@@ -21,6 +21,7 @@ import {
 import { recordSystemAlert } from "@/lib/monitoring";
 import { isCheckoutOpen } from "@/lib/payment-provider";
 import { buildOrderRow, insertOrderItems, insertOrderRow, quoteOrder } from "@/lib/quote-order";
+import { CLAIM_HOLD_SECONDS, claimPromotionRedemption, releasePromotionRedemption } from "@/lib/bxgy-promotions";
 import { describeTenderShortfall, releaseOrderTender, reserveOrderTender } from "@/lib/tender-reservation";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import type { CustomerInput } from "@/lib/payment-types";
@@ -300,8 +301,29 @@ export async function POST(request: Request) {
     promotionId: quoteA.appliedPromotionId,
   });
 
+  // Same atomic claim the card lane takes, before the order row exists, so the
+  // wallet lane cannot slip past a redemption limit the card lane respects.
+  // (`claimed` above is the express INTENT claim — a different thing.)
+  if (quoteA.appliedPromotionId && quoteA.appliedPromotionLimits) {
+    const redemptionClaimed = await claimPromotionRedemption({
+      promotionId: quoteA.appliedPromotionId,
+      orderId: claimed.order_id,
+      customerEmail: customer.email,
+      maxRedemptions: quoteA.appliedPromotionLimits.maxRedemptions,
+      perCustomerLimit: quoteA.appliedPromotionLimits.perCustomerLimit,
+      holdSeconds: CLAIM_HOLD_SECONDS,
+    });
+    if (!redemptionClaimed) {
+      await finish(sessionId, { ok: false, outcome: "refused", message: "That promotion has just been fully claimed. Please refresh to see your current total." }, "failed");
+      return refuse("That promotion has just been fully claimed. Please refresh to see your current total.");
+    }
+  }
+
   const insertOutcome = await insertOrderRow(orderRow);
   if (insertOutcome.status !== "inserted") {
+    if (quoteA.appliedPromotionId && quoteA.appliedPromotionLimits) {
+      await releasePromotionRedemption(claimed.order_id);
+    }
     await finish(sessionId, { ok: false, outcome: "refused", message: "We couldn't create your order. No charge was made." }, "failed");
     return refuse("We couldn't create your order. No charge was made.");
   }

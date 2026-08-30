@@ -55,7 +55,33 @@ type PromotionTemplate = {
   getQuantity: number;
   rewardPercent: number;
   priority: number;
+  /** Slugs this promotion ships excluded from. See BELOW_COST_AT_BOGO. */
+  excludeSlugs?: string[];
 };
+
+/**
+ * PRODUCTS A "GET ONE FREE" PROMOTION CANNOT AFFORD.
+ *
+ * Measured, not guessed: bxgy-production-economics.test.ts prices every
+ * promotion over the real catalogue at production's own break-even floor, and
+ * these two are the only SKUs where Buy 1 Get 1 Free goes below cost —
+ * pinealon at $72.99 against $35.00, cerebrolysin at $74.99 against $35.00, both
+ * ~47% cost. At even quantities BOGO charges half of list, and a $140 basket of
+ * goods is sold for $149.98 before fees. The profit guard already refuses those
+ * orders, so nothing is mispriced today; what it cannot do is stop the
+ * promotion being switched on and then failing at the pay button.
+ *
+ * So they ship EXCLUDED from Buy 1 Get 1 Free. An admin can still remove the
+ * exclusion — this is a guard rail, not a lock — but it cannot happen by
+ * accident, which is the ask.
+ *
+ * Buy 3 Get 2 Free is deliberately NOT given the same exclusion: it competes
+ * against the 12% quantity tier a five-unit basket has already earned, so the
+ * shopper pays 60% of list rather than 50%, and it stays profitable on both
+ * (cerebrolysin x5 clears by $25.97). Excluding a SKU that pays its way would
+ * cost sales for no reason.
+ */
+export const BELOW_COST_AT_BOGO = ["pinealon", "cerebrolysin"];
 
 /**
  * The promotions the centre ships with, every one of them an instance of the
@@ -63,7 +89,7 @@ type PromotionTemplate = {
  * chosen on what it actually saves, never on this number alone.
  */
 const TEMPLATES: PromotionTemplate[] = [
-  { id: "buy-1-get-1-free", name: "Buy 1 Get 1 Free", buyQuantity: 1, getQuantity: 1, rewardPercent: 100, priority: 60 },
+  { id: "buy-1-get-1-free", name: "Buy 1 Get 1 Free", buyQuantity: 1, getQuantity: 1, rewardPercent: 100, priority: 60, excludeSlugs: BELOW_COST_AT_BOGO },
   { id: "buy-2-get-1-free", name: "Buy 2 Get 1 Free", buyQuantity: 2, getQuantity: 1, rewardPercent: 100, priority: 50 },
   { id: "buy-3-get-2-free", name: "Buy 3 Get 2 Free", buyQuantity: 3, getQuantity: 2, rewardPercent: 100, priority: 45 },
   { id: LEGACY_BUY_3_GET_1_ID, name: "Buy 3 Get 1 Free", buyQuantity: 3, getQuantity: 1, rewardPercent: 100, priority: 40 },
@@ -79,7 +105,7 @@ function templateToPromotion(template: PromotionTemplate): BxgyPromotion {
     buyQuantity: template.buyQuantity,
     getQuantity: template.getQuantity,
     rewardPercent: template.rewardPercent,
-    eligibility: { ...DEFAULT_ELIGIBILITY },
+    eligibility: { includeSlugs: [], excludeSlugs: [...(template.excludeSlugs ?? [])] },
     startsAt: null,
     endsAt: null,
     maxRedemptions: null,

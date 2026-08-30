@@ -11,6 +11,12 @@ import {
   sanitizeText,
   type ServerProduct,
 } from "@/lib/quote-order";
+import {
+  CLAIM_HOLD_SECONDS,
+  MANUAL_CLAIM_HOLD_SECONDS,
+  claimPromotionRedemption,
+  releasePromotionRedemption,
+} from "@/lib/bxgy-promotions";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 import type {
@@ -266,6 +272,37 @@ export async function createCheckoutSession(
    };
  };
 
+ // CLAIM THE REDEMPTION BEFORE THE ORDER EXISTS.
+ //
+ // Counting redemptions and then writing the order is a race — two shoppers
+ // reaching the last one together both read "one left". bxgy_claim_redemption
+ // does the count and the reservation under one lock, so the second is refused.
+ // It runs BEFORE the insert so a refusal costs no order row and no orphan.
+ //
+ // Only promotions that carry a limit are claimed; an unlimited one needs no
+ // slot and never touches this path.
+ if (quote.appliedPromotionId && quote.appliedPromotionLimits) {
+   const claimed = await claimPromotionRedemption({
+     promotionId: quote.appliedPromotionId,
+     orderId,
+     customerEmail: payload.customer.email,
+     maxRedemptions: quote.appliedPromotionLimits.maxRedemptions,
+     perCustomerLimit: quote.appliedPromotionLimits.perCustomerLimit,
+     // The promotion slot is held exactly as long as the stock for the same
+     // order, so the two can never expire out of step.
+     holdSeconds: isManual ? MANUAL_CLAIM_HOLD_SECONDS : CLAIM_HOLD_SECONDS,
+   });
+   if (!claimed) {
+     // The same sentence the altered-total guard uses, because it is the same
+     // situation from the shopper's side: the price they were quoted is no
+     // longer available and the page needs to re-price.
+     throw new Error(
+       "A discount on your order is no longer available, so your total has been updated. "
+       + "Please refresh this page to see the current total, then place your order.",
+     );
+   }
+ }
+
  const insertOutcome = await insertOrderRow(orderRow);
  if (insertOutcome.status === "duplicate") {
    const dup = await returnExistingByIdempotency();
@@ -273,6 +310,11 @@ export async function createCheckoutSession(
  }
  if (insertOutcome.status !== "inserted") {
    console.error("Unable to create order record", insertOutcome.status === "error" ? insertOutcome.error : "duplicate");
+   // Hand the redemption straight back rather than leaving it held until the
+   // hold expires. Best effort — the hold would release on its own anyway.
+   if (quote.appliedPromotionId && quote.appliedPromotionLimits) {
+     await releasePromotionRedemption(orderId);
+   }
    throw new Error("Unable to create order record");
  }
 
