@@ -521,9 +521,22 @@ async function main() {
     if (!row?.order_number) return SKIP("this order carries no order_number to quote");
     // The raw key is `order-<uuid>` and appears nowhere on the customer's
     // receipt, so quoting it would give them a reference support cannot use.
-    const log = HARNESS_LOG && existsSync(HARNESS_LOG) ? readFileSync(HARNESS_LOG, "utf8") : "";
-    const quotedRaw = log.includes(`Not sent: "Order Confirmed - ${orderId}"`);
-    assert(!quotedRaw, "the confirmation subject quoted the raw order-<uuid> key");
+    //
+    // TWO WAYS THIS USED TO PASS WITHOUT LOOKING.
+    //
+    // With no harness log it read `const log = ... : ""`, and `"".includes(x)`
+    // is false, so the assertion held and the step reported `quotes VL-XXXX`
+    // having inspected nothing at all. And even with a log it only ever checked
+    // that the RAW key was absent — never that the friendly number was there —
+    // so a subject carrying no order reference, or somebody else's, passed too.
+    if (!HARNESS_LOG || !existsSync(HARNESS_LOG)) {
+      return SKIP("no harness log, so the subject cannot be read — this proves nothing either way");
+    }
+    const log = readFileSync(HARNESS_LOG, "utf8");
+    assert(!log.includes(`Not sent: "Order Confirmed - ${orderId}"`),
+      "the confirmation subject quoted the raw order-<uuid> key");
+    assert(log.includes(`Not sent: "Order Confirmed - ${row.order_number}"`),
+      `no confirmation subject quoted this order's own number (${row.order_number})`);
     return `quotes ${row.order_number}`;
   });
 
