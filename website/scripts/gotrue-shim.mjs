@@ -327,6 +327,24 @@ export async function handleAuth(req, res, url, pool, send, readBody) {
         return send(res, 404, { error: "user_not_found" }), true;
       }
       row = existing.rows[0];
+    } else if (type === "email_change_current" || type === "email_change_new") {
+      // A change of address. `email` is the CURRENT address and must exist;
+      // `new_email` is the one being adopted and must not already belong to
+      // somebody else — real GoTrue refuses that, and /api/account/email-change
+      // reports the refusal rather than promising an email nobody will send.
+      if (!existing.rows.length) {
+        return send(res, 404, { error: "user_not_found" }), true;
+      }
+      const newEmail = String(body.new_email ?? "").trim().toLowerCase();
+      if (!newEmail) return send(res, 400, { error: "validation_failed" }), true;
+      const taken = await q("select 1 from auth.users where lower(email) = $1", [newEmail]);
+      if (taken.rows.length) {
+        return send(res, 422, {
+          error: "email_exists",
+          error_description: "A user with this email address has already been registered",
+        }), true;
+      }
+      row = existing.rows[0];
     } else {
       return send(res, 501, {
         error: "not_implemented",
