@@ -1,0 +1,811 @@
+<title>The Vanta Daily</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&family=Manrope:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --ground:#0a0a0a;
+    --surface:#121212;
+    --raised:#181818;
+    --fg:#ffffff;
+    --muted:#a3a3a3;
+    --dim:#6b6b6b;
+    --fade:#4a4a4a;
+    --accent:#c7ae5e;
+    --accent-hi:#d8c07a;
+    --line:rgba(255,255,255,.075);
+    --line-strong:rgba(255,255,255,.14);
+    --risk:#b5675a;
+    --done:#7ea895;
+
+    --display:"Fraunces",Georgia,"Times New Roman",serif;
+    --body:"Manrope",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    --mono:"Geist Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+
+  *{box-sizing:border-box}
+
+  body{
+    background:var(--ground);
+    color:var(--fg);
+    font-family:var(--body);
+    font-size:16px;
+    line-height:1.6;
+    margin:0;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .page{max-width:940px;margin:0 auto;padding:0 22px 120px}
+
+  /* ---------------- masthead ---------------- */
+
+  .top{padding:72px 0 0}
+  .eyebrow{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.17em;
+    text-transform:uppercase;
+    color:var(--accent);
+    margin:0 0 20px;
+  }
+  h1{
+    font-family:var(--display);
+    font-weight:500;
+    font-size:clamp(2.1rem,5.2vw,3.3rem);
+    line-height:1.06;
+    letter-spacing:-.02em;
+    margin:0 0 22px;
+    text-wrap:balance;
+  }
+  .lede{color:var(--muted);max-width:64ch;margin:0;font-size:1.0625rem;line-height:1.7}
+  .lede strong{color:var(--fg);font-weight:500}
+
+  /* ---------------- the target ---------------- */
+
+  .target{
+    margin:44px 0 0;
+    border:1px solid var(--line-strong);
+    background:
+      radial-gradient(120% 140% at 0% 0%, rgba(199,174,94,.09), rgba(199,174,94,0) 60%),
+      var(--surface);
+    padding:30px 28px;
+  }
+  .target .label{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.15em;
+    text-transform:uppercase;
+    color:var(--accent);
+    margin:0 0 14px;
+  }
+  .target .big{
+    font-family:var(--display);
+    font-weight:500;
+    font-size:clamp(1.5rem,3.4vw,2.1rem);
+    line-height:1.22;
+    letter-spacing:-.015em;
+    margin:0 0 16px;
+    text-wrap:balance;
+  }
+  .target p{color:var(--muted);margin:0;max-width:68ch;font-size:.9375rem}
+  .target p + p{margin-top:11px}
+  .target strong{color:var(--fg);font-weight:500}
+
+  code{
+    font-family:var(--mono);
+    font-size:.86em;
+    color:var(--accent-hi);
+    background:rgba(199,174,94,.07);
+    padding:1px 5px;
+    border-radius:2px;
+  }
+
+  /* ---------------- today bar ---------------- */
+
+  .today{
+    position:sticky;
+    top:0;
+    z-index:20;
+    margin:48px 0 0;
+    display:flex;
+    flex-wrap:wrap;
+    align-items:center;
+    gap:14px 26px;
+    padding:15px 20px;
+    background:rgba(10,10,10,.93);
+    backdrop-filter:blur(14px);
+    -webkit-backdrop-filter:blur(14px);
+    border:1px solid var(--line-strong);
+  }
+  .today .date{
+    font-family:var(--mono);
+    font-size:12px;
+    letter-spacing:.09em;
+    text-transform:uppercase;
+    color:var(--muted);
+  }
+  .meter{display:flex;align-items:center;gap:11px;flex:1;min-width:190px}
+  .bar{
+    flex:1;
+    height:3px;
+    background:var(--line-strong);
+    position:relative;
+    overflow:hidden;
+    min-width:80px;
+  }
+  .bar i{
+    display:block;
+    height:100%;
+    width:0%;
+    background:var(--accent);
+    transition:width .3s ease;
+  }
+  .count{
+    font-family:var(--mono);
+    font-variant-numeric:tabular-nums;
+    font-size:12.5px;
+    color:var(--fg);
+    white-space:nowrap;
+  }
+  .count.full{color:var(--done)}
+  .streak{
+    font-family:var(--mono);
+    font-size:11.5px;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    color:var(--dim);
+    white-space:nowrap;
+  }
+  .streak b{color:var(--accent);font-weight:500}
+  .reset{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.09em;
+    text-transform:uppercase;
+    color:var(--dim);
+    background:none;
+    border:1px solid var(--line-strong);
+    padding:5px 10px;
+    cursor:pointer;
+    border-radius:2px;
+    transition:color .2s ease,border-color .2s ease;
+  }
+  .reset:hover{color:var(--fg);border-color:var(--muted)}
+
+  /* ---------------- blocks ---------------- */
+
+  .block{margin:56px 0 0}
+  .block-head{
+    display:flex;
+    align-items:baseline;
+    gap:16px;
+    flex-wrap:wrap;
+    padding-bottom:16px;
+    border-bottom:1px solid var(--line-strong);
+  }
+  .block-head .tag{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.17em;
+    text-transform:uppercase;
+    color:var(--accent);
+    white-space:nowrap;
+  }
+  .block-head h2{
+    font-family:var(--display);
+    font-weight:500;
+    font-size:1.5rem;
+    letter-spacing:-.012em;
+    margin:0;
+    flex:1;
+    min-width:200px;
+  }
+  .block-head .mins{
+    font-family:var(--mono);
+    font-variant-numeric:tabular-nums;
+    font-size:12px;
+    color:var(--dim);
+    white-space:nowrap;
+  }
+  .block-why{color:var(--muted);font-size:.9375rem;margin:16px 0 4px;max-width:66ch}
+
+  /* ---------------- task rows ---------------- */
+
+  .task{
+    display:grid;
+    grid-template-columns:26px 1fr;
+    gap:0 16px;
+    padding:20px 0;
+    border-bottom:1px solid var(--line);
+    align-items:start;
+  }
+  .task input[type=checkbox]{
+    appearance:none;
+    -webkit-appearance:none;
+    width:19px;
+    height:19px;
+    margin:3px 0 0;
+    border:1px solid var(--line-strong);
+    background:var(--surface);
+    cursor:pointer;
+    border-radius:2px;
+    position:relative;
+    flex:none;
+    transition:border-color .2s ease,background .2s ease;
+  }
+  .task input[type=checkbox]:hover{border-color:var(--accent)}
+  .task input[type=checkbox]:checked{background:var(--accent);border-color:var(--accent)}
+  .task input[type=checkbox]:checked::after{
+    content:"";
+    position:absolute;
+    left:6px;top:2px;
+    width:5px;height:10px;
+    border:solid #0a0a0a;
+    border-width:0 2px 2px 0;
+    transform:rotate(42deg);
+  }
+  .task input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  .task .head{
+    display:flex;
+    align-items:baseline;
+    gap:12px;
+    flex-wrap:wrap;
+    margin-bottom:7px;
+  }
+  .task label{
+    font-family:var(--display);
+    font-weight:500;
+    font-size:1.0625rem;
+    line-height:1.34;
+    letter-spacing:-.004em;
+    cursor:pointer;
+    transition:color .2s ease;
+  }
+  .task .mins{
+    font-family:var(--mono);
+    font-variant-numeric:tabular-nums;
+    font-size:11.5px;
+    color:var(--dim);
+    white-space:nowrap;
+  }
+  .task p{
+    margin:0;
+    color:var(--muted);
+    font-size:.9rem;
+    line-height:1.68;
+    max-width:68ch;
+    transition:color .2s ease;
+  }
+  .task strong{color:var(--fg);font-weight:500}
+  .task.is-done label{color:var(--fade);text-decoration:line-through;text-decoration-color:var(--line-strong)}
+  .task.is-done p{color:var(--fade)}
+
+  .finite{
+    display:inline-block;
+    font-family:var(--mono);
+    font-size:10.5px;
+    letter-spacing:.09em;
+    text-transform:uppercase;
+    color:var(--accent);
+    border:1px solid rgba(199,174,94,.35);
+    padding:2px 7px;
+    border-radius:2px;
+    white-space:nowrap;
+  }
+
+  /* ---------------- weekly / guardrails ---------------- */
+
+  .plain{
+    margin-top:8px;
+    border:1px solid var(--line-strong);
+    background:var(--surface);
+  }
+  .plain-row{
+    display:grid;
+    grid-template-columns:126px 1fr;
+    gap:0 22px;
+    padding:19px 24px;
+    border-bottom:1px solid var(--line);
+  }
+  .plain-row:last-child{border-bottom:0}
+  .plain-row .when{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.09em;
+    text-transform:uppercase;
+    color:var(--accent);
+    padding-top:3px;
+  }
+  .plain-row p{margin:0;color:var(--muted);font-size:.9rem;max-width:64ch}
+  .plain-row strong{color:var(--fg);font-weight:500}
+
+  .never{
+    display:grid;
+    grid-template-columns:1fr;
+    gap:0;
+    margin-top:8px;
+    border:1px solid rgba(181,103,90,.3);
+  }
+  .never-row{
+    display:grid;
+    grid-template-columns:22px 1fr;
+    gap:0 16px;
+    padding:17px 24px;
+    border-bottom:1px solid var(--line);
+    align-items:start;
+  }
+  .never-row:last-child{border-bottom:0}
+  .never-row .x{
+    color:var(--risk);
+    font-family:var(--mono);
+    font-size:14px;
+    line-height:1.5;
+  }
+  .never-row p{margin:0;color:var(--muted);font-size:.9rem;max-width:66ch}
+  .never-row strong{color:var(--fg);font-weight:500}
+
+  /* ---------------- expectations ---------------- */
+
+  .expect{
+    margin-top:8px;
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(210px,1fr));
+    gap:1px;
+    background:var(--line);
+    border:1px solid var(--line);
+  }
+  .expect > div{background:var(--surface);padding:22px 20px}
+  .expect .w{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--accent);
+    margin:0 0 12px;
+  }
+  .expect p{margin:0;color:var(--muted);font-size:.875rem;line-height:1.65}
+  .expect strong{color:var(--fg);font-weight:500}
+
+  footer{
+    margin-top:88px;
+    padding-top:28px;
+    border-top:1px solid var(--line);
+    color:var(--dim);
+    font-size:12.5px;
+    max-width:72ch;
+  }
+  footer p{margin:0 0 11px}
+  footer p:last-child{margin-bottom:0}
+
+  @media (max-width:640px){
+    .page{padding:0 16px 80px}
+    .top{padding:52px 0 0}
+    /* Keep the sticky bar to two compact rows — at 390x844 the wrapped
+       three-row version cost 115px of a very short viewport. */
+    .today{padding:11px 14px;gap:9px 14px}
+    .today .date{display:none}
+    .meter{min-width:0;flex:1 1 100%;order:1}
+    .streak{order:2;flex:1}
+    .reset{order:3}
+    .plain-row{grid-template-columns:1fr;gap:9px 0}
+    .target{padding:24px 19px}
+    .block{margin:44px 0 0}
+  }
+
+  @media (prefers-reduced-motion:reduce){
+    *{transition:none !important}
+  }
+</style>
+
+<div class="page">
+
+  <header class="top">
+    <p class="eyebrow">Vanta Labs · Daily operating list</p>
+    <h1>What to do every day, and the honest reason each one is on the list</h1>
+    <p class="lede">
+      Nothing on this page guarantees a sale — anyone who tells you otherwise is selling something.
+      What a daily routine can guarantee is <strong>the input that produces sales</strong>: qualified
+      strangers arriving at a store that can prove its standards. Right now you have neither the volume
+      nor the proof, so every item below attacks one of those two and nothing else.
+    </p>
+  </header>
+
+  <div class="target">
+    <p class="label">The only number that matters this month</p>
+    <p class="big">50–100 qualified visitors per day.</p>
+    <p>
+      You have taken 8 orders from 364 lifetime visitors. Even generously, a store converting in the normal
+      1–2% range needs <strong>50 to 100 visits a day to average one order a day</strong>. That is the whole
+      arithmetic. You are not short of tactics — you are short of traffic and short of evidence.
+    </p>
+    <p>
+      So stop measuring days in sales. Measure them in <strong>visits created and proof published</strong>.
+      Sales are the lagging indicator; these are the leading ones, and they are the only part you control.
+    </p>
+  </div>
+
+  <div class="today">
+    <span class="date" id="today-date">—</span>
+    <div class="meter">
+      <div class="bar"><i id="bar-fill"></i></div>
+      <span class="count" id="count">0 / 13</span>
+    </div>
+    <span class="streak" id="streak">Streak <b>0</b> days</span>
+    <button class="reset" id="reset" type="button">Reset today</button>
+  </div>
+
+  <section class="block">
+    <div class="block-head">
+      <span class="tag">Block A</span>
+      <h2>Build the proof</h2>
+      <span class="mins">55 min · ends in 19 days</span>
+    </div>
+    <p class="block-why">
+      This is the only finite block on the page. In 19 days it is finished forever, and your store stops
+      asking to be trusted and starts letting people check. Do it first, while you still have the energy.
+    </p>
+
+    <div class="task">
+      <input type="checkbox" id="t1" data-task="t1">
+      <div>
+        <div class="head"><label for="t1">File two batch reports into the COA library</label><span class="mins">30 min</span><span class="finite">19 days left</span></div>
+        <p>Your <code>coa_records</code> table is empty and one of 38 live products has a report link. Two a day clears the catalogue in under three weeks. <strong>Until this exists, every "third-party tested" line on your site is a claim with nothing behind it</strong> — and the documentation angle, the one that survives ad review, cannot be used at all.</p>
+      </div>
+    </div>
+
+    <div class="task">
+      <input type="checkbox" id="t2" data-task="t2">
+      <div>
+        <div class="head"><label for="t2">Complete two product pages, front to back</label><span class="mins">25 min</span><span class="finite">19 days left</span></div>
+        <p>All 38 live products are missing <code>seo_title</code>, <code>cas_number</code> and <code>peptide_sequence</code>; four have no image. Two a day, fully filled — technical fields, SEO title and description, image. <strong>Each finished page is a permanent entry point that works while you sleep.</strong> Long descriptions are already written, so this is faster than it sounds.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <span class="tag">Block B</span>
+      <h2>Manufacture the traffic</h2>
+      <span class="mins">70 min · every day, indefinitely</span>
+    </div>
+    <p class="block-why">
+      Two posts a day, not one. You are not trying to make a good video — you are trying to find a hook that
+      works, and that is a numbers game nobody wins on one attempt a day. Paid is closed to you until the
+      category ruling comes back, which makes this the entire top of your funnel.
+    </p>
+
+    <div class="task">
+      <input type="checkbox" id="t3" data-task="t3">
+      <div>
+        <div class="head"><label for="t3">Shoot two short-form videos</label><span class="mins">45 min</span></div>
+        <p>One is always the documentation archetype — the report on screen, the batch line, the vial, "search your lot number." The second rotates: cinematic macro, packing and cold chain, how an assay works, a catalogue tour. <strong>Batch-shoot on Sunday if it helps</strong>, but never let the queue empty.</p>
+      </div>
+    </div>
+
+    <div class="task">
+      <input type="checkbox" id="t4" data-task="t4">
+      <div>
+        <div class="head"><label for="t4">Post both, everywhere you are connected</label><span class="mins">15 min</span></div>
+        <p>Same asset, reframed — 9:16 for TikTok and Reels, 4:5 for feed. Every link carries a UTM, without exception. <strong>5,836 of your 5,839 page views have no source attached</strong>, which means you currently cannot tell which of these worked.</p>
+      </div>
+    </div>
+
+    <div class="task">
+      <input type="checkbox" id="t5" data-task="t5">
+      <div>
+        <div class="head"><label for="t5">Write tomorrow's two hooks before you close the laptop</label><span class="mins">10 min</span></div>
+        <p>Same body, same call to action, different opening two seconds. Vary one thing at a time or you will not be able to attribute the difference — and a result you cannot attribute is the same as no result. <strong>Write them down; do not trust tomorrow's version of you to have an idea.</strong></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <span class="tag">Block C</span>
+      <h2>Talk to actual humans</h2>
+      <span class="mins">50 min · the fastest path to order nine</span>
+    </div>
+    <p class="block-why">
+      At three customers, this is almost certainly where your next sale comes from. It does not scale, it will
+      feel slow, and it will out-produce every other block on this page for the next sixty days.
+    </p>
+
+    <div class="task">
+      <input type="checkbox" id="t6" data-task="t6">
+      <div>
+        <div class="head"><label for="t6">Ten personalised approaches to bulk and lab buyers</label><span class="mins">30 min</span></div>
+        <p>Your <code>/wholesale</code> page has taken 55 views from nine people with no follow-up path behind it. Bulk buyers are the highest-value segment you can reach <strong>without any advertising platform's permission</strong>. Ten real messages, each mentioning something specific about them — not ten copies of one message.</p>
+      </div>
+    </div>
+
+    <div class="task">
+      <input type="checkbox" id="t7" data-task="t7">
+      <div>
+        <div class="head"><label for="t7">Answer three real sourcing questions in public</label><span class="mins">20 min</span></div>
+        <p>Forums, comment threads, wherever this category actually argues about who to trust. <strong>Answer with documents, never with a pitch.</strong> Reputation in this space forms in rooms you do not own, and it is the one asset a policy change cannot take away from you.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <span class="tag">Block D</span>
+      <h2>Catch what you already have</h2>
+      <span class="mins">30 min · stop the leaks</span>
+    </div>
+    <p class="block-why">
+      Traffic you already paid for in effort is leaking out of the funnel. This block is cheap and it is the
+      part most operators skip because it feels like admin rather than growth.
+    </p>
+
+    <div class="task">
+      <input type="checkbox" id="t8" data-task="t8">
+      <div>
+        <div class="head"><label for="t8">Clear every inbound within the hour</label><span class="mins">15 min</span></div>
+        <p>Contact form, direct messages, comments. At your volume a slow reply is a lost customer, and there are few enough of them that a same-hour human response is genuinely achievable. <strong>Speed is a differentiator you can deploy today for free.</strong></p>
+      </div>
+    </div>
+
+    <div class="task">
+      <input type="checkbox" id="t9" data-task="t9">
+      <div>
+        <div class="head"><label for="t9">Email any new abandoned cart yourself</label><span class="mins">10 min</span></div>
+        <p>Nine carts have been abandoned all time and 29 automated emails have gone out with no recovery figure attached to any of them. <strong>At this scale, write it by hand.</strong> Ask what stopped them — the answer is worth more than the order.</p>
+      </div>
+    </div>
+
+    <div class="task">
+      <input type="checkbox" id="t10" data-task="t10">
+      <div>
+        <div class="head"><label for="t10">Add one subscriber to the list</label><span class="mins">5 min</span></div>
+        <p>Five subscribers is your entire owned audience — the only channel nobody can switch off. Offer the batch reports, not a discount: <strong>"get each new report as it is published"</strong> attracts the buyer who cares about documentation and costs you no margin.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <span class="tag">Block E</span>
+      <h2>Record, and then leave it alone</h2>
+      <span class="mins">10 min · discipline, not analysis</span>
+    </div>
+    <p class="block-why">
+      This block exists to stop you doing damage. "Whatever it takes" energy applied to a daily dashboard is
+      how people kill working campaigns on noise and rewrite pages that were fine.
+    </p>
+
+    <div class="task">
+      <input type="checkbox" id="t11" data-task="t11">
+      <div>
+        <div class="head"><label for="t11">Log five numbers</label><span class="mins">5 min</span></div>
+        <p>Visitors, add-to-carts, orders, revenue, new subscribers. One row a day in one sheet. <strong>Filter your own admin traffic out first</strong> — <code>/vault</code> and <code>/admin</code> are currently inside the same analytics stream, which is why your add-to-cart number looks impossible.</p>
+      </div>
+    </div>
+
+    <div class="task">
+      <input type="checkbox" id="t12" data-task="t12">
+      <div>
+        <div class="head"><label for="t12">Write one sentence about what you learned</label><span class="mins">5 min</span></div>
+        <p>Which hook, which message, which objection. In sixty days this log is the most valuable marketing document you own, because it is the only record of <strong>what already failed</strong> — and that is the thing every fresh burst of enthusiasm forgets and re-tries.</p>
+      </div>
+    </div>
+
+    <div class="task">
+      <input type="checkbox" id="t13" data-task="t13">
+      <div>
+        <div class="head"><label for="t13">Change nothing today based on today</label><span class="mins">0 min</span></div>
+        <p>One day is never a signal. A hook needs roughly 2,000 impressions before a weak click-through rate means anything, and conversion needs about 100 clicks. <strong>Tick this by resisting.</strong> Decisions happen once a week, on Sunday, or they are just superstition with a spreadsheet.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <span class="tag">Weekly</span>
+      <h2>Sunday, ninety minutes</h2>
+      <span class="mins">not daily — on purpose</span>
+    </div>
+    <div class="plain">
+      <div class="plain-row">
+        <div class="when">Review</div>
+        <p>Read the week's seven rows together. <strong>Pick exactly one change.</strong> One. A week where you changed six things teaches you nothing about any of them.</p>
+      </div>
+      <div class="plain-row">
+        <div class="when">Send</div>
+        <p>One email to the list. The week's new batch reports, the new product pages, what you published. <strong>No promotion required</strong> — and note that you currently have no live coupon anyway.</p>
+      </div>
+      <div class="plain-row">
+        <div class="when">Publish</div>
+        <p>One research article. You have four; four is a foundation, not a library. Target the questions you got asked in Block C this week — they are pre-validated demand.</p>
+      </div>
+      <div class="plain-row">
+        <div class="when">Fix</div>
+        <p>Place one test order through a real ambassador link. <strong>131 referral clicks have produced zero referral orders and zero commissions</strong> — that is either a genuine zero or a silent failure, and you cannot tell which by reasoning about it.</p>
+      </div>
+      <div class="plain-row">
+        <div class="when">Ask</div>
+        <p>Talk to one past customer properly. You have three. Ask for a review you may quote, and ask what nearly stopped them buying.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <span class="tag">Guardrails</span>
+      <h2>What "whatever it takes" must never mean</h2>
+      <span class="mins">non-negotiable</span>
+    </div>
+    <p class="block-why">
+      Every item here is a way to get a fast sale and lose the business. They are listed because determination
+      is exactly the mood in which people talk themselves into them.
+    </p>
+    <div class="never">
+      <div class="never-row"><span class="x">—</span><p><strong>No outcome, transformation or before-and-after claims.</strong> No dosing, no reconstitution, no "your results", no addressing the reader as the user. These are laboratory research materials and every piece of creative must survive being read that way.</p></div>
+      <div class="never-row"><span class="x">—</span><p><strong>No invented reviews, testimonials, ratings or COAs.</strong> You have three real customers — ask them. A fabricated report in this specific category is the one mistake that ends the business rather than costing it a week.</p></div>
+      <div class="never-row"><span class="x">—</span><p><strong>No paid spend before the category ruling comes back.</strong> Four direct competitors were checked against the live ad library and none is running ads. Spending into that without a written answer risks the account, not just the budget.</p></div>
+      <div class="never-row"><span class="x">—</span><p><strong>No discount invented to force a sale.</strong> Your margin is what funds the COA library, and the library is the entire differentiator. Discounting to buy order nine costs you the thing that makes orders 50 through 500 possible.</p></div>
+      <div class="never-row"><span class="x">—</span><p><strong>No bought traffic, followers or engagement.</strong> It corrupts the only signal you have — which hook actually worked — and you are running this whole routine to generate exactly that signal.</p></div>
+      <div class="never-row"><span class="x">—</span><p><strong>No working around a rejection.</strong> No obfuscated product names, no spelling around filters. If something is ineligible, the answer is a different concept, not a disguised one.</p></div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <span class="tag">Expectations</span>
+      <h2>What this actually feels like</h2>
+      <span class="mins">so you don't quit in week two</span>
+    </div>
+    <div class="expect">
+      <div>
+        <p class="w">Days 1–14</p>
+        <p>Probably <strong>no new orders at all.</strong> This is the normal shape of it, not evidence of failure. You are filing reports and posting into an empty room. Judge yourself on items ticked, nothing else.</p>
+      </div>
+      <div>
+        <p class="w">Days 15–30</p>
+        <p>The catalogue is finished and documented. Expect <strong>the first hook that outperforms</strong> and the first inbound from Block C. Traffic starts arriving with a source attached, so you can finally see what works.</p>
+      </div>
+      <div>
+        <p class="w">Days 31–60</p>
+        <p>Search begins to contribute, because 38 completed pages have had time to index. <strong>Repeat purchases start showing</strong> — your three customers have already placed eight orders, which is the strongest signal in your data.</p>
+      </div>
+      <div>
+        <p class="w">The real failure signal</p>
+        <p>Not a quiet week. It is <strong>thirty days of consistent execution with no movement in visitors</strong>. That means the hooks are wrong — and by then you will have a log that tells you which ones.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p>
+      Every figure on this page was read from the live Vanta Labs production database and a live ad-library
+      check on 30 August 2026. Where a number is zero, it is zero in the source.
+    </p>
+    <p>
+      Products are laboratory research materials, research use only. Nothing here implies human use, dosing,
+      reconstitution, or any medical, therapeutic, performance or body-composition outcome. Prices, tiers,
+      discounts and stock status must be re-verified against the live store before appearing in any creative.
+    </p>
+    <p>
+      Your ticks and streak are stored in this browser only. They are never sent anywhere.
+    </p>
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var TASKS = ["t1","t2","t3","t4","t5","t6","t7","t8","t9","t10","t11","t12","t13"];
+  var TOTAL = TASKS.length;
+  var PREFIX = "vl-daily-";
+  var STREAK_KEY = "vl-daily-streak";
+
+  function todayKey(d) {
+    d = d || new Date();
+    var m = String(d.getMonth() + 1).padStart(2, "0");
+    var day = String(d.getDate()).padStart(2, "0");
+    return d.getFullYear() + "-" + m + "-" + day;
+  }
+
+  function read(key, fallback) {
+    try {
+      var raw = window.localStorage.getItem(key);
+      return raw === null ? fallback : JSON.parse(raw);
+    } catch (e) {
+      return fallback;
+    }
+  }
+
+  function write(key, value) {
+    try {
+      window.localStorage.setItem(key, JSON.stringify(value));
+    } catch (e) {
+      /* private mode, blocked storage, quota — the page still works */
+    }
+  }
+
+  var key = PREFIX + todayKey();
+  var state = read(key, {});
+  if (typeof state !== "object" || state === null) state = {};
+
+  var els = {
+    date: document.getElementById("today-date"),
+    fill: document.getElementById("bar-fill"),
+    count: document.getElementById("count"),
+    streak: document.getElementById("streak"),
+    reset: document.getElementById("reset")
+  };
+
+  els.date.textContent = new Date().toLocaleDateString(undefined, {
+    weekday: "long", day: "numeric", month: "long"
+  });
+
+  function doneCount() {
+    var n = 0;
+    for (var i = 0; i < TASKS.length; i++) if (state[TASKS[i]]) n++;
+    return n;
+  }
+
+  function yesterdayKey() {
+    var d = new Date();
+    d.setDate(d.getDate() - 1);
+    return todayKey(d);
+  }
+
+  function refreshStreak(complete) {
+    var s = read(STREAK_KEY, { last: null, count: 0 });
+    if (typeof s !== "object" || s === null) s = { last: null, count: 0 };
+    var today = todayKey();
+
+    if (complete && s.last !== today) {
+      s.count = s.last === yesterdayKey() ? (s.count || 0) + 1 : 1;
+      s.last = today;
+      write(STREAK_KEY, s);
+    } else if (!complete && s.last === today) {
+      // unticked below the line again — give the day back
+      s.count = Math.max(0, (s.count || 0) - 1);
+      s.last = s.count > 0 ? yesterdayKey() : null;
+      write(STREAK_KEY, s);
+    }
+
+    // a streak only survives if yesterday or today was completed
+    var live = s.last === today || s.last === yesterdayKey() ? (s.count || 0) : 0;
+    els.streak.innerHTML = "Streak <b>" + live + "</b> " + (live === 1 ? "day" : "days");
+  }
+
+  function render() {
+    var n = doneCount();
+    els.count.textContent = n + " / " + TOTAL;
+    els.count.className = "count" + (n === TOTAL ? " full" : "");
+    els.fill.style.width = Math.round((n / TOTAL) * 100) + "%";
+
+    for (var i = 0; i < TASKS.length; i++) {
+      var box = document.querySelector('[data-task="' + TASKS[i] + '"]');
+      if (!box) continue;
+      var on = !!state[TASKS[i]];
+      box.checked = on;
+      box.closest(".task").classList.toggle("is-done", on);
+    }
+
+    refreshStreak(n === TOTAL);
+  }
+
+  document.addEventListener("change", function (ev) {
+    var box = ev.target;
+    if (!box || !box.dataset || !box.dataset.task) return;
+    state[box.dataset.task] = box.checked;
+    write(key, state);
+    render();
+  });
+
+  els.reset.addEventListener("click", function () {
+    state = {};
+    write(key, state);
+    render();
+  });
+
+  render();
+})();
+</script>
