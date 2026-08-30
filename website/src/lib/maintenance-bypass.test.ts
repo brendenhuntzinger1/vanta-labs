@@ -58,6 +58,21 @@ describe("what survives maintenance mode", () => {
     ["/api/webhooks/payment", "the payment callback"],
     ["/admin/orders", "the owner still has to work"],
     ["/api/admin/orders", "…and so does the admin API"],
+    // THE SAME PROMISE AS THE RESET LINK, AND IT WAS NOT ON THE LIST.
+    //
+    // /account/forgot-password, /account/reset-password and
+    // /api/auth/password-reset are all bypassed, with the reason written beside
+    // them: "these are promises made in an email that has ALREADY been
+    // delivered". Every word of that applies to the signup confirmation link,
+    // and it applies harder — an unconfirmed customer cannot sign in at all, so
+    // the confirmation hop is their only way into the account they just made.
+    // Rewriting it to /maintenance makes the branded link in their inbox look
+    // broken.
+    ["/auth/confirm", "the branded confirmation hop — an email already in their inbox"],
+    ["/api/auth/resend-confirmation", "…and the way to ask for another one"],
+    ["/account/forgot-password", "a delivered reset link has to answer"],
+    ["/account/reset-password", "…and so does the page it lands on"],
+    ["/api/auth/password-reset", "…and the route behind it"],
   ] as const;
 
   for (const [pathname, why] of MUST_SURVIVE) {
