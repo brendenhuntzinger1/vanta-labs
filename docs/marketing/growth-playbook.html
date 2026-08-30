@@ -1,0 +1,975 @@
+<title>Vanta Labs Growth Playbook</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&family=Manrope:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --ground:#0a0a0a;
+    --surface:#121212;
+    --raised:#181818;
+    --fg:#ffffff;
+    --muted:#a3a3a3;
+    --dim:#6b6b6b;
+    --accent:#c7ae5e;
+    --accent-hi:#d8c07a;
+    --line:rgba(255,255,255,.075);
+    --line-strong:rgba(255,255,255,.13);
+    --risk:#b5675a;
+    --verify:#b58a55;
+
+    --display:"Fraunces",Georgia,"Times New Roman",serif;
+    --body:"Manrope",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    --mono:"Geist Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+
+  *{box-sizing:border-box}
+
+  body{
+    background:var(--ground);
+    color:var(--fg);
+    font-family:var(--body);
+    font-size:16px;
+    line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+    margin:0;
+  }
+
+  .page{
+    max-width:1080px;
+    margin:0 auto;
+    padding:0 24px 128px;
+  }
+
+  /* ---------- masthead ---------- */
+
+  .masthead{
+    position:relative;
+    padding:96px 0 56px;
+    border-bottom:1px solid var(--line);
+  }
+  .masthead::before{
+    content:"";
+    position:absolute;
+    top:-140px;
+    left:-10%;
+    width:70%;
+    height:340px;
+    background:radial-gradient(60% 50% at 30% 50%, rgba(199,174,94,.10), rgba(199,174,94,0) 70%);
+    pointer-events:none;
+  }
+  .masthead > *{position:relative}
+
+  .eyebrow{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.16em;
+    text-transform:uppercase;
+    color:var(--accent);
+    margin:0 0 22px;
+  }
+
+  h1{
+    font-family:var(--display);
+    font-weight:500;
+    font-size:clamp(2.4rem,6vw,4rem);
+    line-height:1.04;
+    letter-spacing:-.02em;
+    text-wrap:balance;
+    margin:0 0 24px;
+  }
+
+  .standfirst{
+    max-width:62ch;
+    color:var(--muted);
+    font-size:1.0625rem;
+    line-height:1.7;
+    margin:0;
+  }
+  .standfirst strong{color:var(--fg);font-weight:500}
+
+  .stamp{
+    font-family:var(--mono);
+    font-size:11.5px;
+    color:var(--dim);
+    letter-spacing:.04em;
+    margin:34px 0 0;
+  }
+
+  /* ---------- data strip ---------- */
+
+  .strip{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(148px,1fr));
+    gap:1px;
+    background:var(--line);
+    border:1px solid var(--line);
+    margin:44px 0 0;
+  }
+  .cell{
+    background:var(--surface);
+    padding:20px 18px;
+  }
+  .cell .n{
+    font-family:var(--mono);
+    font-variant-numeric:tabular-nums;
+    font-size:1.5rem;
+    line-height:1.1;
+    color:var(--fg);
+    display:block;
+  }
+  .cell .n.zero{color:var(--risk)}
+  .cell .k{
+    display:block;
+    margin-top:8px;
+    font-size:11.5px;
+    letter-spacing:.05em;
+    text-transform:uppercase;
+    color:var(--dim);
+    line-height:1.45;
+  }
+
+  /* ---------- verdict ---------- */
+
+  .verdict{
+    margin:56px 0 0;
+    border:1px solid var(--line-strong);
+    background:var(--surface);
+    padding:32px 30px;
+  }
+  .verdict h2{
+    font-family:var(--display);
+    font-weight:500;
+    font-size:1.5rem;
+    letter-spacing:-.01em;
+    margin:0 0 18px;
+  }
+  .verdict p{
+    color:var(--muted);
+    margin:0 0 14px;
+    max-width:66ch;
+  }
+  .verdict p:last-child{margin-bottom:0}
+  .verdict strong{color:var(--fg);font-weight:500}
+  code{
+    font-family:var(--mono);
+    font-size:.86em;
+    color:var(--accent-hi);
+    background:rgba(199,174,94,.07);
+    padding:1px 5px;
+    border-radius:2px;
+  }
+
+  /* ---------- index ---------- */
+
+  .index{
+    margin:64px 0 0;
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(210px,1fr));
+    gap:0 32px;
+    border-top:1px solid var(--line);
+    padding-top:22px;
+  }
+  .index a{
+    display:flex;
+    justify-content:space-between;
+    gap:14px;
+    padding:9px 0;
+    color:var(--muted);
+    text-decoration:none;
+    font-size:13.5px;
+    border-bottom:1px solid var(--line);
+    transition:color .2s ease;
+  }
+  .index a:hover,.index a:focus-visible{color:var(--accent-hi)}
+  .index a span:last-child{
+    font-family:var(--mono);
+    font-size:11.5px;
+    color:var(--dim);
+    font-variant-numeric:tabular-nums;
+  }
+
+  /* ---------- sections ---------- */
+
+  section{padding:88px 0 0}
+
+  .sec-head{
+    display:flex;
+    align-items:baseline;
+    gap:18px;
+    padding-bottom:20px;
+    border-bottom:1px solid var(--line-strong);
+    margin-bottom:8px;
+  }
+  .sec-head .roman{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.18em;
+    color:var(--accent);
+    text-transform:uppercase;
+    white-space:nowrap;
+  }
+  .sec-head h2{
+    font-family:var(--display);
+    font-weight:500;
+    font-size:clamp(1.6rem,3vw,2.15rem);
+    letter-spacing:-.015em;
+    margin:0;
+    flex:1;
+    text-wrap:balance;
+  }
+  .sec-note{
+    color:var(--muted);
+    max-width:64ch;
+    margin:20px 0 12px;
+    font-size:.9375rem;
+  }
+
+  /* ---------- tactic rows ---------- */
+
+  .tactic{
+    display:grid;
+    grid-template-columns:56px 1fr;
+    gap:0 22px;
+    padding:26px 0;
+    border-bottom:1px solid var(--line);
+  }
+  .rank{
+    font-family:var(--mono);
+    font-variant-numeric:tabular-nums;
+    font-size:13px;
+    color:var(--accent);
+    padding-top:4px;
+    letter-spacing:.02em;
+  }
+  .tactic h3{
+    font-family:var(--display);
+    font-weight:500;
+    font-size:1.1875rem;
+    line-height:1.3;
+    letter-spacing:-.005em;
+    margin:0 0 9px;
+    text-wrap:balance;
+  }
+  .tactic p{
+    margin:0;
+    color:var(--muted);
+    font-size:.9375rem;
+    line-height:1.7;
+    max-width:68ch;
+  }
+  .tactic p + p{margin-top:10px}
+  .tactic strong{color:var(--fg);font-weight:500}
+
+  .chips{
+    display:flex;
+    flex-wrap:wrap;
+    gap:7px;
+    margin-top:14px;
+  }
+  .chip{
+    font-family:var(--mono);
+    font-size:10.5px;
+    letter-spacing:.09em;
+    text-transform:uppercase;
+    color:var(--dim);
+    border:1px solid var(--line-strong);
+    padding:3px 8px;
+    border-radius:2px;
+    white-space:nowrap;
+  }
+  .chip.verify{color:var(--verify);border-color:rgba(181,138,85,.4)}
+  .chip.risk{color:var(--risk);border-color:rgba(181,103,90,.4)}
+
+  /* ---------- sequence ---------- */
+
+  .seq{
+    margin-top:8px;
+    border:1px solid var(--line-strong);
+    background:var(--surface);
+  }
+  .seq-row{
+    display:grid;
+    grid-template-columns:132px 1fr;
+    gap:0 24px;
+    padding:22px 26px;
+    border-bottom:1px solid var(--line);
+  }
+  .seq-row:last-child{border-bottom:0}
+  .seq-row .when{
+    font-family:var(--mono);
+    font-size:11.5px;
+    letter-spacing:.09em;
+    text-transform:uppercase;
+    color:var(--accent);
+    padding-top:3px;
+  }
+  .seq-row p{margin:0;color:var(--muted);font-size:.9375rem;max-width:64ch}
+  .seq-row strong{color:var(--fg);font-weight:500}
+
+  /* ---------- footer ---------- */
+
+  footer{
+    margin-top:96px;
+    padding-top:30px;
+    border-top:1px solid var(--line);
+    color:var(--dim);
+    font-size:13px;
+    max-width:70ch;
+  }
+  footer p{margin:0 0 12px}
+  footer p:last-child{margin-bottom:0}
+
+  a:focus-visible,.index a:focus-visible{
+    outline:2px solid var(--accent);
+    outline-offset:3px;
+  }
+
+  @media (max-width:640px){
+    .page{padding:0 18px 88px}
+    .masthead{padding:64px 0 44px}
+    .tactic{grid-template-columns:1fr;gap:0}
+    .rank{padding-top:0;margin-bottom:8px}
+    .seq-row{grid-template-columns:1fr;gap:10px 0}
+    .verdict{padding:26px 20px}
+    section{padding:64px 0 0}
+  }
+
+  @media (prefers-reduced-motion:reduce){
+    *{transition:none !important;animation:none !important}
+  }
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <p class="eyebrow">Vanta Labs · Growth strategy · 30 August 2026</p>
+    <h1>Fifty ways to market these peptides, ranked by what your data can actually support</h1>
+    <p class="standfirst">
+      Every tactic below is ordered by expected impact <em>at the stage this store is actually at</em> — not at
+      the stage a generic playbook assumes. That distinction matters, because the numbers pulled from your
+      production database this morning say you are pre-traction, not under-marketed. <strong>Three things are
+      structurally blocking the rest of the list</strong>, and they sit at the top for that reason.
+    </p>
+    <p class="stamp">Sources: production Supabase (live read), AdWhispr live ad-library check, Rebbel account state, repo route map.</p>
+
+    <div class="strip">
+      <div class="cell"><span class="n">35</span><span class="k">live in-stock products</span></div>
+      <div class="cell"><span class="n">8</span><span class="k">paid orders, all time</span></div>
+      <div class="cell"><span class="n">3</span><span class="k">unique customers</span></div>
+      <div class="cell"><span class="n">$57.34</span><span class="k">average order value</span></div>
+      <div class="cell"><span class="n">364</span><span class="k">visitors, all time</span></div>
+      <div class="cell"><span class="n zero">0</span><span class="k">published COA records</span></div>
+      <div class="cell"><span class="n zero">0</span><span class="k">coupons live right now</span></div>
+      <div class="cell"><span class="n">5</span><span class="k">email subscribers</span></div>
+    </div>
+  </header>
+
+  <div class="verdict">
+    <h2>The finding that reorders everything</h2>
+    <p>
+      Your <code>coa_records</code> table has <strong>zero rows</strong>. Of 38 live products — 35 of them in
+      stock — exactly one carries a <code>coa_url</code>. Meanwhile your saved brand description — the one your ad
+      tooling will draft from — leads with <em>"third-party batch testing and transparent COA documentation."</em>
+    </p>
+    <p>
+      That is the single strongest asset this brand has, it is the one angle in this category that survives ad
+      review because it makes no health claim at all, and <strong>right now it is not substantiated.</strong>
+      Until reports are filed, every "tested", "verified" or "transparent" line in your marketing is a claim
+      without a source — which is both the compliance problem and the competitive one, because the whole
+      differentiator is that a customer can go and check.
+    </p>
+    <p>
+      Second finding, from a live ad-library check: of four direct peptide sellers verified this morning —
+      Precision Peptide Sciences, ProvenPeptides, Amino Asylum and Science.bio — <strong>none is currently
+      running Meta ads.</strong> Only adjacent supplement brands (Seed, Thesis, Huel) are. Treat that as
+      evidence about the category, not a gap in the market. It is why paid media sits at #47, not #1.
+    </p>
+  </div>
+
+  <nav class="index" aria-label="Sections">
+    <a href="#unblock"><span>Unblock the funnel</span><span>01–06</span></a>
+    <a href="#moat"><span>The COA moat</span><span>07–13</span></a>
+    <a href="#organic"><span>Organic short-form</span><span>14–21</span></a>
+    <a href="#search"><span>Search &amp; content</span><span>22–29</span></a>
+    <a href="#email"><span>Email &amp; lifecycle</span><span>30–36</span></a>
+    <a href="#community"><span>Community &amp; credibility</span><span>37–41</span></a>
+    <a href="#partners"><span>Partners &amp; referral</span><span>42–46</span></a>
+    <a href="#paid"><span>Paid media</span><span>47–50</span></a>
+  </nav>
+
+  <section id="unblock">
+    <div class="sec-head"><span class="roman">Phase one</span><h2>Unblock the funnel</h2></div>
+    <p class="sec-note">
+      These are not growth tactics. They are the reason growth tactics currently have a low ceiling. Nothing
+      below #7 pays back properly until most of these are done.
+    </p>
+
+    <div class="tactic">
+      <div class="rank">01</div>
+      <div>
+        <h3>Publish the COA library</h3>
+        <p>File real batch reports into <code>coa_records</code> for your highest-volume SKUs first. This unlocks the documentation angle, the strongest creative archetype available to you, and retroactively substantiates claims already live on the site.</p>
+        <p><strong>Nothing else on this list has a higher return.</strong> It converts your marketing from assertion to evidence.</p>
+        <div class="chips"><span class="chip">blocker</span><span class="chip">high effort</span><span class="chip">highest impact</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">02</div>
+      <div>
+        <h3>Resolve the coupon table before promoting anything</h3>
+        <p>You hold 368 coupons; 335 are flagged active; <strong>zero are currently live</strong> — every one has an end date in the past. Any "use code" creative would send traffic to a promise the checkout refuses.</p>
+        <p>Decide on one evergreen first-order code, or none at all, and expire the rest properly.</p>
+        <div class="chips"><span class="chip">blocker</span><span class="chip">low effort</span><span class="chip verify">verify before use</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">03</div>
+      <div>
+        <h3>Separate admin traffic from customer traffic in analytics</h3>
+        <p>Your <code>/vault</code> login and <code>/admin/*</code> pages sit in the same analytics stream as the storefront — 321 views on the vault alone. Your 337 add-to-carts against 8 purchases is almost certainly contaminated by your own testing, not a checkout catastrophe.</p>
+        <p>Until this is filtered, every conversion rate you compute is fiction, and you will optimise against noise.</p>
+        <div class="chips"><span class="chip">blocker</span><span class="chip">low effort</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">04</div>
+      <div>
+        <h3>Tag every outbound link with UTMs</h3>
+        <p>Of 5,839 recorded page views, 5,836 carry no source at all. Click-ID capture already works — <code>ttclid</code> lands in the attribution table automatically — so the gap is entirely on the outbound side.</p>
+        <p>You cannot rank channels you cannot see, and you are about to start several.</p>
+        <div class="chips"><span class="chip">blocker</span><span class="chip">low effort</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">05</div>
+      <div>
+        <h3>Connect at least one publishing channel</h3>
+        <p>Your Rebbel brand exists but has zero connected accounts. There is currently no surface to publish organic content to, which makes the entire organic section unexecutable.</p>
+        <div class="chips"><span class="chip">blocker</span><span class="chip">low effort</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">06</div>
+      <div>
+        <h3>Get a written category ruling from each ad platform</h3>
+        <p>Submit the domain and one representative product page to TikTok's and Meta's category review and obtain an answer in writing. Research peptides sit in a category platforms commonly restrict, and this has never been confirmed for Vanta Labs.</p>
+        <p>Everything in the paid section is provisional until this returns. Do not spend against a guess.</p>
+        <div class="chips"><span class="chip">blocker</span><span class="chip verify">needs verification</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="moat">
+    <div class="sec-head"><span class="roman">Phase two</span><h2>The COA moat</h2></div>
+    <p class="sec-note">
+      Most of this category asks to be trusted. Publishing a searchable, batch-level report library is a
+      checkable difference — and it is the rare marketing angle that gets more persuasive the more literal
+      you make it. Assumes #1 is done.
+    </p>
+
+    <div class="tactic">
+      <div class="rank">07</div>
+      <div>
+        <h3>Make <code>/coa-library</code> searchable by lot number</h3>
+        <p>The page already draws 142 views from 30 unique visitors with nothing in it. People are looking. Let a customer type the lot number printed on their vial and land on that exact report.</p>
+        <div class="chips"><span class="chip">high impact</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">08</div>
+      <div>
+        <h3>Link the batch report from every product page</h3>
+        <p>The <code>batch_number</code>, <code>purity_result</code>, <code>testing_date</code> and <code>lab_name</code> fields already exist on the product record and are empty on every live SKU. Populating them turns each PDP into its own proof point.</p>
+        <div class="chips"><span class="chip">high impact</span><span class="chip verify">only real values</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">09</div>
+      <div>
+        <h3>Run a batch-drop cadence</h3>
+        <p>Each new batch produces one post, one email and one product-page update — a recurring content engine driven by operations rather than by inventing topics. Announce the document, not an outcome.</p>
+        <div class="chips"><span class="chip">recurring</span><span class="chip">low effort</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">10</div>
+      <div>
+        <h3>Put the batch number in the product photography</h3>
+        <p>Monospace lot number, small, in-frame, on a dark field. It signals traceability without a single word of claim copy, and it is unmistakably your brand rather than generic vial photography.</p>
+        <div class="chips"><span class="chip">creative</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">11</div>
+      <div>
+        <h3>QR the vial label to its own report</h3>
+        <p>A physical-to-digital proof loop that competitors relying on generic trust badges cannot cheaply copy. It also gives post-purchase email a genuine reason to exist.</p>
+        <div class="chips"><span class="chip">differentiator</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">12</div>
+      <div>
+        <h3>Publish the testing policy as a standing page</h3>
+        <p>Which laboratory, which assay, what the acceptance threshold is, and what happens when a batch fails. Stating the failure path is the part competitors omit, which is exactly why it reads as credible.</p>
+        <div class="chips"><span class="chip verify">document truthfully</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">13</div>
+      <div>
+        <h3>Build documentation-led creative as the default archetype</h3>
+        <p>Open on the actual report, hold on the batch line, cut to the vial, end on "search your lot number." Zero outcome language, zero human-use framing — which is why it survives review where claim-led creative does not.</p>
+        <div class="chips"><span class="chip">creative</span><span class="chip">lowest policy risk</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="organic">
+    <div class="sec-head"><span class="roman">Phase two</span><h2>Organic short-form</h2></div>
+    <p class="sec-note">
+      Paid eligibility is unresolved; organic is not affected by that ruling. This is where you learn which
+      hooks work while the platform question is still open — and a hook proven organically is evidence worth
+      having whatever the paid answer turns out to be.
+    </p>
+
+    <div class="tactic">
+      <div class="rank">14</div>
+      <div>
+        <h3>Post organically before you pay for anything</h3>
+        <p>Cheapest possible creative testing, no eligibility gate, and it generates the audience data that makes later paid targeting worth buying. At 364 lifetime visitors you have no retargeting pool to spend against anyway.</p>
+        <div class="chips"><span class="chip">start here</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">15</div>
+      <div>
+        <h3>Cinematic product macro series</h3>
+        <p>Vial as object. Dark field, backlit, soft contact shadow, slow push. No copy. This is the one place where high polish beats native-feel footage, because the contrast against a feed of amateur supplement content is the point.</p>
+        <div class="chips"><span class="chip">creative</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">16</div>
+      <div>
+        <h3>Cold chain, packing and handling footage</h3>
+        <p>Operations content: labelling, cold packs, batch stickers going onto boxes. Materially interesting, entirely claim-free, and it answers "are these people real?" — the actual question a first-time buyer in this category has.</p>
+        <div class="chips"><span class="chip">creative</span><span class="chip">low policy risk</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">17</div>
+      <div>
+        <h3>Educational: what a purity assay actually measures</h3>
+        <p>Explain HPLC and mass spec truthfully and generally, without reference to any outcome. Earns attention instead of buying it, and positions you as the party that understands the testing rather than the party asserting it.</p>
+        <div class="chips"><span class="chip">creative</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">18</div>
+      <div>
+        <h3>Catalogue tours by research category</h3>
+        <p>Growth Hormone is your deepest shelf at seven live SKUs, followed by Longevity, Specialty, Cognitive and Repair &amp; Recovery at five each. Depth is a credibility signal — show the shelf, not one hero product.</p>
+        <div class="chips"><span class="chip">creative</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">19</div>
+      <div>
+        <h3>Comparison against the unnamed category norm</h3>
+        <p>Your documentation posture versus what this category normally offers. Never a named competitor, never their assets — the contrast is structural, and it makes your strongest point without you having to assert superiority.</p>
+        <div class="chips"><span class="chip">creative</span><span class="chip">never name a rival</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">20</div>
+      <div>
+        <h3>Test hooks, not concepts</h3>
+        <p>Same body, same CTA, five different opening two seconds. Changing four things at once yields a result you cannot attribute, which is the same as no result. Vary one axis at a time and you actually learn something.</p>
+        <div class="chips"><span class="chip">method</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">21</div>
+      <div>
+        <h3>Reframe winners across platforms rather than reshooting</h3>
+        <p>9:16 for TikTok and Reels, 4:5 for feed. Shoot with the safe areas in mind once — clear of the top 12%, bottom 20% and right 15% — and one shoot serves every surface.</p>
+        <div class="chips"><span class="chip">efficiency</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="search">
+    <div class="sec-head"><span class="roman">Phase three</span><h2>Search &amp; content</h2></div>
+    <p class="sec-note">
+      The highest-leverage channel for a category that ad platforms restrict: demand that already exists,
+      captured without asking a moderator's permission. Slow to compound, and the only channel here that
+      cannot be switched off by someone else's policy update.
+    </p>
+
+    <div class="tactic">
+      <div class="rank">22</div>
+      <div>
+        <h3>Own "[compound] certificate of analysis" search terms</h3>
+        <p>Low competition, unusually high purchase intent, and it maps exactly onto the asset you are building in #1. Someone searching for a COA is already vetting suppliers.</p>
+        <div class="chips"><span class="chip">high impact</span><span class="chip">compounds slowly</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">23</div>
+      <div>
+        <h3>Expand the research library past four articles</h3>
+        <p>You have four — research-use-only, reading a COA, storage and handling, purity and third-party testing. All four are correctly framed. That is a foundation, not a library; the page draws 108 views already.</p>
+        <div class="chips"><span class="chip">recurring</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">24</div>
+      <div>
+        <h3>Fill the technical fields on every product record</h3>
+        <p>Your schema already carries <code>cas_number</code>, <code>molecular_formula</code>, <code>molecular_weight</code>, <code>peptide_sequence</code> and <code>storage_recommendation</code>. Populated, they make each PDP rank for precise technical queries that generic sellers never target.</p>
+        <div class="chips"><span class="chip">high impact</span><span class="chip">low effort</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">25</div>
+      <div>
+        <h3>Audit and write every SEO title and description</h3>
+        <p>The <code>seo_title</code> and <code>seo_description</code> fields exist per product. Thirty-five live SKUs is thirty-five entry points, and unwritten defaults waste all of them.</p>
+        <div class="chips"><span class="chip">low effort</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">26</div>
+      <div>
+        <h3>Write the supplier-vetting guide</h3>
+        <p>"How to verify a research materials supplier" — an honest checklist that happens to describe exactly what you do. The most persuasive form of comparison content, because the reader reaches the conclusion themselves.</p>
+        <div class="chips"><span class="chip">high impact</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">27</div>
+      <div>
+        <h3>Ship Product and Offer structured data</h3>
+        <p>Rich results in search for price, availability and product identity. Mechanical to implement, and it improves click-through on listings you already rank for.</p>
+        <div class="chips"><span class="chip">low effort</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">28</div>
+      <div>
+        <h3>Mine real questions for article topics</h3>
+        <p>Forums and comment threads in this space are full of specific sourcing and verification questions. Answering them precisely is both a content pipeline and a map of what your buyers are uncertain about.</p>
+        <div class="chips"><span class="chip">research</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">29</div>
+      <div>
+        <h3>Check Shopping-feed eligibility before building a feed</h3>
+        <p>Google Merchant Center restricts this category in ways worth confirming before investing in feed infrastructure. Ask first; the answer may make #27's structured data the only search-surface work worth doing.</p>
+        <div class="chips"><span class="chip verify">needs verification</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="email">
+    <div class="sec-head"><span class="roman">Phase three</span><h2>Email &amp; lifecycle</h2></div>
+    <p class="sec-note">
+      Your three customers have placed eight orders between them. Repeat purchase is, on the evidence you
+      have, already this business's strength — and it is the one channel no platform can revoke. It is also
+      currently five subscribers wide.
+    </p>
+
+    <div class="tactic">
+      <div class="rank">30</div>
+      <div>
+        <h3>Build the list around the report library, not a discount</h3>
+        <p>"Get each new batch report as it is published" is a compelling, entirely claim-free reason to subscribe, and it self-selects for the buyer who cares about documentation. Five subscribers is your entire owned audience.</p>
+        <div class="chips"><span class="chip">high impact</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">31</div>
+      <div>
+        <h3>Send the batch report after purchase</h3>
+        <p>Post-purchase email that delivers the actual document for the lot they received. Reinforces the differentiator at the exact moment trust is being formed, and it earns the open without a promotion.</p>
+        <div class="chips"><span class="chip">high impact</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">32</div>
+      <div>
+        <h3>Surface back-in-stock capture</h3>
+        <p>Three live SKUs are out of stock and the feature has captured <strong>zero requests</strong>. Either it is not visible on the product page or it is not working. Free demand capture that is currently being discarded.</p>
+        <div class="chips"><span class="chip">low effort</span><span class="chip verify">check it works</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">33</div>
+      <div>
+        <h3>Measure the abandoned-cart flow you already run</h3>
+        <p>Nine carts, twenty-nine emails sent, no recovery figure attached. This is the only automation with real volume — instrument it before adding a fourth flow you also will not measure.</p>
+        <div class="chips"><span class="chip">low effort</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">34</div>
+      <div>
+        <h3>Activate subscribe-and-save on repeat-purchase SKUs</h3>
+        <p>The <code>product_subscriptions</code> table holds zero rows. For consumable research stock this is the most natural revenue mechanic you have built and are not using.</p>
+        <div class="chips"><span class="chip">built, unused</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">35</div>
+      <div>
+        <h3>Decide what the membership programme is for</h3>
+        <p>Five tiers exist; Vanta Essential is currently inactive; two customers hold memberships against 51 unique visitors to the page. Either activate the full ladder or narrow it — and never attach a benefit or price in creative without re-checking the live tier.</p>
+        <div class="chips"><span class="chip verify">re-verify pricing</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">36</div>
+      <div>
+        <h3>Win back the customers you already have</h3>
+        <p>Three customers, eight orders, $57.34 average. With numbers this small, one recovered customer is a third of your base — worth a personal email rather than an automation.</p>
+        <div class="chips"><span class="chip">low effort</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="community">
+    <div class="sec-head"><span class="roman">Phase three</span><h2>Community &amp; credibility</h2></div>
+    <p class="sec-note">
+      This category buys on reputation formed in places you do not control. You cannot advertise your way
+      into that; you can only show up with documentation and be consistent.
+    </p>
+
+    <div class="tactic">
+      <div class="rank">37</div>
+      <div>
+        <h3>Show up where the category actually discusses sourcing</h3>
+        <p>Forums and communities, answering verification questions with documents rather than pitches. Slow, unscalable, and the single most durable source of credibility in a category where advertising is restricted.</p>
+        <div class="chips"><span class="chip">slow</span><span class="chip">durable</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">38</div>
+      <div>
+        <h3>Collect real reviews, with permission, and never invent one</h3>
+        <p>You have three customers. Ask them. A fabricated testimonial is the fastest way to lose both an ad account and the trust the rest of this document is built on — and at this volume the real ones are obtainable.</p>
+        <div class="chips"><span class="chip risk">never fabricate</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">39</div>
+      <div>
+        <h3>Put a named person behind the standards</h3>
+        <p>Who decides what gets sold, on what evidence. Anonymous vendors are the category norm; a named accountable operator is a differentiator that costs nothing to deploy.</p>
+        <div class="chips"><span class="chip">low effort</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">40</div>
+      <div>
+        <h3>Publish a batch and testing changelog</h3>
+        <p>A dated public log of what was tested and when. It reads as an operating discipline rather than a marketing page, which is precisely why it persuades.</p>
+        <div class="chips"><span class="chip">recurring</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">41</div>
+      <div>
+        <h3>Work with creators on structure, never on claims</h3>
+        <p>Brief them on documentation and process; give them the report to react to. A creator making an outcome claim on your behalf carries the same regulatory exposure as making it yourself.</p>
+        <div class="chips"><span class="chip risk">brief carefully</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="partners">
+    <div class="sec-head"><span class="roman">Phase three</span><h2>Partners &amp; referral</h2></div>
+    <p class="sec-note">
+      This machinery is fully built and producing nothing. Ten ambassadors and ten partners have generated
+      131 tracked clicks and <strong>zero referral orders, zero commissions, zero payouts</strong>. That is a
+      conversion problem, not a recruitment problem — and recruiting more people into a broken funnel makes
+      it worse.
+    </p>
+
+    <div class="tactic">
+      <div class="rank">42</div>
+      <div>
+        <h3>Diagnose why 131 referral clicks produced no orders</h3>
+        <p>Traffic is arriving and not converting. Before recruiting a single additional ambassador, establish whether the referral code survives the checkout session, where those clicks land, and what they see.</p>
+        <div class="chips"><span class="chip">blocker</span><span class="chip">high impact</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">43</div>
+      <div>
+        <h3>Verify referral attribution end to end</h3>
+        <p>Place a test order through a real ambassador link and confirm a row lands in <code>referral_orders</code> and a commission is written. Currently both tables are empty, which is either a genuine zero or a silent failure.</p>
+        <div class="chips"><span class="chip">low effort</span><span class="chip verify">test it</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">44</div>
+      <div>
+        <h3>Recruit ambassadors from customers, not strangers</h3>
+        <p>Someone who has bought and received a batch report can speak to the documentation credibly. Someone recruited cold will reach for outcome claims, because that is what the rest of the category does.</p>
+        <div class="chips"><span class="chip">quality over volume</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">45</div>
+      <div>
+        <h3>Build a real funnel behind the wholesale page</h3>
+        <p>It draws 55 views from nine unique visitors with no follow-up path. Bulk buyers are the highest-value segment you can reach without any advertising platform's permission at all.</p>
+        <div class="chips"><span class="chip">underused</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">46</div>
+      <div>
+        <h3>Turn on tiered commissions once the base flow converts</h3>
+        <p>Three commission tier rules are configured and no commission has ever been paid. Escalating incentives only matter after #42 and #43 prove the mechanism works at all.</p>
+        <div class="chips"><span class="chip">sequenced</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="paid">
+    <div class="sec-head"><span class="roman">Phase four</span><h2>Paid media</h2></div>
+    <p class="sec-note">
+      Last on purpose. Eligibility is unverified, the direct category shows no evidence of running paid social,
+      you have no retargeting pool, and your strongest creative angle is not yet substantiated. Spending now
+      buys expensive noise.
+    </p>
+
+    <div class="tactic">
+      <div class="rank">47</div>
+      <div>
+        <h3>Treat Meta as closed until proven otherwise</h3>
+        <p>Four direct peptide sellers checked against the live ad library this morning; none is running ads. The brands that are — Seed, Thesis, Huel — sell a legally different product. Absence of competitors here is a warning, not an opening.</p>
+        <div class="chips"><span class="chip risk">likely restricted</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">48</div>
+      <div>
+        <h3>Branded search first, if the category clears</h3>
+        <p>Cheapest, lowest-risk paid placement available: people already typing your name. It also tells you whether organic and social are generating demand you are currently failing to capture.</p>
+        <div class="chips"><span class="chip verify">needs verification</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">49</div>
+      <div>
+        <h3>Small documentation-led TikTok test, once #06 returns</h3>
+        <p>Documentation archetype only, no outcome language, minimum viable budget. Click-ID tracking already flows into attribution automatically, so a test will actually be measurable — which is more than most first tests manage.</p>
+        <div class="chips"><span class="chip verify">gated on ruling</span></div>
+      </div>
+    </div>
+
+    <div class="tactic">
+      <div class="rank">50</div>
+      <div>
+        <h3>Retarget only when there is a pool worth retargeting</h3>
+        <p>364 lifetime visitors cannot support a retargeting audience. Revisit when organic has built traffic in the thousands — the tactic is sound, the timing is not.</p>
+        <div class="chips"><span class="chip">not yet</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="sequence">
+    <div class="sec-head"><span class="roman">Execution</span><h2>What to actually do first</h2></div>
+    <p class="sec-note">Fifty tactics is a map, not a to-do list. This is the order that unblocks the most.</p>
+
+    <div class="seq">
+      <div class="seq-row">
+        <div class="when">Week 1</div>
+        <p><strong>#01–#05.</strong> Publish COAs for your top SKUs, resolve the coupon table, filter admin traffic out of analytics, tag outbound links, connect one social channel. Nothing here needs budget.</p>
+      </div>
+      <div class="seq-row">
+        <div class="when">Week 1</div>
+        <p><strong>#06 and #43.</strong> Submit for platform category review, and place one test order through an ambassador link to find out whether referral attribution is broken or genuinely at zero. Both are questions you cannot answer by reasoning.</p>
+      </div>
+      <div class="seq-row">
+        <div class="when">Weeks 2–3</div>
+        <p><strong>#07, #08, #24, #25.</strong> Wire the report library into every product page and fill the technical and SEO fields. This is the compounding work, and it is mostly data entry against a schema you already built.</p>
+      </div>
+      <div class="seq-row">
+        <div class="when">Weeks 3–4</div>
+        <p><strong>#13–#20.</strong> Shoot the first documentation and cinematic-product batch, post organically, test hooks one axis at a time. Cheap creative learning while the platform ruling is still outstanding.</p>
+      </div>
+      <div class="seq-row">
+        <div class="when">Ongoing</div>
+        <p><strong>#09, #30, #31.</strong> The batch-drop loop: every new batch produces a report, a post and an email. Operations generating marketing, so the content pipeline never depends on inventing topics.</p>
+      </div>
+      <div class="seq-row">
+        <div class="when">Only after</div>
+        <p><strong>#47–#50.</strong> Paid media, gated on the category ruling and on the COA library actually existing. Spending before either is settled buys data you cannot act on.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p>
+      Every figure in this document was read from the live Vanta Labs production database, the live Meta ad
+      library, and the Rebbel account on 30 August 2026. Nothing was estimated. Where a number is zero, it is
+      zero in the source.
+    </p>
+    <p>
+      Compliance constraints applied throughout: products are laboratory research materials, research use only.
+      No tactic here implies human use, dosing, reconstitution, or any medical, therapeutic, performance or
+      body-composition outcome. Prices, tiers, discounts and stock status must be re-verified against the live
+      store before appearing in any creative — at time of writing no coupon is live.
+    </p>
+    <p>
+      This document recommends. It does not launch campaigns, set budgets or spend money.
+    </p>
+  </footer>
+
+</div>
