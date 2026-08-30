@@ -10,6 +10,7 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { rateLimitKeyForRequest } from "@/lib/request-ip";
 import { customerSafeMessage } from "@/lib/safe-error";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { looksLikeEmail } from "@/lib/email-shape";
 
 export const dynamic = "force-dynamic";
 
@@ -49,7 +50,7 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => ({}));
     const newEmail = String((body as { email?: unknown })?.email ?? "").trim().toLowerCase();
 
-    if (!newEmail || !newEmail.includes("@") || newEmail.length > 320) {
+    if (!looksLikeEmail(newEmail)) {
       return NextResponse.json({ success: false, error: "Enter a valid email address." }, { status: 400 });
     }
     if (newEmail === user.email.trim().toLowerCase()) {

@@ -133,18 +133,41 @@ const stamp = Date.now();
 
 async function passAgeGate(page) {
   await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(800);
-  if (!(await page.$("[role=dialog]"))) return;
+
+  // WAIT FOR CONDITIONS, NOT FOR CLOCKS.
+  //
+  // This used to be three fixed sleeps, and it raced the render: on a slower
+  // load the dialog had not appeared yet, or the button was still disabled when
+  // the click landed, and the gate stayed up — silently covering whatever the
+  // next step went on to assert. Every wait below is on the thing it actually
+  // depends on.
+  const appeared = await page
+    .waitForSelector("[role=dialog]", { timeout: 8000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!appeared) return false;   // already accepted in this context
+
   await page.evaluate(() => {
     document.querySelectorAll("[role=dialog] input[type=checkbox]").forEach((b) => { if (!b.checked) b.click(); });
   });
-  await page.waitForTimeout(500);
+
+  // The button is disabled until every box is ticked, and React re-renders
+  // between tasks — so wait for it to become enabled rather than guessing.
+  await page.waitForFunction(() => {
+    const btn = [...document.querySelectorAll("[role=dialog] button")]
+      .find((b) => /Create account \/ Sign in|Continue as guest/.test(b.textContent || ""));
+    return Boolean(btn && !btn.disabled);
+  }, null, { timeout: 8000 });
+
   await page.evaluate(() => {
     const btn = [...document.querySelectorAll("[role=dialog] button")]
       .find((b) => /Create account \/ Sign in|Continue as guest/.test(b.textContent || "") && !b.disabled);
     if (btn) btn.click();
   });
+
+  // Prove it cleared. A gate still up hides everything a later step reads.
   await page.waitForFunction(() => !document.querySelector("[role=dialog]"), null, { timeout: 10000 });
+  return true;
 }
 
 async function signIn(page, email, password) {

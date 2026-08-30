@@ -137,6 +137,14 @@ const session = (user) => ({
  */
 const spentTokens = new Set();
 
+/**
+ * Per-user sign-outs the shim was asked to perform, so a test can assert that
+ * the app actually asked. Recorded rather than simulated: this shim keeps no
+ * session table, and pretending to revoke sessions it never tracked would be a
+ * harness reporting work it did not do.
+ */
+const signedOutUsers = new Map();
+
 export async function handleAuth(req, res, url, pool, send, readBody) {
   const path = url.pathname.replace(/^\/auth\/v1/, "");
   if (!url.pathname.startsWith("/auth/v1")) return false;
@@ -230,15 +238,75 @@ export async function handleAuth(req, res, url, pool, send, readBody) {
     return send(res, 200, payload), true;
   }
 
+  // Harness-only introspection: which users the app asked to sign out, and
+  // with what scope. Development tooling; there is no equivalent in GoTrue.
+  if (path === "/__harness/signouts" && req.method === "GET") {
+    return send(res, 200, Object.fromEntries(signedOutUsers)), true;
+  }
+
+  // POST /logout?scope=global|local|others — the REAL path, and the one
+  // admin.signOut(jwt, scope) uses. /api/account/change-password calls it with
+  // scope "others" so a customer changing their password because they think
+  // somebody else is in the account actually removes them.
   if (path === "/logout" && req.method === "POST") {
     const raw = String(req.headers.authorization ?? "");
-    if (raw.startsWith("Bearer ")) revokedTokens.add(raw.slice(7));
+    const token = raw.startsWith("Bearer ") ? raw.slice(7) : "";
+    const scope = url.searchParams.get("scope") ?? "global";
+
+    // Whose token is it? Recorded so a test can assert the app asked for the
+    // right person and the right scope. The shim keeps no session table, so it
+    // records the request rather than pretending to revoke sessions it never
+    // tracked — claiming work it did not do is the failure this harness exists
+    // to avoid.
+    let subject = null;
+    try {
+      const claims = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+      subject = claims?.sub ?? null;
+    } catch {
+      subject = null;
+    }
+    if (subject) signedOutUsers.set(subject, { scope, at: new Date().toISOString() });
+
+    // "others" deliberately leaves the CALLING token usable — the customer must
+    // not be signed out of the page they are standing on.
+    if (token && scope !== "others") revokedTokens.add(token);
     return send(res, 204), true;
   }
 
   // ---- admin API ---------------------------------------------------------
   if (path.startsWith("/admin/users")) {
     const rest = path.slice("/admin/users".length).replace(/^\//, "");
+
+    // admin.updateUserById — PUT /admin/users/<id>.
+    if (rest && (req.method === "PUT" || req.method === "PATCH")) {
+      const body = (await readBody(req)) ?? {};
+      const found = await q("select * from auth.users where id = $1", [rest]);
+      if (!found.rows.length) return send(res, 404, { error: "user_not_found" }), true;
+      if (body.password !== undefined) {
+        await q("update auth.users set encrypted_password = $2 where id = $1", [rest, String(body.password)]);
+      }
+      if (body.email !== undefined) {
+        await q("update auth.users set email = $2 where id = $1", [rest, String(body.email).toLowerCase()]);
+      }
+      if (body.email_confirm === true) {
+        await q("update auth.users set email_confirmed_at = coalesce(email_confirmed_at, now()) where id = $1", [rest]);
+      }
+      if (body.user_metadata) {
+        await q(
+          "update auth.users set raw_user_meta_data = coalesce(raw_user_meta_data,'{}'::jsonb) || $2::jsonb where id = $1",
+          [rest, JSON.stringify(body.user_metadata)],
+        );
+      }
+      if (body.app_metadata) {
+        await q(
+          "update auth.users set raw_app_meta_data = coalesce(raw_app_meta_data,'{}'::jsonb) || $2::jsonb where id = $1",
+          [rest, JSON.stringify(body.app_metadata)],
+        );
+      }
+      const fresh = await q("select * from auth.users where id = $1", [rest]);
+      return send(res, 200, toUser(fresh.rows[0])), true;
+    }
+
     if (rest) {
       const found = await q("select * from auth.users where id = $1", [rest]);
       if (!found.rows.length) return send(res, 404, { error: "user_not_found" }), true;

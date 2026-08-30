@@ -5,6 +5,7 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { getRequestIpAddress, rateLimitKeyForRequest } from "@/lib/request-ip";
 import { getSiteUrl } from "@/lib/env";
 import { verifyTurnstileToken } from "@/lib/turnstile";
+import { looksLikeEmail } from "@/lib/email-shape";
 
 export const dynamic = "force-dynamic";
 
@@ -53,7 +54,7 @@ export async function POST(request: Request) {
     const captchaToken = String((body as { captchaToken?: unknown })?.captchaToken ?? "");
     const nextPath = String((body as { nextPath?: unknown })?.nextPath ?? "").trim() || "/account";
 
-    if (!email || !email.includes("@") || email.length > 320) {
+    if (!looksLikeEmail(email)) {
       return NextResponse.json(GENERIC_RESPONSE);
     }
 

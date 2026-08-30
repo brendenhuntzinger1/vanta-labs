@@ -10,6 +10,7 @@ import { getRequestIpAddress, rateLimitKeyForRequest } from "@/lib/request-ip";
 import { getSiteUrl } from "@/lib/env";
 import { brandedConfirmUrl } from "@/lib/auth-confirm-link";
 import { verifyTurnstileToken } from "@/lib/turnstile";
+import { looksLikeEmail } from "@/lib/email-shape";
 
 export const dynamic = "force-dynamic";
 
@@ -81,7 +82,7 @@ export async function POST(request: Request) {
 
     // Shape check only. An invalid address gets the same answer as a valid one
     // that has no account — silence is the whole point.
-    if (!email || !email.includes("@") || email.length > 320) {
+    if (!looksLikeEmail(email)) {
       return NextResponse.json(GENERIC_RESPONSE);
     }
 

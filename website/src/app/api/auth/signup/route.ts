@@ -11,6 +11,7 @@ import { getSiteUrl } from "@/lib/env";
 import { brandedConfirmUrl } from "@/lib/auth-confirm-link";
 import { verifyTurnstileToken } from "@/lib/turnstile";
 import { SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-signup-outcome";
+import { looksLikeEmail } from "@/lib/email-shape";
 
 export const dynamic = "force-dynamic";
 
@@ -103,7 +104,7 @@ export async function POST(request: Request) {
     // the user's own input error, reveals nothing about any account, and
     // silently swallowing it would leave them staring at "check your email"
     // for a message that was never sent.
-    if (!email || !email.includes("@") || email.length > 320) {
+    if (!looksLikeEmail(email)) {
       return NextResponse.json(GENERIC_RESPONSE);
     }
     if (password.length < 8) {

@@ -144,16 +144,33 @@ export function AccountSettingsClient({
     setPasswordMessage(null);
     setPasswordError(null);
     try {
-      if (newPassword.length < 8) throw new Error("New password must be at least 8 characters.");
-      // Re-authenticate before applying a change so a hijacked session can't
-      // lock the real owner out.
-      const { error: reauthError } = await supabase.auth.signInWithPassword({ email: initialEmail, password: currentPassword });
-      if (reauthError) throw new Error("Current password is incorrect.");
-      const { error } = await supabase.auth.updateUser({ password: newPassword });
-      if (error) throw new Error(error.message);
+      // THROUGH THE SERVER, BECAUSE THAT IS THE ONLY PLACE THE RULES HOLD.
+      //
+      // This used to check the length here and then call
+      // supabase.auth.signInWithPassword + supabase.auth.updateUser from the
+      // browser. Both of those are the caller's own code: anyone holding a
+      // stolen session token could call updateUser directly, skip the
+      // re-authentication entirely, and set a new password without knowing the
+      // old one — locking the real owner out, which is exactly what the
+      // re-authentication was there to prevent. The length rule went with it.
+      //
+      // /api/account/change-password verifies the current password server-side,
+      // enforces the minimum where the caller cannot reach it, and signs the
+      // account's other devices out the way the reset form already did.
+      const response = await fetch("/api/account/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const result = (await response.json().catch(() => null)) as
+        | { success: boolean; message?: string; error?: string }
+        | null;
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.error ?? "Unable to update password");
+      }
       setCurrentPassword("");
       setNewPassword("");
-      setPasswordMessage("Password updated.");
+      setPasswordMessage(result.message ?? "Password updated.");
     } catch (error) {
       setPasswordError(error instanceof Error ? error.message : "Unable to update password");
     } finally {

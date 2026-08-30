@@ -102,13 +102,31 @@ function assert(condition, message) {
  */
 async function passAgeGate(page) {
   await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(800);
-  if (!(await page.$("[role=dialog]"))) return false;
+
+  // WAIT FOR CONDITIONS, NOT FOR CLOCKS.
+  //
+  // This used to be three fixed sleeps, and it raced the render: on a slower
+  // load the dialog had not appeared yet, or the button was still disabled when
+  // the click landed, and the gate stayed up — silently covering whatever the
+  // next step went on to assert. Every wait below is on the thing it actually
+  // depends on.
+  const appeared = await page
+    .waitForSelector("[role=dialog]", { timeout: 8000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!appeared) return false;   // already accepted in this context
 
   await page.evaluate(() => {
     document.querySelectorAll("[role=dialog] input[type=checkbox]").forEach((b) => { if (!b.checked) b.click(); });
   });
-  await page.waitForTimeout(500);
+
+  // The button is disabled until every box is ticked, and React re-renders
+  // between tasks — so wait for it to become enabled rather than guessing.
+  await page.waitForFunction(() => {
+    const btn = [...document.querySelectorAll("[role=dialog] button")]
+      .find((b) => /Create account \/ Sign in|Continue as guest/.test(b.textContent || ""));
+    return Boolean(btn && !btn.disabled);
+  }, null, { timeout: 8000 });
 
   await page.evaluate(() => {
     const btn = [...document.querySelectorAll("[role=dialog] button")]
@@ -116,8 +134,7 @@ async function passAgeGate(page) {
     if (btn) btn.click();
   });
 
-  // Prove it actually cleared rather than assuming; a gate still up silently
-  // hides everything a later step asserts on.
+  // Prove it cleared. A gate still up hides everything a later step reads.
   await page.waitForFunction(() => !document.querySelector("[role=dialog]"), null, { timeout: 10000 });
   return true;
 }
@@ -304,6 +321,34 @@ async function main() {
     const created = await q("select 1 from auth.users where email = $1", [`weak.${stamp}@example.test`]);
     assert(created.rows.length === 0, "a weak password still created an account");
     return "refused, and no account created";
+  });
+
+  await step("a malformed email creates no account", async () => {
+    // The route answers the SAME generic "check your email" for a malformed
+    // address as for a real signup — deliberate, so it cannot be used to probe
+    // which addresses exist. The thing that must hold is therefore not the
+    // status code but the absence of an account.
+    const before = (await q("select count(*)::int as n from auth.users")).rows[0].n;
+    const bad = ["", "noatsign", "a@", `${"x".repeat(330)}@example.test`];
+    const statuses = [];
+    for (const email of bad) {
+      const res = await page.evaluate(async (address) => {
+        const r = await fetch("/api/auth/signup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            email: address, password: "HarnessPass123!", fullName: "Malformed", businessType: "lab",
+          }),
+        });
+        return r.status;
+      }, email);
+      statuses.push(res);
+    }
+    const after = (await q("select count(*)::int as n from auth.users")).rows[0].n;
+    assert(after === before, `${after - before} account(s) were created from malformed addresses`);
+    assert(!statuses.includes(500), `a malformed address caused a 500: ${statuses.join(",")}`);
+    return `${bad.length} malformed addresses, ${after - before} accounts created`;
   });
 
   await step("new customer signs up", async () => {
@@ -517,6 +562,48 @@ async function main() {
     assert(text.includes(NAME.split(" ")[0]) || text.includes(EMAIL),
       "the account page showed neither the customer's name nor their email");
     return "account renders the signed-in customer";
+  });
+
+  await step("a profile edit persists across a reload", async () => {
+    const newName = `Journey Renamed ${stamp}`;
+    await page.goto(`${BASE}/account/settings`, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(2500);
+    if (/\/account\/login/.test(page.url())) return SKIP("settings bounced to the login form");
+
+    const saved = await page.evaluate(async (name) => {
+      // The name field carries NO type attribute, so input[type="text"] does not
+      // match it — the attribute selector needs the attribute to be present,
+      // whatever the .type property defaults to. Selected by exclusion instead.
+      const input = [...document.querySelectorAll("form input, section input, input")]
+        .find((i) => !["email", "tel", "password", "checkbox", "radio", "search", "hidden"].includes(i.type));
+      if (!input) return { ok: false, why: "no name field on the profile panel" };
+      const set = (el, v) => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, v);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+      set(input, name);
+      const btn = [...document.querySelectorAll("button")]
+        .find((b) => /save profile/i.test(b.textContent || "") && !b.disabled);
+      if (!btn) return { ok: false, why: "no Save profile button" };
+      btn.click();
+      return { ok: true };
+    }, newName);
+    if (!saved.ok) return SKIP(`could not drive the profile form: ${saved.why}`);
+    await page.waitForTimeout(3500);
+
+    const stored = (await q("select raw_user_meta_data->>'full_name' as n from auth.users where id = $1", [userId]))
+      .rows[0].n;
+    assert(stored === newName, `the stored name is "${stored}", not "${newName}"`);
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(3000);
+    const shown = await page.evaluate(() => {
+      const input = [...document.querySelectorAll("form input, section input, input")]
+        .find((i) => !["email", "tel", "password", "checkbox", "radio", "search", "hidden"].includes(i.type));
+      return input ? input.value : null;
+    });
+    assert(shown === newName, `after a reload the form shows "${shown}", not the saved name`);
+    return "saved and still shown after a reload";
   });
 
   // ---- 5. Sessions ------------------------------------------------------
@@ -781,6 +868,24 @@ async function main() {
     const text = await page.evaluate(() => document.body.innerText);
     assert(!/invalid or has expired/i.test(text), "a reload wrongly reported the link as expired");
     return "survived the reload";
+  });
+
+  await step("a dead reset link says so rather than showing a form", async () => {
+    // The opposite of the reload case above. Arriving with no recovery session
+    // at all — an expired link, or someone who just typed the URL — must not
+    // offer a no-current-password form, and must say why.
+    const other = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const o = await other.newPage();
+    await passAgeGate(o);
+    await o.goto(`${BASE}/account/reset-password`, { waitUntil: "domcontentloaded" });
+    await o.waitForTimeout(3000);
+    const text = await o.evaluate(() => document.body.innerText);
+    const offersForm = /update password/i.test(text);
+    await other.close();
+    assert(!offersForm, "a visitor with no recovery session was offered a password form");
+    assert(/invalid or has expired|forgot password/i.test(text),
+      `the dead-link state said nothing useful: ${text.slice(0, 160)}`);
+    return "refused, and explained";
   });
 
   await step("the new password saves", async () => {
@@ -1064,51 +1169,68 @@ async function main() {
 
   const THIRD_PASSWORD = "ThirdPassword789!";
 
-  await step("changing the password from settings works and the old one stops", async () => {
+  await step("a WRONG current password is refused, and nothing changes", async () => {
+    // The control the settings page has always claimed: "re-authenticate before
+    // applying a change so a hijacked session can't lock the real owner out."
+    // It used to run in the browser, so a stolen session token could call
+    // GoTrue's updateUser directly and set a new password without knowing the
+    // old one. That is account takeover, and it is what this asserts is gone.
     if (!(await sessionCookie(context))) await signIn(page, EMAIL, NEW_PASSWORD);
-    await page.goto(`${BASE}/account/settings`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(3000);
-    if (/\/account\/login/.test(page.url())) {
-      return SKIP(`settings bounced to the login form: ${page.url()}`);
-    }
-    // The password panel lives behind the Security category; on the default
-    // Profile view there are no password fields to find at all.
-    await page.evaluate(() => {
-      const tab = [...document.querySelectorAll("button, a")]
-        .find((b) => /^security$/i.test((b.textContent || "").trim()));
-      if (tab) tab.click();
-    });
-    await page.waitForTimeout(1200);
-    const changed = await page.evaluate(async ({ current, next }) => {
-      // Targeted by autocomplete role, not by position: /account/settings also
-      // carries a current-password field for the EMAIL change, so "the first two
-      // password inputs" is the wrong pair.
-      const cur = document.querySelector('input[autocomplete="current-password"][type=password]');
-      const neu = document.querySelector('input[autocomplete="new-password"][type=password]');
-      if (!neu) {
-        return { ok: false, why: `found ${document.querySelectorAll("input[type=password]").length} password fields, none marked new-password` };
-      }
-      const set = (el, v) => {
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, v);
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-      };
-      // The current-password box belonging to the PASSWORD panel is the last one.
-      const currents = [...document.querySelectorAll('input[autocomplete="current-password"][type=password]')];
-      if (currents.length) set(currents[currents.length - 1], current);
-      set(neu, next);
-      const confirm = [...document.querySelectorAll("input[type=password]")]
-        .filter((i) => i !== neu && !currents.includes(i));
-      confirm.forEach((i) => set(i, next));
-      const btn = [...document.querySelectorAll("button")]
-        .find((b) => /update password|change password|save password/i.test(b.textContent || "") && !b.disabled);
-      if (!btn) return { ok: false, why: "no enabled update-password button" };
-      btn.click();
-      return { ok: true };
-    }, { current: NEW_PASSWORD, next: THIRD_PASSWORD });
-    if (!changed.ok) return SKIP(`could not drive the change-password form: ${changed.why}`);
-    await page.waitForTimeout(3500);
+    const before = (await q("select encrypted_password from auth.users where id = $1", [userId]))
+      .rows[0].encrypted_password;
 
-    const stored = (await q("select encrypted_password from auth.users where email = $1", [EMAIL]))
+    const res = await apiAs(page, "/api/account/change-password", {
+      method: "POST",
+      body: { currentPassword: "NotTheRightOne!", newPassword: THIRD_PASSWORD },
+    });
+    assert(res.status === 403, `a wrong current password was answered ${res.status}, not 403`);
+
+    const after = (await q("select encrypted_password from auth.users where id = $1", [userId]))
+      .rows[0].encrypted_password;
+    assert(after === before, "the password changed despite a wrong current password");
+    return `403, password untouched`;
+  });
+
+  await step("a session token alone cannot change the password", async () => {
+    // The bypass itself: hold the session, skip the form, call the route.
+    // Without the current password it must get nowhere.
+    const before = (await q("select encrypted_password from auth.users where id = $1", [userId]))
+      .rows[0].encrypted_password;
+    const res = await apiAs(page, "/api/account/change-password", {
+      method: "POST",
+      body: { newPassword: "AttackerChosen1!" },
+    });
+    assert(res.status !== 200, `a change with NO current password was answered ${res.status}`);
+    const after = (await q("select encrypted_password from auth.users where id = $1", [userId]))
+      .rows[0].encrypted_password;
+    assert(after === before, "a session token alone changed the password");
+    return `refused with ${res.status}`;
+  });
+
+  await step("the 8-character minimum is enforced where the caller cannot reach it", async () => {
+    // Seven characters, submitted straight to the route rather than through the
+    // form — the client-side check is not the control.
+    const before = (await q("select encrypted_password from auth.users where id = $1", [userId]))
+      .rows[0].encrypted_password;
+    const short = await apiAs(page, "/api/account/change-password", {
+      method: "POST",
+      body: { currentPassword: NEW_PASSWORD, newPassword: "Short1!" },
+    });
+    assert(short.status === 400, `a 7-character password was answered ${short.status}`);
+    const after = (await q("select encrypted_password from auth.users where id = $1", [userId]))
+      .rows[0].encrypted_password;
+    assert(after === before, "a 7-character password was accepted");
+    return `400: ${short.body?.error}`;
+  });
+
+  await step("changing the password works, and the old one stops", async () => {
+    const res = await apiAs(page, "/api/account/change-password", {
+      method: "POST",
+      body: { currentPassword: NEW_PASSWORD, newPassword: THIRD_PASSWORD },
+    });
+    assert(res.ok, `the change was refused: ${res.status} ${JSON.stringify(res.body)}`);
+
+    const stored = (await q("select encrypted_password from auth.users where id = $1", [userId]))
       .rows[0].encrypted_password;
     assert(stored === THIRD_PASSWORD, "the password did not change");
 
@@ -1119,6 +1241,44 @@ async function main() {
     await signIn(page, EMAIL, THIRD_PASSWORD);
     assert(await sessionCookie(context), "the new password does not sign the customer in");
     return "changed; old rejected, new accepted";
+  });
+
+  await step("changing the password signs the account's OTHER devices out", async () => {
+    // Someone changing their password is very often doing it BECAUSE they think
+    // somebody else is in the account. /account/reset-password already revoked
+    // other sessions; settings did not, so the same act had two different
+    // security outcomes depending on which page you did it from.
+    const other = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const o = await other.newPage();
+    await passAgeGate(o);
+    await signIn(o, EMAIL, THIRD_PASSWORD);
+    assert(await sessionCookie(other), "could not establish the second device");
+
+    const fourth = "FourthPassword321!";
+    const res = await apiAs(page, "/api/account/change-password", {
+      method: "POST",
+      body: { currentPassword: THIRD_PASSWORD, newPassword: fourth },
+    });
+    assert(res.ok, `the change was refused: ${res.status}`);
+
+    // The shim records the revocation request rather than simulating a session
+    // table it does not keep, so this asserts the app ASKED — for the right
+    // account, with the scope that spares the page the customer is standing on.
+    const asked = await page.evaluate(async (shim) => {
+      const r = await fetch(`${shim}/auth/v1/__harness/signouts`);
+      return r.ok ? await r.json() : null;
+    }, BASE.replace(":3000", ":54321"));
+    await other.close();
+
+    if (!asked) return SKIP("the harness shim exposes no signout record to read");
+    const entry = asked[userId];
+    assert(entry, "no other-session revocation was requested for this account");
+    assert(entry.scope === "others",
+      `revocation used scope "${entry.scope}" — "global" would sign the customer out of the page they are on`);
+
+    // Leave the journey on a known password for anything downstream.
+    await q("update auth.users set encrypted_password = $2 where id = $1", [userId, THIRD_PASSWORD]);
+    return `asked to sign out other devices (scope ${entry.scope})`;
   });
 
   // ---- 15. Change email --------------------------------------------------
