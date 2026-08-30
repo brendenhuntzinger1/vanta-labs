@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 
 import { sendEmail } from "@/lib/email/send";
 import { accountConfirmationTemplate } from "@/lib/email/templates";
-import { fallBackToSupabaseConfirmation, sendBrandedConfirmationResend } from "@/lib/auth-confirmation-email";
+import { fallBackToSupabaseConfirmation, findUserByEmail, sendBrandedConfirmationResend } from "@/lib/auth-confirmation-email";
+import { recordSystemAlert } from "@/lib/monitoring";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getRequestIpAddress, rateLimitKeyForRequest } from "@/lib/request-ip";
@@ -139,7 +140,7 @@ export async function POST(request: Request) {
       );
     }
 
-    await createAccountAndSend({
+    const outcome = await createAccountAndSend({
       email,
       password,
       fullName,
@@ -147,6 +148,17 @@ export async function POST(request: Request) {
       referredByCode,
       redirectTo: confirmationRedirect(nextPath),
     });
+
+    if (outcome === "mint_failed") {
+      // No account, no email. Answer with something the form does NOT read as
+      // success, so its own signUp() fallback runs and the customer still gets
+      // an account — the "strictly additive" guarantee this route was built on.
+      //
+      // No `error` string: the form treats one as a refusal to show the
+      // customer and stops. 200, not 5xx, because a status code is a signal
+      // too. Nothing here varies with whether the address is registered.
+      return NextResponse.json({ success: false });
+    }
 
     return NextResponse.json(GENERIC_RESPONSE);
   } catch (error) {
@@ -156,6 +168,15 @@ export async function POST(request: Request) {
     return NextResponse.json(GENERIC_RESPONSE);
   }
 }
+
+/**
+ * What actually happened, so POST can decide whether the client should retry.
+ *
+ * Never surfaced to the caller as-is — see ENUMERATION SAFETY. "handled" covers
+ * both the new-address and the existing-address branch precisely because those
+ * two must stay indistinguishable.
+ */
+type SignupOutcome = "handled" | "mint_failed";
 
 /**
  * Mint the link, send it branded, and never say which branch ran.
@@ -173,7 +194,7 @@ async function createAccountAndSend(input: {
   businessType: string;
   referredByCode: string;
   redirectTo: string;
-}): Promise<void> {
+}): Promise<SignupOutcome> {
   const { data, error } = await supabaseAdmin.auth.admin.generateLink({
     type: "signup",
     email: input.email,
@@ -194,11 +215,45 @@ async function createAccountAndSend(input: {
   });
 
   if (error || !data?.properties?.action_link) {
+    // TWO VERY DIFFERENT FAILURES WORE THE SAME BRANCH.
+    //
     // Overwhelmingly this is "user already registered". Nothing is created and
     // nothing is said — but an account stranded UNCONFIRMED is exactly the
     // person this whole change is for, so they get a branded way back in.
-    await sendBrandedConfirmationResend(input.email, input.redirectTo);
-    return;
+    //
+    // generateLink refuses for other reasons too, though, and every one of them
+    // used to land here: a project password policy stricter than this route's
+    // own 8-character check, signups disabled, a blocked domain, a GoTrue admin
+    // rate limit, a bad service-role key, a transient 5xx. In all of those NO
+    // user exists, so the resend below finds nothing and returns silently — and
+    // POST then answered `success: true`, "check your email", which also
+    // suppressed the client-side signUp() fallback the form keeps for exactly
+    // this case. The customer was told an email was on its way, no account had
+    // been created, nothing was sent, and nobody was told.
+    //
+    // So the two are told apart the way the password-reset route already tells
+    // them apart, by asking whether the account exists. The RESPONSE stays
+    // generic for the existing-address branch; only the failure branch differs,
+    // and that branch does not correlate with whether an address is registered.
+    const existing = await findUserByEmail(input.email).catch(() => null);
+    if (existing) {
+      await sendBrandedConfirmationResend(input.email, input.redirectTo);
+      return "handled";
+    }
+
+    await recordSystemAlert({
+      type: "signup_mint_failed",
+      severity: "critical",
+      message:
+        "A signup was attempted for an address with NO account, and the confirmation link could "
+        + "not be minted — so no account was created and no email was sent. Check the Supabase "
+        + "project's password policy and whether signups are enabled; a policy stricter than this "
+        + "route's own 8-character rule refuses every signup here and nowhere else.",
+      context: { reason: error?.message ?? "no action_link returned" },
+      dedupeWindowMs: 30 * 60 * 1000,
+    }).catch(() => {});
+
+    return "mint_failed";
   }
 
   const template = accountConfirmationTemplate({
@@ -216,8 +271,12 @@ async function createAccountAndSend(input: {
 
   const result = await sendEmail({ to: input.email, ...template });
   if (result.success) {
-    return;
+    return "handled";
   }
 
+  // The account exists by now, so the client fallback must NOT run: a second
+  // signUp() for a live address would only refuse. Supabase's own email is the
+  // recovery here, unbranded but delivered.
   await fallBackToSupabaseConfirmation(input.email, result.error);
+  return "handled";
 }

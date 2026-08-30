@@ -1,5 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import {
+  AUTH_COOKIE_NAME,
+  accessTokenNeedsRefresh,
+  authCookieOptions,
+  decodeAuthCookie,
+  encodeAuthCookie,
+} from "@/lib/auth-cookie";
+
 const ADMIN_SESSION_COOKIE = "vl_admin_session";
 const MAINTENANCE_CACHE_TTL_MS = 15_000;
 const SESSION_CACHE_TTL_MS = 30_000;
@@ -300,8 +308,93 @@ function isTopLevelNavigation(request: NextRequest) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// KEEPING "KEEP ME SIGNED IN" TRUE.
+//
+// The session cookie lives 30 days; the access JWT inside it lives an hour.
+// Nothing renewed it, so the checkbox delivered sixty minutes and then signed
+// the customer out mid-session. This is where the pair is rotated — middleware
+// is the only place that sees every request AND can write a cookie.
+//
+// The common case costs nothing: expiry is read out of the JWT locally, so a
+// live token means no network call and no work at all. Only an expired one
+// spends a round trip, and only on a real page or API request — never on a
+// static asset.
+//
+// `exp` is read WITHOUT verifying the signature, which is safe because it is
+// used for one decision: whether to try refreshing. A forged `exp` buys nothing
+// — GoTrue still has to accept the refresh token, and every authentication
+// decision downstream still goes through getUser().
+// ---------------------------------------------------------------------------
+async function rotateSessionCookie(
+  request: NextRequest,
+): Promise<{ name: string; value: string; options: ReturnType<typeof authCookieOptions> } | null> {
+  const tokens = decodeAuthCookie(request.cookies.get(AUTH_COOKIE_NAME)?.value);
+  if (!tokens?.refreshToken) {
+    // No cookie, or one written before the envelope existed. A legacy cookie
+    // keeps its old behaviour until the customer's next sign-in rewrites it,
+    // which is deliberate: nobody signed in at deploy time gets logged out.
+    return null;
+  }
+
+  if (!accessTokenNeedsRefresh(tokens.accessToken, Math.floor(Date.now() / 1000))) {
+    return null;
+  }
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseKey) {
+    return null;
+  }
+
+  try {
+    // Called over plain fetch rather than through supabase-js: this is the Edge
+    // runtime on every request in the app, and the whole client is a large
+    // dependency to pull in for one endpoint.
+    const response = await fetch(`${supabaseUrl.replace(/\/+$/, "")}/auth/v1/token?grant_type=refresh_token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: supabaseKey },
+      body: JSON.stringify({ refresh_token: tokens.refreshToken }),
+    });
+
+    if (!response.ok) {
+      // A refresh token that GoTrue rejects is spent or revoked — a signed-out
+      // customer. The stale cookie is left alone rather than cleared: clearing
+      // it here would log someone out on a transient 5xx, and getAuthenticatedUser
+      // already treats an unusable token as signed out.
+      return null;
+    }
+
+    const body = await response.json();
+    const accessToken = typeof body?.access_token === "string" ? body.access_token : "";
+    const refreshToken = typeof body?.refresh_token === "string" ? body.refresh_token : "";
+    if (!accessToken || !refreshToken) {
+      return null;
+    }
+
+    return {
+      name: AUTH_COOKIE_NAME,
+      value: encodeAuthCookie({ accessToken, refreshToken, rememberMe: tokens.rememberMe }),
+      options: authCookieOptions(tokens.rememberMe),
+    };
+  } catch {
+    // Never let an auth-backend blip turn into a failed page load.
+    return null;
+  }
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // Rotated once per request, then attached to whichever response is returned
+  // below. Skipped entirely for static assets, which never need a session.
+  const refreshedCookie = isStaticAsset(pathname) ? null : await rotateSessionCookie(request);
+  const finish = (response: NextResponse) => {
+    if (refreshedCookie) {
+      response.cookies.set(refreshedCookie.name, refreshedCookie.value, refreshedCookie.options);
+    }
+    return applySecurityHeaders(response);
+  };
 
   if (MEDIA_EXTENSIONS.test(pathname) && isTopLevelNavigation(request)) {
     const home = request.nextUrl.clone();
@@ -310,7 +403,7 @@ export async function middleware(request: NextRequest) {
     // 307, not 308: this is a routing correction, not a permanent statement
     // about the asset's address, and it must not be cached by intermediaries
     // in a way that would follow the file itself around.
-    return applySecurityHeaders(NextResponse.redirect(home, 307));
+    return finish(NextResponse.redirect(home, 307));
   }
 
   // CSRF defense-in-depth: reject cross-site state-changing requests to the
@@ -329,7 +422,7 @@ export async function middleware(request: NextRequest) {
     CSRF_PROTECTED_PREFIXES.some((prefix) => pathname.startsWith(prefix)) &&
     !isSameOriginRequest(request)
   ) {
-    return applySecurityHeaders(
+    return finish(
       NextResponse.json(
         { success: false, error: "Invalid request origin" },
         { status: 403 },
@@ -338,21 +431,21 @@ export async function middleware(request: NextRequest) {
   }
 
   if (pathBypassesMaintenance(pathname)) {
-    return applySecurityHeaders(NextResponse.next());
+    return finish(NextResponse.next());
   }
 
   const maintenanceEnabled = await isMaintenanceEnabled();
   if (!maintenanceEnabled) {
-    return applySecurityHeaders(NextResponse.next());
+    return finish(NextResponse.next());
   }
 
   const isAdmin = await hasValidAdminSession(request);
   if (isAdmin) {
-    return applySecurityHeaders(NextResponse.next());
+    return finish(NextResponse.next());
   }
 
   if (pathname.startsWith("/api/")) {
-    return applySecurityHeaders(
+    return finish(
       NextResponse.json(
         { success: false, error: "Maintenance mode enabled" },
         { status: 503 },
@@ -363,7 +456,7 @@ export async function middleware(request: NextRequest) {
   const rewriteUrl = request.nextUrl.clone();
   rewriteUrl.pathname = "/maintenance";
   rewriteUrl.search = "";
-  return applySecurityHeaders(NextResponse.rewrite(rewriteUrl));
+  return finish(NextResponse.rewrite(rewriteUrl));
 }
 
 export const config = {

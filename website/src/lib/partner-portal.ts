@@ -10,6 +10,7 @@ import type { EmailTemplate } from "@/lib/email/types";
 import {
   ambassadorApplicationReceivedTemplate,
   ambassadorApprovedTemplate,
+  ambassadorInfoRequestedTemplate,
   ambassadorInviteTemplate,
   ambassadorDeniedTemplate,
   ambassadorPayoutSentTemplate,
@@ -283,8 +284,18 @@ async function sendAmbassadorEmail(
   to: string,
   template: EmailTemplate,
   context: string,
+  /**
+   * `replyTo` exists for the one message whose copy tells the recipient to
+   * reply: "needs more info". A reply to noreply@ goes nowhere, so that
+   * instruction is only true if the header points at a human. It rides on the
+   * queued copy too — a message that retries an hour later must keep the same
+   * reply path, or the retry silently downgrades the very thing that made the
+   * original correct.
+   */
+  options?: { replyTo?: string },
 ): Promise<boolean> {
-  const result = await sendEmail({ to, ...template });
+  const message = { to, ...template, replyTo: options?.replyTo };
+  const result = await sendEmail(message);
   if (result.success) {
     return true;
   }
@@ -293,7 +304,7 @@ async function sendAmbassadorEmail(
   // Best-effort by construction: enqueueFailedEmail swallows a missing table
   // and never throws, so a queue that is not migrated yet cannot turn a failed
   // notification into a failed approval.
-  await enqueueFailedEmail({ to, ...template }, result.error);
+  await enqueueFailedEmail(message, result.error);
   return false;
 }
 
@@ -2106,6 +2117,31 @@ export async function updatePartnerStatus(input: {
   // Gated on a real transition (see statusChanged above): an approved
   // ambassador used to receive a fresh "your application was approved" email
   // every time the owner adjusted their rates.
+  // "Needs more info" tells the applicant, at last.
+  //
+  // /partner/pending has always rendered "Please reply to the email we sent"
+  // for this status, and no email was ever sent — the gate below was
+  // approved/rejected only. An applicant moved to info_requested sat on a page
+  // pointing at a message that did not exist. It is sent with the support
+  // address as Reply-To, because "just reply to this email" has to reach a
+  // human for the page's own instruction to be true.
+  if (statusChanged && input.status === "info_requested" && existingPartner.email) {
+    try {
+      const { supportEmail } = await getBusinessSettings();
+      const template = ambassadorInfoRequestedTemplate({
+        name: String(existingPartner.name ?? ""),
+        supportEmail: supportEmail || undefined,
+        applicationUrl: `${getSiteUrl().replace(/\/$/, "")}/partner/pending`,
+      });
+      await sendAmbassadorEmail(existingPartner.email, template, "ambassador info requested", {
+        replyTo: supportEmail || undefined,
+      });
+    } catch (infoRequestError) {
+      // Never let a send failure undo the status change or skip the audit log.
+      console.error("[partner-portal] info-requested notification failed", infoRequestError);
+    }
+  }
+
   if (statusChanged && (input.status === "approved" || input.status === "rejected") && existingPartner.email) {
     try {
       const queueRowId = await enqueueNotification(

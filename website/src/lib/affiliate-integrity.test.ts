@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { sendEmail } from "@/lib/email/send";
+
 // ---------------------------------------------------------------------------
 // TWO TABLES THAT MUST NEVER DISAGREE, AND ONE NUMBER THAT MUST NEVER BE SHORT.
 //
@@ -43,6 +45,7 @@ vi.mock("@/lib/email/templates", () => ({
   ambassadorApplicationReceivedTemplate: () => ({ subject: "applied", html: "h" }),
   ambassadorApprovedTemplate: () => ({ subject: "approved", html: "h" }),
   ambassadorDeniedTemplate: () => ({ subject: "denied", html: "h" }),
+  ambassadorInfoRequestedTemplate: () => ({ subject: "one more thing", html: "h", text: "t" }),
   ambassadorPayoutSentTemplate: () => ({ subject: "payout", html: "h" }),
   newAmbassadorApplicationTemplate: () => ({ subject: "new", html: "h" }),
   referralCodeAssignedTemplate: () => ({ subject: "Your Vanta Labs Referral Code Is Ready", html: "h" }),
@@ -304,6 +307,31 @@ describe("the two tables cannot drift on status", () => {
 
     expect(state.ambassadors.get(id)!.status).toBe("info_requested");
     expect(state.partners.get(id)!.status).toBe("info_requested");
+  });
+
+  /**
+   * THE STATUS THAT TOLD NOBODY.
+   *
+   * /partner/pending renders, for info_requested: "Please reply to the email we
+   * sent." No email was ever sent — updatePartnerStatus gated its notification
+   * on approved/rejected only. An applicant moved to this state sat on a page
+   * pointing at a message that did not exist.
+   *
+   * Reply-To is part of the fix, not decoration: the copy tells them to reply,
+   * and a reply to noreply@ goes nowhere.
+   */
+  it("tells an applicant when the owner asks for more information", async () => {
+    const created = await apply();
+    const id = created.partnerId;
+    state.partners.set(id, { ...state.partners.get(id)!, email: "e@example.test", name: "E" });
+
+    await updatePartnerStatus({ partnerId: id, status: "info_requested" });
+
+    const sent = vi.mocked(sendEmail).mock.calls.map(([message]) => message);
+    const notice = sent.find((message) => message.subject === "one more thing");
+    expect(notice, "info_requested sent no email").toBeDefined();
+    expect(notice!.to).toBe("e@example.test");
+    expect(notice!.replyTo).toBe("support@example.test");
   });
 
   it("an ordinary status change still writes both", async () => {

@@ -833,6 +833,51 @@ export function ambassadorPayoutSentTemplate(input: {
   };
 }
 
+/**
+ * "We need a bit more information" — the ambassador status that told nobody.
+ *
+ * /partner/pending has always rendered, for status = info_requested: "Please
+ * reply to the email we sent." No email was ever sent. updatePartnerStatus
+ * gated its notification on approved/rejected only, so an applicant moved to
+ * this state was left on a page pointing at a message that did not exist, with
+ * nothing to reply to and no idea what was wanted.
+ *
+ * The copy deliberately does not invent a list of what is missing — the admin
+ * UI has no field for one — so it asks them to reply, which reaches the support
+ * address and is the action the page has always described.
+ */
+export function ambassadorInfoRequestedTemplate(input: { name: string; supportEmail?: string; applicationUrl: string }): EmailTemplate {
+  const name = escapeHtml(input.name);
+  const support = escapeHtml(input.supportEmail ?? "support@vantalabsresearch.com");
+  return {
+    subject: "One more thing about your Vanta Labs ambassador application",
+    html: renderLayout({
+      preheader: "We need a little more detail before we can approve you.",
+      titleHtml: name ? `${name}, we need one more thing` : "We need one more thing",
+      bodyHtml:
+        `<p>Thanks for applying to the Vanta Labs ambassador program. Before we can approve you, our team needs a bit more detail about you and your audience.</p>`
+        + `<p><strong>Just reply to this email</strong> and tell us a little more — where you post, roughly how many people follow you, and anything else you think helps. We'll pick your review straight back up.</p>`,
+      ctaLabel: "View my application",
+      ctaUrl: input.applicationUrl,
+      footerNoteHtml: `<p style="margin:10px 0 0;font-size:12px;color:#71717a;">You can also reach us at <a href="mailto:${support}" style="color:#a1a1aa;">${support}</a>.</p>`,
+    }),
+    text: toText([
+      name ? `Hi ${input.name},` : "Hi,",
+      "",
+      "Thanks for applying to the Vanta Labs ambassador program. Before we can",
+      "approve you, our team needs a bit more detail about you and your audience.",
+      "",
+      "Just reply to this email and tell us a little more — where you post,",
+      "roughly how many people follow you, and anything else you think helps.",
+      "",
+      `Your application: ${input.applicationUrl}`,
+      `Or reach us at ${input.supportEmail ?? "support@vantalabsresearch.com"}.`,
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
 export function ambassadorDeniedTemplate(input: { name: string }): EmailTemplate {
   const name = escapeHtml(input.name);
   return {

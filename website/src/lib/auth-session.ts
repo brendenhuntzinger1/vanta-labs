@@ -2,31 +2,50 @@ import "server-only";
 
 import { cookies } from "next/headers";
 import { createServerClient } from "@/lib/supabase-server";
+import { AUTH_COOKIE_NAME, authCookieOptions, decodeAuthCookie, encodeAuthCookie } from "@/lib/auth-cookie";
 
-export const AUTH_COOKIE_NAME = "vl_session_token";
-// "Remember me" keeps the session cookie for 30 days on a trusted device.
-const AUTH_COOKIE_REMEMBER_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+export { AUTH_COOKIE_NAME };
+
+export async function getSessionCookie() {
+  const store = await cookies();
+  return decodeAuthCookie(store.get(AUTH_COOKIE_NAME)?.value);
+}
 
 export async function getSessionAccessToken() {
-  const store = await cookies();
-  return store.get(AUTH_COOKIE_NAME)?.value ?? null;
+  return (await getSessionCookie())?.accessToken ?? null;
 }
 
 export async function getAuthenticatedUser() {
-  const accessToken = await getSessionAccessToken();
-  if (!accessToken) {
+  const tokens = await getSessionCookie();
+  if (!tokens) {
     return null;
   }
 
   try {
     const supabaseAuthClient = createServerClient();
-    const { data, error } = await supabaseAuthClient.auth.getUser(accessToken);
+    const { data, error } = await supabaseAuthClient.auth.getUser(tokens.accessToken);
 
-    if (error || !data.user) {
+    if (!error && data.user) {
+      return data.user;
+    }
+
+    // THE ACCESS TOKEN LAPSED, WHICH USED TO MEAN "SIGNED OUT".
+    //
+    // A "keep me signed in" cookie lives 30 days; the JWT inside it lives an
+    // hour. Middleware rotates the pair on the way in, so by the time a render
+    // gets here the token is normally fresh — but a render can still outrun it
+    // (a route middleware skips, a token that expired between the two), and on
+    // that path the customer was silently signed out mid-session.
+    //
+    // Refreshing here fixes the render. The COOKIE is not written back: a
+    // server component cannot set one, and Next throws if it tries. Middleware
+    // owns that write and will do it on the next request.
+    if (!tokens.refreshToken) {
       return null;
     }
 
-    return data.user;
+    const refreshed = await supabaseAuthClient.auth.refreshSession({ refresh_token: tokens.refreshToken });
+    return refreshed.data?.user ?? null;
   } catch {
     // Never throw on a transient auth-backend failure (network/DNS/timeout).
     // This helper gates almost every server component; callers treat null as
@@ -36,19 +55,18 @@ export async function getAuthenticatedUser() {
   }
 }
 
-export function buildAuthCookieValue(accessToken: string, rememberMe = true) {
+/**
+ * The cookie to set for a freshly established session.
+ *
+ * `refreshToken` is optional only so an older caller still compiles; without it
+ * the cookie keeps its previous shape and its previous one-hour ceiling, which
+ * is precisely the bug. Every caller in this repo passes one.
+ */
+export function buildAuthCookieValue(accessToken: string, rememberMe = true, refreshToken?: string | null) {
   return {
     name: AUTH_COOKIE_NAME,
-    value: accessToken,
-    options: {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax" as const,
-      path: "/",
-      // Remember me → a persistent 30-day cookie. Otherwise a session cookie
-      // (no maxAge) that clears when the browser fully closes.
-      ...(rememberMe ? { maxAge: AUTH_COOKIE_REMEMBER_MAX_AGE_SECONDS } : {}),
-    },
+    value: encodeAuthCookie({ accessToken, refreshToken: refreshToken ?? null, rememberMe }),
+    options: authCookieOptions(rememberMe),
   };
 }
 
@@ -56,12 +74,6 @@ export function buildExpiredAuthCookie() {
   return {
     name: AUTH_COOKIE_NAME,
     value: "",
-    options: {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax" as const,
-      path: "/",
-      maxAge: 0,
-    },
+    options: { ...authCookieOptions(false), maxAge: 0 },
   };
 }

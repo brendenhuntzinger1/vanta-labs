@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { TurnstileWidget } from "@/components/turnstile-widget";
 import { resolveSignupOutcome, SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-signup-outcome";
+import { classifyAuthReturn, deadAuthLinkMessage, type AuthReturn } from "@/lib/auth-link-fragment";
 
 // When a Turnstile site key is configured, every auth call carries a CAPTCHA
 // token that Supabase verifies — blocking bots from draining email + SMS spend.
@@ -103,12 +104,24 @@ export function AccountAuthForm() {
   // below); older, already-sent links are detected by the auth tokens Supabase
   // puts in the URL fragment. Captured once at first render, before the
   // Supabase client consumes and strips that fragment.
-  const [isVerificationReturn] = useState(() => {
-    if (typeof window === "undefined") return false;
-    if (searchParams.get("verified") === "1") return true;
-    const hash = window.location.hash;
-    return hash.includes("access_token=") || hash.includes("type=signup");
+  // Classified ONCE, at first render, before supabase-js can consume the
+  // fragment (the browser client is lazily constructed on first `supabase.auth`
+  // access, which happens later, inside the effect below).
+  //
+  // `?verified=1` used to be enough on its own. It is not evidence: it is
+  // typed, shared, bookmarked and re-opened, and on any of those loads
+  // getSession() falls back to whatever supabase-js kept in localStorage — so
+  // the page signed the visitor in as whoever last used the browser. Only a
+  // fragment that actually carries a token counts. See lib/auth-link-fragment.
+  const [authReturn] = useState<AuthReturn>(() => {
+    if (typeof window === "undefined") return { kind: "none" };
+    return classifyAuthReturn(window.location.hash);
   });
+  const [arrivedFromEmailLink] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return searchParams.get("verified") === "1" || Boolean(window.location.hash);
+  });
+  const isVerificationReturn = authReturn.kind === "session";
 
   // A shopper who clicked the confirmation link in Supabase's built-in
   // verification email lands back here with a session already established
@@ -129,6 +142,7 @@ export function AccountAuthForm() {
     (async () => {
       const { data } = await supabase.auth.getSession();
       const accessToken = data.session?.access_token;
+      const refreshToken = data.session?.refresh_token ?? null;
       const user = data.session?.user;
 
       if (!accessToken || !user) {
@@ -155,7 +169,7 @@ export function AccountAuthForm() {
         const sessionResponse = await fetch("/api/auth/session", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ accessToken, rememberMe: true }),
+          body: JSON.stringify({ accessToken, refreshToken, rememberMe: true }),
         });
         const sessionJson = await sessionResponse.json();
         if (!sessionResponse.ok || !sessionJson.success) {
@@ -180,6 +194,41 @@ export function AccountAuthForm() {
     };
   }, [router, nextPath, isVerificationReturn]);
 
+  // WHAT HAPPENS WHEN THE LINK IS DEAD.
+  //
+  // Three ways a confirmation link fails, and until now all three landed the
+  // customer on an ordinary, unannotated sign-in form:
+  //
+  //   * GoTrue redirected with `#error=access_denied&error_code=otp_expired`
+  //     — a spent or expired token. Mailbox security scanners pre-fetch links
+  //     and burn them before the human clicks, which is exactly what happened
+  //     to the applicant of 2026-08-28 ("One-time token not found").
+  //   * /auth/confirm could not forward at all and sent `?link=invalid`.
+  //   * `?verified=1` arrived with no fragment — a re-opened, shared or typed
+  //     URL. The address IS confirmed by then (GoTrue verified before
+  //     redirecting), so this is not an error; they just need to sign in. What
+  //     it must never do is promote a leftover localStorage session.
+  useEffect(() => {
+    if (authReturn.kind === "error") {
+      setError(deadAuthLinkMessage(authReturn.errorCode));
+      return;
+    }
+
+    const linkProblem = searchParams.get("link");
+    if (linkProblem) {
+      setError(
+        linkProblem === "unavailable"
+          ? "We couldn't check that link just now. Enter your email below and we'll send you a new one."
+          : deadAuthLinkMessage(),
+      );
+      return;
+    }
+
+    if (authReturn.kind === "none" && arrivedFromEmailLink && searchParams.get("verified") === "1") {
+      setMessage("Your email address is confirmed. Sign in below to finish setting up your account.");
+    }
+  }, [authReturn, arrivedFromEmailLink, searchParams]);
+
   // Tick down the "Text me a code" cooldown once per second.
   useEffect(() => {
     if (otpCooldown <= 0) return;
@@ -197,11 +246,11 @@ export function AccountAuthForm() {
     setCaptchaResetKey((key) => key + 1);
   };
 
-  const establishSessionAndGo = async (accessToken: string) => {
+  const establishSessionAndGo = async (accessToken: string, refreshToken: string | null = null) => {
     const sessionResponse = await fetch("/api/auth/session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ accessToken, rememberMe }),
+      body: JSON.stringify({ accessToken, refreshToken, rememberMe }),
     });
     const sessionJson = await sessionResponse.json();
     if (!sessionResponse.ok || !sessionJson.success) {
@@ -308,7 +357,7 @@ export function AccountAuthForm() {
         return;
       }
 
-      await establishSessionAndGo(outcome.accessToken);
+      await establishSessionAndGo(outcome.accessToken, outcome.refreshToken);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Unable to create account");
     } finally {
@@ -333,7 +382,7 @@ export function AccountAuthForm() {
         throw new Error(signInError?.message ?? "Unable to sign in");
       }
 
-      await establishSessionAndGo(data.session.access_token);
+      await establishSessionAndGo(data.session.access_token, data.session.refresh_token ?? null);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Unable to sign in");
     } finally {
@@ -440,7 +489,7 @@ export function AccountAuthForm() {
       if (verifyError || !data.session?.access_token) {
         throw new Error(verifyError?.message ?? "That code didn't work. Request a new one.");
       }
-      await establishSessionAndGo(data.session.access_token);
+      await establishSessionAndGo(data.session.access_token, data.session.refresh_token ?? null);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Couldn't verify the code.");
     } finally {

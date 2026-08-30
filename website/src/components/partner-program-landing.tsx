@@ -163,6 +163,7 @@ export function PartnerProgramLanding({ initialStats, terms }: { initialStats: P
     try {
       const { data } = await (await getSupabase()).auth.getSession();
       const accessToken = data.session?.access_token;
+      const refreshToken = data.session?.refresh_token ?? null;
       if (!accessToken) {
         setSessionStatus("guest");
         throw new Error("Please sign in to your account first, then apply.");
@@ -173,7 +174,7 @@ export function PartnerProgramLanding({ initialStats, terms }: { initialStats: P
       await fetch("/api/auth/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accessToken }),
+        body: JSON.stringify({ accessToken, refreshToken }),
       });
 
       const applyResponse = await fetch("/api/partner/apply", {

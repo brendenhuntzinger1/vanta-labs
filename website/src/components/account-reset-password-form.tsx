@@ -6,6 +6,56 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { isPasswordSetupLink } from "@/lib/auth-link-fragment";
 
+// ---------------------------------------------------------------------------
+// SURVIVING A RELOAD.
+//
+// The gate below is satisfied by two signals and both are one-shot: the
+// `type=recovery|invite` fragment, and the PASSWORD_RECOVERY event. auth-js
+// clears the fragment the moment it consumes the link (`window.location.hash =
+// ''` in _getSessionFromURL) and only ever emits PASSWORD_RECOVERY from that
+// same function, so a reload emits INITIAL_SESSION instead and sees an empty
+// hash.
+//
+// So refreshing this page — or a password manager reloading it, or coming back
+// after a validation error — rendered "This reset link is invalid or has
+// expired" on a recovery session that was perfectly live and would have
+// accepted a new password. The customer is told to request another link, and
+// the next one lands them in exactly the same place.
+//
+// sessionStorage is the right store for the marker, deliberately not
+// localStorage: it survives the reload, dies with the tab, and is not shared
+// with any other tab — so it cannot outlive the recovery it belongs to or
+// unlock this form for the browser's next occupant. It is only ever WRITTEN
+// after a real recovery signal, only ever HONOURED alongside a live session,
+// and cleared as soon as the password is set.
+// ---------------------------------------------------------------------------
+const RECOVERY_MARKER = "vl:password-recovery";
+
+/** Every access is wrapped: Safari private mode throws on sessionStorage. */
+function markRecoveryInProgress() {
+  try {
+    window.sessionStorage.setItem(RECOVERY_MARKER, "1");
+  } catch {
+    // No marker means the pre-existing behaviour, not a broken form.
+  }
+}
+
+function recoveryInProgress(): boolean {
+  try {
+    return window.sessionStorage.getItem(RECOVERY_MARKER) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function clearRecoveryMarker() {
+  try {
+    window.sessionStorage.removeItem(RECOVERY_MARKER);
+  } catch {
+    // Nothing to do; the marker is only ever an unlock, never a grant.
+  }
+}
+
 export function AccountResetPasswordForm() {
   const router = useRouter();
   const [password, setPassword] = useState("");
@@ -51,8 +101,13 @@ export function AccountResetPasswordForm() {
     const hash = typeof window !== "undefined" ? window.location.hash : "";
     const looksLikePasswordSetupLink = isPasswordSetupLink(hash);
 
+    if (looksLikePasswordSetupLink) {
+      markRecoveryInProgress();
+    }
+
     const { data: sub } = supabase.auth.onAuthStateChange((event) => {
       if (event === "PASSWORD_RECOVERY" && active) {
+        markRecoveryInProgress();
         setHasRecoverySession(true);
       }
     });
@@ -66,7 +121,12 @@ export function AccountResetPasswordForm() {
       // Never downgrade a PASSWORD_RECOVERY event that has already fired: the
       // event is the stronger signal, and Supabase strips the fragment once it
       // has consumed it, so the hash may legitimately be empty by now.
-      setHasRecoverySession((current) => current === true || (Boolean(data.session) && looksLikePasswordSetupLink));
+      // A live session PLUS evidence this tab is mid-recovery. The evidence is
+      // the fragment on the first load and the sessionStorage marker on every
+      // load after it; requiring the session as well means a stale marker can
+      // never unlock the form on its own.
+      const evidence = looksLikePasswordSetupLink || recoveryInProgress();
+      setHasRecoverySession((current) => current === true || (Boolean(data.session) && evidence));
     })();
 
     return () => {
@@ -107,14 +167,20 @@ export function AccountResetPasswordForm() {
 
       const { data } = await supabase.auth.getSession();
       const accessToken = data.session?.access_token;
+      const refreshToken = data.session?.refresh_token ?? null;
 
       if (accessToken) {
         await fetch("/api/auth/session", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ accessToken }),
+          body: JSON.stringify({ accessToken, refreshToken }),
         });
       }
+
+      // The recovery is over. Leaving the marker would unlock this form for the
+      // rest of the tab's life on an ordinary signed-in session — the exact
+      // bypass the gate exists to prevent.
+      clearRecoveryMarker();
 
       router.push("/account");
       router.refresh();
