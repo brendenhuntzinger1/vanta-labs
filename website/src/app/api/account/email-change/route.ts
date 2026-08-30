@@ -10,7 +10,7 @@ import { recordSystemAlert } from "@/lib/monitoring";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { rateLimitKeyForRequest } from "@/lib/request-ip";
 import { customerSafeMessage } from "@/lib/safe-error";
-import { supabaseAdmin } from "@/lib/supabase-server";
+import { createServerClient, supabaseAdmin } from "@/lib/supabase-server";
 import { looksLikeEmail } from "@/lib/email-shape";
 
 export const dynamic = "force-dynamic";
@@ -35,6 +35,27 @@ export const dynamic = "force-dynamic";
 // must already hold a session, so it cannot be used to probe for accounts. It
 // IS abuse-sensitive in the other direction: it can mail an arbitrary address,
 // so it is rate limited per session and per IP.
+//
+// AND IT RE-AUTHENTICATES, WHICH IT DID NOT USED TO.
+//
+// account-settings-client.tsx has always said, above the email field:
+//
+//     // Changing the email is security-sensitive: require the current password
+//     // first so a hijacked open session can't silently take over the account.
+//     await supabase.auth.signInWithPassword({ email: initialEmail, password })
+//
+// That check ran in the caller's own browser and this route never asked for a
+// password at all, so it enforced nothing: anyone holding the session cookie
+// could POST straight here with a new address, confirm it from their own
+// mailbox, and then own the account outright via password reset. The stated
+// threat — "a hijacked open session" — was exactly the one still open, and an
+// email takeover is worse than the password takeover its sibling route closed,
+// because it survives the real owner changing their password back.
+//
+// change-password/route.ts fixed the same shape and its comment claims this
+// route was already part of that move ("Same move as ... the change of email").
+// It was not. This is that move, actually made: the current password is
+// verified server-side, by the server's own client, before anything is minted.
 // ---------------------------------------------------------------------------
 
 const MAX_PER_IP = 10;
@@ -50,12 +71,21 @@ export async function POST(request: Request) {
 
     const body = await request.json().catch(() => ({}));
     const newEmail = String((body as { email?: unknown })?.email ?? "").trim().toLowerCase();
+    const currentPassword = String((body as { currentPassword?: unknown })?.currentPassword ?? "");
 
     if (!looksLikeEmail(newEmail)) {
       return NextResponse.json({ success: false, error: "Enter a valid email address." }, { status: 400 });
     }
     if (newEmail === user.email.trim().toLowerCase()) {
       return NextResponse.json({ success: false, error: "That is already your email address." }, { status: 400 });
+    }
+    // Checked before the limiter, because an empty field is the customer's own
+    // mistake and must not spend their five attempts an hour.
+    if (!currentPassword) {
+      return NextResponse.json(
+        { success: false, error: "Enter your current password to change your email address." },
+        { status: 400 },
+      );
     }
 
     // Per-IP and per-account, because this endpoint can put a message in any
@@ -68,6 +98,22 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { success: false, error: "Too many email change requests. Please wait a while and try again." },
         { status: 429, headers: { "Retry-After": retryAfter } },
+      );
+    }
+
+    // RE-AUTHENTICATE SERVER-SIDE, after the limiter, because verifying a
+    // password is what makes an endpoint a password oracle and the limiter is
+    // what stops it being a free one. A caller holding only a session token
+    // cannot get past this, which is the whole point of the route now.
+    const reauth = createServerClient();
+    const { error: reauthError } = await reauth.auth.signInWithPassword({
+      email: user.email,
+      password: currentPassword,
+    });
+    if (reauthError) {
+      return NextResponse.json(
+        { success: false, error: "Current password is incorrect." },
+        { status: 403 },
       );
     }
 

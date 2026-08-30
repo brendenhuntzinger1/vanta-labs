@@ -67,18 +67,18 @@ export function AccountSettingsClient({
         return;
       }
 
-      // Changing the email is security-sensitive: require the current password
-      // first so a hijacked open session can't silently take over the account.
-      if (updates.email && initialEmail) {
-        if (!emailChangePassword) {
-          setProfileError("Enter your current password to change your email.");
-          return;
-        }
-        const { error: reauthError } = await supabase.auth.signInWithPassword({ email: initialEmail, password: emailChangePassword });
-        if (reauthError) {
-          setProfileError("Current password is incorrect.");
-          return;
-        }
+      // Changing the email is security-sensitive: the current password has to
+      // be re-checked so a hijacked open session can't silently take over the
+      // account. This used to call signInWithPassword right here, which read
+      // like the control and was not one — the route it guarded never asked for
+      // a password, so anyone holding the session cookie could skip the browser
+      // entirely and POST straight to it. The check now happens in
+      // /api/account/email-change, server-side, where a caller cannot reach it;
+      // all this does is stop the customer making a round trip to be told they
+      // left the field blank.
+      if (updates.email && initialEmail && !emailChangePassword) {
+        setProfileError("Enter your current password to change your email.");
+        return;
       }
 
       // THE EMAIL CHANGE GOES THROUGH THE SERVER, SO ITS EMAIL IS OURS.
@@ -104,7 +104,7 @@ export function AccountSettingsClient({
         const response = await fetch("/api/account/email-change", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: updates.email }),
+          body: JSON.stringify({ email: updates.email, currentPassword: emailChangePassword }),
         });
         const result = (await response.json().catch(() => null)) as
           | { success: boolean; message?: string; error?: string }

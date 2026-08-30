@@ -2019,6 +2019,46 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     existingRefundAmount: roundMoney(Number(orderRecord?.refund_amount ?? 0)),
   });
 
+  // A FULL REVERSAL DECIDED BY AN ABSENT FIELD SHOULD NOT BE SILENT.
+  //
+  // resolveRefundOutcome treats a refund event carrying no amount as a FULL
+  // refund, deliberately and with a test naming the case ("processor omitted
+  // it"). That is a sound fallback for a rare omission. The problem is that it
+  // may not be rare: the amount is read from the TOP-LEVEL `amount`, and this
+  // repository already records, in express-reconcile.ts, that "a real Veyra
+  // delivery ... carries no top-level amount either" — the same reason
+  // resolveWebhookOrderId has to dig the order id out of `data.metadata`.
+  //
+  // If that holds for refund.completed too, then every partial refund taken
+  // through the live processor is applied as a full one: refund_amount set to
+  // the whole amount_paid, the entire order restocked, 100% of the ambassador's
+  // commission reversed, and all points and store credit returned. Nothing in
+  // the system would say so afterwards, because a full refund is a perfectly
+  // ordinary thing to record.
+  //
+  // Confirming the live envelope's refund shape is an operator task, not
+  // something this file can settle. What it CAN do is stop the decision being
+  // invisible, so the first time it happens on a real order somebody is told.
+  if (refundOutcome.isRefundEvent && !refundOutcome.isChargeback
+      && nextStatus === "refunded" && !(Number(eventPayload.amount ?? 0) > 0)) {
+    await recordSystemAlert({
+      type: "refund_amount_absent_applied_full",
+      severity: "critical",
+      message:
+        "A refund event arrived with no amount, so it was applied as a FULL refund: the order was "
+        + "restocked, all commission reversed, and points and store credit returned. If the processor "
+        + "actually issued a PARTIAL refund, this over-reversed it. Check the webhook payload shape "
+        + "against the processor's refund event before trusting the recorded refund_amount.",
+      context: {
+        orderId,
+        eventType: eventPayload.type ?? "unknown",
+        recordedRefundAmount: refundOutcome.recordedRefundAmount,
+        amountPaid,
+      },
+      dedupeWindowMs: 5 * 60 * 1000,
+    }).catch(() => {});
+  }
+
   // Atomic paid-claim (H1): exactly one webhook event may flip a not-yet-paid
   // order to "paid" and therefore run the paid side-effects below. A concurrent
   // SECOND distinct success event (different event_id, so not caught by the
