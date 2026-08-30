@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { MIN_PASSWORD_LENGTH } from "@/lib/password-policy";
+
 import { getAuthenticatedUser, getSessionAccessToken } from "@/lib/auth-session";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { checkRateLimit } from "@/lib/rate-limit";
@@ -45,8 +47,9 @@ export const dynamic = "force-dynamic";
 // which page you did it from.
 // ---------------------------------------------------------------------------
 
-/** Matches the rule the settings form has always shown the customer. */
-const MIN_PASSWORD_LENGTH = 8;
+// Matches the rule the settings form has always shown the customer, and the one
+// the reset form shows — see lib/password-policy.ts, which also records where
+// this rule is genuinely enforced and where it is only advisory.
 
 // Generous for a person correcting a typo, far too few to grind a password.
 const MAX_PER_IP = 10;

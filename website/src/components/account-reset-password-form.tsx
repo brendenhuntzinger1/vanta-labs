@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { isPasswordSetupLink } from "@/lib/auth-link-fragment";
+import { MIN_PASSWORD_LENGTH, MIN_PASSWORD_MESSAGE } from "@/lib/password-policy";
 
 // ---------------------------------------------------------------------------
 // SURVIVING A RELOAD.
@@ -139,8 +140,8 @@ export function AccountResetPasswordForm() {
     event.preventDefault();
     if (loading) return;
 
-    if (password.length < 8) {
-      setError("Password must be at least 8 characters.");
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      setError(MIN_PASSWORD_MESSAGE);
       return;
     }
 
