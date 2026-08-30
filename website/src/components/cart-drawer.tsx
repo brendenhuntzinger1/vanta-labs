@@ -98,7 +98,11 @@ export function CartDrawer() {
     clearCouponCode,
     isApplyingCoupon,
     isBuy3Get1FreeEligible,
+    activePromotionAllowsCoupon,
     buy3Get1UntilNextFree,
+    activePromotionName,
+    activePromotionMessage,
+    promotionProgressMessage,
     bulkSavingsApplied,
     bulkSavingsPercent,
     bulkSavingsProgress,
@@ -388,17 +392,22 @@ export function CartDrawer() {
               {/* Promotions & nudges — quiet charcoal cards, gold/emerald accents only */}
               <BacWaterCartCheckboxes />
 
+              {/* Whichever Buy X Get Y promotion is pricing this cart — the
+                  wording comes from the promotion itself (bxgy-engine.ts), so
+                  the drawer cannot describe it differently from the checkout. */}
               {isBuy3Get1FreeEligible ? (
                 <div className="rounded-2xl border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.05] p-4">
-                  <p className="text-sm font-semibold text-[color:var(--accent-gold)]">Buy 3, Get 1 Free — active</p>
-                  <p className="mt-1.5 text-xs text-zinc-400">Your lowest-priced eligible item is free. Referral discounts pause while this promotion applies.</p>
+                  <p className="text-sm font-semibold text-[color:var(--accent-gold)]">{activePromotionName ?? "Promotion"} — active</p>
+                  <p className="mt-1.5 text-xs text-zinc-400">
+                    {activePromotionMessage ?? "Your lowest-priced eligible items are discounted."} Referral discounts pause while this promotion applies.
+                  </p>
                 </div>
               ) : null}
 
-              {buy3Get1UntilNextFree > 0 ? (
+              {buy3Get1UntilNextFree > 0 && promotionProgressMessage ? (
                 <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
                   <p className="text-sm text-zinc-300">
-                    Add <span className="font-semibold text-[color:var(--accent-gold)]">{buy3Get1UntilNextFree} more {buy3Get1UntilNextFree === 1 ? "item" : "items"}</span> to unlock a free item.
+                    <span className="font-semibold text-[color:var(--accent-gold)]">{promotionProgressMessage}</span>
                   </p>
                 </div>
               ) : null}
@@ -437,7 +446,12 @@ export function CartDrawer() {
               ) : null}
 
               {/* Referral & coupon — collapsed by default */}
-              {!isBuy3Get1FreeEligible ? (
+              {/* Hidden while a promotion is running ONLY because the server
+                  refuses a code alongside one. When stacking is permitted —
+                  by the admin's coupon policy or by the promotion itself —
+                  quote-order accepts both, so the shopper must be able to
+                  enter one. */}
+              {!isBuy3Get1FreeEligible || activePromotionAllowsCoupon ? (
                 <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02]">
                   <button
                     type="button"

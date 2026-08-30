@@ -13,6 +13,8 @@ import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
+import { selectPromotionForCart, type BxgyCartLine } from "@/lib/bxgy-engine";
+import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
 import { calculateShipping, isDomesticCountry, isShippableCountry } from "@/lib/shipping";
 import { normalizeUsState } from "@/lib/sales-tax";
 import { recordSystemAlert } from "@/lib/monitoring";
@@ -125,6 +127,10 @@ export interface QuoteResult {
   referral: ValidatedReferral | null;
   couponCode: string | null;
   isBuy3Get1Active: boolean;
+  /** Id of the Buy X Get Y promotion that priced this order, for orders.promotion_id. */
+  appliedPromotionId: string | null;
+  /** Its customer-facing name, for receipts and admin. */
+  appliedPromotionName: string | null;
   storeCreditRedeemedCents: number;
   pointsRedeemed: number;
   pointsDiscountAmount: number;
@@ -229,27 +235,28 @@ export function validateCustomer(customer: CustomerInput) {
   validateDestination(customer);
 }
 
-// Every 4th item (cheapest-first) is free. The caller gates this behind
-// getHomepageControlConfig().promoBuy3Get1Enabled - mirrors the client-side
-// calculation in cart-context.tsx exactly (including that same gate, fetched
-// there via /api/catalog/promotions) so the server total this function feeds
-// into always matches what the cart displayed - see the "Altered total
-// detected" check in payment-service.ts.
-function calculateBuy3Get1Discount(lineItems: Array<{ product: ServerProduct; quantity: number }>) {
-  const expandedPrices: number[] = [];
-  for (const line of lineItems) {
-    for (let i = 0; i < line.quantity; i += 1) {
-      expandedPrices.push(line.product.price);
-    }
-  }
-
-  const freeItemCount = Math.floor(expandedPrices.length / 4);
-  if (freeItemCount <= 0) {
-    return 0;
-  }
-
-  expandedPrices.sort((a, b) => a - b);
-  return roundMoney(expandedPrices.slice(0, freeItemCount).reduce((sum, price) => sum + price, 0));
+// THE ORDER'S BUY-X-GET-Y PROMOTION.
+//
+// This used to be a hand-written "every 4th item is free" loop that had to
+// match, line for line, an identical loop in cart-context.tsx. Both now call
+// selectPromotionForCart in bxgy-engine.ts with the same two prices per line,
+// so the server total and the cart preview cannot drift — the thing the
+// "Altered total detected" guard in payment-service.ts exists to catch.
+//
+// Buy 3 Get 1 is one of those configurations and prices exactly as it always
+// did: floor(n / 4) cheapest units free, across mixed products and quantities.
+function toPromotionCartLines(
+  lineItems: Array<{ product: ServerProduct; quantity: number; baseUnitPrice: number }>,
+): BxgyCartLine[] {
+  return lineItems.map((line) => ({
+    // `product.id` is `slug` or `slug::doseId`; eligibility is per product.
+    slug: line.product.id.split("::")[0],
+    listUnitPrice: line.baseUnitPrice,
+    // product.price already carries the quantity-bundle discount — see the
+    // getBundleDiscountedUnitPrice call where lineItems is built.
+    bundledUnitPrice: line.product.price,
+    quantity: line.quantity,
+  }));
 }
 
 async function validateReferralCode(
@@ -534,8 +541,16 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   const quantityBundleSavings = bundleStacking ? 0 : roundMoney(Math.max(0, fullSubtotal - subtotal));
   const discountBase = bundleStacking ? subtotal : fullSubtotal;
 
-  const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, shippingConfig, memberPerks, referralProgram, couponPolicy] = await Promise.all([
-    Promise.resolve(homepageControlConfig),
+  const [applicablePromotions, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, shippingConfig, memberPerks, referralProgram, couponPolicy] = await Promise.all([
+    // Switched on, inside their schedule, and not used up — resolved once,
+    // here, so the same list prices the order and the coupon rules read it.
+    // The customer's email is what makes a per-customer usage limit
+    // enforceable; an anonymous quote simply has no per-customer history to
+    // check against.
+    getApplicableBxgyPromotions(
+      { customerEmail: input.customer.email },
+      { promotions: homepageControlConfig.bxgyPromotions },
+    ),
     getBulkSavingsControlConfig(),
     input.customerUserId ? isEligibleForBulkSavings(input.customerUserId) : Promise.resolve(false),
     input.customerUserId ? isPriorityMember(input.customerUserId) : Promise.resolve(false),
@@ -560,14 +575,33 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     : (bulkSavingsResult.tier || memberPerks.freeShipping)
       ? 0
       : roundMoney(calculateShipping(subtotal, input.customer.country, shippingConfig));
-  // With bundle stacking off, the Buy-3-Get-1 free item is valued at FULL
-  // price and competes with the bundle savings like every other candidate.
-  const buy3Get1Discount = promoBuy3Get1Enabled
-    ? calculateBuy3Get1Discount(bundleStacking
-      ? lineItems
-      : lineItems.map((line) => ({ product: { ...line.product, price: line.baseUnitPrice }, quantity: line.quantity })))
-    : 0;
-  const isBuy3Get1Active = buy3Get1Discount > 0;
+  // THE ORDER'S BUY-X-GET-Y PROMOTION — at most one, the one worth the most.
+  //
+  // Each promotion is priced against its OWN valuation of a rewarded unit
+  // (full list price, or the bundle-discounted price when this promotion or the
+  // store-wide bundleStacking switch says the two may combine), which is why
+  // each line carries both prices and the engine picks.
+  //
+  // The winner then becomes `bundleDiscount` in resolveCustomerDiscount below,
+  // the exact input Buy 3 Get 1 has always fed it — so every downstream rule
+  // (a referral cannot stack on it, a coupon competes with it unless the admin
+  // allows stacking, the profit guard can peel it off) applies unchanged to all
+  // five new promotions without a line of new policy.
+  const selectedPromotion = selectPromotionForCart(
+    toPromotionCartLines(lineItems),
+    applicablePromotions,
+    { bundleStacking },
+  );
+  const promotionDiscount = selectedPromotion?.application.discountAmount ?? 0;
+  const appliedPromotionId = selectedPromotion?.promotion.id ?? null;
+  const appliedPromotionName = selectedPromotion?.promotion.name ?? null;
+  // Kept under its original name because payment-service, the express lane and
+  // the referral-exclusivity suite all read it. It has always meant "a free/
+  // reduced-price item promotion priced this order"; it now means that for any
+  // of the six, not only Buy 3 Get 1.
+  const isBuy3Get1Active = promotionDiscount > 0;
+  /** This promotion says a coupon may be added on top of it. */
+  const promotionAllowsCouponStacking = isBuy3Get1Active && (selectedPromotion?.promotion.stackWithCoupon ?? false);
 
   const couponEntered = Boolean(input.couponCode?.trim());
   const referralCodeEntered = Boolean(input.referralCode?.trim());
@@ -600,8 +634,10 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     if (referral && couponEntered) {
       throw new Error("Coupon codes cannot be combined with a referral code. Remove one to continue.");
     }
-    if (isBuy3Get1Active && couponEntered) {
-      throw new Error("Coupon codes cannot be combined with Buy 3 Get 1 Free. Remove the coupon code to continue.");
+    // A promotion may opt into coupon stacking on its own (stackWithCoupon),
+    // in which case the coupon is welcome and the two combine downstream.
+    if (isBuy3Get1Active && couponEntered && !promotionAllowsCouponStacking) {
+      throw new Error(`Coupon codes cannot be combined with ${appliedPromotionName ?? "this promotion"}. Remove the coupon code to continue.`);
     }
   }
 
@@ -685,7 +721,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       fullSubtotal: discountBase,
       quantityBundleSavings,
       productCost: 0,
-      bundleDiscount: buy3Get1Discount,
+      bundleDiscount: promotionDiscount,
       referralAccepted: referralQualifiesForDiscount,
       referralPercent: referralQualifiesForDiscount && referral ? referral.discountPercent : 0,
       isMember: memberPricingAmount > 0,
@@ -694,7 +730,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       bulkSavingsAmount: bulkSavingsResult.amount,
       personalDiscountAmount,
       personalDiscountPercent: referralProgram.personalDiscountPercent,
-      allowCouponStacking: couponPolicy.allowStacking,
+      allowCouponStacking: couponPolicy.allowStacking || promotionAllowsCouponStacking,
       commissionPercent: 0,
       processingFeePercent: 0,
       shippingCollected: 0,
@@ -986,6 +1022,8 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     referral,
     couponCode: coupon?.code ?? null,
     isBuy3Get1Active,
+    appliedPromotionId,
+    appliedPromotionName,
     storeCreditRedeemedCents,
     pointsRedeemed,
     pointsDiscountAmount,
@@ -1048,6 +1086,8 @@ export interface OrderRowInput {
   storeCreditRedeemedCents: number;
   taxRatePercent: number;
   taxState: string | null;
+  /** Buy X Get Y promotion that priced the order, if any. */
+  promotionId?: string | null;
   /** Extra columns (e.g. checkout_channel) that live on the newer-column row. */
   extraColumns?: Record<string, unknown>;
 }
@@ -1124,6 +1164,13 @@ export function buildOrderRow(input: OrderRowInput): OrderRowDraft {
     // had to tolerate an unexplained overage up to the maximum possible fee —
     // a band too wide to tell a protection fee from a real overcharge.
     shipping_protection_fee: input.shippingProtectionFee,
+    // Which promotion priced this order. On the FULL row only, so a database
+    // that has not yet run bxgy-promotions.sql still takes the order through
+    // the base-row fallback below — a missing migration must never cost a sale.
+    // Usage limits are counted from this column, so an order that is later
+    // refunded or cancelled releases its redemption without anything having to
+    // remember to decrement a counter.
+    promotion_id: input.promotionId ?? null,
     ...(input.extraColumns ?? {}),
   };
 

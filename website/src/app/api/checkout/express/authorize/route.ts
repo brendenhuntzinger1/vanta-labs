@@ -295,6 +295,9 @@ export async function POST(request: Request) {
     // and the timestamp) keyed by this same order_id. One record, not two that
     // can disagree.
     extraColumns: { checkout_channel: "express_apple_pay" },
+    // Same promotion the wallet lane priced against (quoteA), recorded so a
+    // usage limit counts this order too.
+    promotionId: quoteA.appliedPromotionId,
   });
 
   const insertOutcome = await insertOrderRow(orderRow);

@@ -155,7 +155,7 @@ type TabKey = "description" | "specs" | "coa";
 export function ProductDetailClient({
   product,
   relatedProducts = [],
-  promoBuy3Get1Enabled = false,
+  productPromotions = [],
   bundleConfig = DEFAULT_BUNDLE_CONFIG,
   bacWater = null,
   coaDocuments = [],
@@ -165,7 +165,14 @@ export function ProductDetailClient({
 }: {
   product: Product;
   relatedProducts?: Product[];
-  promoBuy3Get1Enabled?: boolean;
+  /**
+   * Live Buy X Get Y promotions this product qualifies for, server-resolved.
+   *
+   * Replaces the `promoBuy3Get1Enabled` boolean this panel used to take: the
+   * store now has six such promotions and a product can be excluded from any of
+   * them, so a single flag can no longer say what to show here.
+   */
+  productPromotions?: Array<{ id: string; name: string; description: string }>;
   bundleConfig?: BundleConfig;
   bacWater?: Product | null;
   coaDocuments?: PublicCoaDocument[];
@@ -348,13 +355,16 @@ export function ProductDetailClient({
             is guidance at the moment of the decision, and by then the bar has
             scrolled off. */}
 
-        {promoBuy3Get1Enabled ? (
-          <div className="vl2-lab-panel mt-6 flex flex-wrap items-center gap-2 border-white/[0.06] bg-[#141414] px-5 py-3.5 text-sm text-white">
+        {productPromotions.map((promotion) => (
+          <div
+            key={promotion.id}
+            className="vl2-lab-panel mt-6 flex flex-wrap items-center gap-2 border-white/[0.06] bg-[#141414] px-5 py-3.5 text-sm text-white"
+          >
             <span aria-hidden="true">🎁</span>
-            <span className="font-medium">Buy 3, Get 1 Free</span>
-            <span className="text-[#a3a3a3]">— the lowest-priced item in your cart is automatically free at checkout.</span>
+            <span className="font-medium">{promotion.name}</span>
+            <span className="text-[#a3a3a3]">— {promotion.description} Applied automatically at checkout.</span>
           </div>
-        ) : null}
+        ))}
 
         <section className="mt-6 grid min-w-0 gap-6 lg:grid-cols-[0.9fr_1.1fr] lg:items-start lg:gap-10">
           {/* Block A — product image. Mobile order 1; desktop top-left. */}
