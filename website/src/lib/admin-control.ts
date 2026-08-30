@@ -5,6 +5,8 @@ import { DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-
 import { DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from "@/lib/shipping";
 import { DEFAULT_SALES_TAX_CONFIG, normalizeUsState, type SalesTaxConfig } from "@/lib/sales-tax";
 import { resolveBundleConfig, type BundleConfig } from "@/lib/bundle-pricing";
+import { BXGY_CONTROL_KEY, applyLegacyPromotionFlags, resolveBxgyPromotions } from "@/lib/bxgy-config";
+import type { BxgyPromotion } from "@/lib/bxgy-engine";
 import {
   DEFAULT_PAYMENT_METHODS,
   DEFAULT_CARD_PROCESSING_FEE,
@@ -59,6 +61,13 @@ export type HomepageControlConfig = {
   qualityPanelItems?: string[];
   promoBuy3Get1Enabled?: boolean;
   promoBuy2Get1HalfEnabled?: boolean;
+  /**
+   * Every Buy X Get Y promotion the store has, with the two legacy switches
+   * above already reconciled onto them. Resolved here rather than by each
+   * caller so the checkout, the catalog API and the promotion centre all read
+   * one list — see src/lib/bxgy-config.ts.
+   */
+  bxgyPromotions?: BxgyPromotion[];
   bundleConfig?: BundleConfig;
   /**
    * When true, quantity "Bundle & Save" pricing stacks with the winning
@@ -781,6 +790,13 @@ export async function getHomepageControlConfig(): Promise<HomepageControlConfig>
       qualityPanelItems: Array.isArray(homepage.quality_panel_items) ? homepage.quality_panel_items as string[] : undefined,
       promoBuy3Get1Enabled: Boolean(promotions.buy_3_get_1_enabled ?? false),
       promoBuy2Get1HalfEnabled: Boolean(promotions.buy_2_get_1_half_enabled ?? false),
+      bxgyPromotions: applyLegacyPromotionFlags(
+        resolveBxgyPromotions(promotions[BXGY_CONTROL_KEY]),
+        {
+          buy3Get1Enabled: Boolean(promotions.buy_3_get_1_enabled ?? false),
+          buy2Get1HalfEnabled: Boolean(promotions.buy_2_get_1_half_enabled ?? false),
+        },
+      ),
       bundleStacking: promotions.bundle_stacking === true,
       bundleConfig: resolveBundleConfig({
         twoUnitPercent: promotions.bundle_two_unit_percent,

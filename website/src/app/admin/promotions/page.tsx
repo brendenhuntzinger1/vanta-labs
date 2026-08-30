@@ -22,7 +22,8 @@ export default async function AdminPromotionsPage() {
           <p className="text-xs uppercase tracking-[0.28em] text-cyan-300/80">Admin Portal</p>
           <h1 className="mt-2 text-3xl font-semibold text-white sm:text-4xl">Promotions</h1>
           <p className="mt-3 max-w-3xl text-sm text-zinc-400 sm:text-base">
-            Turn store-wide promotions on or off. Changes go live instantly across the site — no coupon code needed.
+            Buy X Get Y promotions, applied automatically at checkout — no coupon code needed. Switching one on takes
+            effect across the site immediately; give it a start or end date and it activates and expires on its own.
           </p>
         </section>
 

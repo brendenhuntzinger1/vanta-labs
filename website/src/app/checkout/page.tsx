@@ -240,6 +240,8 @@ export default function CheckoutPage() {
     clearCouponCode,
     isApplyingCoupon,
     isBuy3Get1FreeActive,
+    activePromotionName,
+    activePromotionAllowsCoupon,
     isSignedIn,
     isHydrated,
     pointsBalance,
@@ -1082,7 +1084,8 @@ export default function CheckoutPage() {
                     <p className="mb-2 text-[10px] uppercase tracking-[0.24em] text-white/35">Referral code</p>
                     {isBuy3Get1FreeActive ? (
                       <p className="rounded-xl border border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5 text-xs text-white/55">
-                        Buy 3 Get 1 Free is active — referral discounts can&apos;t be combined with it.
+                        {activePromotionName ?? "A promotion"} is active — referral discounts can&apos;t be combined
+                        with it.
                       </p>
                     ) : (
                       <div className="flex gap-2">
@@ -1111,9 +1114,9 @@ export default function CheckoutPage() {
                   {/* Coupon */}
                   <div>
                     <p className="mb-2 text-[10px] uppercase tracking-[0.24em] text-white/35">Coupon code</p>
-                    {isBuy3Get1FreeActive ? (
+                    {isBuy3Get1FreeActive && !activePromotionAllowsCoupon ? (
                       <p className="rounded-xl border border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5 text-xs text-white/55">
-                        Buy 3 Get 1 Free is active — coupons can&apos;t be combined with it.
+                        {activePromotionName ?? "A promotion"} is active — coupons can&apos;t be combined with it.
                       </p>
                     ) : referralCode ? (
                       <p className="rounded-xl border border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5 text-xs text-white/55">
@@ -1148,7 +1151,7 @@ export default function CheckoutPage() {
                     {couponDetails && couponOutcome?.controlsPrice ? (
                       <p className="mt-2 text-xs text-white/45">{couponDetails.code} · {couponDetails.discountType === "fixed" ? formatCartCurrency(couponDetails.discountValue) : `${couponDetails.discountValue}%`} off</p>
                     ) : null}
-                    {couponCode && !isBuy3Get1FreeActive ? (
+                    {couponCode && (!isBuy3Get1FreeActive || activePromotionAllowsCoupon) ? (
                       <button type="button" onClick={() => { clearCouponCode(); setCouponInput(""); }} className="vl-focus-ring mt-2 text-xs text-white/35 transition hover:text-white">Remove code</button>
                     ) : null}
                   </div>

@@ -4,6 +4,8 @@ import { ProductDetailClient } from "@/components/product-detail-client";
 import { TikTokViewContent } from "@/components/tiktok-view-content";
 import { getCatalogProductBySlug, getCatalogProductsByCategory } from "@/lib/catalog";
 import { getHomepageControlConfig } from "@/lib/admin-control";
+import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
+import { isSlugEligible, storefrontDescription } from "@/lib/bxgy-engine";
 import { getPublishedCoaDocumentsForProduct } from "@/lib/coa";
 import { getStorefrontCoupon } from "@/lib/coupons";
 import { isBacWater, resolveBacWaterProduct } from "@/lib/bac-water";
@@ -76,7 +78,21 @@ export default async function ProductDetailPage({
   // still drives the buy-panel link; this adds the per-batch history underneath
   // it so a shopper checking a specific lot doesn't have to leave the page.
   const coaDocuments = await getPublishedCoaDocumentsForProduct(product.id ?? "");
-  const { promoBuy3Get1Enabled, bundleConfig } = await getHomepageControlConfig();
+  const controlConfig = await getHomepageControlConfig();
+  const { bundleConfig } = controlConfig;
+  // Every Buy X Get Y promotion this product actually qualifies for — live,
+  // scheduled, not used up, and not excluded from this slug. Resolved on the
+  // server so the panel is in the first paint, and described by the engine so
+  // the product page cannot promise something the cart prices differently.
+  const productPromotions = await getApplicableBxgyPromotions({}, { promotions: controlConfig.bxgyPromotions })
+    .then((promotions) => promotions
+      .filter((promotion) => isSlugEligible(promotion, product.slug))
+      .map((promotion) => ({
+        id: promotion.id,
+        name: promotion.name,
+        description: storefrontDescription(promotion),
+      })))
+    .catch(() => []);
   // Resolved server-side so the promo banner is in the first paint. Fetched in
   // the browser it arrived late and pushed the whole product panel down the
   // page. A failure resolves to null — no banner, never a broken product page.
@@ -131,7 +147,7 @@ export default async function ProductDetailPage({
       <ProductDetailClient
         product={product}
         relatedProducts={relatedProducts}
-        promoBuy3Get1Enabled={Boolean(promoBuy3Get1Enabled)}
+        productPromotions={productPromotions}
         bundleConfig={bundleConfig}
         bacWater={bacWater}
         coaDocuments={coaDocuments}

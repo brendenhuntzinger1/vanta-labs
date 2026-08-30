@@ -6,6 +6,14 @@ import type { ReferralCode } from "@/lib/referral-codes";
 import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
 import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
 import { getBundleDiscountedLineTotal, getBundleDiscountedUnitPrice, DEFAULT_BUNDLE_CONFIG, type BundleConfig } from "@/lib/bundle-pricing";
+import {
+  nextOpportunityForCart,
+  progressMessage,
+  selectPromotionForCart,
+  type BxgyCartLine,
+  type BxgyPromotion,
+} from "@/lib/bxgy-engine";
+import { normalizeBxgyPromotion } from "@/lib/bxgy-config";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { calculateShipping, DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from "@/lib/shipping";
 import { DEFAULT_SALES_TAX_CONFIG, type SalesTaxConfig } from "@/lib/sales-tax";
@@ -138,6 +146,16 @@ type CartContextValue = {
   isBuy3Get1FreeActive: boolean;
   isBuy3Get1FreeEligible: boolean;
   buy3Get1UntilNextFree: number;
+  /** Name of the Buy X Get Y promotion pricing this cart, e.g. "Buy 2 Get 1 Free". */
+  activePromotionName: string | null;
+  /** That promotion permits a coupon code on top of it. */
+  activePromotionAllowsCoupon: boolean;
+  /** What it did, in one sentence: "Buy 2 Get 1 Free applied — 1 item free." */
+  activePromotionMessage: string | null;
+  /** The nudge: "Add 1 more item to unlock an item free." */
+  promotionProgressMessage: string | null;
+  /** Every promotion this shopper could still earn — for storefront messaging. */
+  availablePromotions: BxgyPromotion[];
   bulkSavingsApplied: boolean;
   bulkSavingsTierReached: boolean;
   ambassadorDiscountApplied: boolean;
@@ -190,24 +208,21 @@ const REFERRAL_COOKIE_KEY = "vl_referral_code";
 // silently accepted.
 const MAX_LINE_QUANTITY = 99;
 
-function calculateBuy3Get1Discount(items: CartItem[], bundleConfig: BundleConfig = DEFAULT_BUNDLE_CONFIG, useBundledPrices = true) {
-  const expandedPrices: number[] = [];
-  for (const item of items) {
-    // With bundle stacking off, the free item is valued at FULL price and
-    // competes with the bundle savings (mirrors payment-service exactly).
-    const discountedUnitPrice = useBundledPrices ? getBundleDiscountedUnitPrice(item.price, item.quantity, bundleConfig) : item.price;
-    for (let i = 0; i < item.quantity; i += 1) {
-      expandedPrices.push(discountedUnitPrice);
-    }
-  }
-
-  const freeItemCount = Math.floor(expandedPrices.length / 4);
-  if (freeItemCount <= 0) {
-    return 0;
-  }
-
-  expandedPrices.sort((a, b) => a - b);
-  return expandedPrices.slice(0, freeItemCount).reduce((sum, price) => sum + price, 0);
+// THE CART'S VIEW OF A BUY-X-GET-Y PROMOTION.
+//
+// This used to be a hand-written "every 4th item is free" loop that had to stay
+// byte-identical to a second copy in quote-order.ts. Both now call
+// selectPromotionForCart in bxgy-engine.ts, from the same promotion list (which
+// /api/catalog/promotions resolves server-side) with the same two prices per
+// line — so the preview and the charge cannot drift, which is what the
+// "Altered total detected" guard in payment-service.ts exists to catch.
+function toPromotionCartLines(items: CartItem[], bundleConfig: BundleConfig): BxgyCartLine[] {
+  return items.map((item) => ({
+    slug: item.slug,
+    listUnitPrice: item.price,
+    bundledUnitPrice: getBundleDiscountedUnitPrice(item.price, item.quantity, bundleConfig),
+    quantity: item.quantity,
+  }));
 }
 
 function formatCurrency(value: number) {
@@ -290,7 +305,16 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [pointsPerDollar, setPointsPerDollar] = useState(0);
   const [pointsMultiplier, setPointsMultiplier] = useState(1);
   const [pointsToRedeem, setPointsToRedeemState] = useState(0);
-  const [promoBuy3Get1Enabled, setPromoBuy3Get1Enabled] = useState(false);
+  // Every Buy X Get Y promotion the server says may be applied right now:
+  // switched on, inside its schedule, and not used up. Empty until
+  // /api/catalog/promotions answers, which is the same posture the store has
+  // with no promotion running — the cart never invents one.
+  const [bxgyPromotions, setBxgyPromotions] = useState<BxgyPromotion[]>([]);
+  // Promotions THIS shopper has personally used up. Only knowable once an email
+  // is known, so it arrives separately (see the effect below); until then the
+  // cart prices the store-wide list, exactly as the server does for a quote
+  // with no email.
+  const [exhaustedPromotionIds, setExhaustedPromotionIds] = useState<string[]>([]);
   const [bundleConfig, setBundleConfig] = useState<BundleConfig>(DEFAULT_BUNDLE_CONFIG);
   // Whether quantity "Bundle & Save" pricing stacks with the winning
   // percentage discount. Default FALSE (one discount per order, best wins) —
@@ -382,14 +406,63 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
+  // PER-CUSTOMER USAGE LIMITS, LEARNED THE MOMENT AN EMAIL IS KNOWN.
+  //
+  // A "one per customer" promotion is the only rule the cart cannot evaluate on
+  // its own, and getting it wrong does not merely mis-state a discount: the
+  // server would drop the promotion, the cart's total would sit below the
+  // server's, and payment-service would refuse the order outright. Asking here
+  // keeps the two answers the same before the shopper reaches the pay button.
+  useEffect(() => {
+    const email = knownEmail.trim().toLowerCase();
+    let cancelled = false;
+    (async () => {
+      // No email yet (or one cleared): back to the store-wide list. Same
+      // reference when it is already empty, so this cannot loop.
+      if (!email || !email.includes("@")) {
+        if (!cancelled) setExhaustedPromotionIds((previous) => (previous.length === 0 ? previous : []));
+        return;
+      }
+      try {
+        const response = await fetch("/api/catalog/promotions/eligibility", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        if (!response.ok) return;
+        const result = await response.json() as { success?: boolean; exhaustedPromotionIds?: unknown };
+        if (cancelled || !result.success) return;
+        setExhaustedPromotionIds(
+          Array.isArray(result.exhaustedPromotionIds)
+            ? result.exhaustedPromotionIds.filter((id): id is string => typeof id === "string")
+            : [],
+        );
+      } catch {
+        // Fail open, exactly as the endpoint and the server-side counter do: a
+        // lookup that could not run must never strip a promotion the checkout
+        // will still honour.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [knownEmail]);
+
   useEffect(() => {
     (async () => {
       try {
         const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
         if (!response.ok) return;
-        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; referralProgramEnabled?: boolean; bundleConfig?: BundleConfig; bundleStacking?: boolean; salesTax?: SalesTaxConfig; shippingConfig?: ShippingConfig; referralDiscountPercent?: number; referralMinimumOrder?: number; membershipTiers?: MembershipTierSummary[] };
+        const result = await response.json() as { success: boolean; bxgyPromotions?: unknown[]; referralProgramEnabled?: boolean; bundleConfig?: BundleConfig; bundleStacking?: boolean; salesTax?: SalesTaxConfig; shippingConfig?: ShippingConfig; referralDiscountPercent?: number; referralMinimumOrder?: number; membershipTiers?: MembershipTierSummary[] };
         if (result.success) {
-          setPromoBuy3Get1Enabled(Boolean(result.promoBuy3Get1Enabled));
+          // Normalised through the same reader the server uses, so a payload
+          // from an older or newer deploy can only ever produce a promotion
+          // this engine can price — never a half-built one.
+          setBxgyPromotions(
+            Array.isArray(result.bxgyPromotions)
+              ? result.bxgyPromotions
+                .map((entry) => normalizeBxgyPromotion(entry))
+                .filter((promotion): promotion is BxgyPromotion => promotion !== null)
+              : [],
+          );
           if (result.bundleConfig) setBundleConfig(result.bundleConfig);
           setBundleStacking(result.bundleStacking === true);
           if (Number.isFinite(result.referralMinimumOrder)) {
@@ -774,21 +847,53 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   }, [isSignedIn, cartSessionId, items, customerName, subtotal]);
 
   const totalQuantity = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
-  const isBuy3Get1FreeEligible = useMemo(
-    () => promoBuy3Get1Enabled && totalQuantity >= 4,
-    [totalQuantity, promoBuy3Get1Enabled],
+  // The promotions this cart may actually earn: the store-wide live list, minus
+  // anything this shopper has personally used up.
+  const availablePromotions = useMemo(
+    () => bxgyPromotions.filter((promotion) => !exhaustedPromotionIds.includes(promotion.id)),
+    [bxgyPromotions, exhaustedPromotionIds],
   );
-  // How many more items unlock the next free one (0 when the promo is off, the
-  // cart is empty, or a group of 4 is already complete).
-  const buy3Get1UntilNextFree = useMemo(() => {
-    if (!promoBuy3Get1Enabled || totalQuantity <= 0) return 0;
-    const remainder = totalQuantity % 4;
-    return remainder === 0 ? 0 : 4 - remainder;
-  }, [promoBuy3Get1Enabled, totalQuantity]);
-  const buy3Get1FreeDiscount = useMemo(
-    () => (promoBuy3Get1Enabled ? calculateBuy3Get1Discount(items, bundleConfig, bundleStacking) : 0),
-    [items, promoBuy3Get1Enabled, bundleConfig, bundleStacking],
+
+  // At most one, the one worth the most — chosen by the same engine, from the
+  // same list, with the same valuation rule the server uses.
+  const promotionCartLines = useMemo(
+    () => toPromotionCartLines(items, bundleConfig),
+    [items, bundleConfig],
   );
+  const activePromotion = useMemo(
+    () => selectPromotionForCart(promotionCartLines, availablePromotions, { bundleStacking }),
+    [promotionCartLines, availablePromotions, bundleStacking],
+  );
+  const buy3Get1FreeDiscount = activePromotion?.application.discountAmount ?? 0;
+  /** Name of the promotion pricing this cart, for every customer-facing line. */
+  const activePromotionName = activePromotion?.promotion.name ?? null;
+  // Whether a coupon may be entered alongside it. The store-wide coupon
+  // stacking policy is a separate switch that this client is not told about;
+  // when it is on the server accepts a coupon the cart still declines, which
+  // costs a discount rather than a sale and is unchanged from before.
+  const activePromotionAllowsCoupon = activePromotion?.promotion.stackWithCoupon ?? false;
+  /** "Buy 2 Get 1 Free applied — 1 item free." */
+  const activePromotionMessage = activePromotion?.application.message ?? null;
+
+  // The promotion the shopper is CLOSEST to unlocking, and how far away it is.
+  // Not necessarily the one already applied: a cart earning Buy-3-Get-1 may be
+  // one unit from earning a second free item.
+  const promotionOpportunity = useMemo(
+    () => nextOpportunityForCart(promotionCartLines, availablePromotions, { bundleStacking }),
+    [promotionCartLines, availablePromotions, bundleStacking],
+  );
+  const promotionProgressMessage = promotionOpportunity
+    ? progressMessage(promotionOpportunity.promotion, promotionOpportunity.unitsAway)
+    : null;
+
+  // KEPT UNDER THEIR ORIGINAL NAMES because the cart drawer reads them, and
+  // because they have always meant "a free-item promotion is running on this
+  // cart" rather than anything specific to Buy 3 Get 1. `Eligible` is now true
+  // whenever a promotion has actually earned something, which is stricter and
+  // more honest than the old `totalQuantity >= 4`: that counted ineligible
+  // products towards a promotion that would never price them.
+  const isBuy3Get1FreeEligible = buy3Get1FreeDiscount > 0;
+  const buy3Get1UntilNextFree = promotionOpportunity?.unitsAway ?? 0;
 
   // Reaching a bulk-savings tier grants free shipping on the server
   // (payment-service.ts) regardless of which discount ultimately wins, so the
@@ -808,8 +913,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const shipping = (bulkSavingsTierReached || memberFreeShipping) ? 0 : calculateShipping(subtotal, undefined, shippingConfig);
 
   const couponDiscountAmount = useMemo(
-    () => (buy3Get1FreeDiscount > 0 || referralDetails ? 0 : calculateCouponDiscountAmount(discountBase, couponDetails)),
-    [buy3Get1FreeDiscount, referralDetails, couponDetails, discountBase],
+    () => ((buy3Get1FreeDiscount > 0 && !activePromotionAllowsCoupon) || referralDetails
+      ? 0
+      : calculateCouponDiscountAmount(discountBase, couponDetails)),
+    [buy3Get1FreeDiscount, activePromotionAllowsCoupon, referralDetails, couponDetails, discountBase],
   );
 
   // Whichever of buy3get1 / referral / coupon the customer is actually
@@ -955,12 +1062,14 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         case "referral": return referralDetails ? `Ambassador code ${referralDetails.code}` : "Ambassador code";
         case "ambassador_personal": return "Ambassador discount";
         case "bulk_savings": return "Bulk savings";
-        case "buy3get1": return "Buy 3 Get 1 Free";
+        // Named from the promotion that actually won, so the line reads
+        // "Buy 2 Get 1 Free" when that is what priced the cart.
+        case "buy3get1": return activePromotionName ?? "Free item promotion";
         default: return "Discount";
       }
     }
     return quantityBundleSavings > 0 ? "Bundle pricing" : null;
-  }, [discountAmount, bestDiscount, couponDetails, referralDetails, quantityBundleSavings]);
+  }, [discountAmount, bestDiscount, couponDetails, referralDetails, quantityBundleSavings, activePromotionName]);
 
   const autoBestDiscountApplied = useMemo(() => {
     const winner = discountAmount > 0 ? bestDiscount?.type : (quantityBundleSavings > 0 ? "bundle_pricing" : null);
@@ -1302,7 +1411,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     if (buy3Get1FreeDiscount > 0) {
       setReferralDetails(null);
       setReferralCode(null);
-      setReferralError("Referral codes cannot be combined with the Buy 3 Get 1 Free promotion.");
+      setReferralError(`Referral codes cannot be combined with the ${activePromotionName ?? "current"} promotion.`);
       setReferralSuccess(null);
       return;
     }
@@ -1411,10 +1520,14 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     if (isApplyingCoupon) return; // ignore rapid re-clicks while validating
     const normalized = code.trim().toUpperCase();
 
-    if (buy3Get1FreeDiscount > 0) {
+    // A promotion that permits coupon stacking lets the code through; the
+    // server applies both (quote-order passes stackWithCoupon into
+    // allowCouponStacking), so refusing it here would show a total below the
+    // one the card is charged.
+    if (buy3Get1FreeDiscount > 0 && !activePromotionAllowsCoupon) {
       setCouponDetails(null);
       setCouponCode(null);
-      setCouponError("Coupon codes cannot be combined with the Buy 3 Get 1 Free promotion.");
+      setCouponError(`Coupon codes cannot be combined with the ${activePromotionName ?? "current"} promotion.`);
       setCouponSuccess(null);
       return;
     }
@@ -1533,6 +1646,11 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     isBuy3Get1FreeActive: bestDiscount?.type === "buy3get1",
     isBuy3Get1FreeEligible,
     buy3Get1UntilNextFree,
+    activePromotionName,
+    activePromotionAllowsCoupon,
+    activePromotionMessage,
+    promotionProgressMessage,
+    availablePromotions,
     bulkSavingsApplied,
     bulkSavingsTierReached,
     ambassadorDiscountApplied,

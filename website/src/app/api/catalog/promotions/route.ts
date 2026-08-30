@@ -12,6 +12,8 @@ import { getActiveMembershipTiers } from "@/lib/membership";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
 import type { MembershipTierSummary } from "@/lib/member-pricing";
+import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
+import { serializeBxgyPromotions } from "@/lib/bxgy-config";
 
 export const dynamic = "force-dynamic";
 
@@ -45,9 +47,21 @@ export async function GET() {
         introDurationDays: tier.introDurationDays,
         introOfferEnabled: tier.introOfferEnabled,
       }));
+    // The Buy X Get Y promotions the cart may price against: switched on,
+    // inside their schedule, and not used up. The cart prices from THIS list
+    // using the same engine the checkout uses, which is what keeps the preview
+    // and the charge in lockstep — a promotion the server would refuse never
+    // reaches the client to be previewed in the first place.
+    //
+    // Per-customer limits are not resolvable here (no email on a catalog read);
+    // the cart asks /api/catalog/promotions/eligibility once it knows one.
+    const bxgyPromotions = await getApplicableBxgyPromotions({}, { promotions: config.bxgyPromotions })
+      .catch(() => []);
+
     return NextResponse.json({
       success: true,
       promoBuy3Get1Enabled: Boolean(config.promoBuy3Get1Enabled),
+      bxgyPromotions: serializeBxgyPromotions(bxgyPromotions),
       bundleConfig: config.bundleConfig,
       bundleStacking: config.bundleStacking === true,
       // Only the tax POSTURE travels (nexus states + any per-state overrides);
@@ -81,6 +95,10 @@ export async function GET() {
     return NextResponse.json({
       success: true,
       promoBuy3Get1Enabled: false,
+      // Same lockstep rule as every other field in this fallback: with the
+      // config unreadable the server applies no promotion, so the client must
+      // preview none either.
+      bxgyPromotions: [],
       bundleConfig: null,
       salesTax: DEFAULT_SALES_TAX_CONFIG,
       shippingConfig: DEFAULT_SHIPPING_CONFIG,

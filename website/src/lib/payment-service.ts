@@ -103,6 +103,7 @@ export async function createCheckoutSession(
    referral,
    couponCode,
    isBuy3Get1Active,
+   appliedPromotionName,
    storeCreditRedeemedCents,
    pointsRedeemed,
    pointsDiscountAmount,
@@ -231,6 +232,9 @@ export async function createCheckoutSession(
    storeCreditRedeemedCents,
    taxRatePercent: taxQuote.collected ? taxQuote.ratePercent : 0,
    taxState: taxQuote.collected ? taxQuote.state : null,
+   // The Buy X Get Y promotion this order redeemed, if any. Usage limits are
+   // counted from it, so it has to be written on the order that used it.
+   promotionId: quote.appliedPromotionId,
  });
 
  // A unique-index violation on idempotency_key means a truly-simultaneous
@@ -396,7 +400,7 @@ export async function createCheckoutSession(
    promotionApplied: bulkDiscountTier
      ? "BULK_SAVINGS"
      : isBuy3Get1Active
-       ? "BUY_3_GET_1"
+       ? (appliedPromotionName ?? "PROMOTION")
        : referral
          ? "REFERRAL"
          : couponCode
