@@ -180,6 +180,35 @@ const newContext = (extra = {}) => browser.newContext({
   extraHTTPHeaders: { "x-real-ip": CLIENT_IP, ...(extra.extraHTTPHeaders ?? {}) },
 });
 
+/**
+ * A PAGE WITH ITS OWN CLIENT IP, for the steps that must not inherit the run's.
+ *
+ * Two steps below deliberately present a different address from the rest of the
+ * run, because section 1 floods the signup and resend limiters and they need an
+ * unspent bucket. They did it by putting X-Real-IP on the fetch inside
+ * page.evaluate — which stopped working the moment this file began setting
+ * extraHTTPHeaders on the context, because Playwright applies context headers in
+ * the network layer and they win over one set by page script.
+ *
+ * The symptom was precise and easy to misread: "resend answered 429 for an
+ * address with no account", and an abort ladder reporting 0 of 6 requests
+ * reaching the handler at all. Both read as product defects. Both were the
+ * harness talking over itself.
+ *
+ * So the override now happens where it takes effect — in a context of its own.
+ * The page is navigated to the site first because /api/auth is CSRF-guarded and
+ * refuses a request carrying no Origin.
+ */
+async function pageOnItsOwnIp() {
+  const [a, b, c] = randomBytes(3);
+  const ctx = await newContext({
+    extraHTTPHeaders: { "x-real-ip": `100.${64 + (a % 64)}.${b}.${(c % 254) + 1}` },
+  });
+  const p = await ctx.newPage();
+  await p.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+  return { page: p, close: () => ctx.close() };
+}
+
 const stamp = Date.now();
 
 async function passAgeGate(page) {
@@ -687,16 +716,20 @@ async function main() {
     // so mint-plus-send finishes in tens of milliseconds and a wall-clock race
     // cannot reliably land between them. These delays start at zero, which cuts
     // the connection at dispatch.
+    // Its own address, because section 1 has already spent this run's signup
+    // bucket and a throttled request never reaches the code under test — the
+    // ladder then reports six clean aborts having exercised nothing.
+    const aborter = await pageOnItsOwnIp();
     const attempts = [];
     for (const [i, delayMs] of [0, 1, 3, 8, 20, 45].entries()) {
       const attemptEmail = `abandoned.${stamp}.${i}@example.test`;
-      const outcome = await page.evaluate(async ({ email, delayMs, ip }) => {
+      const outcome = await aborter.page.evaluate(async ({ email, delayMs }) => {
         const controller = new AbortController();
         const abortAt = setTimeout(() => controller.abort(), delayMs);
         try {
           const r = await fetch("/api/auth/signup", {
             method: "POST",
-            headers: { "Content-Type": "application/json", "X-Real-IP": ip },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email, password: "HarnessPass123!", fullName: "Abandoned Signup" }),
             credentials: "same-origin",
             signal: controller.signal,
@@ -707,9 +740,10 @@ async function main() {
         } finally {
           clearTimeout(abortAt);
         }
-      }, { email: attemptEmail, delayMs, ip: `198.51.100.${20 + i}` });
+      }, { email: attemptEmail, delayMs });
       attempts.push({ email: attemptEmail, delayMs, ...outcome });
     }
+    await aborter.close();
 
     assert(!attempts.some((a) => a.status === 403),
       "the signup POST was refused as cross-origin, so nothing was exercised");
@@ -763,23 +797,29 @@ async function main() {
     //
     // The route limits per-IP as well as per-address, and lib/rate-limit.ts
     // holds a spent bucket in an in-process Map that deleting rate_limit_hits
-    // does not clear. Section 1 deliberately floods this very endpoint from the
-    // shared 127.0.0.1, so by the time this runs that bucket is still held and
-    // the answer is 429 — which is the limiter working, not the resend failing.
-    // The address is new to this run, so only the IP needed changing.
-    // From the page, for the same reason as the step above: /api/auth is
-    // CSRF-guarded and a headerless node fetch is refused before it arrives.
+    // does not clear. Section 1 deliberately floods this very endpoint, so by
+    // the time this runs that bucket is still held and the answer is 429 —
+    // which is the limiter working, not the resend failing. The address is new
+    // to this run, so only the IP needed changing.
+    //
+    // It has to be a CONTEXT of its own, not a header on the fetch. This file
+    // sets extraHTTPHeaders on the context, and Playwright applies those in the
+    // network layer where they override anything page script sets — so the
+    // X-Real-IP that used to sit on this fetch was silently discarded and the
+    // step failed with "resend answered 429 for an address with no account".
+    const fresh = await pageOnItsOwnIp();
     const before = logOffset();
-    const status = await page.evaluate(async ({ email }) => {
+    const status = await fresh.page.evaluate(async ({ email }) => {
       const r = await fetch("/api/auth/resend-confirmation", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Real-IP": "198.51.100.90" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
         credentials: "same-origin",
       });
       return r.status;
     }, { email });
-    await page.waitForTimeout(3000);
+    await fresh.page.waitForTimeout(3000);
+    await fresh.close();
     assert(status !== 403, "the resend POST was refused as cross-origin, so nothing was exercised");
 
     const log = logSince(before);
