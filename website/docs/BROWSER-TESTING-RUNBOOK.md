@@ -328,6 +328,25 @@ restarts, so a fix looks like a no-op until you do:
 rm -rf .next && npm run harness:build
 ```
 
+**`npm run build` overwrites the harness build, and the harness keeps running
+against it.** They share `.next`. A production build is `NODE_ENV=production`, so
+Next does not read `.env.test.local` at all — the server comes back up with no
+Supabase URL, no payment provider and no webhook secrets, and the failures land
+where nobody suspects the build: sign-in stops setting a session cookie, the
+account page bounces to the login form, refreshes look like they log the customer
+out. Certifying a release is exactly when you run both, so this is easy to walk
+into:
+
+```bash
+npm run build                       # the certification build
+rm -rf .next && npm run harness:build && bash scripts/qa-harness-up.sh
+```
+
+Run the production build LAST, or rebuild the harness after it. `qa-harness-up.sh`
+now checks the catalogue rather than a 200 on the home page, so this shows up as
+`CATALOGUE EMPTY OR FAILING` at bring-up instead of as a dozen unrelated-looking
+session failures four minutes later.
+
 ### 7. Payments: run LIVE mode against a local stub
 
 Do **not** try to use `PAYMENT_PROVIDER=mock` on a production build, and do not
