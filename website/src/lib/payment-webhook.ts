@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { getPaymentProvider } from "@/lib/payment-provider";
+import { FULLY_TERMINAL_ORDER_STATES } from "@/lib/payment-types";
 import type { OrderStatus } from "@/lib/payment-types";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
@@ -1979,7 +1980,8 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   // store-credit reversal). Only short-circuit when the order is already FULLY
   // terminal (refunded/canceled) — a "partially_refunded" order must still let a
   // subsequent FULL refund event through to complete the restock + reversal.
-  const FULLY_TERMINAL_REFUND_STATES = new Set(["refunded", "canceled"]);
+  // Shared with /api/checkout/submit-payment — see payment-types.ts.
+  const FULLY_TERMINAL_REFUND_STATES = FULLY_TERMINAL_ORDER_STATES;
   if (
     (nextStatus === "refunded" || nextStatus === "canceled" || nextStatus === "payment_failed") &&
     priorPaymentStatus &&

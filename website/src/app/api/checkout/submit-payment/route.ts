@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+
+import { FULLY_TERMINAL_ORDER_STATES } from "@/lib/payment-types";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getRequestIpAddress } from "@/lib/admin-auth";
 import { checkRateLimit } from "@/lib/rate-limit";
@@ -63,6 +65,24 @@ export async function POST(request: Request) {
 
     if (order.payment_status === "paid") {
       return NextResponse.json({ success: false, error: "This order has already been paid." }, { status: 400 });
+    }
+
+    // AN ORDER THAT WAS REFUNDED OR CANCELLED DOES NOT GO BACK IN THE QUEUE.
+    //
+    // This guarded "paid" and nothing else, so a refunded or cancelled order
+    // could be moved to awaiting_verification by anyone holding its id —
+    // clearing the rejection reason on the way — and would then sit in the
+    // admin's approval list looking like an ordinary pending payment. Approving
+    // it marks paid an order whose money has already gone back.
+    //
+    // payment_failed stays resubmittable on purpose: a rejected manual payment
+    // is meant to be re-sent, which is why this route clears rejection_reason
+    // below.
+    if (order.payment_status && FULLY_TERMINAL_ORDER_STATES.has(order.payment_status)) {
+      return NextResponse.json(
+        { success: false, error: "This order has been closed. Please place a new order or contact support." },
+        { status: 400 },
+      );
     }
 
     // Only manual methods use this flow.
