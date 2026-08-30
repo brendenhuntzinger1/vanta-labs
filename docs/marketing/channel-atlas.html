@@ -1,0 +1,737 @@
+<title>The Vanta Channel Atlas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&family=Manrope:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --ground:#0a0a0a;
+    --surface:#121212;
+    --raised:#171717;
+    --fg:#ffffff;
+    --muted:#a3a3a3;
+    --dim:#6b6b6b;
+    --accent:#c7ae5e;
+    --accent-hi:#d8c07a;
+    --line:rgba(255,255,255,.07);
+    --line-strong:rgba(255,255,255,.14);
+
+    --open:#7ea895;
+    --restricted:#b58a55;
+    --unverified:#8e8e8e;
+    --closed:#b5675a;
+
+    --display:"Fraunces",Georgia,"Times New Roman",serif;
+    --body:"Manrope",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    --mono:"Geist Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+
+  *{box-sizing:border-box}
+
+  body{
+    background:var(--ground);
+    color:var(--fg);
+    font-family:var(--body);
+    font-size:16px;
+    line-height:1.6;
+    margin:0;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .page{max-width:1120px;margin:0 auto;padding:0 22px 120px}
+
+  /* ---------- masthead ---------- */
+
+  .top{padding:76px 0 0;position:relative}
+  .top::before{
+    content:"";
+    position:absolute;
+    top:-120px;left:-8%;
+    width:64%;height:300px;
+    background:radial-gradient(58% 50% at 30% 50%, rgba(199,174,94,.10), rgba(199,174,94,0) 70%);
+    pointer-events:none;
+  }
+  .top > *{position:relative}
+
+  .eyebrow{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.17em;
+    text-transform:uppercase;
+    color:var(--accent);
+    margin:0 0 20px;
+  }
+  h1{
+    font-family:var(--display);
+    font-weight:500;
+    font-size:clamp(2.2rem,5.6vw,3.6rem);
+    line-height:1.05;
+    letter-spacing:-.02em;
+    margin:0 0 22px;
+    text-wrap:balance;
+  }
+  .lede{color:var(--muted);max-width:66ch;margin:0;font-size:1.0625rem;line-height:1.7}
+  .lede strong{color:var(--fg);font-weight:500}
+
+  code{
+    font-family:var(--mono);
+    font-size:.86em;
+    color:var(--accent-hi);
+    background:rgba(199,174,94,.07);
+    padding:1px 5px;
+    border-radius:2px;
+  }
+
+  /* ---------- legend ---------- */
+
+  .legend{
+    margin:44px 0 0;
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(216px,1fr));
+    gap:1px;
+    background:var(--line);
+    border:1px solid var(--line);
+  }
+  .legend > div{background:var(--surface);padding:19px 18px}
+  .legend .k{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.13em;
+    text-transform:uppercase;
+    margin:0 0 9px;
+  }
+  .legend p{margin:0;color:var(--muted);font-size:.84rem;line-height:1.6}
+  .legend .k.open{color:var(--open)}
+  .legend .k.restricted{color:var(--restricted)}
+  .legend .k.unverified{color:var(--unverified)}
+  .legend .k.closed{color:var(--closed)}
+
+  /* ---------- callout ---------- */
+
+  .note{
+    margin:40px 0 0;
+    border:1px solid var(--line-strong);
+    background:var(--surface);
+    padding:28px 26px;
+  }
+  .note h2{
+    font-family:var(--display);
+    font-weight:500;
+    font-size:1.375rem;
+    letter-spacing:-.012em;
+    margin:0 0 15px;
+  }
+  .note p{color:var(--muted);margin:0;max-width:70ch;font-size:.9375rem}
+  .note p + p{margin-top:12px}
+  .note strong{color:var(--fg);font-weight:500}
+
+  /* ---------- filter ---------- */
+
+  .filter{
+    position:sticky;
+    top:0;
+    z-index:20;
+    margin:48px 0 0;
+    display:flex;
+    flex-wrap:wrap;
+    align-items:center;
+    gap:9px;
+    padding:14px 16px;
+    background:rgba(10,10,10,.94);
+    backdrop-filter:blur(14px);
+    -webkit-backdrop-filter:blur(14px);
+    border:1px solid var(--line-strong);
+  }
+  .filter .lbl{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.13em;
+    text-transform:uppercase;
+    color:var(--dim);
+    margin-right:4px;
+  }
+  .fbtn{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    color:var(--muted);
+    background:none;
+    border:1px solid var(--line-strong);
+    padding:6px 11px;
+    border-radius:2px;
+    cursor:pointer;
+    transition:color .2s ease,border-color .2s ease,background .2s ease;
+  }
+  .fbtn:hover{color:var(--fg);border-color:var(--muted)}
+  .fbtn[aria-pressed="true"]{color:#0a0a0a;background:var(--accent);border-color:var(--accent)}
+  .fbtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .fbtn .c{font-variant-numeric:tabular-nums;opacity:.7;margin-left:5px}
+
+  /* ---------- family ---------- */
+
+  .fam{margin:52px 0 0}
+  .fam[hidden]{display:none}
+  .fam-head{
+    display:flex;
+    align-items:baseline;
+    gap:16px;
+    flex-wrap:wrap;
+    padding-bottom:14px;
+    border-bottom:1px solid var(--line-strong);
+  }
+  .fam-head .n{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.17em;
+    color:var(--accent);
+    white-space:nowrap;
+  }
+  .fam-head h2{
+    font-family:var(--display);
+    font-weight:500;
+    font-size:1.4375rem;
+    letter-spacing:-.012em;
+    margin:0;
+    flex:1;
+    min-width:180px;
+  }
+  .fam-head .cnt{
+    font-family:var(--mono);
+    font-variant-numeric:tabular-nums;
+    font-size:11.5px;
+    color:var(--dim);
+  }
+  .fam-why{color:var(--muted);font-size:.9rem;margin:15px 0 2px;max-width:70ch}
+
+  /* ---------- method rows ---------- */
+
+  .m{
+    display:grid;
+    grid-template-columns:1fr 104px;
+    gap:4px 18px;
+    padding:14px 0;
+    border-bottom:1px solid var(--line);
+    align-items:baseline;
+  }
+  .m[hidden]{display:none}
+  .m .nm{
+    font-weight:600;
+    font-size:.9375rem;
+    line-height:1.45;
+    grid-column:1;
+  }
+  .m .no{
+    grid-column:1;
+    grid-row:2;
+    color:var(--muted);
+    font-size:.855rem;
+    line-height:1.6;
+    max-width:74ch;
+  }
+  .m .no strong{color:var(--fg);font-weight:500}
+  .m .v{
+    grid-column:2;
+    grid-row:1 / span 2;
+    justify-self:end;
+    align-self:start;
+    font-family:var(--mono);
+    font-size:10px;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+    padding:3px 7px;
+    border:1px solid;
+    border-radius:2px;
+    white-space:nowrap;
+  }
+  .v.open{color:var(--open);border-color:rgba(126,168,149,.4)}
+  .v.restricted{color:var(--restricted);border-color:rgba(181,138,85,.4)}
+  .v.unverified{color:var(--unverified);border-color:var(--line-strong)}
+  .v.closed{color:var(--closed);border-color:rgba(181,103,90,.4)}
+
+  .empty{
+    color:var(--dim);
+    font-family:var(--mono);
+    font-size:12px;
+    letter-spacing:.06em;
+    padding:40px 0;
+    text-align:center;
+  }
+  .empty[hidden]{display:none}
+
+  /* ---------- shortlist ---------- */
+
+  .short{
+    margin-top:8px;
+    border:1px solid var(--line-strong);
+    background:var(--surface);
+  }
+  .short-row{
+    display:grid;
+    grid-template-columns:30px 1fr;
+    gap:0 18px;
+    padding:17px 24px;
+    border-bottom:1px solid var(--line);
+    align-items:baseline;
+  }
+  .short-row:last-child{border-bottom:0}
+  .short-row .i{
+    font-family:var(--mono);
+    font-variant-numeric:tabular-nums;
+    font-size:12px;
+    color:var(--accent);
+  }
+  .short-row p{margin:0;color:var(--muted);font-size:.9rem;max-width:70ch}
+  .short-row strong{color:var(--fg);font-weight:500}
+
+  footer{
+    margin-top:88px;
+    padding-top:28px;
+    border-top:1px solid var(--line);
+    color:var(--dim);
+    font-size:12.5px;
+    max-width:74ch;
+  }
+  footer p{margin:0 0 11px}
+  footer p:last-child{margin-bottom:0}
+
+  @media (max-width:640px){
+    .page{padding:0 16px 80px}
+    .top{padding:54px 0 0}
+    .m{grid-template-columns:1fr;gap:4px 0}
+    .m .v{grid-column:1;grid-row:3;justify-self:start;margin-top:7px}
+    .short-row{grid-template-columns:24px 1fr;padding:15px 17px;gap:0 12px}
+    .note{padding:22px 18px}
+    .filter{padding:11px 12px;gap:7px}
+  }
+
+  @media (prefers-reduced-motion:reduce){*{transition:none !important}}
+</style>
+
+<div class="page">
+
+  <header class="top">
+    <p class="eyebrow">Vanta Labs · Channel atlas · 175 methods</p>
+    <h1>Every way there is to market this, and which ones are actually open to you</h1>
+    <p class="lede">
+      A complete catalogue — paid, organic, print, physical, partner, outreach, broadcast. The list itself
+      is generic; <strong>the verdict beside each entry is not.</strong> Selling research-use-only materials
+      closes doors that are wide open to an ordinary store, and the expensive mistake is discovering that
+      after you have built the campaign. Filter by verdict to see what you can actually use.
+    </p>
+  </header>
+
+  <div class="legend">
+    <div>
+      <p class="k open">Open</p>
+      <p>No category barrier. You are limited by effort and compliance of the message, not by anyone's permission.</p>
+    </div>
+    <div>
+      <p class="k restricted">Restricted</p>
+      <p>Usable, but with a real chance of rejection, account loss, or a partner who makes a claim you cannot make.</p>
+    </div>
+    <div>
+      <p class="k unverified">Unverified</p>
+      <p>Genuinely unknown for your category. Needs a written answer before you spend. The honest default here.</p>
+    </div>
+    <div>
+      <p class="k closed">Closed</p>
+      <p>Policy almost certainly prohibits it. Attempting it repeatedly risks the account, not just the campaign.</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <h2>One verdict changed while I was building this</h2>
+    <p>
+      I told you earlier to treat paid search as unknown. Live Google Keyword Planner data now says something
+      more specific: <code>buy peptides online</code> carries <strong>High competition at $2.24–$9.16
+      top-of-page CPC</strong>, <code>bpc 157 for sale</code> High at $2.27–$6.34, and <code>research peptides
+      for sale</code> returns real cost data too. Competition metrics reflect advertisers actually bidding.
+    </p>
+    <p>
+      <strong>Someone is buying these clicks.</strong> That is meaningfully better evidence than I had, and it
+      is why Google Search sits at Unverified rather than Closed below. Two honest caveats: part of that
+      competition is adjacent collagen-supplement advertisers, who sell a legally different product and are
+      clearly present in the data; and advertisers appearing in an auction is not proof they are compliant or
+      that they will still be there next quarter. It raises the question from "probably impossible" to
+      <strong>"worth getting a written ruling on"</strong> — which is exactly what #06 in your playbook does.
+    </p>
+    <p>
+      Also worth knowing: <code>research peptides</code> draws <strong>14,800 US searches a month at Low
+      competition</strong>. That is an organic search opportunity sitting in plain sight, and it needs
+      nobody's approval at all.
+    </p>
+  </div>
+
+  <div class="filter">
+    <span class="lbl">Show</span>
+    <button class="fbtn" type="button" data-f="all" aria-pressed="true">All<span class="c" id="c-all"></span></button>
+    <button class="fbtn" type="button" data-f="open" aria-pressed="false">Open<span class="c" id="c-open"></span></button>
+    <button class="fbtn" type="button" data-f="restricted" aria-pressed="false">Restricted<span class="c" id="c-restricted"></span></button>
+    <button class="fbtn" type="button" data-f="unverified" aria-pressed="false">Unverified<span class="c" id="c-unverified"></span></button>
+    <button class="fbtn" type="button" data-f="closed" aria-pressed="false">Closed<span class="c" id="c-closed"></span></button>
+  </div>
+
+  <div id="atlas">
+
+    <!-- 1 -->
+    <section class="fam">
+      <div class="fam-head"><span class="n">01</span><h2>Search &amp; organic web</h2><span class="cnt"></span></div>
+      <p class="fam-why">Entirely yours, entirely open, and the only family here that no policy update can switch off. This is where a restricted category should over-invest.</p>
+
+      <div class="m" data-v="open"><span class="nm">Product page SEO</span><span class="no">38 live pages, none with an SEO title written. Each is a permanent entry point.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Category page SEO</span><span class="no">Nine research categories, each a legitimate landing target for broader queries.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Editorial / blog SEO</span><span class="no"><strong>"Research peptides" — 14,800/mo, Low competition.</strong> The gap is real.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Programmatic SEO</span><span class="no">One page per compound and per batch, generated from data you already hold.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Technical SEO</span><span class="no">Crawlability, speed, indexation. Unglamorous and it gates everything else.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Structured data / rich results</span><span class="no">Product and Offer schema. Improves click-through on rankings you already hold.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Internal linking architecture</span><span class="no">Push authority from articles into product pages deliberately, not accidentally.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Glossary &amp; encyclopedia pages</span><span class="no">One page per compound: formula, CAS, sequence, storage. Pure informational capture.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">COA / lot-number search pages</span><span class="no">Indexable per-batch pages. Nobody else in this category can copy them cheaply.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Buying-guide &amp; comparison content</span><span class="no">"How to vet a supplier" — the reader reaches your conclusion themselves.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">FAQ pages &amp; schema</span><span class="no">Captures question queries and feeds AI answer engines at the same time.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Digital PR link building</span><span class="no">Earn links with original data. The hardest and most durable ranking input.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Guest posting</span><span class="no">Write for adjacent publications. Watch their claims as carefully as your own.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Resource-page &amp; broken-link building</span><span class="no">Slow, manual, still works. Best aimed at your educational library.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">AI search visibility</span><span class="no">Being cited by assistants when someone asks how to verify a supplier. Rising fast.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">YouTube SEO</span><span class="no">Second-largest search engine. Your educational content already suits it.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Bing / alternative engine SEO</span><span class="no">Small share, near-zero marginal effort once Google SEO is done.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Image &amp; video SEO</span><span class="no">Alt text and filenames on 38 products. Four have no image at all.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Google Business Profile / local</span><span class="no">Requires a verifiable address and invites local scrutiny of a restricted category.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">International SEO / hreflang</span><span class="no">Only once one market works. Premature internationalisation is a classic time sink.</span><span class="v open">Open</span></div>
+    </section>
+
+    <!-- 2 -->
+    <section class="fam">
+      <div class="fam-head"><span class="n">02</span><h2>Email, SMS &amp; messaging</h2><span class="cnt"></span></div>
+      <p class="fam-why">The only audience you own outright. Currently five people. One caution: email and SMS providers enforce their own acceptable-use policies on this category, independently of any ad platform.</p>
+
+      <div class="m" data-v="open"><span class="nm">Welcome / onboarding flow</span><span class="no">Highest-open sequence you will ever send. Lead with the documentation.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Abandoned cart flow</span><span class="no">Live: 9 carts, 29 emails sent, no recovery figure attached to any of them.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Abandoned browse flow</span><span class="no">Not built. Catches intent earlier than the cart does.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Post-purchase sequence</span><span class="no">Deliver the batch report for the lot they received. Trust forms here.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Batch-report digest</span><span class="no">Your best subscribe reason. Costs no margin and self-selects the right buyer.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Win-back / lapsed</span><span class="no">Three customers, eight orders. At this size, send it by hand.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Replenishment reminders</span><span class="no">Timed to typical reorder intervals. Never framed as a usage schedule.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Back-in-stock alerts</span><span class="no">Built, and holding <strong>zero requests</strong> against three out-of-stock SKUs.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Price-drop alerts</span><span class="no">Requires a live price change to announce. None currently exists.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Review request flow</span><span class="no">The compliant route to social proof: ask real customers, quote them exactly.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Referral invite flow</span><span class="no">Fix attribution first — 131 clicks currently produce zero referral orders.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Segmented broadcast campaigns</span><span class="no">One campaign exists with zero recipients recorded.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Transactional email extensions</span><span class="no">Order confirmations get opened. Add the report link, not an upsell.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">SMS marketing</span><span class="no">US carriers filter aggressively on regulated-sounding categories. Expect scrutiny.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="restricted"><span class="nm">WhatsApp / Telegram broadcast</span><span class="no">Meta's commerce policies reach WhatsApp Business. Telegram is looser and lower quality.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">Web push notifications</span><span class="no">Cheap re-engagement, no gatekeeper. Easy to overuse and burn.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">On-site messaging &amp; live chat</span><span class="no">Answer sourcing questions at the moment of hesitation.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Email service provider choice</span><span class="no"><strong>Read the AUP before you migrate.</strong> Several mainstream ESPs exclude this category outright.</span><span class="v restricted">Restricted</span></div>
+    </section>
+
+    <!-- 3 -->
+    <section class="fam">
+      <div class="fam-head"><span class="n">03</span><h2>Organic social</h2><span class="cnt"></span></div>
+      <p class="fam-why">Unaffected by ad-category rulings, which makes it the whole top of your funnel right now. Community moderation still applies, and it is stricter than most people expect.</p>
+
+      <div class="m" data-v="open"><span class="nm">TikTok organic</span><span class="no">Highest reach per unit of effort. Your first platform, ad ruling or not.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Instagram Reels</span><span class="no">Same assets, reframed. No extra shoot required.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Instagram feed &amp; stories</span><span class="no">Where the cinematic product work belongs. Stories carry the batch drops.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">YouTube long-form</span><span class="no">Best home for genuine testing and methodology explanation. Compounds like SEO.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">YouTube Shorts</span><span class="no">Free distribution for assets you already cut for TikTok.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">X / Twitter</span><span class="no">Small commerce reach; real value in reaching a technical audience directly.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Reddit participation</span><span class="no">Where this category genuinely vets suppliers. Self-promotion gets you banned — <strong>show up as a participant.</strong></span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">Your own subreddit</span><span class="no">Slow to build, and you control the rules and the archive.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">LinkedIn company page</span><span class="no">Marginal for consumer sales; useful for wholesale and lab relationships.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Founder / personal brand</span><span class="no">A named accountable operator in an anonymous category. Free differentiator.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Facebook page &amp; groups</span><span class="no">Meta's commerce policies apply to organic pages too, not only to ads.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">Discord community</span><span class="no">Strong for a technical audience. Needs real moderation of claims made by members.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Telegram channel</span><span class="no">Common in this category, which is precisely why it carries reputational baggage.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">Pinterest organic</span><span class="no">Low fit for a dark technical brand, but effectively free to test.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Threads / Bluesky / Mastodon</span><span class="no">Low cost, low return today. Cross-post, do not staff.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Quora &amp; answer sites</span><span class="no">Ranks in Google and answers sourcing questions permanently.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Substack / Medium</span><span class="no">Distribution for the long-form work you are writing anyway.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Your own podcast</span><span class="no">High effort, deep trust. Only worth it once the content library exists.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Live streams &amp; AMAs</span><span class="no">Unscripted answers about a restricted product. Brief yourself before going live.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">Twitch</span><span class="no">Audience mismatch. Listed for completeness rather than recommendation.</span><span class="v open">Open</span></div>
+    </section>
+
+    <!-- 4 -->
+    <section class="fam">
+      <div class="fam-head"><span class="n">04</span><h2>Paid digital</h2><span class="cnt"></span></div>
+      <p class="fam-why">The most restricted family by a wide margin. Four direct competitors were checked against the live Meta ad library and none is running ads — treat that as a finding about the category, not a gap in the market.</p>
+
+      <div class="m" data-v="unverified"><span class="nm">Google Search ads</span><span class="no">Live CPC data exists on commercial peptide terms. <strong>Get the written ruling first.</strong></span><span class="v unverified">Unverified</span></div>
+      <div class="m" data-v="closed"><span class="nm">Google Shopping / Merchant Center</span><span class="no">Product feeds face stricter review than text ads. Expect rejection.</span><span class="v closed">Closed</span></div>
+      <div class="m" data-v="closed"><span class="nm">Performance Max</span><span class="no">Bundles Shopping surfaces, so it inherits the strictest policy in the set.</span><span class="v closed">Closed</span></div>
+      <div class="m" data-v="unverified"><span class="nm">Google Display Network</span><span class="no">Same policy family as Search. Rises or falls with the same ruling.</span><span class="v unverified">Unverified</span></div>
+      <div class="m" data-v="unverified"><span class="nm">YouTube ads</span><span class="no">Google Ads policy applies. Do not assume video is judged separately.</span><span class="v unverified">Unverified</span></div>
+      <div class="m" data-v="unverified"><span class="nm">Microsoft / Bing ads</span><span class="no">Often more permissive than Google, and genuinely worth asking. Smaller volume.</span><span class="v unverified">Unverified</span></div>
+      <div class="m" data-v="closed"><span class="nm">Meta ads (Facebook &amp; Instagram)</span><span class="no"><strong>Verified: zero of four direct competitors running ads.</strong> Treat as closed.</span><span class="v closed">Closed</span></div>
+      <div class="m" data-v="unverified"><span class="nm">TikTok ads</span><span class="no">Your stated first platform. Attribution is already wired; the ruling is not.</span><span class="v unverified">Unverified</span></div>
+      <div class="m" data-v="unverified"><span class="nm">Reddit ads</span><span class="no">Reaches the exact communities that vet suppliers. Policy stance unconfirmed.</span><span class="v unverified">Unverified</span></div>
+      <div class="m" data-v="unverified"><span class="nm">X ads</span><span class="no">Historically looser enforcement; correspondingly thinner commerce performance.</span><span class="v unverified">Unverified</span></div>
+      <div class="m" data-v="closed"><span class="nm">Pinterest ads</span><span class="no">Health and supplement restrictions, and a poor audience match regardless.</span><span class="v closed">Closed</span></div>
+      <div class="m" data-v="closed"><span class="nm">Snapchat ads</span><span class="no">Restricted category plus a demographic you are not selling to.</span><span class="v closed">Closed</span></div>
+      <div class="m" data-v="unverified"><span class="nm">LinkedIn ads</span><span class="no">Expensive, and only sane as a wholesale play rather than a consumer one.</span><span class="v unverified">Unverified</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Native ads (Taboola / Outbrain)</span><span class="no">Historically permissive on supplements. Placement quality is the real cost.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Programmatic display / DSP</span><span class="no">Independent networks vary widely. Vet the inventory, not just the policy.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="unverified"><span class="nm">Retargeting</span><span class="no">Cheapest paid there is — and 364 lifetime visitors is not yet a pool.</span><span class="v unverified">Unverified</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Newsletter sponsorships</span><span class="no">Direct deals, no ad platform in between. <strong>The most promising paid route open to you.</strong></span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Podcast advertising</span><span class="no">Same logic: buy from the host, not from a network. Script it yourself.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Direct site sponsorship</span><span class="no">Buy banner space on niche sites directly. No moderation layer at all.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Forum &amp; community sponsorship</span><span class="no">Where the audience actually is. Negotiated with a human, not a policy engine.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="closed"><span class="nm">Connected TV / streaming</span><span class="no">Heavy pre-clearance on health-adjacent products. Wrong stage regardless.</span><span class="v closed">Closed</span></div>
+      <div class="m" data-v="closed"><span class="nm">Marketplace ads (Amazon etc.)</span><span class="no">Requires selling on the marketplace, which is itself closed to you.</span><span class="v closed">Closed</span></div>
+      <div class="m" data-v="closed"><span class="nm">Push-notification ad networks</span><span class="no">Low-quality inventory that would undo the premium positioning entirely.</span><span class="v closed">Closed</span></div>
+    </section>
+
+    <!-- 5 -->
+    <section class="fam">
+      <div class="fam-head"><span class="n">05</span><h2>Affiliate, referral &amp; partner</h2><span class="cnt"></span></div>
+      <p class="fam-why">Your machinery is built and idle: 10 ambassadors, 10 partners, 131 clicks, zero referral orders, zero commissions. Fix conversion before recruiting anyone else. And note the structural risk — a partner making an outcome claim creates your exposure, not theirs.</p>
+
+      <div class="m" data-v="open"><span class="nm">In-house affiliate programme</span><span class="no">Already built. You set the rules and the compliance briefing.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Affiliate networks</span><span class="no">Many exclude this category at merchant onboarding. Ask before building for it.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">Ambassador programme</span><span class="no">Ten enrolled, none converting. A funnel problem, not a recruitment problem.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Customer referral programme</span><span class="no">Verify the code survives checkout before you promote it to anyone.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Nano &amp; micro influencers</span><span class="no">Best value per dollar. <strong>Brief them on documentation, never on outcomes.</strong></span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Macro influencers</span><span class="no">Expensive, and far harder to control what gets said on camera.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Product seeding / gifting</span><span class="no">Cheap reach. You lose editorial control the moment the box arrives.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="unverified"><span class="nm">Creator whitelisting</span><span class="no">Running ads through a creator's handle. Inherits every ad-platform restriction above.</span><span class="v unverified">Unverified</span></div>
+      <div class="m" data-v="open"><span class="nm">Wholesale &amp; B2B reseller</span><span class="no">55 views, 9 visitors, no funnel. <strong>Highest-value segment needing nobody's permission.</strong></span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">White label / private label</span><span class="no">Sell your documented supply under someone else's brand. Real revenue, no marketing.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Dropship partners</span><span class="no">You keep the liability and surrender control of the customer relationship.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">Co-marketing partnerships</span><span class="no">Adjacent non-competing brands. Split the audience-building cost.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Bundle partnerships</span><span class="no">Bacteriostatic water and consumables are the obvious pairing you already stock.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Coupon &amp; deal sites</span><span class="no">Attracts discount buyers and erodes the margin funding your COA library.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Cashback &amp; loyalty partners</span><span class="no">Category acceptance varies by network. Low strategic value at your stage.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">Review &amp; comparison sites</span><span class="no">Independent supplier round-ups. Being listed is worth pursuing directly.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Tiered commission structures</span><span class="no">Three rules configured, zero commissions ever paid. Sequenced behind the fix.</span><span class="v open">Open</span></div>
+    </section>
+
+    <!-- 6 -->
+    <section class="fam">
+      <div class="fam-head"><span class="n">06</span><h2>Content &amp; authority</h2><span class="cnt"></span></div>
+      <p class="fam-why">Restriction pushes this brand toward evidence, and evidence is the thing it actually has. Everything here is open, and it is where a documentation-led business should be spending most of its time.</p>
+
+      <div class="m" data-v="open"><span class="nm">Educational article library</span><span class="no">Four articles today. A foundation, not yet a library.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Public COA / testing transparency</span><span class="no"><strong>The single strongest asset available, and currently zero rows.</strong></span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Methodology publishing</span><span class="no">Which lab, which assay, what happens on a fail. The failure path is the persuasive part.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Original research &amp; data studies</span><span class="no">Test the market and publish what you find. Earns links nothing else earns.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Video education series</span><span class="no">The same scripts as your short-form, at length.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Technical guides / whitepapers</span><span class="no">Handling, storage, cold chain, traceability. Doubles as a lead magnet.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Webinars</span><span class="no">Better suited to wholesale buyers than to consumers.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Lead magnets</span><span class="no">"How to read a COA" is already written and already the right offer.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Interactive tools</span><span class="no">A lot-number lookup is a tool, a trust signal and an SEO asset at once.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Guest podcasting</span><span class="no">Borrow an audience without buying it. Prepare your compliance lines first.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Speaking engagements</span><span class="no">Industry credibility, and it feeds the PR family below.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Public batch changelog</span><span class="no">Reads as operating discipline rather than marketing, which is why it works.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Case studies</span><span class="no">B2B and wholesale only — never a customer outcome narrative.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Online courses</span><span class="no">High effort, strong authority. A later-stage move.</span><span class="v open">Open</span></div>
+    </section>
+
+    <!-- 7 -->
+    <section class="fam">
+      <div class="fam-head"><span class="n">07</span><h2>PR &amp; earned media</h2><span class="cnt"></span></div>
+      <p class="fam-why">Cheap, slow, and it compounds into the links that drive family 01. The risk is a journalist writing the outcome claim you carefully avoided.</p>
+
+      <div class="m" data-v="open"><span class="nm">Press releases</span><span class="no">Weak alone; useful as a citable record for a genuine announcement.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Journalist outreach</span><span class="no">Pitch the transparency story. <strong>Control the quotes you supply.</strong></span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Expert-source platforms</span><span class="no">Answer reporter queries on testing and QC. Never on outcomes.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">Trade publication coverage</span><span class="no">Laboratory and supply-chain press understand the category as you frame it.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Awards &amp; industry lists</span><span class="no">Third-party validation you can cite indefinitely once won.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Founder interviews &amp; profiles</span><span class="no">Puts a name behind the standards in an anonymous category.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Review platform management</span><span class="no">Trustpilot and Google reviews. Real reviews only — always.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Industry directories</span><span class="no">Supplier listings. Low effort, permanent, quietly good for links.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Reputation monitoring</span><span class="no">Know what is said about you in the forums that decide your reputation.</span><span class="v open">Open</span></div>
+    </section>
+
+    <!-- 8 -->
+    <section class="fam">
+      <div class="fam-head"><span class="n">08</span><h2>Community &amp; word of mouth</h2><span class="cnt"></span></div>
+      <p class="fam-why">In a category where advertising is restricted, reputation is the distribution channel. It cannot be bought, which is exactly why it is defensible.</p>
+
+      <div class="m" data-v="open"><span class="nm">Own community platform</span><span class="no">Discord or forum. You own the archive and the moderation standard.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Third-party forum participation</span><span class="no">Answer with documents. Pitching gets you banned and deservedly so.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="restricted"><span class="nm">User-generated content</span><span class="no">You cannot control what a customer claims. Curate before amplifying.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">Reviews &amp; testimonials</span><span class="no">Real, permissioned, still compliant. Three customers — ask all three.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Loyalty points programme</span><span class="no">Built and running. Twenty ledger entries so far.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Membership tiers</span><span class="no">Five configured, Essential inactive, two members. Decide what it is for.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Early access &amp; VIP</span><span class="no">Costs nothing, and makes the tiers mean something concrete.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Customer advisory group</span><span class="no">Three customers is a focus group you can convene this week.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Unboxing experience</span><span class="no">The package is media. This category's norm is a padded envelope.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Handwritten notes</span><span class="no">Absurd at scale, decisive at eight orders.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Surprise upgrades</span><span class="no">Cheapest word-of-mouth generator that exists.</span><span class="v open">Open</span></div>
+    </section>
+
+    <!-- 9 -->
+    <section class="fam">
+      <div class="fam-head"><span class="n">09</span><h2>Print &amp; physical</h2><span class="cnt"></span></div>
+      <p class="fam-why">You asked about business cards specifically, so here is the honest answer: print is almost entirely open to you, because no platform reviews it. Its weakness is targeting, not permission — which makes it strong exactly where your audience physically gathers.</p>
+
+      <div class="m" data-v="open"><span class="nm">Business cards</span><span class="no">Genuinely useful for trade shows and lab outreach. <strong>Put the COA library URL on the back</strong>, not a sales line.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Packaging inserts</span><span class="no">The highest-response print you will ever run — it reaches a proven buyer.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Product packaging design</span><span class="no">Your most-photographed asset. Currently doing no marketing work at all.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Batch QR codes on labels</span><span class="no">Physical-to-digital proof loop. Hard for competitors to copy cheaply.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Printed catalogue</span><span class="no">38 documented products makes a credible wholesale leave-behind.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Technical spec sheets</span><span class="no">One page per compound. The B2B document buyers actually keep.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Stickers &amp; decals</span><span class="no">Cheap, and laboratory environments genuinely accumulate them.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Brochures</span><span class="no">Only worth printing for a specific event with a specific audience.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Direct mail / postcards</span><span class="no">Legal, but buying a consumer list in this category invites scrutiny.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">Direct mail to businesses</span><span class="no">Labs and clinics as a B2B list. Far safer than consumer mail.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Trade magazine print ads</span><span class="no">Publishers run their own acceptance policies. Ask before designing.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">Branded merchandise</span><span class="no">Lab-appropriate items beat logo t-shirts for this audience.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Posters &amp; banners</span><span class="no">Event and booth use. No standalone value.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Billboards / OOH</span><span class="no">Operators vet copy, and mass reach is wrong for a niche technical buyer.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Transit advertising</span><span class="no">Same vetting, same targeting mismatch.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">Vehicle wraps</span><span class="no">Listed for completeness. Almost certainly not for you.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Flyers &amp; local drops</span><span class="no">Wrong audience geometry — your buyers are not on one street.</span><span class="v restricted">Restricted</span></div>
+    </section>
+
+    <!-- 10 -->
+    <section class="fam">
+      <div class="fam-head"><span class="n">10</span><h2>Events &amp; in-person</h2><span class="cnt"></span></div>
+      <p class="fam-why">Expensive per contact, and it reaches wholesale buyers who never see an ad. No platform gets a vote on any of it.</p>
+
+      <div class="m" data-v="open"><span class="nm">Trade show booths</span><span class="no">Research and laboratory supply expos. Where bulk buyers actually are.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Conference attendance</span><span class="no">Cheaper than exhibiting and often better for relationships.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Event sponsorship</span><span class="no">Organisers vet sponsors in regulated categories. Ask early.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">Your own events</span><span class="no">An open-lab or testing walkthrough is a story nobody else in the category tells.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Meetups &amp; networking</span><span class="no">Low cost, high variance, occasionally your best partnership source.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">University &amp; institutional outreach</span><span class="no">Direct to actual research buyers — the customer the product is designed for.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Sampling &amp; demo stations</span><span class="no">Physical distribution of research materials carries obvious handling constraints.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">Pop-ups</span><span class="no">Poor fit for a technical purchase. Listed for completeness.</span><span class="v open">Open</span></div>
+    </section>
+
+    <!-- 11 -->
+    <section class="fam">
+      <div class="fam-head"><span class="n">11</span><h2>Direct outreach</h2><span class="cnt"></span></div>
+      <p class="fam-why">Unscalable, unglamorous, and at three customers it is almost certainly where your next order comes from. Nobody's approval required.</p>
+
+      <div class="m" data-v="open"><span class="nm">Cold email to businesses</span><span class="no">Labs, clinics, distributors. Honour CAN-SPAM and keep records.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Cold email to consumers</span><span class="no">Higher legal exposure and much lower response. Not worth it.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">LinkedIn outreach</span><span class="no">Best channel for wholesale conversations. Ten a day is achievable.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="open"><span class="nm">Cold calling</span><span class="no">B2B only. Brutal, and it works when the list is genuinely qualified.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Social DM outreach</span><span class="no">Platforms rate-limit it and read bulk DMs as spam. Use sparingly.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="open"><span class="nm">Account-based marketing</span><span class="no">Pick 50 target accounts and work them properly. Fits your volume exactly.</span><span class="v open">Open</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Purchased lead lists</span><span class="no">Usually stale, often non-compliant, and it can poison your sending domain.</span><span class="v restricted">Restricted</span></div>
+    </section>
+
+    <!-- 12 -->
+    <section class="fam">
+      <div class="fam-head"><span class="n">12</span><h2>Broadcast &amp; marketplaces</h2><span class="cnt"></span></div>
+      <p class="fam-why">Listed to be complete, and to save you the phone calls. Almost all of it is closed to this category, and the parts that are not are wrong for your stage.</p>
+
+      <div class="m" data-v="closed"><span class="nm">Amazon</span><span class="no">Research chemicals are prohibited. Not a grey area.</span><span class="v closed">Closed</span></div>
+      <div class="m" data-v="closed"><span class="nm">eBay</span><span class="no">Prohibited under the same category of policy.</span><span class="v closed">Closed</span></div>
+      <div class="m" data-v="closed"><span class="nm">Etsy / Walmart / Target marketplaces</span><span class="no">Category prohibited across all of them.</span><span class="v closed">Closed</span></div>
+      <div class="m" data-v="closed"><span class="nm">TikTok Shop</span><span class="no">Commerce policies are stricter than advertising policies, not looser.</span><span class="v closed">Closed</span></div>
+      <div class="m" data-v="closed"><span class="nm">Instagram &amp; Facebook Shopping</span><span class="no">Meta commerce policy. Same answer as Meta ads.</span><span class="v closed">Closed</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Niche vertical marketplaces</span><span class="no">Research-supply marketplaces exist and set their own rules. Worth asking.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="closed"><span class="nm">National TV</span><span class="no">Pre-clearance on health-adjacent claims. Wrong scale entirely.</span><span class="v closed">Closed</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Local TV</span><span class="no">Stations vet copy individually. Poor targeting for a niche technical buyer.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Radio</span><span class="no">Same vetting, same mismatch. Cheap, and cheap is not the problem.</span><span class="v restricted">Restricted</span></div>
+      <div class="m" data-v="closed"><span class="nm">Streaming audio ads</span><span class="no">Spotify and Pandora apply supplement and health restrictions.</span><span class="v closed">Closed</span></div>
+      <div class="m" data-v="restricted"><span class="nm">Cinema advertising</span><span class="no">Vetted, expensive, untargeted. Completeness only.</span><span class="v restricted">Restricted</span></div>
+    </section>
+
+  </div>
+
+  <p class="empty" id="empty" hidden>No methods match that filter.</p>
+
+  <section class="fam">
+    <div class="fam-head"><span class="n">Focus</span><h2>If you only run ten of these</h2><span class="cnt"></span></div>
+    <p class="fam-why">Breadth is useful for knowing what exists. It is dangerous as a to-do list. These ten are open to you today, need nobody's approval, and attack your two actual constraints — not enough traffic, not enough proof.</p>
+    <div class="short">
+      <div class="short-row"><span class="i">01</span><p><strong>Publish the COA library.</strong> Zero rows today. Unlocks the documentation angle and substantiates claims already on your site.</p></div>
+      <div class="short-row"><span class="i">02</span><p><strong>Product &amp; category SEO.</strong> 38 pages with no SEO title, against 14,800 monthly searches at low competition.</p></div>
+      <div class="short-row"><span class="i">03</span><p><strong>TikTok and Reels organic.</strong> No ruling required, and it is your entire top of funnel until one arrives.</p></div>
+      <div class="short-row"><span class="i">04</span><p><strong>The educational library.</strong> Four articles is a foundation. This is the family restriction actually pushes you toward.</p></div>
+      <div class="short-row"><span class="i">05</span><p><strong>Batch-report email digest.</strong> A subscribe reason that costs no margin and selects the right buyer.</p></div>
+      <div class="short-row"><span class="i">06</span><p><strong>Wholesale outreach.</strong> Highest-value segment reachable without any platform's permission. Currently 55 views and no funnel.</p></div>
+      <div class="short-row"><span class="i">07</span><p><strong>Fix referral attribution.</strong> 131 clicks, zero orders. One test order tells you whether it is broken or genuinely empty.</p></div>
+      <div class="short-row"><span class="i">08</span><p><strong>Packaging inserts and batch QR codes.</strong> Print aimed at a proven buyer, with the highest response rate available to you.</p></div>
+      <div class="short-row"><span class="i">09</span><p><strong>Forum participation.</strong> Where this category decides who to trust. Documents, never pitches.</p></div>
+      <div class="short-row"><span class="i">10</span><p><strong>Get the written platform ruling.</strong> One email that converts four Unverified rows above into a real decision.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    <p>
+      Store figures read from the live Vanta Labs production database on 30 August 2026. Competitor advertising
+      status from a live Meta ad-library check the same day. Search volumes and CPC ranges from Google Keyword
+      Planner, US, English.
+    </p>
+    <p>
+      <strong>Verdicts are informed judgements, not legal or policy advice.</strong> Platform policies change,
+      are enforced inconsistently, and are not always published clearly. Every Unverified row means exactly
+      what it says: get a written answer before you spend. No row here should be read as permission.
+    </p>
+    <p>
+      Products are laboratory research materials, research use only. No method above may imply human use,
+      dosing or reconstitution, or claim any medical, therapeutic, performance or body-composition outcome —
+      and that constraint travels to every affiliate, influencer and partner acting on your behalf.
+    </p>
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var atlas = document.getElementById("atlas");
+  var empty = document.getElementById("empty");
+  var buttons = Array.prototype.slice.call(document.querySelectorAll(".fbtn"));
+  var methods = Array.prototype.slice.call(atlas.querySelectorAll(".m"));
+  var families = Array.prototype.slice.call(atlas.querySelectorAll(".fam"));
+
+  var counts = { all: methods.length, open: 0, restricted: 0, unverified: 0, closed: 0 };
+  methods.forEach(function (m) {
+    var v = m.getAttribute("data-v");
+    if (counts[v] !== undefined) counts[v]++;
+  });
+  Object.keys(counts).forEach(function (k) {
+    var el = document.getElementById("c-" + k);
+    if (el) el.textContent = counts[k];
+  });
+
+  // Per-family totals, shown before any filter narrows them.
+  families.forEach(function (fam) {
+    var cnt = fam.querySelector(".cnt");
+    if (cnt) cnt.textContent = fam.querySelectorAll(".m").length + " methods";
+  });
+
+  function apply(filter) {
+    var shown = 0;
+
+    methods.forEach(function (m) {
+      var on = filter === "all" || m.getAttribute("data-v") === filter;
+      m.hidden = !on;
+      if (on) shown++;
+    });
+
+    families.forEach(function (fam) {
+      var visible = fam.querySelectorAll(".m:not([hidden])").length;
+      fam.hidden = visible === 0;
+      var cnt = fam.querySelector(".cnt");
+      if (cnt) {
+        cnt.textContent = filter === "all"
+          ? fam.querySelectorAll(".m").length + " methods"
+          : visible + " of " + fam.querySelectorAll(".m").length;
+      }
+    });
+
+    empty.hidden = shown !== 0;
+
+    buttons.forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.getAttribute("data-f") === filter));
+    });
+  }
+
+  buttons.forEach(function (b) {
+    b.addEventListener("click", function () {
+      apply(b.getAttribute("data-f"));
+    });
+  });
+
+  apply("all");
+})();
+</script>
