@@ -388,6 +388,49 @@ class of defects this audit exists to find lives in that gap.
 
 ---
 
+## The three QA harnesses — run these before hand-driving anything
+
+Hand-driving a browser proves one path once. These three scripts prove the same
+things every time, and they are the fastest way to find out whether a change
+broke something a long way from where you were working.
+
+    npm run qa:all          # all three, ~4 minutes
+
+    npm run qa:roles        # 861 probes: every protected route x every role
+    npm run qa:journey      # 61 steps: age gate -> delivered order -> logout
+    npm run qa:abuse        # 16 steps: flooding, CSRF, XSS, fixation, cookies
+
+`qa:roles` discovers every route from the filesystem and reads the HTTP methods
+each one exports, so a route added without a guard fails it the moment it
+exists — which a hand-maintained list can never do, because nobody remembers to
+add the route they just wrote.
+
+`qa:journey` is the whole customer lifecycle in ONE browser session, which is
+the only way to catch state that survives (or fails to survive) a navigation: a
+cart that empties on sign-in, a cookie that works on one page and not the next,
+two tabs disagreeing about whether you are signed in.
+
+`qa:abuse` needs `rate_limit_hits` to exist or every limiter FAILS OPEN by
+design and the flood tests prove nothing. `setup-local-harness.sh` applies it;
+if you see `UNENFORCED` in the output, that table is missing.
+
+### Reading the output
+
+Steps report PASS, FAIL or **SKIP**, and skips are printed again at the end
+under "these are NOT verified". Read them. A skip is a check that did not run —
+treating it as a pass is precisely the false confidence these scripts exist to
+remove.
+
+### If qa:journey fails at signup
+
+Its own signup is being throttled. Each run presents a distinct client IP
+(TEST-NET-3) so it does not share a bucket with `qa:abuse`, whose job is to
+exhaust them — but deleting `rate_limit_hits` does NOT reset the limiter, which
+also holds a spent bucket in memory for the window. Restart the app server, or
+wait the window out.
+
+---
+
 ## Then, in priority order
 
 1. **F-001** — a parent-zero/dose-stocked product must render In Stock and be
