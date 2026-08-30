@@ -12,6 +12,7 @@ import { brandedConfirmUrl } from "@/lib/auth-confirm-link";
 import { verifyTurnstileToken } from "@/lib/turnstile";
 import { SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-signup-outcome";
 import { looksLikeEmail } from "@/lib/email-shape";
+import { recordAuthEmailAttempt } from "@/lib/auth-email-audit";
 
 export const dynamic = "force-dynamic";
 
@@ -271,6 +272,19 @@ async function createAccountAndSend(input: {
   });
 
   const result = await sendEmail({ to: input.email, ...template });
+
+  // RECORD THE ATTEMPT, WHICHEVER WAY IT WENT.
+  //
+  // Without this row nothing anywhere distinguishes "sent and the customer
+  // ignored it" from "the provider refused" from "never attempted", which is
+  // the state a real stalled signup was found in — see lib/auth-email-audit.ts.
+  await recordAuthEmailAttempt({
+    kind: "signup_confirmation",
+    email: input.email,
+    success: result.success,
+    error: result.error,
+  });
+
   if (result.success) {
     return "handled";
   }
@@ -279,5 +293,10 @@ async function createAccountAndSend(input: {
   // signUp() for a live address would only refuse. Supabase's own email is the
   // recovery here, unbranded but delivered.
   await fallBackToSupabaseConfirmation(input.email, result.error);
+  await recordAuthEmailAttempt({
+    kind: "signup_confirmation_supabase_fallback",
+    email: input.email,
+    success: true,
+  });
   return "handled";
 }

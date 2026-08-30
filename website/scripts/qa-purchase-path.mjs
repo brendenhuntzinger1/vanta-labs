@@ -27,7 +27,7 @@
 //   node scripts/qa-purchase-path.mjs
 // ---------------------------------------------------------------------------
 
-import { createHmac, randomUUID } from "node:crypto";
+import { createHmac, randomUUID, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { chromium } from "playwright";
 import pg from "pg";
@@ -158,7 +158,26 @@ async function payOrder(page, orderId, { type = "payment.succeeded", eventId } =
 }
 
 const stamp = Date.now();
-const CLIENT_IP = `203.0.113.${(stamp % 250) + 1}`;
+/**
+ * A CLIENT IP THIS RUN HAS TO ITSELF.
+ *
+ * This was `203.0.113.${(stamp % 250) + 1}`, which looks like isolation and is
+ * not: Date.now() % 250 has only 250 possible values and cycles every 250
+ * MILLISECONDS, so the address a run gets is arbitrary and collides constantly
+ * between runs. A run that lands on a recent run's address inherits its spent
+ * rate-limit bucket, and since a journey does five signups against a per-IP
+ * limit of eight, one collision inside the 15-minute window is enough to fail
+ * the whole harness at its first signup — reported, misleadingly, as though the
+ * product had refused to create the account.
+ *
+ * 100.64.0.0/10 is the carrier-grade NAT range: never routable, and three
+ * random octets give ~16 million addresses instead of 250, from a CSPRNG rather
+ * than from the clock.
+ */
+const CLIENT_IP = (() => {
+  const [a, b, c] = randomBytes(3);
+  return `100.${64 + (a % 64)}.${b}.${(c % 254) + 1}`;
+})();
 
 async function passAgeGate(page) {
   await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
@@ -176,17 +195,37 @@ async function passAgeGate(page) {
     .catch(() => false);
   if (!appeared) return false;   // already accepted in this context
 
-  await page.evaluate(() => {
-    document.querySelectorAll("[role=dialog] input[type=checkbox]").forEach((b) => { if (!b.checked) b.click(); });
-  });
+  // TICKING A BOX BEFORE REACT IS LISTENING DOES NOTHING VISIBLE.
+  //
+  // The dialog is server-rendered, so it is in the DOM before hydration
+  // finishes. A checkbox clicked in that window flips its own `checked`
+  // property and dispatches an event with no handler bound to it — the DOM says
+  // ticked, React's state says nothing was, and the submit button stays
+  // disabled forever. It looks exactly like a broken age gate, and on a
+  // cold-started server (the first navigation of a run) it is the normal case,
+  // not a rare one.
+  //
+  // Clicking through Playwright rather than `element.click()` in page script is
+  // half the fix: those are real trusted events with actionability checks. The
+  // other half is retrying, because no amount of waiting on the checkbox tells
+  // you whether the listener was attached when it was clicked. The button
+  // becoming enabled is the only true signal that React took the tick, so that
+  // is what is waited on, and the ticks are re-applied until it does.
+  const enabled = () => page.$$eval("[role=dialog] button", (btns) =>
+    btns.some((b) => /Create account \/ Sign in|Continue as guest/.test(b.textContent || "") && !b.disabled));
 
-  // The button is disabled until every box is ticked, and React re-renders
-  // between tasks — so wait for it to become enabled rather than guessing.
-  await page.waitForFunction(() => {
-    const btn = [...document.querySelectorAll("[role=dialog] button")]
-      .find((b) => /Create account \/ Sign in|Continue as guest/.test(b.textContent || ""));
-    return Boolean(btn && !btn.disabled);
-  }, null, { timeout: 8000 });
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const boxes = await page.$$("[role=dialog] input[type=checkbox]");
+    for (const box of boxes) {
+      if (!(await box.isChecked())) await box.click({ timeout: 5000 }).catch(() => {});
+    }
+    if (await enabled()) break;
+    await page.waitForTimeout(1000);
+  }
+
+  if (!(await enabled())) {
+    throw new Error("the age gate's submit button never enabled after ticking every box");
+  }
 
   await page.evaluate(() => {
     const btn = [...document.querySelectorAll("[role=dialog] button")]
@@ -575,6 +614,290 @@ async function main() {
     assert(!number || !text.includes(number),
       "an account that has NOT confirmed its address was shown another buyer's guest order");
     return "unconfirmed account saw nothing it had only named";
+  });
+
+  // ---- 4. A SIGNED-IN customer's purchase and its return leg -------------
+  section("4. Signed in through checkout and back");
+
+  const MEMBER_EMAIL = `member.${stamp}@example.test`;
+  let signedInOrder = null;
+
+  await step("a signed-in customer stays signed in through checkout and back", async () => {
+    await q(
+      `insert into auth.users (email, encrypted_password, raw_user_meta_data, raw_app_meta_data, email_confirmed_at, created_at)
+       values ($1, 'HarnessPass123!', $2, '{"role":"customer"}', now(), now())
+       on conflict (email) do update set email_confirmed_at = now()`,
+      [MEMBER_EMAIL, JSON.stringify({ full_name: "Signed In Buyer", role: "customer" })],
+    );
+
+    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const p = await ctx.newPage();
+    await passAgeGate(p);
+    await p.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
+    await p.waitForTimeout(1000);
+    await p.fill("form input[type=email]", MEMBER_EMAIL);
+    await p.fill("form input[type=password]", "HarnessPass123!");
+    await p.click("form button[type=submit]");
+    await p.waitForTimeout(3500);
+    const signedIn = (await ctx.cookies()).some((c) => c.name === "vl_session_token");
+    if (!signedIn) { await ctx.close(); return SKIP("could not sign the customer in"); }
+
+    const item = await sellableCartItem();
+    if (!item) { await ctx.close(); return SKIP("no sellable product"); }
+
+    const created = await p.evaluate(async ({ productId }) => {
+      const r = await fetch("/api/checkout/create-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          items: [{ id: productId, quantity: 1 }],
+          customer: {
+            email: "ignored@example.test", fullName: "Signed In Buyer", address: "2 Test Way",
+            city: "Tampa", state: "FL", postalCode: "33601", country: "US",
+          },
+          complianceAcknowledgements: { researchCompliance: true, returnsPolicy: true },
+        }),
+      });
+      return { status: r.status, body: await r.json().catch(() => null) };
+    }, { productId: item.id });
+
+    const latest = (await q(
+      "select order_id, customer_email, customer_user_id from orders order by created_at desc limit 1",
+    )).rows[0];
+    if (!latest || String(latest.customer_email).toLowerCase() !== MEMBER_EMAIL) {
+      await ctx.close();
+      return SKIP(`checkout did not create the signed-in order (${created.status})`);
+    }
+    signedInOrder = latest.order_id;
+
+    // The account's OWN email, not whatever was typed into the form — the route
+    // pins a signed-in order to the account address so receipts cannot be
+    // redirected by editing a field.
+    assert(String(latest.customer_email).toLowerCase() === MEMBER_EMAIL,
+      `the order was addressed to ${latest.customer_email}, not the account`);
+    assert(latest.customer_user_id, "the order carries no customer_user_id, so it is not tied to the account");
+
+    // THE RETURN LEG. A processor sends the shopper back as a full document
+    // load from another origin; SameSite=Lax is what decides whether the
+    // session cookie comes with them.
+    await payOrder(p, signedInOrder, {});
+    await p.waitForTimeout(2500);
+    await p.goto(`${BASE}/order-confirmation/${encodeURIComponent(signedInOrder)}`,
+      { waitUntil: "domcontentloaded", referer: "https://checkout.example-processor.test/" });
+    await p.waitForTimeout(3000);
+
+    const stillIn = (await ctx.cookies()).some((c) => c.name === "vl_session_token");
+    const bounced = /\/account\/login/.test(p.url());
+    const text = await p.evaluate(() => document.body.innerText);
+    await ctx.close();
+
+    assert(stillIn, "the session cookie was lost coming back from payment");
+    assert(!bounced, "coming back from payment landed on the login form");
+    assert(/thank you|order (confirmed|received)/i.test(text),
+      "the confirmation page did not confirm the order after the return");
+    return "signed in through checkout, payment and the return";
+  });
+
+  await step("the confirmation page recognises an authenticated customer", async () => {
+    if (!signedInOrder) return SKIP("no signed-in order to view");
+    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const p = await ctx.newPage();
+    await passAgeGate(p);
+    await p.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
+    await p.waitForTimeout(1000);
+    await p.fill("form input[type=email]", MEMBER_EMAIL);
+    await p.fill("form input[type=password]", "HarnessPass123!");
+    await p.click("form button[type=submit]");
+    await p.waitForTimeout(3500);
+
+    await p.goto(`${BASE}/order-confirmation/${encodeURIComponent(signedInOrder)}`, { waitUntil: "domcontentloaded" });
+    await p.waitForTimeout(3000);
+    const text = await p.evaluate(() => document.body.innerText);
+    // A signed-in shopper should be offered their account, not asked to create
+    // one — that prompt is for guests and reads as "we don't know who you are".
+    const invitedToCreate = /create an account to track|sign up to track/i.test(text);
+    await ctx.close();
+    assert(!invitedToCreate, "a signed-in customer was invited to create an account on their own confirmation page");
+    return "no create-an-account prompt for a signed-in customer";
+  });
+
+  // ---- 5. Verifying in another tab --------------------------------------
+  section("5. Email verification while checking out");
+
+  await step("verifying in a second tab does not break a checkout in progress", async () => {
+    const email = `midcheckout.${stamp}@example.test`;
+    const row = (await q(
+      `insert into auth.users (email, encrypted_password, raw_user_meta_data, raw_app_meta_data, email_confirmed_at, created_at)
+       values ($1, 'HarnessPass123!', $2, '{"role":"customer"}', null, now())
+       on conflict (email) do update set email_confirmed_at = null
+       returning id`,
+      [email, JSON.stringify({ full_name: "Mid Checkout", role: "customer" })],
+    )).rows[0];
+
+    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const tab1 = await ctx.newPage();
+    await passAgeGate(tab1);
+
+    // Tab 1: an UNVERIFIED customer gets as far as checkout with a cart.
+    await tab1.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
+    await tab1.waitForTimeout(1500);
+    const href = await tab1.$eval('a[href^="/products/"]', (a) => a.getAttribute("href"));
+    await tab1.goto(`${BASE}${href}`, { waitUntil: "domcontentloaded" });
+    await tab1.waitForTimeout(2000);
+    await tab1.evaluate(() => {
+      const b = [...document.querySelectorAll("button")]
+        .find((x) => /add to cart|add to bag/i.test(x.textContent || "") && !x.disabled);
+      if (b) b.click();
+    });
+    await tab1.waitForTimeout(2000);
+    await tab1.goto(`${BASE}/checkout`, { waitUntil: "domcontentloaded" });
+    await tab1.waitForTimeout(2500);
+    const checkoutReachable = !/\/account\/login/.test(tab1.url());
+
+    // Tab 2: the same person follows the confirmation link from their email.
+    const tab2 = await ctx.newPage();
+    await tab2.goto(`${BASE}/auth/confirm?token=harness-hashed-${row.id}&type=signup&next=%2Faccount`,
+      { waitUntil: "domcontentloaded" });
+    await tab2.waitForTimeout(3000);
+    const confirmed = (await q("select email_confirmed_at from auth.users where id = $1", [row.id]))
+      .rows[0].email_confirmed_at;
+
+    // Back to tab 1: the cart and the page must have survived.
+    await tab1.bringToFront();
+    await tab1.goto(`${BASE}/cart`, { waitUntil: "domcontentloaded" });
+    await tab1.waitForTimeout(2500);
+    const cartText = await tab1.evaluate(() => document.body.innerText);
+    const cartSurvived = !/your cart is empty/i.test(cartText);
+
+    await tab2.close();
+    await ctx.close();
+
+    assert(checkoutReachable, "an unverified customer could not reach checkout at all");
+    assert(confirmed, "the second tab did not verify the account");
+    assert(cartSurvived, "verifying in another tab emptied the cart in the checkout tab");
+    return "checkout survived a verification in another tab";
+  });
+
+  await step("returning to the original tab picks the verification up", async () => {
+    const email = `returntab.${stamp}@example.test`;
+    const row = (await q(
+      `insert into auth.users (email, encrypted_password, raw_user_meta_data, raw_app_meta_data, email_confirmed_at, created_at)
+       values ($1, 'HarnessPass123!', $2, '{"role":"customer"}', null, now())
+       on conflict (email) do update set email_confirmed_at = null
+       returning id`,
+      [email, JSON.stringify({ full_name: "Return Tab", role: "customer" })],
+    )).rows[0];
+
+    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const tab1 = await ctx.newPage();
+    await passAgeGate(tab1);
+    await tab1.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
+    await tab1.waitForTimeout(2000);
+
+    // Verify in tab 2, then reload tab 1 — the state the customer is left in.
+    const tab2 = await ctx.newPage();
+    await tab2.goto(`${BASE}/auth/confirm?token=harness-hashed-${row.id}&type=signup&next=%2Faccount`,
+      { waitUntil: "domcontentloaded" });
+    await tab2.waitForTimeout(3000);
+    await tab2.close();
+
+    await tab1.reload({ waitUntil: "domcontentloaded" });
+    await tab1.waitForTimeout(2000);
+
+    // TWO ACCEPTABLE ENDINGS, and the harness must not insist on the worse one.
+    //
+    // Following a confirmation link does not merely flip a flag — it
+    // establishes a session, and the tabs share one cookie jar. So the ordinary
+    // outcome is that the original tab, on reload, is ALREADY signed in and the
+    // login page forwards it away: there is no form left to fill, and demanding
+    // one turns correct behaviour into a 30s timeout. (That is exactly what it
+    // did here first time round.)
+    //
+    // The weaker ending — still on the login page, but the credentials now work
+    // where they were refused before verification — is also fine. What is NOT
+    // fine is the customer being stuck: verified elsewhere and still locked out
+    // of the tab they started in. That is the assertion.
+    const stillOnLogin = Boolean(await tab1.$("form input[type=email]"));
+    if (stillOnLogin) {
+      await tab1.fill("form input[type=email]", email);
+      await tab1.fill("form input[type=password]", "HarnessPass123!");
+      await tab1.click("form button[type=submit]");
+      await tab1.waitForTimeout(3500);
+    }
+
+    const signedIn = (await ctx.cookies()).some((c) => c.name === "vl_session_token");
+
+    // Whichever route it took, the account is usable: /account renders rather
+    // than bouncing back to the login page.
+    await tab1.goto(`${BASE}/account`, { waitUntil: "domcontentloaded" });
+    await tab1.waitForTimeout(2000);
+    const onAccount = !/\/account\/login/.test(tab1.url());
+    await ctx.close();
+
+    assert(signedIn, "after verifying in another tab, the original tab held no session");
+    assert(onAccount, "the original tab was still bounced to the login page after verifying");
+    return stillOnLogin
+      ? "the original tab could sign in once verification happened elsewhere"
+      : "the original tab was already signed in by the verification in the other tab";
+  });
+
+  // ---- 6. Membership billing emails --------------------------------------
+  section("6. Membership billing emails");
+
+  await step("a renewal receipt goes to the member who was charged", async () => {
+    const memberId = (await q("select id from auth.users where email = $1", [MEMBER_EMAIL])).rows[0]?.id;
+    if (!memberId) return SKIP("no member account to renew");
+
+    const veyraId = `vm_${stamp}`;
+    const tier = (await q("select id from membership_tiers order by 1 limit 1")).rows[0];
+    if (!tier) return SKIP("no membership tier seeded in the harness");
+
+    const existing = await q(
+      `insert into customer_memberships (user_id, tier_id, status, billing_cycle, veyra_membership_id, next_billing_at, created_at, updated_at)
+       values ($1, $2, 'active', 'monthly', $3, now() + interval '30 days', now(), now())
+       on conflict do nothing returning user_id`,
+      [memberId, tier.id, veyraId],
+    ).catch(() => ({ rows: [] }));
+    if (!existing.rows.length) {
+      const already = await q("select 1 from customer_memberships where veyra_membership_id = $1", [veyraId]);
+      if (!already.rows.length) return SKIP("could not seed a membership row in the harness");
+    }
+
+    const before = logOffset();
+    const body = JSON.stringify({
+      id: `evt_${randomUUID()}`,
+      type: "membership.renewed",
+      data: {
+        membership_id: veyraId,
+        amount_charged_cents: 2900,
+        next_renewal_at: new Date(Date.now() + 30 * 864e5).toISOString(),
+      },
+    });
+    const signature = createHmac("sha256", WEBHOOK_SECRET).update(body, "utf8").digest("hex");
+    const res = await page.request.post(`${BASE}/api/webhooks/payment`, {
+      headers: {
+        "content-type": "application/json",
+        "x-payment-signature": signature,
+        "x-event-id": `evt_${randomUUID()}`,
+      },
+      data: body,
+    });
+    await page.waitForTimeout(2500);
+    if (!res.ok()) return SKIP(`the membership webhook was refused: ${res.status()}`);
+
+    const mail = mailSince(before);
+    if (!mail) return SKIP("no harness log configured");
+    // Match on the money and the word, not on a guess at the wording: the
+    // subject was `Receipt: $29.00 charged` when this first ran, which named
+    // neither. It says "membership renewal" now — and that is asserted properly
+    // in email/membership-receipt-subjects.test.ts, where a wording change is a
+    // test failure rather than a silently-skipped harness step.
+    const receipt = mail.find((m) => /receipt/i.test(m.subject) && /29\.00/.test(m.subject));
+    assert(receipt, `no renewal email composed; saw: ${mail.map((m) => m.subject).join(", ") || "nothing"}`);
+    assert(receipt.to === MEMBER_EMAIL,
+      `the renewal receipt went to ${receipt.to}, not the member who was charged`);
+    return `"${receipt.subject}" to ${receipt.to}`;
   });
 
   await browser.close();

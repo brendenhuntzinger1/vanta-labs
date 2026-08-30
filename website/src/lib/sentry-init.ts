@@ -156,6 +156,25 @@ export function baseSentryOptions(): SentryInitOptions & { dsn: string } {
       /chrome-extension:\/\//,
       /safari-extension:\/\//,
       /moz-extension:\/\//,
+      // IN-APP BROWSER BRIDGES THAT THROW IN THEIR OWN INJECTED SCRIPT.
+      //
+      // Snapchat's iOS webview injects a script referencing SCDynimacBridge and
+      // on some versions never defines it, so its own global code throws a
+      // ReferenceError that our onerror handler dutifully reports. It arrived
+      // as `ReferenceError: Can't find variable: SCDynimacBridge` at
+      // /account/login from Snapchat 14.21.1 on iOS 18.7, with a one-frame
+      // stack pointing at global code we did not write and zero users
+      // impacted — nothing in the sign-in flow is affected, and there is no
+      // version of this we could fix.
+      //
+      // Filtering it is the point of this list rather than an exception to it:
+      // Sentry ranked that report HIGH actionability, which is exactly how an
+      // unfixable third-party error costs an operator the attention a real one
+      // needed. Traffic here is mostly mobile and a lot of it arrives from
+      // social apps, so these bridges are the in-app equivalent of the
+      // extension noise directly above.
+      /SCDynimacBridge/,
+      /Can't find variable: (SCDynimacBridge|__fbNative|FBNavigator)/,
     ],
 
     denyUrls: [/chrome-extension:\/\//, /safari-extension:\/\//, /moz-extension:\/\//],

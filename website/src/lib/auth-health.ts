@@ -147,7 +147,8 @@ export async function alertOnStalledSignups(): Promise<StalledSignupSummary> {
 
   const worstDomain = Object.entries(summary.domains).sort((a, b) => b[1] - a[1])[0];
   const domainNote = worstDomain && worstDomain[1] > 1
-    ? ` ${worstDomain[1]} of them are @${worstDomain[0]} — check whether that provider is rejecting the Supabase Auth sender.`
+    ? ` ${worstDomain[1]} of them are @${worstDomain[0]} — check whether that provider is rejecting`
+      + " or spam-filing our sending domain."
     : "";
 
   await recordSystemAlert({
@@ -157,9 +158,33 @@ export async function alertOnStalledSignups(): Promise<StalledSignupSummary> {
       `${summary.stalled} account(s) have been waiting on an email confirmation for more than `
       + `${Math.round(STALLED_SIGNUP_AFTER_MS / 3_600_000)}h and have never signed in.`
       + domainNote
-      + " Confirmation email is sent by Supabase Auth, not by this app's provider, so it does not"
-      + " appear in the email retry queue or the bounce webhook — check the Supabase project's SMTP"
-      + " settings and its sending domain's reputation.",
+      // AN ALERT THAT NAMES THE WRONG SYSTEM IS WORSE THAN NO ALERT.
+      //
+      // This used to read "Confirmation email is sent by Supabase Auth, not by
+      // this app's provider, so it does not appear in the email retry queue or
+      // the bounce webhook — check the Supabase project's SMTP settings". That
+      // was true when it was written and is now false in every clause:
+      // /api/auth/signup mints the link with generateLink (which sends
+      // nothing) and delivers it through sendEmail, so the send IS in the
+      // retry queue and the bounce webhook, and the Supabase SMTP settings
+      // have nothing to do with it.
+      //
+      // It matters because this is the alert that fires during an email
+      // incident, and it was sending whoever answered it to go and inspect a
+      // system that is not in the path. The one incident this text has ever
+      // had to survive — Gmail filing a confirmation as spam and stripping its
+      // links — is precisely the case it would have misdirected.
+      //
+      // Supabase's own sender is still reachable, but only as the fallback
+      // that fallBackToSupabaseConfirmation uses when OUR send has already
+      // failed, so it is worth naming second rather than first.
+      + " The confirmation is minted by this app and sent through its own email provider. Look up"
+      + " these addresses in email_send_log under campaign_type 'auth:signup_confirmation': a row"
+      + " with status 'sent' means it left us and the problem is delivery or the customer, 'failed'"
+      + " carries the provider's reason in reference_id, and NO row means the send was never"
+      + " attempted. Then check email_suppressions for a prior bounce, and the sending domain's"
+      + " reputation. Note it is not in the retry queue by design — a failed send falls back to"
+      + " Supabase's own sender immediately instead.",
     context: {
       stalled: summary.stalled,
       scanned: summary.scanned,

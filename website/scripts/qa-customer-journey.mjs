@@ -26,6 +26,7 @@
 // ---------------------------------------------------------------------------
 
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { chromium } from "playwright";
 import pg from "pg";
 
@@ -116,17 +117,37 @@ async function passAgeGate(page) {
     .catch(() => false);
   if (!appeared) return false;   // already accepted in this context
 
-  await page.evaluate(() => {
-    document.querySelectorAll("[role=dialog] input[type=checkbox]").forEach((b) => { if (!b.checked) b.click(); });
-  });
+  // TICKING A BOX BEFORE REACT IS LISTENING DOES NOTHING VISIBLE.
+  //
+  // The dialog is server-rendered, so it is in the DOM before hydration
+  // finishes. A checkbox clicked in that window flips its own `checked`
+  // property and dispatches an event with no handler bound to it — the DOM says
+  // ticked, React's state says nothing was, and the submit button stays
+  // disabled forever. It looks exactly like a broken age gate, and on a
+  // cold-started server (the first navigation of a run) it is the normal case,
+  // not a rare one.
+  //
+  // Clicking through Playwright rather than `element.click()` in page script is
+  // half the fix: those are real trusted events with actionability checks. The
+  // other half is retrying, because no amount of waiting on the checkbox tells
+  // you whether the listener was attached when it was clicked. The button
+  // becoming enabled is the only true signal that React took the tick, so that
+  // is what is waited on, and the ticks are re-applied until it does.
+  const enabled = () => page.$$eval("[role=dialog] button", (btns) =>
+    btns.some((b) => /Create account \/ Sign in|Continue as guest/.test(b.textContent || "") && !b.disabled));
 
-  // The button is disabled until every box is ticked, and React re-renders
-  // between tasks — so wait for it to become enabled rather than guessing.
-  await page.waitForFunction(() => {
-    const btn = [...document.querySelectorAll("[role=dialog] button")]
-      .find((b) => /Create account \/ Sign in|Continue as guest/.test(b.textContent || ""));
-    return Boolean(btn && !btn.disabled);
-  }, null, { timeout: 8000 });
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const boxes = await page.$$("[role=dialog] input[type=checkbox]");
+    for (const box of boxes) {
+      if (!(await box.isChecked())) await box.click({ timeout: 5000 }).catch(() => {});
+    }
+    if (await enabled()) break;
+    await page.waitForTimeout(1000);
+  }
+
+  if (!(await enabled())) {
+    throw new Error("the age gate's submit button never enabled after ticking every box");
+  }
 
   await page.evaluate(() => {
     const btn = [...document.querySelectorAll("[role=dialog] button")]
@@ -265,7 +286,26 @@ async function main() {
   // connection actually looks like. The limiter is left completely untouched;
   // qa-abuse-and-roles.mjs is where it is under test, and this script must not
   // be the thing that proves or weakens it.
-  const CLIENT_IP = `203.0.113.${(stamp % 250) + 1}`;   // TEST-NET-3, never routable
+  /**
+   * A CLIENT IP THIS RUN HAS TO ITSELF.
+   *
+   * This was `203.0.113.${(stamp % 250) + 1}`, which looks like isolation and is
+   * not: Date.now() % 250 has only 250 possible values and cycles every 250
+   * MILLISECONDS, so the address a run gets is arbitrary and collides constantly
+   * between runs. A run that lands on a recent run's address inherits its spent
+   * rate-limit bucket, and since a journey does five signups against a per-IP
+   * limit of eight, one collision inside the 15-minute window is enough to fail
+   * the whole harness at its first signup — reported, misleadingly, as though the
+   * product had refused to create the account.
+   *
+   * 100.64.0.0/10 is the carrier-grade NAT range: never routable, and three
+   * random octets give ~16 million addresses instead of 250, from a CSPRNG rather
+   * than from the clock.
+   */
+  const CLIENT_IP = (() => {
+    const [a, b, c] = randomBytes(3);
+    return `100.${64 + (a % 64)}.${b}.${(c % 254) + 1}`;
+  })();
 
   const browser = await chromium.launch(CHROME ? { executablePath: CHROME } : {});
   const context = await browser.newContext({

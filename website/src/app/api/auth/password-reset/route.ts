@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { sendEmail } from "@/lib/email/send";
+import { recordAuthEmailAttempt } from "@/lib/auth-email-audit";
 import { passwordResetTemplate } from "@/lib/email/templates";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { createServerClient, supabaseAdmin } from "@/lib/supabase-server";
@@ -183,6 +184,17 @@ async function deliverResetEmail(email: string, redirectTo: string): Promise<voi
     });
 
     const result = await sendEmail({ to: email, ...template });
+
+    // Recorded either way — see lib/auth-email-audit.ts. This is the one path a
+    // locked-out customer has, so "was the reset email actually sent?" must be
+    // answerable from the data rather than guessed at from an empty table.
+    await recordAuthEmailAttempt({
+      kind: "password_reset",
+      email,
+      success: result.success,
+      error: result.error,
+    });
+
     if (result.success) {
       return;
     }

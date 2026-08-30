@@ -1919,6 +1919,8 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
               name: contact.name,
               monthlyPriceCents: amountCents,
               nextBillingDate: formatDisplayDate(nextBillingAt, "long") ?? "",
+              // Free here — this lane already holds the tier it charged for.
+              tierName: tier.name ?? undefined,
             }),
           });
         }

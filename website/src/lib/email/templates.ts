@@ -1224,7 +1224,7 @@ export function membershipRemainderReminderTemplate(input: { name: string; remai
 export function membershipRemainderReceiptTemplate(input: { name: string; remainderCents: number; nextBillingDate: string; monthlyPriceCents: number }): EmailTemplate {
   const name = escapeHtml(input.name || "there");
   return {
-    subject: `Receipt: ${money(input.remainderCents / 100)} charged`,
+    subject: `Receipt: ${money(input.remainderCents / 100)} — first-month membership balance`,
     html: renderLayout({
       preheader: "Your first-month balance was charged successfully.",
       titleHtml: `${name}, your payment was successful`,
@@ -1247,10 +1247,30 @@ export function membershipRenewalReminderTemplate(input: { name: string; monthly
   };
 }
 
-export function membershipRenewalReceiptTemplate(input: { name: string; monthlyPriceCents: number; nextBillingDate: string }): EmailTemplate {
+// A RECEIPT HAS TO SAY WHAT IT IS A RECEIPT FOR.
+//
+// The subject was `Receipt: $29.00 charged` — a sum of money and nothing else.
+// No product, no reason, nothing tying it to a membership the customer chose.
+// That is a problem twice over.
+//
+// For the customer, it is the one email they open BECAUSE a charge appeared on
+// their statement, and it answers the only question they have ("what was this
+// for?") nowhere in the line they can see without opening it.
+//
+// For deliverability, a bare amount with no context is a spam signal, and this
+// repo has already been burned by exactly that: a confirmation email was filed
+// as spam and had its links stripped, which is the incident this whole pass
+// began from. The sibling signup receipt directly below already names the tier
+// — these two were simply never brought in line with it.
+//
+// `tierName` is optional because the Veyra webhook lane holds only a tier_id
+// and resolving the name there would cost a query on the hot path; without it
+// the subject still says "membership renewal", which is the part that matters.
+export function membershipRenewalReceiptTemplate(input: { name: string; monthlyPriceCents: number; nextBillingDate: string; tierName?: string }): EmailTemplate {
   const name = escapeHtml(input.name || "there");
+  const what = input.tierName ? `${input.tierName} membership renewal` : "membership renewal";
   return {
-    subject: `Receipt: ${money(input.monthlyPriceCents / 100)} charged`,
+    subject: `Receipt: ${money(input.monthlyPriceCents / 100)} — ${what}`,
     html: renderLayout({
       preheader: "Your membership renewal was successful.",
       titleHtml: `${name}, your renewal was successful`,

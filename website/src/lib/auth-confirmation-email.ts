@@ -1,6 +1,7 @@
 import "server-only";
 
 import { sendEmail } from "@/lib/email/send";
+import { recordAuthEmailAttempt } from "@/lib/auth-email-audit";
 import { accountConfirmationResendTemplate } from "@/lib/email/templates";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { supabaseAdmin } from "@/lib/supabase-server";
@@ -140,7 +141,21 @@ export async function sendBrandedConfirmationResend(email: string, redirectTo: s
   });
 
   const result = await sendEmail({ to: email, ...template });
+  // Logged for the same reason as the first send — see lib/auth-email-audit.ts.
+  // A customer who asked for a second link is, by definition, one the first one
+  // did not reach, so this is the attempt an operator most needs a record of.
+  await recordAuthEmailAttempt({
+    kind: "signup_confirmation_resend",
+    email,
+    success: result.success,
+    error: result.error,
+  });
   if (!result.success) {
     await fallBackToSupabaseConfirmation(email, result.error);
+    await recordAuthEmailAttempt({
+      kind: "signup_confirmation_supabase_fallback",
+      email,
+      success: true,
+    });
   }
 }

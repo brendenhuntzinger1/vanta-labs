@@ -147,17 +147,37 @@ async function passAgeGate(page) {
     .catch(() => false);
   if (!appeared) return false;   // already accepted in this context
 
-  await page.evaluate(() => {
-    document.querySelectorAll("[role=dialog] input[type=checkbox]").forEach((b) => { if (!b.checked) b.click(); });
-  });
+  // TICKING A BOX BEFORE REACT IS LISTENING DOES NOTHING VISIBLE.
+  //
+  // The dialog is server-rendered, so it is in the DOM before hydration
+  // finishes. A checkbox clicked in that window flips its own `checked`
+  // property and dispatches an event with no handler bound to it — the DOM says
+  // ticked, React's state says nothing was, and the submit button stays
+  // disabled forever. It looks exactly like a broken age gate, and on a
+  // cold-started server (the first navigation of a run) it is the normal case,
+  // not a rare one.
+  //
+  // Clicking through Playwright rather than `element.click()` in page script is
+  // half the fix: those are real trusted events with actionability checks. The
+  // other half is retrying, because no amount of waiting on the checkbox tells
+  // you whether the listener was attached when it was clicked. The button
+  // becoming enabled is the only true signal that React took the tick, so that
+  // is what is waited on, and the ticks are re-applied until it does.
+  const enabled = () => page.$$eval("[role=dialog] button", (btns) =>
+    btns.some((b) => /Create account \/ Sign in|Continue as guest/.test(b.textContent || "") && !b.disabled));
 
-  // The button is disabled until every box is ticked, and React re-renders
-  // between tasks — so wait for it to become enabled rather than guessing.
-  await page.waitForFunction(() => {
-    const btn = [...document.querySelectorAll("[role=dialog] button")]
-      .find((b) => /Create account \/ Sign in|Continue as guest/.test(b.textContent || ""));
-    return Boolean(btn && !btn.disabled);
-  }, null, { timeout: 8000 });
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const boxes = await page.$$("[role=dialog] input[type=checkbox]");
+    for (const box of boxes) {
+      if (!(await box.isChecked())) await box.click({ timeout: 5000 }).catch(() => {});
+    }
+    if (await enabled()) break;
+    await page.waitForTimeout(1000);
+  }
+
+  if (!(await enabled())) {
+    throw new Error("the age gate's submit button never enabled after ticking every box");
+  }
 
   await page.evaluate(() => {
     const btn = [...document.querySelectorAll("[role=dialog] button")]
@@ -559,6 +579,206 @@ async function main() {
     assert(!jwts.length, `${jwts.length} JWT-shaped strings were logged, e.g. ${jwts[0]?.slice(0, 40)}...`);
     const hashed = text.match(/harness-hashed-[0-9a-f-]{36}/g) ?? [];
     return `no JWTs logged${hashed.length ? ` (${hashed.length} harness confirmation tokens, which are fixture data)` : ""}`;
+  });
+
+  // ---- 7. The customer walks away mid-send ---------------------------------
+  //
+  // THE HALF-FINISHED SIGNUP.
+  //
+  // /api/auth/signup does two things in order: `generateLink({type:"signup"})`,
+  // which CREATES the account, and then sendEmail(), which delivers the link.
+  // They are not one transaction. If the request dies between them the customer
+  // is left in the worst possible state — an account exists, so signing up
+  // again is refused as "already registered", but no confirmation link was ever
+  // sent, so the account can never be confirmed. Stuck, with no way out that
+  // they can reach on their own.
+  //
+  // A browser refresh is exactly the thing that kills the request: the customer
+  // presses submit, nothing appears to happen (a mint plus an SMTP round trip
+  // is not instant), and they reload. The fetch is aborted at that moment.
+  //
+  // So: abort one mid-flight and require that the two ends stay consistent, and
+  // that whichever way it lands the customer can still get themselves a link.
+  section("7. The customer refreshes while the email is sending");
+
+  await step("aborting the signup request mid-flight leaves no account without a link", async () => {
+    if (!HARNESS_LOG) return SKIP("no harness log to read sends from");
+    const email = `abandoned.${stamp}@example.test`;
+    const before = logOffset();
+
+    // SWEEP THE ABORT ACROSS THE WINDOW, don't guess one moment inside it.
+    //
+    // A single fixed delay is a coin toss: too early and the request dies
+    // before `generateLink` has created anything, which proves nothing about
+    // the gap; too late and the send has already finished. (120ms landed before
+    // account creation on the first run — a pass that exercised nothing.) These
+    // walk the delay across the plausible span so at least one abort lands
+    // between the two writes, and the invariant is asserted after every one.
+    //
+    // Each attempt uses its own address and its own client IP, because these are
+    // signups: one shared address would be refused as already-registered, and
+    // one shared IP would be throttled by the limiter the earlier sections
+    // deliberately spent.
+    // THE ABORT HAS TO HAPPEN IN THE BROWSER, or it never reaches the handler.
+    //
+    // /api/auth is one of the CSRF-protected prefixes in middleware.ts, and the
+    // guard rejects a request with no `Origin` header outright. A bare node
+    // fetch sends none, so every "abandoned signup" came back 403 having done
+    // nothing at all — and because "no account was created" is a legitimate
+    // outcome of this test, it reported PASS four times over while exercising
+    // absolutely nothing. Driving it from the page gets the real Origin, the
+    // real cookie jar, and a real client disconnect on abort.
+    // THE LADDER IS SHORT BECAUSE THE HANDLER IS FAST.
+    //
+    // 80–1200ms found nothing: every request answered 200 before the earliest
+    // abort fired. That is not the window being safe, it is the window being
+    // missed — with EMAIL_PROVIDER=none the "send" is a line written to a log,
+    // so mint-plus-send finishes in tens of milliseconds and a wall-clock race
+    // cannot reliably land between them. These delays start at zero, which cuts
+    // the connection at dispatch.
+    const attempts = [];
+    for (const [i, delayMs] of [0, 1, 3, 8, 20, 45].entries()) {
+      const attemptEmail = `abandoned.${stamp}.${i}@example.test`;
+      const outcome = await page.evaluate(async ({ email, delayMs, ip }) => {
+        const controller = new AbortController();
+        const abortAt = setTimeout(() => controller.abort(), delayMs);
+        try {
+          const r = await fetch("/api/auth/signup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Real-IP": ip },
+            body: JSON.stringify({ email, password: "HarnessPass123!", fullName: "Abandoned Signup" }),
+            credentials: "same-origin",
+            signal: controller.signal,
+          });
+          return { status: r.status, aborted: false };
+        } catch (error) {
+          return { status: null, aborted: error?.name === "AbortError" };
+        } finally {
+          clearTimeout(abortAt);
+        }
+      }, { email: attemptEmail, delayMs, ip: `198.51.100.${20 + i}` });
+      attempts.push({ email: attemptEmail, delayMs, ...outcome });
+    }
+
+    assert(!attempts.some((a) => a.status === 403),
+      "the signup POST was refused as cross-origin, so nothing was exercised");
+
+    // If nothing was aborted, this proves nothing — and must not report a pass.
+    // A step that quietly examines an untouched database is exactly the kind of
+    // green tick this whole exercise exists to stop counting.
+    if (!attempts.some((a) => a.aborted)) {
+      return SKIP(
+        "no abort landed mid-flight — the handler answered "
+        + `${attempts.map((a) => a.status).join("/")} faster than the shortest delay, so the `
+        + "gap between account creation and send was never actually raced here",
+      );
+    }
+
+    // Give the server room to finish the work the clients stopped waiting for.
+    await page.waitForTimeout(8000);
+
+    const log = logSince(before);
+    const observed = [];
+    for (const attempt of attempts) {
+      const account = (await q("select id from auth.users where email = $1", [attempt.email])).rows[0];
+      const sent = log.includes(attempt.email);
+
+      // THE STUCK STATE, stated as the assertion: an account that exists and
+      // can never be confirmed. Either outcome on its own is fine — no account
+      // means nothing was half-done, and account-plus-email means the handler
+      // ran to completion despite the client disconnecting.
+      assert(!(account && !sent),
+        `aborting at ${attempt.delayMs}ms created an account for ${attempt.email} with no confirmation `
+        + "email ever composed — that customer can neither sign up again nor confirm");
+
+      observed.push({ ...attempt, created: Boolean(account), sent });
+    }
+
+    const completed = observed.filter((o) => o.created && o.sent).length;
+    const nothing = observed.filter((o) => !o.created).length;
+    return `${observed.length} aborts across 0–45ms: ${completed} ran to completion despite the `
+      + `disconnect, ${nothing} left nothing behind, 0 half-finished`;
+  });
+
+  await step("a customer who lost the email can always get another one", async () => {
+    if (!HARNESS_LOG) return SKIP("no harness log to read sends from");
+    // The recovery path is what makes the case above survivable at all, so it
+    // is worth proving separately: whatever state the abandoned signup left,
+    // asking again produces a link.
+    const email = `abandoned.${stamp}.0@example.test`;
+    await q("delete from rate_limit_hits where bucket like $1", ["resend-confirmation%"]);
+
+    // A FRESH CLIENT IP, or this step tests the limiter instead of the resend.
+    //
+    // The route limits per-IP as well as per-address, and lib/rate-limit.ts
+    // holds a spent bucket in an in-process Map that deleting rate_limit_hits
+    // does not clear. Section 1 deliberately floods this very endpoint from the
+    // shared 127.0.0.1, so by the time this runs that bucket is still held and
+    // the answer is 429 — which is the limiter working, not the resend failing.
+    // The address is new to this run, so only the IP needed changing.
+    // From the page, for the same reason as the step above: /api/auth is
+    // CSRF-guarded and a headerless node fetch is refused before it arrives.
+    const before = logOffset();
+    const status = await page.evaluate(async ({ email }) => {
+      const r = await fetch("/api/auth/resend-confirmation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Real-IP": "198.51.100.90" },
+        body: JSON.stringify({ email }),
+        credentials: "same-origin",
+      });
+      return r.status;
+    }, { email });
+    await page.waitForTimeout(3000);
+    assert(status !== 403, "the resend POST was refused as cross-origin, so nothing was exercised");
+
+    const log = logSince(before);
+    const sends = (log.match(new RegExp(email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) ?? []).length;
+    const account = (await q("select id from auth.users where email = $1", [email])).rows[0];
+
+    // No account means there is nothing to resend for, and the route's generic
+    // answer is the correct, non-enumerating response — not a failure.
+    if (!account) {
+      assert(status === 200, `resend answered ${status} for an address with no account`);
+      return "answers generically for an address with no account, without leaking that fact";
+    }
+    assert(status === 200, `resend answered ${status}`);
+    assert(sends > 0, "no confirmation email was composed for a customer asking for another link");
+    return `a fresh link went out (${sends} log line${sends === 1 ? "" : "s"} naming the address)`;
+  });
+
+  await step("refreshing the reset-password page does not spend the link", async () => {
+    // The same shape on the other side of the flow: a customer opens the reset
+    // link, the page is slow, they reload it. If the token were consumed by the
+    // page load rather than by the submit, that reload would burn their only
+    // link and they would be back where they started.
+    const email = `reloadreset.${stamp}@example.test`;
+    const row = (await q(
+      `insert into auth.users (email, encrypted_password, raw_user_meta_data, raw_app_meta_data, email_confirmed_at, created_at)
+       values ($1, 'HarnessPass123!', $2, '{"role":"customer"}', now(), now())
+       on conflict (email) do update set email_confirmed_at = now()
+       returning id`,
+      [email, JSON.stringify({ full_name: "Reload Reset", role: "customer" })],
+    )).rows[0];
+
+    const ctx = await browser.newContext();
+    const p = await ctx.newPage();
+    await passAgeGate(p);
+    const link = `${BASE}/auth/confirm?token=harness-hashed-${row.id}&type=recovery&next=%2Faccount%2Freset-password`;
+
+    await p.goto(link, { waitUntil: "domcontentloaded" });
+    await p.waitForTimeout(2500);
+    const firstUrl = p.url();
+
+    // The reload the impatient customer performs.
+    await p.reload({ waitUntil: "domcontentloaded" });
+    await p.waitForTimeout(2500);
+    const afterReload = await p.evaluate(() => document.body.innerText);
+    const stillUsable = !/expired|invalid|already been used|no longer valid/i.test(afterReload);
+    await ctx.close();
+
+    assert(/reset-password|account/.test(firstUrl), `the recovery link landed on ${firstUrl}`);
+    assert(stillUsable, "reloading the reset page burned the customer's only link");
+    return "the link survives a reload of the page it opens";
   });
 
   await browser.close();
