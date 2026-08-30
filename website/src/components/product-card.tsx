@@ -7,6 +7,7 @@ import { WishlistButton } from "@/components/wishlist-button";
 import { formatCartCurrency, useCart } from "@/components/cart-context";
 import { bestPaidTier, parsePriceValue, quoteMemberPrice } from "@/lib/member-pricing";
 import { hasCoa } from "@/lib/coa-url";
+import { COA_SHORT } from "@/lib/trust-claims";
 
 const BADGE_LABELS: Record<NonNullable<Product["badge"]>, string> = {
   new: "New",
@@ -140,9 +141,18 @@ export function ProductCard({
                 {product.purityResult.includes("%") ? product.purityResult : `${product.purityResult} pure`}
               </span>
             ) : null}
-            {product.coaUrl ? (
+            {/* hasCoa(), NOT truthiness — the same guard the COA link forty
+                lines below already uses, and for the reason spelled out there:
+                " ", "pending" and "TBD" are all truthy. This badge asserted
+                that a document EXISTS while the link on the same card, gated
+                properly, offered nothing to open. A card that claims a COA and
+                cannot show one is worse than a card that claims nothing.
+
+                COA_SHORT rather than a local "COA verified" for the same
+                reason the drawer's labels moved: one wording per claim. */}
+            {hasCoa(product.coaUrl) ? (
               <span className="rounded-full border border-white/[0.08] bg-white/[0.03] px-2 py-1 font-medium text-[#a3a3a3]">
-                COA verified
+                {COA_SHORT}
               </span>
             ) : null}
             {product.batchNumber ? (

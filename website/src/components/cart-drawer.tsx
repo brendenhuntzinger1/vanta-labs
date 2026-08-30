@@ -11,7 +11,7 @@ import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
 import { ExpressApplePayButton } from "@/components/express-apple-pay-button";
 import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
-import { FULFILMENT_DETAIL } from "@/lib/trust-claims";
+import { CHECKOUT_DETAIL, CHECKOUT_SHORT, FULFILMENT_DETAIL, RESEARCH_USE_SENTENCE } from "@/lib/trust-claims";
 import {
   REQUIRED_CONFIRMATIONS,
   defaultAcknowledgements,
@@ -622,13 +622,21 @@ export function CartDrawer() {
                 </div>
               ) : null}
 
-              {/* Trust row */}
+              {/* Trust row.
+                  EVERY LABEL HERE COMES FROM trust-claims.ts NOW. Two did not,
+                  and both had drifted exactly the way that module exists to
+                  prevent: "Secure checkout" is a second wording of the
+                  canonical "Encrypted Checkout", and "256-bit SSL" is a
+                  CERTIFICATION claim which trust-claims.ts deliberately
+                  declines to make and which the guard test bans by name — it
+                  simply never looked at this file. The drawer is reachable
+                  from every page, so this was the widest surface carrying it. */}
               <div className="grid grid-cols-2 gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
                 {[
-                  { icon: <path d="M6 10V8a6 6 0 1 1 12 0v2M5 10h14v10H5z" strokeLinejoin="round" />, label: "Secure checkout" },
-                  { icon: <><path d="M12 3 5 6v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z" strokeLinejoin="round" /><path d="m9 12 2 2 4-4" strokeLinecap="round" strokeLinejoin="round" /></>, label: "256-bit SSL" },
+                  { icon: <path d="M6 10V8a6 6 0 1 1 12 0v2M5 10h14v10H5z" strokeLinejoin="round" />, label: CHECKOUT_SHORT },
+                  { icon: <><path d="M12 3 5 6v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z" strokeLinejoin="round" /><path d="m9 12 2 2 4-4" strokeLinecap="round" strokeLinejoin="round" /></>, label: CHECKOUT_DETAIL },
                   { icon: <><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z" strokeLinejoin="round" /><circle cx="7" cy="17" r="1.6" /><circle cx="17.5" cy="17" r="1.6" /></>, label: FULFILMENT_DETAIL },
-                  { icon: <><path d="M9 3h6M10 3v5l-4 9a2 2 0 0 0 1.8 2.9h8.4A2 2 0 0 0 18 17l-4-9V3" strokeLinejoin="round" /></>, label: "Research use only" },
+                  { icon: <><path d="M9 3h6M10 3v5l-4 9a2 2 0 0 0 1.8 2.9h8.4A2 2 0 0 0 18 17l-4-9V3" strokeLinejoin="round" /></>, label: RESEARCH_USE_SENTENCE },
                 ].map((t) => (
                   <div key={t.label} className="flex items-center gap-2.5">
                     <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-gold)" strokeWidth="1.4" className="h-4 w-4 flex-shrink-0 opacity-80">{t.icon}</svg>

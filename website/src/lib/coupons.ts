@@ -344,6 +344,25 @@ export interface ActiveCouponSummary {
   endsAt: string | null;
 }
 
+/**
+ * A code that has spent its redemption cap, and must not be advertised.
+ *
+ * One predicate, two callers, because it was written inline in
+ * getStorefrontCoupon and simply not written in getActiveCouponsForDisplay —
+ * so the storefront banner correctly hid an exhausted code while the account
+ * dashboard and the rewards page went on offering it.
+ *
+ * A null/absent `max_redemptions` means unlimited, which is never exhausted.
+ * NOTE this reads only the settled counter, exactly as the banner always has:
+ * validateCoupon additionally counts in-flight orders against the cap, so a
+ * code can still be refused at checkout after showing here. Hiding a code the
+ * cap has definitively spent is the part that is knowable from a listing.
+ */
+function isExhausted(row: { max_redemptions?: number | null; redemptions_count?: number | null }): boolean {
+  return typeof row.max_redemptions === "number"
+    && Number(row.redemptions_count ?? 0) >= row.max_redemptions;
+}
+
 // The single headline coupon to advertise on the public storefront (the big
 // product-page banner). Shows automatically whenever an admin has an active,
 // in-window, store-wide coupon — no separate "publish" toggle. Personal codes
@@ -387,9 +406,7 @@ export async function getStorefrontCoupon(): Promise<ActiveCouponSummary | null>
   // Skip private (unlisted) codes and any code that has already hit its
   // redemption cap.
   const usable = (data ?? []).find(
-    (row) =>
-      !(row as { is_private?: boolean }).is_private
-      && !(typeof row.max_redemptions === "number" && Number(row.redemptions_count ?? 0) >= row.max_redemptions),
+    (row) => !(row as { is_private?: boolean }).is_private && !isExhausted(row),
   );
 
   if (!usable) {
@@ -415,7 +432,14 @@ export async function getActiveCouponsForDisplay(): Promise<ActiveCouponSummary[
   // pre-migration select if the column doesn't exist yet.
   let { data, error } = await supabaseAdmin
     .from("coupons")
-    .select("code, discount_type, discount_value, starts_at, ends_at, active, assigned_email, is_private")
+    // max_redemptions / redemptions_count are selected for the SAME reason
+    // getStorefrontCoupon selects them: a code at its cap is dead. It was
+    // filtered there and not here, so the account dashboard and the rewards
+    // page went on listing an exhausted code as an offer the shopper could use,
+    // and validateCoupon answered "This coupon has reached its redemption
+    // limit" when they tried it. Advertising a code that cannot be redeemed is
+    // worse than advertising nothing.
+    .select("code, discount_type, discount_value, starts_at, ends_at, active, assigned_email, is_private, max_redemptions, redemptions_count")
     // Only store-wide coupons belong in a customer-facing list. Personal codes
     // (assigned_email — e.g. auto-minted SAVE-… cart-recovery codes) are tied to
     // one shopper and must never be advertised here.
@@ -429,7 +453,7 @@ export async function getActiveCouponsForDisplay(): Promise<ActiveCouponSummary[
   if (error) {
     const fallback = await supabaseAdmin
       .from("coupons")
-      .select("code, discount_type, discount_value, starts_at, ends_at, active, assigned_email")
+      .select("code, discount_type, discount_value, starts_at, ends_at, active, assigned_email, max_redemptions, redemptions_count")
       .eq("active", true)
       .is("assigned_email", null)
       .or(`starts_at.is.null,starts_at.lte.${nowIso}`)
@@ -444,10 +468,13 @@ export async function getActiveCouponsForDisplay(): Promise<ActiveCouponSummary[
     throw error;
   }
 
-  return (data ?? []).filter((row) => !(row as { is_private?: boolean }).is_private).map((row) => ({
-    code: String(row.code),
-    discountType: row.discount_type === "fixed" ? "fixed" : "percent",
-    discountValue: Number(row.discount_value ?? 0),
-    endsAt: row.ends_at ? String(row.ends_at) : null,
-  }));
+  return (data ?? [])
+    .filter((row) => !(row as { is_private?: boolean }).is_private)
+    .filter((row) => !isExhausted(row))
+    .map((row) => ({
+      code: String(row.code),
+      discountType: row.discount_type === "fixed" ? "fixed" : "percent",
+      discountValue: Number(row.discount_value ?? 0),
+      endsAt: row.ends_at ? String(row.ends_at) : null,
+    }));
 }

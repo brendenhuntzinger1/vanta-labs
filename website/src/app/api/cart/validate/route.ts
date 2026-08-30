@@ -124,12 +124,37 @@ export async function POST(request: Request) {
     }
 
     const doseIds = lines.map((line) => line.variantId).filter((id): id is string => Boolean(id));
-    const slugs = Array.from(new Set(lines.filter((line) => !line.variantId).map((line) => line.slug)));
+    // EVERY requested slug, dose lines included — not just the bare-slug ones.
+    // The products query is what establishes whether a row is publicly listed
+    // at all, and a dose line needs that answer about its parent just as much
+    // as a product line needs it about itself.
+    const slugs = Array.from(new Set(lines.map((line) => line.slug)));
 
     const [doseResult, productResult] = await Promise.all([
       doseIds.length > 0
         ? supabaseAdmin
             .from("product_doses")
+            // THE PARENT'S VISIBILITY COUNTS TOO. This branch checked only the
+            // dose's own is_enabled, while the products branch below applies
+            // the full public-catalog filter for the reason stated there: the
+            // route must not answer stock questions about rows the storefront
+            // does not even list. A dose inherits its visibility from its
+            // product, so an unpublished or archived product's doses were
+            // exactly such rows, and nearly every cart line carries a dose id
+            // (quoteOrder rewrites bare slugs to `slug::doseId`) — so the
+            // branch WITHOUT the filter was the common path, not the edge one.
+            //
+            // The customer-visible outcome is unchanged either way: a filtered
+            // row is simply absent, and an absent row is left alone rather than
+            // zeroed (see the `!match` branch below). This closes the
+            // disclosure gap, not a checkout failure.
+            //
+            // Done with the slug the cart line already carries rather than an
+            // embedded `products!inner(...)` filter: the visibility of the
+            // parent is resolved by the products query below, which every
+            // requested slug now goes through, and the match is dropped in code
+            // if its slug did not come back. One less PostgREST relationship to
+            // depend on, and it is checkable without a live database.
             .select("id, label, inventory_quantity, reserved_quantity, stock_status")
             .eq("is_enabled", true)
             .in("id", doseIds)
@@ -191,7 +216,14 @@ export async function POST(request: Request) {
     }
 
     const validated: CartLineValidation[] = lines.map((line) => {
-      const match = line.variantId ? byDoseId.get(line.variantId) : bySlug.get(line.slug);
+      // A dose is only as visible as the product it hangs off. `bySlug` holds
+      // exactly the publicly-listed products, so a dose whose slug is missing
+      // from it belongs to an unpublished or archived row and is treated as a
+      // lookup gap — left alone, never zeroed, same as any other unknown line.
+      const parentListed = bySlug.has(line.slug);
+      const match = line.variantId
+        ? (parentListed ? byDoseId.get(line.variantId) : undefined)
+        : bySlug.get(line.slug);
       // A row we cannot find is left alone rather than zeroed — an unknown line
       // is a lookup gap, not a sold-out product.
       if (!match) {

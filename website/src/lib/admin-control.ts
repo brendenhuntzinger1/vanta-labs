@@ -474,7 +474,10 @@ export async function getWelcomeOffer(): Promise<WelcomeOffer> {
     return {
       enabled: cfg.enabled === true,
       code: (typeof cfg.code === "string" && cfg.code.trim().toUpperCase()) || DEFAULT_WELCOME_OFFER.code,
-      percent: Number(cfg.percent ?? DEFAULT_WELCOME_OFFER.percent) || DEFAULT_WELCOME_OFFER.percent,
+      // clampPercent, like every other percent read in this file. It read
+      // `Number(cfg.percent ?? d) || d`, which accepts 150 as readily as 15 —
+      // see the note on clampPercent below for what that costs.
+      percent: clampPercent(cfg.percent, DEFAULT_WELCOME_OFFER.percent),
       headline: (typeof cfg.headline === "string" && cfg.headline.trim()) || DEFAULT_WELCOME_OFFER.headline,
       subtext: (typeof cfg.subtext === "string" && cfg.subtext.trim()) || DEFAULT_WELCOME_OFFER.subtext,
     };
@@ -571,7 +574,23 @@ export interface ReferralProgramConfig {
   commissionsPaused: boolean;
 }
 
-function clampPercent(value: unknown, fallback: number): number {
+/**
+ * A stored percent, read defensively: blank or unreadable or outside 0..100
+ * falls back to the coded default.
+ *
+ * EXPORTED, AND USED BY getWelcomeOffer ABOVE, which it was not. This guard was
+ * already here — applied to every referral, commission and ambassador percent —
+ * while the welcome offer three hundred lines up read
+ * `Number(cfg.percent ?? d) || d`, which accepts any finite number at all. A
+ * coupons ROW cannot hold a percent above 100 (createCoupon and updateCoupon
+ * both reject it); the welcome offer is a virtual coupon with no row, so this
+ * was the only place such a gate could live, and it was the one place it was
+ * not applied. A typed extra zero on "10" is 100% off the merchandise subtotal
+ * for every first-time customer, which the profit floor then refuses outright:
+ * the storefront advertises the code and the pay button answers "Promotion
+ * unavailable on this order."
+ */
+export function clampPercent(value: unknown, fallback: number): number {
   // Blank means "keep the default" — Number("") is 0, which would silently
   // zero out a referral/commission percent.
   if (value === "" || value == null) return fallback;

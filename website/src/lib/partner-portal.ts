@@ -689,7 +689,6 @@ export async function createPartnerApplication(input: {
   }
 
   const partnerId = randomUUID();
-  const now = new Date().toISOString();
 
   // Honor the applicant's preferred referral code when it's provided and not
   // already taken; otherwise fall back to an auto-generated one. The admin can

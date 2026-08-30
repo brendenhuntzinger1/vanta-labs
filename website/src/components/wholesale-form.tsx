@@ -151,7 +151,7 @@ export function WholesaleForm() {
 
       <div className="grid gap-5 sm:grid-cols-2">
         <div>
-          <Label htmlFor="wholesale-org">Company / organisation</Label>
+          <Label htmlFor="wholesale-org">Company / organization</Label>
           <input id="wholesale-org" name="organization" maxLength={200} autoComplete="organization" className={field} />
         </div>
         <div>

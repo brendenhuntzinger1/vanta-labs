@@ -815,7 +815,14 @@ export default function CheckoutPage() {
           <p className="text-[10px] uppercase tracking-[0.34em] text-white/35">Secure checkout</p>
           <h1 className="vl2-serif mt-2 text-[1.85rem] leading-[1.1] text-white sm:text-[2.5rem]">Complete your order</h1>
           <p className="mt-2 max-w-xl text-sm leading-relaxed text-white/45">
-            Transparent totals, encrypted payment, and full batch traceability.
+            {/* "full batch traceability" was here, on the last screen before
+                payment. It is one of the four claims trust-claims.ts lists as
+                unsubstantiated, and trust-claims-single-source.test.ts already
+                bans it on this exact file — but with `toContain("Full batch
+                traceability")`, which is case-sensitive, so the lowercase
+                sentence rendered while the guard reported green. Both halves
+                are fixed: the claim is gone, and the test now folds case. */}
+            Transparent totals and encrypted payment. No surprises at the total.
           </p>
           <div className="mt-5 max-w-md">
             <CheckoutProgress onPayment={checkoutState === "loading" || checkoutState === "success"} />

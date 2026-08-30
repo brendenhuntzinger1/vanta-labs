@@ -6,6 +6,7 @@ import {
   FULFILMENT_DETAIL,
   FULFILMENT_SHORT,
   TESTING_SHORT,
+  catalogTrustRail,
   trustPoints,
   trustPointsDetailed,
 } from "@/lib/trust-claims";
@@ -44,7 +45,28 @@ import {
 // it — so the strip is now a function of the evidence a caller actually holds.
 // ---------------------------------------------------------------------------
 
-const read = (path: string) => readFileSync(path, "utf8");
+const readRaw = (path: string) => readFileSync(path, "utf8");
+
+/**
+ * Source with its COMMENTS REMOVED.
+ *
+ * These assertions scan file text, which cannot by itself tell a rendered claim
+ * from a comment about one — and this repository documents a removed claim by
+ * naming it, right where it used to be. Scanning raw text therefore makes the
+ * fix for a banned claim indistinguishable from the claim, so the honest way to
+ * record why "256-bit SSL" is gone would re-fail the test that removed it.
+ *
+ * Only the two comment forms this codebase writes are stripped: block comments
+ * (`/* … *\/`, JSX `{/* … *\/}` included, since the braces fall outside) and
+ * whole lines that are a line comment. A mid-line `//` is deliberately NOT
+ * treated as a comment, because that is what a URL looks like.
+ */
+const read = (path: string) =>
+  readRaw(path)
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .split("\n")
+    .filter((line) => !/^\s*(\/\/|\*)/.test(line))
+    .join("\n");
 
 describe("the trust strip is a function of evidence, not a constant", () => {
   it("omits the COA claim when the caller cannot show a published COA", () => {
@@ -89,14 +111,43 @@ describe("no page re-declares its own trust claims", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// TWO WAYS THIS SUITE PASSED WHILE THE CLAIMS IT BANS WERE ON THE SITE.
+//
+// 1. CASE. `toContain("Full batch traceability")` is case-sensitive, and
+//    checkout/page.tsx rendered "…encrypted payment, and full batch
+//    traceability." mid-sentence. The banned claim sat on the LAST SCREEN
+//    BEFORE PAYMENT and this file reported green. Every comparison below now
+//    folds case, which is how a human reads a claim.
+//
+// 2. COVERAGE. The surfaces list named five files. "256-bit SSL" — banned by
+//    name, three lines down — was in cart-drawer.tsx, which is reachable from
+//    every page, and "COA verified" was on product-card.tsx, rendered for every
+//    product in the grid. Neither file was looked at, so neither claim existed
+//    as far as this suite was concerned.
+//
+// The lesson is the general one: a guard that names its subjects will only ever
+// be as complete as that list. So the list now covers the customer-facing
+// surfaces that actually render trust copy, and adding a new one is the same
+// one-line change as adding a page.
+// ---------------------------------------------------------------------------
 describe("the claims that were never substantiated are gone", () => {
   const surfaces = [
     "src/app/page.tsx",
     "src/app/checkout/page.tsx",
+    "src/app/products/products-client.tsx",
     "src/components/site-footer.tsx",
     "src/components/age-gate.tsx",
     "src/components/product-detail-client.tsx",
+    "src/components/product-card.tsx",
+    "src/components/cart-drawer.tsx",
+    "src/components/catalog-trust-rail.tsx",
+    "src/app/cart/cart-client.tsx",
   ];
+
+  /** Case-folded containment — the reason two banned claims shipped. */
+  const contains = (haystack: string, needle: string) =>
+    haystack.toLowerCase().includes(needle.toLowerCase());
 
   it("no COA-EXISTENCE claim is made outside the evidence gate", () => {
     // This is the claim that is currently FALSE: "COA Documented", "COA Verified"
@@ -106,10 +157,18 @@ describe("the claims that were never substantiated are gone", () => {
     for (const path of surfaces) {
       const source = read(path);
       for (const claim of ["COA Verified", "COA on every lot", "Batch-level Certificates"]) {
-        expect(source, `${path} hard-codes "${claim}"`).not.toContain(claim);
+        expect(contains(source, claim), `${path} hard-codes "${claim}"`).toBe(false);
       }
+      // COA_SHORT asserts a document EXISTS, so it must be gated on evidence.
+      // trustPoints() is one such gate. hasCoa() is the other, and it is the
+      // stronger of the two: it is per-product and it rejects the placeholders
+      // ("pending", "TBD", " ") that operators actually type. product-card.tsx
+      // used plain `product.coaUrl ?` truthiness for the badge while gating the
+      // COA LINK forty lines below on hasCoa() — so a card asserted a document
+      // and offered nothing to open.
       if (source.includes("COA_SHORT")) {
-        expect(source, `${path} must source COA_SHORT through the gate`).toMatch(/trustPoints\(/);
+        expect(source, `${path} must gate COA_SHORT on trustPoints() or hasCoa()`)
+          .toMatch(/trustPoints\(|hasCoa\(/);
       }
     }
   });
@@ -130,7 +189,18 @@ describe("the claims that were never substantiated are gone", () => {
     ["Based in the USA", "no recorded provenance anywhere in the codebase"],
   ])("%s is gone — %s", (claim) => {
     for (const path of surfaces) {
-      expect(read(path), path).not.toContain(claim);
+      expect(contains(read(path), claim), `${path} carries "${claim}"`).toBe(false);
+    }
+  });
+
+  it("the catalogue RAIL carries no purity figure either", () => {
+    // The strip assertion above covers trustPoints(). It did not cover
+    // catalogTrustRail(), which is the busiest buying surface in the store and
+    // which carried "≥99% / Purity" — a hard-coded figure inside the very
+    // module whose TESTING block says none appears anywhere in the UI.
+    for (const item of catalogTrustRail(true)) {
+      expect(`${item.top} ${item.bottom}`, `rail item "${item.top} ${item.bottom}"`)
+        .not.toMatch(/\d+\s*%/);
     }
   });
 });
@@ -149,5 +219,16 @@ describe("one fulfilment promise, everywhere", () => {
     // ordering at 11pm on a Sunday, which is a dispute waiting to happen.
     expect(FULFILMENT_DETAIL).toContain("2PM ET");
     expect(FULFILMENT_DETAIL).toContain("Mon");
+  });
+
+  it("and so does the one on the catalogue rail", () => {
+    // This assertion existed only for FULFILMENT_DETAIL, a constant the rail
+    // did not use — so the rail shipped a bare "Same-Day / Fulfillment", which
+    // is precisely the unqualified promise the line above exists to forbid.
+    const fulfilment = catalogTrustRail(true).find((item) => item.icon === "fulfillment");
+    expect(fulfilment, "the rail must carry a fulfilment item").toBeDefined();
+    const claim = `${fulfilment!.top} ${fulfilment!.bottom}`;
+    expect(claim, "the rail's same-day claim must name its cutoff").toContain("2PM ET");
+    expect(claim, "the rail's same-day claim must name its weekday qualifier").toContain("Mon");
   });
 });

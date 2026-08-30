@@ -176,11 +176,14 @@ export function trustPoints(evidence: TrustEvidence = {}): readonly string[] {
 //     document shows no COA action — but this rail does not read that gate,
 //     and it will keep saying "verified" regardless.
 //
-//   * "≥99% PURITY" rests on the owner's attestation (recorded 2026-08) that
-//     every product is third-party tested to that standard. It is a statement
-//     about the programme and already appears on the home page. It is NOT a
-//     statement about a particular vial: a purity FIGURE is only ever rendered
-//     from that product's own record behind hasVerifiedTesting.
+//   * THE PURITY SLOT NO LONGER CARRIES A NUMBER. It read "≥99% PURITY" on the
+//     owner's attestation (recorded 2026-08) that every product is third-party
+//     tested to that standard — but a FIGURE is a statement about a particular
+//     vial, which is why the TESTING block above says no hard-coded "99%"
+//     appears anywhere in the UI and why K-21 stripped one from the home page.
+//     The rail is catalogue-wide, so it now carries the programme-level claim
+//     (TESTING_SHORT) and the number stays where it is earned: rendered from a
+//     product's own `purityResult` behind hasVerifiedTesting.
 //
 //   * "FAST CUSTOMER SUPPORT" is the owner's characterisation of their own
 //     operation, backed by a staffed support route (/account/support) and a
@@ -228,18 +231,54 @@ export const COA_RAIL_PARTIAL: RailItem = {
 };
 
 /**
+ * THE FULFILMENT RAIL ITEM, CARRYING ITS QUALIFIER.
+ *
+ * It read `{ top: "Same-Day", bottom: "Fulfillment" }` \u2014 an UNQUALIFIED
+ * same-day promise, on the catalogue page, which is the busiest buying surface
+ * the store has. The FULFILMENT_CUTOFF comment thirty lines up says why that is
+ * the one thing this claim must never do: "an unqualified 'same-day
+ * fulfilment' promises same-day shipping to someone ordering at 11pm on a
+ * Sunday, which is a dispute waiting to happen." The rail did exactly that, and
+ * the guard test only ever asserted the cutoff on FULFILMENT_DETAIL \u2014 a
+ * constant this function did not use.
+ *
+ * Both lines are derived from FULFILMENT_CUTOFF now, so the cutoff cannot be
+ * changed in one place and left stale here, and it links to the Shipping Policy
+ * that states the transit caveat in full.
+ */
+export const FULFILMENT_RAIL: RailItem = {
+  top: `Order by ${FULFILMENT_CUTOFF}`,
+  bottom: "Ships Same Day, Mon\u2013Fri",
+  href: "/legal/shipping",
+  icon: "fulfillment",
+};
+
+/**
  * The rail for a given catalogue.
  *
  * `everyProductHasCoa` defaults to FALSE, which is the safe direction: while
  * the catalogue is still loading, or if a caller forgets to pass it, the site
  * under-claims rather than over-claims.
+ *
+ * NOTE WHAT IS NO LONGER HERE. This function used to carry `{ top: "\u226599%",
+ * bottom: "Purity" }`, which is a hard-coded purity figure \u2014 the exact thing
+ * the TESTING block above says appears nowhere in the UI ("no hard-coded '99%'
+ * appears anywhere in the UI"). It was removed from src/app/page.tsx by K-21
+ * and reintroduced here, inside the module that forbids it, where the test that
+ * enforces the rule on trustPoints() could not see it. A purity NUMBER is a
+ * statement about one vial and is rendered only from that product's own
+ * `purityResult`; the catalogue-wide slot now carries the programme-level
+ * claim, which is what the owner's attestation actually substantiates.
+ *
+ * "Secure Checkout" likewise became CHECKOUT_SHORT: it was a second wording of
+ * a claim this file already names, which is the drift the file exists to stop.
  */
 export function catalogTrustRail(everyProductHasCoa = false): readonly RailItem[] {
   return [
-    { top: "Same-Day", bottom: "Fulfillment", icon: "fulfillment" },
+    FULFILMENT_RAIL,
     everyProductHasCoa ? COA_RAIL_COMPLETE : COA_RAIL_PARTIAL,
-    { top: "\u226599%", bottom: "Purity", icon: "purity" },
+    { top: "Third-Party", bottom: "Tested", icon: "purity" },
     { top: "Fast Customer", bottom: "Support", href: "/contact", icon: "support" },
-    { top: "Secure", bottom: "Checkout", icon: "checkout" },
+    { top: "Encrypted", bottom: "Checkout", icon: "checkout" },
   ];
 }
