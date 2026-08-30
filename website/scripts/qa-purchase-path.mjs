@@ -179,6 +179,24 @@ const CLIENT_IP = (() => {
   return `100.${64 + (a % 64)}.${b}.${(c % 254) + 1}`;
 })();
 
+/**
+ * THE SAME PURCHASE, AT PHONE SIZE.
+ *
+ * Most of this store's traffic is mobile, and this is the money path — but every
+ * context here was desktop-only, so the one flow it is least affordable to get
+ * wrong was the one never driven at 390x844. The journey harness checks mobile
+ * for the signed-in account pages; nothing checked mobile through cart,
+ * checkout, payment and the receipt.
+ *
+ *   QA_VIEWPORT=mobile npm run qa:purchase
+ *
+ * isMobile + hasTouch as well as the viewport, because a narrow desktop window
+ * is not a phone: it does not dispatch touch events and it does not get the
+ * mobile layout branches that read pointer capability.
+ */
+const MOBILE = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true };
+const VIEWPORT_OPTS = process.env.QA_VIEWPORT === "mobile" ? MOBILE : {};
+
 async function passAgeGate(page) {
   await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
 
@@ -294,7 +312,7 @@ async function main() {
     ?? ["/opt/pw-browsers/chromium-1194/chrome-linux/chrome", "/opt/pw-browsers/chromium/chrome-linux/chrome"]
       .find((p) => existsSync(p));
   const browser = await chromium.launch(CHROME ? { executablePath: CHROME } : {});
-  const context = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+  const context = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
   const page = await context.newPage();
 
   const GUEST_EMAIL = `guest.${stamp}@example.test`;
@@ -559,7 +577,7 @@ async function main() {
       [GUEST_EMAIL, JSON.stringify({ full_name: "Guest Buyer", role: "customer" })],
     );
 
-    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const ctx = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const p = await ctx.newPage();
     await passAgeGate(p);
     await p.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
@@ -597,7 +615,7 @@ async function main() {
       [impostor, `claim.${stamp}@example.test`]);
 
     const number = (await q("select order_number from orders where order_id = $1", [orderId])).rows[0]?.order_number;
-    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const ctx = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const p = await ctx.newPage();
     await passAgeGate(p);
     await p.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
@@ -630,7 +648,7 @@ async function main() {
       [MEMBER_EMAIL, JSON.stringify({ full_name: "Signed In Buyer", role: "customer" })],
     );
 
-    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const ctx = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const p = await ctx.newPage();
     await passAgeGate(p);
     await p.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
@@ -701,7 +719,7 @@ async function main() {
 
   await step("the confirmation page recognises an authenticated customer", async () => {
     if (!signedInOrder) return SKIP("no signed-in order to view");
-    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const ctx = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const p = await ctx.newPage();
     await passAgeGate(p);
     await p.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
@@ -735,7 +753,7 @@ async function main() {
       [email, JSON.stringify({ full_name: "Mid Checkout", role: "customer" })],
     )).rows[0];
 
-    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const ctx = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const tab1 = await ctx.newPage();
     await passAgeGate(tab1);
 
@@ -789,7 +807,7 @@ async function main() {
       [email, JSON.stringify({ full_name: "Return Tab", role: "customer" })],
     )).rows[0];
 
-    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const ctx = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const tab1 = await ctx.newPage();
     await passAgeGate(tab1);
     await tab1.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
