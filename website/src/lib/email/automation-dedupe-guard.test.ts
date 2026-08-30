@@ -104,6 +104,57 @@ vi.mock("@/lib/supabase-server", () => {
             : sendLog;
           return { data: rows.map((r) => ({ reference_id: r.reference_id })), error: null };
         },
+        // THE CLAIM, which this fake did not model.
+        //
+        // runAutomations now takes the send-once slot BEFORE sending, so the
+        // slot is what decides eligibility rather than the snapshot read above.
+        // Without an insert here the claim threw and every recipient was
+        // dropped — which looked exactly like the dedupe rule rejecting them.
+        //
+        // Uniqueness mirrors email_send_log_automation_once: one live row per
+        // (campaign_type, reference_id), with 'failed' excluded so a recipient
+        // whose send failed stays eligible. That exclusion is the property the
+        // tests below exist for.
+        async insert(row: { campaign_type: string; reference_id: string | null; status: string }) {
+          const clash = sendLog.some((r) =>
+            r.reference_id === row.reference_id && r.status !== "failed");
+          if (clash) return { error: { code: "23505", message: "duplicate key" } };
+          sendLog.push({ reference_id: row.reference_id, status: row.status } as never);
+          return { error: null };
+        },
+        update(patch: { status?: string }) {
+          const chain: Record<string, unknown> = {
+            eq: (col: string, val: string) => {
+              if (col === "reference_id") (chain as { _ref?: string })._ref = val;
+              return chain;
+            },
+            then: (resolve: (v: unknown) => void) => {
+              const ref = (chain as { _ref?: string })._ref;
+              for (const r of sendLog) {
+                if (r.reference_id === ref && r.status === "sending" && patch.status) {
+                  r.status = patch.status;
+                }
+              }
+              resolve({ error: null });
+            },
+          };
+          return chain;
+        },
+        delete() {
+          const chain: Record<string, unknown> = {
+            eq: (col: string, val: string) => {
+              if (col === "reference_id") (chain as { _ref?: string })._ref = val;
+              return chain;
+            },
+            then: (resolve: (v: unknown) => void) => {
+              const ref = (chain as { _ref?: string })._ref;
+              const at = sendLog.findIndex((r) => r.reference_id === ref && r.status === "sending");
+              if (at >= 0) sendLog.splice(at, 1);
+              resolve({ error: null });
+            },
+          };
+          return chain;
+        },
       };
       return b;
     }

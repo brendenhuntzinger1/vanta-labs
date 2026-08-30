@@ -139,7 +139,7 @@ echo "==> post-parity migrations"
 # exercising the OLD path, so a pass there said nothing about the code
 # production actually runs.
 for f in referral-orders-commission-lifecycle referral-orders-manual-review-status \
-         refund-exactly-once-indexes pending-emails-order-link; do
+         refund-exactly-once-indexes pending-emails-order-link automation-send-once; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
 done
 
@@ -202,6 +202,11 @@ check "order_email_log_one_live unique index exists (send-once is DB-enforced, n
 # inventory hold was ever released. A function is only proven by running it.
 check "release_inventory_for_order actually runs (not just exists)" \
   "select public.release_inventory_for_order('parity-probe-no-such-order') = 0;"
+
+# The automation send-once slot. Without it claimAutomationSend() cannot detect a
+# duplicate, and two overlapping sweeps mail the customer twice.
+check "email_send_log_automation_once unique index exists (automation send-once)" \
+  "select exists (select 1 from pg_indexes where schemaname='public' and indexname='email_send_log_automation_once');"
 check "orders.inventory_committed_at exists (the restock SIGNAL)" \
   "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='orders' and column_name='inventory_committed_at');"
 # The four columns scripts/harness-pay-order.mjs SELECTs. They are created by
