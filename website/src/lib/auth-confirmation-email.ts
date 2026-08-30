@@ -4,6 +4,7 @@ import { sendEmail } from "@/lib/email/send";
 import { accountConfirmationResendTemplate } from "@/lib/email/templates";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { brandedConfirmUrl } from "@/lib/auth-confirm-link";
 
 // ---------------------------------------------------------------------------
 // The branded way back for an account that exists but never confirmed.
@@ -130,7 +131,12 @@ export async function sendBrandedConfirmationResend(email: string, redirectTo: s
 
   const template = accountConfirmationResendTemplate({
     name: greetingName(found.user_metadata?.full_name),
-    confirmUrl: link.data.properties.action_link,
+    confirmUrl: brandedConfirmUrl({
+      hashedToken: link.data.properties.hashed_token,
+      type: link.data.properties.verification_type ?? "magiclink",
+      next: "/account",
+      fallbackActionLink: link.data.properties.action_link,
+    }),
   });
 
   const result = await sendEmail({ to: email, ...template });

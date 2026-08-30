@@ -7,6 +7,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getRequestIpAddress, rateLimitKeyForRequest } from "@/lib/request-ip";
 import { getSiteUrl } from "@/lib/env";
+import { brandedConfirmUrl } from "@/lib/auth-confirm-link";
 import { verifyTurnstileToken } from "@/lib/turnstile";
 import { SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-signup-outcome";
 
@@ -202,7 +203,15 @@ async function createAccountAndSend(input: {
 
   const template = accountConfirmationTemplate({
     name: greetingName(input.fullName),
-    confirmUrl: data.properties.action_link,
+    // Our own host, not <project>.supabase.co — see lib/auth-confirm-link.ts.
+    // A link whose domain does not match the sender is a phishing signal, and
+    // it was the one spam reason the branding fix did not remove.
+    confirmUrl: brandedConfirmUrl({
+      hashedToken: data.properties.hashed_token,
+      type: data.properties.verification_type ?? "signup",
+      next: "/account",
+      fallbackActionLink: data.properties.action_link,
+    }),
   });
 
   const result = await sendEmail({ to: input.email, ...template });

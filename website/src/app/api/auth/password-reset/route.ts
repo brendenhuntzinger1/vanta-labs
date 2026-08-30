@@ -8,6 +8,7 @@ import { findUserByEmail } from "@/lib/auth-confirmation-email";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getRequestIpAddress, rateLimitKeyForRequest } from "@/lib/request-ip";
 import { getSiteUrl } from "@/lib/env";
+import { brandedConfirmUrl } from "@/lib/auth-confirm-link";
 import { verifyTurnstileToken } from "@/lib/turnstile";
 
 export const dynamic = "force-dynamic";
@@ -172,7 +173,12 @@ async function deliverResetEmail(email: string, redirectTo: string): Promise<voi
 
     const template = passwordResetTemplate({
       name: resolveGreetingName(data.user),
-      resetUrl: data.properties.action_link,
+      resetUrl: brandedConfirmUrl({
+        hashedToken: data.properties.hashed_token,
+        type: data.properties.verification_type ?? "recovery",
+        next: "/account/reset-password",
+        fallbackActionLink: data.properties.action_link,
+      }),
     });
 
     const result = await sendEmail({ to: email, ...template });

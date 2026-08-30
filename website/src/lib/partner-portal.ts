@@ -18,6 +18,7 @@ import {
 } from "@/lib/email/templates";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { getSiteUrl } from "@/lib/env";
+import { brandedConfirmUrl } from "@/lib/auth-confirm-link";
 import { DEFAULT_REFERRAL_DISCOUNT_PERCENT, getBusinessSettings, getReferralProgramConfig } from "@/lib/admin-control";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 import { getAmbassadorProgramSettings, getAmbassadorMarketingResources, type AmbassadorMarketingResource } from "@/lib/ambassador-settings";
@@ -1772,7 +1773,12 @@ async function inviteAmbassadorUser(input: {
   if (!minted.error && minted.data?.properties?.action_link) {
     const template = ambassadorInviteTemplate({
       name: input.name,
-      inviteUrl: minted.data.properties.action_link,
+      inviteUrl: brandedConfirmUrl({
+        hashedToken: minted.data.properties.hashed_token,
+        type: minted.data.properties.verification_type ?? "invite",
+        next: "/account/ambassador",
+        fallbackActionLink: minted.data.properties.action_link,
+      }),
       commissionPercent: input.commissionPercent,
     });
     const sent = await sendAmbassadorEmail(input.email, template, "ambassador invite");

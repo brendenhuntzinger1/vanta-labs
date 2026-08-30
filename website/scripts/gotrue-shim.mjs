@@ -242,6 +242,42 @@ export async function handleAuth(req, res, url, pool, send, readBody) {
     return send(res, 200, { users: rows.rows.map(toUser), aud: "authenticated" }), true;
   }
 
+  // ---- verify -------------------------------------------------------------
+  // The hop every auth email now lands on. /auth/confirm on the app's own host
+  // rebuilds this URL and redirects here, so the customer only ever sees
+  // vantalabsresearch.com — a link whose domain matches the sender, which is
+  // the phishing signal that outlived the 2026-08-29 branding fix.
+  //
+  // Real GoTrue verifies the token, CONFIRMS the address, and 303s to
+  // redirect_to with a session in the fragment. Modelled here so the full chain
+  // is testable; without it the browser test stops at a 501 and proves nothing.
+  if (path === "/verify" && req.method === "GET") {
+    const token = url.searchParams.get("token") ?? "";
+    const type = url.searchParams.get("type") ?? "";
+    const redirect = url.searchParams.get("redirect_to") ?? "http://127.0.0.1:3000";
+
+    // Harness tokens are minted as `harness-hashed-<user id>` by generate_link.
+    const id = token.startsWith("harness-hashed-") ? token.slice("harness-hashed-".length) : "";
+    const found = id ? await q("select * from auth.users where id = $1", [id]) : { rows: [] };
+    if (!found.rows.length) {
+      res.writeHead(303, { Location: `${redirect}${redirect.includes("?") ? "&" : "?"}error=invalid_token` });
+      res.end();
+      return true;
+    }
+
+    // Verifying an email link is what confirms the address — the whole point.
+    await q("update auth.users set email_confirmed_at = coalesce(email_confirmed_at, now()) where id = $1", [id]);
+    const fresh = await q("select * from auth.users where id = $1", [id]);
+    const user = toUser(fresh.rows[0]);
+    const fragment =
+      `#access_token=${mintAccessToken(user)}&type=${type}&expires_in=${TOKEN_TTL_SECONDS}`
+      + `&refresh_token=harness-refresh-${id}&token_type=bearer`;
+
+    res.writeHead(303, { Location: `${redirect}${fragment}` });
+    res.end();
+    return true;
+  }
+
   // ---- admin generate_link ------------------------------------------------
   // Real GoTrue mints a verification link and returns it WITHOUT sending any
   // email, which is what /api/auth/password-reset and /api/auth/signup rely on
