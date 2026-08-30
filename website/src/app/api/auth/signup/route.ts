@@ -12,7 +12,7 @@ import { brandedConfirmUrl } from "@/lib/auth-confirm-link";
 import { verifyTurnstileToken } from "@/lib/turnstile";
 import { SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-signup-outcome";
 import { looksLikeEmail } from "@/lib/email-shape";
-import { recordAuthEmailAttempt } from "@/lib/auth-email-audit";
+import { claimAuthEmailSend, recordAuthEmailAttempt } from "@/lib/auth-email-audit";
 
 export const dynamic = "force-dynamic";
 
@@ -239,7 +239,10 @@ async function createAccountAndSend(input: {
     // and that branch does not correlate with whether an address is registered.
     const existing = await findUserByEmail(input.email).catch(() => null);
     if (existing) {
-      await sendBrandedConfirmationResend(input.email, input.redirectTo);
+      // Debounced as a plain confirmation: a double-clicked signup reaches this
+      // branch on the second request, and to the customer it is the same email
+      // the first request is already sending.
+      await sendBrandedConfirmationResend(input.email, input.redirectTo, "signup_confirmation");
       return "handled";
     }
 
@@ -270,6 +273,21 @@ async function createAccountAndSend(input: {
       fallbackActionLink: data.properties.action_link,
     }),
   });
+
+  // ONE CONFIRMATION PER ADDRESS PER MINUTE.
+  //
+  // A double-clicked signup sent two, each carrying a different token, and the
+  // journey harness never noticed because it counted ACCOUNTS (exactly one, as
+  // designed) rather than emails. The customer sees two messages and, if they
+  // open the older one, a link that no longer works.
+  //
+  // A caller that loses this claim returns "handled": the customer genuinely
+  // does have a confirmation email, so the honest answer is the same one the
+  // winner gives. It must NOT fall through to the Supabase fallback below, or
+  // losing the claim would produce the second email it just prevented.
+  if (!(await claimAuthEmailSend("signup_confirmation", input.email))) {
+    return "handled";
+  }
 
   const result = await sendEmail({ to: input.email, ...template });
 

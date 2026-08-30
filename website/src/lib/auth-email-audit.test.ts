@@ -5,18 +5,47 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const inserted: Array<Record<string, unknown>> = [];
 
+// Rows already in email_send_log when the call is made. recordAuthEmailAttempt
+// now CLOSES a claim written by claimAuthEmailSend() before falling back to an
+// insert, so the fake has to model both halves — an update-only fake reports a
+// missing insert, and an insert-only fake (which this was) reports nothing at
+// all, because the update it cannot answer throws into the swallow-everything
+// catch. Neither failure is in the product.
+const existing: Array<Record<string, unknown>> = [];
+
+/** What the NEXT insert reports back, so the duplicate branch is reachable. */
+let nextInsertError: { code: string } | null = null;
+
 vi.mock("@/lib/supabase-server", () => ({
   supabaseAdmin: {
     from: (table: string) => ({
       insert: async (row: Record<string, unknown>) => {
         inserted.push({ table, ...row });
-        return { error: null };
+        const error = nextInsertError;
+        nextInsertError = null;
+        return { error };
+      },
+      // .update(patch).eq(...).eq(...).eq(...).select("id") — supabase-js
+      // applies the filters as they chain, so the fake must chain too rather
+      // than deciding anything at update() time.
+      update: (patch: Record<string, unknown>) => {
+        const filters: Array<[string, unknown]> = [];
+        const builder = {
+          eq(column: string, value: unknown) { filters.push([column, value]); return builder; },
+          select: async () => {
+            const matched = existing.filter((row) => filters.every(([c, v]) => row[c] === v));
+            for (const row of matched) Object.assign(row, patch);
+            return { data: matched.map((row) => ({ id: row.id })), error: null };
+          },
+        };
+        return builder;
       },
     }),
   },
 }));
 
-const { recordAuthEmailAttempt } = await import("@/lib/auth-email-audit");
+const { recordAuthEmailAttempt, claimAuthEmailSend } = await import("@/lib/auth-email-audit");
+
 
 // ---------------------------------------------------------------------------
 // WAS THE EMAIL ACTUALLY SENT? — THE QUESTION THAT HAD NO ANSWER.
@@ -34,7 +63,7 @@ const { recordAuthEmailAttempt } = await import("@/lib/auth-email-audit");
 // silence of.
 // ---------------------------------------------------------------------------
 
-beforeEach(() => { inserted.length = 0; });
+beforeEach(() => { inserted.length = 0; existing.length = 0; nextInsertError = null; });
 
 describe("the audit row", () => {
   it("records a successful send as sent, with no error stashed", async () => {
@@ -87,6 +116,99 @@ describe("the audit row", () => {
       recordAuthEmailAttempt({ kind: "signup_confirmation", email: "f@example.com", success: true }),
     ).resolves.toBeUndefined();
     (supabaseAdmin as unknown as { from: unknown }).from = original;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE CLAIM — WHY A SECOND COPY OF THE SAME EMAIL IS WORSE THAN NOISE.
+//
+// A double-clicked signup used to send two confirmations and three clicks of
+// "resend" sent three. Each carries a DIFFERENT token, so opening any but the
+// newest gives "I got the email but the link doesn't work" — which is what
+// customers actually reported, alongside the repeated mail itself.
+//
+// The claim is an INSERT against a partial unique index (one row per kind, per
+// address, per minute — sql/auth-email-debounce.sql), so the exclusion happens
+// in the database and holds across processes, where two Vercel lambdas racing
+// on one double-click actually live. An in-process guard would not have.
+// ---------------------------------------------------------------------------
+
+describe("claiming the once-a-minute slot", () => {
+  it("writes the row as 'sending', not 'sent'", async () => {
+    // 'sent' up front would be a lie until the send returns, and — because
+    // 'failed' is outside the index — it would also lock someone who received
+    // NOTHING out of retrying for the rest of the minute.
+    expect(await claimAuthEmailSend("signup_confirmation", "a@example.com")).toBe(true);
+    expect(inserted[0]).toMatchObject({
+      table: "email_send_log",
+      campaign_type: "auth:signup_confirmation",
+      recipient_email: "a@example.com",
+      status: "sending",
+    });
+  });
+
+  it("refuses the send when the index says somebody already took the slot", async () => {
+    nextInsertError = { code: "23505" };
+    expect(await claimAuthEmailSend("password_reset", "b@example.com")).toBe(false);
+  });
+
+  it("FAILS OPEN on any other database error", async () => {
+    // An un-migrated database, or a transport blip, must not silence the
+    // confirmation email: a customer who never receives it is locked out of the
+    // account they just created, which is strictly worse than a duplicate.
+    nextInsertError = { code: "08006" };
+    expect(await claimAuthEmailSend("signup_confirmation", "c@example.com")).toBe(true);
+  });
+
+  it("debounces against the key it is given, not its own kind", async () => {
+    // A double-clicked signup does not take the same route twice: the second
+    // request finds the address registered and would send the RESEND. Two
+    // kinds, two slots, two emails from one double-click — unless they collide
+    // on one key, which is what this argument is for.
+    await claimAuthEmailSend("signup_confirmation_resend", "d@example.com", "signup_confirmation");
+    expect(inserted[0]).toMatchObject({
+      campaign_type: "auth:signup_confirmation",
+      template_key: "signup_confirmation_resend",
+    });
+  });
+});
+
+describe("closing the claim rather than writing a second row", () => {
+  it("updates the 'sending' row in place, leaving no duplicate", async () => {
+    existing.push({
+      id: 7, campaign_type: "auth:signup_confirmation",
+      recipient_email: "e@example.com", status: "sending",
+    });
+
+    await recordAuthEmailAttempt({ kind: "signup_confirmation", email: "e@example.com", success: true });
+
+    expect(inserted, "inserted a second row instead of closing the claim it already had").toHaveLength(0);
+    expect(existing[0]).toMatchObject({ status: "sent", reference_id: null });
+  });
+
+  it("closes a failed send as 'failed', which frees the slot immediately", async () => {
+    // 'failed' is outside the partial unique index on purpose. A customer whose
+    // email did not go must be able to ask again now, not in sixty seconds.
+    existing.push({
+      id: 8, campaign_type: "auth:password_reset",
+      recipient_email: "f@example.com", status: "sending",
+    });
+
+    await recordAuthEmailAttempt({
+      kind: "password_reset", email: "f@example.com", success: false, error: "domain not verified",
+    });
+
+    expect(existing[0]).toMatchObject({ status: "failed", reference_id: "domain not verified" });
+  });
+
+  it("still inserts when there is no claim to close", async () => {
+    // Not every recorded attempt is claimed — the Supabase fallback records one
+    // without ever taking a slot. Losing those rows would put the audit log
+    // back where it started.
+    await recordAuthEmailAttempt({
+      kind: "signup_confirmation_supabase_fallback", email: "g@example.com", success: true,
+    });
+    expect(inserted).toHaveLength(1);
   });
 });
 

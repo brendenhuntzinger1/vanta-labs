@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { sendEmail } from "@/lib/email/send";
-import { recordAuthEmailAttempt } from "@/lib/auth-email-audit";
+import { claimAuthEmailSend, recordAuthEmailAttempt } from "@/lib/auth-email-audit";
 import { passwordResetTemplate } from "@/lib/email/templates";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { createServerClient, supabaseAdmin } from "@/lib/supabase-server";
@@ -182,6 +182,15 @@ async function deliverResetEmail(email: string, redirectTo: string): Promise<voi
         fallbackActionLink: data.properties.action_link,
       }),
     });
+
+    // ONE RESET EMAIL PER ADDRESS PER MINUTE. A customer clicking "send reset
+    // link" twice used to get two, each with a different token — and on this
+    // path acting on the older one is precisely how somebody locked out stays
+    // locked out. The caller answers with the same generic message either way,
+    // which is honest: their email is on its way.
+    if (!(await claimAuthEmailSend("password_reset", email))) {
+      return;
+    }
 
     const result = await sendEmail({ to: email, ...template });
 

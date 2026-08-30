@@ -1,7 +1,8 @@
 import "server-only";
 
 import { sendEmail } from "@/lib/email/send";
-import { recordAuthEmailAttempt } from "@/lib/auth-email-audit";
+import { claimAuthEmailSend, recordAuthEmailAttempt } from "@/lib/auth-email-audit";
+import type { AuthEmailKind } from "@/lib/auth-email-audit";
 import { accountConfirmationResendTemplate } from "@/lib/email/templates";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { supabaseAdmin } from "@/lib/supabase-server";
@@ -119,9 +120,27 @@ export async function fallBackToSupabaseConfirmation(email: string, providerErro
  * identically whether or not this did anything, so there is no outcome worth
  * reporting upward.
  */
-export async function sendBrandedConfirmationResend(email: string, redirectTo: string): Promise<void> {
+export async function sendBrandedConfirmationResend(
+  email: string,
+  redirectTo: string,
+  /**
+   * Debounce against a different key than this function's own kind.
+   *
+   * The signup route calls this when the address is already registered and
+   * unconfirmed — i.e. on a double-click — and that email is, to the customer,
+   * the same confirmation the other request just sent. Passing
+   * "signup_confirmation" makes the two collide instead of both going out.
+   */
+  debounceAs?: AuthEmailKind,
+): Promise<void> {
   const found = await findUnconfirmedUser(email);
   if (!found) return;
+
+  // ONE PER MINUTE. Three impatient clicks of "resend" used to mint three magic
+  // links and send three emails, each carrying a DIFFERENT token — so acting on
+  // any but the newest produced "the link doesn't work". The claim is taken
+  // before the link is minted, so a losing caller costs nothing.
+  if (!(await claimAuthEmailSend("signup_confirmation_resend", email, debounceAs))) return;
 
   const link = await supabaseAdmin.auth.admin.generateLink({
     type: "magiclink",
