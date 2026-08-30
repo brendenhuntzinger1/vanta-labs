@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -96,23 +96,62 @@ describe("the audit row", () => {
 // point is that none of them was missed.
 // ---------------------------------------------------------------------------
 
-const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
-
 describe("every auth email path records its attempt", () => {
-  const paths = [
-    ["src/app/api/auth/signup/route.ts", "the first confirmation"],
-    ["src/lib/auth-confirmation-email.ts", "the resend, and the Supabase fallback"],
-    ["src/app/api/auth/password-reset/route.ts", "the one path a locked-out customer has"],
-  ] as const;
+  // THE HAND-WRITTEN LIST IS WHAT LET ONE THROUGH.
+  //
+  // This used to name three files and check each contained the call. It passed,
+  // and it was wrong: /api/account/email-change also sends an auth email and
+  // recorded nothing — despite "email_change" being a declared AuthEmailKind
+  // and exercised in the tests above. A list you maintain by hand only ever
+  // covers what you remembered.
+  //
+  // So the list is derived instead: every file that calls sendEmail AND is an
+  // auth path has to record its attempt. A new auth route fails this the day it
+  // is added rather than the day someone goes looking for a missing email.
+  const SRC = join(process.cwd(), "src");
 
-  for (const [path, why] of paths) {
-    it(`${path} — ${why}`, () => {
-      expect(read(path), `${path} does not record its send`).toContain("recordAuthEmailAttempt");
+  function walk(dir: string): string[] {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) return walk(full);
+      return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [full] : [];
+    });
+  }
+
+  /** An email a customer is BLOCKED by until it arrives. */
+  const AUTH_PATH = /(^|\/)(auth|account)(\/|-)|auth-confirmation-email/;
+
+  /**
+   * Comments are stripped before looking for the call.
+   *
+   * Three files DISCUSS sendEmail() in prose — the resend route, the auth form
+   * and auth-health.ts all explain what does and does not go through it — and a
+   * raw substring search flagged every one of them as an unlogged sender. A
+   * check with false positives gets its failures waved away, which is how the
+   * real one would have been waved away too.
+   */
+  const codeOf = (file: string) => readFileSync(file, "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
+  const authSenders = walk(SRC)
+    .filter((f) => /\bsendEmail\s*\(/.test(codeOf(f)) && AUTH_PATH.test(f.replace(SRC, "")))
+    .map((f) => f.replace(`${process.cwd()}/`, ""));
+
+  it("finds the auth senders at all, so an empty sweep cannot pass silently", () => {
+    expect(authSenders.length).toBeGreaterThanOrEqual(4);
+  });
+
+  for (const path of authSenders) {
+    it(`${path} records its send`, () => {
+      expect(codeOf(join(process.cwd(), path)),
+        `${path} sends an auth email and records nothing — a customer blocked by it `
+        + "cannot be told whether it was ever sent").toContain("recordAuthEmailAttempt");
     });
   }
 
   it("the signup route records the failure branch too, not just the happy one", () => {
-    const src = read("src/app/api/auth/signup/route.ts");
+    const src = readFileSync(join(process.cwd(), "src/app/api/auth/signup/route.ts"), "utf8");
     // Both the app's own send and the Supabase fallback leave a row, so an
     // operator can see WHICH sender the customer's link came from.
     expect(src).toContain("signup_confirmation_supabase_fallback");

@@ -4,6 +4,7 @@ import { brandedConfirmUrl } from "@/lib/auth-confirm-link";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getSiteUrl } from "@/lib/env";
 import { sendEmail } from "@/lib/email/send";
+import { recordAuthEmailAttempt } from "@/lib/auth-email-audit";
 import { emailChangeConfirmationTemplate } from "@/lib/email/templates";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { checkRateLimit } from "@/lib/rate-limit";
@@ -116,6 +117,17 @@ export async function POST(request: Request) {
     });
 
     const result = await sendEmail({ to: newEmail, ...template });
+
+    // Recorded like the other auth sends — see lib/auth-email-audit.ts. This
+    // one is logged against the NEW address, because that is the mailbox the
+    // link was sent to and the one the customer will say never received it.
+    await recordAuthEmailAttempt({
+      kind: "email_change",
+      email: newEmail,
+      success: result.success,
+      error: result.error,
+    });
+
     if (!result.success) {
       // The pending change is recorded on the auth row either way, so the
       // customer is mid-change with nothing in their inbox. Deliberately NOT
