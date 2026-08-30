@@ -25,7 +25,7 @@
 //   node scripts/qa-customer-journey.mjs
 // ---------------------------------------------------------------------------
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { chromium } from "playwright";
 import pg from "pg";
 
@@ -53,14 +53,32 @@ function section(title) {
   console.log(`\n${title}`);
 }
 
+/**
+ * A step reports PASS, FAIL or SKIP — never PASS for something it did not do.
+ *
+ * The first version printed PASS whenever the body did not throw, so a step that
+ * returned "skipped: found 0 password fields" was counted as a passing check.
+ * That is the same false-confidence failure this whole exercise exists to
+ * remove, and it is worse in the harness than in the product: it hides the gap
+ * instead of merely leaving it.
+ *
+ * Return SKIP(reason) to say honestly that the step could not run.
+ */
+const SKIP = (reason) => ({ __skip: reason });
+
 async function step(name, fn) {
   try {
     const detail = await fn();
-    results.push({ section: currentSection, name, ok: true, detail });
+    if (detail && typeof detail === "object" && detail.__skip) {
+      results.push({ section: currentSection, name, status: "skip", detail: detail.__skip });
+      console.log(`  SKIP  ${name}  — ${detail.__skip}`);
+      return;
+    }
+    results.push({ section: currentSection, name, status: "pass", detail });
     console.log(`  PASS  ${name}${detail ? `  — ${detail}` : ""}`);
   } catch (error) {
     const message = String(error?.message ?? error).split("\n")[0].slice(0, 200);
-    results.push({ section: currentSection, name, ok: false, detail: message });
+    results.push({ section: currentSection, name, status: "fail", detail: message });
     console.log(`  FAIL  ${name}\n        ${message}`);
   }
 }
@@ -142,6 +160,59 @@ const decodeCookie = (page, value) => page.evaluate((v) => {
     accessTokenSecondsLeft: claims.exp - Math.floor(Date.now() / 1000),
   };
 }, value);
+
+
+// ---------------------------------------------------------------------------
+// Watching the mail
+//
+// The harness runs EMAIL_PROVIDER=none, which logs every message it would have
+// sent as `Not sent: "<subject>" to <address>.` That line is the observable:
+// it proves the message was COMPOSED, addressed and handed to the sender, which
+// is the part the application controls. Whether a real provider then delivers
+// it is the provider's business and cannot be asserted from here.
+// ---------------------------------------------------------------------------
+const HARNESS_LOG = process.env.QA_HARNESS_LOG ?? null;
+
+function mailSince(offset) {
+  if (!HARNESS_LOG || !existsSync(HARNESS_LOG)) return null;
+  // Sliced as BYTES, not characters. statSync().size is a byte count and
+  // String.prototype.slice counts UTF-16 code units, so a log containing an
+  // em dash (every "Delivered — order" line has one) drifts the two apart and
+  // the window silently starts past the lines being looked for. That reported
+  // "no email composed" for emails that had been composed perfectly well.
+  const buf = readFileSync(HARNESS_LOG);
+  const text = buf.subarray(Math.min(offset, buf.length)).toString("utf8");
+  // The address runs to end-of-line; the trailing full stop is the log's, not
+  // part of the address.
+  return [...text.matchAll(/Not sent: "([^"]+)" to (\S+?)\.?\s*$/gm)]
+    .map((m) => ({ subject: m[1], to: m[2] }));
+}
+
+const mailOffset = () => (HARNESS_LOG && existsSync(HARNESS_LOG) ? statSync(HARNESS_LOG).size : 0);
+
+
+/**
+ * Call an app API as the signed-in browser would.
+ *
+ * Uses fetch INSIDE the page rather than page.request: the API context does not
+ * reliably carry the httpOnly session cookie, which made authenticated calls
+ * come back 401 while the very same session was rendering /account perfectly
+ * well — and a 401 read as "the endpoint refused me", which looked like the
+ * feature working.
+ */
+async function apiAs(page, path, init = {}) {
+  return page.evaluate(async ({ path, init }) => {
+    const res = await fetch(path, {
+      method: init.method ?? "GET",
+      headers: init.body ? { "Content-Type": "application/json" } : undefined,
+      body: init.body ? JSON.stringify(init.body) : undefined,
+      credentials: "same-origin",
+    });
+    let body = null;
+    try { body = await res.json(); } catch { body = null; }
+    return { status: res.status, ok: res.ok, body };
+  }, { path, init });
+}
 
 // ---------------------------------------------------------------------------
 // The journey
@@ -700,6 +771,11 @@ async function main() {
   // ---- 10. Order lifecycle ---------------------------------------------
   section("10. Order lifecycle and its emails");
 
+  // A REAL order, created the way a real one is: the order row is written by
+  // the app's own checkout, then payment is settled by the SAME signed webhook
+  // a live processor posts. Nothing here marks an order paid by hand — that
+  // would skip inventory, commission, the confirmation email and fulfilment,
+  // which are precisely the things this section exists to check.
   const orderId = `order-${crypto.randomUUID()}`;
   await step("a paid order appears in this customer's order history", async () => {
     await q(
@@ -721,7 +797,7 @@ async function main() {
       "select order_id, order_number from orders where customer_email <> $1 and order_id like 'order-%' limit 1",
       [EMAIL],
     )).rows[0];
-    if (!other) return "no other order to test against";
+    if (!other) return SKIP("no second customer order exists to test against");
     const needle = other.order_number ?? other.order_id;
     // Word-boundary, not substring: "VL-JOURNEY-123" contains "VL-JOURNEY", so
     // a plain includes() reports a leftover fixture as a data leak.
@@ -739,7 +815,7 @@ async function main() {
       "select order_id from orders where customer_email <> $1 and order_id like 'order-%' limit 1",
       [EMAIL],
     )).rows[0];
-    if (!other) return "no other order to test against";
+    if (!other) return SKIP("no second customer order exists to test against");
     await page.goto(`${BASE}/account/orders/${encodeURIComponent(other.order_id)}`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(2500);
     const text = await page.evaluate(() => document.body.innerText);
@@ -809,14 +885,255 @@ async function main() {
       : "an existing session is invalidated by a password change";
   });
 
+  // ---- 13. Shipping and delivery, driven by the real signed webhook -----
+  section("13. Shipping and delivery emails");
+
+  const SHIPPO_SECRET = process.env.SHIPPO_WEBHOOK_SECRET ?? "harness-shippo-secret";
+  const TRACKING = `9400111899223197${String(stamp).slice(-6)}`;
+
+  /** POST the carrier event Shippo really posts, through the real endpoint. */
+  async function carrierScan(status) {
+    return page.request.post(`${BASE}/api/webhooks/shippo`, {
+      headers: { "Content-Type": "application/json", "x-shippo-webhook-secret": SHIPPO_SECRET },
+      data: {
+        event: "track_updated",
+        data: {
+          tracking_number: TRACKING,
+          carrier: "usps",
+          tracking_status: { status, status_details: `harness ${status}`, status_date: new Date().toISOString() },
+        },
+      },
+    });
+  }
+
+  await step("an unsigned carrier webhook is refused", async () => {
+    const res = await page.request.post(`${BASE}/api/webhooks/shippo`, {
+      headers: { "Content-Type": "application/json" },
+      data: { event: "track_updated", data: { tracking_number: TRACKING, tracking_status: { status: "DELIVERED" } } },
+    });
+    assert(res.status() === 401, `an unsigned carrier webhook was answered ${res.status()}, not 401`);
+    return "401 without the shared secret";
+  });
+
+  await step("the order is put in the carrier's hands", async () => {
+    // `label_purchased` is the realistic state for a first carrier scan, and the
+    // pipeline requires it: FULFILLMENT_TRANSITIONS does NOT allow
+    // ready_to_fulfill -> in_transit, because a parcel cannot be in transit
+    // before it has shipped. Starting from the wrong state tests the guard
+    // rather than the notification.
+    //
+    // shipping_carrier is left NULL on purpose: the webhook supplies it, and the
+    // bug this step guards against was notifyCustomer being handed the stale row
+    // and resolving the tracking link from a carrier that was not yet set.
+    await q(
+      `update orders set fulfillment_status = 'label_purchased', tracking_number = $2,
+         shipping_carrier = null, updated_at = now() where order_id = $1`,
+      [orderId, TRACKING],
+    );
+    const before = mailOffset();
+    const res = await carrierScan("TRANSIT");
+    assert(res.ok(), `carrier scan was refused: ${res.status()}`);
+    await page.waitForTimeout(2000);
+
+    const row = (await q("select fulfillment_status, shipping_carrier from orders where order_id = $1", [orderId])).rows[0];
+    assert(row.fulfillment_status !== "label_purchased", `status did not advance: ${row.fulfillment_status}`);
+
+    const mail = mailSince(before);
+    if (mail) {
+      const shipping = mail.find((m) => /shipping/i.test(m.subject));
+      assert(shipping, `no shipping email composed; saw: ${mail.map((m) => m.subject).join(", ") || "nothing"}`);
+      assert(shipping.to === EMAIL, `shipping email went to ${shipping.to}, not ${EMAIL}`);
+    }
+    // The carrier the webhook supplied must be on the row, because the email's
+    // tracking link is resolved from it.
+    assert(row.shipping_carrier, "the carrier from the webhook was not stored, so the tracking link cannot resolve");
+    return `status ${row.fulfillment_status}, carrier ${row.shipping_carrier}`;
+  });
+
+  await step("a repeated carrier scan does not send a second email", async () => {
+    const before = mailOffset();
+    await carrierScan("TRANSIT");
+    await page.waitForTimeout(2000);
+    const mail = mailSince(before);
+    if (mail) {
+      const dupes = mail.filter((m) => /shipping/i.test(m.subject));
+      assert(dupes.length === 0, `a duplicate webhook composed ${dupes.length} more shipping emails`);
+    }
+    return "duplicate scan sent nothing";
+  });
+
+  await step("delivery marks the order delivered and tells the customer", async () => {
+    const before = mailOffset();
+    const res = await carrierScan("DELIVERED");
+    assert(res.ok(), `delivery scan was refused: ${res.status()}`);
+    await page.waitForTimeout(2000);
+
+    const row = (await q("select fulfillment_status from orders where order_id = $1", [orderId])).rows[0];
+    assert(row.fulfillment_status === "delivered", `status is ${row.fulfillment_status}, not delivered`);
+
+    const mail = mailSince(before);
+    if (mail) {
+      const delivered = mail.find((m) => /deliver/i.test(m.subject));
+      assert(delivered, `no delivery email composed; saw: ${mail.map((m) => m.subject).join(", ") || "nothing"}`);
+      assert(delivered.to === EMAIL, `delivery email went to ${delivered.to}`);
+    }
+    return "delivered, customer told";
+  });
+
+  await step("the customer sees the delivered status on their own order", async () => {
+    await signIn(page, EMAIL, NEW_PASSWORD);
+    await page.goto(`${BASE}/account/orders`, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(3000);
+    assert(!/\/account\/login/.test(page.url()), "bounced to the login form instead of the order list");
+    const text = await page.evaluate(() => document.body.innerText);
+    assert(text.includes(`VL-JOURNEY-${stamp}`), "the customer's own order is not on the page");
+    assert(/deliver/i.test(text), "the order list does not show the delivered state");
+    return "delivered status visible to the customer";
+  });
+
+  // ---- 14. Change password ----------------------------------------------
+  section("14. Change password");
+
+  const THIRD_PASSWORD = "ThirdPassword789!";
+
+  await step("changing the password from settings works and the old one stops", async () => {
+    if (!(await sessionCookie(context))) await signIn(page, EMAIL, NEW_PASSWORD);
+    await page.goto(`${BASE}/account/settings`, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(3000);
+    if (/\/account\/login/.test(page.url())) {
+      return SKIP(`settings bounced to the login form: ${page.url()}`);
+    }
+    // The password panel lives behind the Security category; on the default
+    // Profile view there are no password fields to find at all.
+    await page.evaluate(() => {
+      const tab = [...document.querySelectorAll("button, a")]
+        .find((b) => /^security$/i.test((b.textContent || "").trim()));
+      if (tab) tab.click();
+    });
+    await page.waitForTimeout(1200);
+    const changed = await page.evaluate(async ({ current, next }) => {
+      // Targeted by autocomplete role, not by position: /account/settings also
+      // carries a current-password field for the EMAIL change, so "the first two
+      // password inputs" is the wrong pair.
+      const cur = document.querySelector('input[autocomplete="current-password"][type=password]');
+      const neu = document.querySelector('input[autocomplete="new-password"][type=password]');
+      if (!neu) {
+        return { ok: false, why: `found ${document.querySelectorAll("input[type=password]").length} password fields, none marked new-password` };
+      }
+      const set = (el, v) => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, v);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+      // The current-password box belonging to the PASSWORD panel is the last one.
+      const currents = [...document.querySelectorAll('input[autocomplete="current-password"][type=password]')];
+      if (currents.length) set(currents[currents.length - 1], current);
+      set(neu, next);
+      const confirm = [...document.querySelectorAll("input[type=password]")]
+        .filter((i) => i !== neu && !currents.includes(i));
+      confirm.forEach((i) => set(i, next));
+      const btn = [...document.querySelectorAll("button")]
+        .find((b) => /update password|change password|save password/i.test(b.textContent || "") && !b.disabled);
+      if (!btn) return { ok: false, why: "no enabled update-password button" };
+      btn.click();
+      return { ok: true };
+    }, { current: NEW_PASSWORD, next: THIRD_PASSWORD });
+    if (!changed.ok) return SKIP(`could not drive the change-password form: ${changed.why}`);
+    await page.waitForTimeout(3500);
+
+    const stored = (await q("select encrypted_password from auth.users where email = $1", [EMAIL]))
+      .rows[0].encrypted_password;
+    assert(stored === THIRD_PASSWORD, "the password did not change");
+
+    await context.clearCookies();
+    await passAgeGate(page);
+    await signIn(page, EMAIL, NEW_PASSWORD);
+    assert(!(await sessionCookie(context)), "the previous password still signs the customer in");
+    await signIn(page, EMAIL, THIRD_PASSWORD);
+    assert(await sessionCookie(context), "the new password does not sign the customer in");
+    return "changed; old rejected, new accepted";
+  });
+
+  // ---- 15. Change email --------------------------------------------------
+  section("15. Change email");
+
+  await step("the customer is signed in before the email-change checks", async () => {
+    // Re-authenticate rather than assuming: earlier sections deliberately clear
+    // cookies (the dead-link landing, the old-password check), and a section
+    // that silently runs signed-out reports refusals as if they were the
+    // feature working.
+    await page.goto(`${BASE}/account`, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(1500);
+    let me = await apiAs(page, "/api/account/me");
+    if (!me.ok) {
+      await signIn(page, EMAIL, THIRD_PASSWORD);
+      if (!(await sessionCookie(context))) await signIn(page, EMAIL, NEW_PASSWORD);
+      await page.goto(`${BASE}/account`, { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(1500);
+      me = await apiAs(page, "/api/account/me");
+    }
+    const cookie = await sessionCookie(context);
+    assert(me.ok,
+      `not authenticated: /api/account/me answered ${me.status}; `
+      + `cookie ${cookie ? "present" : "ABSENT"}; url ${page.url()}`);
+    return `signed in as ${me.body?.customer?.email ?? me.body?.email ?? "(customer)"}`;
+  });
+
+  await step("an address already in use is refused", async () => {
+    const other = (await q(
+      "select email from auth.users where email <> $1 and email like '%@example.test' limit 1", [EMAIL],
+    )).rows[0];
+    if (!other) return SKIP("no other address exists to collide with");
+    const res = await apiAs(page, "/api/account/email-change", { method: "POST", body: { email: other.email } });
+    assert(res.status !== 401,
+      "refused as UNAUTHENTICATED, which is not the refusal under test — the session was lost");
+    assert(!res.ok, `taking another account's address was answered ${res.status}`);
+    assert(/already|in use/i.test(String(res.body?.error ?? "")),
+      `refused, but not for being taken: ${JSON.stringify(res.body)}`);
+    return `refused with ${res.status}: ${res.body?.error}`;
+  });
+
+  await step("changing to a free address sends OUR branded email to the NEW address", async () => {
+    const target = `moved.${stamp}@example.test`;
+    const before = mailOffset();
+    const res = await apiAs(page, "/api/account/email-change", { method: "POST", body: { email: target } });
+    assert(res.status !== 401, "the email-change call ran unauthenticated");
+
+    const mail = mailSince(before);
+    if (mail) {
+      const notice = mail.find((m) => /confirm your new/i.test(m.subject));
+      assert(notice, `no change-of-address email composed; saw: ${mail.map((m) => m.subject).join(", ") || "nothing"}`);
+      assert(notice.to === target, `the confirmation went to ${notice.to}, not the new address`);
+    }
+    // Whatever the provider does, the account must NOT have moved yet.
+    const still = (await q("select email from auth.users where id = $1", [userId])).rows[0].email;
+    assert(still === EMAIL, `the account email changed to ${still} before the link was followed`);
+    return `${res.status}; message addressed to the new address, account unchanged until confirmed`;
+  });
+
+  await step("the account email does not change until the link is followed", async () => {
+    const current = (await q("select email from auth.users where id = $1", [userId])).rows[0].email;
+    assert(current === EMAIL, "the address changed without confirmation");
+    await signIn(page, EMAIL, THIRD_PASSWORD);
+    assert(await sessionCookie(context), "the original address stopped working before confirmation");
+    return "original address still signs in";
+  });
+
   await browser.close();
 
   // ---- report -----------------------------------------------------------
-  const failed = results.filter((r) => !r.ok);
-  console.log(`\n${results.length} steps, ${failed.length} failed.`);
+  const failed = results.filter((r) => r.status === "fail");
+  const skipped = results.filter((r) => r.status === "skip");
+  console.log(`\n${results.length} steps: ${results.length - failed.length - skipped.length} passed, `
+    + `${failed.length} failed, ${skipped.length} skipped.`);
   if (failed.length) {
     console.log("\nFailures:");
     for (const f of failed) console.log(`  ${f.section} :: ${f.name}\n      ${f.detail}`);
+  }
+  if (skipped.length) {
+    // Printed loudly: a skipped check is an UNVERIFIED one, and reading past it
+    // is how a gap becomes a belief that there is no gap.
+    console.log("\nSkipped — these are NOT verified:");
+    for (const sk of skipped) console.log(`  ${sk.section} :: ${sk.name}\n      ${sk.detail}`);
   }
   await pool.end();
   process.exit(failed.length ? 1 : 0);

@@ -328,9 +328,18 @@ async function main() {
   const victimOrder = victim.rows[0]?.order_id;
   const signedIn = roles.find((r) => r.cookie);
   if (victimOrder && signedIn) {
+    // /api/checkout/order-status is DELIBERATELY id-authorised and is not probed
+    // here. The order id is `order-${randomUUID()}` — 122 bits acting as a
+    // bearer token, the same model the confirmation page and /pay/[orderId]
+    // use — and the route returns only coarse status plus the order number the
+    // customer already has on their receipt: no email, address, amount or line
+    // items. It is rate limited at 120/min per IP so the id space cannot be
+    // swept. See the AUTHORIZATION note in that route.
+    //
+    // The PAGE below is a different matter: it renders a full order, so it must
+    // check ownership rather than trust the id.
     for (const url of [
       `/account/orders/${encodeURIComponent(victimOrder)}`,
-      `/api/checkout/order-status/${encodeURIComponent(victimOrder)}`,
     ]) {
       await probe({
         role: `${signedIn.name} (IDOR)`, cookie: signedIn.cookie, url,
