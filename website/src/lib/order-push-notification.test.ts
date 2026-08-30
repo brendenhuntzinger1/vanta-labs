@@ -20,6 +20,10 @@ const base: OrderPushInput = {
   profit: 41.2,
   profitStatus: "estimated",
   itemCount: 3,
+  items: [
+    { name: "Alpha Peptide 10mg", quantity: 2 },
+    { name: "Bac Water 30ml", quantity: 1 },
+  ],
   placedAt: "2026-08-26T18:42:11.000Z",
   siteUrl: "https://vantalabs.com",
 };
@@ -27,8 +31,19 @@ const base: OrderPushInput = {
 const message = (over: Partial<OrderPushInput> = {}) => buildOrderPushPayload({ ...base, ...over }).message;
 
 describe("the notification message", () => {
-  it("reads as one line an operator can act on without opening anything", () => {
-    expect(message()).toBe("Order VL-1042 — Jordan M. — $89.00 — profit $41.20 (est.)");
+  it("gives the operator the four things they asked for: who, how much, what, and when", () => {
+    expect(message()).toBe(
+      [
+        "Jordan Mitchell — $89.00",
+        "2× Alpha Peptide 10mg, 1× Bac Water 30ml",
+        "profit $41.20 (est.)",
+        "Aug 26, 2026, 2:42 PM ET",
+      ].join("\n"),
+    );
+  });
+
+  it("puts the order number in the title, where a phone shows it first", () => {
+    expect(buildOrderPushPayload(base).title).toBe("New Order VL-1042");
   });
 
   it("marks an estimated profit so it is never mistaken for the settled figure", () => {
@@ -47,46 +62,124 @@ describe("the notification message", () => {
     // A missing profit must not cost the operator the notification itself —
     // knowing an order came in matters more than knowing what it earned.
     const payload = buildOrderPushPayload({ ...base, profit: null, profitStatus: null });
-    expect(payload.message).toBe("Order VL-1042 — Jordan M. — $89.00");
+    expect(payload.message).toBe(
+      ["Jordan Mitchell — $89.00", "2× Alpha Peptide 10mg, 1× Bac Water 30ml", "Aug 26, 2026, 2:42 PM ET"].join("\n"),
+    );
     expect(payload.profit).toBe("");
     expect(payload.profit_status).toBe("");
+  });
+
+  it("names the order in the body when there is no order number to put in the title", () => {
+    const payload = buildOrderPushPayload({ ...base, orderNumber: null });
+    expect(payload.title).toBe("New Order");
+    expect(payload.message.split("\n")[0]).toBe("Order ord_a1b2c3d4");
+  });
+});
+
+describe("when the order was placed", () => {
+  // Vercel runs UTC. A bare toLocaleString would have told the operator an
+  // evening order happened tomorrow, so the time goes through the same pinned
+  // display zone every other date in the app uses.
+  it("reports the time in the store's zone, not the server's", () => {
+    // 18:42Z is 2:42 PM in New York, not 6:42 PM.
+    expect(message()).toContain("Aug 26, 2026, 2:42 PM ET");
+  });
+
+  it("does not report a late-evening order as tomorrow", () => {
+    // 02:05Z on the 15th is 9:05 PM on the 14th in New York. Getting this wrong
+    // is the exact bug format-date.ts exists to prevent.
+    expect(message({ placedAt: "2026-01-15T02:05:00.000Z" })).toContain("Jan 14, 2026, 9:05 PM ET");
+  });
+
+  it("still sends the machine-readable instant for a Zap to filter on", () => {
+    const payload = buildOrderPushPayload(base);
+    expect(payload.placed_at).toBe("2026-08-26T18:42:11.000Z");
+    expect(payload.placed_at_display).toBe("Aug 26, 2026, 2:42 PM ET");
+  });
+
+  it("drops the time rather than printing a broken one", () => {
+    const payload = buildOrderPushPayload({ ...base, placedAt: "not a date" });
+    expect(payload.placed_at_display).toBe("");
+    expect(payload.message).not.toContain("Invalid");
+  });
+});
+
+describe("what was bought", () => {
+  it("lists each line as quantity and product name", () => {
+    expect(buildOrderPushPayload(base).items).toBe("2× Alpha Peptide 10mg, 1× Bac Water 30ml");
+  });
+
+  it("keeps a long order readable instead of flooding the lock screen", () => {
+    // Pushover truncates a long message, and a truncated one can lose the
+    // profit line below it. Cap the list and say how many were left out.
+    const many = Array.from({ length: 9 }, (_, i) => ({ name: `Product ${i + 1}`, quantity: 1 }));
+    const payload = buildOrderPushPayload({ ...base, items: many, itemCount: 9 });
+    expect(payload.items).toBe("1× Product 1, 1× Product 2, 1× Product 3, 1× Product 4, +5 more");
+  });
+
+  it("shortens a product name that would otherwise dominate the alert", () => {
+    const payload = buildOrderPushPayload({
+      ...base,
+      items: [{ name: "A".repeat(60), quantity: 1 }],
+    });
+    expect(payload.items).toBe(`1× ${"A".repeat(39)}…`);
+  });
+
+  it("skips a line with no product name rather than printing 'undefined'", () => {
+    const payload = buildOrderPushPayload({
+      ...base,
+      items: [{ name: null, quantity: 2 }, { name: "  ", quantity: 1 }, { name: "Real Product", quantity: 1 }],
+    });
+    expect(payload.items).toBe("1× Real Product");
+  });
+
+  it("omits the items line entirely when nothing is known about the contents", () => {
+    const payload = buildOrderPushPayload({ ...base, items: [] });
+    expect(payload.items).toBe("");
+    expect(payload.message).toBe(
+      ["Jordan Mitchell — $89.00", "profit $41.20 (est.)", "Aug 26, 2026, 2:42 PM ET"].join("\n"),
+    );
   });
 });
 
 describe("how much of the customer is sent to Zapier and Pushover", () => {
-  it("reduces the surname to an initial", () => {
-    // Zapier task history and the Pushover message log are two third-party
-    // stores outside our control. The order number is the real key; the name is
-    // only there so the operator recognises the order at a glance.
-    expect(buildOrderPushPayload(base).customer).toBe("Jordan M.");
+  it("sends the customer's full name, as the operator asked", () => {
+    expect(buildOrderPushPayload(base).customer).toBe("Jordan Mitchell");
   });
 
-  it("takes the initial from the last name, not the middle one", () => {
-    expect(buildOrderPushPayload({ ...base, customerName: "Jordan Lee Mitchell" }).customer).toBe("Jordan M.");
-  });
-
-  it("leaves a single-word name alone rather than inventing an initial", () => {
-    expect(buildOrderPushPayload({ ...base, customerName: "Jordan" }).customer).toBe("Jordan");
+  it("keeps every part of a longer name instead of guessing which one is the surname", () => {
+    // The old redaction turned "Private Lillian Hanze" into "Private H." — it
+    // took "Private" for a given name and initialled the wrong word.
+    expect(buildOrderPushPayload({ ...base, customerName: "Private Lillian Hanze" }).customer).toBe(
+      "Private Lillian Hanze",
+    );
+    expect(buildOrderPushPayload({ ...base, customerName: "Jordan Lee Mitchell" }).customer).toBe("Jordan Lee Mitchell");
   });
 
   it("does not mangle a name it does not understand", () => {
     // No title-casing, no reordering. Whatever the customer typed is what they
-    // are called; the only edit is dropping the surname.
-    expect(buildOrderPushPayload({ ...base, customerName: "  o'brien  MCDONALD " }).customer).toBe("o'brien M.");
+    // are called: title-casing turns "o'brien" into "O'Brien" and "McDonald"
+    // into "Mcdonald", getting someone's own name wrong to look tidier.
+    expect(buildOrderPushPayload({ ...base, customerName: "  o'brien  MCDONALD " }).customer).toBe("o'brien MCDONALD");
+  });
+
+  it("caps a pathological name rather than letting it push the order off the screen", () => {
+    const payload = buildOrderPushPayload({ ...base, customerName: "Z".repeat(200) });
+    expect(payload.customer).toBe(`${"Z".repeat(79)}…`);
   });
 
   it("omits the customer entirely when there is no name", () => {
     for (const customerName of [null, "", "   "]) {
       const payload = buildOrderPushPayload({ ...base, customerName });
       expect(payload.customer).toBe("");
-      expect(payload.message).toBe("Order VL-1042 — $89.00 — profit $41.20 (est.)");
+      expect(payload.message.split("\n")[0]).toBe("$89.00");
     }
   });
 
-  it("never sends the email address or the shipping address", () => {
-    // Enforced by the input type having nowhere to put them. This asserts the
-    // absence at the payload boundary so a later "just add the email" is a
-    // deliberate decision and not an accident.
+  it("still never sends the email address or the shipping address", () => {
+    // The name is now sent in full, which makes this boundary MORE important,
+    // not less: contact details and location still have nowhere to live in the
+    // payload, so adding one stays a deliberate decision.
     const keys = Object.keys(buildOrderPushPayload(base));
     expect(keys).not.toContain("email");
     expect(keys).not.toContain("address");
@@ -100,24 +193,31 @@ describe("the field contract Zapier maps against", () => {
     // numerically ("only alert above $200"). The symbols live in `message`.
     expect(buildOrderPushPayload(base)).toEqual({
       event: "new_order",
-      title: "New Order",
-      message: "Order VL-1042 — Jordan M. — $89.00 — profit $41.20 (est.)",
+      title: "New Order VL-1042",
+      message: [
+        "Jordan Mitchell — $89.00",
+        "2× Alpha Peptide 10mg, 1× Bac Water 30ml",
+        "profit $41.20 (est.)",
+        "Aug 26, 2026, 2:42 PM ET",
+      ].join("\n"),
       order_number: "VL-1042",
       order_id: "ord_a1b2c3d4",
-      customer: "Jordan M.",
+      customer: "Jordan Mitchell",
       total: "89.00",
       profit: "41.20",
       profit_status: "estimated",
       item_count: "3",
+      items: "2× Alpha Peptide 10mg, 1× Bac Water 30ml",
       url: "https://vantalabs.com/admin/orders/ord_a1b2c3d4",
       placed_at: "2026-08-26T18:42:11.000Z",
+      placed_at_display: "Aug 26, 2026, 2:42 PM ET",
     });
   });
 
   it("falls back to the order id when the order has no number yet", () => {
     const payload = buildOrderPushPayload({ ...base, orderNumber: null });
     expect(payload.order_number).toBe("");
-    expect(payload.message).toBe("Order ord_a1b2c3d4 — Jordan M. — $89.00 — profit $41.20 (est.)");
+    expect(payload.message).toContain("Order ord_a1b2c3d4");
   });
 
   it("sends an empty link rather than a broken one when the site url is unset", () => {
@@ -152,7 +252,13 @@ vi.mock("@/lib/supabase-server", () => ({
       select: () => ({
         eq: () =>
           table === "order_items"
-            ? Promise.resolve({ data: [{ quantity: 2 }, { quantity: 1 }], error: null })
+            ? Promise.resolve({
+                data: [
+                  { product_name: "Alpha Peptide 10mg", quantity: 2 },
+                  { product_name: "Bac Water 30ml", quantity: 1 },
+                ],
+                error: null,
+              })
             : { maybeSingle: () => Promise.resolve({ data: dbOrder, error: null }) },
       }),
     }),
@@ -162,9 +268,9 @@ vi.mock("@/lib/supabase-server", () => ({
 let profitResult: Promise<unknown> = Promise.resolve({ profit: 41.2, profitStatus: "estimated" });
 vi.mock("@/lib/admin-profit", () => ({ getOrderProfit: () => profitResult }));
 
-const alerts: Array<{ type: string; severity: string }> = [];
+const alerts: Array<{ type: string; severity: string; dedupeWindowMs?: number }> = [];
 vi.mock("@/lib/monitoring", () => ({
-  recordSystemAlert: async (input: { type: string; severity: string }) => {
+  recordSystemAlert: async (input: { type: string; severity: string; dedupeWindowMs?: number }) => {
     alerts.push(input);
   },
 }));
@@ -198,10 +304,18 @@ describe("sending", () => {
     expect(init.headers["Content-Type"]).toBe("application/json");
     expect(JSON.parse(init.body)).toMatchObject({
       event: "new_order",
-      message: "Order VL-1042 — Jordan M. — $89.00 — profit $41.20 (est.)",
+      title: "New Order VL-1042",
+      customer: "Jordan Mitchell",
+      items: "2× Alpha Peptide 10mg, 1× Bac Water 30ml",
       item_count: "3",
+      placed_at_display: "Aug 26, 2026, 2:42 PM ET",
       url: "https://vantalabs.com/admin/orders/ord_a1b2c3d4",
     });
+  });
+
+  it("reads the product names out of the order, not just the quantities", async () => {
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).message).toContain("2× Alpha Peptide 10mg");
   });
 
   it("gives the request a deadline", async () => {
@@ -212,16 +326,28 @@ describe("sending", () => {
     expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
   });
 
-  it("does nothing at all — not even a log line — when no webhook is configured", async () => {
+  it("raises an alert when a paid order arrives and no webhook is configured", async () => {
+    // This is the failure that hid itself. Two real orders were paid while
+    // ORDER_PUSH_WEBHOOK_URL was unset; the module returned silently, so
+    // nothing on /admin/status ever said the phone had stopped ringing.
     for (const value of ["", "   "]) {
+      alerts.length = 0;
       vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", value);
       await expect(sendOrderPushNotification("ord_a1b2c3d4")).resolves.toEqual({
         sent: false,
         reason: "not_configured",
       });
+      expect(alerts[0]).toMatchObject({ type: "order_push_not_configured", severity: "warning" });
     }
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(alerts).toHaveLength(0);
+  });
+
+  it("nags once a day, not once an order", async () => {
+    // Without a dedupe window a busy day writes one identical alert per order
+    // and buries every other alert on the status page.
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "");
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(alerts[0].dedupeWindowMs).toBe(24 * 60 * 60 * 1000);
   });
 
   it("refuses to send over http rather than putting the URL on the wire in the clear", async () => {
@@ -264,10 +390,10 @@ describe("what happens when things break", () => {
   it("survives the profit engine failing, and still tells the operator about the order", async () => {
     profitResult = Promise.reject(new Error("profit settings unavailable"));
     await expect(sendOrderPushNotification("ord_a1b2c3d4")).resolves.toEqual({ sent: true });
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
-      message: "Order VL-1042 — Jordan M. — $89.00",
-      profit: "",
-    });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.profit).toBe("");
+    expect(body.message).toContain("Jordan Mitchell — $89.00");
+    expect(body.message).not.toContain("profit");
   });
 
   it("sends nothing when the order cannot be found", async () => {

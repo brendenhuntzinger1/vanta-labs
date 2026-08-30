@@ -163,7 +163,7 @@ describe("a real paid order", () => {
     // whole point is that the phone reports what the store actually charged.
     expect(pushes[0]).toMatchObject({
       event: "new_order",
-      title: "New Order",
+      title: `New Order ${order.order_number}`,
       order_id: orderId,
       total: paid,
       item_count: "2",
@@ -173,13 +173,33 @@ describe("a real paid order", () => {
     expect(pushes[0].message).toContain("profit ");
   });
 
-  it("reduces the shopper's name to a first name and an initial", async () => {
+  it("names the product that was actually bought, read back out of the order", async () => {
+    // The operator asked to see what was in the order. Reading the name from
+    // the order_items rows the checkout actually wrote is the only way to know
+    // the notification describes THIS order rather than a hardcoded string.
+    await buyAndPay(2);
+    expect(pushes[0].items).toBe("2× Alpha Peptide 10mg");
+    expect(pushes[0].message).toContain("2× Alpha Peptide 10mg");
+  });
+
+  it("stamps the time in the store's zone so an evening order is not dated tomorrow", async () => {
     await buyAndPay(1);
-    // "Alpha Buyer" went through checkout. Only "Alpha B." may leave the app.
-    expect(pushes[0].customer).toBe("Alpha B.");
-    expect(JSON.stringify(pushes[0])).not.toContain("Buyer");
+    // Vercel runs UTC; the display zone is Eastern. Asserting the suffix and a
+    // real parse is enough — format-date.test.ts owns the zone arithmetic.
+    expect(pushes[0].placed_at_display).toMatch(/ ET$/);
+    expect(Number.isNaN(Date.parse(pushes[0].placed_at))).toBe(false);
+  });
+
+  it("sends the shopper's full name, and still no way to contact or find them", async () => {
+    await buyAndPay(1);
+    // The operator chose the full name over the old "Alpha B." redaction. That
+    // is the ONLY thing that widened: the email address and the shipping
+    // address must still be absent from the payload entirely.
+    expect(pushes[0].customer).toBe("Alpha Buyer");
     expect(JSON.stringify(pushes[0])).not.toContain(SHOPPER.email);
     expect(JSON.stringify(pushes[0])).not.toContain(SHOPPER.address);
+    expect(JSON.stringify(pushes[0])).not.toContain(SHOPPER.phone);
+    expect(JSON.stringify(pushes[0])).not.toContain(SHOPPER.postalCode);
   });
 
   it("does not ring the phone twice when the processor redelivers the same payment", async () => {
