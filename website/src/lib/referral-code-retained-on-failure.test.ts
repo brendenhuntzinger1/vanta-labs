@@ -104,7 +104,10 @@ describe("a failed referral submission keeps the code that is already applied", 
 describe("the two branches that genuinely invalidate the applied code still clear it", () => {
   it.each([
     ["the referral programme is paused", "REFERRAL_PROGRAM_PAUSED_MESSAGE"],
-    ["Buy 3 Get 1 Free is running", "cannot be combined with the Buy 3 Get 1 Free"],
+    // The message names whichever Buy X Get Y promotion is actually pricing
+    // the cart now (the store has six), so the marker is the part of the
+    // sentence that does not change with the promotion.
+    ["a Buy X Get Y promotion is running", "Referral codes cannot be combined with the"],
   ])("clears when %s", (_label, marker) => {
     const branch = branchReporting(marker);
     for (const setter of CLEARS_THE_APPLIED_CODE) {

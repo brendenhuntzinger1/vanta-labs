@@ -105,6 +105,7 @@ function cartAmount(s: Scenario): number {
     memberPricingAmount: s.memberPercent ? (s.subtotal + (s.quantityBundleSavings ?? 0)) * (s.memberPercent / 100) : 0,
     ambassadorPersonalAmount: s.personalDiscount ?? 0,
     couponDiscountAmount: s.couponDiscount ?? 0,
+    allowCouponStacking: s.allowCouponStacking ?? false,
     promo,
   }).amount;
 }
@@ -275,26 +276,88 @@ describe("the combination they used to disagree on", () => {
   });
 });
 
-describe("the admin stacking switch, which is off in production", () => {
+describe("the admin coupon-stacking switch, which the cart could not see", () => {
   /**
-   * With stacking ON the server deliberately adds the coupon on top of the best
-   * promo. The cart has no equivalent branch, so this is a SECOND known
-   * divergence — dormant behind the same switch (coupons.allow_stacking =
-   * false, set by the owner 2026-08-23). Recorded, not fixed, for the same
-   * reason as the first.
+   * THIS BLOCK USED TO RECORD A KNOWN, UNFIXED DIVERGENCE.
+   *
+   * It said: "With stacking ON the server deliberately adds the coupon on top
+   * of the best promo. The cart has no equivalent branch, so this is a SECOND
+   * known divergence — dormant behind the same switch." Dormant is not the same
+   * as safe: the switch is one checkbox in the Control Center, and the day
+   * anyone ticked it every cart in the store would have quoted a total higher
+   * than the card was charged, with no test going red.
+   *
+   * The cart now has the branch, and takes the policy from the same place the
+   * server does — `coupons.allow_stacking`, delivered through
+   * /api/catalog/promotions. These assert the two agree in BOTH switch
+   * positions rather than describing what only the server does.
    */
-  it("the server stacks a coupon on the best promo when told to", () => {
-    const stacked = serverAmount({ name: "x", subtotal: 300, memberPercent: 10, couponDiscount: 40, allowCouponStacking: true });
-    expect(stacked).toBe(70); // $30 membership + $40 coupon
+  it("stacks a coupon on the best promo when told to — on both sides", () => {
+    const scenario: Scenario = { name: "x", subtotal: 300, memberPercent: 10, couponDiscount: 40, allowCouponStacking: true };
+    expect(serverAmount(scenario)).toBe(70); // $30 membership + $40 coupon
+    expect(cartAmount(scenario)).toBe(70);
   });
 
-  it("and does not when told not to", () => {
-    const unstacked = serverAmount({ name: "x", subtotal: 300, memberPercent: 10, couponDiscount: 40 });
-    expect(unstacked).toBe(40); // the larger of the two, alone
+  it("and does not when told not to — on both sides", () => {
+    const scenario: Scenario = { name: "x", subtotal: 300, memberPercent: 10, couponDiscount: 40 };
+    expect(serverAmount(scenario)).toBe(40); // the larger of the two, alone
+    expect(cartAmount(scenario)).toBe(40);
   });
 
-  it("still never exceeds the cart when stacking", () => {
-    const huge = serverAmount({ name: "x", subtotal: 50, memberPercent: 50, couponDiscount: 400, allowCouponStacking: true });
-    expect(huge).toBe(50);
+  it("still never exceeds the cart when stacking, on either side", () => {
+    const scenario: Scenario = { name: "x", subtotal: 50, memberPercent: 50, couponDiscount: 400, allowCouponStacking: true };
+    expect(serverAmount(scenario)).toBe(50);
+    expect(cartAmount(scenario)).toBe(50);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUY X GET Y AGAINST EVERY OTHER DISCOUNT, BOTH SWITCH POSITIONS.
+//
+// A Buy-X-Get-Y promotion reaches resolveCustomerDiscount as `bundleDiscount`
+// and resolveCartDiscount as `promo.type === "buy3get1"` — the same two inputs
+// Buy 3 Get 1 has always used — so these cover all six promotions at once.
+// ---------------------------------------------------------------------------
+
+describe("Buy X Get Y versus coupon, referral, membership and bulk savings", () => {
+  const cases: Scenario[] = [
+    // --- coupon + promotion, stacking OFF: they compete, larger wins --------
+    { name: "promotion beats a smaller coupon", subtotal: 300, buy3Get1: 80, couponDiscount: 30 },
+    { name: "coupon beats a smaller promotion", subtotal: 300, buy3Get1: 30, couponDiscount: 80 },
+    { name: "coupon and promotion exactly equal", subtotal: 300, buy3Get1: 50, couponDiscount: 50 },
+
+    // --- coupon + promotion, stacking ON: they add ------------------------
+    { name: "coupon stacks on the promotion", subtotal: 300, buy3Get1: 80, couponDiscount: 30, allowCouponStacking: true },
+    { name: "coupon stacks on a promotion that lost to bundle pricing", subtotal: 260, quantityBundleSavings: 40, buy3Get1: 30, couponDiscount: 25, allowCouponStacking: true },
+    { name: "stacked pair capped at the subtotal", subtotal: 100, buy3Get1: 90, couponDiscount: 90, allowCouponStacking: true },
+
+    // --- referral + promotion: the referral is suppressed outright ---------
+    { name: "promotion suppresses the referral", subtotal: 400, buy3Get1: 60, referralPercent: 10 },
+    { name: "promotion suppresses even a bigger referral", subtotal: 400, buy3Get1: 20, referralPercent: 15 },
+    { name: "referral alone with no promotion", subtotal: 400, referralPercent: 10 },
+
+    // --- membership + promotion -------------------------------------------
+    { name: "membership beats a small promotion", subtotal: 400, buy3Get1: 20, memberPercent: 15 },
+    { name: "promotion beats membership", subtotal: 400, buy3Get1: 90, memberPercent: 10 },
+    { name: "membership, promotion and coupon together, stacking on", subtotal: 400, buy3Get1: 50, memberPercent: 15, couponDiscount: 20, allowCouponStacking: true },
+
+    // --- bulk savings and the ambassador personal discount -----------------
+    { name: "bulk savings beats the promotion", subtotal: 900, buy3Get1: 60, bulkSavings: 108 },
+    { name: "promotion beats bulk savings", subtotal: 900, buy3Get1: 200, bulkSavings: 108 },
+    { name: "ambassador personal discount versus a promotion", subtotal: 300, buy3Get1: 40, personalDiscount: 45 },
+
+    // --- with quantity-bundle pricing already in the subtotal --------------
+    { name: "promotion competed to nothing by bundle pricing", subtotal: 260, quantityBundleSavings: 40, buy3Get1: 35 },
+    { name: "promotion just beats bundle pricing", subtotal: 260, quantityBundleSavings: 40, buy3Get1: 55 },
+    { name: "everything at once, stacking off", subtotal: 500, quantityBundleSavings: 60, buy3Get1: 90, memberPercent: 10, couponDiscount: 70, bulkSavings: 50 },
+    { name: "everything at once, stacking on", subtotal: 500, quantityBundleSavings: 60, buy3Get1: 90, memberPercent: 10, couponDiscount: 70, bulkSavings: 50, allowCouponStacking: true },
+  ];
+
+  it.each(cases)("$name — cart and checkout charge the same", (scenario) => {
+    expect(cartAmount(scenario)).toBe(serverAmount(scenario));
+  });
+
+  it.each(cases)("$name — cart and checkout agree on whether the referral won", (scenario) => {
+    expect(cartReferralWon(scenario)).toBe(serverReferralWon(scenario));
   });
 });

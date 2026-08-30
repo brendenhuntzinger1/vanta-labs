@@ -17,7 +17,8 @@ import { getHomepageControlConfig, getShippingConfig, getWelcomeOffer } from "@/
 //
 //   COUPON CODES     public.coupons            -> validateCoupon()   (coupons.ts)
 //   WELCOME OFFER    control: welcome_offer     -> validateCoupon()   (coupons.ts)
-//   BUY 3 GET 1      control: promotions.*      -> quote-order.ts:501
+//   BUY X GET Y      control: promotions.bxgy_promotions
+//                                              -> bxgy-engine.ts, via quote-order.ts
 //   FREE SHIPPING    control: shipping.*        -> calculateShipping()
 //   BUNDLE & SAVE    control: bundleConfig      -> bundle-pricing.ts
 //
@@ -34,6 +35,8 @@ import {
   offerId,
   type StorefrontOffer,
 } from "@/lib/storefront-offer-format";
+import { promotionHeadline, storefrontDescription, type BxgyPromotion } from "@/lib/bxgy-engine";
+import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
 
 // Re-exported so existing importers of this module keep working unchanged.
 export * from "@/lib/storefront-offer-format";
@@ -232,6 +235,13 @@ export async function resolveStorefrontOffers(deps: ResolveOffersDeps = {}): Pro
     getShippingConfig().catch(() => null),
   ]);
 
+  // Guarded on its own, like every other source here: a failed promotion read
+  // costs the promotion offers, never the bar.
+  const promotions: BxgyPromotion[] = await getApplicableBxgyPromotions(
+    {},
+    { promotions: control?.bxgyPromotions, now },
+  ).catch(() => []);
+
   for (const row of couponRows) offers.push(couponOffer(row));
 
   // WELCOME OFFER — a real code enforced by validateCoupon(), but first-order
@@ -257,20 +267,34 @@ export async function resolveStorefrontOffers(deps: ResolveOffersDeps = {}): Pro
     });
   }
 
-  // BUY 3 GET 1 — quote-order.ts:213 makes every 4th unit free, cheapest
-  // first, across the whole cart. Both halves of that matter to a customer
-  // deciding what to add, so both are stated.
-  if (control?.promoBuy3Get1Enabled) {
+  // BUY X GET Y — every live promotion in the promotion centre, described from
+  // the promotion record that prices it (bxgy-engine.ts). This is still a
+  // READ-ONLY VIEW: nothing here decides that a promotion runs, and a promotion
+  // outside its schedule or past its usage limit is already absent from
+  // `promotions` because getApplicableBxgyPromotions resolved it away.
+  //
+  // The old branch read `control.promoBuy3Get1Enabled` and hard-coded "Buy 3,
+  // get 1 free". That flag is now the on/off switch for ONE of six promotions
+  // and is reconciled onto it in bxgy-config.ts, so reading the promotion list
+  // advertises exactly what checkout will honour — including the Buy 2 Get 1
+  // (50% off) switch that this file previously, and correctly, refused to
+  // advertise on the grounds that nothing consumed it. Something does now.
+  for (const promotion of promotions ?? []) {
     offers.push({
-      id: offerId(["buy3get1"]),
+      id: offerId(["bxgy", promotion.id, promotion.buyQuantity, promotion.getQuantity, promotion.rewardPercent]),
       kind: "buy3get1",
       eyebrow: "Automatic offer",
-      headline: "Buy 3, get 1 free",
+      headline: promotionHeadline(promotion),
       code: null,
       automaticNote: "Applied automatically at checkout",
-      endsAt: null,
+      // A real timestamp from the promotion record, or null. The bar's own
+      // rule: never invent an end date.
+      endsAt: promotion.endsAt,
       details: [
-        "Every 4th item in your cart is free. The free item is the lowest-priced one, and it counts across your whole order rather than per product.",
+        storefrontDescription(promotion),
+        promotion.eligibility.excludeSlugs.length > 0
+          ? "Some products are excluded."
+          : "Counts across your whole order rather than per product.",
       ],
       href: "/products",
       priority: 30,
@@ -377,14 +401,16 @@ export async function getStorefrontOffers(): Promise<StorefrontOffer[]> {
 //   MEMBER-SCOPED COUPONS are honoured only for the matching audience, so they
 //     are not advertised to an anonymous reader who may be the wrong one.
 //
-//   BUY 2 GET 1 (50% OFF) — `promotions.buy_2_get_1_half_enabled` is written by
-//     the Control Center and read back into HomepageControlConfig, and then
-//     NOTHING CONSUMES IT. There is no such branch in quote-order.ts, in the
-//     cart, or anywhere in pricing: ticking that box changes no total. It is
-//     therefore an admin control that does nothing, and advertising it would
-//     promise a discount checkout does not give. Reported, not silently
-//     wired up — making a live pricing rule out of a dormant flag is a
-//     pricing change, and that is the owner's call, not this feature's.
+//   BUY X GET Y PROMOTIONS THAT ARE OFF, out of schedule, or past a usage
+//     limit are not in `promotions` at all — getApplicableBxgyPromotions has
+//     already resolved them away, so the bar cannot advertise one checkout
+//     would refuse.
+//
+//     This paragraph used to report `promotions.buy_2_get_1_half_enabled` as an
+//     admin control that changed no total, and refused to advertise it on
+//     exactly that ground. It is now the on/off switch for the Buy 2 Get 1
+//     (50% Off) promotion in the promotion centre, priced by the same engine as
+//     the other five, so it is advertised like any other live promotion.
 //
 //   MEMBERSHIP PRICING is a product, not a promotion, and has its own page.
 // ---------------------------------------------------------------------------

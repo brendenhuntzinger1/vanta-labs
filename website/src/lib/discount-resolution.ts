@@ -44,6 +44,23 @@ export interface CartDiscountInputs {
   ambassadorPersonalAmount: number;
   couponDiscountAmount: number;
   /**
+   * The admin's coupon-stacking policy (`coupons.allow_stacking`), OR the
+   * active promotion's own `stackWithCoupon` flag — whichever grants it.
+   *
+   * THE CART DID NOT USED TO KNOW THIS, AND THAT WAS THE LAST PLACE THE CART
+   * AND THE CHECKOUT DISAGREED. resolveCustomerDiscount has always had an
+   * additive branch for it (`allowCouponStacking && couponEnabled` -> best +
+   * coupon); this function had no such branch and no such input, so with
+   * stacking ON the server charged best+coupon while the cart previewed
+   * max(best, coupon). The shopper was quoted a total higher than the card was
+   * charged — not a blocked sale, but a wrong number on the page and a discount
+   * the shopper had no way to see they were getting.
+   *
+   * Defaults to false, which is both the store's current setting and the
+   * behaviour every existing caller had.
+   */
+  allowCouponStacking?: boolean;
+  /**
    * The Buy-3-Get-1 free item, or a valid referral — never both, and never
    * alongside the coupon. A bundle suppresses the referral outright, matching
    * `!isBundle && hasReferral` in profit-engine's resolveCustomerDiscount.
@@ -71,16 +88,52 @@ export function resolveCartDiscount(inputs: CartDiscountInputs): CartDiscountRes
   const alreadyGranted = Math.max(0, inputs.quantityBundleSavings);
   const compete = (raw: number) => Math.max(0, round(raw - alreadyGranted));
 
-  const best = resolveBestDiscount([
-    { type: "bulk_savings", amount: compete(inputs.bulkSavingsAmount) },
-    { type: "member_pricing", amount: compete(inputs.memberPricingAmount) },
-    { type: "ambassador_personal", amount: compete(inputs.ambassadorPersonalAmount) },
-    ...(inputs.promo ? [{ type: inputs.promo.type, amount: compete(inputs.promo.amount) }] : []),
-    // On its own footing, never behind the promo. This is the fix.
-    { type: "coupon" as const, amount: compete(inputs.couponDiscountAmount) },
-  ]);
+  const stacking = inputs.allowCouponStacking === true && inputs.couponDiscountAmount > 0;
 
-  return { best, amount: round(Math.min(inputs.subtotal, best?.amount ?? 0)) };
+  // Candidates at their RAW value. `compete` is applied when they are ranked,
+  // exactly as resolveCustomerDiscount does it — the distinction matters only
+  // in the stacking branch below, where the server adds the coupon to the
+  // winner's RAW amount and competes the pair once.
+  const rawCandidates: DiscountCandidate[] = [
+    { type: "bulk_savings", amount: inputs.bulkSavingsAmount },
+    { type: "member_pricing", amount: inputs.memberPricingAmount },
+    { type: "ambassador_personal", amount: inputs.ambassadorPersonalAmount },
+    ...(inputs.promo ? [{ type: inputs.promo.type, amount: inputs.promo.amount }] : []),
+    // With stacking ON the coupon is not a competitor — it is added on top of
+    // whatever wins — so it must not also stand in the contest, or it would
+    // beat the promotion it is about to be added to and be counted once
+    // instead of twice. resolveCustomerDiscount excludes it for exactly this
+    // reason (`couponEnabled && !inputs.allowCouponStacking`).
+    ...(stacking ? [] : [{ type: "coupon" as const, amount: inputs.couponDiscountAmount }]),
+  ];
+
+  // Ranked on what each saves BEYOND the bundle pricing already in `subtotal`,
+  // while keeping the raw amount — the server's `best` / `bestEffective` pair.
+  let best: DiscountCandidate | null = null;
+  let bestEffective = 0;
+  for (const candidate of rawCandidates) {
+    const effective = compete(candidate.amount);
+    if (effective > bestEffective) {
+      best = candidate;
+      bestEffective = effective;
+    }
+  }
+
+  if (stacking) {
+    // `best?.amount ?? 0` is the server's zero sentinel: when nothing clears
+    // the bundle savings on its own, the coupon is added to 0 rather than to a
+    // promotion that is worth nothing here. Getting this wrong quoted $15 off a
+    // basket the server charged in full.
+    const stacked = compete((best?.amount ?? 0) + inputs.couponDiscountAmount);
+    return {
+      // The coupon is part of the price either way; when it is the only thing
+      // reducing the total, it is also the thing to name.
+      best: best ?? { type: "coupon", amount: inputs.couponDiscountAmount },
+      amount: round(Math.min(inputs.subtotal, stacked)),
+    };
+  }
+
+  return { best, amount: round(Math.min(inputs.subtotal, bestEffective)) };
 }
 
 // ---------------------------------------------------------------------------

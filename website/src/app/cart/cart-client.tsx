@@ -64,6 +64,7 @@ export function CartPageClient() {
     clearReferralCode,
     isApplyingReferral,
     isBuy3Get1FreeActive,
+    activePromotionName,
     bulkSavingsApplied,
     bulkSavingsPercent,
     bulkSavingsProgress,
@@ -431,7 +432,8 @@ export function CartPageClient() {
 
             {isBuy3Get1FreeActive ? (
               <p className="mt-8 border border-white/20 px-3 py-2 text-sm text-white/75">
-                Buy 3 Get 1 Free is active. Referral discounts cannot be combined with this promotion.
+                {activePromotionName ?? "A promotion"} is active. Referral discounts cannot be combined with this
+                promotion.
               </p>
             ) : (
               <>
