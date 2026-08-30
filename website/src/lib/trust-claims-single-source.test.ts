@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { assertNotGutted, stripComments } from "@/lib/test-support/strip-comments";
 
 import {
   COA_SHORT,
@@ -45,28 +46,17 @@ import {
 // it — so the strip is now a function of the evidence a caller actually holds.
 // ---------------------------------------------------------------------------
 
-const readRaw = (path: string) => readFileSync(path, "utf8");
-
 /**
- * Source with its COMMENTS REMOVED.
+ * Source with its COMMENTS REMOVED, via the shared scanner in test-support.
  *
- * These assertions scan file text, which cannot by itself tell a rendered claim
- * from a comment about one — and this repository documents a removed claim by
- * naming it, right where it used to be. Scanning raw text therefore makes the
- * fix for a banned claim indistinguishable from the claim, so the honest way to
- * record why "256-bit SSL" is gone would re-fail the test that removed it.
- *
- * Only the two comment forms this codebase writes are stripped: block comments
- * (`/* … *\/`, JSX `{/* … *\/}` included, since the braces fall outside) and
- * whole lines that are a line comment. A mid-line `//` is deliberately NOT
- * treated as a comment, because that is what a URL looks like.
+ * These assertions cannot by themselves tell a rendered claim from a comment
+ * about one — and this repository documents a removed claim by naming it, right
+ * where it used to be. Scanning raw text would make the fix for a banned claim
+ * indistinguishable from the claim, so the honest record of why "256-bit SSL"
+ * is gone would re-fail the test that removed it.
  */
 const read = (path: string) =>
-  readRaw(path)
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .split("\n")
-    .filter((line) => !/^\s*(\/\/|\*)/.test(line))
-    .join("\n");
+  assertNotGutted(path, stripComments(readFileSync(path, "utf8")));
 
 describe("the trust strip is a function of evidence, not a constant", () => {
   it("omits the COA claim when the caller cannot show a published COA", () => {

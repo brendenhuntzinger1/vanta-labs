@@ -111,6 +111,16 @@ type CartContextValue = {
   isApplyingReferral: boolean;
   isApplyingCoupon: boolean;
   isSignedIn: boolean;
+  /**
+   * Whether the server saw an auth cookie on the request that rendered this
+   * page — so whether asking an /api/account/* endpoint can return anything.
+   *
+   * Distinct from `isSignedIn`, which is only true once /api/account/me has
+   * actually answered. This is known before that round trip and is false for
+   * every anonymous visitor; it is a hint for skipping a request that would be
+   * refused, never an assertion that anyone is authenticated.
+   */
+  hasSessionCookie: boolean;
   pointsBalance: number;
   pointsToEarn: number;
   pointsToRedeem: number;
@@ -288,7 +298,24 @@ function calculateCouponDiscountAmount(subtotal: number, coupon: CouponDetails |
   return Math.min(Math.max(amount, 0), subtotal);
 }
 
-export function CartProvider({ children }: { children: React.ReactNode }) {
+/**
+ * `hasSessionCookie` — whether the SERVER saw an auth cookie on this request.
+ *
+ * Defaults to TRUE, which is exactly the behaviour every caller had before it
+ * existed: ask /api/account/me and find out. A caller that cannot know must not
+ * accidentally suppress a real customer's personalization.
+ *
+ * It is a hint about whether asking is worth a round trip, and never a claim
+ * about who anyone is — /api/account/me still authenticates every request and
+ * still refuses an anonymous one. See the note on it in app/layout.tsx.
+ */
+export function CartProvider({
+  children,
+  hasSessionCookie = true,
+}: {
+  children: React.ReactNode;
+  hasSessionCookie?: boolean;
+}) {
   const [items, setItems] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -360,6 +387,16 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [storeCreditMinOrderCents, setStoreCreditMinOrderCents] = useState(0);
 
   useEffect(() => {
+    // No auth cookie on the request that rendered this page, so there is no
+    // account to personalize from and /api/account/me can only answer 401.
+    // Skipping it saves every logged-out visitor a round trip on every page
+    // load — and the refused request was the one thing on a clean storefront
+    // page that put a red line in the console.
+    //
+    // NOT a security check. The endpoint authenticates independently and is
+    // unchanged; this only decides whether to ask. Defaults to true, so a
+    // provider mounted without the prop behaves exactly as it always did.
+    if (!hasSessionCookie) return;
     (async () => {
       try {
         const response = await fetch("/api/account/me", { cache: "no-store" });
@@ -393,7 +430,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         // Guest shoppers simply see no points UI.
       }
     })();
-  }, []);
+  }, [hasSessionCookie]);
 
   useEffect(() => {
     (async () => {
@@ -1643,6 +1680,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     isApplyingReferral,
     isApplyingCoupon,
     isSignedIn,
+    hasSessionCookie,
     pointsBalance,
     pointsToEarn,
     pointsToRedeem,

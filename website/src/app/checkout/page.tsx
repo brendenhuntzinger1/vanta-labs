@@ -264,6 +264,7 @@ export default function CheckoutPage() {
     shippingProtectionEnabled,
     setShippingProtectionEnabled,
     shippingProtectionFee,
+    hasSessionCookie,
   } = useCart();
 
   // Whether Apple Pay may be advertised at all — the same predicate the express
@@ -513,6 +514,12 @@ export default function CheckoutPage() {
   }
 
   useEffect(() => {
+    // Nothing to pre-fill from when the request carried no auth cookie, and
+    // /api/account/me can only answer 401 — so a guest checkout asked for a
+    // signed-in customer's details on every visit and was refused. Same hint,
+    // same reasoning, as the account read in cart-context; the endpoint itself
+    // is unchanged and still authenticates every caller.
+    if (!hasSessionCookie) return;
     (async () => {
       try {
         const response = await fetch("/api/account/me", { cache: "no-store" });
@@ -542,7 +549,7 @@ export default function CheckoutPage() {
       }
     })();
     // Runs once on mount to pre-fill from a signed-in account.
-  }, []);
+  }, [hasSessionCookie]);
 
   const handleFieldChange = (key: keyof CheckoutForm, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));

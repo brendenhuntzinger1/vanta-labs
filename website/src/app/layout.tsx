@@ -10,6 +10,7 @@ import { SiteAnalyticsTracker } from "@/components/site-analytics-tracker";
 import { SiteFooter } from "@/components/site-footer";
 import { CookieConsent } from "@/components/cookie-consent";
 import { CONSENT_COOKIE_NAME } from "@/lib/cookie-consent-server";
+import { AUTH_COOKIE_NAME, decodeAuthCookie } from "@/lib/auth-cookie";
 import { EntryDiagnostics } from "@/components/entry-diagnostics";
 import { RecoveryLinkCatcher } from "@/components/recovery-link-catcher";
 import { StorefrontOffersBar } from "@/components/storefront-offers-bar";
@@ -199,6 +200,31 @@ export default async function RootLayout({
   const consentValue = cookieStore.get(CONSENT_COOKIE_NAME)?.value;
   const consentAnswered = consentValue === "accepted" || consentValue === "declined";
 
+  // WHETHER THERE IS ANY POINT ASKING /api/account/me AT ALL.
+  //
+  // Read the same way, and for the same reason, as the two cookies above:
+  // `cookies()` is already awaited, so this costs nothing, and answering on the
+  // server saves the browser discovering it after paint.
+  //
+  // A HINT, NOT AN AUTHORIZATION, and the distinction is the whole design.
+  // /api/account/me returns a signed-in customer's email, name and default
+  // address, so it must stay 401 for anonymous callers exactly like every other
+  // /api/account/* route — and it does; nothing about that changes here. This
+  // only decides whether the client bothers to ASK. A forged or expired cookie
+  // makes the flag true, the request is made, and the route refuses it exactly
+  // as it does today: the flag can cause a wasted request, never a granted one.
+  //
+  // Deliberately `decodeAuthCookie` rather than `getAuthenticatedUser`: this is
+  // a local, zero-network cookie read with no verification. Verifying here
+  // would put the auth backend on the render path of every page on the site,
+  // which is a far worse trade than one refused request.
+  //
+  // It errs toward TRUE — a legacy bare JWT and any non-empty envelope both
+  // decode — because a false positive costs one 401 (today's behaviour) while
+  // a false negative would silently stop prefilling a real customer's
+  // checkout.
+  const hasSessionCookie = decodeAuthCookie(cookieStore.get(AUTH_COOKIE_NAME)?.value) !== null;
+
   return (
     <html
       lang="en"
@@ -258,7 +284,7 @@ export default async function RootLayout({
             misdirected password-reset link must be carried to the reset form
             before the gate can hold them on a page that has no such form. */}
         <RecoveryLinkCatcher />
-        <CartProvider>
+        <CartProvider hasSessionCookie={hasSessionCookie}>
           <Suspense fallback={null}>
             <SiteAnalyticsTracker />
           </Suspense>
