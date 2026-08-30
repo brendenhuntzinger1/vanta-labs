@@ -56,9 +56,69 @@ it: it is the only thing authenticating the alert, so anyone holding it can fire
 fake "you got an order" notifications at your phone. `https://` only — an
 `http://` URL is refused rather than sent in the clear.
 
-## Step 3 — Confirm it works
+## Step 3 — Check each link separately
 
-Place a £1/$1 test order through checkout, or approve a manual payment. Within a
+There are three links in the chain, and they fail for different reasons. Check
+them in this order; each one is independent, so a failure tells you exactly
+which half is wrong.
+
+### 3a. Is the code deployed?
+
+Vercel → **Deployments** → the one marked **Production**. Its commit must
+include the order-push work. If production is older than that commit, no
+configuration anywhere will help — the running code is the old version.
+
+### 3b. Is the secret set?
+
+Vercel → project → **Settings** → **Environment Variables** → find
+`ORDER_PUSH_WEBHOOK_URL`. Confirm two things: the row is ticked for
+**Production**, and the value begins `https://hooks.zapier.com/hooks/catch/`.
+
+A variable added *after* the current deployment was built is not picked up.
+If in doubt, redeploy.
+
+### 3c. Is the Zap live? (test it without touching the store)
+
+This is the check worth knowing, because it isolates Zapier and Pushover from
+the store entirely. POST the real payload straight at the catch hook:
+
+```bash
+curl -X POST 'PASTE_YOUR_CATCH_HOOK_URL_HERE' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "event": "new_order",
+    "title": "New Order VL-TEST01",
+    "message": "Test Customer — $12.34\n1× Test Product\nprofit $4.56 (est.)\nAug 30, 2026, 3:00 PM ET",
+    "order_number": "VL-TEST01",
+    "order_id": "order-test",
+    "customer": "Test Customer",
+    "total": "12.34",
+    "profit": "4.56",
+    "profit_status": "estimated",
+    "item_count": "1",
+    "items": "1× Test Product",
+    "url": "https://www.vantalabsresearch.com/admin/orders/order-test",
+    "placed_at": "2026-08-30T19:00:00.000Z",
+    "placed_at_display": "Aug 30, 2026, 3:00 PM ET"
+  }'
+```
+
+`{"status":"success",...}` means Zapier *accepted* it — which it does whether or
+not the Zap is on, so **the reply proves nothing**. The phone is the test:
+
+- **Push arrives, reads correctly** → Zapier and Pushover are done. Any
+  remaining problem is 3a or 3b.
+- **Push arrives but fields are wrong/blank** → the field mapping in the Zap's
+  Pushover step is wrong. Compare against the table in step 1.
+- **No push** → the Zap is not published, or its Pushover step is erroring.
+  Zapier → **Zap history** shows which.
+
+Because this test never touches the store, it is safe to repeat as often as you
+like, and it never creates an order, a payment or a stock movement.
+
+## Step 4 — Confirm end to end
+
+Once 3a–3c all pass, place a real order (or approve a manual payment). Within a
 few seconds you should get:
 
 ```
