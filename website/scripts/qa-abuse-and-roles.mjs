@@ -420,8 +420,97 @@ async function main() {
     return `refused with ${res}; target still ${after.status}`;
   });
 
+  // ---- Session fixation -------------------------------------------------
+  section("5. Session fixation and open redirects");
+
+  await step("a pre-planted session cookie is replaced on sign-in, not adopted", async () => {
+    // Session fixation: an attacker who can set a cookie on the victim's
+    // browser plants a value they know, waits for the victim to sign in, and
+    // then uses it. The defence is that authenticating MINTS a fresh session
+    // rather than blessing whatever was already there.
+    const ctx = await browser.newContext();
+    const p = await ctx.newPage();
+    await passAgeGate(p);
+
+    const planted = "v2.attacker-planted-value-that-must-not-survive";
+    await ctx.addCookies([{
+      name: "vl_session_token", value: planted,
+      domain: "127.0.0.1", path: "/", httpOnly: true, sameSite: "Lax",
+    }]);
+
+    await signIn(p, AMB, PW);
+    const after = (await ctx.cookies()).find((c) => c.name === "vl_session_token");
+    const reached = await (async () => {
+      await p.goto(`${BASE}/account`, { waitUntil: "domcontentloaded" });
+      await p.waitForTimeout(2000);
+      return !/\/account\/login/.test(p.url());
+    })();
+    await ctx.close();
+
+    assert(after, "no session cookie after signing in over a planted one");
+    assert(after.value !== planted, "the planted cookie value SURVIVED sign-in — session fixation");
+    assert(reached, "signed in, but the account page did not render");
+    return "planted value discarded, a fresh session minted";
+  });
+
+  await step("a planted cookie on its own grants nothing", async () => {
+    const ctx = await browser.newContext();
+    const p = await ctx.newPage();
+    await passAgeGate(p);
+    await ctx.addCookies([{
+      name: "vl_session_token", value: "v2.not-a-real-session",
+      domain: "127.0.0.1", path: "/", httpOnly: true, sameSite: "Lax",
+    }]);
+    await p.goto(`${BASE}/account`, { waitUntil: "domcontentloaded" });
+    await p.waitForTimeout(2500);
+    const url = p.url();
+    await ctx.close();
+    assert(/\/account\/login/.test(url), `a forged cookie reached ${url}`);
+    return "forged cookie bounced to the login form";
+  });
+
+  await step("the confirmation hop cannot be turned into an open redirect", async () => {
+    const offsite = [
+      "//evil.example/steal",
+      "https://evil.example",
+      "https:/evil.example",
+      "/\\evil.example",
+      "////evil.example",
+    ];
+    const escaped = [];
+    for (const next of offsite) {
+      const res = await page.request.get(
+        `${BASE}/auth/confirm?token=harness-hashed-nobody&type=signup&next=${encodeURIComponent(next)}`,
+        { maxRedirects: 0 },
+      );
+      const location = res.headers().location ?? "";
+      if (!location) continue;
+
+      // The hop legitimately forwards to the GoTrue host — that is its whole
+      // job. What must never escape is where GoTrue is told to put the customer
+      // DOWN afterwards, which rides in `redirect_to`, and the `next` inside it.
+      let landing;
+      try {
+        landing = new URL(new URL(location).searchParams.get("redirect_to") ?? location);
+      } catch {
+        escaped.push(`${next} -> unparseable ${location}`);
+        continue;
+      }
+      if (landing.host !== new URL(BASE).host) {
+        escaped.push(`${next} -> lands on ${landing.host}`);
+        continue;
+      }
+      const forwarded = landing.searchParams.get("next");
+      if (forwarded && !(forwarded.startsWith("/") && !forwarded.startsWith("//"))) {
+        escaped.push(`${next} -> next=${forwarded}`);
+      }
+    }
+    assert(!escaped.length, `the hop redirected off-site: ${escaped.join(" | ")}`);
+    return `${offsite.length} off-site targets neutralised to a same-site path`;
+  });
+
   // ---- Cookie hardening -------------------------------------------------
-  section("5. Cookie and token hygiene");
+  section("6. Cookie and token hygiene");
 
   await step("the session cookie is httpOnly and SameSite=Lax", async () => {
     const ctx = await browser.newContext();
