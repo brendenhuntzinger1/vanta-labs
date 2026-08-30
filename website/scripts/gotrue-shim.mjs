@@ -126,6 +126,17 @@ const session = (user) => ({
  * Handle a GoTrue request. Returns true when it took the request.
  * `pool` is the pg pool the REST shim already owns.
  */
+/**
+ * Tokens already spent in this process.
+ *
+ * Real GoTrue consumes a verification token on first use. Modelling that is
+ * what makes "clicking the link twice is safe" and "a reused reset link is
+ * refused" testable at all — and it is the exact behaviour behind the
+ * 2026-08-29 applicant whose token a mailbox scanner burned before they
+ * clicked. In-memory, so a shim restart is a clean slate.
+ */
+const spentTokens = new Set();
+
 export async function handleAuth(req, res, url, pool, send, readBody) {
   const path = url.pathname.replace(/^\/auth\/v1/, "");
   if (!url.pathname.startsWith("/auth/v1")) return false;
@@ -256,17 +267,51 @@ export async function handleAuth(req, res, url, pool, send, readBody) {
     const type = url.searchParams.get("type") ?? "";
     const redirect = url.searchParams.get("redirect_to") ?? "http://127.0.0.1:3000";
 
+    // ERRORS GO IN THE FRAGMENT, exactly as GoTrue sends them.
+    //
+    // A spent or expired link comes back as
+    // `#error=access_denied&error_code=otp_expired&error_description=...`, and
+    // account-auth-form reads that fragment to explain what happened. Putting
+    // the error in the QUERY instead — which this shim used to do — meant the
+    // app's dead-link handling was never exercised: the page said nothing and
+    // the harness recorded a pass.
+    const deadLink = (code) => {
+      res.writeHead(303, {
+        Location: `${redirect}#error=access_denied&error_code=${code}`
+          + `&error_description=${encodeURIComponent("Email link is invalid or has expired")}`,
+      });
+      res.end();
+      return true;
+    };
+
     // Harness tokens are minted as `harness-hashed-<user id>` by generate_link.
     const id = token.startsWith("harness-hashed-") ? token.slice("harness-hashed-".length) : "";
     const found = id ? await q("select * from auth.users where id = $1", [id]) : { rows: [] };
     if (!found.rows.length) {
-      res.writeHead(303, { Location: `${redirect}${redirect.includes("?") ? "&" : "?"}error=invalid_token` });
-      res.end();
-      return true;
+      return deadLink("otp_expired");
     }
+
+    // SINGLE USE, because that is the property the 2026-08-29 incident turned
+    // on: a mailbox security scanner pre-fetched the link and burned the token
+    // before the human ever clicked it. A shim that verifies the same token
+    // forever cannot reproduce that, so the app's handling of it goes untested.
+    const spentKey = `${token}:${type}`;
+    if (spentTokens.has(spentKey)) {
+      return deadLink("access_denied");
+    }
+    spentTokens.add(spentKey);
 
     // Verifying an email link is what confirms the address — the whole point.
     await q("update auth.users set email_confirmed_at = coalesce(email_confirmed_at, now()) where id = $1", [id]);
+
+    // An email_change link MOVES the account to the pending address and clears
+    // it, so the old address stops signing in from this moment.
+    if (type === "email_change" && found.rows[0].email_change) {
+      await q(
+        "update auth.users set email = email_change, email_change = null, email_confirmed_at = now() where id = $1",
+        [id],
+      );
+    }
     const fresh = await q("select * from auth.users where id = $1", [id]);
     const user = toUser(fresh.rows[0]);
     const fragment =
@@ -344,6 +389,12 @@ export async function handleAuth(req, res, url, pool, send, readBody) {
           error_description: "A user with this email address has already been registered",
         }), true;
       }
+      // Record the pending address the way real GoTrue does, so /verify can
+      // actually MOVE the account when the link is followed. Without this the
+      // change-of-address chain stops at "an email was sent" and the half that
+      // matters — does the account end up on the new address, and does the old
+      // one stop working — cannot be tested at all.
+      await q("update auth.users set email_change = $2 where id = $1", [existing.rows[0].id, newEmail]);
       row = existing.rows[0];
     } else {
       return send(res, 501, {

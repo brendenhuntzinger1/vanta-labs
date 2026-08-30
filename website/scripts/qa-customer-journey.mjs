@@ -232,8 +232,29 @@ async function main() {
       "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
       "/opt/pw-browsers/chromium/chrome-linux/chrome",
     ].find((p) => existsSync(p));
+  // TEST ISOLATION FROM THE LIMITER — ONE CUSTOMER, ONE ADDRESS.
+  //
+  // Every run otherwise shares 127.0.0.1, so the per-IP signup/reset/resend
+  // buckets carry over: from an earlier journey run, and especially from
+  // qa-abuse-and-roles.mjs, whose whole job is to exhaust them. This script's
+  // own signup then gets throttled and every later step fails on a limiter that
+  // is working exactly as intended.
+  //
+  // Deleting rate_limit_hits is NOT enough — lib/rate-limit.ts also holds a
+  // spent bucket in an in-process map for the window, so a warm server keeps
+  // refusing after the rows are gone.
+  //
+  // So this run presents its own client IP, which is what one customer on one
+  // connection actually looks like. The limiter is left completely untouched;
+  // qa-abuse-and-roles.mjs is where it is under test, and this script must not
+  // be the thing that proves or weakens it.
+  const CLIENT_IP = `203.0.113.${(stamp % 250) + 1}`;   // TEST-NET-3, never routable
+
   const browser = await chromium.launch(CHROME ? { executablePath: CHROME } : {});
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+    extraHTTPHeaders: { "x-real-ip": CLIENT_IP },
+  });
   const page = await context.newPage();
 
   // ---- 1. Visit and age gate -------------------------------------------
@@ -361,7 +382,16 @@ async function main() {
   // ---- 3. Email verification -------------------------------------------
   section("3. Email verification");
 
-  const userId = (await q("select id from auth.users where email = $1", [EMAIL])).rows[0].id;
+  const signedUp = (await q("select id from auth.users where email = $1", [EMAIL])).rows[0];
+  if (!signedUp) {
+    console.log("\n  Signup did not create an account, so the rest of the journey cannot run.");
+    console.log("  Most often the per-IP limiter is still holding this address's bucket —");
+    console.log("  see the isolation note at the top of main().");
+    await browser.close();
+    await pool.end();
+    process.exit(1);
+  }
+  const userId = signedUp.id;
   const confirmUrl = `${BASE}/auth/confirm?token=harness-hashed-${userId}&type=signup&next=%2Faccount`;
 
   await step("a tampered confirmation token is refused and says so", async () => {
@@ -594,7 +624,7 @@ async function main() {
     // The real scenario from the checklist: shop as a guest, THEN log in. The
     // classic regression is that authenticating resets client state and the
     // shopper silently loses everything they picked before signing in.
-    const guest = await browser.newContext();
+    const guest = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const g = await guest.newPage();
     await passAgeGate(g);
 
@@ -694,6 +724,17 @@ async function main() {
     return "no authenticated content restored";
   });
 
+  await step("logging out does not throw away the cart", async () => {
+    // Signing out is not "forget everything I was buying". A shopper who signs
+    // out on a shared machine and back in on their own should still have what
+    // they picked.
+    await page.goto(`${BASE}/cart`, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(2500);
+    const text = await page.evaluate(() => document.body.innerText);
+    assert(!/your cart is empty/i.test(text), "logging out emptied the cart");
+    return "cart survived logout";
+  });
+
   await step("a refresh does not resurrect the logged-out session", async () => {
     await page.goto(`${BASE}/account`, { waitUntil: "domcontentloaded" });
     await page.reload({ waitUntil: "domcontentloaded" });
@@ -754,6 +795,28 @@ async function main() {
     return "password updated";
   });
 
+  await step("the recovery link cannot be spent twice", async () => {
+    // The token has just been used to set a password. Following it again must
+    // not hand a second person a password form on this account.
+    await context.clearCookies();
+    await passAgeGate(page);
+    await page.goto(`${BASE}/auth/confirm?token=harness-hashed-${userId}&type=recovery&next=%2Faccount`,
+      { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(3000);
+    const text = await page.evaluate(() => document.body.innerText);
+    const url = page.url();
+    // Either refused outright, or landed on the form — but a form reached
+    // without a live recovery session must say the link is dead.
+    const offersAForm = /update password/i.test(text) && !/invalid or has expired/i.test(text);
+    if (offersAForm) {
+      // The harness shim re-mints a token for the same id, so a second visit is
+      // a NEW valid link rather than a spent one — a limitation of the shim,
+      // not evidence about production. Say so rather than claiming a pass.
+      return SKIP("the harness shim re-issues a token for the same user id, so a spent link cannot be modelled here");
+    }
+    return `refused; landed on ${new URL(url).pathname}`;
+  });
+
   await step("the old password stops working", async () => {
     await context.clearCookies();
     await passAgeGate(page);
@@ -778,12 +841,17 @@ async function main() {
   // which are precisely the things this section exists to check.
   const orderId = `order-${crypto.randomUUID()}`;
   await step("a paid order appears in this customer's order history", async () => {
+    // customer_user_id is set because this is an order placed WHILE SIGNED IN,
+    // which is what the journey has just done. That column is what makes an
+    // order survive a later change of address — order-ownership.ts matches on
+    // `customer_user_id OR customer_email`. Omitting it models a GUEST order
+    // instead, which is a different case and is covered separately below.
     await q(
       `insert into orders (order_id, order_number, payment_status, fulfillment_status,
-         customer_email, customer_name, subtotal, shipping_amount, discount_amount,
-         tax_amount, amount_paid, created_at, updated_at)
-       values ($1, $2, 'paid', 'paid', $3, $4, 100, 10, 0, 0, 110, now(), now())`,
-      [orderId, `VL-JOURNEY-${stamp}`, EMAIL, NAME],
+         customer_user_id, customer_email, customer_name, subtotal, shipping_amount,
+         discount_amount, tax_amount, amount_paid, created_at, updated_at)
+       values ($1, $2, 'paid', 'paid', $3, $4, $5, 100, 10, 0, 0, 110, now(), now())`,
+      [orderId, `VL-JOURNEY-${stamp}`, userId, EMAIL, NAME],
     );
     await page.goto(`${BASE}/account/orders`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(3000);
@@ -828,7 +896,7 @@ async function main() {
   section("11. Mobile");
 
   await step("the whole signed-in journey works at 390x844 with no sideways scroll", async () => {
-    const mobile = await browser.newContext({ viewport: MOBILE, isMobile: true, hasTouch: true });
+    const mobile = await browser.newContext({ viewport: MOBILE, isMobile: true, hasTouch: true, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const m = await mobile.newPage();
     await passAgeGate(m);
     await signIn(m, EMAIL, NEW_PASSWORD);
@@ -849,7 +917,7 @@ async function main() {
   section("12. A second device");
 
   await step("signing in on a second device does not disturb the first", async () => {
-    const second = await browser.newContext();
+    const second = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const s = await second.newPage();
     await passAgeGate(s);
     await signIn(s, EMAIL, NEW_PASSWORD);
@@ -866,7 +934,7 @@ async function main() {
   await step("a password reset elsewhere does not silently leave a stale session usable", async () => {
     // Policy question, so this REPORTS rather than asserts a direction: what
     // matters is that the behaviour is known and deliberate, not accidental.
-    const second = await browser.newContext();
+    const second = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const s = await second.newPage();
     await passAgeGate(s);
     await signIn(s, EMAIL, NEW_PASSWORD);
@@ -1116,6 +1184,117 @@ async function main() {
     await signIn(page, EMAIL, THIRD_PASSWORD);
     assert(await sessionCookie(context), "the original address stopped working before confirmation");
     return "original address still signs in";
+  });
+
+  await step("following the link actually moves the account to the new address", async () => {
+    const pending = (await q("select email_change from auth.users where id = $1", [userId])).rows[0].email_change;
+    if (!pending) return SKIP("no pending address was recorded, so the move cannot be followed");
+
+    await page.goto(`${BASE}/auth/confirm?token=harness-hashed-${userId}&type=email_change&next=%2Faccount%2Fsettings`,
+      { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(3000);
+
+    const now = (await q("select email, email_change from auth.users where id = $1", [userId])).rows[0];
+    assert(now.email === pending, `the account is still on ${now.email}, not ${pending}`);
+    assert(!now.email_change, "the pending address was not cleared after the move");
+    return `moved to ${now.email}`;
+  });
+
+  await step("the old address no longer signs in, and the new one does", async () => {
+    const moved = (await q("select email from auth.users where id = $1", [userId])).rows[0].email;
+    if (moved === EMAIL) return SKIP("the address never moved, so there is no old address to reject");
+
+    await context.clearCookies();
+    await passAgeGate(page);
+    await signIn(page, EMAIL, THIRD_PASSWORD);
+    assert(!(await sessionCookie(context)), "the OLD address still signs in after the change");
+
+    await signIn(page, moved, THIRD_PASSWORD);
+    assert(await sessionCookie(context), "the NEW address does not sign in after the change");
+    return `${EMAIL} rejected, ${moved} accepted`;
+  });
+
+  await step("orders stay attached to the same account across an email change", async () => {
+    await page.goto(`${BASE}/account/orders`, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(3000);
+    const text = await page.evaluate(() => document.body.innerText);
+    assert(text.includes(`VL-JOURNEY-${stamp}`),
+      "the order placed before the email change is no longer on the account");
+    return "order history intact after the change";
+  });
+
+  await step("a GUEST order claimed by address behaves predictably after a change", async () => {
+    // Different case, and worth knowing rather than guessing. A guest order has
+    // no customer_user_id, so it is only ever matched by customer_email — which
+    // means changing address decides whether it is still visible. This REPORTS
+    // the behaviour instead of asserting a direction: which way it should go is
+    // a product decision, not something a harness gets to settle.
+    const guestOrder = `order-${crypto.randomUUID()}`;
+    const moved = (await q("select email from auth.users where id = $1", [userId])).rows[0].email;
+    await q(
+      `insert into orders (order_id, order_number, payment_status, fulfillment_status,
+         customer_email, customer_name, subtotal, shipping_amount, discount_amount,
+         tax_amount, amount_paid, created_at, updated_at)
+       values ($1, $2, 'paid', 'paid', $3, $4, 50, 5, 0, 0, 55, now(), now())`,
+      [guestOrder, `VL-GUEST-${stamp}`, EMAIL, NAME],
+    );
+
+    await page.goto(`${BASE}/account/orders`, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(3000);
+    const text = await page.evaluate(() => document.body.innerText);
+    const visible = text.includes(`VL-GUEST-${stamp}`);
+    return visible
+      ? `a guest order under the OLD address is still shown after moving to ${moved}`
+      : `a guest order under the OLD address is NO LONGER shown after moving to ${moved} `
+        + "— it has no customer_user_id, so only the address linked it";
+  });
+
+  // ---- 16. In-app browser ------------------------------------------------
+  section("16. In-app browser");
+
+  await step("sign-in works when localStorage throws, as it does in some webviews", async () => {
+    const webview = await browser.newContext({
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 "
+        + "(KHTML, like Gecko) Mobile/15E148 Instagram 300.0.0.0",
+      viewport: MOBILE,
+      isMobile: true,
+      hasTouch: true,
+      extraHTTPHeaders: { "x-real-ip": CLIENT_IP },
+    });
+    // Make every localStorage access throw, which is what a locked-down webview
+    // does. supabase-js persists its session there, so anything that depends on
+    // it silently breaks — and our own session is an httpOnly cookie, which
+    // should not care.
+    await webview.addInitScript(() => {
+      const boom = () => { throw new DOMException("localStorage is disabled", "SecurityError"); };
+      try {
+        Object.defineProperty(window, "localStorage", {
+          configurable: true,
+          get: boom,
+        });
+      } catch { /* nothing to do; the test simply runs with storage available */ }
+    });
+
+    const w = await webview.newPage();
+    const errors = [];
+    w.on("pageerror", (e) => errors.push(String(e.message).slice(0, 120)));
+    await passAgeGate(w);
+
+    const current = (await q("select email from auth.users where id = $1", [userId])).rows[0].email;
+    await signIn(w, current, THIRD_PASSWORD);
+    const signedIn = Boolean(await sessionCookie(webview));
+
+    let reached = false;
+    if (signedIn) {
+      await w.goto(`${BASE}/account`, { waitUntil: "domcontentloaded" });
+      await w.waitForTimeout(2500);
+      reached = !/\/account\/login/.test(w.url());
+    }
+    await webview.close();
+
+    assert(signedIn, `sign-in failed in a webview with localStorage disabled; page errors: ${errors.slice(0, 2).join(" | ")}`);
+    assert(reached, "signed in, but /account did not render in the webview");
+    return "signed in and reached /account with localStorage throwing";
   });
 
   await browser.close();

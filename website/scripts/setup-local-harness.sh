@@ -64,6 +64,12 @@ $PSQL -q -f "$HERE/src/lib/sql/deploy-run-once.sql" >/tmp/vl-schema.log 2>&1 || 
 # is unreachable. The harness therefore applied no throttling at all, so signup
 # flooding, reset flooding and resend flooding could not be tested here and the
 # QA scripts had to report them UNENFORCED rather than passing.
+# auth.users.email_change carries a PENDING address, exactly as GoTrue does.
+# The shim writes it when an email_change link is minted and applies it on
+# verify, which is what makes "does the account actually move, and does the
+# old address stop working" testable rather than assumed.
+$PSQL -q -c "alter table auth.users add column if not exists email_change text" >>/tmp/vl-schema.log 2>&1 || true
+
 echo "==> feature schema files"
 for f in inventory-reservations inventory-ledger order-email-log v1.1-features \
          fulfillment-batches self-fulfillment-shippo membership-tiers-seed express-checkout \
