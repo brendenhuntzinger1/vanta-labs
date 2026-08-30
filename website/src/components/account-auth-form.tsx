@@ -135,11 +135,15 @@ export function AccountAuthForm() {
         return;
       }
 
-      // Complete the session for any shopper — admins/partners have their own
-      // portals, but a role-less account is a customer and must finish signing
-      // in (mirrors detectRoleFromUser's default-to-customer).
+      // Complete the session for any shopper. Admins have a separate portal and
+      // a separate session token, so they are skipped.
+      //
+      // AMBASSADORS ARE NOT. They used to be skipped here too, which left an
+      // invited ambassador confirmed but with no session — on a login page that
+      // would not forward them, to a dashboard that would not admit them. Their
+      // portal is a tab inside the customer dashboard; see auth-role.ts.
       const role = String(user.app_metadata?.role ?? user.user_metadata?.role ?? "").toLowerCase();
-      if (role === "admin" || role === "partner" || role === "ambassador") {
+      if (role === "admin") {
         return;
       }
 

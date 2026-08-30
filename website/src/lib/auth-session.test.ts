@@ -6,12 +6,19 @@ describe("detectRoleFromUser", () => {
     expect(detectRoleFromUser({ app_metadata: { role: "admin" }, user_metadata: {} })).toBe("admin");
   });
 
-  it("returns partner when user metadata role is partner (legit invite path)", () => {
-    expect(detectRoleFromUser({ app_metadata: {}, user_metadata: { role: "partner" } })).toBe("partner");
+  // These two used to expect "partner", and that expectation was pinning a bug
+  // rather than a behaviour. Nothing in the app ever GRANTED access on
+  // "partner"; ~30 gates only ever excluded on it — including the layout
+  // wrapping the ambassador dashboard itself. So an invited ambassador was
+  // locked out of their own portal, with /account/login declining to forward
+  // them onward: a closed loop with no exit. See auth-role.ts and
+  // ambassador-portal-access.test.ts for the full account.
+  it("resolves an invited ambassador to customer, so their portal is reachable", () => {
+    expect(detectRoleFromUser({ app_metadata: {}, user_metadata: { role: "partner" } })).toBe("customer");
   });
 
-  it("returns partner when app metadata role is partner", () => {
-    expect(detectRoleFromUser({ app_metadata: { role: "partner" }, user_metadata: {} })).toBe("partner");
+  it("resolves an app_metadata partner to customer for the same reason", () => {
+    expect(detectRoleFromUser({ app_metadata: { role: "partner" }, user_metadata: {} })).toBe("customer");
   });
 
   it("SECURITY: ignores a self-set user_metadata admin role", () => {

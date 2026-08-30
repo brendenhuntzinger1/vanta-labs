@@ -14,15 +14,38 @@ export function detectRoleFromUser(user: { app_metadata?: Record<string, unknown
     return "admin";
   }
 
-  // "partner"/"ambassador" is a NON-privileged routing hint: it grants no data
-  // access on its own — every partner/ambassador surface re-checks the
-  // ambassadors table (status = 'approved') server-side. Legit partners are
-  // provisioned via inviteUserByEmail, which writes the role into
-  // user_metadata, so both metadata sources are accepted here. The worst a
-  // customer can do by self-setting this is lock themselves out of the
-  // customer dashboard (all account routes require role === "customer").
+  // AN AMBASSADOR IS A CUSTOMER. This used to return "partner" here, and that
+  // one line locked every invited ambassador out of the entire product.
+  //
+  // inviteUserByEmail (and now generateLink for invites) writes
+  // `role: "partner"` into user_metadata. Every account surface gates on
+  // `detectRoleFromUser(user) !== "customer"`, so that string excluded the
+  // account from /account and all of its children, /api/account/*, checkout as
+  // a signed-in customer, membership, and the signup/referral point awards in
+  // /api/auth/session.
+  //
+  // Including — and this is the part that made it a closed loop — their OWN
+  // ambassador dashboard, which lives at /account/(dashboard)/ambassador,
+  // inside the layout that rejected them. /partner/dashboard redirects there,
+  // and /account/login only forwards a signed-in visitor onward when the role
+  // is "customer", so an invited ambassador signed in, bounced back to the
+  // sign-in form, and had no exit. The old comment claimed "partners have their
+  // own portals"; they do not. Theirs is a tab inside the customer one.
+  //
+  // Ambassador ZAIN was invited on 2026-08-23. The unbranded invite email is
+  // why he never got a password — this is what would have happened next if he
+  // had.
+  //
+  // Nothing ever GRANTED access on "partner": every consumer only excluded on
+  // it, and every ambassador surface separately re-checks the ambassadors table
+  // for status = 'approved' server-side, which is the real authorisation. So
+  // resolving these accounts to "customer" removes a self-inflicted lockout and
+  // grants nothing new — a customer who self-sets this string in their own
+  // user_metadata is exactly as privileged as they were before.
+  //
+  // "admin" above is untouched and still honoured from app_metadata only.
   if (appRole === "partner" || appRole === "ambassador" || userRole === "partner" || userRole === "ambassador") {
-    return "partner";
+    return "customer";
   }
 
   // Any authenticated user who is not an explicit admin or partner is treated
@@ -33,4 +56,17 @@ export function detectRoleFromUser(user: { app_metadata?: Record<string, unknown
   // "admin"/"partner" strings above, so this default never grants elevated
   // access.
   return "customer";
+}
+
+/**
+ * Whether this account carries the ambassador routing HINT.
+ *
+ * Never an authorisation check — `user_metadata` is writable by the account
+ * holder. Every ambassador surface re-reads the ambassadors table for
+ * status = 'approved'. This exists only for navigation cosmetics.
+ */
+export function hasPartnerRoleHint(user: { app_metadata?: Record<string, unknown>; user_metadata?: Record<string, unknown> }): boolean {
+  const appRole = (typeof user.app_metadata?.role === "string" ? user.app_metadata.role : "").toLowerCase();
+  const userRole = (typeof user.user_metadata?.role === "string" ? user.user_metadata.role : "").toLowerCase();
+  return appRole === "partner" || appRole === "ambassador" || userRole === "partner" || userRole === "ambassador";
 }
