@@ -394,10 +394,11 @@ Hand-driving a browser proves one path once. These three scripts prove the same
 things every time, and they are the fastest way to find out whether a change
 broke something a long way from where you were working.
 
-    npm run qa:all          # all three, ~4 minutes
+    npm run qa:all          # all four, ~6 minutes
 
     npm run qa:roles        # 861 probes: every protected route x every role
     npm run qa:journey      # 61 steps: age gate -> delivered order -> logout
+    npm run qa:purchase     # 13 steps: guest buys, pays, gets ONE receipt
     npm run qa:abuse        # 16 steps: flooding, CSRF, XSS, fixation, cookies
 
 `qa:roles` discovers every route from the filesystem and reads the HTTP methods
@@ -409,6 +410,14 @@ add the route they just wrote.
 the only way to catch state that survives (or fails to survive) a navigation: a
 cart that empties on sign-in, a cookie that works on one page and not the next,
 two tabs disagreeing about whether you are signed in.
+
+`qa:purchase` is the receipt test. A shopper charged and told nothing writes to
+support; one charged and told twice stops trusting the receipts. It creates a
+real order through the app's own checkout, settles it with the same signed event
+a processor posts, and asserts exactly one confirmation — then retries the
+webhook, as a processor does, and asserts no second one. Cart ids there are
+`slug` or `slug::doseId`, never a products.id: quote-order.ts keys the catalogue
+by slug, and most of this catalogue is dose-stocked.
 
 `qa:abuse` needs `rate_limit_hits` to exist or every limiter FAILS OPEN by
 design and the flood tests prove nothing. `setup-local-harness.sh` applies it;

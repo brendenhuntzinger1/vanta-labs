@@ -13,7 +13,8 @@
     "qa:roles": "node scripts/qa-role-boundaries.mjs",
     "qa:journey": "node scripts/qa-customer-journey.mjs",
     "qa:abuse": "node scripts/qa-abuse-and-roles.mjs",
-    "qa:all": "npm run qa:roles && npm run qa:journey && npm run qa:abuse"
+    "qa:all": "npm run qa:roles && npm run qa:journey && npm run qa:purchase && npm run qa:abuse",
+    "qa:purchase": "node scripts/qa-purchase-path.mjs"
   },
   "dependencies": {
     "@basis-theory/basis-theory-js": "^4.30.2",
