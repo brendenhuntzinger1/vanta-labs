@@ -1,0 +1,15 @@
+{
+  "name": "vanta-local",
+  "description": "Plugins that live in this repository, for tooling the public marketplace cannot supply.",
+  "owner": { "name": "Vanta Labs" },
+  "plugins": [
+    {
+      "name": "vanta-typescript-lsp",
+      "description": "TypeScript language server for this repo, pointed at website/ where the code and its pinned TypeScript actually live.",
+      "version": "1.0.0",
+      "author": { "name": "Vanta Labs" },
+      "category": "development",
+      "source": "./plugins/vanta-typescript-lsp"
+    }
+  ]
+}

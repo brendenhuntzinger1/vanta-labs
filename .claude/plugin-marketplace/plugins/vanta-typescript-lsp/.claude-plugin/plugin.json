@@ -1,0 +1,25 @@
+{
+  "name": "vanta-typescript-lsp",
+  "description": "TypeScript language server for this repo, pointed at website/ where the code and its pinned TypeScript actually live.",
+  "version": "1.0.0",
+  "author": { "name": "Vanta Labs" },
+  "lspServers": {
+    "typescript": {
+      "command": "typescript-language-server",
+      "args": ["--stdio"],
+      "workspaceFolder": "${CLAUDE_PLUGIN_ROOT}/../../../../website",
+      "extensionToLanguage": {
+        ".ts": "typescript",
+        ".tsx": "typescriptreact",
+        ".mts": "typescript",
+        ".cts": "typescript",
+        ".js": "javascript",
+        ".jsx": "javascriptreact",
+        ".mjs": "javascript",
+        ".cjs": "javascript"
+      },
+      "restartOnCrash": true,
+      "startupTimeout": 30000
+    }
+  }
+}

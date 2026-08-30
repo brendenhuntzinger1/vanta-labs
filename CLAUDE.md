@@ -91,14 +91,43 @@ need no per-session install:
   across `.ts/.tsx/.js/.jsx`. Resolved by the type system rather than by text
   match, so it finds every real call site and no false ones.
 
-**typescript-lsp needs a TypeScript 5 it can reach.** The plugin is enabled by
-the checked-in settings and the marketplace entry carries its own `lspServers`
-config, so nothing is missing on the plugin side. What it needs is a real
-`tsserver`, and the session-start hook below now supplies one on every web
-session — you should not have to do this by hand.
+**The LSP comes from `vanta-typescript-lsp@vanta-local`, not from the official
+plugin.** This section used to say the official `typescript-lsp` plugin was fine
+and only needed a TypeScript 5 it could reach. That was wrong in both halves,
+and the wrong half mattered: it sent everyone off to install a TypeScript that
+was already installed, while the actual cause sat untouched.
 
-`typescript-language-server` looks for TypeScript in the **workspace** first and
-falls back to the global install. Either one satisfies it:
+What is actually true. Claude Code starts a plugin's language servers from
+exactly two places — the plugin's own manifest (`.claude-plugin/plugin.json`,
+key `lspServers`) or a `.lsp.json` in the plugin root:
+
+    let K = A.lspServers || await nhY(A, q);   // manifest, else .lsp.json
+    if (!K) return;                            // ← neither: silently nothing
+
+The official `typescript-lsp` plugin ships **neither**. Its cached payload is a
+README and a LICENSE, nothing else. Its `lspServers` block lives only in the
+marketplace catalogue entry, and the CLI deliberately does not read one from
+there — it carries the string `"lspServers (not readable from marketplace)"` for
+exactly this case. So the plugin can be installed, enabled and perfectly healthy
+and still start no server, with no error anywhere. That is why the symptom is
+always "no process, no tools, no complaint".
+
+So the repo ships its own. `.claude/plugin-marketplace/` is a local marketplace
+registered through `extraKnownMarketplaces` in the checked-in settings, holding
+one plugin whose manifest declares the server properly. The official plugin is
+set to `false` beside it — leaving it on would mean two `tsserver` processes on
+this repo the day upstream ships a manifest.
+
+It points at `website/`, which is not cosmetic: the LSP resolves TypeScript from
+its workspace root, and the repo root has no `node_modules`. Started at the root
+it reports `Using Typescript version (bundled)`; started at `website/` it reports
+`(workspace)` and picks up the version this project actually pins. `${CLAUDE_PLUGIN_ROOT}`
+is substituted by Claude Code before any environment expansion, so the relative
+hop out to `website/` works in any clone.
+
+Both `typescript-language-server` and `typescript@5` are already present
+globally, and `website/node_modules/typescript` covers the workspace, so there is
+normally nothing to install. If you do need them:
 
     cd website && npm install       # website's pinned typescript ^5 (5.9.3)
     npm install -g typescript@5     # global fallback, also works outside website/
@@ -108,17 +137,17 @@ TypeScript 7 — the native port — which ships `tsc.js` and no `lib/tsserver.j
 and whose `bin` exposes only `tsc`. It cannot back a language server at all, so
 installing it looks like a fix and changes nothing.
 
-With neither in place the server exits during `initialize` with "Could not find
-a valid TypeScript installation", and every LSP feature silently does nothing —
-no error surfaces anywhere.
+The client is spawned once at session start, so a config change fixes the
+container but not the running session: restart it afterwards.
 
-The client is spawned once at session start, so installing TypeScript
-mid-session fixes the container but not the running session: restart it
-afterwards.
+To check: `pgrep -af typescript-language-server`. If there is no process, do not
+assume TypeScript is missing — check first that the plugin providing the server
+actually declares one, with
 
-To tell a dead server from a broken plugin: `ps aux | grep
-typescript-language-server`. No process means it exited at startup, and the
-cause is almost always a missing TypeScript 5.
+    cat .claude/plugin-marketplace/plugins/vanta-typescript-lsp/.claude-plugin/plugin.json
+
+A server that is declared but failing is a different problem, and it answers a
+plain `initialize` over stdio if you want to see it directly.
 
 ## Session startup (checked in)
 

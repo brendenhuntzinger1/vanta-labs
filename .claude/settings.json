@@ -37,7 +37,16 @@
   "enableAllProjectMcpServers": true,
   "enabledPlugins": {
     "context7@claude-plugins-official": true,
-    "typescript-lsp@claude-plugins-official": true
+    "typescript-lsp@claude-plugins-official": false,
+    "vanta-typescript-lsp@vanta-local": true
+  },
+  "extraKnownMarketplaces": {
+    "vanta-local": {
+      "source": {
+        "source": "directory",
+        "path": "./.claude/plugin-marketplace"
+      }
+    }
   },
   "hooks": {
     "SessionStart": [
