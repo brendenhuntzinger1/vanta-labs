@@ -21,7 +21,7 @@ import { normalizeBxgyPromotion } from "@/lib/bxgy-config";
 // customer reads.
 // ---------------------------------------------------------------------------
 
-type PromotionRow = BxgyPromotion & { liveNow?: boolean; scheduledNow?: boolean };
+type PromotionRow = BxgyPromotion & { liveNow?: boolean; scheduledNow?: boolean; limitBlocked?: boolean };
 
 /** ISO ⇄ the value a datetime-local input wants, in the admin's own timezone. */
 function toLocalInputValue(iso: string | null): string {
@@ -63,6 +63,11 @@ function textToLimit(value: string): number | null {
 export function AdminPromotionsClient({ initialBuy3Get1Enabled }: { initialBuy3Get1Enabled: boolean }) {
   const [promotions, setPromotions] = useState<PromotionRow[] | null>(null);
   const [productSlugs, setProductSlugs] = useState<string[]>([]);
+  // False when orders.promotion_id has not been migrated: usage limits cannot
+  // be counted, so promotions carrying one are withheld rather than run as if
+  // unlimited. Shown, because an unexplained "my promotion never applies" is a
+  // worse failure than a missing migration.
+  const [limitsEnforceable, setLimitsEnforceable] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -76,11 +81,12 @@ export function AdminPromotionsClient({ initialBuy3Get1Enabled }: { initialBuy3G
         .map((entry: unknown) => {
           const normalized = normalizeBxgyPromotion(entry);
           if (!normalized) return null;
-          const extras = entry as { liveNow?: boolean; scheduledNow?: boolean };
-          return { ...normalized, liveNow: extras.liveNow, scheduledNow: extras.scheduledNow };
+          const extras = entry as { liveNow?: boolean; scheduledNow?: boolean; limitBlocked?: boolean };
+          return { ...normalized, liveNow: extras.liveNow, scheduledNow: extras.scheduledNow, limitBlocked: extras.limitBlocked };
         })
         .filter(Boolean) as PromotionRow[];
       setPromotions(rows);
+      setLimitsEnforceable(json.usageLimitsEnforceable !== false);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Unable to load promotions");
       setPromotions([]);
@@ -163,6 +169,16 @@ export function AdminPromotionsClient({ initialBuy3Get1Enabled }: { initialBuy3G
         ) : null}
       </section>
 
+      {!limitsEnforceable ? (
+        <p className="rounded-lg border border-amber-300/40 bg-amber-300/10 px-3.5 py-2.5 text-sm text-amber-100">
+          <strong className="font-semibold">Usage limits are not countable on this database yet.</strong> The{" "}
+          <code className="rounded bg-black/30 px-1">orders.promotion_id</code> column is missing, so a redemption
+          cannot be attributed to a promotion. Any promotion below that carries a total or per-customer limit will
+          NOT run until <code className="rounded bg-black/30 px-1">src/lib/sql/bxgy-promotions.sql</code> is applied —
+          it is withheld rather than run as though it were unlimited. Promotions with no limits are unaffected.
+        </p>
+      ) : null}
+
       {message ? <p className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-sm text-emerald-200">{message}</p> : null}
       {error ? <p className="rounded-lg border border-red-400/30 bg-red-400/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
 
@@ -196,8 +212,10 @@ function PromotionCard({
   // Recomputed from the form's own values rather than read from the server, so
   // the badge tracks an unsaved schedule change as the admin types it.
   const scheduled = isPromotionScheduled(promotion, new Date());
-  const live = promotion.enabled && scheduled;
-  const status = live ? "LIVE" : promotion.enabled ? (scheduled ? "LIVE" : "Scheduled") : "Off";
+  const live = promotion.enabled && scheduled && !promotion.limitBlocked;
+  const status = promotion.limitBlocked
+    ? "Blocked"
+    : live ? "LIVE" : promotion.enabled ? "Scheduled" : "Off";
 
   const preview = useMemo(() => ({
     headline: promotionHeadline(promotion),
@@ -394,7 +412,11 @@ function PromotionCard({
         >
           {saving ? "Saving…" : "Save promotion"}
         </button>
-        {promotion.enabled && !scheduled ? (
+        {promotion.limitBlocked ? (
+          <span className="text-xs text-amber-200">
+            Its usage limit cannot be counted on this database — apply the migration or clear the limit.
+          </span>
+        ) : promotion.enabled && !scheduled ? (
           <span className="text-xs text-amber-200">
             Switched on but outside its schedule — it will activate and expire on its own.
           </span>

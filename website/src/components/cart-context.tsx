@@ -315,6 +315,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // cart prices the store-wide list, exactly as the server does for a quote
   // with no email.
   const [exhaustedPromotionIds, setExhaustedPromotionIds] = useState<string[]>([]);
+  // The admin's coupon-stacking policy (`coupons.allow_stacking`). Until this
+  // was delivered the cart assumed "never stacks" and the server assumed the
+  // admin's actual setting, which is the last place the two disagreed.
+  const [couponStackingEnabled, setCouponStackingEnabled] = useState(false);
   const [bundleConfig, setBundleConfig] = useState<BundleConfig>(DEFAULT_BUNDLE_CONFIG);
   // Whether quantity "Bundle & Save" pricing stacks with the winning
   // percentage discount. Default FALSE (one discount per order, best wins) —
@@ -451,7 +455,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       try {
         const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
         if (!response.ok) return;
-        const result = await response.json() as { success: boolean; bxgyPromotions?: unknown[]; referralProgramEnabled?: boolean; bundleConfig?: BundleConfig; bundleStacking?: boolean; salesTax?: SalesTaxConfig; shippingConfig?: ShippingConfig; referralDiscountPercent?: number; referralMinimumOrder?: number; membershipTiers?: MembershipTierSummary[] };
+        const result = await response.json() as { success: boolean; bxgyPromotions?: unknown[]; couponStackingEnabled?: boolean; referralProgramEnabled?: boolean; bundleConfig?: BundleConfig; bundleStacking?: boolean; salesTax?: SalesTaxConfig; shippingConfig?: ShippingConfig; referralDiscountPercent?: number; referralMinimumOrder?: number; membershipTiers?: MembershipTierSummary[] };
         if (result.success) {
           // Normalised through the same reader the server uses, so a payload
           // from an older or newer deploy can only ever produce a promotion
@@ -465,6 +469,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           );
           if (result.bundleConfig) setBundleConfig(result.bundleConfig);
           setBundleStacking(result.bundleStacking === true);
+          setCouponStackingEnabled(result.couponStackingEnabled === true);
           if (Number.isFinite(result.referralMinimumOrder)) {
             setReferralMinimumOrder(Number(result.referralMinimumOrder));
           }
@@ -871,7 +876,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // stacking policy is a separate switch that this client is not told about;
   // when it is on the server accepts a coupon the cart still declines, which
   // costs a discount rather than a sale and is unchanged from before.
-  const activePromotionAllowsCoupon = activePromotion?.promotion.stackWithCoupon ?? false;
+  //
+  // THE ONE AUTHORITATIVE COUPON-STACKING ANSWER, and the exact expression
+  // quote-order.ts passes to resolveCustomerDiscount:
+  //   couponPolicy.allowStacking || promotionAllowsCouponStacking
+  // Either the admin allows it store-wide, or this promotion allows it.
+  const activePromotionAllowsCoupon = couponStackingEnabled
+    || (activePromotion?.promotion.stackWithCoupon ?? false);
   /** "Buy 2 Get 1 Free applied — 1 item free." */
   const activePromotionMessage = activePromotion?.application.message ?? null;
 
@@ -913,7 +924,11 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const shipping = (bulkSavingsTierReached || memberFreeShipping) ? 0 : calculateShipping(subtotal, undefined, shippingConfig);
 
   const couponDiscountAmount = useMemo(
-    () => ((buy3Get1FreeDiscount > 0 && !activePromotionAllowsCoupon) || referralDetails
+    // Zeroed only when the server would refuse the coupon outright: a promotion
+    // or a referral is running AND nothing permits stacking. quote-order throws
+    // on exactly those two combinations (`!couponPolicy.allowStacking`), and
+    // adds the coupon on top in every other case.
+    () => (((buy3Get1FreeDiscount > 0 || referralDetails) && !activePromotionAllowsCoupon)
       ? 0
       : calculateCouponDiscountAmount(discountBase, couponDetails)),
     [buy3Get1FreeDiscount, activePromotionAllowsCoupon, referralDetails, couponDetails, discountBase],
@@ -1005,9 +1020,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       memberPricingAmount,
       ambassadorPersonalAmount,
       couponDiscountAmount,
+      allowCouponStacking: activePromotionAllowsCoupon,
       promo: promoDiscount,
     }),
-    [subtotal, quantityBundleSavings, bulkSavingsResult.amount, memberPricingAmount, ambassadorPersonalAmount, couponDiscountAmount, promoDiscount],
+    [subtotal, quantityBundleSavings, bulkSavingsResult.amount, memberPricingAmount, ambassadorPersonalAmount, couponDiscountAmount, activePromotionAllowsCoupon, promoDiscount],
   );
 
   const bestDiscount = cartDiscount.best;
@@ -1089,12 +1105,18 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // winner the price is derived from, so the copy cannot disagree with the maths.
   const couponOutcome = useMemo<CouponOutcome | null>(() => {
     if (!couponDetails) return null;
+    // WHEN STACKING IS ON THE COUPON DID NOT HAVE TO WIN TO COUNT. It is added
+    // on top of whatever else applies, so naming the promotion as the reason
+    // the code "didn't lower the total" would be false — the code is in the
+    // price. Saying so needs the same condition the price used.
     const winnerType: PriceControllingDiscount | null =
-      discountAmount > 0 && bestDiscount
-        ? bestDiscount.type
-        : quantityBundleSavings > 0
-          ? "bundle_pricing"
-          : null;
+      activePromotionAllowsCoupon && couponDiscountAmount > 0 && discountAmount > 0
+        ? "coupon"
+        : discountAmount > 0 && bestDiscount
+          ? bestDiscount.type
+          : quantityBundleSavings > 0
+            ? "bundle_pricing"
+            : null;
     return describeCouponOutcome({
       code: couponDetails.code,
       offerLabel:
@@ -1104,7 +1126,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       winnerType,
       winnerLabel: appliedDiscountLabel,
     });
-  }, [couponDetails, discountAmount, bestDiscount, quantityBundleSavings, appliedDiscountLabel]);
+  }, [couponDetails, discountAmount, bestDiscount, quantityBundleSavings, appliedDiscountLabel, activePromotionAllowsCoupon, couponDiscountAmount]);
 
   const bulkSavingsApplied = bestDiscount?.type === "bulk_savings";
   const ambassadorDiscountApplied = bestDiscount?.type === "ambassador_personal";

@@ -1118,7 +1118,11 @@ export default function CheckoutPage() {
                       <p className="rounded-xl border border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5 text-xs text-white/55">
                         {activePromotionName ?? "A promotion"} is active — coupons can&apos;t be combined with it.
                       </p>
-                    ) : referralCode ? (
+                    ) : referralCode && !activePromotionAllowsCoupon ? (
+                      /* quote-order refuses referral + coupon only while
+                         stacking is off (`!couponPolicy.allowStacking`). With
+                         it on the server applies both, so the field stays open
+                         and the preview matches the charge. */
                       <p className="rounded-xl border border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5 text-xs text-white/55">
                         A referral code is applied. Remove it to use a coupon instead.
                       </p>

@@ -102,6 +102,14 @@ describe("redemptions are counted, never incremented", () => {
     expect(source).not.toMatch(/redemptions_count/);
   });
 
+  it("never counts with head:true, which would hide the missing-column error", () => {
+    // A HEAD response has no body, so PostgREST's 42703 never arrives and the
+    // missing-migration guard cannot fire. Found on the wire against a real
+    // PostgREST after the unit tests passed, because the mock returned a
+    // structured error the HEAD request would never have delivered.
+    expect(read("src/lib/bxgy-promotions.ts")).not.toMatch(/\.select\([^)]*head:\s*true/);
+  });
+
   it("records the promotion on the order row so the count has something to read", () => {
     expect(read("src/lib/quote-order.ts")).toContain("promotion_id");
     expect(read("src/lib/sql/bxgy-promotions.sql")).toContain("add column if not exists promotion_id");

@@ -29,6 +29,10 @@ const promotionState = vi.hoisted(() => ({
  */
 const orderHistory = vi.hoisted(() => ({
   rows: [] as Array<{ promotion_id: string; payment_status: string; customer_email: string }>,
+  /** Simulate a database on which bxgy-promotions.sql has not been applied. */
+  promotionColumnMissing: false,
+  /** Simulate a transient failure (statement timeout, RLS refusal). */
+  transientError: false,
 }));
 
 vi.mock("@/lib/membership", async () => {
@@ -61,6 +65,13 @@ vi.mock("@/lib/supabase-server", () => {
 
     const resolve = () => {
       if (table !== "orders") return { data: null, error: null, count: 0 };
+      if (orderHistory.promotionColumnMissing) {
+        // Exactly what PostgREST answers for an unknown column.
+        return { data: null, error: { code: "42703", message: 'column orders.promotion_id does not exist' }, count: null };
+      }
+      if (orderHistory.transientError) {
+        return { data: null, error: { code: "57014", message: "canceling statement due to statement timeout" }, count: null };
+      }
       const matching = orderHistory.rows.filter((row) => filters.every((filter) => {
         const cell = (row as unknown as Record<string, unknown>)[filter.column];
         if (filter.kind === "in") return Array.isArray(filter.value) && filter.value.includes(cell);
@@ -162,10 +173,17 @@ async function quote(input: {
 }
 
 beforeEach(() => {
+  // bxgy-promotions.ts memoises "the promotion_id column is missing" for the
+  // life of the process — deliberately, so one failed count does not become one
+  // per checkout. That memo has to be reset between tests, or the first
+  // missing-column case would silently poison every test after it.
+  vi.resetModules();
   promotionState.promotions = [];
   promotionState.bundleStacking = false;
   promotionState.allowCouponStacking = false;
   orderHistory.rows = [];
+  orderHistory.promotionColumnMissing = false;
+  orderHistory.transientError = false;
   coupon.discountAmount = 30;
   vi.clearAllMocks();
 });
@@ -458,5 +476,189 @@ describe("stacking rules", () => {
     const quoted = await quote({ items: [{ id: "peptide-b", quantity: 20 }] });
     expect(quoted.subtotal).toBe(800);
     expect(quoted.discountAmount).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE MIGRATION, AND WHAT HAPPENS BEFORE IT IS APPLIED
+// ---------------------------------------------------------------------------
+
+describe("a missing orders.promotion_id migration never silently unlimits a promotion", () => {
+  it("WITHHOLDS a promotion whose total limit cannot be counted", async () => {
+    orderHistory.promotionColumnMissing = true;
+    promotionState.promotions = [promotion("buy-1-get-1-free", { maxRedemptions: 100 })];
+
+    const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }] });
+    // Not applied — rather than applied as though the cap did not exist.
+    expect(quoted.discountAmount).toBe(0);
+    expect(quoted.appliedPromotionId).toBeNull();
+  });
+
+  it("withholds a promotion whose per-customer limit cannot be counted", async () => {
+    orderHistory.promotionColumnMissing = true;
+    promotionState.promotions = [promotion("buy-1-get-1-free", { perCustomerLimit: 1 })];
+
+    const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }] });
+    expect(quoted.discountAmount).toBe(0);
+  });
+
+  it("still runs a promotion that carries no limit at all", async () => {
+    // Nothing to count, so nothing to be wrong about. An unmigrated database
+    // does not switch the whole promotion system off.
+    orderHistory.promotionColumnMissing = true;
+    promotionState.promotions = [promotion("buy-1-get-1-free")];
+
+    const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }] });
+    expect(quoted.discountAmount).toBe(80);
+    expect(quoted.appliedPromotionId).toBe("buy-1-get-1-free");
+  });
+
+  it("falls through to an unlimited promotion when the limited one is withheld", async () => {
+    orderHistory.promotionColumnMissing = true;
+    promotionState.promotions = [
+      promotion("buy-1-get-1-free", { maxRedemptions: 100 }),
+      promotion("buy-3-get-1-free"),
+    ];
+
+    const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }] });
+    expect(quoted.appliedPromotionId).toBe("buy-3-get-1-free");
+    expect(quoted.discountAmount).toBe(40);
+  });
+
+  it("treats a TRANSIENT count failure differently — the promotion keeps running", async () => {
+    // A statement timeout is not a missing migration: it heals, and dropping a
+    // promotion the cart already previewed would turn a database blip into a
+    // refused sale. Over-running a cap during an incident is the cheaper
+    // mistake, and it is logged.
+    orderHistory.transientError = true;
+    promotionState.promotions = [promotion("buy-1-get-1-free", { maxRedemptions: 1 })];
+
+    const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }] });
+    expect(quoted.discountAmount).toBe(80);
+  });
+});
+
+describe("what the cart is told matches what the checkout does", () => {
+  it("the withheld promotion is absent from the applicable list the cart prices against", async () => {
+    orderHistory.promotionColumnMissing = true;
+    const { getApplicableBxgyPromotions } = await import("@/lib/bxgy-promotions");
+    const applicable = await getApplicableBxgyPromotions({}, {
+      promotions: [
+        promotion("buy-1-get-1-free", { maxRedemptions: 100 }),
+        promotion("buy-3-get-1-free"),
+      ],
+    });
+    // /api/catalog/promotions publishes exactly this list, so the cart cannot
+    // preview a promotion the checkout is about to withhold.
+    expect(applicable.map((p) => p.id)).toEqual(["buy-3-get-1-free"]);
+  });
+
+  it("reports that limits are not enforceable, for the promotion centre", async () => {
+    orderHistory.promotionColumnMissing = true;
+    const { areUsageLimitsEnforceable } = await import("@/lib/bxgy-promotions");
+    expect(await areUsageLimitsEnforceable()).toBe(false);
+  });
+
+  it("reports limits ARE enforceable on a migrated database", async () => {
+    const { areUsageLimitsEnforceable } = await import("@/lib/bxgy-promotions");
+    expect(await areUsageLimitsEnforceable()).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TAMPERING, AND THE LIMITS OF THE USAGE COUNTER
+// ---------------------------------------------------------------------------
+
+describe("a tampered request cannot buy a discount", () => {
+  it("ignores any price the client sends — the catalogue is the only price source", async () => {
+    // CartItemInput carries an id and a quantity and nothing else, so there is
+    // no price field to forge. Asserted on the type's real shape rather than
+    // trusted: a `price` added here later would be a live tampering vector.
+    const quoted = await quote({
+      items: [{ id: "peptide-b", quantity: 4, price: 0.01, unitPrice: 0.01 } as unknown as { id: string; quantity: number }],
+    });
+    expect(quoted.subtotal).toBe(160); // 4 x $40 from the catalogue, not $0.04
+  });
+
+  it("cannot be told which promotion to apply", async () => {
+    // The request has no promotion field; the server resolves the applicable
+    // list itself. A forged id is simply not read.
+    promotionState.promotions = [promotion("buy-2-get-1-free")];
+    const quoted = await quote({
+      items: [{ id: "peptide-b", quantity: 3 }],
+      ...({ promotionId: "buy-1-get-1-free", appliedPromotionId: "buy-1-get-1-free" } as object),
+    });
+    expect(quoted.appliedPromotionId).toBe("buy-2-get-1-free");
+    expect(quoted.discountAmount).toBe(40); // not the 80 a forged BOGO would give
+  });
+
+  it("cannot be told a promotion is live when it is not", async () => {
+    // Switched off in the control value; nothing in the request can revive it.
+    promotionState.promotions = [promotion("buy-1-get-1-free", { enabled: false })];
+    const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }] });
+    expect(quoted.discountAmount).toBe(0);
+  });
+
+  it("cannot be told an expired promotion is in date", async () => {
+    promotionState.promotions = [promotion("buy-1-get-1-free", { endsAt: "2020-01-01T00:00:00.000Z" })];
+    const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }] });
+    expect(quoted.discountAmount).toBe(0);
+  });
+
+  it("cannot be told a product is eligible when the promotion excludes it", async () => {
+    promotionState.promotions = [promotion("buy-1-get-1-free", {
+      eligibility: { includeSlugs: [], excludeSlugs: ["peptide-b"] },
+    })];
+    const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }] });
+    expect(quoted.discountAmount).toBe(0);
+  });
+});
+
+describe("the usage counter's real limits, stated rather than assumed", () => {
+  it("counts each promotion independently, so one cap cannot exhaust another", async () => {
+    promotionState.promotions = [
+      promotion("buy-1-get-1-free", { maxRedemptions: 1 }),
+      promotion("buy-3-get-1-free", { maxRedemptions: 1 }),
+    ];
+    orderHistory.rows = [paidOrder("buy-1-get-1-free")];
+    const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }] });
+    expect(quoted.appliedPromotionId).toBe("buy-3-get-1-free");
+  });
+
+  it("TWO SIMULTANEOUS CHECKOUTS CAN BOTH TAKE THE LAST REDEMPTION", async () => {
+    // Honest limitation, recorded rather than papered over. The count is read
+    // at quote time and the order is written afterwards, with no lock in
+    // between, so N concurrent checkouts can overshoot a cap by up to N-1.
+    //
+    // Bounding it: the window is one checkout, both orders are real sales at a
+    // real promotional price, and the overshoot is capped by how many shoppers
+    // are inside that window at once. Closing it properly needs the count and
+    // the order insert in one transaction (a Postgres function), which is a
+    // change to the order-creation path and out of scope here.
+    promotionState.promotions = [promotion("buy-1-get-1-free", { maxRedemptions: 1 })];
+    orderHistory.rows = [];
+
+    const [first, second] = await Promise.all([
+      quote({ items: [{ id: "peptide-b", quantity: 4 }], email: "racer-one@example.test" }),
+      quote({ items: [{ id: "peptide-b", quantity: 4 }], email: "racer-two@example.test" }),
+    ]);
+
+    expect(first.appliedPromotionId).toBe("buy-1-get-1-free");
+    expect(second.appliedPromotionId).toBe("buy-1-get-1-free");
+
+    // And once either order is on record, the next shopper is correctly refused.
+    orderHistory.rows = [paidOrder("buy-1-get-1-free", "racer-one@example.test")];
+    const third = await quote({ items: [{ id: "peptide-b", quantity: 4 }], email: "racer-three@example.test" });
+    expect(third.appliedPromotionId).toBeNull();
+  });
+
+  it("an abandoned or failed checkout does not consume a redemption", async () => {
+    promotionState.promotions = [promotion("buy-1-get-1-free", { maxRedemptions: 1 })];
+    orderHistory.rows = [
+      paidOrder("buy-1-get-1-free", "abandoned@example.test", "pending_payment"),
+      paidOrder("buy-1-get-1-free", "failed@example.test", "payment_failed"),
+    ];
+    const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }] });
+    expect(quoted.discountAmount).toBe(80);
   });
 });

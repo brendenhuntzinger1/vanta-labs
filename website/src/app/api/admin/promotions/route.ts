@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageSettings } from "@/lib/admin-roles";
 import { getHomepageControlConfig, upsertControlValue } from "@/lib/admin-control";
-import { getBxgyPromotions, saveBxgyPromotions } from "@/lib/bxgy-promotions";
+import { areUsageLimitsEnforceable, getBxgyPromotions, hasUsageLimit, saveBxgyPromotions } from "@/lib/bxgy-promotions";
 import { normalizeBxgyPromotion, serializeBxgyPromotions } from "@/lib/bxgy-config";
 import { isPromotionScheduled, type BxgyPromotion } from "@/lib/bxgy-engine";
 
@@ -31,9 +31,15 @@ export async function GET(request: Request) {
   if (!session) return unauthorized();
   if (!canManageSettings(session.role)) return forbidden();
 
-  const [config, promotions] = await Promise.all([
+  const [config, promotions, limitsEnforceable] = await Promise.all([
     getHomepageControlConfig(),
     getBxgyPromotions(),
+    // Whether orders.promotion_id exists. A promotion carrying a usage limit
+    // does NOT run while its limit cannot be counted, so the centre has to say
+    // so — otherwise an admin sets "one per customer", sees the promotion never
+    // apply, and reports it as a broken promotion rather than a missing
+    // migration.
+    areUsageLimitsEnforceable().catch(() => true),
   ]);
   const now = new Date();
 
@@ -42,12 +48,17 @@ export async function GET(request: Request) {
     promotions: {
       buy3Get1Enabled: Boolean(config.promoBuy3Get1Enabled),
     },
+    usageLimitsEnforceable: limitsEnforceable,
     bxgyPromotions: serializeBxgyPromotions(promotions).map((promotion, index) => ({
       ...promotion,
       // Switched on AND inside its window — the only state that actually
       // discounts an order.
-      liveNow: promotions[index].enabled && isPromotionScheduled(promotions[index], now),
+      liveNow: promotions[index].enabled
+        && isPromotionScheduled(promotions[index], now)
+        && (limitsEnforceable || !hasUsageLimit(promotions[index])),
       scheduledNow: isPromotionScheduled(promotions[index], now),
+      /** Configured with a limit that this database cannot count yet. */
+      limitBlocked: !limitsEnforceable && hasUsageLimit(promotions[index]),
     })),
   });
 }

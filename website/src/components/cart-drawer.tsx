@@ -98,6 +98,7 @@ export function CartDrawer() {
     clearCouponCode,
     isApplyingCoupon,
     isBuy3Get1FreeEligible,
+    activePromotionAllowsCoupon,
     buy3Get1UntilNextFree,
     activePromotionName,
     activePromotionMessage,
@@ -445,7 +446,12 @@ export function CartDrawer() {
               ) : null}
 
               {/* Referral & coupon — collapsed by default */}
-              {!isBuy3Get1FreeEligible ? (
+              {/* Hidden while a promotion is running ONLY because the server
+                  refuses a code alongside one. When stacking is permitted —
+                  by the admin's coupon policy or by the promotion itself —
+                  quote-order accepts both, so the shopper must be able to
+                  enter one. */}
+              {!isBuy3Get1FreeEligible || activePromotionAllowsCoupon ? (
                 <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02]">
                   <button
                     type="button"

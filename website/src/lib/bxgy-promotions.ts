@@ -103,11 +103,23 @@ export async function getBxgyPromotions(): Promise<BxgyPromotion[]> {
 
 async function countRedemptions(promotionId: string, customerEmail?: string): Promise<number | null> {
   if (promotionColumnMissing) return null;
+  // `head: true` WOULD BE THE OBVIOUS CHOICE HERE AND IT IS THE WRONG ONE.
+  //
+  // supabase-js turns head:true into an HTTP HEAD request, and a HEAD response
+  // carries no body — so PostgREST's error payload, and with it the `42703`
+  // that says "this column does not exist", never reaches the client. The error
+  // arrives as `{ message: '' }` with no code, indistinguishable from a network
+  // blip, and the missing-migration guard below cannot fire.
+  //
+  // Caught against a real PostgREST, not in a unit test: the mock returned a
+  // structured error, the wire did not. `limit(1)` keeps the body to a single
+  // row while leaving the count in Content-Range and the error legible.
   let query = supabaseAdmin
     .from("orders")
-    .select("id", { count: "exact", head: true })
+    .select("id", { count: "exact" })
     .eq(PROMOTION_COLUMN, promotionId)
-    .in("payment_status", REDEEMED_STATUSES as unknown as string[]);
+    .in("payment_status", REDEEMED_STATUSES as unknown as string[])
+    .limit(1);
 
   if (customerEmail) {
     query = query.eq("customer_email", customerEmail.trim().toLowerCase());
@@ -131,42 +143,95 @@ export interface PromotionUsageContext {
   customerEmail?: string;
 }
 
+export interface PromotionUsageResult {
+  /** Promotions that have hit a limit and may no longer be applied. */
+  exhaustedIds: string[];
+  /**
+   * False when `orders.promotion_id` does not exist, so no usage limit in this
+   * store can be counted at all.
+   *
+   * THIS IS THE DIFFERENCE BETWEEN A MISSING MIGRATION AND A BAD MINUTE, AND
+   * THE TWO GET OPPOSITE ANSWERS.
+   *
+   * A transient count failure — a statement timeout, an RLS refusal — is
+   * handled by leaving the promotion alone: it self-heals, and dropping a
+   * promotion the cart already previewed turns a database blip into a refused
+   * sale ("Altered total detected"). Over-running a cap by a few orders during
+   * an incident is the cheaper mistake, and it is logged.
+   *
+   * A MISSING COLUMN IS NOT A BAD MINUTE. It does not heal, it lasts until
+   * someone runs the migration, and for its whole duration every "limit 100" /
+   * "one per customer" promotion in the store would be unlimited — silently,
+   * because nothing about the storefront looks wrong. So a promotion that
+   * carries a limit is NOT APPLIED while its limit cannot be counted. A
+   * promotion with no limits is unaffected and runs normally.
+   *
+   * Both sides see the same list (getApplicableBxgyPromotions is what
+   * /api/catalog/promotions publishes and what quote-order prices against), so
+   * this withholds a discount — it never blocks a checkout.
+   */
+  limitsEnforceable: boolean;
+}
+
 /**
- * The promotions that may no longer be applied, because a limit is reached.
+ * The promotions that may no longer be applied, because a limit is reached,
+ * plus whether limits can be counted at all.
  *
- * A COUNT THAT CANNOT BE READ DOES NOT DISABLE A PROMOTION. That is a
- * deliberate, and the less obvious, choice. The client cart prices the same
- * promotions from the same config, and payment-service rejects any order whose
- * claimed total is below the server's — so a server that quietly drops a
- * promotion the cart showed does not under-charge, it BLOCKS THE SALE with
- * "Altered total detected". Over-running a redemption cap during a database
- * incident costs the margin on a few orders; failing closed costs every order
- * placed during it. The failure is logged either way.
+ * See PromotionUsageResult.limitsEnforceable for why a count that CANNOT RUN
+ * and a count that HAS NOT YET RUN are treated differently.
  */
-export async function getExhaustedPromotionIds(
+export async function getPromotionUsage(
   promotions: readonly BxgyPromotion[],
   context: PromotionUsageContext = {},
-): Promise<string[]> {
+): Promise<PromotionUsageResult> {
   const email = context.customerEmail?.trim().toLowerCase();
-  const exhausted: string[] = [];
+  const exhaustedIds: string[] = [];
 
   await Promise.all(promotions.map(async (promotion) => {
     if (promotion.maxRedemptions !== null) {
       const used = await countRedemptions(promotion.id);
       if (used !== null && used >= promotion.maxRedemptions) {
-        exhausted.push(promotion.id);
+        exhaustedIds.push(promotion.id);
         return;
       }
     }
     if (promotion.perCustomerLimit !== null && email) {
       const used = await countRedemptions(promotion.id, email);
       if (used !== null && used >= promotion.perCustomerLimit) {
-        exhausted.push(promotion.id);
+        exhaustedIds.push(promotion.id);
       }
     }
   }));
 
-  return exhausted;
+  return { exhaustedIds, limitsEnforceable: !promotionColumnMissing };
+}
+
+/** Backwards-compatible view for callers that only need the exhausted ids. */
+export async function getExhaustedPromotionIds(
+  promotions: readonly BxgyPromotion[],
+  context: PromotionUsageContext = {},
+): Promise<string[]> {
+  return (await getPromotionUsage(promotions, context)).exhaustedIds;
+}
+
+/** Does this promotion depend on a usage limit that has to be counted? */
+export function hasUsageLimit(promotion: BxgyPromotion): boolean {
+  return promotion.maxRedemptions !== null || promotion.perCustomerLimit !== null;
+}
+
+/**
+ * Whether the store can count redemptions at all — i.e. whether
+ * orders.promotion_id exists.
+ *
+ * Answers from the memoised result once a read has proved it either way, and
+ * probes with a single cheap count otherwise. The promotion centre shows this
+ * so an admin who sets a limit and sees the promotion refuse to run is told
+ * why, rather than filing it as a bug.
+ */
+export async function areUsageLimitsEnforceable(): Promise<boolean> {
+  if (promotionColumnMissing) return false;
+  await countRedemptions("__migration_probe__");
+  return !promotionColumnMissing;
 }
 
 /**
@@ -194,8 +259,19 @@ export async function getApplicableBxgyPromotions(
   const configured = options.promotions ?? await getBxgyPromotions();
   const live = liveBxgyPromotions(configured, { now });
   if (live.length === 0) return [];
-  const exhausted = await getExhaustedPromotionIds(live, context);
-  const blocked = new Set(exhausted);
+
+  const usage = await getPromotionUsage(live, context);
+  const blocked = new Set(usage.exhaustedIds);
+
+  if (!usage.limitsEnforceable) {
+    // The migration is not applied. Withhold every promotion whose limit cannot
+    // be counted rather than running it as if it were unlimited — see
+    // PromotionUsageResult.limitsEnforceable.
+    for (const promotion of live) {
+      if (hasUsageLimit(promotion)) blocked.add(promotion.id);
+    }
+  }
+
   return live.filter((promotion) => !blocked.has(promotion.id));
 }
 
