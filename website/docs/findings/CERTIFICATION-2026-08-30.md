@@ -457,3 +457,36 @@ AFTER: 19/19, 0 skipped, and the ladder reports 4 of 6 reaching completion rathe
 LESSON: this is the second time in this session that a harness change made a step pass or fail for
 a reason unrelated to the product. Both were caught only because the step's DETAIL string carried
 the numbers ("0 ran to completion"), not just PASS. Detail strings are load-bearing.
+
+### D-011 (P2, CUSTOMER BLOCKED) — FIXED. Bears on question C.
+middleware.ts pathBypassesMaintenance exempts /account/forgot-password,
+/account/reset-password and /api/auth/password-reset, with the reason written beside them:
+"these are promises made in an email that has ALREADY been delivered. A customer who clicks a
+reset link during a maintenance window is the one person who most needs the page to answer."
+It did NOT exempt /auth/confirm (the branded signup-confirmation hop) or
+/api/auth/resend-confirmation. Every word of that reasoning applies to them and applies harder: an
+unconfirmed customer cannot sign in at all, so the confirmation link is their only way into the
+account they just made. With maintenance on it was rewritten to /maintenance — the branded link in
+their inbox simply looked broken — and they could not ask for another one either.
+BOUNDED, not permanent: the hop forwards to GoTrue and is not consumed when rewritten, so the token
+survives the window. Blocked for its duration, not destroyed.
+FIX: both paths added, with the existing reasoning carried over.
+Regression test: src/lib/maintenance-bypass.test.ts, which EVALUATES the real predicate lifted out
+of middleware.ts rather than asserting on its source. Both cases fail against the old list with
+"expected false to be true". The already-exempt delivered-email paths are pinned alongside them.
+
+### D-012 (P2, MONEY STATE MACHINE) — FIXED.
+/api/checkout/submit-payment (manual-payment lane, no session — the order id is the bearer
+credential, deliberate in this repo) refused an order that was already "paid" and nothing else.
+A REFUNDED or CANCELLED order could be posted back to awaiting_verification, with rejection_reason
+cleared on the way so it arrived looking clean, and would then sit in the admin's approval list
+indistinguishable from an ordinary pending payment. Approving it marks paid an order whose money
+has already gone back. The likely trigger is the CUSTOMER of a refunded order who still has the
+link, with the store's own admin completing the mistake.
+The terminal set already existed as a local const in processPaymentWebhook. Rather than copy it,
+it is now exported once from payment-types.ts as FULLY_TERMINAL_ORDER_STATES and imported by both
+ends — a second copy of a state-machine rule is how the two halves drift.
+payment_failed is deliberately excluded: a rejected manual payment is meant to be resubmittable,
+which is why the route clears rejection_reason.
+Regression test: src/lib/terminal-order-resubmit.test.ts (6 tests), including that the webhook does
+NOT re-inline the literals, and that the guard runs BEFORE the write rather than after it.
