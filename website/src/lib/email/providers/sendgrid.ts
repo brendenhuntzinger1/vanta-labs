@@ -42,6 +42,9 @@ export class SendgridEmailProvider implements EmailProvider {
             { type: "text/plain", value: message.text },
             { type: "text/html", value: message.html },
           ],
+          ...(message.headers && Object.keys(message.headers).length
+            ? { headers: message.headers }
+            : {}),
         }),
       });
 

@@ -95,7 +95,30 @@ export async function sendMarketingEmail(
     : `${input.html}${appendedHtml}`;
   const addressText = postalAddress && !input.text.includes(postalAddress) ? `\n\n${postalAddress}` : "";
   const text = `${input.text}\n\nUnsubscribe: ${unsubscribeUrl}${addressText}`;
+  // ONE-CLICK UNSUBSCRIBE (RFC 8058), because a footer link is no longer enough.
+  //
+  // Gmail and Yahoo have required bulk senders to offer one-click opt-out since
+  // February 2024. A commercial message without List-Unsubscribe is a message
+  // their filters are entitled to score worse — and this store has just spent a
+  // week learning what a filter's verdict costs, when a confirmation email was
+  // DELIVERED, filed as spam, had its links stripped, and stranded four signups.
+  //
+  // The header carries both forms the RFC allows. The mailto is the fallback
+  // for clients that do not implement one-click; the https URL is what Gmail's
+  // own "Unsubscribe" button POSTs to, which is why /api/unsubscribe gained a
+  // POST. Both name the same HMAC-signed token as the footer link, so all three
+  // routes are the same authorisation.
+  //
+  // TRANSACTIONAL MAIL SETS NONE OF THIS. A receipt is not a marketing message
+  // and must never offer to stop being sent; this is the marketing wrapper, and
+  // that is exactly why it lives here rather than in sendEmail().
+  const listHeaders: Record<string, string> = {
+    "List-Unsubscribe": `<${unsubscribeUrl}>${emailConfig.from ? `, <mailto:${emailConfig.from}?subject=unsubscribe>` : ""}`,
+    "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+  };
+
   const result = await sendEmail({
+    headers: listHeaders,
     to: input.to,
     subject: input.subject,
     html,

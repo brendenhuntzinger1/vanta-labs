@@ -38,21 +38,16 @@ function htmlResponse(title: string, message: string, status: number) {
 // with no account at all). Suppresses future marketing sends to this email
 // immediately; transactional email (receipts, shipping updates, billing
 // confirmations) is never affected by this list.
-export async function GET(request: NextRequest) {
-  const email = request.nextUrl.searchParams.get("email")?.trim().toLowerCase();
-  const token = request.nextUrl.searchParams.get("token");
-
-  if (!email || !token || !verifyUnsubscribeToken(email, token)) {
-    return htmlResponse("Link invalid", "This unsubscribe link is invalid or has expired.", 400);
-  }
-
+/**
+ * Record the opt-out. Shared verbatim by the footer link (GET) and Gmail's
+ * one-click button (POST), so all three entry points are the same decision.
+ */
+async function suppress(email: string): Promise<{ ok: boolean }> {
   const { error } = await supabaseAdmin
     .from("email_suppressions")
     .upsert({ email, reason: "unsubscribed", created_at: new Date().toISOString() }, { onConflict: "email" });
 
-  if (error) {
-    return htmlResponse("Something went wrong", "Unable to process this request right now. Please try again shortly.", 500);
-  }
+  if (error) return { ok: false };
 
   // Best-effort mirror onto the account preference toggle shown in
   // /account/settings, for a signed-in customer with this email. Not
@@ -70,5 +65,52 @@ export async function GET(request: NextRequest) {
     // Non-fatal.
   }
 
+  return { ok: true };
+}
+
+export async function GET(request: NextRequest) {
+  const email = request.nextUrl.searchParams.get("email")?.trim().toLowerCase();
+  const token = request.nextUrl.searchParams.get("token");
+
+  if (!email || !token || !verifyUnsubscribeToken(email, token)) {
+    return htmlResponse("Link invalid", "This unsubscribe link is invalid or has expired.", 400);
+  }
+
+  const { ok } = await suppress(email);
+  if (!ok) {
+    return htmlResponse("Something went wrong", "Unable to process this request right now. Please try again shortly.", 500);
+  }
+
   return htmlResponse("You're unsubscribed", `${email} will no longer receive marketing emails from Vanta Labs. You'll still receive order receipts and account/billing notices.`, 200);
+}
+
+// ---------------------------------------------------------------------------
+// POST — RFC 8058 one-click unsubscribe.
+//
+// This is what Gmail's and Yahoo's own "Unsubscribe" button calls. Both have
+// required bulk senders to support it since February 2024, and a commercial
+// message that does not is one their filters may score worse. That is not an
+// abstract risk here: on 2026-08-29 a message this store sent was DELIVERED,
+// filed as spam, had its links stripped by the filter, and left four customers
+// unable to finish signing up.
+//
+// The mail client POSTs with no cookies and no user interaction, so the signed
+// token in the URL is the whole authorisation — the same HMAC the footer link
+// carries. The body ("List-Unsubscribe=One-Click") is not read: the RFC says a
+// sender must not require anything further, and the token already proves the
+// request came from a message we sent to that address.
+//
+// The response is a bare 200. No HTML: nothing renders it.
+// ---------------------------------------------------------------------------
+export async function POST(request: NextRequest) {
+  const email = request.nextUrl.searchParams.get("email")?.trim().toLowerCase();
+  const token = request.nextUrl.searchParams.get("token");
+
+  if (!email || !token || !verifyUnsubscribeToken(email, token)) {
+    return new NextResponse("Invalid unsubscribe link", { status: 400 });
+  }
+
+  const { ok } = await suppress(email);
+  // A 5xx makes the client retry, which is right: the customer asked to stop.
+  return new NextResponse(ok ? "Unsubscribed" : "Unable to process", { status: ok ? 200 : 500 });
 }

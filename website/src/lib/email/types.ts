@@ -19,6 +19,19 @@ export interface EmailMessage {
    * capability, where our claim remains the only guard.
    */
   idempotencyKey?: string;
+  /**
+   * Extra RFC 5322 headers to put on the wire.
+   *
+   * Exists for List-Unsubscribe. Gmail and Yahoo have required bulk senders to
+   * offer one-click unsubscribe since February 2024, and a commercial message
+   * without the header is a message their filters are entitled to treat as
+   * worse than one with it — which is the whole subject of the 2026-08-29
+   * incident. See lib/email/marketing.ts.
+   *
+   * Transactional mail deliberately sets none of these: a receipt is not a
+   * marketing message and must not offer to stop being sent.
+   */
+  headers?: Record<string, string>;
 }
 
 export interface EmailSendResult {

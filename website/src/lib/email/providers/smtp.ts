@@ -51,6 +51,10 @@ export class SmtpEmailProvider implements EmailProvider {
         text: message.text,
         html: message.html,
         replyTo: message.replyTo,
+        // Nodemailer writes these straight into the message headers.
+        ...(message.headers && Object.keys(message.headers).length
+          ? { headers: message.headers }
+          : {}),
       });
 
       // NOT THROWING IS NOT THE SAME AS DELIVERED. nodemailer resolves rather

@@ -40,6 +40,12 @@ export class ResendEmailProvider implements EmailProvider {
           html: message.html,
           text: message.text,
           reply_to: message.replyTo,
+          // List-Unsubscribe and friends. Resend puts these on the wire
+          // verbatim; without them a bulk send has no one-click opt-out, which
+          // Gmail and Yahoo have required of bulk senders since Feb 2024.
+          ...(message.headers && Object.keys(message.headers).length
+            ? { headers: message.headers }
+            : {}),
         }),
       });
 

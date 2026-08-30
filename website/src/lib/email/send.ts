@@ -8,7 +8,7 @@ import type { EmailMessage, EmailSendResult, EmailTemplate } from "@/lib/email/t
 // errors — this always resolves, and the caller decides what (if anything)
 // to do with a failed result (e.g. log it, queue for retry).
 export async function sendEmail(
-  input: { to: string; replyTo?: string; from?: string; idempotencyKey?: string } & EmailTemplate,
+  input: { to: string; replyTo?: string; from?: string; idempotencyKey?: string; headers?: Record<string, string> } & EmailTemplate,
 ): Promise<EmailSendResult> {
   const message: EmailMessage = {
     to: input.to,
@@ -17,6 +17,7 @@ export async function sendEmail(
     text: input.text,
     replyTo: input.replyTo,
     idempotencyKey: input.idempotencyKey,
+    headers: input.headers,
   };
 
   try {
