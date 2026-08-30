@@ -393,6 +393,19 @@ describe("customer-facing wording", () => {
     const limited = builtIn("buy-2-get-1-free", { eligibility: { includeSlugs: ["alpha"], excludeSlugs: [] } });
     expect(storefrontDescription(limited)).toContain("on selected products");
   });
+
+  it("never calls a promotion storewide when products are excluded from it", () => {
+    // The shipped Buy 1 Get 1 Free excludes two SKUs, so "storewide" would be
+    // a promise it does not keep — read on the product page of an excluded
+    // product, it is simply false.
+    const withExclusion = builtIn("buy-2-get-1-free", { eligibility: { includeSlugs: [], excludeSlugs: ["alpha"] } });
+    const described = storefrontDescription(withExclusion);
+    expect(described).toContain("on eligible products");
+    expect(described).not.toContain("storewide");
+
+    const bogo = defaultBxgyPromotions().find((p) => p.id === "buy-1-get-1-free")!;
+    expect(storefrontDescription(bogo)).not.toContain("storewide");
+  });
 });
 
 // ---------------------------------------------------------------------------

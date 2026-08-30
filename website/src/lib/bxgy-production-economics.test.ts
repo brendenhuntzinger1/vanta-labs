@@ -230,6 +230,20 @@ function promo(id: string, overrides: Partial<BxgyPromotion> = {}): BxgyPromotio
   return { ...found, enabled: true, ...overrides };
 }
 
+/**
+ * A promotion with its shipped exclusions REMOVED.
+ *
+ * Buy 1 Get 1 Free now ships excluding the two SKUs it cannot afford, which is
+ * the guard rail. The finding underneath it is still worth proving — an admin
+ * can remove an exclusion, and if these prices or costs move, "is BOGO safe
+ * here" must be answerable from a test rather than from memory. So the
+ * below-cost cases below deliberately strip the exclusion and price the raw
+ * promotion.
+ */
+function promoWithoutExclusions(id: string): BxgyPromotion {
+  return promo(id, { eligibility: { includeSlugs: [], excludeSlugs: [] } });
+}
+
 const ALL_IDS = [
   "buy-1-get-1-free",
   "buy-2-get-1-free",
@@ -312,11 +326,11 @@ describe("THE TWO PROMOTIONS THAT CAN LOSE MONEY, AND EXACTLY WHERE", () => {
   // Buy 1 Get 1 Free gives away 50% of the units and Buy 3 Get 2 Free gives
   // away 40%. Against a SKU costing ~47% of its price, that is a loss — not a
   // bug in the promotion, an arithmetic fact about the price of that SKU.
-  it("Buy 1 Get 1 Free is refused on pinealon and cerebrolysin", () => {
+  it("Buy 1 Get 1 Free is refused on pinealon and cerebrolysin — with its exclusions removed", () => {
     const refused: string[] = [];
     for (const item of CATALOGUE) {
       for (const quantity of [2, 4, 6, 8, 10]) {
-        const outcome = priceBasket([{ slug: item.slug, quantity }], [promo("buy-1-get-1-free")]);
+        const outcome = priceBasket([{ slug: item.slug, quantity }], [promoWithoutExclusions("buy-1-get-1-free")]);
         if (outcome.refused && !refused.includes(item.slug)) refused.push(item.slug);
       }
     }
@@ -328,13 +342,13 @@ describe("THE TWO PROMOTIONS THAT CAN LOSE MONEY, AND EXACTLY WHERE", () => {
     // promotion; two units free at list is $149.98, competed to $125.98 against
     // the $24.00 the bundle already gave. $149.98 is charged against $140.00 of
     // goods, $12.00 of card fees and $6.00 of shipping cost.
-    const cerebrolysin = priceBasket([{ slug: "cerebrolysin", quantity: 4 }], [promo("buy-1-get-1-free")]);
+    const cerebrolysin = priceBasket([{ slug: "cerebrolysin", quantity: 4 }], [promoWithoutExclusions("buy-1-get-1-free")]);
     expect(cerebrolysin.refused).toBe(true);
-    expect(cerebrolysin.grossProfit).toBeLessThan(0);
+    expect(cerebrolysin.grossProfit).toBeCloseTo(-8.02, 2);
 
-    const pinealon = priceBasket([{ slug: "pinealon", quantity: 4 }], [promo("buy-1-get-1-free")]);
+    const pinealon = priceBasket([{ slug: "pinealon", quantity: 4 }], [promoWithoutExclusions("buy-1-get-1-free")]);
     expect(pinealon.refused).toBe(true);
-    expect(pinealon.grossProfit).toBeLessThan(0);
+    expect(pinealon.grossProfit).toBeCloseTo(-11.70, 2);
   });
 
   it("Buy 3 Get 2 Free stays above the floor even on those two SKUs — thinly", () => {
@@ -361,7 +375,21 @@ describe("THE TWO PROMOTIONS THAT CAN LOSE MONEY, AND EXACTLY WHERE", () => {
     expect(cerebrolysin.grossProfit).toBeCloseTo(25.97, 2); // on a $224.99 order
   });
 
-  it("EXCLUDING those two SKUs makes every promotion safe across the catalogue", () => {
+  it("SHIPS SAFE: the built-in Buy 1 Get 1 Free already excludes both, so it cannot be switched on unprofitably", () => {
+    const shipped = promo("buy-1-get-1-free");
+    expect(shipped.eligibility.excludeSlugs.sort()).toEqual(["cerebrolysin", "pinealon"]);
+
+    const failures: string[] = [];
+    for (const item of CATALOGUE) {
+      for (const quantity of [2, 3, 4, 5, 6, 8, 10, 12]) {
+        const outcome = priceBasket([{ slug: item.slug, quantity }], [shipped]);
+        if (outcome.refused) failures.push(`${item.slug} x${quantity} (profit ${outcome.grossProfit})`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("excluding those two SKUs makes every promotion safe across the catalogue", () => {
     // This is the remedy, and it is a configuration rather than a code change:
     // the promotion centre's "Excluded products" field is exactly for this.
     const exclusion = { includeSlugs: [], excludeSlugs: ["pinealon", "cerebrolysin"] };
@@ -415,7 +443,7 @@ describe("mixed-price baskets", () => {
 
 describe("the guard is never weakened to let a promotion through", () => {
   it("a below-cost basket is refused, not silently repriced", () => {
-    const outcome = priceBasket([{ slug: "cerebrolysin", quantity: 4 }], [promo("buy-1-get-1-free")]);
+    const outcome = priceBasket([{ slug: "cerebrolysin", quantity: 4 }], [promoWithoutExclusions("buy-1-get-1-free")]);
     // The promotion IS applied by the engine — the guard is what stops the
     // order. Nothing in this change lowers the floor or trims the discount to
     // sneak under it.

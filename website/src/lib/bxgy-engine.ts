@@ -418,7 +418,15 @@ export function progressMessage(promotion: BxgyPromotion, unitsAway: number): st
 
 /** What the storefront may advertise: short, and true of the promotion as configured. */
 export function storefrontDescription(promotion: BxgyPromotion): string {
-  const scope = promotion.eligibility.includeSlugs.length > 0 ? "on selected products" : "storewide";
+  // "storewide" is only true when nothing is carved out of it. A promotion that
+  // excludes even one product is not storewide, and saying so on a product page
+  // that happens to BE the excluded one is how a shopper ends up at a checkout
+  // that does not honour what they read.
+  const scope = promotion.eligibility.includeSlugs.length > 0
+    ? "on selected products"
+    : promotion.eligibility.excludeSlugs.length > 0
+      ? "on eligible products"
+      : "storewide";
   const reward = clampPercent(promotion.rewardPercent) >= 100 ? "free" : `${trimPercent(clampPercent(promotion.rewardPercent))}% off`;
   const rewarded = promotion.getQuantity === 1 ? "the cheapest item" : `the ${promotion.getQuantity} cheapest items`;
   return `Add ${groupSize(promotion)} eligible ${pluralUnits(groupSize(promotion))} ${scope} and ${rewarded} ${promotion.getQuantity === 1 ? "is" : "are"} ${reward}.`;

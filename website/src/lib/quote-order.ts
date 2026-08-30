@@ -131,6 +131,14 @@ export interface QuoteResult {
   appliedPromotionId: string | null;
   /** Its customer-facing name, for receipts and admin. */
   appliedPromotionName: string | null;
+  /**
+   * The limits that promotion carries, or null when it carries none.
+   *
+   * Present so order creation can claim a redemption atomically without
+   * re-reading the promotion config it has already resolved here. Null means
+   * "nothing to claim" — an unlimited promotion needs no slot.
+   */
+  appliedPromotionLimits: { maxRedemptions: number | null; perCustomerLimit: number | null } | null;
   storeCreditRedeemedCents: number;
   pointsRedeemed: number;
   pointsDiscountAmount: number;
@@ -595,6 +603,13 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   const promotionDiscount = selectedPromotion?.application.discountAmount ?? 0;
   const appliedPromotionId = selectedPromotion?.promotion.id ?? null;
   const appliedPromotionName = selectedPromotion?.promotion.name ?? null;
+  const appliedPromotionLimits = selectedPromotion
+    && (selectedPromotion.promotion.maxRedemptions !== null || selectedPromotion.promotion.perCustomerLimit !== null)
+    ? {
+      maxRedemptions: selectedPromotion.promotion.maxRedemptions,
+      perCustomerLimit: selectedPromotion.promotion.perCustomerLimit,
+    }
+    : null;
   // Kept under its original name because payment-service, the express lane and
   // the referral-exclusivity suite all read it. It has always meant "a free/
   // reduced-price item promotion priced this order"; it now means that for any
@@ -1024,6 +1039,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     isBuy3Get1Active,
     appliedPromotionId,
     appliedPromotionName,
+    appliedPromotionLimits,
     storeCreditRedeemedCents,
     pointsRedeemed,
     pointsDiscountAmount,

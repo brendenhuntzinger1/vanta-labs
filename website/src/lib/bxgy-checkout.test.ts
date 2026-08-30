@@ -29,8 +29,8 @@ const promotionState = vi.hoisted(() => ({
  */
 const orderHistory = vi.hoisted(() => ({
   rows: [] as Array<{ promotion_id: string; payment_status: string; customer_email: string }>,
-  /** Simulate a database on which bxgy-promotions.sql has not been applied. */
-  promotionColumnMissing: false,
+  /** Simulate a database on which bxgy-redemption-claims.sql has not been applied. */
+  atomicLayerMissing: false,
   /** Simulate a transient failure (statement timeout, RLS refusal). */
   transientError: false,
 }));
@@ -53,38 +53,68 @@ vi.mock("@/lib/membership", async () => {
 // coupon row a coupon test redeems, and the order history the redemption count
 // reads. Everything else legitimately answers empty.
 vi.mock("@/lib/supabase-server", () => {
-  type Filter = { column: string; value: unknown; kind: "eq" | "in" };
-  const chain = (table: string) => {
-    const filters: Filter[] = [];
+  /**
+   * The database, reduced to what these tests need: the RPCs the promotion
+   * layer calls, backed by the seeded order history.
+   *
+   * `bxgy_count_redemptions` reproduces the SQL's rule for SETTLED history —
+   * a paid or partially-refunded order counts, everything else does not. The
+   * hold branch (a claim newer than the hold window) is exercised where it
+   * actually lives, against a real Postgres, in
+   * src/lib/sql/bxgy-redemption-claims.test.ts. A mock has no concurrency to be
+   * wrong about, so it cannot stand in for that proof and does not pretend to.
+   */
+  const REDEEMED = ["paid", "partially_refunded"];
+
+  const countRedemptions = (promotionId: string, email: string | null) =>
+    orderHistory.rows.filter((row) => (
+      row.promotion_id === promotionId
+      && REDEEMED.includes(row.payment_status)
+      && (email === null || row.customer_email.toLowerCase() === email.toLowerCase())
+    )).length;
+
+  const rpc = async (fn: string, args: Record<string, unknown>) => {
+    if (orderHistory.atomicLayerMissing) {
+      // Exactly what PostgREST answers for an RPC it cannot find.
+      return { data: null, error: { code: "PGRST202", message: `Could not find the function public.${fn}` } };
+    }
+    if (orderHistory.transientError) {
+      return { data: null, error: { code: "57014", message: "canceling statement due to statement timeout" } };
+    }
+    if (fn === "bxgy_count_redemptions") {
+      return {
+        data: countRedemptions(String(args.p_promotion_id), args.p_customer_email as string | null),
+        error: null,
+      };
+    }
+    if (fn === "bxgy_claim_redemption") {
+      const promotionId = String(args.p_promotion_id);
+      const email = (args.p_customer_email as string | null) ?? null;
+      const max = args.p_max_redemptions as number | null;
+      const perCustomer = args.p_per_customer_limit as number | null;
+      if (max !== null && countRedemptions(promotionId, null) >= max) return { data: false, error: null };
+      if (perCustomer !== null && email && countRedemptions(promotionId, email) >= perCustomer) {
+        return { data: false, error: null };
+      }
+      return { data: true, error: null };
+    }
+    if (fn === "bxgy_release_redemption") return { data: true, error: null };
+    return { data: null, error: null };
+  };
+
+  const chain = () => {
     const self: Record<string, unknown> = {};
-    for (const method of ["select", "order", "limit", "not", "is", "gte", "lte", "neq", "ilike"]) {
+    for (const method of ["select", "eq", "in", "order", "limit", "not", "is", "gte", "lte", "neq", "ilike"]) {
       self[method] = () => self;
     }
-    self.eq = (column: string, value: unknown) => { filters.push({ column, value, kind: "eq" }); return self; };
-    self.in = (column: string, value: unknown) => { filters.push({ column, value, kind: "in" }); return self; };
-
-    const resolve = () => {
-      if (table !== "orders") return { data: null, error: null, count: 0 };
-      if (orderHistory.promotionColumnMissing) {
-        // Exactly what PostgREST answers for an unknown column.
-        return { data: null, error: { code: "42703", message: 'column orders.promotion_id does not exist' }, count: null };
-      }
-      if (orderHistory.transientError) {
-        return { data: null, error: { code: "57014", message: "canceling statement due to statement timeout" }, count: null };
-      }
-      const matching = orderHistory.rows.filter((row) => filters.every((filter) => {
-        const cell = (row as unknown as Record<string, unknown>)[filter.column];
-        if (filter.kind === "in") return Array.isArray(filter.value) && filter.value.includes(cell);
-        return cell === filter.value;
-      }));
-      return { data: null, error: null, count: matching.length };
-    };
     self.maybeSingle = async () => ({ data: null, error: null });
     self.single = async () => ({ data: null, error: null });
-    self.then = (onResolve: (value: unknown) => unknown) => Promise.resolve(resolve()).then(onResolve);
+    self.then = (onResolve: (value: unknown) => unknown) =>
+      Promise.resolve({ data: null, error: null, count: 0 }).then(onResolve);
     return self;
   };
-  const client = { from: (table: string) => chain(table) };
+
+  const client = { from: () => chain(), rpc };
   return { supabaseAdmin: client, createServerClient: () => client };
 });
 
@@ -182,7 +212,7 @@ beforeEach(() => {
   promotionState.bundleStacking = false;
   promotionState.allowCouponStacking = false;
   orderHistory.rows = [];
-  orderHistory.promotionColumnMissing = false;
+  orderHistory.atomicLayerMissing = false;
   orderHistory.transientError = false;
   coupon.discountAmount = 30;
   vi.clearAllMocks();
@@ -483,9 +513,9 @@ describe("stacking rules", () => {
 // THE MIGRATION, AND WHAT HAPPENS BEFORE IT IS APPLIED
 // ---------------------------------------------------------------------------
 
-describe("a missing orders.promotion_id migration never silently unlimits a promotion", () => {
+describe("a missing atomic-redemption migration never silently unlimits a promotion", () => {
   it("WITHHOLDS a promotion whose total limit cannot be counted", async () => {
-    orderHistory.promotionColumnMissing = true;
+    orderHistory.atomicLayerMissing = true;
     promotionState.promotions = [promotion("buy-1-get-1-free", { maxRedemptions: 100 })];
 
     const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }] });
@@ -495,7 +525,7 @@ describe("a missing orders.promotion_id migration never silently unlimits a prom
   });
 
   it("withholds a promotion whose per-customer limit cannot be counted", async () => {
-    orderHistory.promotionColumnMissing = true;
+    orderHistory.atomicLayerMissing = true;
     promotionState.promotions = [promotion("buy-1-get-1-free", { perCustomerLimit: 1 })];
 
     const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }] });
@@ -505,7 +535,7 @@ describe("a missing orders.promotion_id migration never silently unlimits a prom
   it("still runs a promotion that carries no limit at all", async () => {
     // Nothing to count, so nothing to be wrong about. An unmigrated database
     // does not switch the whole promotion system off.
-    orderHistory.promotionColumnMissing = true;
+    orderHistory.atomicLayerMissing = true;
     promotionState.promotions = [promotion("buy-1-get-1-free")];
 
     const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }] });
@@ -514,7 +544,7 @@ describe("a missing orders.promotion_id migration never silently unlimits a prom
   });
 
   it("falls through to an unlimited promotion when the limited one is withheld", async () => {
-    orderHistory.promotionColumnMissing = true;
+    orderHistory.atomicLayerMissing = true;
     promotionState.promotions = [
       promotion("buy-1-get-1-free", { maxRedemptions: 100 }),
       promotion("buy-3-get-1-free"),
@@ -540,7 +570,7 @@ describe("a missing orders.promotion_id migration never silently unlimits a prom
 
 describe("what the cart is told matches what the checkout does", () => {
   it("the withheld promotion is absent from the applicable list the cart prices against", async () => {
-    orderHistory.promotionColumnMissing = true;
+    orderHistory.atomicLayerMissing = true;
     const { getApplicableBxgyPromotions } = await import("@/lib/bxgy-promotions");
     const applicable = await getApplicableBxgyPromotions({}, {
       promotions: [
@@ -554,7 +584,7 @@ describe("what the cart is told matches what the checkout does", () => {
   });
 
   it("reports that limits are not enforceable, for the promotion centre", async () => {
-    orderHistory.promotionColumnMissing = true;
+    orderHistory.atomicLayerMissing = true;
     const { areUsageLimitsEnforceable } = await import("@/lib/bxgy-promotions");
     expect(await areUsageLimitsEnforceable()).toBe(false);
   });
@@ -625,16 +655,19 @@ describe("the usage counter's real limits, stated rather than assumed", () => {
     expect(quoted.appliedPromotionId).toBe("buy-3-get-1-free");
   });
 
-  it("TWO SIMULTANEOUS CHECKOUTS CAN BOTH TAKE THE LAST REDEMPTION", async () => {
-    // Honest limitation, recorded rather than papered over. The count is read
-    // at quote time and the order is written afterwards, with no lock in
-    // between, so N concurrent checkouts can overshoot a cap by up to N-1.
+  it("two simultaneous QUOTES can both preview the last redemption — only one can claim it", async () => {
+    // Quoting is a read: nothing reserves anything, so two carts reaching the
+    // last redemption together will both show the discount. That is correct and
+    // deliberate — a cart preview must not consume a slot, or an abandoned
+    // browse would burn the promotion.
     //
-    // Bounding it: the window is one checkout, both orders are real sales at a
-    // real promotional price, and the overshoot is capped by how many shoppers
-    // are inside that window at once. Closing it properly needs the count and
-    // the order insert in one transaction (a Postgres function), which is a
-    // change to the order-creation path and out of scope here.
+    // The reservation happens at ORDER CREATION, through
+    // claimPromotionRedemption, and that is where the race is closed. Proof
+    // that it is closed cannot live here: this mock is single-threaded, so it
+    // has no concurrency to be wrong about. It lives in
+    // src/lib/sql/bxgy-redemption-claims.test.ts, which fires ten real
+    // connections at one slot against a real Postgres and asserts exactly one
+    // wins — and which fails when the advisory lock is removed.
     promotionState.promotions = [promotion("buy-1-get-1-free", { maxRedemptions: 1 })];
     orderHistory.rows = [];
 
@@ -642,14 +675,60 @@ describe("the usage counter's real limits, stated rather than assumed", () => {
       quote({ items: [{ id: "peptide-b", quantity: 4 }], email: "racer-one@example.test" }),
       quote({ items: [{ id: "peptide-b", quantity: 4 }], email: "racer-two@example.test" }),
     ]);
-
     expect(first.appliedPromotionId).toBe("buy-1-get-1-free");
     expect(second.appliedPromotionId).toBe("buy-1-get-1-free");
 
-    // And once either order is on record, the next shopper is correctly refused.
+    // Both quotes carry the limits that order creation will enforce...
+    expect(first.appliedPromotionLimits).toEqual({ maxRedemptions: 1, perCustomerLimit: null });
+
+    // ...and once one of them becomes a sale, the other's claim is refused.
+    const { claimPromotionRedemption } = await import("@/lib/bxgy-promotions");
     orderHistory.rows = [paidOrder("buy-1-get-1-free", "racer-one@example.test")];
-    const third = await quote({ items: [{ id: "peptide-b", quantity: 4 }], email: "racer-three@example.test" });
-    expect(third.appliedPromotionId).toBeNull();
+    const secondClaim = await claimPromotionRedemption({
+      promotionId: "buy-1-get-1-free",
+      orderId: "order-racer-two",
+      customerEmail: "racer-two@example.test",
+      maxRedemptions: 1,
+      perCustomerLimit: null,
+    });
+    expect(secondClaim).toBe(false);
+  });
+
+  it("claims a redemption when one is free, and refuses a per-customer repeat", async () => {
+    const { claimPromotionRedemption } = await import("@/lib/bxgy-promotions");
+    orderHistory.rows = [];
+    expect(await claimPromotionRedemption({
+      promotionId: "buy-1-get-1-free",
+      orderId: "order-1",
+      customerEmail: "shopper@example.test",
+      maxRedemptions: 5,
+      perCustomerLimit: 1,
+    })).toBe(true);
+
+    orderHistory.rows = [paidOrder("buy-1-get-1-free", "shopper@example.test")];
+    expect(await claimPromotionRedemption({
+      promotionId: "buy-1-get-1-free",
+      orderId: "order-2",
+      customerEmail: "shopper@example.test",
+      maxRedemptions: 5,
+      perCustomerLimit: 1,
+    })).toBe(false);
+  });
+
+  it("a claim that cannot reach the database does not refuse a correctly priced sale", async () => {
+    // Documented posture: an unreadable limit must not block a checkout that
+    // was priced correctly. Logged, and bounded by the fact that the promotion
+    // was only offered because the count succeeded moments earlier at quote
+    // time.
+    const { claimPromotionRedemption } = await import("@/lib/bxgy-promotions");
+    orderHistory.transientError = true;
+    expect(await claimPromotionRedemption({
+      promotionId: "buy-1-get-1-free",
+      orderId: "order-x",
+      customerEmail: "shopper@example.test",
+      maxRedemptions: 1,
+      perCustomerLimit: null,
+    })).toBe(true);
   });
 
   it("an abandoned or failed checkout does not consume a redemption", async () => {

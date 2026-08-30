@@ -8,16 +8,59 @@
 // modules cannot — "which promotions may still be used, by this shopper, right
 // now".
 //
-// USAGE LIMITS ARE COUNTED FROM ORDERS, NOT FROM A COUNTER COLUMN.
+// USAGE LIMITS ARE CLAIMED ATOMICALLY, AND COUNTED FROM ORDER STATUS.
 //
-// A counter that is incremented at checkout has to be decremented on refund, on
-// cancellation, on a failed capture and on every path anyone adds later; the
-// day one of those is missed the promotion is permanently a redemption short of
-// its limit with nothing to point at. Counting `orders` rows carrying the
-// promotion id gives refunds and cancellations for free: an order that stops
-// being a sale stops being a redemption, because REDEEMED_STATUSES no longer
-// matches it. It costs one indexed COUNT per limited promotion per quote, which
-// is why only promotions that actually HAVE a limit are ever counted.
+// Two halves, and both matter:
+//
+//   COUNTING. A counter that is incremented at checkout has to be decremented
+//   on refund, on cancellation, on a failed capture and on every path anyone
+//   adds later; the day one of those is missed the promotion is permanently a
+//   redemption short of its limit with nothing to point at. A claim's liveness
+//   is DERIVED from its order's payment status instead, so refunds and
+//   cancellations release it with no code to remember.
+//
+//   ENFORCING. Counting and then inserting is a race: two shoppers reaching the
+//   last redemption together both read "one left". The claim is therefore taken
+//   in a single locked function (bxgy_claim_redemption) before the order is
+//   written — see src/lib/sql/bxgy-redemption-claims.sql for the lock and why
+//   it cannot deadlock.
+//
+// Only promotions that actually HAVE a limit are ever counted or claimed.
+//
+// ---------------------------------------------------------------------------
+// WHAT HAPPENS WHEN THE DATABASE IS UNAVAILABLE — the complete list.
+//
+//   1. THE MIGRATION IS NOT APPLIED (structural, permanent).
+//      Every limited promotion is WITHHELD: it is absent from the list the cart
+//      is given and from the list the checkout prices against, so it simply does
+//      not run. Unlimited promotions are unaffected. The promotion centre shows
+//      a banner and marks those promotions "Blocked". A limit that cannot be
+//      enforced must never look enforced. Logged once per process.
+//
+//   2. THE COUNT FAILS AT QUOTE TIME (transient — timeout, RLS, blip).
+//      The promotion KEEPS RUNNING and may exceed its cap for the duration.
+//      Deliberate, and unchanged by the move to atomic claims: the cart and the
+//      checkout resolve the same list, so withholding on a transient failure
+//      would drop a promotion the cart already previewed, push the server total
+//      above the shopper's claimed one, and the altered-total guard would refuse
+//      the sale. Over-running a cap during an incident costs the margin on a few
+//      orders; failing closed costs every order placed during it. Logged.
+//
+//   3. THE CLAIM FAILS AT ORDER TIME (transient).
+//      The order PROCEEDS. Same rule as (2) and for the same reason — a
+//      reservation that could not be taken must not refuse a sale that was
+//      priced correctly moments earlier. The exposure is narrower than (2): the
+//      promotion was only offered because the count succeeded at quote time.
+//      Logged.
+//
+//   4. THE CLAIM ANSWERS FALSE (the database is fine; the limit is reached).
+//      The order is REFUSED with the same sentence the altered-total guard uses,
+//      because it is the same situation from the shopper's side: the price they
+//      were quoted is no longer available and the page must re-price. This is
+//      the only case that stops a checkout, and it is the correct one.
+//
+// So: a structural failure withholds the promotion, a transient failure lets it
+// through, and only a genuinely exhausted limit refuses an order.
 // ---------------------------------------------------------------------------
 
 import { supabaseAdmin } from "@/lib/supabase-server";
@@ -33,36 +76,155 @@ import {
 import { liveBxgyPromotions, type BxgyPromotion } from "@/lib/bxgy-engine";
 
 /**
- * Order states that consume a redemption.
+ * Order states that consume a redemption for good.
  *
  * `partially_refunded` still counts: the sale happened, the promotion was
  * honoured, and part of the money was returned. `refunded`, `canceled`,
- * `cancelled`, `payment_failed` and `pending_payment` do not — an order that
- * never became a sale, or stopped being one, gives its redemption back.
+ * `cancelled` and `payment_failed` do not — an order that never became a sale,
+ * or stopped being one, gives its redemption back. `pending_payment` counts
+ * only while its hold is live (see CLAIM_HOLD_SECONDS).
+ *
+ * Kept in step with bxgy_count_redemptions, which is where the rule is
+ * ENFORCED; a structural test asserts the two lists match.
  */
 export const REDEEMED_STATUSES = ["paid", "partially_refunded"] as const;
 
-/** Column that records which promotion priced an order (bxgy-promotions.sql). */
-const PROMOTION_COLUMN = "promotion_id";
+/**
+ * How long a claim holds a redemption before the order is paid.
+ *
+ * Matched to the inventory hold for the same order, deliberately: a checkout
+ * that still holds stock must still hold its promotion slot, or the two expire
+ * at different moments and a shopper can pay for an order whose promotion has
+ * been given away. Manual payment methods hold stock for a day, so they hold a
+ * redemption for a day too.
+ */
+export const CLAIM_HOLD_SECONDS = 15 * 60;
+export const MANUAL_CLAIM_HOLD_SECONDS = 24 * 60 * 60;
 
 /**
- * True once a read has proved `orders.promotion_id` is missing, for the life of
- * this process.
+ * True once a read has proved the atomic layer is not installed, for the life
+ * of this process.
  *
  * The migration is separate from the deploy, so there is a window in which the
- * code is live and the column is not. Remembering the answer keeps that window
- * from costing one failed count per limited promotion per checkout.
+ * code is live and the function is not. Remembering the answer keeps that
+ * window from costing one failed call per limited promotion per checkout.
  */
-let promotionColumnMissing = false;
+let atomicLayerMissing = false;
 
-function isMissingColumnError(error: { code?: string; message?: string } | null): boolean {
+function isMissingObjectError(error: { code?: string; message?: string } | null): boolean {
   if (!error) return false;
-  // 42703 = undefined_column. PostgREST also answers PGRST204 for an unknown
-  // column in a payload, and the message is checked as a last resort because a
-  // pooled connection can surface either.
-  return error.code === "42703"
-    || error.code === "PGRST204"
-    || Boolean(error.message && /promotion_id/i.test(error.message) && /column|schema cache/i.test(error.message));
+  // 42883 undefined_function / 42P01 undefined_table from Postgres; PGRST202
+  // is PostgREST's "no function matches" for an RPC it cannot find in the
+  // schema cache. The message check is a last resort only.
+  return error.code === "42883"
+    || error.code === "42P01"
+    || error.code === "PGRST202"
+    || Boolean(error.message && /bxgy_(claim|count|release)_redemption|promotion_redemption_claims/i.test(error.message));
+}
+
+function noteMissingAtomicLayer(where: string): void {
+  if (!atomicLayerMissing) {
+    atomicLayerMissing = true;
+    console.warn(
+      `[bxgy] the atomic redemption layer is missing (${where}). Promotions carrying a usage limit will NOT run `
+      + "until src/lib/sql/bxgy-redemption-claims.sql is applied.",
+    );
+  }
+}
+
+/**
+ * Live redemptions of one promotion, optionally for one customer.
+ *
+ * Delegates to bxgy_count_redemptions so the count the cart is shown and the
+ * count the claim enforces are the same SQL, not two implementations that agree
+ * on the day they were written. Returns null when the count could not be taken.
+ */
+async function countRedemptions(
+  promotionId: string,
+  customerEmail?: string,
+  holdSeconds: number = CLAIM_HOLD_SECONDS,
+): Promise<number | null> {
+  if (atomicLayerMissing) return null;
+
+  const { data, error } = await supabaseAdmin.rpc("bxgy_count_redemptions", {
+    p_promotion_id: promotionId,
+    p_customer_email: customerEmail ? customerEmail.trim().toLowerCase() : null,
+    p_hold_seconds: holdSeconds,
+  });
+
+  if (error) {
+    if (isMissingObjectError(error)) {
+      noteMissingAtomicLayer("bxgy_count_redemptions");
+      return null;
+    }
+    console.error(`Unable to count redemptions for promotion ${promotionId}`, error);
+    return null;
+  }
+  const count = Number(data);
+  return Number.isFinite(count) ? count : null;
+}
+
+export interface ClaimRedemptionInput {
+  promotionId: string;
+  orderId: string;
+  customerEmail?: string | null;
+  maxRedemptions: number | null;
+  perCustomerLimit: number | null;
+  /** Use MANUAL_CLAIM_HOLD_SECONDS for a manual payment method. */
+  holdSeconds?: number;
+}
+
+/**
+ * Reserve one redemption for an order, atomically.
+ *
+ * Call this BEFORE the order row is written, and do not write the order if it
+ * answers false — the promotion is fully claimed and the price the shopper was
+ * quoted is no longer available.
+ *
+ * Returns false only when a limit is genuinely reached. A failure to reach the
+ * database answers TRUE, matching how a failed count is treated: an unreadable
+ * limit must not refuse a sale that was priced correctly. Both are logged.
+ */
+export async function claimPromotionRedemption(input: ClaimRedemptionInput): Promise<boolean> {
+  if (atomicLayerMissing) return true;
+
+  const { data, error } = await supabaseAdmin.rpc("bxgy_claim_redemption", {
+    p_promotion_id: input.promotionId,
+    p_order_id: input.orderId,
+    p_customer_email: input.customerEmail ? input.customerEmail.trim().toLowerCase() : null,
+    p_max_redemptions: input.maxRedemptions,
+    p_per_customer_limit: input.perCustomerLimit,
+    p_hold_seconds: input.holdSeconds ?? CLAIM_HOLD_SECONDS,
+  });
+
+  if (error) {
+    if (isMissingObjectError(error)) {
+      noteMissingAtomicLayer("bxgy_claim_redemption");
+      return true;
+    }
+    console.error(`Unable to claim a redemption for promotion ${input.promotionId}`, error);
+    return true;
+  }
+  return data !== false;
+}
+
+/**
+ * Hand a claimed redemption back when the checkout failed after claiming it.
+ *
+ * Best effort and never throws: an unused hold expires on its own, so this only
+ * returns the slot in seconds rather than minutes. Refuses to release a claim
+ * whose order actually became a sale (enforced in SQL, not here).
+ */
+export async function releasePromotionRedemption(orderId: string): Promise<void> {
+  if (atomicLayerMissing) return;
+  try {
+    const { error } = await supabaseAdmin.rpc("bxgy_release_redemption", { p_order_id: orderId });
+    if (error && !isMissingObjectError(error)) {
+      console.error(`Unable to release the redemption claim for order ${orderId}`, error);
+    }
+  } catch (error) {
+    console.error(`Unable to release the redemption claim for order ${orderId}`, error);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -101,43 +263,6 @@ export async function getBxgyPromotions(): Promise<BxgyPromotion[]> {
 // USAGE LIMITS
 // ---------------------------------------------------------------------------
 
-async function countRedemptions(promotionId: string, customerEmail?: string): Promise<number | null> {
-  if (promotionColumnMissing) return null;
-  // `head: true` WOULD BE THE OBVIOUS CHOICE HERE AND IT IS THE WRONG ONE.
-  //
-  // supabase-js turns head:true into an HTTP HEAD request, and a HEAD response
-  // carries no body — so PostgREST's error payload, and with it the `42703`
-  // that says "this column does not exist", never reaches the client. The error
-  // arrives as `{ message: '' }` with no code, indistinguishable from a network
-  // blip, and the missing-migration guard below cannot fire.
-  //
-  // Caught against a real PostgREST, not in a unit test: the mock returned a
-  // structured error, the wire did not. `limit(1)` keeps the body to a single
-  // row while leaving the count in Content-Range and the error legible.
-  let query = supabaseAdmin
-    .from("orders")
-    .select("id", { count: "exact" })
-    .eq(PROMOTION_COLUMN, promotionId)
-    .in("payment_status", REDEEMED_STATUSES as unknown as string[])
-    .limit(1);
-
-  if (customerEmail) {
-    query = query.eq("customer_email", customerEmail.trim().toLowerCase());
-  }
-
-  const { count, error } = await query;
-  if (error) {
-    if (isMissingColumnError(error)) {
-      promotionColumnMissing = true;
-      console.warn("orders.promotion_id is missing — promotion usage limits are not being enforced. Apply src/lib/sql/bxgy-promotions.sql.");
-      return null;
-    }
-    console.error(`Unable to count redemptions for promotion ${promotionId}`, error);
-    return null;
-  }
-  return count ?? 0;
-}
-
 export interface PromotionUsageContext {
   /** Lower-cased at the call site or here; absent for an anonymous cart. */
   customerEmail?: string;
@@ -147,8 +272,9 @@ export interface PromotionUsageResult {
   /** Promotions that have hit a limit and may no longer be applied. */
   exhaustedIds: string[];
   /**
-   * False when `orders.promotion_id` does not exist, so no usage limit in this
-   * store can be counted at all.
+   * False when the atomic redemption layer
+   * (`bxgy-redemption-claims.sql` — the claim table and its functions) is not
+   * installed, so no usage limit in this store can be counted or enforced.
    *
    * THIS IS THE DIFFERENCE BETWEEN A MISSING MIGRATION AND A BAD MINUTE, AND
    * THE TWO GET OPPOSITE ANSWERS.
@@ -159,11 +285,11 @@ export interface PromotionUsageResult {
    * sale ("Altered total detected"). Over-running a cap by a few orders during
    * an incident is the cheaper mistake, and it is logged.
    *
-   * A MISSING COLUMN IS NOT A BAD MINUTE. It does not heal, it lasts until
-   * someone runs the migration, and for its whole duration every "limit 100" /
+   * A MISSING MIGRATION IS NOT A BAD MINUTE. It does not heal, it lasts until
+   * someone runs it, and for its whole duration every "limit 100" /
    * "one per customer" promotion in the store would be unlimited — silently,
    * because nothing about the storefront looks wrong. So a promotion that
-   * carries a limit is NOT APPLIED while its limit cannot be counted. A
+   * carries a limit is NOT APPLIED while its limit cannot be enforced. A
    * promotion with no limits is unaffected and runs normally.
    *
    * Both sides see the same list (getApplicableBxgyPromotions is what
@@ -203,7 +329,7 @@ export async function getPromotionUsage(
     }
   }));
 
-  return { exhaustedIds, limitsEnforceable: !promotionColumnMissing };
+  return { exhaustedIds, limitsEnforceable: !atomicLayerMissing };
 }
 
 /** Backwards-compatible view for callers that only need the exhausted ids. */
@@ -229,9 +355,9 @@ export function hasUsageLimit(promotion: BxgyPromotion): boolean {
  * why, rather than filing it as a bug.
  */
 export async function areUsageLimitsEnforceable(): Promise<boolean> {
-  if (promotionColumnMissing) return false;
+  if (atomicLayerMissing) return false;
   await countRedemptions("__migration_probe__");
-  return !promotionColumnMissing;
+  return !atomicLayerMissing;
 }
 
 /**
