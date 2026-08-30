@@ -194,6 +194,14 @@ check "pending_emails.email_kind exists (C-02)" \
 # email exactly-once on its own; this partial unique index is what does it.
 check "order_email_log_one_live unique index exists (send-once is DB-enforced, not just code)" \
   "select exists (select 1 from pg_indexes where schemaname='public' and indexname='order_email_log_one_live');"
+
+# CALLED, not merely present. release_inventory_for_order existed, had the right
+# signature and the right grants, and raised `column "batch_limit" does not
+# exist` on every invocation — a line copy-pasted from expire_stale_reservations,
+# whose parameter that is. Every existence check in this file passed while no
+# inventory hold was ever released. A function is only proven by running it.
+check "release_inventory_for_order actually runs (not just exists)" \
+  "select public.release_inventory_for_order('parity-probe-no-such-order') = 0;"
 check "orders.inventory_committed_at exists (the restock SIGNAL)" \
   "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='orders' and column_name='inventory_committed_at');"
 # The four columns scripts/harness-pay-order.mjs SELECTs. They are created by

@@ -26,13 +26,26 @@
 //   node scripts/qa-abuse-and-roles.mjs
 // ---------------------------------------------------------------------------
 
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { chromium } from "playwright";
 import pg from "pg";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
 const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/storefront";
-const HARNESS_LOG = process.env.QA_HARNESS_LOG ?? null;
+/**
+ * WHERE THE APP'S OWN LOG IS, WITHOUT BEING TOLD.
+ *
+ * Nothing sets QA_HARNESS_LOG — not the npm script, not qa:all — and every step
+ * here that reads what was sent skips without it. That silently gave up on
+ * three: that no auth token is written into the log, that an aborted signup
+ * leaves no account without a link, and that a customer who lost their email can
+ * get another. qa-harness-up.sh writes the log to a known place, so look there.
+ * An explicit QA_HARNESS_LOG still wins.
+ */
+const DEFAULT_HARNESS_LOG = `${process.env.QA_LOG_DIR ?? "/tmp/vanta-qa"}/harness.log`;
+const HARNESS_LOG = process.env.QA_HARNESS_LOG
+  ?? (existsSync(DEFAULT_HARNESS_LOG) ? DEFAULT_HARNESS_LOG : null);
 
 if (!/127\.0\.0\.1|localhost/.test(BASE)) {
   console.error(`Refusing to run against ${BASE}. This script drives the local harness only.`);
@@ -129,6 +142,44 @@ async function hammer(page, path, body, attempts, buckets = []) {
   return { statuses, failedOpen, throttled: statuses.filter((s) => s === 429).length };
 }
 
+/**
+ * A CLIENT IP THIS RUN HAS TO ITSELF.
+ *
+ * This harness's whole job in section 1 is to EXHAUST the per-IP signup, reset
+ * and resend buckets. It did that on the default client address, which every
+ * other run also uses — so a second `qa:all` inside the 15-minute window found
+ * those buckets already spent and turned all three flood tests into assertions
+ * about a limiter that had nothing left to give. Worse in the other direction:
+ * a journey or purchase run following an abuse run would have been throttled at
+ * its first signup and reported it as the product refusing to create accounts.
+ *
+ * qa-customer-journey.mjs and qa-purchase-path.mjs were given CSPRNG addresses
+ * for exactly this reason; this file — the one that actually spends the buckets
+ * — was left on the shared one, which is the wrong way round.
+ *
+ * Clearing rate_limit_hits is NOT enough on its own: lib/rate-limit.ts also
+ * keeps a spent bucket in an in-process map for the window, so a warm server
+ * keeps refusing after the rows are gone. Its own address is what makes a run
+ * repeatable.
+ *
+ * 100.64.0.0/10 is carrier-grade NAT: never routable, and three random octets
+ * give ~16 million addresses from a CSPRNG rather than from the clock.
+ */
+const CLIENT_IP = (() => {
+  const [a, b, c] = randomBytes(3);
+  return `100.${64 + (a % 64)}.${b}.${(c % 254) + 1}`;
+})();
+
+/**
+ * Every context in this file, so none of them silently falls back to the shared
+ * address. Assigned in main(); declared here because the helper closes over it.
+ */
+let browser;
+const newContext = (extra = {}) => browser.newContext({
+  ...extra,
+  extraHTTPHeaders: { "x-real-ip": CLIENT_IP, ...(extra.extraHTTPHeaders ?? {}) },
+});
+
 const stamp = Date.now();
 
 async function passAgeGate(page) {
@@ -207,8 +258,8 @@ async function main() {
   const CHROME = process.env.QA_CHROMIUM
     ?? ["/opt/pw-browsers/chromium-1194/chrome-linux/chrome", "/opt/pw-browsers/chromium/chrome-linux/chrome"]
       .find((p) => existsSync(p));
-  const browser = await chromium.launch(CHROME ? { executablePath: CHROME } : {});
-  const context = await browser.newContext();
+  browser = await chromium.launch(CHROME ? { executablePath: CHROME } : {});
+  const context = await newContext();
   const page = await context.newPage();
   await passAgeGate(page);
 
@@ -354,7 +405,7 @@ async function main() {
       [email, JSON.stringify({ full_name: payload, role: "customer" })],
     );
 
-    const victim = await browser.newContext();
+    const victim = await newContext();
     const v = await victim.newPage();
     let dialogged = false;
     v.on("dialog", async (d) => { dialogged = true; await d.dismiss(); });
@@ -385,7 +436,7 @@ async function main() {
   const PW = "HarnessPass123!";
 
   await step("an approved ambassador reaches their own portal", async () => {
-    const amb = await browser.newContext();
+    const amb = await newContext();
     const a = await amb.newPage();
     await passAgeGate(a);
     await signIn(a, AMB, PW);
@@ -401,7 +452,7 @@ async function main() {
   });
 
   await step("an ambassador sees their own rate, not somebody else's", async () => {
-    const amb = await browser.newContext();
+    const amb = await newContext();
     const a = await amb.newPage();
     await passAgeGate(a);
     await signIn(a, AMB, PW);
@@ -418,7 +469,7 @@ async function main() {
   });
 
   await step("a pending applicant cannot reach the ambassador portal", async () => {
-    const app = await browser.newContext();
+    const app = await newContext();
     const a = await app.newPage();
     await passAgeGate(a);
     await signIn(a, APPLICANT, PW);
@@ -439,7 +490,7 @@ async function main() {
       "select id from partners where email <> $1 limit 1", [AMB],
     )).rows[0];
     if (!other) return SKIP("no second partner record exists to probe");
-    const amb = await browser.newContext();
+    const amb = await newContext();
     const a = await amb.newPage();
     await passAgeGate(a);
     await signIn(a, AMB, PW);
@@ -471,7 +522,7 @@ async function main() {
     // browser plants a value they know, waits for the victim to sign in, and
     // then uses it. The defence is that authenticating MINTS a fresh session
     // rather than blessing whatever was already there.
-    const ctx = await browser.newContext();
+    const ctx = await newContext();
     const p = await ctx.newPage();
     await passAgeGate(p);
 
@@ -497,7 +548,7 @@ async function main() {
   });
 
   await step("a planted cookie on its own grants nothing", async () => {
-    const ctx = await browser.newContext();
+    const ctx = await newContext();
     const p = await ctx.newPage();
     await passAgeGate(p);
     await ctx.addCookies([{
@@ -556,7 +607,7 @@ async function main() {
   section("6. Cookie and token hygiene");
 
   await step("the session cookie is httpOnly and SameSite=Lax", async () => {
-    const ctx = await browser.newContext();
+    const ctx = await newContext();
     const p = await ctx.newPage();
     await passAgeGate(p);
     await signIn(p, AMB, PW);
@@ -760,7 +811,7 @@ async function main() {
       [email, JSON.stringify({ full_name: "Reload Reset", role: "customer" })],
     )).rows[0];
 
-    const ctx = await browser.newContext();
+    const ctx = await newContext();
     const p = await ctx.newPage();
     await passAgeGate(p);
     const link = `${BASE}/auth/confirm?token=harness-hashed-${row.id}&type=recovery&next=%2Faccount%2Freset-password`;
