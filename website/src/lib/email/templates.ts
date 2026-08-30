@@ -980,11 +980,27 @@ export function newAmbassadorApplicationTemplate(input: {
   };
 }
 
+/**
+ * "Your referral code is ready."
+ *
+ * `dashboardUrl` is the ambassador's own portal, and it is separate from
+ * `referralLink` on purpose. The button said "Open my dashboard" and pointed at
+ * the referral link — which is /r/CODE, the SHOPPER redirect. Tapping their own
+ * dashboard button 302'd the ambassador to /products, set the referral cookie
+ * in their own browser and recorded a partner_clicks row against their own
+ * code. The message carried no portal URL at all, unlike the approval and
+ * payout emails, so there was nothing else to tap either.
+ *
+ * Keep the parameter list free of comments: templates-sweep.test.ts derives its
+ * fixture by parsing this signature's text, and a comment inside the braces
+ * hides the fields after it.
+ */
 export function referralCodeAssignedTemplate(input: {
   name: string;
   referralCode: string;
   referralLink: string;
   commissionPercent: number;
+  dashboardUrl: string;
 }): EmailTemplate {
   const name = escapeHtml(input.name);
   return {
@@ -995,6 +1011,7 @@ export function referralCodeAssignedTemplate(input: {
       bodyHtml: `
         <p>Your referral code: <strong>${escapeHtml(input.referralCode)}</strong></p>
         <p>You'll earn ${input.commissionPercent}% commission on qualifying orders placed through your link.</p>
+        <p>Share this link — it's the one that credits you:</p>
         <p style="font-size:12px;color:#a1a1aa;word-break:break-all;">${escapeHtml(input.referralLink)}</p>
       `,
       // A real button, not the inline link this used to carry. An ambassador
@@ -1002,14 +1019,16 @@ export function referralCodeAssignedTemplate(input: {
       // a paragraph is the shape recipients skim past, and the shape a spam
       // filter strips.
       ctaLabel: "Open my dashboard",
-      ctaUrl: input.referralLink,
+      ctaUrl: input.dashboardUrl,
     }),
     text: toText([
       `Hi ${input.name},`,
       "",
       `Your referral code: ${input.referralCode}`,
-      `Your referral link: ${input.referralLink}`,
+      `Your referral link (share this one): ${input.referralLink}`,
       `Commission rate: ${input.commissionPercent}%`,
+      "",
+      `Your dashboard: ${input.dashboardUrl}`,
       "",
       "- Vanta Labs",
     ]),
@@ -1502,6 +1521,17 @@ export function wholesaleInquiryAutoReplyTemplate(input: { firstName: string }):
 // gets paragraphs, which is what they actually need, and nothing else is
 // reachable from the compose box.
 // ---------------------------------------------------------------------------
+/**
+ * A marketing campaign, composed by an operator in the admin.
+ *
+ * `postalAddress` is the CAN-SPAM postal address and the sender refuses to send
+ * without one.
+ *
+ * Keep the parameter list free of comments: templates-sweep.test.ts derives its
+ * fixture by parsing this signature's text, and a comment inside the braces
+ * hides every field after it — which is why this template had been swept for
+ * months with no postal address in it at all.
+ */
 export function campaignTemplate(input: {
   subject: string;
   previewText?: string | null;
@@ -1510,7 +1540,6 @@ export function campaignTemplate(input: {
   promoCode?: string | null;
   ctaLabel: string;
   ctaUrl: string;
-  /** CAN-SPAM postal address. The sender refuses to send without one. */
   postalAddress: string;
 }): EmailTemplate {
   // Coerced rather than trusted. Every other template here is called from one

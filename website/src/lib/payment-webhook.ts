@@ -1048,7 +1048,25 @@ async function notifyAmbassadorOfNewCommission(input: {
     dashboardUrl: `${getSiteUrl().replace(/\/$/, "")}/account/ambassador`,
   });
 
-  await sendEmail({ to: String(ambassador.email), ...template });
+  // QUEUED ON FAILURE, LIKE EVERY OTHER AMBASSADOR EMAIL.
+  //
+  // This was the one ambassador message that discarded its result. sendEmail
+  // never throws — it returns { success: false } — so the `.catch(() => {})` at
+  // the call site was unreachable and a provider refusal produced no
+  // pending_emails row, no log line and no alert. The ambassador simply never
+  // heard that they had earned money, and nobody could find out.
+  //
+  // partner-portal.ts routes application-received, approved, denied,
+  // referral-code-assigned, invite and payout-sent through sendAmbassadorEmail
+  // for exactly this reason (audit E4); this send site lives here and never did.
+  const message = { to: String(ambassador.email), ...template };
+  const result = await sendEmail(message);
+  if (!result.success) {
+    console.error(
+      `[payment-webhook] commission earned email failed for ${ambassador.email}: ${result.error ?? "unknown error"}`,
+    );
+    await enqueueFailedEmail(message, result.error);
+  }
 }
 
 // Computes the commission that should remain after a refund. A FULL refund

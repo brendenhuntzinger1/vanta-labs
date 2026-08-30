@@ -60,6 +60,7 @@ describe("the exact email that went out", () => {
       referralCode: "MIZZY",
       referralLink: "https://www.vantalabsresearch.com/r/MIZZY",
       commissionPercent: percent,
+      dashboardUrl: "https://www.vantalabsresearch.com/account/ambassador",
     });
 
     expect(email.html).toContain("You'll earn 15% commission");
@@ -78,6 +79,7 @@ describe("the exact email that went out", () => {
       referralCode: "MIZZY",
       referralLink: "https://www.vantalabsresearch.com/r/MIZZY",
       commissionPercent: oldWay,
+      dashboardUrl: "https://www.vantalabsresearch.com/account/ambassador",
     });
     // The screenshot, regenerated. This is what must never be produced again.
     expect(email.html).toContain("earn 0% commission");
@@ -141,6 +143,7 @@ describe("every rate in production emails as itself", () => {
       referralCode: code,
       referralLink: `https://www.vantalabsresearch.com/r/${code}`,
       commissionPercent: percent,
+      dashboardUrl: "https://www.vantalabsresearch.com/account/ambassador",
     });
     expect(email.html).toContain(`earn ${expected}% commission`);
     expect(email.html).not.toContain("earn 0% commission");
@@ -154,6 +157,7 @@ describe("the link the ambassador is given", () => {
       referralCode: "MIZZY",
       referralLink: "https://www.vantalabsresearch.com/r/MIZZY",
       commissionPercent: 15,
+      dashboardUrl: "https://www.vantalabsresearch.com/account/ambassador",
     });
     expect(email.html).toContain("/r/MIZZY");
     expect(email.text).toContain("/r/MIZZY");
@@ -165,6 +169,7 @@ describe("the link the ambassador is given", () => {
       referralCode: "MIZZY",
       referralLink: "https://www.vantalabsresearch.com/r/MIZZY",
       commissionPercent: 15,
+      dashboardUrl: "https://www.vantalabsresearch.com/account/ambassador",
     });
     expect(email.html).not.toContain("<img src=x");
     expect(email.html).toContain("&lt;img");

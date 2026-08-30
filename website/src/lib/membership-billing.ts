@@ -16,6 +16,8 @@ import { recordMembershipChargeOrder } from "@/lib/membership-orders";
 import { PAID_EVENT_TYPES, isMembershipActive, skipUsedThisPaidPeriod } from "@/lib/membership-status";
 import { currentPeriodMonth, grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/store-credit";
 import { sendEmail } from "@/lib/email/send";
+import { enqueueFailedEmail } from "@/lib/email/retry-queue";
+import type { EmailTemplate } from "@/lib/email/types";
 import { sendMarketingEmail } from "@/lib/email/marketing";
 import { getSiteUrl } from "@/lib/env";
 import { recordSystemAlert } from "@/lib/monitoring";
@@ -62,7 +64,7 @@ async function getTierById(tierId: string): Promise<TierRow | null> {
   return data as TierRow | null;
 }
 
-async function getAuthUserContact(userId: string): Promise<{ email: string; name: string } | null> {
+export async function getAuthUserContact(userId: string): Promise<{ email: string; name: string } | null> {
   const { data, error } = await supabaseAdmin.auth.admin.getUserById(userId);
   if (error || !data?.user?.email) {
     return null;
@@ -70,6 +72,32 @@ async function getAuthUserContact(userId: string): Promise<{ email: string; name
 
   const fullName = typeof data.user.user_metadata?.full_name === "string" ? data.user.user_metadata.full_name : "";
   return { email: data.user.email, name: fullName || data.user.email.split("@")[0] };
+}
+
+/**
+ * Send a membership email and never let a refusal vanish.
+ *
+ * sendEmail is documented to NEVER THROW — it returns { success: false } — so
+ * every `await sendEmail(...)` whose result went unread was a message that
+ * could disappear with no queue row, no log line and no alert. That is the same
+ * shape as audit E4 on the ambassador side, and it covers receipts for money
+ * that has already left the customer's account.
+ *
+ * Best-effort by construction: enqueueFailedEmail swallows a missing table and
+ * never throws, so a queue that is not migrated cannot turn a successful charge
+ * into a failed webhook.
+ */
+export async function sendMembershipEmail(
+  to: string,
+  template: EmailTemplate,
+  context: string,
+): Promise<boolean> {
+  const result = await sendEmail({ to, ...template });
+  if (result.success) return true;
+
+  console.error(`[membership] ${context} email failed for ${to}: ${result.error ?? "unknown error"}`);
+  await enqueueFailedEmail({ to, ...template }, result.error);
+  return false;
 }
 
 /**

@@ -1976,14 +1976,30 @@ export async function applyTrackingUpdate(payload: ShippoWebhookPayload): Promis
   await recordStatusHistory(transition.history);
 
   const effectiveTracking = trackingNumber ?? text(order.tracking_number);
+  // The carrier this update SETTLED on, not the one the row was read with.
+  //
+  // `update.shipping_carrier` is filled from the webhook a few lines above when
+  // the order had none. upsertShipment already used that fallback; notifyCustomer
+  // was handed the stale `order` and resolved the tracking link from it alone —
+  // so on the very first shipping email, the one that matters most, carrier was
+  // null and resolveCarrier could only fall back to inferring it from the
+  // number's shape. That recognises UPS and nothing else, so every USPS, FedEx,
+  // DHL and OnTrac customer got an email with no carrier named and a link to
+  // their order list instead of to the parcel.
+  const effectiveCarrier = text(order.shipping_carrier) ?? text(data.carrier);
   await upsertShipment({
     orderId: order.order_id,
-    carrier: text(order.shipping_carrier) ?? text(data.carrier),
+    carrier: effectiveCarrier,
     trackingNumber: effectiveTracking,
     status: transition.next,
   });
 
-  const emailed = await notifyCustomer(order, transition.from, transition.next, effectiveTracking);
+  const emailed = await notifyCustomer(
+    { ...order, shipping_carrier: effectiveCarrier },
+    transition.from,
+    transition.next,
+    effectiveTracking,
+  );
 
   await markEventProcessed(eventKey);
 

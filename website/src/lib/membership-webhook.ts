@@ -31,6 +31,10 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { recordMembershipChargeOrder } from "@/lib/membership-orders";
+import { getAuthUserContact, sendMembershipEmail } from "@/lib/membership-billing";
+import { membershipPaymentFailedTemplate, membershipRenewalReceiptTemplate } from "@/lib/email/templates";
+import { formatDisplayDate } from "@/lib/format-date";
+import { getSiteUrl } from "@/lib/env";
 
 export const MEMBERSHIP_EVENT_TYPES = new Set([
   "membership.created",
@@ -213,6 +217,34 @@ export async function handleMembershipEvent(
       paidAt: nowIso,
     });
 
+    // THE RECEIPT FOR MONEY THAT HAS ALREADY LEFT THEIR ACCOUNT.
+    //
+    // This lane charged the card, booked a real paid order, and sent nothing —
+    // the module did not import an email helper at all. The sweep lane in
+    // membership-billing.ts calls the identical recordMembershipChargeOrder and
+    // then sends membershipRenewalReceiptTemplate, and this IS the live billing
+    // path for a Veyra-billed membership. So a member was charged every month,
+    // in silence, with no receipt to reconcile against their statement.
+    //
+    // Never allowed to fail the webhook: the charge is already recorded, and
+    // returning an error here would have Veyra retry an event we handled.
+    try {
+      const contact = await getAuthUserContact(local.user_id);
+      if (contact) {
+        await sendMembershipEmail(
+          contact.email,
+          membershipRenewalReceiptTemplate({
+            name: contact.name,
+            monthlyPriceCents: chargedCents,
+            nextBillingDate: formatDisplayDate(data.next_renewal_at ?? data.current_period_end ?? null, "long") ?? "",
+          }),
+          "renewal receipt",
+        );
+      }
+    } catch (receiptError) {
+      console.error("[membership-webhook] renewal receipt failed", receiptError);
+    }
+
     return { handled: true, membershipId: veyraMembershipId, userId: local.user_id };
   }
 
@@ -237,6 +269,29 @@ export async function handleMembershipEvent(
           ? `Veyra dunning attempt ${data.dunning_attempts}`
           : "Renewal charge failed at the payment provider",
     });
+
+    // Perks have just stopped. Say so, and say how to fix it.
+    //
+    // This branch set past_due and told nobody, so the member lost their
+    // benefits with no notice and no idea why — while Veyra's dunning quietly
+    // retried a card that needs their attention. The sweep lane's
+    // handleChargeFailure has always sent this exact message.
+    try {
+      const contact = await getAuthUserContact(local.user_id);
+      if (contact) {
+        await sendMembershipEmail(
+          contact.email,
+          membershipPaymentFailedTemplate({
+            name: contact.name,
+            amountCents: data.amount_charged_cents ?? data.amount_cents ?? 0,
+            updatePaymentUrl: `${getSiteUrl().replace(/\/+$/, "")}/account`,
+          }),
+          "payment failed notice",
+        );
+      }
+    } catch (noticeError) {
+      console.error("[membership-webhook] payment-failed notice failed", noticeError);
+    }
 
     return { handled: true, membershipId: veyraMembershipId, userId: local.user_id };
   }

@@ -406,6 +406,7 @@ async function sendReferralCodeAssignedEmail(input: {
     referralCode: input.referralCode,
     referralLink: `${getSiteUrl()}/r/${input.referralCode}`,
     commissionPercent: resolvedPercent,
+    dashboardUrl: `${getSiteUrl().replace(/\/$/, "")}/account/ambassador`,
   });
 
   return sendAmbassadorEmail(input.to, template, "referral code assigned");
@@ -1769,10 +1770,9 @@ export async function getAdminOperationsSummary(): Promise<AdminOperationsSummar
 async function inviteAmbassadorUser(input: {
   email: string;
   name: string;
-  commissionPercent: number;
   actorUserId: string | null;
   redirectTo: string;
-}): Promise<{ user?: { id?: string } | null } | null> {
+}): Promise<{ user?: { id?: string } | null; inviteUrl?: string | null } | null> {
   const metadata = { role: "partner", invited_by: input.actorUserId };
 
   const minted = await supabaseAdmin.auth.admin.generateLink({
@@ -1782,42 +1782,34 @@ async function inviteAmbassadorUser(input: {
   });
 
   if (!minted.error && minted.data?.properties?.action_link) {
-    const template = ambassadorInviteTemplate({
-      name: input.name,
+    // THE ACCOUNT IS MADE HERE; THE EMAIL IS SENT BY THE CALLER, LATER.
+    //
+    // It used to be sent right here, before the RPC below had decided anything
+    // — and the invite quotes a commission rate. On an ADOPTED invite (the
+    // address already exists as a pre-added ambassador) create_partner_invite
+    // deliberately keeps the admin's configured rate and returns it, so the
+    // email had already promised a number the ambassador would never be paid.
+    // The audit row two lines further down already recorded the settled rate;
+    // only the message had left too early to be corrected.
+    //
+    // It also meant an RPC that raises ("already claimed by another account")
+    // left an invite email and an auth account in the world with no partner row
+    // behind them.
+    return {
+      user: minted.data.user ?? null,
       inviteUrl: brandedConfirmUrl({
         hashedToken: minted.data.properties.hashed_token,
         type: minted.data.properties.verification_type ?? "invite",
         next: "/account/ambassador",
         fallbackActionLink: minted.data.properties.action_link,
       }),
-      commissionPercent: input.commissionPercent,
-    });
-    const sent = await sendAmbassadorEmail(input.email, template, "ambassador invite");
-    if (sent) {
-      return { user: minted.data.user ?? null };
-    }
-    // The account EXISTS now — generateLink created it — so the fallback below
-    // would fail on "already registered" and leave the person with no email at
-    // all. Hand this one to Supabase's own mailer instead, and say so.
-    await recordSystemAlert({
-      type: "partner_invite_provider_failed",
-      severity: "warning",
-      message:
-        `The configured email provider refused the ambassador invite for ${input.email}, so it fell `
-        + "back to Supabase Auth's own unbranded email. The invite still works, but that message is "
-        + "the one Gmail filed as phishing on 2026-08-29 — check the invite actually landed.",
-      context: { email: input.email },
-      dedupeWindowMs: 60 * 60 * 1000,
-    }).catch(() => {});
-
-    const { error: resendError } = await supabaseAdmin.auth.resend({ type: "signup", email: input.email });
-    if (resendError) {
-      console.error("[partner-portal] supabase invite fallback failed", resendError);
-    }
-    return { user: minted.data.user ?? null };
+    };
   }
 
-  // Minting itself failed. Do exactly what this function did before it existed.
+  // Minting itself failed. Do exactly what this function did before it existed:
+  // inviteUserByEmail creates the account AND sends Supabase's own message, so
+  // there is nothing for the caller to send. That email quotes no rate, so it
+  // cannot promise the wrong one.
   const { data: invitedUser, error: inviteError } = await supabaseAdmin.auth.admin.inviteUserByEmail(input.email, {
     data: metadata,
     redirectTo: input.redirectTo,
@@ -1825,7 +1817,46 @@ async function inviteAmbassadorUser(input: {
   if (inviteError) {
     assertNoSupabaseError("auth.admin.inviteUserByEmail", inviteError);
   }
-  return invitedUser;
+  return { user: invitedUser?.user ?? null, inviteUrl: null };
+}
+
+/**
+ * Send the branded invite once the database has settled the rate.
+ *
+ * Falls back to Supabase's own mailer when our provider refuses: the account
+ * EXISTS by now (generateLink created it), so there is no re-invite to attempt
+ * and the person would otherwise be left with no email at all.
+ */
+async function sendAmbassadorInvite(input: {
+  email: string;
+  name: string;
+  inviteUrl: string;
+  commissionPercent: number;
+}): Promise<void> {
+  const template = ambassadorInviteTemplate({
+    name: input.name,
+    inviteUrl: input.inviteUrl,
+    commissionPercent: input.commissionPercent,
+  });
+
+  const sent = await sendAmbassadorEmail(input.email, template, "ambassador invite");
+  if (sent) return;
+
+  await recordSystemAlert({
+    type: "partner_invite_provider_failed",
+    severity: "warning",
+    message:
+      `The configured email provider refused the ambassador invite for ${input.email}, so it fell `
+      + "back to Supabase Auth's own unbranded email. The invite still works, but that message is "
+      + "the one Gmail filed as phishing on 2026-08-29 — check the invite actually landed.",
+    context: { email: input.email },
+    dedupeWindowMs: 60 * 60 * 1000,
+  }).catch(() => {});
+
+  const { error: resendError } = await supabaseAdmin.auth.resend({ type: "signup", email: input.email });
+  if (resendError) {
+    console.error("[partner-portal] supabase invite fallback failed", resendError);
+  }
 }
 
 export async function createPartnerInvite(input: {
@@ -1862,7 +1893,6 @@ export async function createPartnerInvite(input: {
   const invitedUser = await inviteAmbassadorUser({
     email: input.email,
     name: input.name,
-    commissionPercent: input.commissionPercent,
     actorUserId,
     redirectTo: `${getSiteUrl()}/account/reset-password`,
   });
@@ -1906,6 +1936,31 @@ export async function createPartnerInvite(input: {
   const settledReferralCode = result.referral_code ?? referralCode;
   const adopted = result.adopted === true;
 
+  // NOW the rate is known, so now the invite can quote one.
+  //
+  // On adoption the surviving row is the admin's, with the rate they already
+  // configured — create_partner_invite deliberately does not overwrite it and
+  // returns what it kept. Sending before this point promised a number the
+  // ambassador would not be paid; the audit row below has always recorded the
+  // settled one.
+  //
+  // `inviteUrl` is null when minting failed, in which case Supabase's own
+  // mailer has already sent an invite that quotes no rate at all.
+  const settledCommissionPercent = adopted
+    ? (Number.isFinite(Number(result.commission_percent))
+        ? Number(result.commission_percent)
+        : input.commissionPercent)
+    : input.commissionPercent;
+
+  if (invitedUser?.inviteUrl) {
+    await sendAmbassadorInvite({
+      email: input.email,
+      name: input.name,
+      inviteUrl: invitedUser.inviteUrl,
+      commissionPercent: settledCommissionPercent,
+    });
+  }
+
   await supabaseAdmin.from("admin_audit_logs").insert({
     actor_user_id: actorUserId,
     action: adopted ? "partner_invite_adopted" : "partner_invited",
@@ -1913,7 +1968,7 @@ export async function createPartnerInvite(input: {
     target_id: settledPartnerId,
     metadata: {
       email: input.email,
-      commissionPercent: adopted ? Number(result.commission_percent) : input.commissionPercent,
+      commissionPercent: settledCommissionPercent,
       referralCode: settledReferralCode,
       // An adopted invite linked an ambassador the admin had already configured;
       // the rate and code they see are that row's, not the ones typed into the

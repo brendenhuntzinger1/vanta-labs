@@ -52,7 +52,7 @@ const INPUTS: Record<string, unknown> = {
   ambassadorDeniedTemplate: { name: "Zain" },
   commissionEarnedTemplate: { name: "Zain", commissionAmount: 24, unpaidBalance: 120, referralCode: "ZAIN", dashboardUrl: URL_ },
   newAmbassadorApplicationTemplate: { applicantName: "Zain", applicantEmail: "z@example.test", adminUrl: URL_ },
-  referralCodeAssignedTemplate: { name: "Zain", referralCode: "ZAIN", referralLink: URL_, commissionPercent: 20 },
+  referralCodeAssignedTemplate: { name: "Zain", referralCode: "ZAIN", referralLink: URL_, commissionPercent: 20, dashboardUrl: URL_ },
   membershipWelcomeTemplate: { name: "Zain", tierName: "Vault" },
   membershipTrialConfirmationTemplate: { name: "Zain", tierName: "Vault", introChargeCents: 100, remainderCents: 900, remainderChargeDate: "2026-09-30", monthlyPriceCents: 1000 },
   membershipRemainderReminderTemplate: { name: "Zain", remainderCents: 900, chargeDate: "2026-09-30" },

@@ -202,6 +202,16 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       // The status change goes through the same writer the bulk action and the
       // Shippo webhook use. Tracking is saved FIRST so that if this transition
       // triggers a shipping email, the tracking number is already on the row.
+      // What the status ACTUALLY became, straight from the writer.
+      //
+      // The notification block below used to read it off `updatePayload`, which
+      // stopped carrying fulfillment_status when the write moved here — so
+      // `newStatus` was always the PRIOR status, `statusTransitioned` was always
+      // false, and the "delivered" branch was unreachable. Marking an order
+      // shipped from the order page could not send a shipping email at all; the
+      // only surviving trigger was a tracking number changing, and
+      // setOrderFulfillmentStatus sends nothing itself.
+      let transitionedTo: string | null = null;
       if (body.fulfillmentStatus) {
         const transition = await setOrderFulfillmentStatus({
           orderId,
@@ -214,6 +224,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
           // verbatim rather than a generic failure, so the operator learns why.
           return NextResponse.json({ success: false, error: transition.message }, { status: 400 });
         }
+        // `from`/`to` come from the pipeline, so re-saving the same status is a
+        // no-op here exactly as it is there — no duplicate "your order shipped".
+        transitionedTo = transition.data.from === transition.data.to ? null : transition.data.to;
       }
 
       const { error: auditError } = await supabaseAdmin
@@ -263,7 +276,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       // was newly added or changed. Re-saving the same values sends nothing, so
       // there are no duplicate "your order shipped" emails.
       const NOTIFY_STATUSES = new Set(["shipped", "out_for_delivery", "delivered"]);
-      const newStatus = String(updatePayload.fulfillment_status ?? priorStatus);
+      const newStatus = transitionedTo ?? priorStatus;
       const newTracking = updatePayload.tracking_number !== undefined
         ? (updatePayload.tracking_number ? String(updatePayload.tracking_number) : "")
         : priorTracking;
@@ -293,7 +306,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
               : shippingUpdateTemplate({
                   customerName: String(order.customer_name ?? ""),
                   orderId: orderReference,
-                  status: String(updatePayload.fulfillment_status ?? order.fulfillment_status ?? "updated"),
+                  status: String(transitionedTo ?? order.fulfillment_status ?? "updated"),
                   carrier,
                   trackingNumber,
                   // Carrier link, or the customer's own Vanta Labs order list.
@@ -303,10 +316,36 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
                     buildCarrierTrackingUrl(carrier, trackingNumber)
                     ?? `${getSiteUrl()}/account/orders`,
                 });
-            await sendEmail({ to: String(order.customer_email), ...template });
+            // QUEUED ON FAILURE, NOT DROPPED.
+            //
+            // sendEmail is documented never to throw — it returns
+            // { success: false }. So the catch below was unreachable, the result
+            // was discarded, and a provider refusal left no trace: nothing
+            // queued, nothing logged, no alert. And because the status has
+            // already advanced by now, notificationFor() returns null for every
+            // later carrier scan, so no subsequent event regenerates this
+            // message. One transient outage cost the customer their tracking
+            // email for good.
+            //
+            // The Shippo-webhook sibling queues these same two templates for
+            // exactly that reason; this path is now the same.
+            const result = await sendEmail({ to: String(order.customer_email), ...template });
+            if (!result.success) {
+              console.error(
+                `[admin/orders] ${newStatus} notification failed for ${orderId}: ${result.error ?? "unknown error"}`,
+              );
+              // No order context: `email_kind` is the send-once vocabulary for
+              // confirmations and refunds, and a shipping update is neither.
+              // The Shippo-webhook sibling queues these same two templates the
+              // same way.
+              await enqueueFailedEmail({ to: String(order.customer_email), ...template }, result.error);
+            }
           }
-        } catch {
-          // Non-critical notification; the status update itself already succeeded above.
+        } catch (notifyError) {
+          // The status update itself already succeeded, so this must not fail
+          // the request — but it must not be silent either, which is the whole
+          // point of the block above.
+          console.error("[admin/orders] status notification failed", notifyError);
         }
       }
 

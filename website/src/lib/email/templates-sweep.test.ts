@@ -76,6 +76,30 @@ describe("email template sweep", () => {
     expect(TEMPLATE_ENTRIES.length).toBeGreaterThanOrEqual(30);
   });
 
+  it.each(TEMPLATE_ENTRIES.map(([name]) => name))("%s has every declared field populated", (name) => {
+    // The fixture is parsed out of the signature's TEXT, so anything that
+    // confuses the parser — a comment inside the braces, most easily — silently
+    // drops the fields after it and renders them as undefined. That is only
+    // caught downstream if the word "undefined" reaches the output, so a field
+    // used behind a `??` fallback would slip through entirely.
+    //
+    // Real near-miss: a doc comment added above `dashboardUrl` hid it, and the
+    // CTA rendered with no URL.
+    const declared = [...
+      (SOURCE.slice(
+        SOURCE.indexOf(`export function ${name}(`),
+        SOURCE.indexOf("): EmailTemplate", SOURCE.indexOf(`export function ${name}(`)),
+      ).matchAll(/^\s*(\w+)\??\s*:/gm))
+    ].map((match) => match[1]);
+
+    const fixture = inputFixtureFor(name);
+    for (const field of declared) {
+      if (field === "input") continue;
+      expect(fixture, `${name}.${field} was not populated — the signature parser missed it`)
+        .toHaveProperty(field);
+    }
+  });
+
   it.each(rendered.map((r) => [r.name, r] as const))("%s renders a complete email", (_name, email) => {
     expect(email.subject.trim().length).toBeGreaterThan(0);
     expect(email.html.trim().length).toBeGreaterThan(0);
