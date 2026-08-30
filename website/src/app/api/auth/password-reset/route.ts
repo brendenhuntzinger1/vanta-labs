@@ -4,6 +4,7 @@ import { sendEmail } from "@/lib/email/send";
 import { passwordResetTemplate } from "@/lib/email/templates";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { createServerClient, supabaseAdmin } from "@/lib/supabase-server";
+import { findUserByEmail } from "@/lib/auth-confirmation-email";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getRequestIpAddress, rateLimitKeyForRequest } from "@/lib/request-ip";
 import { getSiteUrl } from "@/lib/env";
@@ -137,11 +138,35 @@ async function deliverResetEmail(email: string, redirectTo: string): Promise<voi
       options: { redirectTo },
     });
 
-    // No account for this address. Nothing to send, and — critically — nothing
-    // to say about it. Return without falling back: asking Supabase to send
-    // would be equally silent, so the fallback would only add latency that
-    // differs between existing and non-existing addresses.
+    // TWO DIFFERENT THINGS LIVE IN THIS BRANCH, and only one of them is fine.
+    //
+    // "No account for this address" is fine: nothing to send, and nothing to
+    // say about it. Falling back would only add latency that differs between
+    // existing and non-existing addresses, which is the leak this route exists
+    // to avoid.
+    //
+    // "That address HAS an account and minting failed" is not fine. The
+    // customer has just been told a link is on its way, nothing was sent, no
+    // retry is queued and — until this alert existed — nobody was told. That is
+    // the same silent-failure shape that stranded four signups on 2026-08-29,
+    // and it lands on the one path a locked-out customer has left.
+    //
+    // The RESPONSE stays byte-identical either way; only the telemetry differs,
+    // so enumeration safety is untouched.
     if (error || !data?.properties?.action_link) {
+      const existing = await findUserByEmail(email).catch(() => null);
+      if (existing) {
+        await recordSystemAlert({
+          type: "password_reset_mint_failed",
+          severity: "critical",
+          message:
+            "A password reset was requested for an address that DOES have an account, and the "
+            + "recovery link could not be minted — so no email was sent at all. The customer was "
+            + "told a link was on its way. They are locked out with no way back until this is fixed.",
+          context: { reason: error?.message ?? "no action_link returned" },
+          dedupeWindowMs: 30 * 60 * 1000,
+        }).catch(() => {});
+      }
       return;
     }
 

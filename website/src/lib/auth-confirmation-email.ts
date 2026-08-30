@@ -39,14 +39,15 @@ const PAGE_SIZE = 200;
 const MAX_PAGES = 5;
 
 /**
- * The unconfirmed account for this address, or null.
+ * The account for this address, or null if there genuinely is not one.
  *
- * Returns null for a CONFIRMED account on purpose. Mailing a sign-in link to
- * anyone who types an existing address into a public form would be a nuisance
- * vector even though it grants no access; unconfirmed is the one state where
- * the person is provably stuck.
+ * Used to tell "no such address" apart from "that address exists and something
+ * went wrong" — a distinction the enumeration-safe routes cannot make in their
+ * RESPONSE but absolutely must make in their TELEMETRY. Conflating the two is
+ * how a customer ends up told a link is on its way when nothing was sent and
+ * nobody was told.
  */
-export async function findUnconfirmedUser(email: string): Promise<AdminUserLike | null> {
+export async function findUserByEmail(email: string): Promise<AdminUserLike | null> {
   const target = email.trim().toLowerCase();
   if (!target) return null;
 
@@ -55,12 +56,24 @@ export async function findUnconfirmedUser(email: string): Promise<AdminUserLike 
     if (error) return null;
     const users = (data?.users ?? []) as AdminUserLike[];
     const match = users.find((user) => String(user.email ?? "").toLowerCase() === target);
-    if (match) {
-      return match.email_confirmed_at || match.confirmed_at ? null : match;
-    }
+    if (match) return match;
     if (users.length < PAGE_SIZE) return null;
   }
   return null;
+}
+
+/**
+ * The unconfirmed account for this address, or null.
+ *
+ * Returns null for a CONFIRMED account on purpose. Mailing a sign-in link to
+ * anyone who types an existing address into a public form would be a nuisance
+ * vector even though it grants no access; unconfirmed is the one state where
+ * the person is provably stuck.
+ */
+export async function findUnconfirmedUser(email: string): Promise<AdminUserLike | null> {
+  const match = await findUserByEmail(email);
+  if (!match) return null;
+  return match.email_confirmed_at || match.confirmed_at ? null : match;
 }
 
 /** Best-effort first name for the greeting. Never used for anything else. */

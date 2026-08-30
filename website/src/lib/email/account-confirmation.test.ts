@@ -218,3 +218,48 @@ describe("POST /api/auth/resend-confirmation", () => {
     expect(FORM).not.toContain('supabase.auth.resend(');
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE SILENT-FAILURE BRANCH ON THE LAST PATH A LOCKED-OUT CUSTOMER HAS.
+//
+// deliverResetEmail returned early on `error || !action_link`, which is two
+// different things wearing one branch. "No account for this address" is fine to
+// swallow — saying anything is the enumeration leak the route exists to avoid.
+// "That address HAS an account and minting failed" is not: the customer has
+// just been told a link is on its way, nothing was sent, no retry is queued,
+// and nobody was told. Same shape as the incident, on password reset.
+//
+// The response must stay byte-identical either way; only the telemetry differs.
+// ---------------------------------------------------------------------------
+
+const RESET_ROUTE = readFileSync(join(process.cwd(), "src/app/api/auth/password-reset/route.ts"), "utf8");
+
+describe("password reset, when the link cannot be minted", () => {
+  it("distinguishes a missing account from a real failure", () => {
+    expect(RESET_ROUTE).toContain("findUserByEmail");
+  });
+
+  it("alerts when the address exists and nothing was sent", () => {
+    expect(RESET_ROUTE).toContain("password_reset_mint_failed");
+    // Critical, not warning: this is a customer who cannot get back in and has
+    // been told otherwise.
+    const alertBlock = RESET_ROUTE.slice(RESET_ROUTE.indexOf("password_reset_mint_failed"));
+    expect(alertBlock.slice(0, 200)).toContain('severity: "critical"');
+  });
+
+  it("still says nothing different to the client", () => {
+    // The whole point: telemetry gained, enumeration safety untouched. There is
+    // exactly one response shape and the failure branch returns without one.
+    expect(RESET_ROUTE).toContain("GENERIC_RESPONSE");
+    const branch = RESET_ROUTE.slice(
+      RESET_ROUTE.indexOf("const existing = await findUserByEmail"),
+      RESET_ROUTE.indexOf("const template = passwordResetTemplate"),
+    );
+    expect(branch).not.toContain("NextResponse");
+  });
+
+  it("shares one account lookup with the confirmation paths", () => {
+    expect(CONFIRM_LIB).toContain("export async function findUserByEmail");
+    expect(CONFIRM_LIB).toContain("findUserByEmail(email)");
+  });
+});
