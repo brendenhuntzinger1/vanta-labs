@@ -209,7 +209,23 @@ const decodeCookie = (page, value) => page.evaluate((v) => {
 // is the part the application controls. Whether a real provider then delivers
 // it is the provider's business and cannot be asserted from here.
 // ---------------------------------------------------------------------------
-const HARNESS_LOG = process.env.QA_HARNESS_LOG ?? null;
+/**
+ * WHERE THE APP'S OWN LOG IS, WITHOUT BEING TOLD.
+ *
+ * This was `process.env.QA_HARNESS_LOG ?? null`, and every email assertion in
+ * this file skips when it is null. Nothing sets the variable — not the npm
+ * script, not qa:all — so the default run silently gave up on precisely the two
+ * steps the harness exists for: that paying sends exactly ONE confirmation, and
+ * that a retried webhook does not send a second. They reported as skips, under
+ * a heading that says skips are not verified, and the run still exited 0.
+ *
+ * qa-harness-up.sh already writes the log to a known place, so look there.
+ * An explicit QA_HARNESS_LOG still wins; the fallback only removes the case
+ * where the log exists and nobody thought to point at it.
+ */
+const DEFAULT_HARNESS_LOG = `${process.env.QA_LOG_DIR ?? "/tmp/vanta-qa"}/harness.log`;
+const HARNESS_LOG = process.env.QA_HARNESS_LOG
+  ?? (existsSync(DEFAULT_HARNESS_LOG) ? DEFAULT_HARNESS_LOG : null);
 
 function mailSince(offset) {
   if (!HARNESS_LOG || !existsSync(HARNESS_LOG)) return null;

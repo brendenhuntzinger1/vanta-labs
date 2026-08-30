@@ -258,13 +258,34 @@ EMAIL_ENABLED=false
 EMAIL_PROVIDER=none
 NEXT_PUBLIC_ENABLE_ANALYTICS=false
 CHECKOUT_ENABLED=true
-PAYMENT_PROVIDER=mock
 NEXT_PUBLIC_EXPRESS_CHECKOUT_ENABLED=false
 SHIPPO_WEBHOOK_SECRET=harness-shippo-secret
+PAYMENT_PROVIDER=live
+VEYRA_API_BASE=http://127.0.0.1:59999
+VEYRA_SECRET_KEY=stub-secret-not-real
+PAYMENT_WEBHOOK_SECRET=harness-webhook-secret
 ```
 
-`EMAIL_ENABLED=false` and `PAYMENT_PROVIDER=mock` are load-bearing: they make it
-impossible for a synthetic test to mail a real person or reach a real processor.
+**`PAYMENT_PROVIDER=live`, not `mock`, and this block used to say `mock`.** That
+was wrong and it cost a whole diagnosis round: with `mock`, every call to
+`/api/checkout/create-session` throws before it does anything, so no order is
+ever created and the purchase harness skips twelve of its eighteen steps —
+including "exactly one confirmation email" — while still exiting 0. The section
+below ("Checkout needs the LIVE provider…") had the right answer all along;
+these two blocks disagreed, and the wrong one came first.
+
+`live` here reaches nothing real: `VEYRA_API_BASE` points at
+`scripts/veyra-stub.mjs` on loopback, which only mints session ids. That is the
+whole point — the genuine live code path, against a stub that cannot take money.
+
+`EMAIL_ENABLED=false` is load-bearing in the same way: it makes it impossible
+for a synthetic test to mail a real person.
+
+`SHIPPO_WEBHOOK_SECRET` and `PAYMENT_WEBHOOK_SECRET` are load-bearing in the
+other direction. Both webhook routes fail **closed** without them — correctly,
+since an unconfigured secret must never mean "accept anything" — so their
+absence does not look like a configuration problem, it looks like shipping,
+delivery and payment settlement being broken.
 
 `SHIPPO_WEBHOOK_SECRET` is load-bearing in the other direction. Without it
 `/api/webhooks/shippo` fails **closed** with 503 — correctly, since an

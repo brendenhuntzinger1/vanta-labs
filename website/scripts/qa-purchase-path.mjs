@@ -34,7 +34,23 @@ import pg from "pg";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
 const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/storefront";
-const HARNESS_LOG = process.env.QA_HARNESS_LOG ?? null;
+/**
+ * WHERE THE APP'S OWN LOG IS, WITHOUT BEING TOLD.
+ *
+ * This was `process.env.QA_HARNESS_LOG ?? null`, and every email assertion in
+ * this file skips when it is null. Nothing sets the variable — not the npm
+ * script, not qa:all — so the default run silently gave up on precisely the two
+ * steps the harness exists for: that paying sends exactly ONE confirmation, and
+ * that a retried webhook does not send a second. They reported as skips, under
+ * a heading that says skips are not verified, and the run still exited 0.
+ *
+ * qa-harness-up.sh already writes the log to a known place, so look there.
+ * An explicit QA_HARNESS_LOG still wins; the fallback only removes the case
+ * where the log exists and nobody thought to point at it.
+ */
+const DEFAULT_HARNESS_LOG = `${process.env.QA_LOG_DIR ?? "/tmp/vanta-qa"}/harness.log`;
+const HARNESS_LOG = process.env.QA_HARNESS_LOG
+  ?? (existsSync(DEFAULT_HARNESS_LOG) ? DEFAULT_HARNESS_LOG : null);
 const WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET ?? "harness-webhook-secret";
 
 if (!/127\.0\.0\.1|localhost/.test(BASE)) {
@@ -933,6 +949,32 @@ async function main() {
     for (const sk of skipped) console.log(`  ${sk.section} :: ${sk.name}\n      ${sk.detail}`);
   }
   await pool.end();
+
+  // A CASCADE OF SKIPS IS NOT A PASS, AND IT USED TO EXIT 0.
+  //
+  // Almost every step here needs the order the first one creates. When checkout
+  // refuses, that step skips and takes twelve of the eighteen with it —
+  // including "paying sends exactly one confirmation" and "a retried webhook
+  // does not send a second", which are the two this harness exists for. The
+  // output said so plainly, under a heading reading "these are NOT verified",
+  // and then returned 0 anyway, so `qa:all` carried straight on and the run
+  // recorded as green.
+  //
+  // That is exactly how it read on 2026-08-30: 6 passed, 0 failed, 12 skipped,
+  // exit 0, with the receipt never once demonstrated. (The cause was the
+  // runbook's first env block saying PAYMENT_PROVIDER=mock, which the compiled
+  // guard rejects unconditionally — see the runbook.)
+  //
+  // Individual skips stay legitimate: a step that needs a harness log it was
+  // not given should say so and move on. What cannot stand is a run where more
+  // was skipped than proven, because the summary line then describes a purchase
+  // path nobody walked.
+  const passed = results.length - failed.length - skipped.length;
+  if (!failed.length && skipped.length > passed) {
+    console.log(`\n  ${skipped.length} steps skipped against ${passed} passed — this run is not evidence`);
+    console.log("  of anything the harness is for. Fix the skips before reading the result.");
+    process.exit(1);
+  }
   process.exit(failed.length ? 1 : 0);
 }
 
