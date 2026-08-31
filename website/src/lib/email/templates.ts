@@ -710,9 +710,33 @@ export function ambassadorApplicationReceivedTemplate(input: { name: string }): 
   };
 }
 
+/**
+ * THE APPROVAL EMAIL HAS TO CARRY THE LINK, NOT JUST THE CODE.
+ *
+ * It named the code and stopped there. The shareable link — /r/CODE, which is
+ * what actually sets the referral cookie and credits the ambassador — went out
+ * only in `referralCodeAssignedTemplate`, and that fires on
+ * `referralCodeChanged`. Approve someone whose code was already on their row
+ * and the condition is false, so the link is never sent at all.
+ *
+ * Not hypothetical: ambassador DREW was approved 2026-08-31 with the code
+ * already stored. `notification_queue` holds exactly two rows for that address
+ * — application received, application approved — and no referral-code mail. He
+ * had a live code, a working /r/DREW redirect, and no way to learn the URL
+ * existed. He asked for it by hand.
+ *
+ * So the link is built here from the code rather than taken as a required
+ * field: a caller that forgets cannot reintroduce the hole, the same reasoning
+ * `sendPartnerStatusEmail` already applies to the commission rate.
+ *
+ * Keep the parameter list free of comments: templates-sweep.test.ts derives its
+ * fixture by parsing this signature's text, and a comment inside the braces
+ * hides the fields after it.
+ */
 export function ambassadorApprovedTemplate(input: {
   name: string;
   referralCode?: string;
+  siteUrl?: string;
   dashboardUrl: string;
   commissionPercent?: number;
   personalDiscountPercent?: number;
@@ -721,6 +745,22 @@ export function ambassadorApprovedTemplate(input: {
 }): EmailTemplate {
   const name = escapeHtml(input.name);
   const code = input.referralCode ? escapeHtml(input.referralCode) : null;
+  // Derived from dashboardUrl when no siteUrl is given: the dashboard already
+  // IS an absolute URL on this origin, so its origin is the one the link must
+  // share. Falls back to null rather than a relative href — a bare "/r/CODE"
+  // in an email body is dead text.
+  const linkOrigin = (input.siteUrl || input.dashboardUrl || "").trim();
+  const referralCodeRaw = input.referralCode;
+  const referralLink = referralCodeRaw && linkOrigin
+    ? (() => {
+        try {
+          return new URL(`/r/${encodeURIComponent(referralCodeRaw)}`, linkOrigin).toString();
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+  const referralLinkHtml = referralLink ? escapeHtml(referralLink) : null;
   // The programme defaults, not literal 10/20/10 — same reason as holdDays
   // below: these fire whenever the caller cannot resolve the live value, and a
   // copy here would keep quoting the old rate to new ambassadors after the
@@ -737,6 +777,9 @@ export function ambassadorApprovedTemplate(input: {
   const bodyHtml = `
     <p>Congratulations, ${name} — your application to the Vanta Labs Ambassador Program has been <strong>approved</strong>. Welcome aboard.</p>
     ${code ? `<p><strong>Your referral code:</strong> ${code} — customers who use it get <strong>${referralPct}% off</strong>.</p>` : ""}
+    ${referralLinkHtml ? `<p style="margin-top:12px"><strong>Your referral link — share this one, it credits you automatically:</strong></p>
+    <p style="font-size:13px;word-break:break-all;"><a href="${referralLinkHtml}" style="color:#c9a227;">${referralLinkHtml}</a></p>
+    <p style="font-size:13px;color:#a1a1aa;">Anyone who opens it has the discount applied without typing anything. The code still works on its own for people who would rather enter it at checkout.</p>` : ""}
     <p><strong>Your personal discount:</strong> as an approved ambassador you automatically get <strong>${personalPct}% off your own purchases</strong> — just sign in and check out; it applies at the cart, no code needed.</p>
 
     <p style="margin-top:20px"><strong>Starting Benefits</strong></p>
@@ -784,11 +827,12 @@ export function ambassadorApprovedTemplate(input: {
       "",
       "Congratulations — your Vanta Labs Ambassador application has been approved.",
       code ? `Your referral code: ${input.referralCode} (customers get ${referralPct}% off).` : null,
+      referralLink ? `Your referral link (share this one — it credits you automatically): ${referralLink}` : null,
       `Personal discount: ${personalPct}% off your own purchases while approved (auto-applied at checkout when signed in).`,
       "",
       "Benefits:",
       `- ${personalPct}% off your own purchases`,
-      `- Referral code giving your audience ${referralPct}% off`,
+      `- Referral code and link giving your audience ${referralPct}% off`,
       `- ${commissionPct}% commission on completed orders with your code`,
       "- Real-time dashboard (pending/approved/paid commissions, referral orders, earnings)",
       "- Payouts every two weeks",
