@@ -63,6 +63,34 @@ export const BRAND_LEGAL_NAME = "Vanta Labs Research";
 /** The visual brand. Customers. */
 export const BRAND_SHORT_NAME = "Vanta Labs";
 
+// ---------------------------------------------------------------------------
+// THE PROFILES THIS BUSINESS ACTUALLY OWNS.
+//
+// `sameAs` is how a site tells Google that the entity described here is the
+// same entity as the one behind these accounts. It is the strongest signal
+// available for the specific problem this file exists to solve: "Vanta Labs"
+// is contested. A compliance SaaS owns the "Vanta" knowledge-graph entity, and
+// at least two other peptide vendors publish under near-identical names —
+// vantalab.org ("Vanta Labs & Research") and vantalp.com ("Vanta Labs
+// Peptides"), both of which currently outrank this site for its own name.
+// Schema alone says "we are called X"; sameAs says "and here is the corroborating
+// footprint", which is what separates one claimant from another.
+//
+// EVERY URL HERE WAS CONFIRMED TO RESOLVE TO A LIVE ACCOUNT BEFORE BEING ADDED,
+// and that is the rule for anything added later. A sameAs pointing at a dead
+// profile is worse than no sameAs at all: it is an unverifiable claim, which is
+// the same category of signal as an invented address or a fake rating.
+//
+// Note on the TikTok handle: it is "officialvantalabs". The near-miss spelling
+// "officalvantalabs" (no second "i") is NOT a real account — it returns TikTok's
+// "Couldn't find this account" page. Checked, because the two are one keystroke
+// apart and the wrong one would have shipped a broken claim.
+// ---------------------------------------------------------------------------
+export const BRAND_PROFILES = [
+  "https://www.instagram.com/vantalabsresearch/",
+  "https://www.tiktok.com/@officialvantalabs",
+] as const;
+
 /** Per-page title suffix — short brand, see the note above. */
 export const TITLE_TEMPLATE = `%s | ${BRAND_SHORT_NAME}`;
 
@@ -94,11 +122,17 @@ export function organizationSchema() {
     url: homeUrl(),
     logo: `${base}/images/vanta-logo.png`,
     description: ORG_DESCRIPTION,
+    // Corroborating profiles — see BRAND_PROFILES. Emitted only when the list
+    // is non-empty, so removing every profile removes the property rather than
+    // leaving an empty array, which asserts "this entity has no presence".
+    ...(BRAND_PROFILES.length > 0 ? { sameAs: [...BRAND_PROFILES] } : {}),
     // The one contact detail this site actually publishes — it is in the footer
-    // of all 111 public URLs. Nothing else is asserted: there is no published
-    // address, phone number, founding date or social profile anywhere on this
-    // site, and inventing them to fill out the schema is structured-data spam
-    // that Google penalises rather than rewards.
+    // of all 111 public URLs. Still nothing else is asserted: there is no
+    // published address, phone number or founding date anywhere on this site,
+    // and inventing them to fill out the schema is structured-data spam that
+    // Google penalises rather than rewards. The sameAs list above is the one
+    // addition, and it is held to the same standard — every entry verified live
+    // rather than assumed.
     contactPoint: {
       "@type": "ContactPoint",
       contactType: "customer support",

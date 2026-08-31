@@ -7,6 +7,7 @@ import { ScrollReveal } from "@/components/scroll-reveal";
 import { getHomepageControlConfig } from "@/lib/admin-control";
 import { getCatalogProducts } from "@/lib/catalog";
 import { CHECKOUT_SHORT, COA_SHORT, FULFILMENT_SHORT, TESTING_SHORT, trustPoints } from "@/lib/trust-claims";
+import { BRAND_LEGAL_NAME } from "@/lib/site-identity";
 
 export const dynamic = "force-dynamic";
 
@@ -169,8 +170,37 @@ export default async function HomePage() {
                 top, by StorefrontOffersBar, which states the real terms and
                 says it applies automatically. */}
             <p className="vl2-eyebrow">Research Use Only</p>
-            <h1 className="vl2-serif mt-5 max-w-2xl text-[2.6rem] leading-[1.04] tracking-[-0.01em] text-white sm:text-5xl md:text-6xl lg:text-7xl">
-              {control.heroHeadline ?? "Precision, in every vial."}
+            {/* THE ENTITY NAME IS PART OF THE H1, NOT JUST THE <title>.
+                
+                The h1 was "Precision, in every vial." alone — a tagline with no
+                brand in it. On the one query this page has to win, its most
+                heavily weighted piece of on-page text named the company nowhere,
+                while two other peptide vendors with near-identical names put
+                "Vanta Labs" straight in their titles and outrank it.
+
+                Rendered as two lines inside ONE h1 rather than as a separate
+                element above it, because the signal comes from the h1's text
+                content: split the brand into its own <p> and the h1 goes back to
+                being a brand-less tagline. Visual hierarchy is unchanged — the
+                tagline keeps every size class it had and stays the thing the eye
+                lands on; the brand sits above it in the same serif at reading
+                size, which is also why it is not styled like the uppercase
+                eyebrow directly above (two stacked eyebrow lines read as a
+                mistake).
+
+                Deliberately OUTSIDE control.heroHeadline. That field is how the
+                hero copy gets reworded from the admin screen, and rewording the
+                hero is what removed the brand from this page in the first place.
+                The tagline stays editable; the entity name is not something a
+                copy tweak can drop by accident again. It comes from
+                BRAND_LEGAL_NAME so it cannot drift from the schema or title. */}
+            <h1 className="vl2-serif mt-5 max-w-2xl text-white">
+              <span className="block text-[1.35rem] leading-tight text-white/65 sm:text-2xl md:text-[1.75rem]">
+                {BRAND_LEGAL_NAME}
+              </span>
+              <span className="mt-1.5 block text-[2.6rem] leading-[1.04] tracking-[-0.01em] sm:mt-2 sm:text-5xl md:text-6xl lg:text-7xl">
+                {control.heroHeadline ?? "Precision, in every vial."}
+              </span>
             </h1>
             <p className="mt-4 max-w-md text-[0.95rem] leading-7 text-white/75 sm:mt-6 sm:text-lg sm:leading-8">
               {control.heroSubheadline ?? "Vanta Labs sources, verifies, and ships research compounds with the discipline of an analytical laboratory."}
