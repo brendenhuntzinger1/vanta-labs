@@ -202,8 +202,14 @@ function approvalEmail() {
 
 /** The commission percentage the approval email actually quotes. */
 function quotedPercent(): number | null {
+  // Reads the "Your commission" row of the rate table. The email used to state
+  // this as a "<strong>N% commission</strong>" bullet inside a promotional
+  // benefits list; that list was removed when the approval email was trimmed
+  // back to a transactional shape. The rate itself is unchanged and is now
+  // stated against the label that names it, which is a stricter thing to
+  // assert than a loose substring.
   const html = approvalEmail()?.html ?? "";
-  const match = html.match(/<strong>([\d.]+)% commission<\/strong>/);
+  const match = html.match(/Your commission<\/td>\s*<td[^>]*>([\d.]+)%/);
   return match ? Number(match[1]) : null;
 }
 
@@ -236,7 +242,7 @@ describe("approving and setting the rate in one submission", () => {
 
   it("never quotes a rate that was overwritten by this same request", async () => {
     await updatePartnerStatus({ partnerId: PARTNER_ID, status: "approved", commissionPercent: 20 });
-    expect(approvalEmail()!.html).not.toContain("<strong>10% commission</strong>");
+    expect(quotedPercent()).not.toBe(10);
   });
 });
 

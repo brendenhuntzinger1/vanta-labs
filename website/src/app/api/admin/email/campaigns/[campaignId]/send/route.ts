@@ -4,7 +4,10 @@ import { canManageEmailCampaigns } from "@/lib/admin-roles";
 import { queueCampaign, sendCampaignBatch } from "@/lib/email/campaign-sender";
 import { campaignTemplate } from "@/lib/email/templates";
 import { sendEmail } from "@/lib/email/send";
-import { getEmailRuntimeConfig, marketingBlockedReason } from "@/lib/email/settings";
+import { getEmailRuntimeConfig, marketingBlockedReason, resolveMarketingFrom } from "@/lib/email/settings";
+import { extractEmailAddress, isMarketingSuppressed } from "@/lib/email/marketing";
+import { generateUnsubscribeToken } from "@/lib/email/unsubscribe";
+import { getSiteUrl } from "@/lib/env";
 import { safeCampaignDestination } from "@/lib/email/campaign-links";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -48,13 +51,39 @@ export async function POST(request: Request, context: { params: Promise<{ campai
   }
 
   // --- Test send ----------------------------------------------------------
-  // Goes through sendEmail, NOT sendMarketingEmail: a test to the operator's
-  // own address must not be blocked by the suppression list, must not be
-  // logged as a campaign send, and must not count in the campaign's metrics.
+  // Goes through sendEmail, NOT sendMarketingEmail, so a test is not logged as
+  // a campaign send and does not count in the campaign's metrics. That part was
+  // right. Two things that came with it were not.
+  //
+  // THE ADDRESS WAS NEVER THE OPERATOR'S. The comment here used to justify the
+  // bypass as "a test to the operator's own address", but nothing checked that:
+  // `testEmail` is whatever the request body says, validated only for an "@".
+  // So the one path that skips the suppression list could deliver a full
+  // marketing campaign to a real customer — including one who had unsubscribed
+  // or hit "report spam" — carrying no List-Unsubscribe header, because those
+  // are set in the marketing wrapper this deliberately avoids. A "[TEST]"
+  // subject prefix was the only thing marking it.
+  //
+  // Both halves are closed here rather than by routing through
+  // sendMarketingEmail, which would reintroduce the logging and metrics this is
+  // specifically meant to stay out of:
+  //   * a suppressed address is refused outright. An operator whose own address
+  //     is suppressed sees why and can test to another — strictly better than
+  //     silently mailing someone who asked us to stop;
+  //   * the one-click unsubscribe headers are attached unconditionally, so any
+  //     recipient of a promotional message has a working opt-out even on a
+  //     path that never consults an audience.
   if (mode === "test") {
     const testEmail = String(body?.testEmail ?? "").trim().toLowerCase();
     if (!testEmail || !testEmail.includes("@")) {
       return NextResponse.json({ success: false, error: "Enter a valid test address." }, { status: 400 });
+    }
+
+    if (await isMarketingSuppressed(testEmail)) {
+      return NextResponse.json(
+        { success: false, error: "That address has unsubscribed or bounced, so it cannot receive a campaign — even a test. Use a different address." },
+        { status: 400 },
+      );
     }
 
     const template = campaignTemplate({
@@ -71,7 +100,19 @@ export async function POST(request: Request, context: { params: Promise<{ campai
       postalAddress: config.marketingPostalAddress,
     });
 
-    const result = await sendEmail({ to: testEmail, ...template });
+    // The same headers sendMarketingEmail sets, built from the same HMAC token,
+    // so the opt-out in a test behaves exactly as it will in the real send.
+    const unsubscribeUrl = `${getSiteUrl()}/api/unsubscribe?email=${encodeURIComponent(testEmail)}&token=${generateUnsubscribeToken(testEmail)}`;
+    const unsubscribeMailbox = extractEmailAddress(resolveMarketingFrom(config));
+    const result = await sendEmail({
+      to: testEmail,
+      ...template,
+      from: resolveMarketingFrom(config),
+      headers: {
+        "List-Unsubscribe": `<${unsubscribeUrl}>${unsubscribeMailbox ? `, <mailto:${unsubscribeMailbox}?subject=unsubscribe>` : ""}`,
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+      },
+    });
     return NextResponse.json({ success: result.success, error: result.error });
   }
 

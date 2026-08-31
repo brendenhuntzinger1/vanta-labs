@@ -258,7 +258,12 @@ describe("E-08 — bounces and complaints suppress the address", () => {
       { email: "angry@example.com", event: "spamreport" },
       { email: "fine@example.com", event: "delivered" },
     ]);
-    expect(events.map((event) => event.kind)).toEqual(["hard_bounce", "soft_bounce", "complaint", "ignored"]);
+    // "delivered" used to land in `ignored` with everything else the parser did
+    // not act on. It is now its own kind — not because anything suppresses on
+    // it, but because a delivery is the only event a HEALTHY send produces, and
+    // without it an empty event log could not distinguish "nothing bounced"
+    // from "the webhook was never configured". See webhook-observability.test.ts.
+    expect(events.map((event) => event.kind)).toEqual(["hard_bounce", "soft_bounce", "complaint", "delivered"]);
     // Addresses are normalised, or the suppression would never match a send.
     expect(events[0].email).toBe("dead@example.com");
   });

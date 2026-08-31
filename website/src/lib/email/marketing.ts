@@ -37,6 +37,21 @@ export async function isMarketingSuppressed(to: string): Promise<boolean> {
   return Boolean(data);
 }
 
+/**
+ * Pull the bare address out of a From value.
+ *
+ * A From may be `"Vanta Labs <news@mail.example.com>"` or just
+ * `news@mail.example.com`. A List-Unsubscribe mailto must carry only the
+ * address — the display-name form makes the header unparseable, which is worse
+ * than having no mailto fallback at all.
+ */
+export function extractEmailAddress(from: string): string {
+  const value = String(from ?? "").trim();
+  const angled = value.match(/<([^>]+)>/);
+  const candidate = (angled ? angled[1] : value).trim();
+  return candidate.includes("@") ? candidate : "";
+}
+
 export async function sendMarketingEmail(
   input: {
     to: string;
@@ -124,8 +139,22 @@ export async function sendMarketingEmail(
   // TRANSACTIONAL MAIL SETS NONE OF THIS. A receipt is not a marketing message
   // and must never offer to stop being sent; this is the marketing wrapper, and
   // that is exactly why it lives here rather than in sendEmail().
+  // The mailto must name the address this message is actually FROM.
+  //
+  // It used to name `emailConfig.from` — the TRANSACTIONAL address — while the
+  // message itself is sent from `resolveMarketingFrom()`. Identical today,
+  // because no marketing From is configured. The moment one is, every campaign
+  // would go out From the marketing subdomain carrying a List-Unsubscribe
+  // pointing at the transactional mailbox: an unaligned opt-out header, which
+  // is the shape filters score against, and opt-out replies landing in the
+  // inbox that takes order questions.
+  //
+  // Deriving both from the same resolved value means turning separation on
+  // cannot introduce the mismatch.
+  const marketingFrom = resolveMarketingFrom(emailConfig);
+  const unsubscribeMailbox = extractEmailAddress(marketingFrom);
   const listHeaders: Record<string, string> = {
-    "List-Unsubscribe": `<${unsubscribeUrl}>${emailConfig.from ? `, <mailto:${emailConfig.from}?subject=unsubscribe>` : ""}`,
+    "List-Unsubscribe": `<${unsubscribeUrl}>${unsubscribeMailbox ? `, <mailto:${unsubscribeMailbox}?subject=unsubscribe>` : ""}`,
     "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
   };
 
@@ -135,7 +164,7 @@ export async function sendMarketingEmail(
     subject: input.subject,
     html,
     text,
-    from: resolveMarketingFrom(emailConfig),
+    from: marketingFrom,
   });
 
   // Logged best-effort - a logging failure must never fail the send itself.

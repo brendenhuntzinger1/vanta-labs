@@ -1,3 +1,4 @@
+import { FULFILLMENT_STATUS_LABELS } from "@/lib/order-pipeline";
 import { NextResponse, after } from "next/server";
 import { setOrderFulfillmentStatus } from "@/lib/shippo/service";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
@@ -306,7 +307,19 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
               : shippingUpdateTemplate({
                   customerName: String(order.customer_name ?? ""),
                   orderId: orderReference,
-                  status: String(transitionedTo ?? order.fulfillment_status ?? "updated"),
+                  // THE CUSTOMER WAS READING OUR INTERNAL ENUM.
+                  //
+                  // This passed the raw column through, so a shipping update
+                  // rendered "Order VL-1001 is now: label_purchased" — and
+                  // lowercase "shipped" in the ordinary case. The Shippo path
+                  // has always mapped through FULFILLMENT_STATUS_LABELS before
+                  // sending; this path never adopted it. Falls back to the raw
+                  // value only for a status with no label, which is strictly
+                  // better than rendering nothing.
+                  status: (() => {
+                    const raw = String(transitionedTo ?? order.fulfillment_status ?? "updated");
+                    return FULFILLMENT_STATUS_LABELS[raw as keyof typeof FULFILLMENT_STATUS_LABELS] ?? raw;
+                  })(),
                   carrier,
                   trackingNumber,
                   // Carrier link, or the customer's own Vanta Labs order list.

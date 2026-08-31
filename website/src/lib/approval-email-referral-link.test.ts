@@ -99,3 +99,89 @@ describe("negative controls", () => {
     expect(html).not.toContain("//r/DREW");
   });
 });
+
+/**
+ * THE TRIM, AND WHAT IT MUST NOT COST.
+ *
+ * The approval email was 371 words and 21 promotional terms — "Cash bonuses",
+ * "Free products", "no fixed ceiling on what top performers can earn" — shipped
+ * as transactional mail with no List-Unsubscribe, no postal address and no
+ * Reply-To. That combination is the shape bulk filters score against, on the
+ * one message an ambassador cannot afford to miss.
+ *
+ * Trimming it is only safe if every operative fact survives. These assert the
+ * facts, and that the hype did not come back.
+ */
+describe("the approval email stays transactional in shape", () => {
+  const PROMO = /\b(cash bonus(es)?|free products?|giveaways?|no fixed ceiling|unlimited earning)\b/i;
+
+  it("carries no promotional hype", () => {
+    const { html, text } = approved();
+    expect(html).not.toMatch(PROMO);
+    expect(text ?? "").not.toMatch(PROMO);
+  });
+
+  it("is short enough to read as a notice rather than a campaign", () => {
+    const { html } = approved();
+    const words = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().split(" ").length;
+    // 371 before the trim, 219 after — and that 219 counts the shared layout
+    // chrome (header, footer, legal line), not just this template's body. The
+    // bar is set above the current value on purpose: this guards against the
+    // promotional blocks coming back, not against an honest extra sentence.
+    expect(words).toBeLessThan(250);
+  });
+
+  it("offers no unsubscribe — a transactional message must not invite opt-out", () => {
+    const { html, text } = approved();
+    expect(html).not.toMatch(/unsubscrib/i);
+    expect(text ?? "").not.toMatch(/unsubscrib/i);
+  });
+});
+
+describe("every operative fact survives the trim", () => {
+  it("states the commission rate, both discounts, and the hold period", () => {
+    const { html } = approved();
+    expect(html).toContain("15%");   // commission
+    expect(html).toContain("10%");   // customers' discount
+    expect(html).toContain("20%");   // personal discount
+    expect(html).toContain("30 days"); // commission hold
+  });
+
+  it("states the code, the link, and the dashboard", () => {
+    const { html } = approved();
+    expect(html).toContain("DREW");
+    expect(html).toContain(`${SITE}/r/DREW`);
+    expect(html).toContain(`${SITE}/account/ambassador`);
+  });
+
+  it("says the ambassador was approved", () => {
+    const { html, subject } = approved();
+    expect(html).toMatch(/approved/i);
+    expect(subject).toMatch(/approved/i);
+  });
+
+  it("names the payout methods and cadence", () => {
+    const { html } = approved();
+    expect(html).toMatch(/PayPal/);
+    expect(html).toMatch(/two weeks/i);
+  });
+
+  it("gives a route to a human", () => {
+    const { html } = approved();
+    expect(html).toMatch(/reply to this email/i);
+  });
+
+  it("repeats every HTML link in the plain-text part", () => {
+    const { html, text } = approved();
+    const hrefs = [...html.matchAll(/href="(https?:[^"]+)"/g)].map((m) => m[1]);
+    expect(hrefs.length).toBeGreaterThan(0);
+    for (const href of hrefs) expect(text ?? "").toContain(href);
+  });
+
+  it("keeps the same facts in the text part", () => {
+    const { text } = approved();
+    for (const fact of ["15%", "10%", "20%", "30 days", "DREW", `${SITE}/r/DREW`]) {
+      expect(text ?? "").toContain(fact);
+    }
+  });
+});

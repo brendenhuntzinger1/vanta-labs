@@ -1,3 +1,4 @@
+import { FULFILLMENT_STATUS_LABELS } from "@/lib/order-pipeline";
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
@@ -278,7 +279,10 @@ export async function bulkUpdateAdminOrders(input: { orderIds: string[]; action:
       const template = shippingUpdateTemplate({
         customerName: String(row.customer_name ?? ""),
         orderId,
-        status: nextStatus,
+        // Mapped, not raw — the customer must not read our internal enum.
+        // Same fix as the single-order path in
+        // api/admin/orders/[orderId]/route.ts; the Shippo path always did this.
+        status: FULFILLMENT_STATUS_LABELS[nextStatus as keyof typeof FULFILLMENT_STATUS_LABELS] ?? nextStatus,
         trackingNumber,
         // No carrier is known in a bulk action, so there is no carrier
         // deep-link to build — send them to their own order list, which is
