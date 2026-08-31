@@ -356,6 +356,10 @@ async function sendPartnerStatusEmail(input: {
     template = ambassadorApprovedTemplate({
       name: input.name,
       referralCode: input.referralCode,
+      // The origin the /r/CODE share link is built on. The template can derive
+      // one from dashboardUrl, but passing it explicitly keeps the link correct
+      // if the dashboard ever moves to another host.
+      siteUrl: getSiteUrl(),
       dashboardUrl: `${getSiteUrl().replace(/\/$/, "")}/account/ambassador`,
       commissionPercent: haveRate ? firstFinitePercent(rateCandidates) : undefined,
       personalDiscountPercent: referralProgram?.personalDiscountPercent,
