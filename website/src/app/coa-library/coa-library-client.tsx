@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { CoaTestingDisclosure } from "@/components/coa-testing-disclosure";
 import { coaSearchHaystack, formatCoaTestDate, matchesCoaSearch } from "@/lib/coa-format";
+import { COA_TESTING_PENDING_SHORT, isCoaTestingPending } from "@/lib/coa-pending";
 import type { CoaLibraryProduct, CoaLibrarySnapshot, PublicCoaDocument } from "@/lib/coa-types";
 import { PLACEHOLDER_IMAGE_PATHS } from "@/lib/product-image";
 
@@ -134,6 +135,7 @@ function ProductCoaCard({
 }) {
   const documents = product.documents;
   const verified = documents.length > 0;
+  const awaitingTesting = !verified && isCoaTestingPending(product.slug);
   const latest = documents[0];
   const showPhoto = isRealProductPhoto(product.imageUrl);
 
@@ -189,7 +191,10 @@ function ProductCoaCard({
           </dl>
         ) : (
           <p className="mt-5 text-[13px] leading-6 text-white/38">
-            Batch documentation has not been published yet.
+            {/* A pending card used to say only that documentation was absent,
+                which reads as an omission. For the products we know are still
+                awaiting testing, say why and what happens next instead. */}
+            {awaitingTesting ? COA_TESTING_PENDING_SHORT : "Batch documentation has not been published yet."}
           </p>
         )}
 
