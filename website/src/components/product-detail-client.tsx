@@ -20,6 +20,11 @@ import { RecentlyViewed } from "@/components/recently-viewed";
 import { BacWaterAccessoryBlock, FrequentlyBoughtTogether } from "@/components/bac-water-upsell";
 import { CoaLibraryNotice } from "@/components/coa-library-notice";
 import { formatCoaTestDate } from "@/lib/coa-format";
+import {
+  COA_TESTING_PENDING_BODY,
+  COA_TESTING_PENDING_HEADING,
+  isCoaTestingPending,
+} from "@/lib/coa-pending";
 import type { PublicCoaDocument } from "@/lib/coa-types";
 import Image from "next/image";
 import { FULFILMENT_DETAIL, FULFILMENT_SENTENCE, FULFILMENT_SHORT, RESEARCH_USE_SENTENCE, TESTING_DETAIL, TESTING_SHORT } from "@/lib/trust-claims";
@@ -199,6 +204,9 @@ export function ProductDetailClient({
   // file for this batch — never claim "third-party tested / ≥99%" for a product
   // whose data is absent or "Pending". Keeps on-page claims substantiated.
   const hasVerifiedTesting = Boolean(selectedCoaUrl) && Boolean(selectedPurity) && selectedPurity !== "Pending";
+  // Only for products carrying no published batch record: once one exists the
+  // page would be claiming its own evidence is still in a laboratory.
+  const awaitingTesting = coaDocuments.length === 0 && isCoaTestingPending(product);
   const selectedStockStatus = selectedDose?.stockStatus ?? product.stockStatus;
   const unitPrice = toPriceNumber(selectedPrice);
 
@@ -530,6 +538,22 @@ export function ProductDetailClient({
 
                 {activeTab === "coa" && (
                   <div className="vl2-lab-panel p-5">
+                    {/* The notice below speaks for the catalogue. This speaks
+                        for THIS product, and only for the ones we know are
+                        still awaiting testing — so a shopper on an undocumented
+                        page gets an answer rather than an absence. It leads,
+                        because the general notice reads as the context and the
+                        remedy ("contact support before ordering") for it. */}
+                    {awaitingTesting ? (
+                      <div className="mb-5 border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.04] p-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[color:var(--accent-gold)]">
+                          {COA_TESTING_PENDING_HEADING}
+                        </p>
+                        <p className="mt-2 text-sm leading-relaxed text-[#a3a3a3]">
+                          {COA_TESTING_PENDING_BODY}
+                        </p>
+                      </div>
+                    ) : null}
                     {/* The notice explains that batch-specific COAs are still
                         being prepared. Once this product HAS published batch
                         records, that is no longer true of it — showing both
