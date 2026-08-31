@@ -191,9 +191,13 @@ describe("CFG-14: the approval email quotes the programme defaults", () => {
         referralCode: "TESTCODE",
         dashboardUrl: "https://example.test/account/ambassador",
       });
+      // The two discount/commission bullets became rows of the rate table when
+      // the approval email was trimmed to a transactional shape. The assertion
+      // is the same one — each shared constant reaches the rendered email —
+      // read against the label that names it.
       expect(rendered.html).toContain("customers who use it get <strong>17% off");
-      expect(rendered.html).toContain("<strong>23% off your own purchases</strong>");
-      expect(rendered.html).toContain("<strong>29% commission</strong>");
+      expect(rendered.html).toMatch(/Your own discount<\/td>\s*<td[^>]*>23%/);
+      expect(rendered.html).toMatch(/Your commission<\/td>\s*<td[^>]*>29%/);
     } finally {
       vi.doUnmock("@/lib/admin-control-shared");
       vi.resetModules();

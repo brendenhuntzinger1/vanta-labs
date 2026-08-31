@@ -482,6 +482,15 @@
     "created_at",
     "updated_at"
   ],
+  "email_delivery_events": [
+    "id",
+    "provider_message_id",
+    "event_type",
+    "kind",
+    "recipient_email",
+    "suppressed",
+    "received_at"
+  ],
   "email_send_log": [
     "id",
     "campaign_type",

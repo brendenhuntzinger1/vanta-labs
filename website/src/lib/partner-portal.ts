@@ -325,14 +325,22 @@ async function sendPartnerStatusEmail(input: {
   commissionPercent?: number | string | null;
 }) {
   let template;
+  let replyTo: string | undefined;
   if (input.status === "approved") {
     // Enrich the approval email with the live program terms so the ambassador
     // gets the full onboarding: their rates, the configured hold, biweekly
     // payouts. The hold is read from settings below, never named here.
-    const [referralProgram, ambassadorSettings] = await Promise.all([
+    const [referralProgram, ambassadorSettings, business] = await Promise.all([
       getReferralProgramConfig().catch(() => null),
       getAmbassadorProgramSettings().catch(() => null),
+      getBusinessSettings().catch(() => null),
     ]);
+    // The approval copy ends "reply to this email and our team will help", so
+    // there has to be somewhere for that reply to land. Without this it goes to
+    // the From address, which is the automated orders mailbox nobody reads.
+    // Undefined when no support address is configured — an absent Reply-To is
+    // correct, a broken one is not.
+    replyTo = business?.supportEmail || undefined;
     // What the ambassador will ACTUALLY be paid, then the program default —
     // the resolution sendReferralCodeAssignedEmail's header has always claimed
     // this email used. The rate typed into this request needs no separate slot:
@@ -370,7 +378,7 @@ async function sendPartnerStatusEmail(input: {
     template = ambassadorDeniedTemplate({ name: input.name });
   }
 
-  return sendAmbassadorEmail(input.to, template, `ambassador ${input.status}`);
+  return sendAmbassadorEmail(input.to, template, `ambassador ${input.status}`, { replyTo });
 }
 
 // TELLING AN AMBASSADOR THEY EARN 0% IS WORSE THAN NOT WRITING.

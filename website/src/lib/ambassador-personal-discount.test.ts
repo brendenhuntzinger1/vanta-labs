@@ -63,25 +63,50 @@ describe("the approval email states each rate against the right concept", () => 
     holdDays: 14,
   });
 
+  /**
+   * The email now states the three rates in a table rather than in prose, so
+   * these read the value out of the row that NAMES each concept. That is
+   * strictly stronger than the substring match this used to do: a swapped pair
+   * fails here even if both numbers are still present somewhere in the body.
+   */
+  function rowValue(html: string, label: string): string | null {
+    const m = html.match(new RegExp(`${label}</td>\\s*<td[^>]*>([0-9.]+)%`));
+    return m ? m[1] : null;
+  }
+
   it("attributes the PERSONAL percent to the ambassador's own purchases", () => {
-    expect(rendered.html).toMatch(/44% off your own purchases/);
-    expect(rendered.text).toMatch(/44% off your own purchases/);
+    expect(rowValue(rendered.html, "Your own discount")).toBe("44");
+    expect(rendered.html).toMatch(/Your own discount applies at the cart/);
+    expect(rendered.text).toMatch(/Your own discount: 44% off your own purchases/);
   });
 
   it("attributes the CUSTOMER percent to people using the code", () => {
     expect(rendered.html).toMatch(/customers who use it get <strong>55% off/);
     expect(rendered.html).not.toMatch(/customers who use it get <strong>44% off/);
+    expect(rowValue(rendered.html, "Your customers&apos; discount")
+      ?? rowValue(rendered.html, "Your customers' discount")).toBe("55");
   });
 
   it("attributes the COMMISSION percent to completed referrals only", () => {
-    expect(rendered.html).toMatch(/33% commission/);
-    expect(rendered.html).not.toMatch(/44% commission/);
+    expect(rowValue(rendered.html, "Your commission")).toBe("33");
+    expect(rendered.html).toMatch(/You earn 33% of the merchandise total/);
+    expect(rendered.html).not.toMatch(/You earn 44%/);
+    expect(rendered.text).toMatch(/Your commission: 33% of the merchandise total/);
   });
 
   it("never describes the personal discount as something the customer receives", () => {
-    // The defect this correction fixes, stated as an invariant.
-    expect(rendered.text).not.toMatch(/audience 44% off/);
-    expect(rendered.text).toMatch(/audience 55% off/);
+    // The defect this correction fixes, stated as an invariant: the personal
+    // rate must never be attached to the customer-facing concept, in either part.
+    expect(rendered.text).not.toMatch(/customers' discount: 44%/i);
+    expect(rendered.text).toMatch(/Your customers' discount: 55%/);
+    expect(rendered.html).not.toMatch(/customers who use it get <strong>44%/);
+  });
+
+  it("keeps all three rates distinct in the rendered output", () => {
+    // If a refactor ever collapses two of them onto one variable, this is the
+    // assertion that notices — regardless of wording.
+    const values = ["Your commission", "Your own discount"].map((l) => rowValue(rendered.html, l));
+    expect(new Set([...values, "55"]).size).toBe(3);
   });
 
   describe("when the caller supplies nothing (fallbacks)", () => {
@@ -92,17 +117,18 @@ describe("the approval email states each rate against the right concept", () => 
     });
 
     it("falls back to 20% personal, matching the program default", () => {
-      expect(fallback.text).toMatch(/Personal discount: 20% off your own purchases/);
+      expect(rowValue(fallback.html, "Your own discount")).toBe("20");
+      expect(fallback.text).toMatch(/Your own discount: 20% off your own purchases/);
     });
 
     it("falls back to 10% for the customer discount, NOT 20%", () => {
-      expect(fallback.text).toMatch(/customers get 10% off/);
-      expect(fallback.text).not.toMatch(/customers get 20% off/);
+      expect(fallback.text).toMatch(/Your customers' discount: 10%/);
+      expect(fallback.text).not.toMatch(/Your customers' discount: 20%/);
     });
 
     it("falls back to 10% commission, NOT 20%", () => {
-      expect(fallback.html).toMatch(/10% commission/);
-      expect(fallback.html).not.toMatch(/20% commission/);
+      expect(rowValue(fallback.html, "Your commission")).toBe("10");
+      expect(fallback.html).not.toMatch(/You earn 20%/);
     });
   });
 });

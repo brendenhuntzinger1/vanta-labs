@@ -774,43 +774,48 @@ export function ambassadorApprovedTemplate(input: {
   // configured value.
   const holdDays = Number.isFinite(input.holdDays) ? Number(input.holdDays) : DEFAULT_COMMISSION_HOLD_DAYS;
 
+  // WHAT AN APPROVED AMBASSADOR NEEDS, AND NOTHING ELSE.
+  //
+  // This was 371 words and 21 promotional terms — "Cash bonuses", "Free
+  // products", "no fixed ceiling on what top performers can earn", giveaways,
+  // exclusive promotions — sent as TRANSACTIONAL mail: no List-Unsubscribe, no
+  // postal address, no Reply-To. Promotional body plus none of the three things
+  // that make promotional mail legitimate is the exact shape bulk filters score
+  // against, and this message is the one an ambassador cannot afford to miss:
+  // it is the only place their code, rate and link are delivered.
+  //
+  // The growth/bonus material is not deleted, it is MOVED — the dashboard is
+  // where it can be kept current, and where quoting an incentive is not a
+  // promise stamped into someone's inbox for ever. What stays is the operative
+  // facts and one route to a human.
   const bodyHtml = `
-    <p>Congratulations, ${name} — your application to the Vanta Labs Ambassador Program has been <strong>approved</strong>. Welcome aboard.</p>
+    <p>Congratulations, ${name} — your application to the Vanta Labs Ambassador Program has been <strong>approved</strong>.</p>
     ${code ? `<p><strong>Your referral code:</strong> ${code} — customers who use it get <strong>${referralPct}% off</strong>.</p>` : ""}
     ${referralLinkHtml ? `<p style="margin-top:12px"><strong>Your referral link — share this one, it credits you automatically:</strong></p>
     <p style="font-size:13px;word-break:break-all;"><a href="${referralLinkHtml}" style="color:#c9a227;">${referralLinkHtml}</a></p>
     <p style="font-size:13px;color:#a1a1aa;">Anyone who opens it has the discount applied without typing anything. The code still works on its own for people who would rather enter it at checkout.</p>` : ""}
-    <p><strong>Your personal discount:</strong> as an approved ambassador you automatically get <strong>${personalPct}% off your own purchases</strong> — just sign in and check out; it applies at the cart, no code needed.</p>
 
-    <p style="margin-top:20px"><strong>Starting Benefits</strong></p>
-    <ul>
-      <li><strong>${commissionPct}% commission</strong> on every completed referral.</li>
-      <li><strong>${personalPct}% personal discount</strong> on all Vanta Labs products.</li>
-      <li>Access to exclusive promotions, giveaways, and future ambassador perks.</li>
-    </ul>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:20px;border-top:1px solid rgba(255,255,255,0.12);border-bottom:1px solid rgba(255,255,255,0.12);">
+      <tr>
+        <td style="padding:14px 0;font-size:13px;color:#a1a1aa;">Your commission</td>
+        <td style="padding:14px 0;font-size:15px;color:#f4f4f4;font-weight:700;" align="right">${commissionPct}%</td>
+      </tr>
+      <tr>
+        <td style="padding:14px 0;border-top:1px solid rgba(255,255,255,0.08);font-size:13px;color:#a1a1aa;">Your customers' discount</td>
+        <td style="padding:14px 0;border-top:1px solid rgba(255,255,255,0.08);font-size:15px;color:#f4f4f4;font-weight:700;" align="right">${referralPct}%</td>
+      </tr>
+      <tr>
+        <td style="padding:14px 0;border-top:1px solid rgba(255,255,255,0.08);font-size:13px;color:#a1a1aa;">Your own discount</td>
+        <td style="padding:14px 0;border-top:1px solid rgba(255,255,255,0.08);font-size:15px;color:#f4f4f4;font-weight:700;" align="right">${personalPct}%</td>
+      </tr>
+    </table>
+    <p style="margin-top:10px;font-size:12px;color:#71717a;">Your own discount applies at the cart automatically while you are signed in — no code needed.</p>
 
-    <p style="margin-top:16px"><strong>Growth Opportunities</strong></p>
-    <p>As your referrals begin to grow and you consistently bring in completed orders, we'll review your performance and negotiate a higher commission rate. We want to reward ambassadors who genuinely help grow Vanta Labs, so there is no fixed ceiling on what top performers can earn.</p>
-    <p>High-performing ambassadors may receive:</p>
-    <ul>
-      <li>Increased commission percentages</li>
-      <li>Cash bonuses</li>
-      <li>Free products</li>
-      <li>Early access to new releases</li>
-      <li>Exclusive promotions</li>
-      <li>Long-term partnership opportunities</li>
-    </ul>
+    <p style="margin-top:20px"><strong>How you get paid</strong></p>
+    <p>You earn ${commissionPct}% of the merchandise total on each completed order placed with your code. A commission is held for ${holdDays} days after the order completes, which covers refunds and chargebacks, then is included in the next payout. Payouts run every two weeks by PayPal, Venmo, or Cash App.</p>
+    <p>Open your dashboard to choose your payout method, copy your link, and track pending, approved, and paid commissions. Full program terms, requirements, and current incentives live there too.</p>
 
-    <p style="margin-top:16px"><strong>Monthly Performance</strong></p>
-    <p>Referral performance is reviewed each month based on completed, paid orders. Refunded, canceled, fraudulent, or chargeback orders do not count toward referral totals.</p>
-    <p>Our goal is simple: the more value you bring to Vanta Labs, the more we'll invest back into you.</p>
-
-    <p style="margin-top:16px"><strong>How commissions work</strong></p>
-    <p>You earn ${commissionPct}% on the merchandise total of each completed order placed with your code. A commission is <em>pending</em> for ${holdDays} days after the order completes (this protects against refunds and chargebacks), then becomes <em>approved</em> and is included in the next payout. Payouts run every two weeks. You'll never be paid on a refunded or cancelled order.</p>
-    <p>Track everything — pending, approved, and paid commissions plus your referral orders — anytime from your dashboard.</p>
-
-    <p style="margin-top:16px"><strong>Getting paid</strong></p>
-    <p>We pay via <strong>PayPal, Venmo, or Cash App</strong>. Open your dashboard to choose your payout method and enter your handle so we can pay you on the next cycle.</p>
+    <p style="margin-top:16px;font-size:13px;color:#a1a1aa;">Questions about the program or your account? Reply to this email and our team will help.</p>
   `;
 
   return {
@@ -830,26 +835,15 @@ export function ambassadorApprovedTemplate(input: {
       referralLink ? `Your referral link (share this one — it credits you automatically): ${referralLink}` : null,
       `Personal discount: ${personalPct}% off your own purchases while approved (auto-applied at checkout when signed in).`,
       "",
-      "Benefits:",
-      `- ${personalPct}% off your own purchases`,
-      `- Referral code and link giving your audience ${referralPct}% off`,
-      `- ${commissionPct}% commission on completed orders with your code`,
-      "- Real-time dashboard (pending/approved/paid commissions, referral orders, earnings)",
-      "- Payouts every two weeks",
-      "- Performance bonuses and higher commission potential",
-      "- Early access to new products and promotions",
+      `Your commission: ${commissionPct}% of the merchandise total on each completed order placed with your code.`,
+      `Your customers' discount: ${referralPct}%.`,
+      `Your own discount: ${personalPct}% off your own purchases, applied at the cart while signed in (no code needed).`,
       "",
-      "Responsibilities:",
-      "- At least 3 social posts per month",
-      "- Represent Vanta Labs professionally",
-      "- No medical / human-use claims",
-      "- No prohibited advertising",
-      "- Keep your code active",
-      "- Follow all program rules",
+      `How you get paid: a commission is held for ${holdDays} days after the order completes, which covers refunds and chargebacks, then is included in the next payout. Payouts run every two weeks by PayPal, Venmo, or Cash App. Refunded or cancelled orders never pay.`,
       "",
-      `How commissions work: you earn ${commissionPct}% on each completed order's merchandise total. A commission is pending for ${holdDays} days after completion (protects against refunds/chargebacks), then approved and paid in the next biweekly payout. Refunded/cancelled orders never pay.`,
+      "Open your dashboard to choose your payout method, copy your link, and track pending, approved and paid commissions. Full program terms, requirements and current incentives live there.",
       "",
-      "Getting paid: we pay via PayPal, Venmo, or Cash App — set your payout method in your dashboard.",
+      "Questions about the program or your account? Reply to this email and our team will help.",
       "",
       `Dashboard: ${input.dashboardUrl}`,
       "",
@@ -961,7 +955,21 @@ export function orderCancelledTemplate(input: {
   const name = escapeHtml(input.customerName || "there");
   const reason = String(input.reason ?? "").trim();
   const refundNote = String(input.refundNote ?? "").trim();
-  const support = escapeHtml(String(input.supportEmail ?? "support@vantalabsresearch.com"));
+  // THE LAYOUT FOOTER ALREADY PRINTS A SUPPORT ADDRESS.
+  //
+  // Found by rendering this template in a browser, not by a unit test: the
+  // footer read "Questions? support@vantalabsresearch.com" from renderLayout
+  // and then, immediately under it, "Questions? Reach us at
+  // support@vantalabsresearch.com." — the same address twice, two lines apart.
+  // This is the only template that adds its own copy of that line.
+  //
+  // Kept only when a CONFIGURED support address differs from the one the layout
+  // hard-codes, which is the single case where the extra line carries
+  // information rather than repeating it.
+  const LAYOUT_SUPPORT = "support@vantalabsresearch.com";
+  const configuredSupport = String(input.supportEmail ?? "").trim();
+  const support = escapeHtml(configuredSupport || LAYOUT_SUPPORT);
+  const showSupportNote = Boolean(configuredSupport) && configuredSupport.toLowerCase() !== LAYOUT_SUPPORT;
   return {
     subject: `Your Vanta Labs order ${input.orderId} has been cancelled`,
     html: renderLayout({
@@ -970,11 +978,30 @@ export function orderCancelledTemplate(input: {
       bodyHtml:
         `<p>Order <strong>${escapeHtml(input.orderId)}</strong> has been cancelled and will not ship.</p>`
         + (reason ? `<p>${escapeHtml(reason)}</p>` : "")
+        // THE FALLBACK PROMISED A REFUND NOTHING ISSUES.
+        //
+        // It read "the payment is being returned to your original payment
+        // method… within 5–10 business days" whenever `refundNote` was absent —
+        // and `refundNote` is passed by nothing: the sole caller
+        // (api/admin/orders/[orderId]/route.ts) supplies customerName, orderId,
+        // reason and supportEmail only. So the fallback always rendered. The
+        // cancel block initiates no refund either: it moves the fulfillment
+        // status, restocks, writes an audit row and mails. `paid → cancelled`
+        // is a permitted transition, so this went to customers whose card had
+        // already been charged, telling them money was on its way that nobody
+        // had sent.
+        //
+        // The honest fallback states what is true — the order will not be
+        // billed further, and a charge already taken is refunded on request —
+        // and routes them to a human. An explicit `refundNote` still wins, so a
+        // caller that HAS issued a refund can say so precisely.
         + `<p>${refundNote
             ? escapeHtml(refundNote)
-            : "If you were charged for this order, the payment is being returned to your original payment method. Refunds usually appear within 5–10 business days, depending on your bank."}</p>`
+            : "You will not be billed anything further for this order. If you were already charged, reply to this email and we'll return it to your original payment method."}</p>`
         + `<p>If this wasn't expected, reply to this email and we'll sort it out.</p>`,
-      footerNoteHtml: `<p style="margin:10px 0 0;font-size:12px;color:#71717a;">Questions? Reach us at <a href="mailto:${support}" style="color:#a1a1aa;">${support}</a>.</p>`,
+      footerNoteHtml: showSupportNote
+        ? `<p style="margin:10px 0 0;font-size:12px;color:#71717a;">Questions? Reach us at <a href="mailto:${support}" style="color:#a1a1aa;">${support}</a>.</p>`
+        : undefined,
     }),
     text: toText([
       `Hi ${input.customerName || "there"},`,
@@ -983,8 +1010,8 @@ export function orderCancelledTemplate(input: {
       reason || null,
       "",
       refundNote
-        || "If you were charged for this order, the payment is being returned to your original payment method. "
-           + "Refunds usually appear within 5-10 business days, depending on your bank.",
+        || "You will not be billed anything further for this order. If you were already charged, "
+           + "reply to this email and we'll return it to your original payment method.",
       "",
       `If this wasn't expected, reply to this email or reach us at ${input.supportEmail ?? "support@vantalabsresearch.com"}.`,
       "",
@@ -1244,8 +1271,24 @@ export function membershipWelcomeTemplate(input: { name: string; tierName: strin
 // app. They are kept because the features they belong to are half-built --
 // /api/account/birthday already collects the date -- but nothing sends them
 // today, so do not read their existence as evidence that a customer receives
-// them. Wire one through sendMarketingEmail() (they are all promotional) before
-// assuming otherwise.
+// them.
+//
+// THEY ARE NOT ALL PROMOTIONAL, AND THIS USED TO SAY THEY WERE.
+//
+// The instruction here was "wire one through sendMarketingEmail() (they are all
+// promotional)". Three of the four are. `membershipTrialConfirmationTemplate`
+// is not: it states the exact amount charged today, the exact remainder and the
+// date it lands, and the recurring price after that. It is the disclosure that
+// makes the intro offer lawful, and its siblings —
+// membershipRemainderReminderTemplate and membershipRenewalReminderTemplate,
+// the same class of message — correctly go through sendEmail().
+//
+// Following the old instruction would have attached List-Unsubscribe to a
+// billing disclosure and, worse, made it SUPPRESSIBLE: a member who once
+// unsubscribed from marketing would have had the remainder taken from their
+// card with no notice. So: the benefits, birthday and launch templates go
+// through sendMarketingEmail(); the trial confirmation goes through sendEmail()
+// like every other billing message.
 
 export function membershipTrialConfirmationTemplate(input: {
   name: string;

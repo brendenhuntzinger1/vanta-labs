@@ -29,7 +29,19 @@ import { recordSystemAlert } from "@/lib/monitoring";
  * writing is what lets every branch be tested without a database.
  */
 
-export type DeliveryEventKind = "hard_bounce" | "soft_bounce" | "complaint" | "ignored";
+/**
+ * `delivered` and `delayed` suppress nothing — they exist so the webhook has
+ * something to record on a healthy send. Without them the only provable state
+ * was "something bounced", and a sender with no bounces was indistinguishable
+ * from a webhook that was never configured. See email-delivery-event-log.sql.
+ */
+export type DeliveryEventKind =
+  | "delivered"
+  | "hard_bounce"
+  | "soft_bounce"
+  | "complaint"
+  | "delayed"
+  | "ignored";
 
 export interface DeliveryEvent {
   email: string;
@@ -70,6 +82,12 @@ function parseResend(body: Record<string, unknown>): DeliveryEvent[] {
   if (type === "email.complained") {
     return [{ email, kind: "complaint", providerMessageId, rawType: type }];
   }
+  if (type === "email.delivered") {
+    return [{ email, kind: "delivered", providerMessageId, rawType: type }];
+  }
+  if (type === "email.delivery_delayed") {
+    return [{ email, kind: "delayed", providerMessageId, rawType: type }];
+  }
   if (type === "email.bounced") {
     const bounce = (data.bounce ?? {}) as Record<string, unknown>;
     const severity = str(bounce.type).toLowerCase();
@@ -103,7 +121,11 @@ function parseSendgrid(events: Array<Record<string, unknown>>): DeliveryEvent[] 
     const name = str(event.event).toLowerCase();
     const providerMessageId = str(event.sg_message_id) || undefined;
 
-    if (name === "spamreport") {
+    if (name === "delivered") {
+      parsed.push({ email, kind: "delivered", providerMessageId, rawType: name });
+    } else if (name === "deferred") {
+      parsed.push({ email, kind: "delayed", providerMessageId, rawType: name });
+    } else if (name === "spamreport") {
       parsed.push({ email, kind: "complaint", providerMessageId, rawType: name });
     } else if (name === "dropped") {
       parsed.push({ email, kind: "hard_bounce", providerMessageId, rawType: name });
@@ -160,10 +182,49 @@ export interface DeliveryEventOutcome {
  * retry anything not answered 2xx, and a repeat delivery must not turn into a
  * second anything.
  */
+/**
+ * Write one webhook event to `email_delivery_events`.
+ *
+ * Idempotent at the database: `email_delivery_events_once` covers
+ * (provider_message_id, event_type, recipient_email), so a provider redelivery
+ * updates the existing row rather than inserting a second. That keeps "how many
+ * times did this bounce?" honest — providers retry anything not answered 2xx.
+ *
+ * Swallows a missing table so a deployment that has not run
+ * email-delivery-event-log.sql yet still suppresses bounces correctly. The
+ * suppression is what protects the domain; this is only how we can see it.
+ */
+async function recordDeliveryEvent(event: DeliveryEvent, suppressed: boolean): Promise<void> {
+  await supabaseAdmin
+    .from("email_delivery_events")
+    .upsert(
+      {
+        provider_message_id: event.providerMessageId ?? null,
+        event_type: event.rawType,
+        kind: event.kind,
+        recipient_email: event.email || null,
+        suppressed,
+        received_at: new Date().toISOString(),
+      },
+      { onConflict: "provider_message_id,event_type,recipient_email" },
+    );
+}
+
 export async function applyDeliveryEvents(events: DeliveryEvent[]): Promise<DeliveryEventOutcome> {
   const outcome: DeliveryEventOutcome = { suppressed: 0, ignored: 0, writeFailed: false };
 
   for (const event of events) {
+    // RECORD FIRST, ACT SECOND — and record EVERY event, including the ones
+    // this function goes on to do nothing about.
+    //
+    // The audit could not answer "is the provider webhook actually configured?"
+    // because a healthy sender and an unwired webhook produce the same empty
+    // suppression table. A delivered/opened/clicked event writes a row here and
+    // settles it. Best-effort by construction: a logging failure must never
+    // stop a bounce being suppressed, which is the thing that protects the
+    // sending domain.
+    await recordDeliveryEvent(event, false).catch(() => {});
+
     if (event.kind !== "hard_bounce" && event.kind !== "complaint") {
       outcome.ignored += 1;
       continue;
@@ -185,6 +246,7 @@ export async function applyDeliveryEvents(events: DeliveryEvent[]): Promise<Deli
         continue;
       }
       outcome.suppressed += 1;
+      await recordDeliveryEvent(event, true).catch(() => {});
     } catch {
       outcome.writeFailed = true;
       continue;
