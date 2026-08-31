@@ -175,6 +175,15 @@ export function baseSentryOptions(): SentryInitOptions & { dsn: string } {
       // extension noise directly above.
       /SCDynimacBridge/,
       /Can't find variable: (SCDynimacBridge|__fbNative|FBNavigator)/,
+      // The Android half of the same story. Instagram's webview injects
+      // `navigation_performance_logger_android`, which posts timings to a
+      // native Java object; on `beforeunload` that object is torn down first,
+      // so its own send throws. It reached us as `Error invoking postMessage:
+      // Java object is gone` from /products on Instagram 444.0.0 / Android 15,
+      // twice, with zero users impacted. Our frames appear in the stack only
+      // because the listener was attached to our page — the throw is theirs and
+      // there is no version of it we could fix.
+      /invoking postMessage: Java object is gone/,
     ],
 
     denyUrls: [/chrome-extension:\/\//, /safari-extension:\/\//, /moz-extension:\/\//],

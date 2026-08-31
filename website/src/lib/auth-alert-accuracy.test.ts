@@ -101,6 +101,15 @@ describe("in-app browser bridge noise is filtered out of Sentry", () => {
     expect(matches("ReferenceError: Can't find variable: __fbNative")).toBe(true);
   });
 
+  it("drops Instagram's Android postMessage bridge error", () => {
+    // Verbatim from the production event on /products, Instagram 444.0.0 on
+    // Android 15. Its own injected navigation_performance_logger_android tries
+    // to post to a native object that has already been torn down during
+    // beforeunload — our frames appear in the stack only because the listener
+    // was attached to our page. Zero users impacted, and nothing we can fix.
+    expect(matches("Error: Error invoking postMessage: Java object is gone")).toBe(true);
+  });
+
   it("does NOT drop an ordinary application error", () => {
     // The filter earns its place only if it is still narrow.
     for (const real of [

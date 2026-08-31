@@ -130,6 +130,24 @@ function restatesStructuredPerk(benefit: string, tier: MembershipTier): boolean 
   return false;
 }
 
+/**
+ * The bullets a tier actually shows, after the de-duplication above.
+ *
+ * Exported and shared because the list and its "See all N benefits" toggle used
+ * to compute this filter separately, and a count that disagrees with the list
+ * it opens is the one thing a toggle must never do. It also has to be reachable
+ * from a test: rendering the landing page needs a CartProvider, so the only
+ * practical way to pin the empty case is to pin this.
+ *
+ * Returning [] is a real state, not just a seeding artefact — a tier whose
+ * every bullet restates a structured perk (a plausible "10% member discount /
+ * Free shipping / 1x points per $1" set) filters down to nothing, and the
+ * caller must render no toggle rather than an empty one offering "0 benefits".
+ */
+export function visibleBenefits(tier: MembershipTier): string[] {
+  return tier.benefits.filter((benefit) => !restatesStructuredPerk(benefit, tier));
+}
+
 // ——— Live savings calculator ————————————————————————————————————————————
 // Prices membership against the shopper's REAL cart (live — updates as items
 // are added). With an empty cart it falls back to a spend slider so the page
@@ -355,6 +373,9 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
             // member discount + store credit (labeled with its basis below).
             const avgMonthlySavingsCents = Math.round(20000 * (tier.memberDiscountPercent / 100)) + tier.monthlyStoreCreditCents;
             const bestFor = BEST_FOR_BY_RANK[Math.min(index, BEST_FOR_BY_RANK.length - 1)];
+            // Computed once and shared with the toggle below, so the count in
+            // "See all N benefits" can never disagree with the list it opens.
+            const shownBenefits = visibleBenefits(tier);
             return (
               <div key={tier.id}>
                 <div
@@ -472,7 +493,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
                       where there is room for it. */}
                   <div className={`${expandedBenefits[tier.id] ? "block" : "hidden"} sm:block sm:flex-1`}>
                     <ul className="mt-5 space-y-3 border-t border-white/10 pt-5 text-sm leading-6 text-white/70 sm:mt-6">
-                      {tier.benefits.filter((benefit) => !restatesStructuredPerk(benefit, tier)).map((benefit) => (
+                      {shownBenefits.map((benefit) => (
                         <li key={benefit} className="flex items-start gap-2.5">
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-[color:var(--accent-gold)]/70">
                             <path d="m5 13 4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
@@ -485,17 +506,22 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
                     </ul>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setExpandedBenefits((prev) => ({ ...prev, [tier.id]: !prev[tier.id] }))}
-                    aria-expanded={Boolean(expandedBenefits[tier.id])}
-                    className="vl-focus-ring mt-4 flex w-full items-center justify-center gap-1.5 border-t border-white/10 pt-4 text-xs text-[color:var(--accent-gold)] sm:hidden"
-                  >
-                    {expandedBenefits[tier.id] ? "Hide benefits" : `See all ${tier.benefits.filter((b) => !restatesStructuredPerk(b, tier)).length} benefits`}
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={`h-3.5 w-3.5 transition-transform duration-200 ${expandedBenefits[tier.id] ? "rotate-180" : ""}`} aria-hidden>
-                      <path d="m6 9 6 6 6-6" />
-                    </svg>
-                  </button>
+                  {/* No bullets left to reveal means no toggle. It used to render
+                      unconditionally, so such a tier offered "See all 0 benefits"
+                      and opened onto a blank list. */}
+                  {shownBenefits.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => setExpandedBenefits((prev) => ({ ...prev, [tier.id]: !prev[tier.id] }))}
+                      aria-expanded={Boolean(expandedBenefits[tier.id])}
+                      className="vl-focus-ring mt-4 flex w-full items-center justify-center gap-1.5 border-t border-white/10 pt-4 text-xs text-[color:var(--accent-gold)] sm:hidden"
+                    >
+                      {expandedBenefits[tier.id] ? "Hide benefits" : `See all ${shownBenefits.length} benefits`}
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={`h-3.5 w-3.5 transition-transform duration-200 ${expandedBenefits[tier.id] ? "rotate-180" : ""}`} aria-hidden>
+                        <path d="m6 9 6 6 6-6" />
+                      </svg>
+                    </button>
+                  ) : null}
 
                   <div className="mt-6">
                     <Link
