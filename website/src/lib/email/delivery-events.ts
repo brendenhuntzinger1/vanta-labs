@@ -183,6 +183,23 @@ export interface DeliveryEventOutcome {
  * second anything.
  */
 /**
+ * Is this the error a database that has not run the migration produces?
+ *
+ * Deliberately STRICTER than partner-portal's helper of the same name, which
+ * also returns true for any error whose text merely mentions the relation.
+ * That looseness would have hidden the defect this function's caller was built
+ * to expose: the ON CONFLICT mismatch names `email_delivery_events` in its
+ * message, so a substring test would have classified a broken index as a
+ * missing table and stayed quiet. Only the two codes that actually mean "no
+ * such relation" count.
+ */
+function isMissingRelationError(error: unknown, _relationName: string): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: string }).code;
+  return code === "42P01" || code === "PGRST205";
+}
+
+/**
  * Write one webhook event to `email_delivery_events`.
  *
  * Idempotent at the database: `email_delivery_events_once` covers
@@ -193,9 +210,23 @@ export interface DeliveryEventOutcome {
  * Swallows a missing table so a deployment that has not run
  * email-delivery-event-log.sql yet still suppresses bounces correctly. The
  * suppression is what protects the domain; this is only how we can see it.
+ *
+ * BEST-EFFORT, BUT NOT SILENT — and it was silent, which cost a round.
+ *
+ * The first version of the migration indexed
+ * `coalesce(provider_message_id, '')` rather than the bare column, so this
+ * upsert's ON CONFLICT could not be matched and every insert raised. The caller
+ * catches, so Resend saw 200, bounces suppressed correctly, and the log stayed
+ * empty — indistinguishable from "no events arrived", which is the exact
+ * ambiguity this table exists to remove. It was found by sending real events
+ * through production and comparing four Success rows in Resend against zero
+ * rows here.
+ *
+ * So a failure is logged now. Still never thrown: a logging fault must not stop
+ * a bounce being suppressed. But it must not be invisible either.
  */
 async function recordDeliveryEvent(event: DeliveryEvent, suppressed: boolean): Promise<void> {
-  await supabaseAdmin
+  const { error } = await supabaseAdmin
     .from("email_delivery_events")
     .upsert(
       {
@@ -208,6 +239,17 @@ async function recordDeliveryEvent(event: DeliveryEvent, suppressed: boolean): P
       },
       { onConflict: "provider_message_id,event_type,recipient_email" },
     );
+
+  // A missing table is the one expected failure (a deployment that has not run
+  // the migration). Anything else means the log is broken while the webhook
+  // looks healthy, which is precisely the state that hid the ON CONFLICT
+  // mismatch — so it goes to the server log. Never the payload: it carries
+  // customer email addresses.
+  if (error && !isMissingRelationError(error, "email_delivery_events")) {
+    console.error(
+      `[email] could not record a ${event.kind} delivery event: ${error.message ?? "unknown error"}`,
+    );
+  }
 }
 
 export async function applyDeliveryEvents(events: DeliveryEvent[]): Promise<DeliveryEventOutcome> {

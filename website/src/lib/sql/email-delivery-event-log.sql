@@ -20,8 +20,24 @@
 -- IDEMPOTENCY. Providers retry anything not answered 2xx, and Resend can
 -- redeliver an event it already delivered. The unique index makes a repeat a
 -- no-op rather than a second row, so "how many times did this bounce?" stays
--- honest. provider_message_id can be absent on a malformed payload, so the
--- index covers the coalesced value rather than the raw column.
+-- honest.
+--
+-- IT MUST BE A PLAIN-COLUMN INDEX, AND THE FIRST VERSION WAS NOT.
+--
+-- This originally read `(coalesce(provider_message_id, ''), event_type,
+-- coalesce(recipient_email, ''))` to make a NULL id still dedupe. That is a
+-- valid index and a useless one here: PostgREST's upsert sends
+-- `ON CONFLICT (provider_message_id, event_type, recipient_email)`, naming
+-- COLUMNS, and Postgres cannot match a column list to an expression index. So
+-- every insert raised "no unique or exclusion constraint matching the ON
+-- CONFLICT specification" — and because recording is best-effort, the caller
+-- swallowed it. Resend got 200, the suppression worked, and the log stayed
+-- empty. Caught only by sending real events through production and finding
+-- four Success rows in Resend against zero rows here.
+--
+-- NULLS NOT DISTINCT (Postgres 15+; this project runs 17) gives the same
+-- "a NULL id still dedupes" behaviour with a plain-column index the upsert can
+-- actually target.
 -- ===========================================================================
 
 create table if not exists public.email_delivery_events (
@@ -42,7 +58,9 @@ create table if not exists public.email_delivery_events (
 );
 
 create unique index if not exists email_delivery_events_once
-  on public.email_delivery_events (coalesce(provider_message_id, ''), event_type, coalesce(recipient_email, ''));
+  on public.email_delivery_events
+  using btree (provider_message_id, event_type, recipient_email)
+  nulls not distinct;
 
 create index if not exists email_delivery_events_received_at
   on public.email_delivery_events (received_at desc);
