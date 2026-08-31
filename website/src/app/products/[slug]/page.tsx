@@ -9,7 +9,7 @@ import { isSlugEligible, storefrontDescription } from "@/lib/bxgy-engine";
 import { getPublishedCoaDocumentsForProduct } from "@/lib/coa";
 import { getStorefrontCoupon } from "@/lib/coupons";
 import { isBacWater, resolveBacWaterProduct } from "@/lib/bac-water";
-import { siteUrl } from "@/lib/site-identity";
+import { BRAND_SHORT_NAME, organizationId, siteUrl } from "@/lib/site-identity";
 
 export const dynamic = "force-dynamic";
 
@@ -114,7 +114,20 @@ export default async function ProductDetailPage({
     image: product.image ? [product.image] : undefined,
     description: product.shortDescription ?? product.description ?? undefined,
     category: product.category,
-    brand: { "@type": "Brand", name: "Vanta Labs" },
+    // BRAND POINTS AT THE ONE ORGANIZATION NODE, RATHER THAN NAMING A STRING.
+    //
+    // Every product page previously declared a free-floating Brand called
+    // "Vanta Labs" — the short name, hard-coded here, agreeing with nothing.
+    // To a crawler that is a brand of that name, not necessarily THIS site's
+    // company, which is a costly ambiguity when two other peptide vendors
+    // publish under near-identical names (see site-identity.ts).
+    //
+    // Referencing the Organization's @id makes all ~40 product pages
+    // corroborate the same entity the homepage declares, instead of each one
+    // introducing a nameless lookalike. The name is kept alongside the
+    // reference so the node is still self-describing if the graph is read in
+    // isolation, and it now comes from the shared constant so it cannot drift.
+    brand: { "@type": "Brand", "@id": organizationId(), name: BRAND_SHORT_NAME },
     offers: priceNumber
       ? {
           "@type": "Offer",
