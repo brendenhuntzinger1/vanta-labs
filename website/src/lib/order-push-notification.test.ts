@@ -265,6 +265,15 @@ vi.mock("@/lib/supabase-server", () => ({
   },
 }));
 
+const control: Record<string, Record<string, unknown>> = {};
+let controlThrows = false;
+vi.mock("@/lib/admin-control", () => ({
+  getControlSnapshot: async (section: string) => {
+    if (controlThrows) throw new Error("settings unavailable");
+    return { [section]: control[section] ?? {} };
+  },
+}));
+
 let profitResult: Promise<unknown> = Promise.resolve({ profit: 41.2, profitStatus: "estimated" });
 vi.mock("@/lib/admin-profit", () => ({ getOrderProfit: () => profitResult }));
 
@@ -285,6 +294,8 @@ beforeEach(() => {
   dbOrder = orderRow;
   profitResult = Promise.resolve({ profit: 41.2, profitStatus: "estimated" });
   alerts.length = 0;
+  for (const key of Object.keys(control)) delete control[key];
+  controlThrows = false;
   fetchMock.mockReset().mockResolvedValue({ ok: true, status: 200 });
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -519,5 +530,91 @@ describe("an order that could not be announced still reaches the owner", () => {
   it("never rejects, whatever the alert path does", async () => {
     fetchMock.mockRejectedValue(new Error("boom"));
     await expect(sendOrderPushNotification("ord_a1b2c3d4")).resolves.toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PUSHOVER, DIRECTLY — NO ZAPIER IN THE MIDDLE.
+//
+// The original design posts to an automation webhook (Zapier) which forwards to
+// a push service. That middleman is what broke: the Catch Hook was deleted or
+// rebuilt, it started answering 404, and a paid order went unannounced.
+//
+// Pushover is the actual destination, and it has a plain HTTP API. Talking to
+// it directly removes an entire service from the path, and — because the
+// credentials live in the Control Center rather than an environment variable —
+// a broken destination can be repaired from the admin in seconds instead of
+// needing a redeploy. That was the other half of the incident: the URL could
+// not be changed without shipping.
+//
+// The webhook path is kept, unchanged, for anyone already using it.
+// ---------------------------------------------------------------------------
+
+describe("sending through Pushover directly", () => {
+  beforeEach(() => {
+    control.notifications = { pushover_token: "app-token", pushover_user_key: "user-key" };
+  });
+
+  it("posts the order to Pushover's API rather than a webhook", async () => {
+    await expect(sendOrderPushNotification("ord_a1b2c3d4")).resolves.toEqual({ sent: true });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("https://api.pushover.net/1/messages.json");
+    const body = new URLSearchParams(String((init as { body?: string }).body));
+    expect(body.get("token")).toBe("app-token");
+    expect(body.get("user")).toBe("user-key");
+  });
+
+  it("carries the same four facts the webhook payload carries", async () => {
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    const body = new URLSearchParams(String((fetchMock.mock.calls[0][1] as { body?: string }).body));
+    expect(body.get("title")).toContain("VL-1042");
+    expect(body.get("message")).toContain("Jordan Mitchell");
+    expect(body.get("message")).toContain("$89.00");
+    expect(body.get("url")).toBe("https://vantalabs.com/admin/orders/ord_a1b2c3d4");
+  });
+
+  it("wins over a configured webhook, because it is the shorter path", async () => {
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.example.com/catch/1/abc");
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(String(fetchMock.mock.calls[0][0])).toContain("api.pushover.net");
+  });
+
+  it("still raises the missed-order critical when Pushover refuses", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 400 });
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(alerts.find((a) => a.type === "order_notification_missed")).toMatchObject({ severity: "critical" });
+  });
+
+  it("falls back to the webhook when only one of the two keys is set", async () => {
+    // A half-filled credential pair is a configuration mistake, not a
+    // destination. Guessing would send to nowhere and report success.
+    control.notifications = { pushover_token: "app-token" };
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.example.com/catch/1/abc");
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(String(fetchMock.mock.calls[0][0])).toContain("hooks.example.com");
+  });
+
+  it("never lets a settings read failure stop an order going out", async () => {
+    controlThrows = true;
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.example.com/catch/1/abc");
+    await expect(sendOrderPushNotification("ord_a1b2c3d4")).resolves.toEqual({ sent: true });
+    expect(String(fetchMock.mock.calls[0][0])).toContain("hooks.example.com");
+  });
+});
+
+describe("the webhook URL can be changed without a deploy", () => {
+  it("prefers the Control Center URL over the environment variable", async () => {
+    // The incident's second half: the dead URL lived in an env var, so fixing
+    // it needed a redeploy. From the admin it is a ten-second edit.
+    control.notifications = { order_push_webhook_url: "https://hooks.example.com/catch/NEW/xyz" };
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.example.com/catch/OLD/abc");
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/catch/NEW/xyz");
+  });
+
+  it("still uses the environment variable when nothing is configured in the admin", async () => {
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.example.com/catch/1/abc");
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(String(fetchMock.mock.calls[0][0])).toContain("hooks.example.com/catch/1/abc");
   });
 });

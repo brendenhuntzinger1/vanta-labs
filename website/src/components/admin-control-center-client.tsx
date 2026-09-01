@@ -30,7 +30,7 @@ type ReferralEffective = {
   defaultCommissionSource: string;
 };
 
-type SectionKey = "homepage" | "promotions" | "shipping" | "content" | "settings" | "security";
+type SectionKey = "homepage" | "promotions" | "shipping" | "content" | "settings" | "security" | "notifications";
 
 const SECTION_LABELS: Record<SectionKey, string> = {
   homepage: "Homepage",
@@ -39,6 +39,7 @@ const SECTION_LABELS: Record<SectionKey, string> = {
   content: "Content",
   settings: "Website Settings",
   security: "Security",
+  notifications: "Order Notifications",
 };
 
 function parseCsv(value: string) {
@@ -92,6 +93,10 @@ export function AdminControlCenterClient() {
   const [contentFaq, setContentFaq] = useState("");
   const [contentPolicies, setContentPolicies] = useState("");
   const [contentContactEmail, setContentContactEmail] = useState("");
+  const [pushoverToken, setPushoverToken] = useState("");
+  const [pushoverUserKey, setPushoverUserKey] = useState("");
+  const [orderPushWebhookUrl, setOrderPushWebhookUrl] = useState("");
+  const [alertEmail, setAlertEmail] = useState("");
   const [contentFooterLinks, setContentFooterLinks] = useState("");
   const [contentLegalPages, setContentLegalPages] = useState("");
 
@@ -189,6 +194,12 @@ export function AdminControlCenterClient() {
     setContentContactEmail(String(content.contact_email ?? ""));
     setContentFooterLinks(String(content.footer_links ?? ""));
     setContentLegalPages(String(content.legal_pages ?? ""));
+
+    const notifications = next.notifications ?? {};
+    setPushoverToken(String(notifications.pushover_token ?? ""));
+    setPushoverUserKey(String(notifications.pushover_user_key ?? ""));
+    setOrderPushWebhookUrl(String(notifications.order_push_webhook_url ?? ""));
+    setAlertEmail(String((next.alerts ?? {}).email ?? ""));
 
     const settings = next.settings ?? {};
     setBusinessName(String(settings.business_name ?? ""));
@@ -317,6 +328,11 @@ export function AdminControlCenterClient() {
       { section: "content", key: "contact_email", value: contentContactEmail },
       { section: "content", key: "footer_links", value: contentFooterLinks },
       { section: "content", key: "legal_pages", value: contentLegalPages },
+
+      { section: "notifications", key: "pushover_token", value: pushoverToken },
+      { section: "notifications", key: "pushover_user_key", value: pushoverUserKey },
+      { section: "notifications", key: "order_push_webhook_url", value: orderPushWebhookUrl },
+      { section: "alerts", key: "email", value: alertEmail },
 
       { section: "settings", key: "business_name", value: businessName },
       { section: "settings", key: "logo_url", value: logoUrl },
@@ -535,6 +551,30 @@ export function AdminControlCenterClient() {
               <label className="block text-zinc-300">Contact email<input value={contentContactEmail} onChange={(e) => setContentContactEmail(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="block text-zinc-300">Footer links<textarea value={contentFooterLinks} onChange={(e) => setContentFooterLinks(e.target.value)} className="vl-input mt-1 min-h-16 w-full px-3 py-2" /></label>
               <label className="block text-zinc-300">Legal pages<textarea value={contentLegalPages} onChange={(e) => setContentLegalPages(e.target.value)} className="vl-input mt-1 min-h-16 w-full px-3 py-2" /></label>
+            </div>
+          </section>
+
+          {/* WHY THESE LIVE HERE RATHER THAN IN THE HOSTING ENVIRONMENT.
+              A paid order went unannounced because the push webhook had died
+              and the URL sat in an environment variable — so correcting it
+              needed a redeploy, at exactly the moment orders were being missed.
+              From this panel it is a ten-second edit. */}
+          <section className="vl-panel-soft rounded-2xl p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-200">{SECTION_LABELS.notifications}</h3>
+            <p className="mt-1 text-[11px] text-zinc-500">
+              Where &quot;you just got an order&quot; goes. Pushover is used directly when both of its fields are filled in —
+              that is the shortest path and the one least likely to break. The webhook is the older Zapier route, kept as a fallback.
+            </p>
+            <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+              <label className="text-zinc-300">Pushover API token<input value={pushoverToken} onChange={(e) => setPushoverToken(e.target.value)} placeholder="from pushover.net/apps/build" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Pushover user key<input value={pushoverUserKey} onChange={(e) => setPushoverUserKey(e.target.value)} placeholder="from your pushover.net dashboard" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300 sm:col-span-2">Order push webhook URL (fallback)<input value={orderPushWebhookUrl} onChange={(e) => setOrderPushWebhookUrl(e.target.value)} placeholder="https://hooks.zapier.com/hooks/catch/..." className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300 sm:col-span-2">Critical alert email
+                <input value={alertEmail} onChange={(e) => setAlertEmail(e.target.value)} placeholder="you@example.com" className="vl-input mt-1 w-full px-3 py-2" />
+                <span className="mt-1 block text-[11px] text-zinc-500">
+                  Where a missed order or other critical alert is emailed. Kept separate from the public support address, which customers see.
+                </span>
+              </label>
             </div>
           </section>
 

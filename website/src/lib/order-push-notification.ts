@@ -5,6 +5,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { getOrderProfit } from "@/lib/admin-profit";
 import { formatDisplayDate } from "@/lib/format-date";
 import { recordSystemAlert } from "@/lib/monitoring";
+import { getControlSnapshot } from "@/lib/admin-control";
 import type { ProfitStatus } from "@/lib/order-profit";
 
 // ---------------------------------------------------------------------------
@@ -51,6 +52,9 @@ import type { ProfitStatus } from "@/lib/order-profit";
  * it has not answered in eight, waiting longer changes nothing.
  */
 export const ORDER_PUSH_TIMEOUT_MS = 8_000;
+
+/** Pushover's message endpoint. A constant, so it can never be misconfigured. */
+export const PUSHOVER_API_URL = "https://api.pushover.net/1/messages.json";
 
 /**
  * How long an "the webhook is not configured" alert suppresses the next one.
@@ -303,8 +307,52 @@ async function collectOrderPushInput(orderId: string): Promise<OrderPushInput | 
  * Send the paid-order notification. Resolves with the outcome and NEVER throws
  * — see rule 1 at the top of this file.
  */
+/**
+ * Where a paid order gets announced.
+ *
+ * TWO DESTINATIONS, AND THE SHORTER ONE WINS. Pushover is the actual phone
+ * notification service; the webhook path reaches it through an automation tool
+ * (Zapier) that forwards the payload on. That middleman is what failed: the
+ * Catch Hook stopped existing, answered 404, and a paid order went unannounced.
+ * Talking to Pushover directly removes a whole service from the path.
+ *
+ * BOTH ARE READ FROM THE CONTROL CENTER FIRST, environment second. The other
+ * half of that incident was that the dead URL lived in an environment variable,
+ * so correcting it required a redeploy — at exactly the moment orders were
+ * being missed. From the admin it is a ten-second edit. That is the wrong
+ * default for most configuration and the right one for the setting whose whole
+ * job is to still work when something else has broken.
+ */
+type PushDestination =
+  | { kind: "pushover"; token: string; userKey: string }
+  | { kind: "webhook"; url: string }
+  | { kind: "none" };
+
+async function resolvePushDestination(): Promise<PushDestination> {
+  let configured: Record<string, unknown> = {};
+  try {
+    const snapshot = await getControlSnapshot("notifications");
+    configured = snapshot.notifications ?? {};
+  } catch {
+    // A settings read failure must never be the reason an order goes
+    // unannounced. Fall through to the environment.
+  }
+
+  const text = (value: unknown) => String(value ?? "").trim();
+  const token = text(configured.pushover_token);
+  const userKey = text(configured.pushover_user_key);
+
+  // BOTH keys or neither. A half-filled pair is a configuration mistake, and
+  // posting with one of them would fail at Pushover while looking configured.
+  if (token && userKey) return { kind: "pushover", token, userKey };
+
+  const url = text(configured.order_push_webhook_url) || text(process.env.ORDER_PUSH_WEBHOOK_URL);
+  return url ? { kind: "webhook", url } : { kind: "none" };
+}
+
 export async function sendOrderPushNotification(orderId: string): Promise<OrderPushResult> {
-  const webhookUrl = process.env.ORDER_PUSH_WEBHOOK_URL?.trim();
+  const destination = await resolvePushDestination();
+  const webhookUrl = destination.kind === "webhook" ? destination.url : undefined;
 
   /**
    * The order was paid and NOT announced. Raise it as a critical, which the
@@ -361,7 +409,7 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
   // anything anywhere saying so. Deduped to one row a day: the fault is a
   // standing one, so every order after the first repeats it rather than adding
   // to it.
-  if (!webhookUrl) {
+  if (destination.kind === "none") {
     await safeAlert(
       "order_push_not_configured",
       `Order ${orderId} was paid but no push notification was sent: ORDER_PUSH_WEBHOOK_URL is unset. ` +
@@ -374,7 +422,7 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
   // The URL is the only credential. Over http it — and every order that follows
   // — travels in the clear to anyone on the path, so this refuses rather than
   // downgrading silently. It is a configuration mistake, hence the alert.
-  if (!webhookUrl.toLowerCase().startsWith("https://")) {
+  if (destination.kind === "webhook" && !destination.url.toLowerCase().startsWith("https://")) {
     await safeAlert("order_push_misconfigured", "ORDER_PUSH_WEBHOOK_URL is not an https:// URL. No notification was sent.");
     return { sent: false, reason: "insecure_url" };
   }
@@ -383,12 +431,30 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
     const input = await collectOrderPushInput(orderId);
     if (!input) return { sent: false, reason: "order_not_found" };
 
-    const response = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildOrderPushPayload(input)),
-      signal: AbortSignal.timeout(ORDER_PUSH_TIMEOUT_MS),
-    });
+    const payload = buildOrderPushPayload(input);
+
+    // Pushover takes form-encoded fields, not JSON, and its own title/message/
+    // url map one-to-one onto the payload the webhook already carries — so both
+    // destinations announce exactly the same four facts.
+    const response = destination.kind === "pushover"
+      ? await fetch(PUSHOVER_API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            token: destination.token,
+            user: destination.userKey,
+            title: payload.title,
+            message: payload.message,
+            ...(payload.url ? { url: payload.url, url_title: "Open in admin" } : {}),
+          }).toString(),
+          signal: AbortSignal.timeout(ORDER_PUSH_TIMEOUT_MS),
+        })
+      : await fetch(webhookUrl as string, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(ORDER_PUSH_TIMEOUT_MS),
+        });
 
     if (!response.ok) {
       const detail = `webhook answered ${response.status}`;

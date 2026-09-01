@@ -1,6 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
-import { getBusinessSettings } from "@/lib/admin-control";
+import { getBusinessSettings, getControlSnapshot } from "@/lib/admin-control";
 
 // Lightweight operational monitoring. Failure paths across the app call
 // recordSystemAlert() to persist a durable alert row (viewable in admin) and,
@@ -45,6 +45,24 @@ async function alreadyReportedWithin(type: string, windowMs: number): Promise<bo
     return (count ?? 0) > 0;
   } catch {
     return false;
+  }
+}
+
+
+/**
+ * The operator address for critical alerts, from the Control Center.
+ *
+ * Best-effort by construction: a settings read that fails must never be what
+ * stops an alert going out, so any error falls through to the env var and then
+ * the support address.
+ */
+async function getAlertEmailSetting(): Promise<string> {
+  try {
+    const snapshot = await getControlSnapshot("alerts");
+    const value = snapshot.alerts?.email;
+    return typeof value === "string" ? value.trim() : "";
+  } catch {
+    return "";
   }
 }
 
@@ -103,7 +121,22 @@ export async function recordSystemAlert(input: {
 
   if (input.severity === "critical") {
     try {
-      const recipient = process.env.ALERT_EMAIL?.trim() || (await getBusinessSettings()).supportEmail;
+      // WHERE A CRITICAL ALERT GOES, IN PRECEDENCE ORDER.
+      //
+      // The control setting wins over the environment variable ON PURPOSE. The
+      // recipient of "your store just broke" is the one setting an operator
+      // most needs to change in a hurry — a new phone-linked address, someone
+      // covering while they are away — and an env var cannot be changed without
+      // a redeploy. Settings > env is the wrong default for most config and the
+      // right one for this.
+      //
+      // Falls back to the support address, which is where these went before
+      // this key existed. That address is ALSO printed in customer-facing email
+      // templates, which is exactly why alerts get their own key rather than
+      // repurposing it: pointing alerts at a personal inbox must not put that
+      // inbox in front of customers.
+      const configuredAlertEmail = await getAlertEmailSetting();
+      const recipient = configuredAlertEmail || process.env.ALERT_EMAIL?.trim() || (await getBusinessSettings()).supportEmail;
       if (recipient) {
         const contextJson = JSON.stringify(input.context ?? {}, null, 2);
         await sendEmail({
