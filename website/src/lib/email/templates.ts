@@ -43,7 +43,7 @@ function money(value: number) {
 // exists for the CAN-SPAM postal address that commercial mail must carry and
 // transactional mail must not be forced to invent; anything else that belongs
 // below the rule can use it too.
-function renderLayout(input: { preheader: string; titleHtml: string; bodyHtml: string; ctaLabel?: string; ctaUrl?: string; footerNoteHtml?: string }) {
+export function renderLayout(input: { preheader: string; titleHtml: string; bodyHtml: string; ctaLabel?: string; ctaUrl?: string; footerNoteHtml?: string }) {
   const cta = input.ctaUrl && input.ctaLabel
     ? `<tr><td style="padding:28px 0 4px;"><a href="${escapeHtml(input.ctaUrl)}" style="display:inline-block;background:#f4f4f4;color:#111111;text-decoration:none;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;font-size:13px;padding:12px 24px;border-radius:999px;">${escapeHtml(input.ctaLabel)}</a></td></tr>`
     : "";
@@ -77,7 +77,7 @@ function renderLayout(input: { preheader: string; titleHtml: string; bodyHtml: s
 </html>`;
 }
 
-function toText(lines: Array<string | null | false | undefined>) {
+export function toText(lines: Array<string | null | false | undefined>) {
   return lines.filter((line): line is string => Boolean(line) || line === "").join("\n");
 }
 

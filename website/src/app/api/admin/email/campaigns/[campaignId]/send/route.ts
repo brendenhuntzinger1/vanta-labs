@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageEmailCampaigns } from "@/lib/admin-roles";
-import { queueCampaign, sendCampaignBatch } from "@/lib/email/campaign-sender";
+import { CampaignAlreadyStartedError, queueCampaign, sendCampaignBatch } from "@/lib/email/campaign-sender";
+import { buildAffiliateCampaignEmail, normalizeLinkButtons } from "@/lib/email/affiliate-campaign-template";
+import { buildSampleMergeContext } from "@/lib/email/affiliate-merge";
 import { campaignTemplate } from "@/lib/email/templates";
 import { sendEmail } from "@/lib/email/send";
 import { getEmailRuntimeConfig, marketingBlockedReason, resolveMarketingFrom } from "@/lib/email/settings";
@@ -43,7 +45,7 @@ export async function POST(request: Request, context: { params: Promise<{ campai
 
   const { data: campaign } = await supabaseAdmin
     .from("email_campaigns")
-    .select("id, name, subject, preview_text, headline, body, promo_code, cta_label, cta_path, status")
+    .select("id, name, subject, preview_text, headline, body, promo_code, cta_label, cta_path, status, audience_kind, link_buttons")
     .eq("id", campaignId)
     .maybeSingle();
   if (!campaign) {
@@ -86,19 +88,46 @@ export async function POST(request: Request, context: { params: Promise<{ campai
       );
     }
 
-    const template = campaignTemplate({
-      subject: `[TEST] ${campaign.subject}`,
-      previewText: campaign.preview_text as string | null,
-      headline: String(campaign.headline),
-      body: String(campaign.body),
-      promoCode: campaign.promo_code as string | null,
-      ctaLabel: String(campaign.cta_label),
-      // A test can't carry a per-recipient tracking link, so it points straight
-      // at the real destination. The button therefore behaves as it will for a
-      // customer, minus the click being recorded.
-      ctaUrl: safeCampaignDestination(campaign.cta_path as string),
-      postalAddress: config.marketingPostalAddress,
-    });
+    // An AFFILIATE test renders through the affiliate template with a clearly
+    // labelled sample affiliate, so what the owner receives is what an affiliate
+    // will receive — personalisation resolved, resource buttons present. A test
+    // that rendered through the customer template would show "{{first_name}}"
+    // literally and hide the one thing worth testing.
+    const isAffiliate = String(campaign.audience_kind ?? "customer") === "affiliate";
+    const template = isAffiliate
+      ? buildAffiliateCampaignEmail({
+          subject: `[TEST] ${campaign.subject}`,
+          previewText: campaign.preview_text as string | null,
+          headline: String(campaign.headline),
+          body: String(campaign.body),
+          ctaLabel: String(campaign.cta_label),
+          ctaPath: String(campaign.cta_path),
+          linkButtons: normalizeLinkButtons(campaign.link_buttons),
+          mergeContext: buildSampleMergeContext(getSiteUrl()),
+          siteUrl: getSiteUrl(),
+          postalAddress: config.marketingPostalAddress,
+          // A test carries no per-recipient tracking link, so buttons point
+          // straight at their real destinations and behave exactly as they will
+          // for an affiliate, minus the click being recorded.
+          trackedUrlFor: (linkIndex) => {
+            const buttons = normalizeLinkButtons(campaign.link_buttons);
+            const path = linkIndex === null ? String(campaign.cta_path) : (buttons[linkIndex]?.url ?? String(campaign.cta_path));
+            return safeCampaignDestination(path);
+          },
+        })
+      : campaignTemplate({
+          subject: `[TEST] ${campaign.subject}`,
+          previewText: campaign.preview_text as string | null,
+          headline: String(campaign.headline),
+          body: String(campaign.body),
+          promoCode: campaign.promo_code as string | null,
+          ctaLabel: String(campaign.cta_label),
+          // A test can't carry a per-recipient tracking link, so it points straight
+          // at the real destination. The button therefore behaves as it will for a
+          // customer, minus the click being recorded.
+          ctaUrl: safeCampaignDestination(campaign.cta_path as string),
+          postalAddress: config.marketingPostalAddress,
+        });
 
     // The same headers sendMarketingEmail sets, built from the same HMAC token,
     // so the opt-out in a test behaves exactly as it will in the real send.
@@ -196,6 +225,20 @@ export async function POST(request: Request, context: { params: Promise<{ campai
       finished: batch.finished,
     });
   } catch (error) {
+    // A SECOND CLICK IS A CONFLICT, NOT A FAILURE, AND NOT A SUCCESS.
+    //
+    // queueCampaign refuses to re-queue a campaign that is already sending or
+    // sent. Reporting that as 409 with a plain sentence is what stops the owner
+    // believing a second press did nothing when it in fact caught a send
+    // already in flight. No duplicate mail is possible either way — the unique
+    // index on (campaign_id, email) guarantees that — but the message needs to
+    // say what actually happened.
+    if (error instanceof CampaignAlreadyStartedError) {
+      return NextResponse.json(
+        { success: false, error: `This campaign is already ${error.status}. Nobody was sent a second copy.`, status: error.status },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : "Unable to send this campaign" },
       { status: 400 },

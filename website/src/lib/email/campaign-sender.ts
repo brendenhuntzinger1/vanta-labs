@@ -5,7 +5,11 @@ import { sendMarketingEmail } from "@/lib/email/marketing";
 import { campaignTemplate } from "@/lib/email/templates";
 import { getEmailRuntimeConfig, marketingBlockedReason } from "@/lib/email/settings";
 import { resolveAudience, isCampaignSegment, type CampaignSegment } from "@/lib/email/audience";
-import { buildCampaignClickUrl, buildCampaignOpenUrl } from "@/lib/email/campaign-links";
+import { buildCampaignClickUrl, buildCampaignLinkClickUrl, buildCampaignOpenUrl } from "@/lib/email/campaign-links";
+import { resolveAffiliateAudience, type AffiliateFilter } from "@/lib/email/affiliate-audience";
+import { buildAffiliateCampaignEmail, normalizeLinkButtons } from "@/lib/email/affiliate-campaign-template";
+import type { AffiliateMergeContext } from "@/lib/email/affiliate-merge";
+import { getSiteUrl } from "@/lib/env";
 
 /**
  * Queueing and sending campaigns.
@@ -50,7 +54,23 @@ export type CampaignRow = {
   segment_param: string | null;
   status: string;
   scheduled_at: string | null;
+  audience_kind?: string | null;
+  affiliate_filter?: string | null;
+  affiliate_ids?: string[] | null;
+  link_buttons?: unknown;
 };
+
+/** Statuses a campaign may be in when a send or a schedule is allowed to start. */
+export const SENDABLE_STATUSES = ["draft", "scheduled", "paused"] as const;
+
+export class CampaignAlreadyStartedError extends Error {
+  readonly status: string;
+  constructor(status: string) {
+    super("This campaign is already sending or sent.");
+    this.name = "CampaignAlreadyStartedError";
+    this.status = status;
+  }
+}
 
 export type QueueResult = {
   queued: number;
@@ -70,49 +90,137 @@ export type QueueResult = {
 export async function queueCampaign(campaignId: string): Promise<QueueResult> {
   const { data: campaign, error } = await supabaseAdmin
     .from("email_campaigns")
-    .select("id, segment, segment_param, status")
+    .select("id, segment, segment_param, status, audience_kind, affiliate_filter, affiliate_ids")
     .eq("id", campaignId)
     .maybeSingle();
   if (error) throw error;
   if (!campaign) throw new Error("Campaign not found");
   if (campaign.status === "sending" || campaign.status === "sent") {
     // Re-queuing a live or finished campaign is almost always a double-click,
-    // not an intention.
-    return { queued: 0, alreadyQueued: 0, status: String(campaign.status) };
+    // not an intention — so it is REFUSED rather than returning a zero result.
+    //
+    // It used to return `{ queued: 0, alreadyQueued: 0 }`, which the send route
+    // reports to the operator as "Nobody currently matches this audience, so
+    // nothing was sent." A second click therefore looked like a successful send
+    // to an empty list, on a campaign that was in fact mailing the whole
+    // programme at that moment. Nobody received a duplicate — the unique index
+    // saw to that — but the owner was told the opposite of what was happening.
+    throw new CampaignAlreadyStartedError(String(campaign.status));
+  }
+
+  // Captured BEFORE the claim below mutates the row. Reading it afterwards
+  // would restore 'sending' onto a campaign the restore exists to rescue.
+  const previousStatus = String(campaign.status ?? "draft");
+
+  // THE CLAIM, AND WHY IT IS AN UPDATE RATHER THAN THE READ ABOVE.
+  //
+  // The status check above is read-then-write: two clicks 50ms apart both read
+  // 'draft' and both proceed. The unique constraint on (campaign_id, email)
+  // already means neither can produce a duplicate EMAIL — that guarantee is
+  // untouched and remains the real protection. What it does not do is stop the
+  // second click looking like it worked, or stop two workers resolving the same
+  // audience at once.
+  //
+  // This conditional update is the same claim protocol the recipient rows use:
+  // only one caller's update matches, and a caller whose update matched nothing
+  // knows someone else got there first. It is deliberately placed BEFORE the
+  // audience read, which is the slow part and therefore the window a second
+  // click lands in.
+  const { data: claimed, error: claimError } = await supabaseAdmin
+    .from("email_campaigns")
+    .update({ status: "sending", started_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq("id", campaignId)
+    .in("status", SENDABLE_STATUSES as unknown as string[])
+    .select("id");
+  if (claimError) throw claimError;
+  if ((claimed ?? []).length === 0) {
+    // Somebody else claimed it between the read and here.
+    const { data: current } = await supabaseAdmin
+      .from("email_campaigns")
+      .select("status")
+      .eq("id", campaignId)
+      .maybeSingle();
+    throw new CampaignAlreadyStartedError(String(current?.status ?? "sending"));
+  }
+
+  try {
+    const rows = await resolveCampaignRecipients(campaign as CampaignRow);
+
+    // Upsert with ignoreDuplicates: the unique index is the idempotency
+    // guarantee, so a partially-queued campaign can simply be queued again.
+    let queued = 0;
+    const CHUNK = 500;
+    for (let index = 0; index < rows.length; index += CHUNK) {
+      const chunk = rows.slice(index, index + CHUNK);
+      const { data, error: insertError } = await supabaseAdmin
+        .from("email_campaign_recipients")
+        .upsert(chunk, { onConflict: "campaign_id,email", ignoreDuplicates: true })
+        .select("id");
+      if (insertError) throw insertError;
+      queued += (data ?? []).length;
+    }
+
+    await supabaseAdmin
+      .from("email_campaigns")
+      .update({ recipient_count: rows.length, updated_at: new Date().toISOString() })
+      .eq("id", campaignId);
+
+    return { queued, alreadyQueued: rows.length - queued, status: "sending" };
+  } catch (queueError) {
+    // HAND THE CAMPAIGN BACK. The claim above moved it to 'sending'; if
+    // resolving the audience then failed — a truncated read, a suppression-list
+    // outage — leaving it there would strand it as a send in progress that has
+    // no recipients and will be marked 'sent' by the next sweep, with the owner
+    // believing it went out. Restoring the previous status makes the failure
+    // visible and the campaign retryable.
+    await supabaseAdmin
+      .from("email_campaigns")
+      .update({ status: previousStatus, started_at: null, updated_at: new Date().toISOString() })
+      .eq("id", campaignId)
+      .eq("status", "sending");
+    throw queueError;
+  }
+}
+
+/** One queue row per recipient, shaped by which audience the campaign addresses. */
+type RecipientInsert = {
+  campaign_id: string;
+  email: string;
+  status: string;
+  ambassador_id?: string | null;
+  merge_context?: AffiliateMergeContext | null;
+};
+
+/**
+ * Resolve the audience for a campaign of either kind.
+ *
+ * The customer path is untouched: same `resolveAudience`, same segments, same
+ * row shape (ambassador_id and merge_context are simply absent, which is what
+ * every existing row already looks like).
+ *
+ * The affiliate path additionally snapshots each affiliate's merge values. See
+ * affiliate-email-system.sql for why that is a snapshot rather than a lookup.
+ */
+async function resolveCampaignRecipients(campaign: CampaignRow): Promise<RecipientInsert[]> {
+  const campaignId = String(campaign.id);
+
+  if (String(campaign.audience_kind ?? "customer") === "affiliate") {
+    const recipients = await resolveAffiliateAudience({
+      filter: (campaign.affiliate_filter ?? "all_active") as AffiliateFilter,
+      ambassadorIds: campaign.affiliate_ids ?? [],
+    });
+    return recipients.map((recipient) => ({
+      campaign_id: campaignId,
+      email: recipient.email,
+      status: "pending",
+      ambassador_id: recipient.ambassadorId,
+      merge_context: recipient.mergeContext,
+    }));
   }
 
   const segment = isCampaignSegment(campaign.segment) ? (campaign.segment as CampaignSegment) : "all";
   const emails = await resolveAudience({ segment, segmentParam: campaign.segment_param });
-
-  // Upsert with ignoreDuplicates: the unique index is the idempotency
-  // guarantee, so a partially-queued campaign can simply be queued again.
-  let queued = 0;
-  const CHUNK = 500;
-  for (let index = 0; index < emails.length; index += CHUNK) {
-    const chunk = emails.slice(index, index + CHUNK).map((email) => ({
-      campaign_id: campaignId,
-      email,
-      status: "pending",
-    }));
-    const { data, error: insertError } = await supabaseAdmin
-      .from("email_campaign_recipients")
-      .upsert(chunk, { onConflict: "campaign_id,email", ignoreDuplicates: true })
-      .select("id");
-    if (insertError) throw insertError;
-    queued += (data ?? []).length;
-  }
-
-  await supabaseAdmin
-    .from("email_campaigns")
-    .update({
-      status: "sending",
-      started_at: new Date().toISOString(),
-      recipient_count: emails.length,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", campaignId);
-
-  return { queued, alreadyQueued: emails.length - queued, status: "sending" };
+  return emails.map((email) => ({ campaign_id: campaignId, email, status: "pending" }));
 }
 
 /**
@@ -162,7 +270,9 @@ async function reclaimStaleClaims(campaignId: string, now: number): Promise<numb
  * each worker sends only the rows its own update returned. Selecting first and
  * updating after would let both workers read the same rows and send twice.
  */
-async function claimBatch(campaignId: string, limit: number, now: number): Promise<Array<{ id: string; email: string; attempts: number }>> {
+type ClaimedRecipient = { id: string; email: string; attempts: number; mergeContext: AffiliateMergeContext | null };
+
+async function claimBatch(campaignId: string, limit: number, now: number): Promise<ClaimedRecipient[]> {
   const { data: candidates, error: selectError } = await supabaseAdmin
     .from("email_campaign_recipients")
     .select("id")
@@ -180,13 +290,16 @@ async function claimBatch(campaignId: string, limit: number, now: number): Promi
     // The guard that makes this a claim rather than a read: a row another
     // worker already took is no longer 'pending' and will not be returned.
     .eq("status", "pending")
-    .select("id, email, attempts");
+    .select("id, email, attempts, merge_context");
   if (claimError) throw claimError;
 
   return (claimed ?? []).map((row) => ({
     id: String(row.id),
     email: String(row.email),
     attempts: Number(row.attempts ?? 0),
+    // Present only for affiliate campaigns. Customer rows carry null, which is
+    // what every row written before this column existed also reads as.
+    mergeContext: ((row as { merge_context?: AffiliateMergeContext | null }).merge_context ?? null),
   }));
 }
 
@@ -225,7 +338,7 @@ export async function sendCampaignBatch(input: {
 
   const { data: campaignData, error: campaignError } = await supabaseAdmin
     .from("email_campaigns")
-    .select("id, name, subject, preview_text, headline, body, promo_code, cta_label, cta_path, segment, segment_param, status, scheduled_at")
+    .select("id, name, subject, preview_text, headline, body, promo_code, cta_label, cta_path, segment, segment_param, status, scheduled_at, audience_kind, affiliate_filter, affiliate_ids, link_buttons")
     .eq("id", input.campaignId)
     .maybeSingle();
   if (campaignError) throw campaignError;
@@ -254,22 +367,50 @@ export async function sendCampaignBatch(input: {
         continue;
       }
 
-      const template = campaignTemplate({
-        subject: campaign.subject,
-        previewText: campaign.preview_text,
-        headline: campaign.headline,
-        body: campaign.body,
-        promoCode: campaign.promo_code,
-        ctaLabel: campaign.cta_label,
-        ctaUrl: buildCampaignClickUrl(campaign.id, recipient.email),
-        postalAddress: config.marketingPostalAddress,
-      });
+      // AFFILIATE CAMPAIGNS RENDER PER RECIPIENT; CUSTOMER CAMPAIGNS DO NOT.
+      //
+      // The customer branch below is byte-for-byte what it has always been —
+      // same template call, same arguments, same tracking link. Personalisation
+      // is an additional path taken only when the row carries a merge context,
+      // which only affiliate queue rows do.
+      const isAffiliate = String(campaign.audience_kind ?? "customer") === "affiliate" && recipient.mergeContext !== null;
 
+      const template = isAffiliate
+        ? buildAffiliateCampaignEmail({
+            subject: campaign.subject,
+            previewText: campaign.preview_text,
+            headline: campaign.headline,
+            body: campaign.body,
+            ctaLabel: campaign.cta_label,
+            ctaPath: campaign.cta_path,
+            linkButtons: normalizeLinkButtons(campaign.link_buttons),
+            mergeContext: recipient.mergeContext as AffiliateMergeContext,
+            siteUrl: getSiteUrl(),
+            postalAddress: config.marketingPostalAddress,
+            trackedUrlFor: (linkIndex) => buildCampaignLinkClickUrl(campaign.id, recipient.email, linkIndex),
+          })
+        : campaignTemplate({
+            subject: campaign.subject,
+            previewText: campaign.preview_text,
+            headline: campaign.headline,
+            body: campaign.body,
+            promoCode: campaign.promo_code,
+            ctaLabel: campaign.cta_label,
+            ctaUrl: buildCampaignClickUrl(campaign.id, recipient.email),
+            postalAddress: config.marketingPostalAddress,
+          });
+
+      // THE SAME MARKETING WRAPPER EITHER WAY. Suppression, the one-click
+      // unsubscribe headers, the CAN-SPAM postal address and the marketing From
+      // identity are not re-implemented for affiliates — an affiliate broadcast
+      // is a commercial message and gets every protection a customer campaign
+      // gets. campaignType distinguishes the two in email_send_log so the
+      // histories stay separable.
       const result = await sendMarketingEmail({
         to: recipient.email,
-        campaignType: "campaign",
+        campaignType: isAffiliate ? "affiliate_campaign" : "campaign",
         referenceId: campaign.id,
-        templateKey: "campaign",
+        templateKey: isAffiliate ? "affiliate_campaign" : "campaign",
         openTrackingPixelUrl: buildCampaignOpenUrl(campaign.id, recipient.email),
         ...template,
       });

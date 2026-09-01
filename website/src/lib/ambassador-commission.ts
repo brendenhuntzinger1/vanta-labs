@@ -96,22 +96,42 @@ export interface TierQualifyingRow {
 // month. It is pure: month boundary is passed in rather than read from the
 // clock.
 export function qualifiesForMonthlyTierCount(row: TierQualifyingRow, monthStart: Date): boolean {
-  const status = String(row.payment_status ?? "").toLowerCase();
-  if (status === "reversed" || status === "voided" || status === "manual_review") {
-    return false;
-  }
-
-  // Only GENUINELY qualifying orders advance the performance tier. Orders that
-  // earned $0 — below the minimum qualifying subtotal, program paused, etc.
-  // (ineligible_reason set / commission_amount 0) — or that are FRAUD-FLAGGED
-  // (self-dealing) must not inflate the count and push the ambassador into a
-  // higher commission-percent tier.
-  if (row.ineligible_reason || Number(row.commission_amount ?? 0) <= 0 || row.fraud_flag === true) {
+  if (!commissionOrderCounts(row)) {
     return false;
   }
 
   const createdAt = new Date(String(row.created_at));
   return Number.isFinite(createdAt.getTime()) && createdAt >= monthStart;
+}
+
+// The window-INDEPENDENT half of the rule above: "is this referred order a
+// genuine, commission-earning sale at all", with no opinion about when it
+// happened.
+//
+// Extracted so that any other surface asking "has this affiliate actually sold
+// anything" answers it with the SAME rule the commission engine uses, rather
+// than a second copy that drifts. The affiliate email audience uses it to build
+// its has-sales / no-sales groups; getting a different answer there would mean
+// congratulating an affiliate whose only sale was refunded, or chasing one who
+// has been selling all month.
+//
+// qualifiesForMonthlyTierCount is unchanged in behaviour — it is this predicate
+// plus the month boundary, exactly as it was written inline before.
+export function commissionOrderCounts(row: TierQualifyingRow): boolean {
+  const status = String(row.payment_status ?? "").toLowerCase();
+  if (status === "reversed" || status === "voided" || status === "manual_review") {
+    return false;
+  }
+
+  // Only GENUINELY qualifying orders count. Orders that earned $0 — below the
+  // minimum qualifying subtotal, program paused, etc. (ineligible_reason set /
+  // commission_amount 0) — or that are FRAUD-FLAGGED (self-dealing) must not
+  // inflate the count.
+  if (row.ineligible_reason || Number(row.commission_amount ?? 0) <= 0 || row.fraud_flag === true) {
+    return false;
+  }
+
+  return true;
 }
 
 export function monthStartUtc(now: Date): Date {

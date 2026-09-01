@@ -73,6 +73,57 @@ export function buildCampaignClickUrl(campaignId: string, email: string): string
   return `${getSiteUrl()}/api/email/click?${params.toString()}`;
 }
 
+/**
+ * Signature for a link-INDEXED click, used by affiliate campaigns with several
+ * buttons.
+ *
+ * The index is inside the signed payload, not merely carried alongside it. If it
+ * were unsigned, anyone holding one link from a campaign could edit the index
+ * and have their click recorded against a different button — which would quietly
+ * corrupt exactly the per-link report this exists to produce. Same reasoning as
+ * signing the address in the first place.
+ *
+ * `signCampaignRecipient` is untouched and still produces the unindexed
+ * signature, so every tracking link in an email that has ALREADY BEEN SENT keeps
+ * verifying. A missing index means the primary CTA, which is what every existing
+ * link means today.
+ */
+export function signCampaignLink(campaignId: string, email: string, linkIndex: number): string {
+  return crypto
+    .createHmac("sha256", signingSecret())
+    .update(`${campaignId}:${email.trim().toLowerCase()}:${linkIndex}`)
+    .digest("hex")
+    .slice(0, 32);
+}
+
+export function verifyCampaignLink(campaignId: string, email: string, linkIndex: number, token: string): boolean {
+  try {
+    const expected = Buffer.from(signCampaignLink(campaignId, email, linkIndex));
+    const provided = Buffer.from(token);
+    return expected.length === provided.length && crypto.timingSafeEqual(expected, provided);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The click-tracked URL for one button.
+ *
+ * `linkIndex === null` is the primary CTA and produces exactly the link
+ * `buildCampaignClickUrl` has always produced — same params, same signature — so
+ * affiliate and customer campaigns share one click route and one format.
+ */
+export function buildCampaignLinkClickUrl(campaignId: string, email: string, linkIndex: number | null): string {
+  if (linkIndex === null) return buildCampaignClickUrl(campaignId, email);
+  const params = new URLSearchParams({
+    c: campaignId,
+    e: email.trim().toLowerCase(),
+    l: String(linkIndex),
+    t: signCampaignLink(campaignId, email, linkIndex),
+  });
+  return `${getSiteUrl()}/api/email/click?${params.toString()}`;
+}
+
 /** The open-tracking pixel URL. Same signature scheme. */
 export function buildCampaignOpenUrl(campaignId: string, email: string): string {
   const params = new URLSearchParams({
