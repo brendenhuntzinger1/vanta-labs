@@ -385,7 +385,13 @@ describe("the superseded validate_referral_code definition says so", () => {
     expect(read("lib/sql/referral-code-customer-discount.sql")).toContain(
       "'customer_discount_percent', a.customer_discount_percent",
     );
-    expect(read("lib/referral-client.ts")).toContain("data.customer_discount_percent");
+    // The cart still reads that rate, but no longer off the RPC: referral
+    // validation moved to /api/catalog/referral/validate so it passes through
+    // the rate limiter. The route selects the column and the client carries it
+    // through, so the property this guards — the cart gets the ambassador's own
+    // rate rather than the programme default — is unchanged.
+    expect(read("app/api/catalog/referral/validate/route.ts")).toContain("customer_discount_percent");
+    expect(read("lib/referral-client.ts")).toContain("customerDiscountPercent");
   });
 });
 

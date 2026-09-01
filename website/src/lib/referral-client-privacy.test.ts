@@ -1,44 +1,39 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
-// THE ONE RPC THE INTERNET MAY CALL.
+// THE ANONYMOUS READ SURFACE OF THE AMBASSADOR PROGRAMME.
 //
-// rpc-execute-lockdown.sql revoked EXECUTE from anon/authenticated on every
-// SECURITY DEFINER function except validate_referral_code, which has to stay
-// open because the cart checks a code before the shopper has an account. That
-// makes what it RETURNS the entire anonymous read surface of the ambassador
-// programme.
+// A referral code has to be checkable before the shopper has an account, so
+// whatever answers that question is reachable by anyone. What it RETURNS is
+// therefore the entire anonymous read surface of the programme.
 //
-// It was returning commission_percent — what Vanta pays that ambassador —
-// to anyone holding the public anon key, which ships in the client bundle.
-// Referral codes are short, human-chosen and guessable, and a PostgREST RPC
-// does not pass through the application's rate limiter, so they can be swept.
-// One ambassador discovering another's rate is a real problem.
-//
-// It bought nothing. referral-client returned it, cart-context stored it on
-// referralDetails, and no component ever rendered it. The commission actually
+// It once returned commission_percent — what Vanta pays that ambassador — to
+// anyone holding the public anon key, which ships in the client bundle. It
+// bought nothing: no component ever rendered it, and the commission actually
 // paid is resolved server-side in quote-order.ts from the ambassadors table
-// with the service role; the client only ever supplies the CODE.
+// with the service role. The client only ever supplies the CODE.
 //
-// This file pins BOTH halves: the client must not surface commission data even
-// if the database starts leaking it again, and a valid code must still work.
+// THE TRANSPORT MOVED, THE CONTRACT DID NOT. Validation used to go straight to
+// PostgREST as the `validate_referral_code` RPC, which meant it bypassed the
+// application's rate limiter and the short, human-chosen codes could be swept
+// for ambassador names. It now goes through /api/catalog/referral/validate,
+// which is throttled. These tests pin the payload either way: the client must
+// not surface commission data even if the server starts leaking it again, and a
+// valid code must still work.
 // ---------------------------------------------------------------------------
 
-const rpc = vi.fn();
-const from = vi.fn();
+const fetchMock = vi.fn();
 
-vi.mock("@/lib/supabase", () => ({
-  supabase: {
-    rpc: (...args: unknown[]) => rpc(...args),
-    from: (...args: unknown[]) => from(...args),
-  },
-}));
+/** Answer as the validate route would, with whatever body a test supplies. */
+function respondWith(body: Record<string, unknown>, status = 200) {
+  fetchMock.mockResolvedValue({ ok: status >= 200 && status < 300, status, json: async () => body });
+}
 
 const { validateReferralCodeClient } = await import("@/lib/referral-client");
 
 beforeEach(() => {
-  rpc.mockReset();
-  from.mockReset();
+  fetchMock.mockReset();
+  vi.stubGlobal("fetch", fetchMock);
 });
 
 /** Every key any caller could read off the returned object, nested included. */
@@ -63,19 +58,15 @@ describe("what a referral lookup hands back to the browser", () => {
    *
    * customer_discount_percent is the shopper's OWN discount — they see it the
    * instant the code applies, and the server charges it. The line that matters
-   * for privacy is the ambassador's PAY, and commission stays out; the two tests
-   * below still enforce that, on both the RPC and the legacy fallback path.
+   * for privacy is the ambassador's PAY, and commission stays out.
    */
   it("returns the code, the id, the name and the customer's own discount — and nothing else", async () => {
-    rpc.mockResolvedValue({
-      data: {
-        valid: true,
-        referral_code: "SARAH10",
-        ambassador_id: "amb-1",
-        ambassador_name: "Sarah",
-        customer_discount_percent: 15,
-      },
-      error: null,
+    respondWith({
+      valid: true,
+      referralCode: "SARAH10",
+      ambassadorId: "amb-1",
+      ambassadorName: "Sarah",
+      customerDiscountPercent: 15,
     });
 
     const result = await validateReferralCodeClient("sarah10");
@@ -88,10 +79,7 @@ describe("what a referral lookup hands back to the browser", () => {
   });
 
   it("carries no rate at all when the ambassador has no override", async () => {
-    rpc.mockResolvedValue({
-      data: { valid: true, referral_code: "SARAH10", ambassador_id: "amb-1", ambassador_name: "Sarah" },
-      error: null,
-    });
+    respondWith({ valid: true, referralCode: "SARAH10", ambassadorId: "amb-1", ambassadorName: "Sarah" });
 
     const result = await validateReferralCodeClient("sarah10");
     // null, never 0 — 0 is a real configured rate and would mean "no discount".
@@ -104,20 +92,18 @@ describe("what a referral lookup hands back to the browser", () => {
   });
 
   /**
-   * Defence in depth. If the RPC is ever changed back — a migration replayed in
-   * the wrong order, someone "restoring" the old definition — the client must
+   * Defence in depth. If the server is ever changed back — a migration replayed
+   * in the wrong order, someone widening the route's select — the client must
    * still refuse to carry the figure into application state.
    */
-  it("drops commission data even when the RPC leaks it", async () => {
-    rpc.mockResolvedValue({
-      data: {
-        valid: true,
-        referral_code: "SARAH10",
-        ambassador_id: "amb-1",
-        ambassador_name: "Sarah",
-        commission_percent: 22.5,
-      },
-      error: null,
+  it("drops commission data even when the server leaks it", async () => {
+    respondWith({
+      valid: true,
+      referralCode: "SARAH10",
+      ambassadorId: "amb-1",
+      ambassadorName: "Sarah",
+      commissionPercent: 22.5,
+      commission_percent: 22.5,
     });
 
     const result = await validateReferralCodeClient("SARAH10");
@@ -126,40 +112,46 @@ describe("what a referral lookup hands back to the browser", () => {
     expect(JSON.stringify(result)).not.toContain("22.5");
   });
 
-  it("the legacy table fallback does not select or return commission either", async () => {
-    // The RPC is reported missing, so the client falls back to a direct read.
-    rpc.mockResolvedValue({ data: null, error: { code: "PGRST202", message: "Could not find the function" } });
+  it("goes through the throttled application route, never straight at PostgREST", async () => {
+    // The whole point of the move. A direct /rest/v1/rpc call bypasses the rate
+    // limiter, and these codes are short enough to sweep.
+    respondWith({ valid: true, referralCode: "SARAH10", ambassadorId: "amb-1", ambassadorName: "Sarah" });
+    await validateReferralCodeClient("SARAH10");
 
-    const maybeSingle = vi.fn().mockResolvedValue({
-      data: { id: "amb-1", name: "Sarah", referral_code: "SARAH10", status: "approved" },
-      error: null,
-    });
-    const eq = vi.fn(() => ({ maybeSingle }));
-    const select = vi.fn((_columns: string) => ({ eq }));
-    from.mockReturnValue({ select });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("/api/catalog/referral/validate");
+    expect(String(url)).not.toContain("/rest/v1/");
+    expect((init as { method?: string }).method).toBe("POST");
+  });
 
-    const result = await validateReferralCodeClient("SARAH10");
+  it("refuses rather than reporting a valid code invalid when throttled", async () => {
+    // Returning null on a 429 would silently strip a real ambassador's discount
+    // from a real basket. It must be an error the cart can say something true
+    // about, not a quiet "that code is not valid".
+    respondWith({ success: false, error: "Too many referral code attempts." }, 429);
+    await expect(validateReferralCodeClient("SARAH10")).rejects.toThrow(/wait a moment/i);
+  });
 
-    // The column must not even be requested — an unused column in a SELECT is
-    // still a column the browser asked the database for.
-    expect(select).toHaveBeenCalledTimes(1);
-    expect(String(select.mock.calls[0]?.[0] ?? "")).not.toContain("commission_percent");
-    expect(JSON.stringify(result).toLowerCase()).not.toContain("commission");
+  it("refuses rather than reporting a valid code invalid when the lookup fails", async () => {
+    respondWith({ success: false }, 503);
+    await expect(validateReferralCodeClient("SARAH10")).rejects.toThrow(/could not check/i);
   });
 
   it("an unapproved ambassador is not a valid code", async () => {
-    rpc.mockResolvedValue({ data: { valid: false }, error: null });
+    respondWith({ valid: false });
     expect(await validateReferralCodeClient("NOPE")).toBeNull();
   });
 
-  it("an empty code never reaches the database", async () => {
+  it("an empty code never reaches the server", async () => {
     expect(await validateReferralCodeClient("   ")).toBeNull();
-    expect(rpc).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("normalises the code before sending it", async () => {
-    rpc.mockResolvedValue({ data: { valid: false }, error: null });
+    respondWith({ valid: false });
     await validateReferralCodeClient("  sarah10 ");
-    expect(rpc).toHaveBeenCalledWith("validate_referral_code", { input_code: "SARAH10" });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String((init as { body?: string }).body))).toEqual({ code: "SARAH10" });
   });
 });

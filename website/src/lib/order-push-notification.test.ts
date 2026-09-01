@@ -268,9 +268,9 @@ vi.mock("@/lib/supabase-server", () => ({
 let profitResult: Promise<unknown> = Promise.resolve({ profit: 41.2, profitStatus: "estimated" });
 vi.mock("@/lib/admin-profit", () => ({ getOrderProfit: () => profitResult }));
 
-const alerts: Array<{ type: string; severity: string; dedupeWindowMs?: number }> = [];
+const alerts: Array<{ type: string; severity: string; message: string; dedupeWindowMs?: number }> = [];
 vi.mock("@/lib/monitoring", () => ({
-  recordSystemAlert: async (input: { type: string; severity: string; dedupeWindowMs?: number }) => {
+  recordSystemAlert: async (input: { type: string; severity: string; message: string; dedupeWindowMs?: number }) => {
     alerts.push(input);
   },
 }));
@@ -406,6 +406,117 @@ describe("what happens when things break", () => {
   });
 
   it("never rejects, whatever the alerting path does", async () => {
+    fetchMock.mockRejectedValue(new Error("boom"));
+    await expect(sendOrderPushNotification("ord_a1b2c3d4")).resolves.toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A DEAD WEBHOOK MUST NOT COST THE OWNER AN ORDER.
+//
+// On 2026-09-01 a real $94.96 order was paid, the Zapier hook answered 404, and
+// the only trace was a `warning` on /admin/status that nobody was looking at.
+// The owner found out because an unrelated Supabase email prompted them to
+// check. That is the failure these tests exist to prevent.
+//
+// The module's own comment argued against emailing here, and it was right about
+// what it was rejecting: "emailing someone to tell them a notification failed"
+// is a meta-alert, and meta-alerts are noise. So this does not send one. It
+// raises a CRITICAL alert whose message IS the notification — the same text the
+// phone would have shown — and the existing critical path mails it. A different
+// channel for the same message, not a message about a message.
+//
+// Per ORDER, never deduped: two missed orders are two facts, and collapsing
+// them loses one. The standing "your webhook is broken" warning keeps its daily
+// dedupe, because that one genuinely is a repeating condition.
+// ---------------------------------------------------------------------------
+
+function missedAlert() {
+  return alerts.find((a) => a.type === "order_notification_missed");
+}
+
+describe("an order that could not be announced still reaches the owner", () => {
+  it("raises a CRITICAL alert when the webhook rejects the request", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 404 });
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(missedAlert()).toMatchObject({ type: "order_notification_missed", severity: "critical" });
+  });
+
+  it("carries the order itself, so the email IS the notification", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 404 });
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    const message = (missedAlert() as unknown as { message: string }).message;
+    // Who, how much, and which order — the same facts the push carries.
+    expect(message).toContain("VL-1042");
+    expect(message).toContain("Jordan Mitchell");
+    expect(message).toContain("$89.00");
+    // And why it had to come this way.
+    expect(message).toContain("404");
+  });
+
+  it("links straight to the order in the admin", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 404 });
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    const message = (missedAlert() as unknown as { message: string }).message;
+    expect(message).toContain("https://vantalabs.com/admin/orders/ord_a1b2c3d4");
+  });
+
+  it("is NOT deduped — a second missed order is a second fact", async () => {
+    // The exact way this fix could fail silently: a dedupe window would let
+    // order 1 email and swallow every order after it.
+    fetchMock.mockResolvedValue({ ok: false, status: 404 });
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(missedAlert()?.dedupeWindowMs).toBeUndefined();
+  });
+
+  it("stays quiet when push was never configured — that is a standing fault, not a lost order", async () => {
+    // Deliberate. A store with no webhook has never had push and nobody is
+    // waiting for it; the daily-deduped warning is the signal to go set it up.
+    // Mailing per order here would be exactly the nagging that dedupe prevents.
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "");
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(missedAlert()).toBeUndefined();
+    expect(alerts.some((a) => a.type === "order_push_not_configured")).toBe(true);
+  });
+
+  it("stays quiet on an insecure url too, for the same reason", async () => {
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "http://hooks.example.com/catch/1/abc");
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(missedAlert()).toBeUndefined();
+    expect(alerts.some((a) => a.type === "order_push_misconfigured")).toBe(true);
+  });
+
+  it("keeps the standing config warning deduped to once a day", async () => {
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "");
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    const standing = alerts.find((a) => a.type === "order_push_not_configured");
+    expect(standing?.dedupeWindowMs).toBe(24 * 60 * 60 * 1000);
+  });
+
+  it("says nothing when the push actually worked", async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(missedAlert()).toBeUndefined();
+  });
+
+  it("does not fire for an order that does not exist", async () => {
+    // Nothing was missed, because there was nothing to announce.
+    dbOrder = null;
+    await sendOrderPushNotification("ord_missing");
+    expect(missedAlert()).toBeUndefined();
+  });
+
+  it("still tells the owner even when the order details cannot be read", async () => {
+    // The worst case: the push failed AND the order lookup failed. The owner
+    // must still learn that an order went unannounced, with its id.
+    fetchMock.mockResolvedValue({ ok: false, status: 404 });
+    profitResult = Promise.reject(new Error("profit unavailable"));
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(missedAlert()).toBeTruthy();
+    expect((missedAlert() as unknown as { message: string }).message).toContain("ord_a1b2c3d4");
+  });
+
+  it("never rejects, whatever the alert path does", async () => {
     fetchMock.mockRejectedValue(new Error("boom"));
     await expect(sendOrderPushNotification("ord_a1b2c3d4")).resolves.toBeTruthy();
   });

@@ -306,6 +306,56 @@ async function collectOrderPushInput(orderId: string): Promise<OrderPushInput | 
 export async function sendOrderPushNotification(orderId: string): Promise<OrderPushResult> {
   const webhookUrl = process.env.ORDER_PUSH_WEBHOOK_URL?.trim();
 
+  /**
+   * The order was paid and NOT announced. Raise it as a critical, which the
+   * alerting path emails to the operator.
+   *
+   * THE MESSAGE IS THE NOTIFICATION, NOT A MESSAGE ABOUT ONE. The comment on
+   * safeAlert below argues — correctly — that emailing someone to say "a
+   * notification failed" is noise and a second thing to go wrong. So this does
+   * not do that. It carries the same text the phone would have shown, plus the
+   * reason it had to arrive this way, so the email IS the missed notification
+   * on a different channel.
+   *
+   * That distinction was learned the expensive way: on 2026-09-01 a real
+   * $94.96 order was paid, the webhook answered 404, and the only trace was a
+   * warning on a status page nobody was watching.
+   *
+   * PER ORDER, NEVER DEDUPED. Two missed orders are two facts, and collapsing
+   * them loses one.
+   *
+   * DELIVERY FAILURES ONLY — deliberately NOT the unconfigured or insecure-URL
+   * paths. Those are STANDING CONFIGURATION faults: the store has never had
+   * push, the operator is not waiting for it, and the daily-deduped warning
+   * above is the right signal to go and set it up. Raising a critical per order
+   * there would mail the operator for every order of a state they already know
+   * about, which is the nagging the dedupe on those alerts exists to prevent.
+   *
+   * A webhook that WAS configured and has started failing is the opposite case,
+   * and the one that actually cost an order: everything looks set up, so
+   * nothing prompts anybody to look.
+   */
+  const announceMissedOrder = async (reason: string) => {
+    let summary = `Order ${orderId}`;
+    try {
+      const input = await collectOrderPushInput(orderId);
+      if (input) {
+        const payload = buildOrderPushPayload(input);
+        const link = payload.url ? `\n${payload.url}` : "";
+        summary = `${payload.title}\n${payload.message}${link}`;
+      }
+    } catch {
+      // The push already failed; a second failure reading the order must not
+      // cost the operator the alert as well. The id alone is still actionable.
+    }
+
+    await safeAlert(
+      "order_notification_missed",
+      `${summary}\n\nThis order was PAID but the push notification did not go out (${reason}). `
+        + "It is in the admin and needs fulfilling. Fix the push webhook so the next one reaches your phone.",
+    );
+  };
+
   // A paid order just arrived and there is nowhere to announce it. This used to
   // return in silence, which is how two real orders went unannounced without
   // anything anywhere saying so. Deduped to one row a day: the fault is a
@@ -343,6 +393,7 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
     if (!response.ok) {
       const detail = `webhook answered ${response.status}`;
       await safeAlert("order_push_failed", `Order ${orderId} notification not delivered: ${detail}`);
+      await announceMissedOrder(detail);
       return { sent: false, reason: "delivery_failed", detail };
     }
 
@@ -350,6 +401,7 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     await safeAlert("order_push_failed", `Order ${orderId} notification not delivered: ${detail}`);
+    await announceMissedOrder(detail);
     return { sent: false, reason: "delivery_failed", detail };
   }
 }
@@ -362,7 +414,12 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
  */
 async function safeAlert(type: string, message: string, dedupeWindowMs?: number): Promise<void> {
   try {
-    await recordSystemAlert({ type, severity: "warning", message, dedupeWindowMs });
+    // `order_notification_missed` is the one critical here, because it is the
+    // only one that carries an order the operator has not been told about.
+    // Everything else describes the CONFIGURATION, which belongs on the status
+    // page rather than in an inbox.
+    const severity = type === "order_notification_missed" ? "critical" : "warning";
+    await recordSystemAlert({ type, severity, message, dedupeWindowMs });
   } catch {
     // recordSystemAlert already swallows its own failures; this is belt and
     // braces so the alerting path can never be what breaks the alert.

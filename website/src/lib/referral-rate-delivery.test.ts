@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
@@ -14,40 +16,51 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // it for everybody. A 15% ambassador's customers were offered 10%.
 //
 // This file tests the DELIVERY. It drives the real validateReferralCodeClient
-// against a mocked Supabase and asserts the rate arrives, because a test that
+// against a mocked server and asserts the rate arrives, because a test that
 // only exercises the maths cannot fail when the plumbing breaks.
+//
+// The transport moved from a direct PostgREST RPC to
+// /api/catalog/referral/validate (rate-limited; see referral-client.ts). The
+// fixtures below are still written in the database's snake_case and translated
+// here, so what each test asserts is unchanged by that move.
 // ---------------------------------------------------------------------------
 
-const rpc = vi.fn();
+const fetchMock = vi.fn();
 const state = {
   rpcData: null as unknown,
   rpcError: null as unknown,
-  tableRow: null as unknown,
 };
 
-vi.mock("@/lib/supabase", () => ({
-  supabase: {
-    rpc: (...args: unknown[]) => {
-      rpc(...args);
-      return Promise.resolve({ data: state.rpcData, error: state.rpcError });
-    },
-    from: () => ({
-      select: () => ({
-        eq: () => ({
-          maybeSingle: async () => ({ data: state.tableRow, error: null }),
-        }),
-      }),
+/** The route's answer, built from a database-shaped fixture. */
+function routeResponse() {
+  if (state.rpcError) {
+    return { ok: false, status: 503, json: async () => ({ success: false }) };
+  }
+  const row = state.rpcData as Record<string, unknown> | null;
+  if (!row || !row.valid) {
+    return { ok: true, status: 200, json: async () => ({ success: true, valid: false }) };
+  }
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      success: true,
+      valid: true,
+      referralCode: row.referral_code,
+      ambassadorId: row.ambassador_id,
+      ambassadorName: row.ambassador_name,
+      customerDiscountPercent: row.customer_discount_percent ?? null,
     }),
-  },
-}));
+  };
+}
 
 const { validateReferralCodeClient } = await import("@/lib/referral-client");
 
 beforeEach(() => {
   state.rpcData = null;
   state.rpcError = null;
-  state.tableRow = null;
-  rpc.mockClear();
+  fetchMock.mockReset().mockImplementation(async () => routeResponse());
+  vi.stubGlobal("fetch", fetchMock);
 });
 
 describe("what the browser is told about a code", () => {
@@ -97,12 +110,14 @@ describe("what the browser is told about a code", () => {
   it("normalises case and whitespace before asking", async () => {
     state.rpcData = { valid: true, referral_code: "MIZZY", ambassador_id: "a", ambassador_name: "J", customer_discount_percent: 15 };
     await validateReferralCodeClient("  mizzy  ");
-    expect(rpc).toHaveBeenCalledWith("validate_referral_code", { input_code: "MIZZY" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("/api/catalog/referral/validate");
+    expect(JSON.parse(String((init as { body?: string }).body))).toEqual({ code: "MIZZY" });
   });
 
   it("never asks the database for an empty code", async () => {
     expect(await validateReferralCodeClient("   ")).toBeNull();
-    expect(rpc).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -112,7 +127,7 @@ describe("commission stays out of the browser", () => {
    * The privacy fix that removed commission from this path must survive the
    * addition of the discount.
    */
-  it("drops commission even when the RPC hands it over", async () => {
+  it("drops commission even when the server hands it over", async () => {
     state.rpcData = {
       valid: true,
       referral_code: "MIZZY",
@@ -140,11 +155,13 @@ describe("commission stays out of the browser", () => {
   });
 });
 
-describe("the legacy fallback, for a database without the RPC", () => {
+describe("the rules that moved from the client into the route", () => {
   /** Only fires when the function is genuinely missing, never on a real error. */
   it("inherits the program rate rather than guessing one", async () => {
-    state.rpcError = { code: "PGRST202", message: "Could not find the function" };
-    state.tableRow = { id: "amb-1", name: "Jaeley", referral_code: "MIZZY", status: "approved" };
+    // The ambassador has no override, so the route sends no rate. The client
+    // must pass that through as null — "inherit the programme rate" — and never
+    // invent a number.
+    state.rpcData = { valid: true, referral_code: "MIZZY", ambassador_id: "amb-1", ambassador_name: "Jaeley" };
 
     const result = await validateReferralCodeClient("MIZZY");
 
@@ -157,9 +174,19 @@ describe("the legacy fallback, for a database without the RPC", () => {
     await expect(validateReferralCodeClient("MIZZY")).rejects.toBeTruthy();
   });
 
-  it("refuses an unapproved ambassador on the fallback path too", async () => {
-    state.rpcError = { code: "PGRST202", message: "Could not find the function" };
-    state.tableRow = { id: "amb-1", name: "J", referral_code: "MIZZY", status: "pending" };
-    expect(await validateReferralCodeClient("MIZZY")).toBeNull();
+  it("only ever asks the database for an APPROVED ambassador", () => {
+    // This used to be asserted on a browser-side fallback read that no longer
+    // exists. The rule did not go away — it moved into the route, which is now
+    // the only thing that touches the table. Asserted on the route's source
+    // because that is where the guarantee now lives: drop the status filter and
+    // a pending or disabled applicant's code starts working at checkout.
+    const route = readFileSync(join(process.cwd(), "src/app/api/catalog/referral/validate/route.ts"), "utf8");
+    expect(route).toContain('.eq("status", "approved")');
+    // And the SELECT must still not ASK for the commission. Asserted on the
+    // select list rather than the whole file, because the file legitimately
+    // names the column in the comment explaining why it is excluded.
+    const selected = route.match(/\.select\(\s*"([^"]+)"/)?.[1] ?? "";
+    expect(selected).toBeTruthy();
+    expect(selected).not.toContain("commission_percent");
   });
 });
