@@ -15,6 +15,7 @@ import { runCampaignSweep } from "@/lib/email/campaign-sender";
 import { runAutomationSweep } from "@/lib/email/automations";
 import { repairMissingShippingCosts } from "@/lib/shipping-cost-repair";
 import { repairIncompleteRefunds } from "@/lib/refund-effect-repair";
+import { runOrderPushHealthCheck } from "@/lib/order-push-notification";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { describeError } from "@/lib/operator-error";
 import { runBirthdayBonusSweep } from "@/lib/membership";
@@ -110,6 +111,13 @@ const JOBS = {
   // referral code is already live and earning. This one does not expire, so a
   // partner who cannot reach their portal stays reported until they get in.
   partnerAccess: { label: "partner_access_watch", run: alertOnPartnersLockedOut },
+  // Watch the phone-notification path itself. A $94.96 order was paid and
+  // announced to nothing: the destination had stopped accepting deliveries and
+  // the only evidence was the absence of a notification, which looks exactly
+  // like a quiet day. Pushover's validate endpoint confirms the credentials and
+  // SENDS NOTHING, so this can run every tick without becoming the thing that
+  // gets muted. Alerts at most once a day, and never throws.
+  orderPushHealth: { label: "order_push_health", run: runOrderPushHealthCheck },
 } as const;
 
 type JobName = keyof typeof JOBS;

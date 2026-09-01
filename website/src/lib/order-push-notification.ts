@@ -57,6 +57,204 @@ export const ORDER_PUSH_TIMEOUT_MS = 8_000;
 export const PUSHOVER_API_URL = "https://api.pushover.net/1/messages.json";
 
 /**
+ * Pushover's credential check. Confirms a token and user key are still valid and
+ * SENDS NOTHING — which is the only reason a routine health check is possible.
+ * A check that pushed to the owner's phone daily would be switched off inside a
+ * week, and then the destination would be able to die quietly again.
+ */
+export const PUSHOVER_VALIDATE_URL = "https://api.pushover.net/1/users/validate.json";
+
+/** How long an unhealthy-destination alert suppresses the next one. */
+export const PUSH_HEALTH_DEDUPE_MS = 24 * 60 * 60 * 1000;
+
+export type PushDestinationHealth = {
+  kind: "pushover" | "webhook" | "none";
+  /** true healthy, false broken, null genuinely unknown. */
+  healthy: boolean | null;
+  detail: string;
+};
+
+/**
+ * Is the configured destination still able to receive an order?
+ *
+ * THE POINT IS TO LEARN THIS BEFORE AN ORDER NEEDS IT. The incident was not
+ * that a webhook broke — webhooks break — it is that it broke silently and the
+ * first evidence was a paid order nobody was told about.
+ *
+ * `healthy: null` for the webhook path is deliberate and is not a shrug. There
+ * is no way to ping a Zapier Catch Hook that is not indistinguishable from a
+ * fake order, so the honest answer is "cannot be checked", not a cheerful
+ * "healthy" resting on no evidence. Saying so out loud is also the strongest
+ * argument for moving to the Pushover path, which can be checked.
+ */
+export async function verifyPushDestination(): Promise<PushDestinationHealth> {
+  const destination = await resolvePushDestination();
+
+  if (destination.kind === "none") {
+    return { kind: "none", healthy: false, detail: "No push destination is configured, so no order can be announced." };
+  }
+
+  if (destination.kind === "webhook") {
+    return {
+      kind: "webhook",
+      healthy: null,
+      detail: "A webhook cannot be checked without sending it something that looks like an order. "
+        + "Configure Pushover directly to have this verified automatically.",
+    };
+  }
+
+  try {
+    const response = await fetch(PUSHOVER_VALIDATE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: destination.token, user: destination.userKey }).toString(),
+      signal: AbortSignal.timeout(ORDER_PUSH_TIMEOUT_MS),
+    });
+    const payload = await response.json().catch(() => null) as { status?: number; errors?: string[] } | null;
+
+    if (response.ok && payload?.status === 1) {
+      return { kind: "pushover", healthy: true, detail: "Pushover accepted the credentials." };
+    }
+    const errors = Array.isArray(payload?.errors) ? payload.errors.join("; ") : `answered ${response.status}`;
+    return { kind: "pushover", healthy: false, detail: `Pushover rejected the credentials: ${errors}` };
+  } catch (error) {
+    // Unreachable is NOT healthy. Assuming the best is what let the last one
+    // stay broken.
+    return {
+      kind: "pushover",
+      healthy: false,
+      detail: `Could not reach Pushover: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+export type TestPushResult = {
+  sent: boolean;
+  kind: "pushover" | "webhook" | "none";
+  detail?: string;
+};
+
+/**
+ * Deliver a real notification, on demand, from the Control Center.
+ *
+ * The scheduled check above answers "are these credentials still valid". It
+ * cannot answer the question the owner actually asks after pasting a token in:
+ * does a notification reach MY PHONE. Only a delivery answers that, and nobody
+ * should have to place a real order to find out — that is precisely how the
+ * last broken destination stayed broken.
+ *
+ * So this is the one path that pushes deliberately. Two things keep it from
+ * becoming a nuisance of its own:
+ *
+ *  - The message says it is a test, in the title and the body. A phone alert
+ *    that reads like money arriving, but is not, is worse than no test.
+ *  - A failure is RETURNED, never alerted. Somebody is standing at the screen
+ *    watching for the result; raising a critical (and emailing it) over their
+ *    own experiment is how an alert feed becomes wallpaper. Contrast
+ *    sendOrderPushNotification, where nobody is watching and the alert is the
+ *    entire safety net.
+ */
+export async function sendTestPushNotification(): Promise<TestPushResult> {
+  const destination = await resolvePushDestination();
+
+  if (destination.kind === "none") {
+    return {
+      sent: false,
+      kind: "none",
+      detail: "No push destination is configured. Fill in the Pushover fields above (or a webhook URL) and save first.",
+    };
+  }
+
+  if (destination.kind === "webhook" && !destination.url.toLowerCase().startsWith("https://")) {
+    return {
+      sent: false,
+      kind: "webhook",
+      detail: "The webhook URL must start with https:// — a real order would refuse it, so this test does too.",
+    };
+  }
+
+  const title = "Vanta Labs test notification";
+  const message = "This is a test from Admin -> Control Center -> Order Notifications. "
+    + "If you are reading it on your phone, a real order will reach you the same way.";
+  // Same source the order payload uses, trimmed the same way. Omitted rather
+  // than sent as "undefined/admin/orders" when the site URL is not configured.
+  const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "").trim().replace(/\/+$/, "");
+  const url = siteUrl ? `${siteUrl}/admin/orders` : "";
+
+  try {
+    const response = destination.kind === "pushover"
+      ? await fetch(PUSHOVER_API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            token: destination.token,
+            user: destination.userKey,
+            title,
+            message,
+            ...(url ? { url, url_title: "Open the admin" } : {}),
+          }).toString(),
+          signal: AbortSignal.timeout(ORDER_PUSH_TIMEOUT_MS),
+        })
+      : await fetch(destination.url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          // The same field names a real order carries, so a webhook wired to
+          // read `title`/`message` is exercised exactly as it will be used.
+          body: JSON.stringify({ title, message, url, test: true }),
+          signal: AbortSignal.timeout(ORDER_PUSH_TIMEOUT_MS),
+        });
+
+    if (!response.ok) {
+      return {
+        sent: false,
+        kind: destination.kind,
+        detail: `The destination answered ${response.status}. The credentials or URL are wrong, or the app was deleted.`,
+      };
+    }
+    return { sent: true, kind: destination.kind };
+  } catch (error) {
+    return {
+      sent: false,
+      kind: destination.kind,
+      detail: `Could not reach the destination: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+/**
+ * The cron entry point. Checks the destination and complains once a day if it
+ * has gone bad, so a revoked token surfaces on its own rather than at the cost
+ * of the next order.
+ *
+ * Never throws: it runs beside ten other jobs in a shared 60-second window.
+ */
+export async function runOrderPushHealthCheck(): Promise<PushDestinationHealth> {
+  let health: PushDestinationHealth;
+  try {
+    health = await verifyPushDestination();
+  } catch (error) {
+    health = {
+      kind: "none",
+      healthy: false,
+      detail: `Could not check the push destination: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+
+  // Only a definite NO raises. `null` means unverifiable, and alerting daily on
+  // something nobody can act on is how a status page becomes wallpaper.
+  if (health.healthy === false) {
+    await safeAlert(
+      "order_push_destination_unhealthy",
+      `Order push notifications will NOT reach you: ${health.detail} `
+        + "Fix this in Admin -> Control Center -> Order Notifications before the next order.",
+      PUSH_HEALTH_DEDUPE_MS,
+    );
+  }
+
+  return health;
+}
+
+/**
  * How long an "the webhook is not configured" alert suppresses the next one.
  * The condition is a standing configuration fault, not an event: it is equally
  * true of every order placed until someone fixes it, so one row a day says it
@@ -484,7 +682,9 @@ async function safeAlert(type: string, message: string, dedupeWindowMs?: number)
     // only one that carries an order the operator has not been told about.
     // Everything else describes the CONFIGURATION, which belongs on the status
     // page rather than in an inbox.
-    const severity = type === "order_notification_missed" ? "critical" : "warning";
+    const severity = type === "order_notification_missed" || type === "order_push_destination_unhealthy"
+      ? "critical"
+      : "warning";
     await recordSystemAlert({ type, severity, message, dedupeWindowMs });
   } catch {
     // recordSystemAlert already swallows its own failures; this is belt and

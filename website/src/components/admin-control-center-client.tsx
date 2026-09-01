@@ -96,6 +96,8 @@ export function AdminControlCenterClient() {
   const [pushoverToken, setPushoverToken] = useState("");
   const [pushoverUserKey, setPushoverUserKey] = useState("");
   const [orderPushWebhookUrl, setOrderPushWebhookUrl] = useState("");
+  const [pushTesting, setPushTesting] = useState(false);
+  const [pushTestResult, setPushTestResult] = useState<string | null>(null);
   const [alertEmail, setAlertEmail] = useState("");
   const [contentFooterLinks, setContentFooterLinks] = useState("");
   const [contentLegalPages, setContentLegalPages] = useState("");
@@ -396,6 +398,28 @@ export function AdminControlCenterClient() {
     void loadSnapshot();
   };
 
+  // PROVE IT REACHES THE PHONE, HERE, NOW.
+  //
+  // Saving a token only proves it was typed. A $94.96 order was paid and
+  // announced to nothing because the destination had quietly stopped working
+  // and there was no way to find that out short of the next order. This sends a
+  // real notification, and reports back what the destination actually said.
+  const sendTestNotification = async () => {
+    setPushTesting(true);
+    setPushTestResult(null);
+    try {
+      const res = await fetch("/api/admin/notifications/test", { method: "POST" });
+      const json = await res.json() as { success: boolean; error?: string; message?: string };
+      setPushTestResult(json.success
+        ? (json.message ?? "Sent.")
+        : (json.error ?? "The test notification could not be sent."));
+    } catch {
+      setPushTestResult("Could not reach the server to send a test notification.");
+    } finally {
+      setPushTesting(false);
+    }
+  };
+
   const setMaintenanceInstant = async (enabled: boolean) => {
     const confirmation = enabled
       ? "Freeze public site now? Admin access will stay available."
@@ -576,6 +600,18 @@ export function AdminControlCenterClient() {
                 </span>
               </label>
             </div>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={sendTestNotification}
+                disabled={pushTesting}
+                className="vl-btn-secondary vl-focus-ring px-4 py-2 text-xs disabled:opacity-60"
+              >
+                {pushTesting ? "Sending…" : "Send test notification"}
+              </button>
+              <span className="text-[11px] text-zinc-500">Save first — this uses the settings already stored, not what is typed above.</span>
+            </div>
+            {pushTestResult ? <p className="mt-2 text-xs text-zinc-300">{pushTestResult}</p> : null}
           </section>
 
           <section className="vl-panel-soft rounded-2xl p-4">
