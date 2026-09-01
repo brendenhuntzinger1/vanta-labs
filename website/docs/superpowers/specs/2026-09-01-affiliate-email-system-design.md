@@ -5,10 +5,10 @@ Status: approved (owner decisions recorded below)
 
 ## The shape of the problem
 
-The owner asked for a way to email affiliates from the admin: mass sends,
-hand-picked sends, personalisation, preview, test send, drafts, scheduling,
-duplicate-send protection, history, and a competitions feature that tracks
-qualifying sales and locks a winner.
+The owner asked for a small email marketing platform for the affiliate
+programme: mass sends, hand-picked sends, personalisation, desktop and mobile
+preview, test sends, drafts, scheduling, duplicating an old campaign,
+duplicate-send protection, and history with delivery and click reporting.
 
 Almost none of that is new machinery. **This store already has a campaign
 system**, built for customers, and it already solves the hard parts:
@@ -31,10 +31,11 @@ to get right.
 
 What is genuinely missing is four things:
 
-1. an affiliate audience (approved ambassadors, all or hand-picked);
+1. an affiliate audience (approved ambassadors, all, hand-picked, or by sales activity);
 2. per-recipient personalisation — every campaign today renders one identical body;
-3. competitions, with progress tracking and a winner that cannot be won twice;
-4. history filtered to affiliate campaigns.
+3. several resource buttons per message, so affiliates can be handed links to
+   product pages, sale pages, images, video and ad material;
+4. history filtered to affiliate campaigns, with per-link click attribution.
 
 ## Owner decisions
 
@@ -56,10 +57,12 @@ An affiliate who unsubscribes lands in `email_suppressions` and stops receiving
 **promotional** mail only. Approval, commission, payout and account email are
 transactional, use `sendEmail` directly, and are untouched by any of this.
 
-**Competitions — track and lock, never pay.** The system counts qualifying
-sales, shows exactly which orders counted, and locks the winner atomically so a
-bonus cannot be awarded twice. It records no payout: the owner reviews the
-qualifying orders and pays manually.
+**Competitions are OUT OF SCOPE.** An early draft of this design was built
+around one example the owner gave — "first affiliate to 10 sales wins $500" —
+and mistook it for a feature. It is one message an owner might send, not a
+subsystem. There is no competition tracking, leaderboard, winner selection or
+bonus payout here, and nothing in the composer is shaped around any particular
+promotion. The owner writes the message; the system delivers it.
 
 ## Architecture
 
@@ -72,8 +75,9 @@ Additive and idempotent, in the house style.
 - `audience_kind text not null default 'customer'` — `customer` | `affiliate`.
   Defaulted so every existing row keeps its current meaning, and so the customer
   composer needs no change.
-- `affiliate_filter text` — `all_active` | `selected`.
+- `affiliate_filter text` — `all_active` | `selected` | `no_sales` | `has_sales`.
 - `affiliate_ids uuid[]` — the hand-picked set when `selected`.
+- `link_buttons jsonb` — the extra resource buttons (see section 5).
 
 `email_campaign_recipients` gains:
 
@@ -87,19 +91,23 @@ Additive and idempotent, in the house style.
   and would make the preview a lie. It also turns N per-recipient lookups into
   one read at queue time.
 
-New table `affiliate_competitions` — name, window, `sales_required`,
-`bonus_amount`, participant scope, status, and the winner columns
-(`winner_ambassador_id`, `won_at`, `winning_order_id`).
+`email_campaign_clicks` gains `link_index` and `link_label`, so "which button
+was clicked" is answerable. Null means the primary CTA — which is what every
+existing row already means, so no backfill is needed.
 
-RLS enabled with no policies (deny-by-default for anon/authenticated), matching
-every other admin-only table here.
+No new tables. Nothing here has its own RLS to configure, because nothing here
+is a new table: the campaign tables already deny anon and authenticated by
+default and are reached only by the service role.
 
 ### 2. Merge variables (`src/lib/email/affiliate-merge.ts`)
 
 Pure and testable, no database.
 
-`{{first_name}}`, `{{affiliate_code}}`, `{{referral_link}}`,
-`{{commission_percent}}`, `{{dashboard_link}}`.
+`{{first_name}}`, `{{referral_code}}`, `{{referral_link}}`,
+`{{commission_percent}}`, `{{affiliate_dashboard_link}}`. Two older spellings
+(`{{affiliate_code}}`, `{{dashboard_link}}`) resolve as aliases so a saved draft
+cannot start rendering literal braces at a real affiliate, but they are kept out
+of the composer's chip list so one idea has one name on screen.
 
 Two rules that matter:
 
@@ -115,7 +123,8 @@ empty space after "Hey ".
 
 ### 3. Affiliate audience (`src/lib/email/affiliate-audience.ts`)
 
-Approved ambassadors, optionally narrowed to a hand-picked set, **minus
+Approved ambassadors, optionally narrowed to a hand-picked set or to those with
+(or without) qualifying sales, **minus
 `email_suppressions`** — subtracted up front for the same reason the customer
 audience does it: so the count the owner sees before pressing Send is the truth
 rather than an overestimate that quietly shrinks.
@@ -123,6 +132,12 @@ rather than an overestimate that quietly shrinks.
 Deduped by email, so two ambassador rows sharing an address receive one message.
 Reads are bounded (`readAllRowsBounded`) and a truncated read is fatal, matching
 `audience.ts`.
+
+The has-sales / no-sales groups count with `commissionOrderCounts`, extracted
+from `qualifiesForMonthlyTierCount` so they use the SAME definition of a real
+sale as the commission engine — a refunded or reversed sale is excluded from
+both. A second copy of that rule would eventually congratulate someone whose
+only sale was refunded.
 
 ### 4. Sending
 
@@ -138,27 +153,27 @@ status claim (`update ... where status in ('draft','scheduled','paused')`,
 matching the claim pattern already used for recipient rows) makes the second
 click return a clean 409 instead of appearing to succeed.
 
-### 5. Competitions (`src/lib/affiliate-competitions.ts`)
+### 5. Resource buttons and per-link clicks
 
-**The qualifying rule is not rewritten.** `qualifiesForMonthlyTierCount` already
-encodes what this store means by a genuine sale — it excludes `reversed`,
-`voided` and `manual_review` commissions, zero-commission and ineligible orders,
-and fraud-flagged self-dealing. Refunds reach it correctly: a full refund sets
-`reversed` (or `manual_review` if the commission was already paid), and free
-replacement reships carry no commission so they are excluded already.
+An affiliate email carries a primary CTA plus up to six extra buttons, stored as
+`link_buttons` jsonb on the campaign — content of one message, edited and
+versioned with it, never queried across campaigns.
 
-That predicate is split into its window-independent half so competitions and the
-monthly tier count share one definition. A competition that counted differently
-from the commission engine would be the worst possible bug here — it would pay a
-bonus on sales the store does not consider real.
+Which links can be click-tracked is a security decision, not a convenience one.
+The click redirect resolves its destination FROM THE CAMPAIGN ROW and normalises
+it to this origin, and that is exactly what stops it being an open redirect on a
+domain affiliates have been trained to click. So:
 
-**Winner locking is a conditional update**, not a read-then-write:
+* a plain site path is tracked, with the link index inside the signed payload so
+  a click cannot be re-attributed to another button by editing a URL;
+* an off-site URL (an image folder, a video) is rendered as a plain link and
+  never routed through the redirect;
+* a personalised URL (`{{referral_link}}`) is also linked directly — its
+  destination differs per recipient, and the click route has only the campaign
+  row to work from, so it could not resolve it even if it wanted to.
 
-    update affiliate_competitions set winner_ambassador_id = $1 ...
-    where id = $2 and winner_ambassador_id is null
-
-Zero rows updated means someone else already won. Two affiliates crossing the
-threshold in the same sweep cannot both be recorded.
+Both untracked cases still work perfectly as links. They are simply not counted,
+and the composer says so.
 
 ### 6. Admin UI
 
@@ -172,8 +187,9 @@ Confirmation before a mass send is a modal naming the exact recipient count.
 ## Testing
 
 Unit: merge rendering and validation, audience resolution and suppression
-subtraction, competition counting against refunded / cancelled / replacement /
-fraud-flagged orders, winner-lock concurrency, double-send claim.
+subtraction, the sales-based groups against refunded and reversed commissions,
+per-recipient personalisation through the real send loop, and the double-send
+claim under two concurrent callers.
 
 Regression: the existing suite, particularly the email and ambassador files,
 must stay green — the whole point is that transactional mail is untouched.
