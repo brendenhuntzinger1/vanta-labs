@@ -66,6 +66,20 @@ export async function getEmailDashboard(): Promise<EmailDashboard> {
     supabaseAdmin
       .from("email_campaigns")
       .select("id, name, subject, segment, segment_param, status, created_at, scheduled_at, completed_at, recipient_count")
+      // CUSTOMER CAMPAIGNS ONLY.
+      //
+      // Affiliate broadcasts live in this same table (see
+      // affiliate-email-system.sql for why a shared table beats a second
+      // mailer), so without this filter they appear in the customer campaign
+      // history and — worse — their sends, opens and clicks are added into the
+      // totals at the top of this page. Those totals are read as "how is
+      // customer marketing performing", and an affiliate announcement is not
+      // an answer to that question.
+      //
+      // `audience_kind` is NOT NULL with default 'customer', so every campaign
+      // that existed before affiliate broadcasts did matches this and keeps its
+      // place in the history exactly as before.
+      .eq("audience_kind", "customer")
       .order("created_at", { ascending: false })
       .limit(100),
     // Reporting, not sending — a short read here misstates open rates rather

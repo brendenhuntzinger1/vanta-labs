@@ -5,6 +5,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { getOrderProfit } from "@/lib/admin-profit";
 import { formatDisplayDate } from "@/lib/format-date";
 import { recordSystemAlert } from "@/lib/monitoring";
+import { getControlSnapshot } from "@/lib/admin-control";
 import type { ProfitStatus } from "@/lib/order-profit";
 
 // ---------------------------------------------------------------------------
@@ -51,6 +52,207 @@ import type { ProfitStatus } from "@/lib/order-profit";
  * it has not answered in eight, waiting longer changes nothing.
  */
 export const ORDER_PUSH_TIMEOUT_MS = 8_000;
+
+/** Pushover's message endpoint. A constant, so it can never be misconfigured. */
+export const PUSHOVER_API_URL = "https://api.pushover.net/1/messages.json";
+
+/**
+ * Pushover's credential check. Confirms a token and user key are still valid and
+ * SENDS NOTHING — which is the only reason a routine health check is possible.
+ * A check that pushed to the owner's phone daily would be switched off inside a
+ * week, and then the destination would be able to die quietly again.
+ */
+export const PUSHOVER_VALIDATE_URL = "https://api.pushover.net/1/users/validate.json";
+
+/** How long an unhealthy-destination alert suppresses the next one. */
+export const PUSH_HEALTH_DEDUPE_MS = 24 * 60 * 60 * 1000;
+
+export type PushDestinationHealth = {
+  kind: "pushover" | "webhook" | "none";
+  /** true healthy, false broken, null genuinely unknown. */
+  healthy: boolean | null;
+  detail: string;
+};
+
+/**
+ * Is the configured destination still able to receive an order?
+ *
+ * THE POINT IS TO LEARN THIS BEFORE AN ORDER NEEDS IT. The incident was not
+ * that a webhook broke — webhooks break — it is that it broke silently and the
+ * first evidence was a paid order nobody was told about.
+ *
+ * `healthy: null` for the webhook path is deliberate and is not a shrug. There
+ * is no way to ping a Zapier Catch Hook that is not indistinguishable from a
+ * fake order, so the honest answer is "cannot be checked", not a cheerful
+ * "healthy" resting on no evidence. Saying so out loud is also the strongest
+ * argument for moving to the Pushover path, which can be checked.
+ */
+export async function verifyPushDestination(): Promise<PushDestinationHealth> {
+  const destination = await resolvePushDestination();
+
+  if (destination.kind === "none") {
+    return { kind: "none", healthy: false, detail: "No push destination is configured, so no order can be announced." };
+  }
+
+  if (destination.kind === "webhook") {
+    return {
+      kind: "webhook",
+      healthy: null,
+      detail: "A webhook cannot be checked without sending it something that looks like an order. "
+        + "Configure Pushover directly to have this verified automatically.",
+    };
+  }
+
+  try {
+    const response = await fetch(PUSHOVER_VALIDATE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: destination.token, user: destination.userKey }).toString(),
+      signal: AbortSignal.timeout(ORDER_PUSH_TIMEOUT_MS),
+    });
+    const payload = await response.json().catch(() => null) as { status?: number; errors?: string[] } | null;
+
+    if (response.ok && payload?.status === 1) {
+      return { kind: "pushover", healthy: true, detail: "Pushover accepted the credentials." };
+    }
+    const errors = Array.isArray(payload?.errors) ? payload.errors.join("; ") : `answered ${response.status}`;
+    return { kind: "pushover", healthy: false, detail: `Pushover rejected the credentials: ${errors}` };
+  } catch (error) {
+    // Unreachable is NOT healthy. Assuming the best is what let the last one
+    // stay broken.
+    return {
+      kind: "pushover",
+      healthy: false,
+      detail: `Could not reach Pushover: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+export type TestPushResult = {
+  sent: boolean;
+  kind: "pushover" | "webhook" | "none";
+  detail?: string;
+};
+
+/**
+ * Deliver a real notification, on demand, from the Control Center.
+ *
+ * The scheduled check above answers "are these credentials still valid". It
+ * cannot answer the question the owner actually asks after pasting a token in:
+ * does a notification reach MY PHONE. Only a delivery answers that, and nobody
+ * should have to place a real order to find out — that is precisely how the
+ * last broken destination stayed broken.
+ *
+ * So this is the one path that pushes deliberately. Two things keep it from
+ * becoming a nuisance of its own:
+ *
+ *  - The message says it is a test, in the title and the body. A phone alert
+ *    that reads like money arriving, but is not, is worse than no test.
+ *  - A failure is RETURNED, never alerted. Somebody is standing at the screen
+ *    watching for the result; raising a critical (and emailing it) over their
+ *    own experiment is how an alert feed becomes wallpaper. Contrast
+ *    sendOrderPushNotification, where nobody is watching and the alert is the
+ *    entire safety net.
+ */
+export async function sendTestPushNotification(): Promise<TestPushResult> {
+  const destination = await resolvePushDestination();
+
+  if (destination.kind === "none") {
+    return {
+      sent: false,
+      kind: "none",
+      detail: "No push destination is configured. Fill in the Pushover fields above (or a webhook URL) and save first.",
+    };
+  }
+
+  if (destination.kind === "webhook" && !destination.url.toLowerCase().startsWith("https://")) {
+    return {
+      sent: false,
+      kind: "webhook",
+      detail: "The webhook URL must start with https:// — a real order would refuse it, so this test does too.",
+    };
+  }
+
+  const title = "Vanta Labs test notification";
+  const message = "This is a test from Admin -> Control Center -> Order Notifications. "
+    + "If you are reading it on your phone, a real order will reach you the same way.";
+  // Same source the order payload uses, trimmed the same way. Omitted rather
+  // than sent as "undefined/admin/orders" when the site URL is not configured.
+  const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "").trim().replace(/\/+$/, "");
+  const url = siteUrl ? `${siteUrl}/admin/orders` : "";
+
+  try {
+    const response = destination.kind === "pushover"
+      ? await fetch(PUSHOVER_API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            token: destination.token,
+            user: destination.userKey,
+            title,
+            message,
+            ...(url ? { url, url_title: "Open the admin" } : {}),
+          }).toString(),
+          signal: AbortSignal.timeout(ORDER_PUSH_TIMEOUT_MS),
+        })
+      : await fetch(destination.url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          // The same field names a real order carries, so a webhook wired to
+          // read `title`/`message` is exercised exactly as it will be used.
+          body: JSON.stringify({ title, message, url, test: true }),
+          signal: AbortSignal.timeout(ORDER_PUSH_TIMEOUT_MS),
+        });
+
+    if (!response.ok) {
+      return {
+        sent: false,
+        kind: destination.kind,
+        detail: `The destination answered ${response.status}. The credentials or URL are wrong, or the app was deleted.`,
+      };
+    }
+    return { sent: true, kind: destination.kind };
+  } catch (error) {
+    return {
+      sent: false,
+      kind: destination.kind,
+      detail: `Could not reach the destination: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+/**
+ * The cron entry point. Checks the destination and complains once a day if it
+ * has gone bad, so a revoked token surfaces on its own rather than at the cost
+ * of the next order.
+ *
+ * Never throws: it runs beside ten other jobs in a shared 60-second window.
+ */
+export async function runOrderPushHealthCheck(): Promise<PushDestinationHealth> {
+  let health: PushDestinationHealth;
+  try {
+    health = await verifyPushDestination();
+  } catch (error) {
+    health = {
+      kind: "none",
+      healthy: false,
+      detail: `Could not check the push destination: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+
+  // Only a definite NO raises. `null` means unverifiable, and alerting daily on
+  // something nobody can act on is how a status page becomes wallpaper.
+  if (health.healthy === false) {
+    await safeAlert(
+      "order_push_destination_unhealthy",
+      `Order push notifications will NOT reach you: ${health.detail} `
+        + "Fix this in Admin -> Control Center -> Order Notifications before the next order.",
+      PUSH_HEALTH_DEDUPE_MS,
+    );
+  }
+
+  return health;
+}
 
 /**
  * How long an "the webhook is not configured" alert suppresses the next one.
@@ -303,15 +505,109 @@ async function collectOrderPushInput(orderId: string): Promise<OrderPushInput | 
  * Send the paid-order notification. Resolves with the outcome and NEVER throws
  * — see rule 1 at the top of this file.
  */
+/**
+ * Where a paid order gets announced.
+ *
+ * TWO DESTINATIONS, AND THE SHORTER ONE WINS. Pushover is the actual phone
+ * notification service; the webhook path reaches it through an automation tool
+ * (Zapier) that forwards the payload on. That middleman is what failed: the
+ * Catch Hook stopped existing, answered 404, and a paid order went unannounced.
+ * Talking to Pushover directly removes a whole service from the path.
+ *
+ * BOTH ARE READ FROM THE CONTROL CENTER FIRST, environment second. The other
+ * half of that incident was that the dead URL lived in an environment variable,
+ * so correcting it required a redeploy — at exactly the moment orders were
+ * being missed. From the admin it is a ten-second edit. That is the wrong
+ * default for most configuration and the right one for the setting whose whole
+ * job is to still work when something else has broken.
+ */
+type PushDestination =
+  | { kind: "pushover"; token: string; userKey: string }
+  | { kind: "webhook"; url: string }
+  | { kind: "none" };
+
+async function resolvePushDestination(): Promise<PushDestination> {
+  let configured: Record<string, unknown> = {};
+  try {
+    const snapshot = await getControlSnapshot("notifications");
+    configured = snapshot.notifications ?? {};
+  } catch {
+    // A settings read failure must never be the reason an order goes
+    // unannounced. Fall through to the environment.
+  }
+
+  const text = (value: unknown) => String(value ?? "").trim();
+  const token = text(configured.pushover_token);
+  const userKey = text(configured.pushover_user_key);
+
+  // BOTH keys or neither. A half-filled pair is a configuration mistake, and
+  // posting with one of them would fail at Pushover while looking configured.
+  if (token && userKey) return { kind: "pushover", token, userKey };
+
+  const url = text(configured.order_push_webhook_url) || text(process.env.ORDER_PUSH_WEBHOOK_URL);
+  return url ? { kind: "webhook", url } : { kind: "none" };
+}
+
 export async function sendOrderPushNotification(orderId: string): Promise<OrderPushResult> {
-  const webhookUrl = process.env.ORDER_PUSH_WEBHOOK_URL?.trim();
+  const destination = await resolvePushDestination();
+  const webhookUrl = destination.kind === "webhook" ? destination.url : undefined;
+
+  /**
+   * The order was paid and NOT announced. Raise it as a critical, which the
+   * alerting path emails to the operator.
+   *
+   * THE MESSAGE IS THE NOTIFICATION, NOT A MESSAGE ABOUT ONE. The comment on
+   * safeAlert below argues — correctly — that emailing someone to say "a
+   * notification failed" is noise and a second thing to go wrong. So this does
+   * not do that. It carries the same text the phone would have shown, plus the
+   * reason it had to arrive this way, so the email IS the missed notification
+   * on a different channel.
+   *
+   * That distinction was learned the expensive way: on 2026-09-01 a real
+   * $94.96 order was paid, the webhook answered 404, and the only trace was a
+   * warning on a status page nobody was watching.
+   *
+   * PER ORDER, NEVER DEDUPED. Two missed orders are two facts, and collapsing
+   * them loses one.
+   *
+   * DELIVERY FAILURES ONLY — deliberately NOT the unconfigured or insecure-URL
+   * paths. Those are STANDING CONFIGURATION faults: the store has never had
+   * push, the operator is not waiting for it, and the daily-deduped warning
+   * above is the right signal to go and set it up. Raising a critical per order
+   * there would mail the operator for every order of a state they already know
+   * about, which is the nagging the dedupe on those alerts exists to prevent.
+   *
+   * A webhook that WAS configured and has started failing is the opposite case,
+   * and the one that actually cost an order: everything looks set up, so
+   * nothing prompts anybody to look.
+   */
+  const announceMissedOrder = async (reason: string) => {
+    let summary = `Order ${orderId}`;
+    try {
+      const input = await collectOrderPushInput(orderId);
+      if (input) {
+        const payload = buildOrderPushPayload(input);
+        const link = payload.url ? `\n${payload.url}` : "";
+        summary = `${payload.title}\n${payload.message}${link}`;
+      }
+    } catch {
+      // The push already failed; a second failure reading the order must not
+      // cost the operator the alert as well. The id alone is still actionable.
+    }
+
+    await safeAlert(
+      "order_notification_missed",
+      `${summary}\n\nThis order was PAID but the push notification did not go out (${reason}). `
+        + "It is in the admin and needs fulfilling. Fix the push webhook so the next one reaches your phone.",
+    );
+  };
 
   // A paid order just arrived and there is nowhere to announce it. This used to
   // return in silence, which is how two real orders went unannounced without
   // anything anywhere saying so. Deduped to one row a day: the fault is a
   // standing one, so every order after the first repeats it rather than adding
   // to it.
-  if (!webhookUrl) {
+  if (destination.kind === "none") {
     await safeAlert(
       "order_push_not_configured",
       `Order ${orderId} was paid but no push notification was sent: ORDER_PUSH_WEBHOOK_URL is unset. ` +
@@ -324,7 +620,7 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
   // The URL is the only credential. Over http it — and every order that follows
   // — travels in the clear to anyone on the path, so this refuses rather than
   // downgrading silently. It is a configuration mistake, hence the alert.
-  if (!webhookUrl.toLowerCase().startsWith("https://")) {
+  if (destination.kind === "webhook" && !destination.url.toLowerCase().startsWith("https://")) {
     await safeAlert("order_push_misconfigured", "ORDER_PUSH_WEBHOOK_URL is not an https:// URL. No notification was sent.");
     return { sent: false, reason: "insecure_url" };
   }
@@ -333,16 +629,35 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
     const input = await collectOrderPushInput(orderId);
     if (!input) return { sent: false, reason: "order_not_found" };
 
-    const response = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildOrderPushPayload(input)),
-      signal: AbortSignal.timeout(ORDER_PUSH_TIMEOUT_MS),
-    });
+    const payload = buildOrderPushPayload(input);
+
+    // Pushover takes form-encoded fields, not JSON, and its own title/message/
+    // url map one-to-one onto the payload the webhook already carries — so both
+    // destinations announce exactly the same four facts.
+    const response = destination.kind === "pushover"
+      ? await fetch(PUSHOVER_API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            token: destination.token,
+            user: destination.userKey,
+            title: payload.title,
+            message: payload.message,
+            ...(payload.url ? { url: payload.url, url_title: "Open in admin" } : {}),
+          }).toString(),
+          signal: AbortSignal.timeout(ORDER_PUSH_TIMEOUT_MS),
+        })
+      : await fetch(webhookUrl as string, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(ORDER_PUSH_TIMEOUT_MS),
+        });
 
     if (!response.ok) {
       const detail = `webhook answered ${response.status}`;
       await safeAlert("order_push_failed", `Order ${orderId} notification not delivered: ${detail}`);
+      await announceMissedOrder(detail);
       return { sent: false, reason: "delivery_failed", detail };
     }
 
@@ -350,6 +665,7 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     await safeAlert("order_push_failed", `Order ${orderId} notification not delivered: ${detail}`);
+    await announceMissedOrder(detail);
     return { sent: false, reason: "delivery_failed", detail };
   }
 }
@@ -362,7 +678,14 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
  */
 async function safeAlert(type: string, message: string, dedupeWindowMs?: number): Promise<void> {
   try {
-    await recordSystemAlert({ type, severity: "warning", message, dedupeWindowMs });
+    // `order_notification_missed` is the one critical here, because it is the
+    // only one that carries an order the operator has not been told about.
+    // Everything else describes the CONFIGURATION, which belongs on the status
+    // page rather than in an inbox.
+    const severity = type === "order_notification_missed" || type === "order_push_destination_unhealthy"
+      ? "critical"
+      : "warning";
+    await recordSystemAlert({ type, severity, message, dedupeWindowMs });
   } catch {
     // recordSystemAlert already swallows its own failures; this is belt and
     // braces so the alerting path can never be what breaks the alert.

@@ -1,0 +1,48 @@
+-- ===========================================================================
+-- RUN THIS ONLY AFTER THE CODE THAT REPLACES IT IS LIVE IN PRODUCTION.
+--
+-- ORDERING IS THE WHOLE POINT OF THIS FILE. Running it before the deploy that
+-- ships /api/catalog/referral/validate would take referral codes offline at
+-- checkout: the browser would still be calling the RPC, and this revokes its
+-- permission to. Running it after is inert to shoppers — nothing calls either
+-- of these from a browser any more.
+--
+-- WHAT IT CLOSES
+--
+-- validate_referral_code was the ONE SECURITY DEFINER function anon could call
+-- (rpc-execute-lockdown.sql revoked every other). It had to stay open because
+-- the cart checks a referral code before the shopper has an account.
+--
+-- referral-rpc-minimise.sql had already trimmed what it returns down to what
+-- the cart renders, and stated the residual it could not fix from inside the
+-- database:
+--
+--     "a PostgREST RPC does not pass through the application's rate limiter,
+--      so the codes can be swept"
+--
+-- Referral codes are short and human-chosen (JORDAN10, SAM20), so sweeping
+-- them is cheap, and every hit returns an ambassador's name. That file said the
+-- fix was "moving validation behind a rate-limited application route and
+-- revoking the anon grant". The route now exists — 20 attempts per IP per ten
+-- minutes, generous for a shopper, useless for a sweep — so this is the second
+-- half of that sentence.
+--
+-- The ambassadors SELECT grant goes with it. referral-client.ts was the only
+-- browser-side reader of that table (it had a legacy fallback for a database
+-- without the RPC); the fallback is gone, and client-key-table-access.test.ts
+-- now asserts that NOTHING in the browser reads `ambassadors`.
+--
+-- BLAST RADIUS. Server-side callers are unaffected: the route, quote-order.ts
+-- and the webhook all read with the service role, which is not subject to
+-- either grant.
+--
+-- TO VERIFY AFTERWARDS, from a browser console on the live site:
+--   the referral field in the cart still accepts a real code, and
+--   POST /rest/v1/rpc/validate_referral_code returns 401/403 rather than a name.
+-- ===========================================================================
+
+revoke execute on function public.validate_referral_code(text) from anon, authenticated;
+
+-- The last browser-side read of the ambassador table. Server-side reads use the
+-- service role and are unaffected.
+revoke select on table public.ambassadors from anon, authenticated;

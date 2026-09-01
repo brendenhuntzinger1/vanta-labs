@@ -79,6 +79,11 @@ export const ADMIN_NAV_GROUPS: AdminTabGroup[] = [
     title: "Growth",
     tabs: [
       { label: "Ambassadors", href: "/admin/partners", match: startsWith("/admin/partners") },
+      // Emailing the affiliate programme is its own job with its own screen, so
+      // it gets its own tab rather than being buried inside the ambassador
+      // roster. A page nothing links to has not shipped — see the note at the
+      // top of this file.
+      { label: "Affiliate Emails", href: "/admin/affiliates/emails", match: startsWith("/admin/affiliates") },
       { label: "Coupons", href: "/admin/coupons", match: startsWith("/admin/coupons") },
       { label: "Promotions", href: "/admin/promotions", match: startsWith("/admin/promotions") },
       { label: "Membership", href: "/admin/membership", match: startsWith("/admin/membership") },

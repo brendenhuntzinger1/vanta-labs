@@ -516,7 +516,19 @@ export function AdminPartnersClient({
       {/* The six numbers an owner actually opens this page for. Everything
           secondary moved to the row beneath, so the headline stays readable. */}
       <section>
-        <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Ambassador Program</h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Ambassador Program</h2>
+          {/* The email screen is a sibling of this one, not a section of it.
+              Linked from here as well as from the nav, because this is the page
+              an owner is already on when they decide to tell everyone
+              something. */}
+          <a
+            href="/admin/affiliates/emails"
+            className="vl-focus-ring rounded-full border border-white/15 px-4 py-2 text-xs font-semibold text-white"
+          >
+            Email affiliates
+          </a>
+        </div>
         <div className="mt-3 grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Active Ambassadors</p>

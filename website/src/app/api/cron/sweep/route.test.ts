@@ -32,6 +32,7 @@ const tenderHolds = sentinel("tenderHolds");
 const signupConfirmations = sentinel("signupConfirmations");
 const partnerAccess = sentinel("partnerAccess");
 const birthdayBonus = sentinel("birthdayBonus");
+const orderPushHealth = sentinel("orderPushHealth");
 interface SystemAlert {
   type: string;
   severity: string;
@@ -78,6 +79,7 @@ vi.mock("@/lib/auth-health", () => ({
   alertOnStalledSignups: () => signupConfirmations(),
   alertOnPartnersLockedOut: () => partnerAccess(),
 }));
+vi.mock("@/lib/order-push-notification", () => ({ runOrderPushHealthCheck: () => orderPushHealth() }));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: (alert: SystemAlert) => recordSystemAlert(alert) }));
 
 const SECRET = "test-cron-secret";
@@ -113,12 +115,13 @@ describe("the scheduled sweep", () => {
     expect(body.refundEffectRepair).toEqual({ job: "refundEffectRepair" });
     expect(body.signupConfirmations).toEqual({ job: "signupConfirmations" });
     expect(body.partnerAccess).toEqual({ job: "partnerAccess" });
+    expect(body.orderPushHealth).toEqual({ job: "orderPushHealth" });
   });
 
   it("runs every job exactly once", async () => {
     await callSweep();
 
-    for (const job of [membership, storeCredit, cartRecovery, commissions, reservations, tenderHolds, emails, paymentReconcile, expressIntents, shippoSync, shipmentRepair, shippingCostRepair, refundEffectRepair, signupConfirmations, partnerAccess]) {
+    for (const job of [membership, storeCredit, cartRecovery, commissions, reservations, tenderHolds, emails, paymentReconcile, expressIntents, shippoSync, shipmentRepair, shippingCostRepair, refundEffectRepair, signupConfirmations, partnerAccess, orderPushHealth]) {
       expect(job).toHaveBeenCalledTimes(1);
     }
   });

@@ -1,4 +1,3 @@
-import { supabase } from "@/lib/supabase";
 
 /**
  * Confirm a referral code is real and active, for the cart's benefit.
@@ -32,52 +31,54 @@ export async function validateReferralCodeClient(code: string) {
     return null;
   }
 
-  const { data, error } = await supabase.rpc("validate_referral_code", {
-    input_code: normalizedCode,
+  // THROUGH THE APPLICATION, NOT STRAIGHT AT POSTGREST.
+  //
+  // This used to call the `validate_referral_code` RPC with the anon key. That
+  // worked, but it meant every referral check bypassed the application's rate
+  // limiter — so the codes, which are short and human-chosen, could be swept
+  // for ambassador names by anyone holding the public anon key that ships in
+  // the client bundle. referral-rpc-minimise.sql documented that as the
+  // residual it could not close from the database.
+  //
+  // The route returns the same fields the RPC did, so nothing downstream
+  // changes: `customerDiscountPercent` is still RAW, and its null still means
+  // "inherits the programme rate".
+  const response = await fetch("/api/catalog/referral/validate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code: normalizedCode }),
   });
 
-  if (error) {
-    const message = String(error.message ?? "").toLowerCase();
-    const isMissingRpc = error.code === "PGRST202" || message.includes("could not find the function") || message.includes("does not exist");
-
-    if (!isMissingRpc) {
-      throw error;
-    }
-
-    const { data: ambassador, error: fallbackError } = await supabase
-      .from("ambassadors")
-      .select("id, name, referral_code, status")
-      .eq("referral_code", normalizedCode)
-      .maybeSingle();
-
-    if (fallbackError) {
-      throw fallbackError;
-    }
-
-    if (!ambassador || String(ambassador.status ?? "").toLowerCase() !== "approved") {
-      return null;
-    }
-
-    return {
-      referralCode: String(ambassador.referral_code ?? normalizedCode).toUpperCase(),
-      ambassadorId: String(ambassador.id),
-      ambassadorName: String(ambassador.name ?? "Ambassador"),
-      // The legacy fallback path cannot see the column (the table select above
-      // is deliberately narrow), so it inherits the program rate rather than
-      // guessing. This runs only when the RPC is missing entirely.
-      customerDiscountPercent: null,
-    };
+  if (!response.ok) {
+    // A refusal is NOT "this code is invalid". Returning null here would
+    // silently strip a real ambassador's discount from a real basket because
+    // of a blip or a throttle, which is the failure mode this whole module has
+    // been burned by before. Throwing lets the cart keep the code attached and
+    // say something true.
+    throw new Error(
+      response.status === 429
+        ? "Too many referral code attempts. Please wait a moment and try again."
+        : "Could not check that referral code right now.",
+    );
   }
+
+  const data = (await response.json()) as {
+    valid?: boolean;
+    referralCode?: string;
+    ambassadorId?: string;
+    ambassadorName?: string;
+    customerDiscountPercent?: number | string | null;
+  };
 
   if (!data?.valid) {
     return null;
   }
 
   return {
-    referralCode: data.referral_code,
-    ambassadorId: data.ambassador_id,
-    ambassadorName: data.ambassador_name,
+    referralCode: String(data.referralCode ?? normalizedCode).toUpperCase(),
+    ambassadorId: String(data.ambassadorId ?? ""),
+    ambassadorName: String(data.ambassadorName ?? "Ambassador"),
     // Raw: a number, a numeric string, or null for "inherits the program rate".
-    customerDiscountPercent: (data.customer_discount_percent ?? null) as number | string | null,
+    customerDiscountPercent: (data.customerDiscountPercent ?? null) as number | string | null,
   };
 }

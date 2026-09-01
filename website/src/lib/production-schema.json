@@ -446,7 +446,9 @@
     "email",
     "clicked_at",
     "user_agent",
-    "ip_hash"
+    "ip_hash",
+    "link_index",
+    "link_label"
   ],
   "email_campaign_recipients": [
     "id",
@@ -459,7 +461,9 @@
     "sent_at",
     "opened_at",
     "clicked_at",
-    "created_at"
+    "created_at",
+    "ambassador_id",
+    "merge_context"
   ],
   "email_campaigns": [
     "id",
@@ -480,7 +484,11 @@
     "recipient_count",
     "created_by",
     "created_at",
-    "updated_at"
+    "updated_at",
+    "audience_kind",
+    "affiliate_filter",
+    "affiliate_ids",
+    "link_buttons"
   ],
   "email_delivery_events": [
     "id",

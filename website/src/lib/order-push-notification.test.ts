@@ -265,17 +265,26 @@ vi.mock("@/lib/supabase-server", () => ({
   },
 }));
 
+const control: Record<string, Record<string, unknown>> = {};
+let controlThrows = false;
+vi.mock("@/lib/admin-control", () => ({
+  getControlSnapshot: async (section: string) => {
+    if (controlThrows) throw new Error("settings unavailable");
+    return { [section]: control[section] ?? {} };
+  },
+}));
+
 let profitResult: Promise<unknown> = Promise.resolve({ profit: 41.2, profitStatus: "estimated" });
 vi.mock("@/lib/admin-profit", () => ({ getOrderProfit: () => profitResult }));
 
-const alerts: Array<{ type: string; severity: string; dedupeWindowMs?: number }> = [];
+const alerts: Array<{ type: string; severity: string; message: string; dedupeWindowMs?: number }> = [];
 vi.mock("@/lib/monitoring", () => ({
-  recordSystemAlert: async (input: { type: string; severity: string; dedupeWindowMs?: number }) => {
+  recordSystemAlert: async (input: { type: string; severity: string; message: string; dedupeWindowMs?: number }) => {
     alerts.push(input);
   },
 }));
 
-const { sendOrderPushNotification } = await import("./order-push-notification");
+const { sendOrderPushNotification, sendTestPushNotification, verifyPushDestination, runOrderPushHealthCheck } = await import("./order-push-notification");
 
 const fetchMock = vi.fn();
 
@@ -285,6 +294,8 @@ beforeEach(() => {
   dbOrder = orderRow;
   profitResult = Promise.resolve({ profit: 41.2, profitStatus: "estimated" });
   alerts.length = 0;
+  for (const key of Object.keys(control)) delete control[key];
+  controlThrows = false;
   fetchMock.mockReset().mockResolvedValue({ ok: true, status: 200 });
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -408,5 +419,411 @@ describe("what happens when things break", () => {
   it("never rejects, whatever the alerting path does", async () => {
     fetchMock.mockRejectedValue(new Error("boom"));
     await expect(sendOrderPushNotification("ord_a1b2c3d4")).resolves.toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A DEAD WEBHOOK MUST NOT COST THE OWNER AN ORDER.
+//
+// On 2026-09-01 a real $94.96 order was paid, the Zapier hook answered 404, and
+// the only trace was a `warning` on /admin/status that nobody was looking at.
+// The owner found out because an unrelated Supabase email prompted them to
+// check. That is the failure these tests exist to prevent.
+//
+// The module's own comment argued against emailing here, and it was right about
+// what it was rejecting: "emailing someone to tell them a notification failed"
+// is a meta-alert, and meta-alerts are noise. So this does not send one. It
+// raises a CRITICAL alert whose message IS the notification — the same text the
+// phone would have shown — and the existing critical path mails it. A different
+// channel for the same message, not a message about a message.
+//
+// Per ORDER, never deduped: two missed orders are two facts, and collapsing
+// them loses one. The standing "your webhook is broken" warning keeps its daily
+// dedupe, because that one genuinely is a repeating condition.
+// ---------------------------------------------------------------------------
+
+function missedAlert() {
+  return alerts.find((a) => a.type === "order_notification_missed");
+}
+
+describe("an order that could not be announced still reaches the owner", () => {
+  it("raises a CRITICAL alert when the webhook rejects the request", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 404 });
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(missedAlert()).toMatchObject({ type: "order_notification_missed", severity: "critical" });
+  });
+
+  it("carries the order itself, so the email IS the notification", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 404 });
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    const message = (missedAlert() as unknown as { message: string }).message;
+    // Who, how much, and which order — the same facts the push carries.
+    expect(message).toContain("VL-1042");
+    expect(message).toContain("Jordan Mitchell");
+    expect(message).toContain("$89.00");
+    // And why it had to come this way.
+    expect(message).toContain("404");
+  });
+
+  it("links straight to the order in the admin", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 404 });
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    const message = (missedAlert() as unknown as { message: string }).message;
+    expect(message).toContain("https://vantalabs.com/admin/orders/ord_a1b2c3d4");
+  });
+
+  it("is NOT deduped — a second missed order is a second fact", async () => {
+    // The exact way this fix could fail silently: a dedupe window would let
+    // order 1 email and swallow every order after it.
+    fetchMock.mockResolvedValue({ ok: false, status: 404 });
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(missedAlert()?.dedupeWindowMs).toBeUndefined();
+  });
+
+  it("stays quiet when push was never configured — that is a standing fault, not a lost order", async () => {
+    // Deliberate. A store with no webhook has never had push and nobody is
+    // waiting for it; the daily-deduped warning is the signal to go set it up.
+    // Mailing per order here would be exactly the nagging that dedupe prevents.
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "");
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(missedAlert()).toBeUndefined();
+    expect(alerts.some((a) => a.type === "order_push_not_configured")).toBe(true);
+  });
+
+  it("stays quiet on an insecure url too, for the same reason", async () => {
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "http://hooks.example.com/catch/1/abc");
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(missedAlert()).toBeUndefined();
+    expect(alerts.some((a) => a.type === "order_push_misconfigured")).toBe(true);
+  });
+
+  it("keeps the standing config warning deduped to once a day", async () => {
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "");
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    const standing = alerts.find((a) => a.type === "order_push_not_configured");
+    expect(standing?.dedupeWindowMs).toBe(24 * 60 * 60 * 1000);
+  });
+
+  it("says nothing when the push actually worked", async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(missedAlert()).toBeUndefined();
+  });
+
+  it("does not fire for an order that does not exist", async () => {
+    // Nothing was missed, because there was nothing to announce.
+    dbOrder = null;
+    await sendOrderPushNotification("ord_missing");
+    expect(missedAlert()).toBeUndefined();
+  });
+
+  it("still tells the owner even when the order details cannot be read", async () => {
+    // The worst case: the push failed AND the order lookup failed. The owner
+    // must still learn that an order went unannounced, with its id.
+    fetchMock.mockResolvedValue({ ok: false, status: 404 });
+    profitResult = Promise.reject(new Error("profit unavailable"));
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(missedAlert()).toBeTruthy();
+    expect((missedAlert() as unknown as { message: string }).message).toContain("ord_a1b2c3d4");
+  });
+
+  it("never rejects, whatever the alert path does", async () => {
+    fetchMock.mockRejectedValue(new Error("boom"));
+    await expect(sendOrderPushNotification("ord_a1b2c3d4")).resolves.toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PUSHOVER, DIRECTLY — NO ZAPIER IN THE MIDDLE.
+//
+// The original design posts to an automation webhook (Zapier) which forwards to
+// a push service. That middleman is what broke: the Catch Hook was deleted or
+// rebuilt, it started answering 404, and a paid order went unannounced.
+//
+// Pushover is the actual destination, and it has a plain HTTP API. Talking to
+// it directly removes an entire service from the path, and — because the
+// credentials live in the Control Center rather than an environment variable —
+// a broken destination can be repaired from the admin in seconds instead of
+// needing a redeploy. That was the other half of the incident: the URL could
+// not be changed without shipping.
+//
+// The webhook path is kept, unchanged, for anyone already using it.
+// ---------------------------------------------------------------------------
+
+describe("sending through Pushover directly", () => {
+  beforeEach(() => {
+    control.notifications = { pushover_token: "app-token", pushover_user_key: "user-key" };
+  });
+
+  it("posts the order to Pushover's API rather than a webhook", async () => {
+    await expect(sendOrderPushNotification("ord_a1b2c3d4")).resolves.toEqual({ sent: true });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("https://api.pushover.net/1/messages.json");
+    const body = new URLSearchParams(String((init as { body?: string }).body));
+    expect(body.get("token")).toBe("app-token");
+    expect(body.get("user")).toBe("user-key");
+  });
+
+  it("carries the same four facts the webhook payload carries", async () => {
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    const body = new URLSearchParams(String((fetchMock.mock.calls[0][1] as { body?: string }).body));
+    expect(body.get("title")).toContain("VL-1042");
+    expect(body.get("message")).toContain("Jordan Mitchell");
+    expect(body.get("message")).toContain("$89.00");
+    expect(body.get("url")).toBe("https://vantalabs.com/admin/orders/ord_a1b2c3d4");
+  });
+
+  it("wins over a configured webhook, because it is the shorter path", async () => {
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.example.com/catch/1/abc");
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(String(fetchMock.mock.calls[0][0])).toContain("api.pushover.net");
+  });
+
+  it("still raises the missed-order critical when Pushover refuses", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 400 });
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(alerts.find((a) => a.type === "order_notification_missed")).toMatchObject({ severity: "critical" });
+  });
+
+  it("falls back to the webhook when only one of the two keys is set", async () => {
+    // A half-filled credential pair is a configuration mistake, not a
+    // destination. Guessing would send to nowhere and report success.
+    control.notifications = { pushover_token: "app-token" };
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.example.com/catch/1/abc");
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(String(fetchMock.mock.calls[0][0])).toContain("hooks.example.com");
+  });
+
+  it("never lets a settings read failure stop an order going out", async () => {
+    controlThrows = true;
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.example.com/catch/1/abc");
+    await expect(sendOrderPushNotification("ord_a1b2c3d4")).resolves.toEqual({ sent: true });
+    expect(String(fetchMock.mock.calls[0][0])).toContain("hooks.example.com");
+  });
+});
+
+describe("the webhook URL can be changed without a deploy", () => {
+  it("prefers the Control Center URL over the environment variable", async () => {
+    // The incident's second half: the dead URL lived in an env var, so fixing
+    // it needed a redeploy. From the admin it is a ten-second edit.
+    control.notifications = { order_push_webhook_url: "https://hooks.example.com/catch/NEW/xyz" };
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.example.com/catch/OLD/abc");
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/catch/NEW/xyz");
+  });
+
+  it("still uses the environment variable when nothing is configured in the admin", async () => {
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.example.com/catch/1/abc");
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(String(fetchMock.mock.calls[0][0])).toContain("hooks.example.com/catch/1/abc");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE DESTINATION MUST NOT BE ABLE TO DIE QUIETLY.
+//
+// The incident was not that a webhook broke. Webhooks break. It was that it
+// broke SILENTLY: the hook had been dead for some unknown stretch, nothing said
+// so, and the first evidence was a paid order nobody was told about.
+//
+// So the destination is checked on a schedule rather than only at the moment an
+// order needs it. Pushover's users/validate.json confirms a token and user key
+// are still good WITHOUT sending a notification, which is what makes a routine
+// check possible at all — a health check that pushed to the owner's phone every
+// day would be turned off within a week.
+//
+// The webhook path deliberately reports "cannot verify" instead of guessing.
+// There is no way to ping a Zapier Catch Hook that is not indistinguishable
+// from a fake order, and saying "healthy" on the strength of no evidence is the
+// failure this whole exercise is about.
+// ---------------------------------------------------------------------------
+
+describe("checking the destination is still alive", () => {
+  it("reports healthy when Pushover accepts the credentials", async () => {
+    control.notifications = { pushover_token: "app-token", pushover_user_key: "user-key" };
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 1 }) });
+
+    await expect(verifyPushDestination()).resolves.toMatchObject({ kind: "pushover", healthy: true });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("https://api.pushover.net/1/users/validate.json");
+    const body = new URLSearchParams(String((init as { body?: string }).body));
+    expect(body.get("token")).toBe("app-token");
+    expect(body.get("user")).toBe("user-key");
+  });
+
+  it("sends no notification while checking", async () => {
+    // The property that lets this run daily without being switched off.
+    control.notifications = { pushover_token: "app-token", pushover_user_key: "user-key" };
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 1 }) });
+    await verifyPushDestination();
+    for (const [url] of fetchMock.mock.calls) {
+      expect(String(url)).not.toContain("/messages.json");
+    }
+  });
+
+  it("reports unhealthy when Pushover rejects the credentials", async () => {
+    // A revoked token or a deleted Pushover app: exactly the shape of the
+    // failure that cost an order, caught before an order needs it.
+    control.notifications = { pushover_token: "stale", pushover_user_key: "stale" };
+    fetchMock.mockResolvedValue({ ok: false, status: 400, json: async () => ({ status: 0, errors: ["user key is invalid"] }) });
+
+    const result = await verifyPushDestination();
+    expect(result).toMatchObject({ kind: "pushover", healthy: false });
+    expect(result.detail).toContain("invalid");
+  });
+
+  it("treats an unreachable Pushover as unhealthy rather than assuming the best", async () => {
+    control.notifications = { pushover_token: "t", pushover_user_key: "u" };
+    fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+    await expect(verifyPushDestination()).resolves.toMatchObject({ healthy: false });
+  });
+
+  it("says a webhook CANNOT be verified rather than calling it healthy", async () => {
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.example.com/catch/1/abc");
+    const result = await verifyPushDestination();
+    expect(result).toMatchObject({ kind: "webhook", healthy: null });
+    expect(result.detail).toMatch(/cannot be checked|without sending/i);
+    // And it must not have poked the hook to find out.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports nothing configured as unhealthy, because no order can be announced", async () => {
+    // The shared beforeEach stubs a webhook URL; this case is specifically the
+    // store with no destination at all, so it clears it.
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "");
+    const result = await verifyPushDestination();
+    expect(result).toMatchObject({ kind: "none", healthy: false });
+  });
+});
+
+describe("the scheduled health check", () => {
+  it("raises a critical when the destination has gone bad", async () => {
+    control.notifications = { pushover_token: "stale", pushover_user_key: "stale" };
+    fetchMock.mockResolvedValue({ ok: false, status: 400, json: async () => ({ status: 0, errors: ["invalid"] }) });
+
+    const result = await runOrderPushHealthCheck();
+
+    expect(result.healthy).toBe(false);
+    expect(alerts.find((a) => a.type === "order_push_destination_unhealthy")).toMatchObject({ severity: "critical" });
+  });
+
+  it("nags once a day, not once a sweep", async () => {
+    // This runs on the same cron as everything else. Without a window it would
+    // write one identical alert every sweep and bury the status page.
+    control.notifications = { pushover_token: "stale", pushover_user_key: "stale" };
+    fetchMock.mockResolvedValue({ ok: false, status: 400, json: async () => ({ status: 0, errors: ["invalid"] }) });
+    await runOrderPushHealthCheck();
+    expect(alerts.find((a) => a.type === "order_push_destination_unhealthy")?.dedupeWindowMs).toBe(24 * 60 * 60 * 1000);
+  });
+
+  it("stays silent when the destination is healthy", async () => {
+    control.notifications = { pushover_token: "good", pushover_user_key: "good" };
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 1 }) });
+    await runOrderPushHealthCheck();
+    expect(alerts).toEqual([]);
+  });
+
+  it("stays silent on a webhook it cannot check, rather than crying wolf daily", async () => {
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.example.com/catch/1/abc");
+    await runOrderPushHealthCheck();
+    expect(alerts.find((a) => a.type === "order_push_destination_unhealthy")).toBeUndefined();
+  });
+
+  it("never throws — it runs beside ten other cron jobs", async () => {
+    controlThrows = true;
+    await expect(runOrderPushHealthCheck()).resolves.toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// "SEND TEST NOTIFICATION" — the button beside the fields in the Control Center.
+//
+// The scheduled check above answers "are the credentials still valid". It
+// cannot answer the question the owner actually asks after pasting a token in:
+// does a notification reach MY PHONE. Only a real delivery answers that, and
+// nobody should have to place a real order to find out.
+//
+// So this is the one path that deliberately pushes on demand. Two properties
+// keep it honest: the message says plainly that it is a test, and a failure is
+// reported to the person who clicked rather than raised as a missed order.
+// ---------------------------------------------------------------------------
+
+describe("sending a test notification on demand", () => {
+  it("delivers through Pushover using the same message endpoint a real order does", async () => {
+    control.notifications = { pushover_token: "app-token", pushover_user_key: "user-key" };
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await expect(sendTestPushNotification()).resolves.toEqual({ sent: true, kind: "pushover" });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("https://api.pushover.net/1/messages.json");
+    const body = new URLSearchParams(String((init as { body?: string }).body));
+    expect(body.get("token")).toBe("app-token");
+    expect(body.get("user")).toBe("user-key");
+    expect(body.get("title")).toMatch(/test/i);
+  });
+
+  it("says it is a test, so it can never be mistaken for money that came in", async () => {
+    control.notifications = { pushover_token: "t", pushover_user_key: "u" };
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await sendTestPushNotification();
+
+    const body = new URLSearchParams(String((fetchMock.mock.calls[0][1] as { body?: string }).body));
+    expect(body.get("title")).not.toMatch(/new order/i);
+    expect(body.get("message")).toMatch(/test/i);
+  });
+
+  it("goes to the webhook when that is what is configured", async () => {
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.example.com/catch/1/abc");
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await expect(sendTestPushNotification()).resolves.toEqual({ sent: true, kind: "webhook" });
+    expect(String(fetchMock.mock.calls[0][0])).toBe("https://hooks.example.com/catch/1/abc");
+  });
+
+  it("hands the failure back to whoever pressed the button", async () => {
+    control.notifications = { pushover_token: "stale", pushover_user_key: "stale" };
+    fetchMock.mockResolvedValue({ ok: false, status: 400 });
+
+    const result = await sendTestPushNotification();
+    expect(result.sent).toBe(false);
+    expect(result.detail).toContain("400");
+  });
+
+  // A test that fails is a person standing at the screen, not a lost order.
+  // Raising order_notification_missed here would put a critical — and an email
+  // — on the operator's own experiment, which is how alerting becomes noise.
+  it("raises no alert when the test fails, because nobody lost an order", async () => {
+    control.notifications = { pushover_token: "stale", pushover_user_key: "stale" };
+    fetchMock.mockResolvedValue({ ok: false, status: 400 });
+
+    await sendTestPushNotification();
+    expect(alerts).toEqual([]);
+  });
+
+  it("survives an unreachable destination without throwing at the route", async () => {
+    control.notifications = { pushover_token: "t", pushover_user_key: "u" };
+    fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+
+    const result = await sendTestPushNotification();
+    expect(result).toMatchObject({ sent: false, kind: "pushover" });
+    expect(result.detail).toContain("fetch failed");
+  });
+
+  it("explains that nothing is configured rather than reporting a mystery failure", async () => {
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "");
+    const result = await sendTestPushNotification();
+    expect(result).toMatchObject({ sent: false, kind: "none" });
+    expect(result.detail).toMatch(/not configured|no push destination/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses an http:// webhook here too, so the test cannot pass a URL an order would refuse", async () => {
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "http://hooks.example.com/catch/1/abc");
+    const result = await sendTestPushNotification();
+    expect(result.sent).toBe(false);
+    expect(result.detail).toMatch(/https/i);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

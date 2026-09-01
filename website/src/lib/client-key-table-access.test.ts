@@ -155,18 +155,27 @@ describe("tables the publishable key can no longer reach", () => {
     expect(POLICYLESS_RLS_TABLES).toHaveLength(36);
   });
 
-  it("ambassadors stays readable from the browser, and unwritable", () => {
-    // referral-client.ts falls back to a narrow browser read when the
-    // validate_referral_code RPC is missing, and throws on any error — which is
-    // why the SELECT grant was kept. A write from the same client would 42501.
+  it("NOTHING in the browser reads the ambassadors table any more", () => {
+    // This used to allow exactly one reader. referral-client.ts fell back to a
+    // narrow browser read when the validate_referral_code RPC was missing, and
+    // that lone fallback was the entire reason the client-key SELECT grant on
+    // `ambassadors` was kept.
+    //
+    // Referral validation now goes through /api/catalog/referral/validate,
+    // which reads with the service role behind the rate limiter, so the
+    // fallback is gone and with it the last browser-side reader. The grant it
+    // was protecting can therefore be revoked — see
+    // src/lib/sql/AFTER-DEPLOY-referral-validation-lockdown.sql, which must be
+    // run only once the route is live.
     const readers = browserFiles.filter((file) => file.text.includes('.from("ambassadors")'));
+    expect(readers.map((file) => file.path)).toEqual([]);
+  });
 
-    expect(readers.map((file) => file.path)).toEqual(["src/lib/referral-client.ts"]);
-
-    for (const file of readers) {
-      const writes = file.text.match(/\.from\("ambassadors"\)\s*\n?\s*\.(insert|update|upsert|delete)\b/g);
-      expect(writes).toBeNull();
-    }
+  it("the browser does not call the referral RPC directly either", () => {
+    // The other half of the same move: a PostgREST RPC bypasses the
+    // application's rate limiter, and referral codes are short enough to sweep.
+    const callers = browserFiles.filter((file) => file.text.includes("validate_referral_code"));
+    expect(callers.map((file) => file.path)).toEqual([]);
   });
 });
 
