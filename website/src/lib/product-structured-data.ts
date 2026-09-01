@@ -35,6 +35,7 @@
 // decision rather than an oversight.
 // ---------------------------------------------------------------------------
 
+import { breadcrumbList as crumbsToSchema } from "@/lib/breadcrumbs";
 import type { Product, ProductDose } from "@/lib/catalog-types";
 import type { ShippingConfig } from "@/lib/shipping";
 
@@ -187,13 +188,9 @@ export function buildOffers({
 
 /** Home › Products › <product>, using real crawlable URLs at every level. */
 export function breadcrumbList({ product, siteUrl }: { product: Product; siteUrl: string }) {
-  return {
-    "@context": "https://schema.org/",
-    "@type": "BreadcrumbList",
-    itemListElement: [
-      { "@type": "ListItem", position: 1, name: "Home", item: `${siteUrl}/` },
-      { "@type": "ListItem", position: 2, name: "Products", item: `${siteUrl}/products` },
-      { "@type": "ListItem", position: 3, name: product.name, item: `${siteUrl}/products/${product.slug}` },
-    ],
-  };
+  return crumbsToSchema([
+    { name: "Home", url: `${siteUrl}/` },
+    { name: "Products", url: `${siteUrl}/products` },
+    { name: product.name, url: `${siteUrl}/products/${product.slug}` },
+  ]);
 }
