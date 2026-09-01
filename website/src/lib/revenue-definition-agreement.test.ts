@@ -157,7 +157,11 @@ beforeEach(() => {
     { order_id: "o-partial", product_id: "bpc-157", quantity: 1 },
     { order_id: "o-replacement", product_id: "tb-500", quantity: 5 },
   ];
-  tables.email_campaigns = [{ id: "campaign-1", name: "C", status: "sent", subject: "s" }];
+  // audience_kind is NOT NULL DEFAULT 'customer' in the schema, so a real row
+  // always carries it — and getEmailDashboard filters on it to keep affiliate
+  // broadcasts out of the customer campaign report. The fixture models the
+  // column rather than relying on its absence.
+  tables.email_campaigns = [{ id: "campaign-1", name: "C", status: "sent", subject: "s", audience_kind: "customer" }];
   tables.email_sends = [];
 });
 

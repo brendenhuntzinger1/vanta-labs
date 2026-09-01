@@ -83,6 +83,56 @@ const OPS = [
  * catastrophic-looking leak. A test rig that quietly widens a query is worse
  * than one that cannot run it.
  */
+
+// ---------------------------------------------------------------------------
+// JSON COLUMNS MUST BE SENT AS JSON TEXT, NOT AS A JS VALUE.
+//
+// node-postgres serialises a JS array as a POSTGRES ARRAY LITERAL ({a,b}), which
+// is right for uuid[]/text[] and wrong for jsonb: `[{"label":"A"}]` arrives as
+// `{"{\"label\":\"A\"}"}` and Postgres rejects it with
+// 22P02 "invalid input syntax for type json".
+//
+// Real PostgREST does not have this problem — it knows each column's type and
+// binds accordingly — so without this the harness FABRICATES a failure that
+// production does not have, which is the exact class of false positive the
+// browser-testing runbook warns about. A campaign carrying jsonb (affiliate
+// link buttons, per-recipient merge context) could not be saved here while
+// being perfectly valid against Supabase.
+//
+// So the shim now looks up real column types, once per table, and stringifies
+// only the values bound to json/jsonb columns. Array columns are untouched and
+// keep node-postgres's own (correct) handling.
+// ---------------------------------------------------------------------------
+const jsonColumnCache = new Map();
+
+async function jsonColumnsFor(tableName) {
+  const key = String(tableName).replace(/"/g, "");
+  if (jsonColumnCache.has(key)) return jsonColumnCache.get(key);
+  let columns = new Set();
+  try {
+    const { rows } = await pool.query(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = $1 and udt_name in ('json','jsonb')`,
+      [key],
+    );
+    columns = new Set(rows.map((r) => r.column_name));
+  } catch {
+    // A lookup failure must not break the request; binding as before is the
+    // status quo, not a regression.
+  }
+  jsonColumnCache.set(key, columns);
+  return columns;
+}
+
+/** Bind one value, encoding it as JSON text when its column is json/jsonb. */
+function bindValue(value, column, jsonColumns) {
+  if (value === undefined) return null;
+  if (value === null) return null;
+  if (!jsonColumns.has(column)) return value;
+  // Already a string? Trust it — the caller has encoded it themselves.
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
 function splitGroup(body) {
   const parts = [];
   let depth = 0, current = "";
@@ -481,9 +531,10 @@ const server = http.createServer(async (req, res) => {
       const cols = declared && declared.length
         ? declared
         : [...new Set(rowsIn.flatMap((r) => Object.keys(r)))];
+      const jsonColumns = await jsonColumnsFor(tableName);
       const values = [];
       const tuples = rowsIn.map((r) => `(${cols.map((c) => {
-        values.push(r[c] === undefined ? null : r[c]);
+        values.push(bindValue(r[c], c, jsonColumns));
         return `$${values.length}`;
       }).join(", ")})`);
 
@@ -512,7 +563,10 @@ const server = http.createServer(async (req, res) => {
       if (!cols.length) return send(res, 400, { message: "empty patch" });
 
       // Filter placeholders were numbered from $1; re-number SET ahead of them.
-      const setValues = cols.map((c) => body[c]);
+      // Same json/jsonb binding as INSERT — an UPDATE that writes a jsonb column
+      // hits exactly the same 22P02 without it.
+      const patchJsonColumns = await jsonColumnsFor(tableName);
+      const setValues = cols.map((c) => bindValue(body[c], c, patchJsonColumns));
       const setSql = cols.map((c, i) => `${ident(c)} = $${i + 1}`).join(", ");
       const shifted = q.where.replace(/\$(\d+)/g, (_, n) => `$${Number(n) + cols.length}`);
 
