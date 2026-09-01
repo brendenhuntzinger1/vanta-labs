@@ -10,6 +10,9 @@ import { getPublishedCoaDocumentsForProduct } from "@/lib/coa";
 import { getStorefrontCoupon } from "@/lib/coupons";
 import { isBacWater, resolveBacWaterProduct } from "@/lib/bac-water";
 import { BRAND_SHORT_NAME, organizationId, siteUrl } from "@/lib/site-identity";
+import { getShippingConfig } from "@/lib/admin-control";
+import { DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
+import { breadcrumbList, buildOffers, priceToNumber } from "@/lib/product-structured-data";
 
 export const dynamic = "force-dynamic";
 
@@ -104,9 +107,18 @@ export default async function ProductDetailPage({
     ? null
     : await resolveBacWaterProduct(getCatalogProductBySlug).catch(() => null);
 
-  // Product structured data for rich results (price / availability). Server-
-  // controlled data only; escaped so it can never break out of the script tag.
-  const priceNumber = Number((product.price ?? "").replace(/[^0-9.]/g, "")) || undefined;
+  // Product structured data for rich results (price / availability / shipping /
+  // returns). Server-controlled data only; escaped so it can never break out of
+  // the script tag. The offer shapes live in product-structured-data.ts, under
+  // test — see that module's header for why each field is there, and why
+  // aggregateRating deliberately is not.
+  //
+  // Shipping comes from the LIVE admin config rather than the coded defaults:
+  // an admin edits these in Control Center, and structured data quoting a
+  // stale constant would advertise a rate checkout does not charge.
+  const shippingConfig = await getShippingConfig().catch(() => DEFAULT_SHIPPING_CONFIG);
+  const priceNumber = priceToNumber(product.price);
+  const productUrl = `${SITE_URL}/products/${product.slug}`;
   const productLd = {
     "@context": "https://schema.org/",
     "@type": "Product",
@@ -128,30 +140,29 @@ export default async function ProductDetailPage({
     // reference so the node is still self-describing if the graph is read in
     // isolation, and it now comes from the shared constant so it cannot drift.
     brand: { "@type": "Brand", "@id": organizationId(), name: BRAND_SHORT_NAME },
-    offers: priceNumber
-      ? {
-          "@type": "Offer",
-          priceCurrency: "USD",
-          price: priceNumber,
-          // Only assert InStock for an explicit In Stock status — map anything
-          // else (Out of Stock, Backorder, Low, unknown) to a non-InStock value
-          // so JSON-LD never over-claims availability to search engines.
-          availability:
-            product.stockStatus === "In Stock"
-              ? "https://schema.org/InStock"
-              : product.stockStatus === "Out of Stock"
-                ? "https://schema.org/OutOfStock"
-                : "https://schema.org/LimitedAvailability",
-          url: `${SITE_URL}/products/${product.slug}`,
-        }
-      : undefined,
+    // A merchant-specific identifier Google can use to match this product
+    // across surfaces. The slug is the real one this site keys on, and it is
+    // stable — no value is invented here.
+    sku: product.slug,
+    // One Offer per purchasable dose. The previous single Offer quoted only the
+    // DEFAULT dose's price, so a product selling 5mg at $39.99 and 10mg at
+    // $49.99 told Google it cost a flat $39.99 — a merchant listing that
+    // disagrees with its own landing page.
+    offers: buildOffers({ product, url: productUrl, shipping: shippingConfig }),
   };
+
+  // Renders "Home › Products › BPC-157" in place of a bare URL in results.
+  const breadcrumbLd = breadcrumbList({ product, siteUrl: SITE_URL });
 
   return (
     <>
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(productLd).replace(/</g, "\\u003c") }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbLd).replace(/</g, "\\u003c") }}
       />
       {/* Measurement only. Rendered alongside the product UI rather than inside
           it, so the shopping component stays untouched. `priceNumber` is the
