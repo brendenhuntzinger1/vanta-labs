@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { businessDayKey } from "@/lib/business-day";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageRefunds } from "@/lib/admin-roles";
 // Partner name, email and referral code come from the PUBLIC application form.
@@ -43,7 +44,7 @@ export async function GET(request: Request) {
 
     for (const row of rows) {
       lines.push([
-        csvSafeCell(new Date(row.createdAt).toISOString().slice(0, 10)),
+        csvSafeCell(businessDayKey(new Date(row.createdAt))),
         csvSafeCell(row.ambassadorName),
         row.amount.toFixed(2),
         csvSafeCell(row.note ?? ""),
@@ -54,7 +55,7 @@ export async function GET(request: Request) {
       status: 200,
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="payout-history-${new Date().toISOString().slice(0, 10)}.csv"`,
+        "Content-Disposition": `attachment; filename="payout-history-${businessDayKey(new Date())}.csv"`,
       },
     });
   } catch (error) {

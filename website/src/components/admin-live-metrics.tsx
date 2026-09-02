@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { businessDayKey } from "@/lib/business-day";
 
 type RevenueMetrics = {
   today: number;
@@ -28,7 +29,9 @@ function isoDateInput(value: string) {
   if (!Number.isFinite(parsed)) {
     return "";
   }
-  return new Date(parsed).toISOString().slice(0, 10);
+  // The store's calendar date, so the picker opens on the day the range
+  // actually covers. The UTC slice showed tomorrow's date all evening.
+  return businessDayKey(new Date(parsed));
 }
 
 function money(value: number) {

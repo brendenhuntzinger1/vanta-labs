@@ -1,7 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { startOfBusinessDay, startOfBusinessMonth, startOfBusinessWeek, startOfBusinessYear } from "@/lib/business-day";
+import { businessDayKey, startOfBusinessDay, startOfBusinessMonth, startOfBusinessWeek, startOfBusinessYear } from "@/lib/business-day";
 import { getProfitSettings, type ProfitSettingsConfig } from "@/lib/admin-control";
 import { computeOrderProfit, marginPercentOf, type OrderProfitLine, type OrderProfitResult } from "@/lib/order-profit";
 import { hasCapturedPayment, isEarnedCommission, isSaleOrder } from "@/lib/ledger";
@@ -649,7 +649,9 @@ export async function getProfitTrend(fromIso: string, toIso: string): Promise<Pr
   for (const row of rows) {
     const eventTime = Date.parse(row.paidAt ?? row.createdAt ?? "");
     if (!Number.isFinite(eventTime)) continue;
-    const day = new Date(eventTime).toISOString().slice(0, 10);
+    // The store's day, like every window above — otherwise this trend's last
+    // point and the "today" tile beside it describe different orders.
+    const day = businessDayKey(new Date(eventTime));
     byDay.set(day, (byDay.get(day) ?? 0) + row.profit);
   }
 

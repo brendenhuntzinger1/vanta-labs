@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   BUSINESS_TIME_ZONE,
+  businessCalendarDate,
+  businessHour,
+  endOfBusinessDay,
+  startOfBusinessDate,
   startOfBusinessDay,
   startOfBusinessDayIso,
   startOfBusinessMonth,
@@ -100,6 +104,30 @@ describe("startOfBusinessWeek and startOfBusinessYear", () => {
   });
 });
 
+describe("startOfBusinessDate, businessCalendarDate, businessHour, endOfBusinessDay", () => {
+  it("resolves a plain calendar date to the store's midnight", () => {
+    // Used by the sales-tax filing year and the custom range picker, both of
+    // which are handed bare `YYYY-MM-DD` values with no zone of their own.
+    expect(startOfBusinessDate(2026, 1, 1).toISOString()).toBe("2026-01-01T05:00:00.000Z");
+    expect(startOfBusinessDate(2026, 7, 4).toISOString()).toBe("2026-07-04T04:00:00.000Z");
+    // Overflowing day and month normalise, so "the day after the 31st" works.
+    expect(startOfBusinessDate(2026, 8, 32).toISOString()).toBe("2026-09-01T04:00:00.000Z");
+    expect(startOfBusinessDate(2026, 13, 1).toISOString()).toBe("2027-01-01T05:00:00.000Z");
+  });
+
+  it("reads the store's calendar date and hour, not the server's", () => {
+    // 00:25Z on Sep 2 is 8:25pm ET on Sep 1 — an evening, not a small hour.
+    expect(businessCalendarDate(REPORTED_AT)).toEqual({ year: 2026, month: 9, day: 1 });
+    expect(businessHour(REPORTED_AT)).toBe(20);
+    expect(businessHour(new Date("2026-09-01T11:00:00Z"))).toBe(7);
+  });
+
+  it("ends the business day one millisecond before the next one starts", () => {
+    expect(endOfBusinessDay(REPORTED_AT).toISOString()).toBe("2026-09-02T03:59:59.999Z");
+    expect(endOfBusinessDay(REPORTED_AT).getTime() + 1).toBe(startOfBusinessDay(REPORTED_AT, 1).getTime());
+  });
+});
+
 describe("the business zone is the one the admin already reads dates in", () => {
   it("is America/New_York, same as format-date's display zone", () => {
     expect(BUSINESS_TIME_ZONE).toBe("America/New_York");
@@ -115,17 +143,55 @@ describe("the business zone is the one the admin already reads dates in", () => 
 // guarded against is one file quietly going back to Date.UTC.
 // ---------------------------------------------------------------------------
 
-/** Each surface, and the helper every one of its windows must come from. */
-const SURFACES: Array<{ path: string; helpers: string[] }> = [
-  // /admin/partners "Sales today / Sales this month", and the ambassador
-  // dashboard's "This month" commissions.
-  { path: "src/lib/partner-portal.ts", helpers: ["startOfBusinessDayIso(", "startOfBusinessMonthIso(", "startOfBusinessMonth("] },
-  // /admin/revenue "today".
+/**
+ * Each surface, the helper its windows must come from, and the UTC shape that
+ * must not come back. `banned` defaults to the two day-start shapes; a file
+ * with its own way of cutting the day names its own.
+ */
+const SURFACES: Array<{ path: string; helpers: string[]; banned?: RegExp[] }> = [
+  // --- displayed windows ---------------------------------------------------
+  // /admin/partners "Sales today / Sales this month", the ambassador dashboard's
+  // "This month" commissions, and that page's month/day chart keys.
+  { path: "src/lib/partner-portal.ts", helpers: ["startOfBusinessDayIso(", "startOfBusinessMonthIso(", "startOfBusinessMonth(", "businessMonthKey("] },
+  // /admin/revenue today.
   { path: "src/lib/admin-revenue.ts", helpers: ["startOfBusinessDayIso("] },
-  // /admin/profit today / yesterday / week / month / year.
-  { path: "src/lib/admin-profit.ts", helpers: ["startOfBusinessDay(", "startOfBusinessWeek(", "startOfBusinessMonth(", "startOfBusinessYear("] },
-  // The analytics dashboard's day figures.
-  { path: "src/lib/admin-analytics.ts", helpers: ["startOfBusinessDayIso("] },
+  // /admin/profit today / yesterday / week / month / year, and its daily trend.
+  { path: "src/lib/admin-profit.ts", helpers: ["startOfBusinessDay(", "startOfBusinessWeek(", "startOfBusinessMonth(", "startOfBusinessYear(", "businessDayKey("] },
+  // The analytics day figures and the revenue trend's buckets.
+  { path: "src/lib/admin-analytics.ts", helpers: ["startOfBusinessDayIso(", "businessDayKey("] },
+  // The range the analytics dashboard asks for, presets and custom alike.
+  {
+    path: "src/app/api/admin/metrics/route.ts",
+    helpers: ["startOfBusinessDay(", "endOfBusinessDay(", "startOfBusinessDate("],
+    banned: [/setUTCHours\(/, /T00:00:00\.000Z`/],
+  },
+  // The dates the picker itself displays.
+  { path: "src/components/admin-live-metrics.tsx", helpers: ["businessDayKey("] },
+
+  // --- rules, not displays -------------------------------------------------
+  // Which month an ambassador's sale counts toward for her tier.
+  { path: "src/lib/ambassador-commission.ts", helpers: ["startOfBusinessMonth("] },
+  // The store-credit grant period: dedupe key and spendable window together.
+  { path: "src/lib/store-credit.ts", helpers: ["businessMonthKey(", "startOfBusinessMonthIso("] },
+  // Whose birthday it is today.
+  {
+    path: "src/lib/membership.ts",
+    helpers: ["businessCalendarDate("],
+    banned: [/today\.getUTC(Month|Date|FullYear)\(\)/],
+  },
+  // Which year a taxed sale is filed in.
+  { path: "src/lib/admin-tax-report.ts", helpers: ["startOfBusinessDate("] },
+  // The label an operator reads off a packing batch.
+  { path: "src/lib/fulfillment-batches.ts", helpers: ["businessDayKey(", "businessHour("], banned: [/getUTCHours\(\)/] },
+  // The window TikTok reports against.
+  { path: "src/app/api/ads/campaigns/route.ts", helpers: ["businessDayKey("] },
+];
+
+/** Both shapes cut the day at midnight UTC, which is 8pm ET. */
+const DEFAULT_BANNED = [
+  /Date\.UTC\(\s*\w+\.getUTCFullYear\(\),\s*\w+\.getUTCMonth\(\),\s*\w+\.getUTCDate\(\)\s*\)/,
+  /setUTCHours\(0,\s*0,\s*0,\s*0\)/,
+  /toISOString\(\)\.slice\(0,\s*10\)/,
 ];
 
 function code(path: string): string {
@@ -138,8 +204,8 @@ function code(path: string): string {
     .join("\n");
 }
 
-describe("no admin metric window is cut at midnight UTC", () => {
-  for (const { path, helpers } of SURFACES) {
+describe("no store figure is cut at midnight UTC", () => {
+  for (const { path, helpers, banned } of SURFACES) {
     it(`${path} takes every window from business-day.ts`, () => {
       const src = code(path);
       expect(src).toMatch(/from "@\/lib\/business-day"/);
@@ -148,15 +214,12 @@ describe("no admin metric window is cut at midnight UTC", () => {
       }
     });
 
-    it(`${path} builds no day start out of the UTC accessors`, () => {
-      // The defect, stated as source. Both shapes cut the day at midnight UTC,
-      // which is the 8pm ET rollover that emptied the "today" tile every
-      // evening. A `Date.UTC(y, m, 1)` elsewhere is fine — chart labels are
-      // synthesised from month KEYS, not from a window boundary.
-      expect(code(path)).not.toMatch(
-        /Date\.UTC\(\s*\w+\.getUTCFullYear\(\),\s*\w+\.getUTCMonth\(\),\s*\w+\.getUTCDate\(\)\s*\)/,
-      );
-      expect(code(path)).not.toMatch(/setUTCHours\(0,\s*0,\s*0,\s*0\)/);
+    it(`${path} carries none of the UTC day shapes`, () => {
+      // A `Date.UTC(y, m, 1)` elsewhere is fine — chart labels are synthesised
+      // from month KEYS, not from a boundary.
+      for (const pattern of [...DEFAULT_BANNED, ...(banned ?? [])]) {
+        expect(code(path), `${path} still matches ${pattern}`).not.toMatch(pattern);
+      }
     });
   }
 });

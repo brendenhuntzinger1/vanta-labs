@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { businessDayKey } from "@/lib/business-day";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageSettings, canViewProfit } from "@/lib/admin-roles";
 import { supabaseAdmin } from "@/lib/supabase-server";
@@ -169,7 +170,7 @@ export async function GET(request: Request) {
     status: 200,
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename=orders-export-${new Date().toISOString().slice(0, 10)}.csv`,
+      "Content-Disposition": `attachment; filename=orders-export-${businessDayKey(new Date())}.csv`,
     },
   });
 }

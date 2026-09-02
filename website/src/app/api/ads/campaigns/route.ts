@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { businessDayKey } from "@/lib/business-day";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { fetchCampaignPerformance, readAdsCredentials, writesEnabled } from "@/lib/ads/tiktok-ads-api";
 
@@ -37,7 +38,10 @@ export async function GET(request: Request) {
   const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days") ?? 30)));
   const until = new Date();
   const since = new Date(until.getTime() - (days - 1) * 86_400_000);
-  const iso = (date: Date) => date.toISOString().slice(0, 10);
+  // TikTok reports on the advertiser's calendar, and ads/ingestion.ts already
+  // records America/New_York as this account's source timezone. Asking for UTC
+  // dates shifted the window a day at both ends every evening.
+  const iso = (date: Date) => businessDayKey(date);
 
   const result = await fetchCampaignPerformance({ credentials, since: iso(since), until: iso(until) });
 

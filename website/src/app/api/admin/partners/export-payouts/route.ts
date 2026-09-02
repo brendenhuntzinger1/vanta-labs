@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { businessDayKey } from "@/lib/business-day";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageRefunds } from "@/lib/admin-roles";
 // Partner name, email and referral code come from the PUBLIC application form.
@@ -60,7 +61,7 @@ export async function GET(request: Request) {
       status: 200,
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="partner-payouts-${new Date().toISOString().slice(0, 10)}.csv"`,
+        "Content-Disposition": `attachment; filename="partner-payouts-${businessDayKey(new Date())}.csv"`,
       },
     });
   } catch (error) {

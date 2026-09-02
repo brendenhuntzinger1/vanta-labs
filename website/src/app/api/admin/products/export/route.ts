@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { businessDayKey } from "@/lib/business-day";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageProducts } from "@/lib/admin-roles";
 import { exportProductsCsv } from "@/lib/admin-products-csv";
@@ -19,7 +20,7 @@ export async function GET(request: Request) {
       status: 200,
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename=products-export-${new Date().toISOString().slice(0, 10)}.csv`,
+        "Content-Disposition": `attachment; filename=products-export-${businessDayKey(new Date())}.csv`,
       },
     });
   } catch (error) {

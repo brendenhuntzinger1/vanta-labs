@@ -66,8 +66,11 @@ function offsetMs(instant: Date): number {
   return wallClockAsUtc - Math.floor(instant.getTime() / 1000) * 1000;
 }
 
-/** The instant at which the business zone's clock reads midnight on y-m-d. */
-function midnight(year: number, month: number, day: number): Date {
+/**
+ * The instant at which the business zone's clock reads midnight on y-m-d.
+ * `month` is 1-based, like every other date in this file.
+ */
+export function startOfBusinessDate(year: number, month: number, day: number): Date {
   const wallClock = Date.UTC(year, month - 1, day);
   // Two passes. The first offset is read at an instant that can sit on the far
   // side of a DST change from the answer; re-reading it at the corrected
@@ -78,24 +81,40 @@ function midnight(year: number, month: number, day: number): Date {
   return new Date(wallClock - offsetMs(new Date(firstPass)));
 }
 
+/** The calendar date the business zone is on at `instant`; `month` is 1-based. */
+export function businessCalendarDate(instant: Date = new Date()): { year: number; month: number; day: number } {
+  const { year, month, day } = civil(instant);
+  return { year, month, day };
+}
+
+/** The hour the business zone's clock reads at `instant`, 0-23. */
+export function businessHour(instant: Date = new Date()): number {
+  return civil(instant).hour;
+}
+
+/** The last millisecond of `now`'s business day, offset by whole calendar days. */
+export function endOfBusinessDay(now: Date = new Date(), dayOffset = 0): Date {
+  return new Date(startOfBusinessDay(now, dayOffset + 1).getTime() - 1);
+}
+
 /** Local midnight of `now`'s business day, offset by whole calendar days. */
 export function startOfBusinessDay(now: Date = new Date(), dayOffset = 0): Date {
   const c = civil(now);
   // Shifted as a calendar date, not by 86_400_000ms, so "yesterday" is still
   // yesterday on the 23- and 25-hour days either side of a DST change.
   const shifted = new Date(Date.UTC(c.year, c.month - 1, c.day + dayOffset));
-  return midnight(shifted.getUTCFullYear(), shifted.getUTCMonth() + 1, shifted.getUTCDate());
+  return startOfBusinessDate(shifted.getUTCFullYear(), shifted.getUTCMonth() + 1, shifted.getUTCDate());
 }
 
 /** Local midnight on the 1st of `now`'s business month. */
 export function startOfBusinessMonth(now: Date = new Date()): Date {
   const { year, month } = civil(now);
-  return midnight(year, month, 1);
+  return startOfBusinessDate(year, month, 1);
 }
 
 /** Local midnight on January 1st of `now`'s business year. */
 export function startOfBusinessYear(now: Date = new Date()): Date {
-  return midnight(civil(now).year, 1, 1);
+  return startOfBusinessDate(civil(now).year, 1, 1);
 }
 
 /** Local midnight on Monday of `now`'s business week (ISO weeks). */

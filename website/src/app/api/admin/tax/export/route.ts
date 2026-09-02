@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { businessDayKey } from "@/lib/business-day";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canViewProfit } from "@/lib/admin-roles";
 import { getSalesTaxReport } from "@/lib/admin-tax-report";
@@ -47,7 +48,7 @@ export async function GET(request: Request) {
   for (const r of report.rows) {
     lines.push([
       r.orderNumber,
-      r.createdAt ? new Date(r.createdAt).toISOString().slice(0, 10) : "",
+      r.createdAt ? businessDayKey(new Date(r.createdAt)) : "",
       r.state,
       r.ratePercent,
       r.taxableSales.toFixed(2),
@@ -62,7 +63,7 @@ export async function GET(request: Request) {
       "Content-Type": "text/csv; charset=utf-8",
       // The filename carries the warning too: a file saved to disk, mailed to an
       // accountant and opened next week has lost every banner but its name.
-      "Content-Disposition": `attachment; filename=sales-tax-${year ?? "all"}-${new Date().toISOString().slice(0, 10)}${report.truncated ? "-INCOMPLETE" : ""}.csv`,
+      "Content-Disposition": `attachment; filename=sales-tax-${year ?? "all"}-${businessDayKey(new Date())}${report.truncated ? "-INCOMPLETE" : ""}.csv`,
     },
   });
 }

@@ -1,4 +1,5 @@
 import "server-only";
+import { startOfBusinessDate } from "@/lib/business-day";
 
 // Sales-tax recordkeeping for the admin dashboard: exactly how much tax was
 // collected, per order and per state — the numbers the owner files with each
@@ -133,9 +134,13 @@ export async function getSalesTaxReport(options?: { year?: number }): Promise<Sa
         .order("order_number", { ascending: true })
         .range(from, to);
       if (options?.year) {
+        // A FILING YEAR IS THE STORE'S YEAR. On UTC, a sale at 8pm ET on
+        // December 31st fell into the next year's return and out of the one it
+        // was actually made in — a filing that no reconciliation would catch,
+        // because both years looked internally consistent.
         query = query
-          .gte("created_at", `${options.year}-01-01T00:00:00Z`)
-          .lt("created_at", `${options.year + 1}-01-01T00:00:00Z`);
+          .gte("created_at", startOfBusinessDate(options.year, 1, 1).toISOString())
+          .lt("created_at", startOfBusinessDate(options.year + 1, 1, 1).toISOString());
       }
       return query as unknown as PromiseLike<{ data: OrderRecord[] | null; error: { message?: string } | null }>;
     },

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { businessDayKey } from "@/lib/business-day";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageInventory } from "@/lib/admin-roles";
 import { getInventoryRows } from "@/lib/admin-inventory";
@@ -48,7 +49,7 @@ export async function GET(request: Request) {
   const kind = url.searchParams.get("type") === "history" ? "history" : "levels";
   // Date only: these are filed and compared by day, and a colon in a filename
   // is awkward on Windows.
-  const stamp = new Date().toISOString().slice(0, 10);
+  const stamp = businessDayKey(new Date());
 
   if (kind === "history") {
     const limitParam = Number(url.searchParams.get("limit") ?? 1000);

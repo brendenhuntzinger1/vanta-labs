@@ -1,4 +1,5 @@
 import "server-only";
+import { businessDayKey, businessHour } from "@/lib/business-day";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { bucketForOrder, exceptionsForOrder, inPackingOrder, type OrderBucketInput } from "@/lib/fulfillment-buckets";
@@ -28,10 +29,14 @@ export interface FulfillmentBatch {
   orderCount: number;
 }
 
-/** `2026-08-22-AM` — something an operator can say out loud. */
+/**
+ * `2026-08-22-AM` — something an operator can say out loud.
+ *
+ * In the STORE'S zone, both halves. On UTC, a batch packed at 8pm ET on the
+ * 22nd was labelled `2026-08-23-AM`: tomorrow's date, and "AM" for an evening.
+ */
 export function suggestBatchLabel(now: Date = new Date()): string {
-  const iso = now.toISOString().slice(0, 10);
-  return `${iso}-${now.getUTCHours() < 12 ? "AM" : "PM"}`;
+  return `${businessDayKey(now)}-${businessHour(now) < 12 ? "AM" : "PM"}`;
 }
 
 /**

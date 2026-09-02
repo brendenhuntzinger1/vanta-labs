@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { startOfBusinessMonth } from "@/lib/business-day";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 
 export interface CommissionTierRule {
@@ -134,8 +135,19 @@ export function commissionOrderCounts(row: TierQualifyingRow): boolean {
   return true;
 }
 
-export function monthStartUtc(now: Date): Date {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+/**
+ * The first instant of the month the STORE is in — the tier ladder counts a
+ * calendar month of this business, not of UTC.
+ *
+ * Named `monthStartUtc` when the boundary was midnight UTC, and justified as
+ * "follow UTC consistently, matching how created_at is stored". Storage format
+ * is not the question: an ambassador's sale at 11pm ET on the 31st belongs to
+ * the month she made it in, and under UTC it counted toward the NEXT month's
+ * qualifying total — moving her up a tier a day early, or leaving the month she
+ * actually worked four hours short.
+ */
+export function monthStartForTierCount(now: Date): Date {
+  return startOfBusinessMonth(now);
 }
 
 // Ceiling on the tier read. The tier ladder tops out in the tens of qualifying
@@ -152,7 +164,7 @@ const MAX_TIER_SCAN_ROWS = 5_000;
 const MAX_FRAUD_SCAN_ROWS = 2_000;
 
 async function getQualifyingMonthlySalesCount(ambassadorId: string): Promise<number> {
-  const monthStart = monthStartUtc(new Date());
+  const monthStart = monthStartForTierCount(new Date());
 
   // The month window is applied in the QUERY, not only in the JS filter below.
   // This runs on the shopper's critical path (quoteOrder → getEffectiveCommissionPercent)
