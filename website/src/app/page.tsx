@@ -6,7 +6,7 @@ import { ProductCard } from "@/components/product-card";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { getHomepageControlConfig } from "@/lib/admin-control";
 import { getCatalogProducts } from "@/lib/catalog";
-import { CHECKOUT_SHORT, COA_SHORT, FULFILMENT_SHORT, TESTING_SHORT, trustPoints } from "@/lib/trust-claims";
+import { COA_SHORT, trustPoints } from "@/lib/trust-claims";
 import { BRAND_LEGAL_NAME } from "@/lib/site-identity";
 
 export const dynamic = "force-dynamic";
@@ -20,95 +20,33 @@ export const metadata: Metadata = {
 };
 
 /**
- * K-21. The CLAIMS come from @/lib/trust-claims — the single source, with
- * recorded provenance for each one. Only the icons live here, because an icon is
- * this page's design and not an assertion about the product.
- *
- * This array used to hard-code its own claims and had drifted: a purity
- * percentage (trust-claims.ts's TESTING block states no such figure appears
- * anywhere in the UI, because a purity number is a statement about a specific
- * vial and is rendered only from that product's own purityResult and COA), a
- * batch-verification wording stronger than the canonical TESTING_SHORT, and a
- * country-of-origin claim with no recorded provenance in the repo.
- *
- * Paraphrased rather than quoted: trust-claims-single-source.test.ts scans this
- * file for the retired strings, and it caught an earlier version of this comment.
- */
-const TRUST_ICONS: Record<string, React.ReactNode> = {
-  [TESTING_SHORT]: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
-      <circle cx="12" cy="12" r="9" />
-      <path d="m8.5 12.5 2.4 2.4L16 9.6" />
-    </svg>
-  ),
-  [COA_SHORT]: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
-      <path d="M9 2h6M10 2v6.2a2 2 0 0 1-.34 1.12L4.9 17.2A2.4 2.4 0 0 0 6.9 21h10.2a2.4 2.4 0 0 0 2-3.8l-4.76-7.88A2 2 0 0 1 14 8.2V2" />
-    </svg>
-  ),
-  [CHECKOUT_SHORT]: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
-      <path d="M12 2 4 5v6c0 5 3.4 8.7 8 11 4.6-2.3 8-6 8-11V5z" />
-      <path d="m9 12 2 2 4-4" />
-    </svg>
-  ),
-  [FULFILMENT_SHORT]: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
-      <path d="M2 8h11v8H2z" />
-      <path d="M13 11h4l4 3v2h-8z" />
-      <circle cx="6.5" cy="18.5" r="1.6" />
-      <circle cx="17" cy="18.5" r="1.6" />
-    </svg>
-  ),
-};
-
-/**
  * The hero pill row. These rest on the owner attestation recorded in
  * trust-claims.ts's TESTING block. The COA line that used to sit alongside them
  * asserted that documents EXIST, which ledger finding F-006 disproved, so it is
  * appended from the evidence gate at the render site instead of typed here.
  */
-const HERO_ATTESTATIONS = ["Third-party batch tested", "99%+ purity", "Ships from the USA"] as const;
-
-const BRAND_PILLARS = [
-  {
-    title: "Analytical Precision",
-    detail: "Every batch is screened with calibrated instrumentation and archived reports.",
-  },
-  {
-    title: "Transparent Documentation",
-    detail: "Product lots are mapped to structured quality documents and purity records.",
-  },
-  {
-    title: "Operational Reliability",
-    detail: "Rapid processing, careful packaging, and secure, tracked shipment workflows.",
-  },
-];
+const HERO_ATTESTATIONS = ["Third-party tested", "99%+ purity", "Ships from the USA"] as const;
 
 const TESTING_PROOFS = [
   {
     title: "Independently verified",
-    detail: "Every production lot is tested by a third-party lab — we don't grade our own work.",
+    detail: "Tested by a third-party lab. We don't grade our own work.",
   },
   {
     title: "≥99% purity by HPLC",
-    detail: "High-performance liquid chromatography confirms purity on each batch before it ships.",
+    detail: "Confirmed on every batch before it ships.",
   },
   {
     title: "Identity by mass spec",
-    detail: "Mass spectrometry verifies the exact compound and molecular weight of every lot.",
+    detail: "The exact compound and molecular weight of every lot.",
   },
   {
     title: "Batch-to-COA mapping",
-    detail: "Each vial's batch number links to its Certificate of Analysis — confirm it before you buy.",
+    detail: "Each vial's batch number links to its Certificate of Analysis.",
   },
 ];
 
 const FAQ = [
-  {
-    q: "How do you verify quality?",
-    a: "Each lot is linked to a Certificate of Analysis and tracked through internal QC checkpoints before release.",
-  },
   {
     q: "How quickly are orders processed?",
     a: "Most in-stock orders are prepared within one business day, with secure tracking sent after dispatch.",
@@ -203,7 +141,7 @@ export default async function HomePage() {
               </span>
             </h1>
             <p className="mt-4 max-w-md text-[0.95rem] leading-7 text-white/75 sm:mt-6 sm:text-lg sm:leading-8">
-              {control.heroSubheadline ?? "Vanta Labs sources, verifies, and ships research compounds with the discipline of an analytical laboratory."}
+              {control.heroSubheadline ?? "Research compounds, sourced and verified with the discipline of an analytical laboratory."}
             </p>
             <div className="mt-7 flex flex-col gap-3 sm:mt-9 sm:flex-row sm:items-center">
               <Link href="/products" className="vl2-btn-primary vl-focus-ring w-full px-8 py-4 text-sm sm:w-auto">
@@ -215,13 +153,24 @@ export default async function HomePage() {
             </div>
 
             {/* Inline trust strip — factual claims only, right under the CTA so
-                purchase confidence lands before the fold on mobile. */}
-            <ul className="mt-7 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-white/65 sm:mt-8 sm:text-[0.8rem]">
-              {[...HERO_ATTESTATIONS, ...trustPoints().filter((p: string) => p === COA_SHORT)].map((claim) => (
-                <li key={claim} className="inline-flex items-center gap-1.5">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5 text-[color:var(--accent-gold)]">
-                    <path d="m5 12 4 4 10-10" />
-                  </svg>
+                purchase confidence lands before the fold on mobile.
+
+                SET AS ONE LINE OF TEXT, NOT A ROW OF TICKS. Each claim used to
+                carry its own gold check mark, and three of those cost 60px of
+                the 358px available at 390px — enough that "Ships from the USA"
+                wrapped onto a second line and the strip read as a badge
+                cluster rather than a specification. The claims are unchanged,
+                word for word; only the ornament is gone. Measured at 390px the
+                row is now 322px and sits on one line.
+
+                The middots are decoration and are hidden from assistive tech —
+                the <li> boundaries already separate the items. */}
+            <ul className="mt-7 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-white/60 sm:mt-8 sm:text-[0.8rem]">
+              {[...HERO_ATTESTATIONS, ...trustPoints().filter((p: string) => p === COA_SHORT)].map((claim, index) => (
+                <li key={claim} className="inline-flex items-center gap-2.5">
+                  {index > 0 ? (
+                    <span aria-hidden="true" className="text-[color:var(--accent-gold)]/60">·</span>
+                  ) : null}
                   {claim}
                 </li>
               ))}
@@ -235,27 +184,11 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="border-t border-white/10 py-8 sm:py-14">
-        <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-12">
-          <ScrollReveal>
-            <div className="vl2-trust-row justify-center">
-              {trustPoints().map((label: string) => (
-                <div key={label} className="flex items-center gap-2.5 text-white/60">
-                  <span aria-hidden="true">{TRUST_ICONS[label] ?? null}</span>
-                  <span className="text-[0.72rem] font-medium uppercase tracking-[0.14em]">{label}</span>
-                </div>
-              ))}
-            </div>
-          </ScrollReveal>
-        </div>
-      </section>
-
       {categories.length > 0 ? (
         <section className="border-t border-white/10 py-10 sm:py-20">
           <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-12">
             <ScrollReveal>
-              <p className="vl2-eyebrow">Catalog</p>
-              <h2 className="vl2-serif mt-2 text-2xl text-white sm:mt-3 sm:text-4xl">Browse by category</h2>
+              <h2 className="vl2-serif text-2xl text-white sm:text-4xl">Browse by category</h2>
             </ScrollReveal>
             <div className="mt-9 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {categories.map((category, index) => (
@@ -284,8 +217,7 @@ export default async function HomePage() {
           <ScrollReveal>
             <div className="mb-10 flex items-end justify-between gap-4">
               <div>
-                <p className="vl2-eyebrow">Selection</p>
-                <h2 className="vl2-serif mt-2 text-2xl text-white sm:mt-3 sm:text-4xl">Most requested compounds</h2>
+                <h2 className="vl2-serif text-2xl text-white sm:text-4xl">Most requested compounds</h2>
               </div>
               {/* inline-flex + min-h-6: a 24px tap target (WCAG 2.2 AA 2.5.8)
                   for a standalone section link that was 16px tall. */}
@@ -319,14 +251,11 @@ export default async function HomePage() {
                 <p className="vl2-eyebrow text-[color:var(--accent-gold)]/80">Testing &amp; Transparency</p>
                 <h2 className="vl2-serif mt-2 text-2xl text-white sm:mt-3 sm:text-4xl lg:text-5xl">Every batch, third-party tested.</h2>
                 <p className="mt-5 text-sm leading-7 text-white/65 sm:text-base">
-                  Anyone can print a label. We publish the proof. Every lot Vanta Labs ships is
-                  independently verified for purity and identity, and every vial&apos;s batch number
-                  maps to its Certificate of Analysis — so you can confirm exactly what you&apos;re
-                  getting before you order.
+                  Anyone can print a label. We publish the proof — every lot independently
+                  verified, every batch number mapped to its Certificate of Analysis.
                 </p>
-                <div className="mt-8 flex flex-wrap gap-3">
+                <div className="mt-8">
                   <Link href="/coa-library" className="vl2-btn-primary vl-focus-ring px-7 py-3.5">Browse the COA Library</Link>
-                  <Link href="/products" className="vl2-btn-secondary vl-focus-ring px-7 py-3.5">Shop tested compounds</Link>
                 </div>
               </div>
             </ScrollReveal>
@@ -351,33 +280,10 @@ export default async function HomePage() {
       </section>
 
       <section className="border-t border-white/10 py-10 sm:py-20">
-        <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-12">
-          <ScrollReveal>
-            <div className="mb-10 max-w-2xl">
-              <p className="vl2-eyebrow">Standards</p>
-              <h2 className="vl2-serif mt-2 text-2xl text-white sm:mt-3 sm:text-4xl">Built around trust and performance</h2>
-            </div>
-          </ScrollReveal>
-
-          <div className="grid gap-px overflow-hidden border border-white/10 md:grid-cols-3">
-            {BRAND_PILLARS.map((pillar, index) => (
-              <ScrollReveal key={pillar.title} delayMs={index * 90}>
-                <article className="h-full bg-[#181818] p-7">
-                  <h3 className="vl2-serif text-xl text-white">{pillar.title}</h3>
-                  <p className="mt-3 text-sm leading-7 text-white/60">{pillar.detail}</p>
-                </article>
-              </ScrollReveal>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="border-t border-white/10 py-10 sm:py-20">
         <div className="mx-auto max-w-3xl px-6 lg:px-12">
           <ScrollReveal>
             <div className="mb-10 text-center">
-              <p className="vl2-eyebrow">FAQ</p>
-              <h2 className="vl2-serif mt-2 text-2xl text-white sm:mt-3 sm:text-4xl">Before you order</h2>
+              <h2 className="vl2-serif text-2xl text-white sm:text-4xl">Before you order</h2>
             </div>
           </ScrollReveal>
           <div className="space-y-px border border-white/10">
