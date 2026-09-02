@@ -526,6 +526,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           const parsed = JSON.parse(stored) as {
             items?: CartItem[];
             referralCode?: string | null;
+            couponCode?: string | null;
           };
 
           if (Array.isArray(parsed.items)) {
@@ -534,6 +535,17 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
           if (typeof parsed.referralCode === "string") {
             setReferralCode(parsed.referralCode);
+          }
+
+          // The coupon used to live ONLY in React state while the referral was
+          // persisted beside the items, so a refresh kept the cart and the
+          // referral and silently dropped the coupon — the shopper watched the
+          // total go back UP by the discount they had just been shown, with no
+          // message saying the code had gone. Restoring the code alone is not
+          // enough and would be worse: the effect below re-validates it before
+          // any discount is shown, the same way the referral is re-resolved.
+          if (typeof parsed.couponCode === "string" && parsed.couponCode) {
+            setCouponCode(parsed.couponCode);
           }
         }
 
@@ -683,12 +695,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     try {
       window.localStorage.setItem(
         CART_STORAGE_KEY,
-        JSON.stringify({ items, referralCode }),
+        JSON.stringify({ items, referralCode, couponCode }),
       );
     } catch (error) {
       console.error("Unable to save cart state", error);
     }
-  }, [items, referralCode, isHydrated]);
+  }, [items, referralCode, couponCode, isHydrated]);
 
   useEffect(() => {
     if (!isHydrated || !referralCode || referralDetails) {
@@ -803,6 +815,61 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     () => items.reduce((sum, item) => sum + getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig), 0),
     [items, bundleConfig],
   );
+
+  // A coupon restored from storage is a CODE, not a discount. Re-validate it
+  // through the same endpoint `applyCouponCode` uses before it reduces
+  // anything, so a coupon that has since expired, been switched off, or whose
+  // minimum spend this cart no longer meets cannot be replayed out of a
+  // shopper's own localStorage into a total the server will refuse at the pay
+  // button. Guarded on `!couponDetails` so it runs once per restored code
+  // rather than on every subtotal change.
+  useEffect(() => {
+    if (!isHydrated || !couponCode || couponDetails) {
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const response = await fetch("/api/coupons/validate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: couponCode, subtotal }),
+        });
+        const result = (await response.json()) as {
+          success?: boolean;
+          code?: string;
+          discountType?: "percent" | "fixed";
+          discountValue?: number;
+        };
+        if (cancelled) return;
+
+        if (!result.success || !result.code || !result.discountType) {
+          // Drop the code rather than leaving it showing as applied. Silent,
+          // deliberately: the shopper did not just do anything, so an error
+          // about a code they entered on a previous visit would be noise.
+          setCouponCode(null);
+          setCouponDetails(null);
+          return;
+        }
+
+        setCouponDetails({
+          code: result.code,
+          discountType: result.discountType,
+          discountValue: Number(result.discountValue ?? 0),
+        });
+      } catch {
+        // A network failure is not proof the coupon is dead. Leave the code in
+        // place and let the next render try again; the server re-checks it at
+        // checkout regardless, so nothing can be honoured that it refuses.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isHydrated, couponCode, couponDetails, subtotal]);
 
   // Full-price subtotal and the dollars the quantity "Bundle & Save" tiers
   // already saved inside `subtotal`. With bundle stacking OFF (default),

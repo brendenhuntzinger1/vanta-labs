@@ -73,8 +73,16 @@ export function ProductCard({
               {BADGE_LABELS[product.badge]}
             </span>
           ) : null}
+          {/* Bottom-left, NOT top-right: the wishlist button above is
+              `right-2.5 top-2.5` at z-20, so a top-right badge sits under it and
+              renders as "OUT OF STO" — 34px of its 108px covered, at every
+              viewport. Top-left is taken by the best-seller/merchandising badge,
+              which an out-of-stock product can also carry. Bottom-left is the
+              only corner of the media box that is free in every combination, and
+              it matters on a phone, where the disabled "Out of Stock" pill is
+              hidden and this badge carries the state on its own. */}
           {soldOut ? (
-            <span className="absolute right-3 top-3 z-10 rounded-full border border-white/[0.09] bg-black/60 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-white/45 backdrop-blur-md">
+            <span className="absolute bottom-3 left-3 z-10 rounded-full border border-white/[0.09] bg-black/60 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-white/45 backdrop-blur-md">
               Out of Stock
             </span>
           ) : null}
