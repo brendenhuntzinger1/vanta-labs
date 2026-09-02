@@ -44,7 +44,6 @@ interface OrderRow {
   fulfillment_status: string | null;
   order_number: string | null;
   customer_name: string | null;
-  customer_email: string | null;
   phone: string | null;
   shipping_address: string | null;
   shipping_address_2: string | null;
@@ -78,7 +77,7 @@ const ORDER_COLUMNS =
   // fulfillment_status is selected so the monotonicity guard in
 // applyTransactionCreated can read the order's CURRENT progress before
 // deciding whether a late label event is allowed to move it.
-  "order_id, order_number, customer_name, customer_email, phone, shipping_address, shipping_address_2, city, state, postal_code, country, subtotal, shipping_amount, tax_amount, amount_paid, currency, paid_at, payment_status, fulfillment_status, order_type, shippo_order_id, shippo_transaction_id, label_voided_at, label_purchased_at";
+  "order_id, order_number, customer_name, phone, shipping_address, shipping_address_2, city, state, postal_code, country, subtotal, shipping_amount, tax_amount, amount_paid, currency, paid_at, payment_status, fulfillment_status, order_type, shippo_order_id, shippo_transaction_id, label_voided_at, label_purchased_at";
 
 function money(value: number | null | undefined): string {
   return (Math.round((Number(value) || 0) * 100) / 100).toFixed(2);
@@ -105,6 +104,40 @@ function toShippoAddress(a: {
   };
 }
 
+/**
+ * THE SHOPPER'S EMAIL ADDRESS IS NOT SENT.
+ *
+ * It used to be, and that is how a customer came to receive a UPS "Your
+ * package is on the way!" email headed "From BRENDEN HUNTZINGER" — the owner's
+ * own name, from a carrier, about an order placed with Vanta Labs.
+ *
+ * This store sends its own shipping and delivery emails. notifyCustomer() in
+ * service.ts composes them from the store's templates, on the store's domain,
+ * with a tracking link resolved through the carrier allow-list, and fires each
+ * one exactly once per order. A carrier email arriving alongside them is a
+ * second, unbranded voice talking to the customer, saying whatever the label
+ * and the carrier account happen to say, and nothing here can edit a word of
+ * it.
+ *
+ * An address a carrier does not have is one it cannot mail. That is the whole
+ * mechanism, and it is why this is an omission rather than a setting: a
+ * notification preference in a dashboard is one support call from being
+ * switched back on by somebody who does not know this decision was made.
+ *
+ * NOTHING IS LOST ON THE FULFILMENT SIDE. This address goes onto the Shippo
+ * ORDER, which is a record for the owner to buy a label against; the shipment
+ * that actually carries a parcel is built by orderDestinationAddress() in
+ * service.ts, which has never sent an email address either. Rates, labels and
+ * tracking are unaffected. The one real cost is that the shopper's email no
+ * longer appears beside the order in Shippo's dashboard — it is in the admin,
+ * on the order, where support already looks.
+ *
+ * THIS DOES NOT SILENCE EVERY CARRIER EMAIL, and it cannot. A recipient
+ * enrolled in UPS My Choice (or a carrier equivalent) is notified about
+ * parcels addressed to them from their own account, on a subscription this
+ * store is not party to and cannot cancel. What that email SAYS is set by the
+ * label's shipper name, which is configured wherever the label is bought.
+ */
 function destinationAddress(order: OrderRow): ShippoAddress {
   return {
     name: order.customer_name ?? "",
@@ -117,7 +150,6 @@ function destinationAddress(order: OrderRow): ShippoAddress {
     zip: order.postal_code ?? "",
     country: toCountryCode(order.country),
     phone: order.phone ?? undefined,
-    email: order.customer_email ?? undefined,
   };
 }
 
