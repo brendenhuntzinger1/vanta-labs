@@ -278,22 +278,30 @@ let profitResult: Promise<unknown> = Promise.resolve({ profit: 41.2, profitStatu
 vi.mock("@/lib/admin-profit", () => ({ getOrderProfit: () => profitResult }));
 
 const alerts: Array<{ type: string; severity: string; message: string; dedupeWindowMs?: number }> = [];
+let alertingThrows = false;
 vi.mock("@/lib/monitoring", () => ({
   recordSystemAlert: async (input: { type: string; severity: string; message: string; dedupeWindowMs?: number }) => {
     alerts.push(input);
+    // Models the alerting path itself failing — a Supabase outage, or the
+    // operator email bouncing. Recorded first, so a test can still see what was
+    // attempted.
+    if (alertingThrows) throw new Error("system_alerts unavailable");
   },
 }));
 
-const { sendOrderPushNotification, sendTestPushNotification, verifyPushDestination, runOrderPushHealthCheck } = await import("./order-push-notification");
+const { sendOrderPushNotification, sendTestPushNotification, scheduleOrderPushNotification, verifyPushDestination, describePushDestination, runOrderPushHealthCheck } = await import("./order-push-notification");
 
 const fetchMock = vi.fn();
 
 beforeEach(() => {
   vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.example.com/catch/1/abc");
+  vi.stubEnv("PUSHOVER_API_TOKEN", "");
+  vi.stubEnv("PUSHOVER_USER_KEY", "");
   vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://vantalabs.com");
   dbOrder = orderRow;
   profitResult = Promise.resolve({ profit: 41.2, profitStatus: "estimated" });
   alerts.length = 0;
+  alertingThrows = false;
   for (const key of Object.keys(control)) delete control[key];
   controlThrows = false;
   fetchMock.mockReset().mockResolvedValue({ ok: true, status: 200 });
@@ -825,5 +833,163 @@ describe("sending a test notification on demand", () => {
     expect(result.sent).toBe(false);
     expect(result.detail).toMatch(/https/i);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WHERE THE PUSHOVER CREDENTIALS MAY LIVE.
+//
+// The audit found production configured for NEITHER: the Control Center held
+// no Pushover keys, so the resolver fell through to ORDER_PUSH_WEBHOOK_URL —
+// the dead Zapier hook this whole exercise exists to get rid of. The webhook
+// had a control-then-environment ladder and Pushover had only the top rung, so
+// an owner who put the credentials in Vercel (the obvious place, and where
+// every other credential lives) got a store that looked configured and was not.
+//
+// Control still wins: that is what makes a credential change take effect
+// without a deploy.
+// ---------------------------------------------------------------------------
+
+describe("resolving the Pushover credentials", () => {
+  it("uses the environment when the Control Center has none", async () => {
+    vi.stubEnv("PUSHOVER_API_TOKEN", "env-token");
+    vi.stubEnv("PUSHOVER_USER_KEY", "env-user");
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 1 }) });
+
+    await expect(verifyPushDestination()).resolves.toMatchObject({ kind: "pushover", healthy: true });
+    const body = new URLSearchParams(String((fetchMock.mock.calls[0][1] as { body?: string }).body));
+    expect(body.get("token")).toBe("env-token");
+  });
+
+  it("prefers the Control Center over the environment, so an edit needs no deploy", async () => {
+    vi.stubEnv("PUSHOVER_API_TOKEN", "env-token");
+    vi.stubEnv("PUSHOVER_USER_KEY", "env-user");
+    control.notifications = { pushover_token: "typed-token", pushover_user_key: "typed-user" };
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 1 }) });
+
+    await verifyPushDestination();
+    const body = new URLSearchParams(String((fetchMock.mock.calls[0][1] as { body?: string }).body));
+    expect(body.get("token")).toBe("typed-token");
+  });
+
+  it("takes Pushover over a webhook that is also configured", async () => {
+    // The point of the whole change: no Zapier in the active path once real
+    // credentials exist, wherever they were typed.
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.zapier.com/hooks/catch/1/dead");
+    vi.stubEnv("PUSHOVER_API_TOKEN", "env-token");
+    vi.stubEnv("PUSHOVER_USER_KEY", "env-user");
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 1 }) });
+
+    await expect(verifyPushDestination()).resolves.toMatchObject({ kind: "pushover" });
+  });
+
+  it("still needs BOTH halves — half a credential is not a destination", async () => {
+    vi.stubEnv("PUSHOVER_API_TOKEN", "env-token");
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "");
+    await expect(verifyPushDestination()).resolves.toMatchObject({ kind: "none" });
+  });
+});
+
+describe("a rejected credential says which half is wrong", () => {
+  it.each([
+    ["invalid token", ["application token is invalid"]],
+    ["invalid user key", ["user identifier is not a valid user, group, or subscribed user key"]],
+  ])("surfaces Pushover's own wording for an %s", async (_label, errors) => {
+    control.notifications = { pushover_token: "t", pushover_user_key: "u" };
+    fetchMock.mockResolvedValue({ ok: false, status: 400, json: async () => ({ status: 0, errors }) });
+
+    const result = await verifyPushDestination();
+    expect(result.healthy).toBe(false);
+    expect(result.detail).toContain(errors[0]);
+  });
+
+  it("never puts the credentials themselves in the reason", async () => {
+    // The reason is rendered in the admin and written to an alert. Neither is
+    // a place for a token.
+    control.notifications = { pushover_token: "SECRET-TOKEN-VALUE", pushover_user_key: "SECRET-USER-VALUE" };
+    fetchMock.mockResolvedValue({ ok: false, status: 400, json: async () => ({ status: 0, errors: ["invalid"] }) });
+
+    const result = await verifyPushDestination();
+    expect(result.detail).not.toContain("SECRET-TOKEN-VALUE");
+    expect(result.detail).not.toContain("SECRET-USER-VALUE");
+  });
+});
+
+describe("what the admin panel is told", () => {
+  it("reports a configured, healthy Pushover destination without the credentials", async () => {
+    control.notifications = { pushover_token: "SECRET-TOKEN-VALUE", pushover_user_key: "SECRET-USER-VALUE" };
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 1 }) });
+
+    const status = await describePushDestination();
+
+    expect(status).toMatchObject({ configured: true, kind: "pushover", healthy: true });
+    expect(typeof status.checkedAt).toBe("string");
+    expect(JSON.stringify(status)).not.toContain("SECRET-TOKEN-VALUE");
+    expect(JSON.stringify(status)).not.toContain("SECRET-USER-VALUE");
+  });
+
+  it("reports an unconfigured store as not configured", async () => {
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "");
+    await expect(describePushDestination()).resolves.toMatchObject({ configured: false, kind: "none", healthy: false });
+  });
+
+  it("does not leak a webhook URL to the panel either", async () => {
+    // The URL is the webhook's only credential — anyone holding it can fire
+    // fake "you got an order" alerts at the owner's phone.
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.example.com/catch/SECRET-PATH/abc");
+    const status = await describePushDestination();
+    expect(status).toMatchObject({ configured: true, kind: "webhook", healthy: null });
+    expect(JSON.stringify(status)).not.toContain("SECRET-PATH");
+  });
+
+  it("sends nothing while reporting status", async () => {
+    control.notifications = { pushover_token: "t", pushover_user_key: "u" };
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 1 }) });
+    await describePushDestination();
+    for (const [url] of fetchMock.mock.calls) expect(String(url)).not.toContain("/messages.json");
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE ORDER IS ALREADY PAID.
+//
+// Everything in this file runs inside a paid order's side effects, after the
+// card has been charged and the stock has moved. The module's own contract is
+// that it never throws; these are the two cases where "never" has to survive
+// the alerting path breaking too, because that is the one path that is reached
+// precisely when something else has already gone wrong.
+// ---------------------------------------------------------------------------
+
+describe("nothing here can break a paid order", () => {
+  it("swallows a failure in the alerting path itself", async () => {
+    // A dead destination AND a dead system_alerts table. The order is still
+    // paid; the caller must not see an exception.
+    alertingThrows = true;
+    fetchMock.mockResolvedValue({ ok: false, status: 500 });
+
+    await expect(sendOrderPushNotification("ord_a1b2c3d4")).resolves.toMatchObject({ reason: "delivery_failed" });
+  });
+
+  it("does not answer a failed alert with another alert", async () => {
+    // The shape that turns one dead webhook into an infinite loop: the alert
+    // fails, the failure is itself alerted, and so on. Each attempt is recorded
+    // once by the mock, so a recursive path would show many more.
+    alertingThrows = true;
+    fetchMock.mockResolvedValue({ ok: false, status: 500 });
+
+    await sendOrderPushNotification("ord_a1b2c3d4");
+
+    // Exactly the two the code asks for — order_push_failed, then the missed
+    // order — and no cascade from either one failing.
+    expect(alerts.map((a) => a.type)).toEqual(["order_push_failed", "order_notification_missed"]);
+  });
+
+  it("returns cleanly even if the send itself throws", async () => {
+    // scheduleOrderPushNotification is what the payment webhook calls. Its job
+    // is to be unthrowable regardless of what the module beneath it does.
+    controlThrows = true;
+    fetchMock.mockRejectedValue(new Error("boom"));
+    await expect(scheduleOrderPushNotification("ord_a1b2c3d4")).resolves.toBeUndefined();
   });
 });

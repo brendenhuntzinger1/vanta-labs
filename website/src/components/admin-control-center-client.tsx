@@ -15,6 +15,21 @@ import { DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
 type ControlSnapshot = Record<string, Record<string, unknown>>;
 
 /**
+ * What the server will say about the order-notification destination.
+ *
+ * No credential appears here, by design: not the Pushover token, not the user
+ * key, and not the webhook URL — which is itself the webhook's only credential.
+ */
+type PushStatus = {
+  configured: boolean;
+  kind: "pushover" | "webhook" | "none";
+  /** true healthy, false broken, null genuinely unknown (a webhook). */
+  healthy: boolean | null;
+  detail: string;
+  checkedAt: string;
+};
+
+/**
  * The referral rates as the BUSINESS LOGIC resolves them, with the provenance
  * of each. Declared at module scope rather than inline in the loader: writing
  * `typeof referralEffective` inside the fetch made the loader read as though it
@@ -98,6 +113,10 @@ export function AdminControlCenterClient() {
   const [orderPushWebhookUrl, setOrderPushWebhookUrl] = useState("");
   const [pushTesting, setPushTesting] = useState(false);
   const [pushTestResult, setPushTestResult] = useState<string | null>(null);
+  /** Which credentials the server holds. Their VALUES never reach this file. */
+  const [secretsSet, setSecretsSet] = useState<Record<string, boolean>>({});
+  const [pushStatus, setPushStatus] = useState<PushStatus | null>(null);
+  const [pushStatusLoading, setPushStatusLoading] = useState(false);
   const [alertEmail, setAlertEmail] = useState("");
   const [contentFooterLinks, setContentFooterLinks] = useState("");
   const [contentLegalPages, setContentLegalPages] = useState("");
@@ -143,11 +162,32 @@ export function AdminControlCenterClient() {
    */
   const [referralEffective, setReferralEffective] = useState<ReferralEffective | null>(null);
 
+  /**
+   * Whether the owner's phone would actually hear about an order, asked live.
+   *
+   * Deliberately not a remembered result: "healthy as of this morning" is the
+   * kind of reassurance that let a dead destination look fine while a paid
+   * order went unannounced.
+   */
+  const loadPushStatus = async () => {
+    setPushStatusLoading(true);
+    try {
+      const res = await fetch("/api/admin/notifications/test", { cache: "no-store" });
+      const json = await res.json() as { success: boolean; status?: PushStatus };
+      setPushStatus(json.status ?? null);
+    } catch {
+      setPushStatus(null);
+    } finally {
+      setPushStatusLoading(false);
+    }
+  };
+
   const loadSnapshot = async () => {
     const res = await fetch("/api/admin/control", { cache: "no-store" });
     const json = await res.json() as {
       success: boolean;
       snapshot?: ControlSnapshot;
+      secretsSet?: Record<string, boolean>;
       effective?: { referral?: ReferralEffective | null };
       error?: string;
     };
@@ -198,8 +238,11 @@ export function AdminControlCenterClient() {
     setContentLegalPages(String(content.legal_pages ?? ""));
 
     const notifications = next.notifications ?? {};
-    setPushoverToken(String(notifications.pushover_token ?? ""));
-    setPushoverUserKey(String(notifications.pushover_user_key ?? ""));
+    // The server sends "" for both credentials whatever it holds, so these stay
+    // empty on purpose: an empty field means "leave the stored one alone".
+    setPushoverToken("");
+    setPushoverUserKey("");
+    setSecretsSet(json.secretsSet ?? {});
     setOrderPushWebhookUrl(String(notifications.order_push_webhook_url ?? ""));
     setAlertEmail(String((next.alerts ?? {}).email ?? ""));
 
@@ -262,6 +305,7 @@ export function AdminControlCenterClient() {
   useEffect(() => {
     const timer = setTimeout(() => {
       void loadSnapshot();
+      void loadPushStatus();
     }, 0);
 
     return () => {
@@ -417,6 +461,39 @@ export function AdminControlCenterClient() {
       setPushTestResult("Could not reach the server to send a test notification.");
     } finally {
       setPushTesting(false);
+      void loadPushStatus();
+    }
+  };
+
+  /**
+   * Turn direct Pushover off again.
+   *
+   * The panel can no longer read a stored credential, which is what makes a
+   * blank field mean "keep". That leaves no way to say "delete it" by typing,
+   * so removal is its own deliberate action — and it announces itself with
+   * allowClear, the same flag the blanking backstop has always required.
+   */
+  const removePushoverCredentials = async () => {
+    if (!window.confirm("Remove the stored Pushover credentials? Order notifications will fall back to the webhook, or stop.")) return;
+    setPushTestResult(null);
+    try {
+      const res = await fetch("/api/admin/control", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          updates: [
+            { section: "notifications", key: "pushover_token", value: "", allowClear: true },
+            { section: "notifications", key: "pushover_user_key", value: "", allowClear: true },
+          ],
+        }),
+      });
+      const json = await res.json() as { success: boolean; error?: string };
+      setPushTestResult(res.ok && json.success ? "Pushover credentials removed." : (json.error ?? "Unable to remove the credentials."));
+    } catch {
+      setPushTestResult("Unable to reach the server to remove the credentials.");
+    } finally {
+      void loadSnapshot();
+      void loadPushStatus();
     }
   };
 
@@ -589,9 +666,51 @@ export function AdminControlCenterClient() {
               Where &quot;you just got an order&quot; goes. Pushover is used directly when both of its fields are filled in —
               that is the shortest path and the one least likely to break. The webhook is the older Zapier route, kept as a fallback.
             </p>
+
+            {/* THE STATE OF THE THING, NOT A PROMISE ABOUT IT.
+                A dead destination and a healthy one looked identical from this
+                screen, and the difference only showed up as an order nobody was
+                told about. This is asked live on every load. */}
+            <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3 text-xs">
+              {pushStatusLoading && !pushStatus ? (
+                <span className="text-zinc-500">Checking the notification destination…</span>
+              ) : !pushStatus ? (
+                <span className="text-zinc-500">Notification status unavailable.</span>
+              ) : (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span
+                    className={
+                      pushStatus.healthy === true
+                        ? "rounded-full bg-emerald-500/15 px-2 py-0.5 font-semibold text-emerald-300"
+                        : pushStatus.healthy === false
+                          ? "rounded-full bg-red-500/15 px-2 py-0.5 font-semibold text-red-300"
+                          : "rounded-full bg-amber-500/15 px-2 py-0.5 font-semibold text-amber-300"
+                    }
+                  >
+                    {pushStatus.healthy === true ? "Healthy" : pushStatus.healthy === false ? "Not working" : "Cannot be verified"}
+                  </span>
+                  <span className="text-zinc-300">
+                    {pushStatus.kind === "pushover" ? "Pushover (direct)" : pushStatus.kind === "webhook" ? "Webhook fallback" : "Not configured"}
+                  </span>
+                  <span className="text-zinc-500">checked {new Date(pushStatus.checkedAt).toLocaleTimeString()}</span>
+                  <button type="button" onClick={loadPushStatus} disabled={pushStatusLoading} className="vl-focus-ring text-zinc-400 underline disabled:opacity-60">
+                    {pushStatusLoading ? "Checking…" : "Check again"}
+                  </button>
+                  <p className="w-full text-zinc-500">{pushStatus.detail}</p>
+                </div>
+              )}
+            </div>
+
             <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
-              <label className="text-zinc-300">Pushover API token<input value={pushoverToken} onChange={(e) => setPushoverToken(e.target.value)} placeholder="from pushover.net/apps/build" className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">Pushover user key<input value={pushoverUserKey} onChange={(e) => setPushoverUserKey(e.target.value)} placeholder="from your pushover.net dashboard" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              {/* WRITE-ONLY. The server reports these as stored or not and never
+                  sends the value back, so an empty box means "keep what you
+                  have" rather than "delete it". */}
+              <label className="text-zinc-300">Pushover API token
+                <input type="password" autoComplete="new-password" value={pushoverToken} onChange={(e) => setPushoverToken(e.target.value)} placeholder={secretsSet["notifications.pushover_token"] ? "stored — type to replace" : "from pushover.net/apps/build"} className="vl-input mt-1 w-full px-3 py-2" />
+              </label>
+              <label className="text-zinc-300">Pushover user key
+                <input type="password" autoComplete="new-password" value={pushoverUserKey} onChange={(e) => setPushoverUserKey(e.target.value)} placeholder={secretsSet["notifications.pushover_user_key"] ? "stored — type to replace" : "from your pushover.net dashboard"} className="vl-input mt-1 w-full px-3 py-2" />
+              </label>
               <label className="text-zinc-300 sm:col-span-2">Order push webhook URL (fallback)<input value={orderPushWebhookUrl} onChange={(e) => setOrderPushWebhookUrl(e.target.value)} placeholder="https://hooks.zapier.com/hooks/catch/..." className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300 sm:col-span-2">Critical alert email
                 <input value={alertEmail} onChange={(e) => setAlertEmail(e.target.value)} placeholder="you@example.com" className="vl-input mt-1 w-full px-3 py-2" />
@@ -609,6 +728,11 @@ export function AdminControlCenterClient() {
               >
                 {pushTesting ? "Sending…" : "Send test notification"}
               </button>
+              {(secretsSet["notifications.pushover_token"] || secretsSet["notifications.pushover_user_key"]) ? (
+                <button type="button" onClick={removePushoverCredentials} className="vl-focus-ring text-xs text-zinc-400 underline">
+                  Remove stored Pushover credentials
+                </button>
+              ) : null}
               <span className="text-[11px] text-zinc-500">Save first — this uses the settings already stored, not what is typed above.</span>
             </div>
             {pushTestResult ? <p className="mt-2 text-xs text-zinc-300">{pushTestResult}</p> : null}

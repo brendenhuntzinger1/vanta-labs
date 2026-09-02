@@ -221,6 +221,31 @@ export async function sendTestPushNotification(): Promise<TestPushResult> {
   }
 }
 
+export type PushDestinationStatus = PushDestinationHealth & {
+  /** A destination exists at all — separate from whether it works. */
+  configured: boolean;
+  /** When this answer was obtained. It is live, not remembered. */
+  checkedAt: string;
+};
+
+/**
+ * What the admin panel shows: configured or not, healthy or not, why, and when
+ * the answer was obtained.
+ *
+ * It carries NO credential — not the Pushover token, not the user key, not the
+ * webhook URL. The URL is the webhook's only credential, and anyone holding it
+ * can fire fake "you got an order" alerts at the owner's phone, so "a webhook
+ * is configured" is the whole of what the panel needs to know.
+ *
+ * The check is live rather than a remembered result. A stored "healthy as of
+ * this morning" is the kind of reassurance that let a dead destination look
+ * fine for a fortnight; asking now costs one request that sends nothing.
+ */
+export async function describePushDestination(): Promise<PushDestinationStatus> {
+  const health = await verifyPushDestination();
+  return { ...health, configured: health.kind !== "none", checkedAt: new Date().toISOString() };
+}
+
 /**
  * The cron entry point. Checks the destination and complains once a day if it
  * has gone bad, so a revoked token surfaces on its own rather than at the cost
@@ -537,8 +562,18 @@ async function resolvePushDestination(): Promise<PushDestination> {
   }
 
   const text = (value: unknown) => String(value ?? "").trim();
-  const token = text(configured.pushover_token);
-  const userKey = text(configured.pushover_user_key);
+
+  // CONTROL FIRST, ENVIRONMENT SECOND — the same ladder the webhook has always
+  // had, and for the same reason: the Control Center rung is what lets a
+  // credential change take effect without a deploy, and the environment rung is
+  // where an owner naturally puts a credential.
+  //
+  // Pushover used to have only the top rung. Production had no Pushover keys in
+  // the Control Center, so it fell through to ORDER_PUSH_WEBHOOK_URL — the dead
+  // Zapier hook — while looking, from the outside, exactly like a store with
+  // direct Pushover configured.
+  const token = text(configured.pushover_token) || text(process.env.PUSHOVER_API_TOKEN);
+  const userKey = text(configured.pushover_user_key) || text(process.env.PUSHOVER_USER_KEY);
 
   // BOTH keys or neither. A half-filled pair is a configuration mistake, and
   // posting with one of them would fail at Pushover while looking configured.

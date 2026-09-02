@@ -73,6 +73,13 @@ export class NoopEmailProvider implements EmailProvider {
             subject: message.subject,
             html: message.html ?? "",
             text: message.text ?? "",
+            // The HEADERS matter as much as the body, and were the one thing a
+            // captured message could not answer. Whether a send carried
+            // List-Unsubscribe is the whole transactional/marketing
+            // separation, and reading it off the captured message is the only
+            // way to see what a mailbox provider will see.
+            replyTo: message.replyTo ?? "",
+            headers: message.headers ?? {},
           })}\n`,
           "utf8",
         );
