@@ -588,7 +588,7 @@ export function CartDrawer() {
                             type="checkbox"
                             checked={acknowledgements[item.key]}
                             onChange={(event) => { haptic(); setAcknowledgements((current) => ({ ...current, [item.key]: event.target.checked })); }}
-                            className="h-[1.15rem] w-[1.15rem] flex-shrink-0 accent-emerald-500"
+                            className="h-[1.15rem] w-[1.15rem] flex-shrink-0 accent-[color:var(--accent-gold)]"
                           />
                           <span className="flex-1 text-sm text-zinc-200">{item.short}</span>
                           <button
