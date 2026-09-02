@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { businessDayKey, startOfBusinessDay, startOfBusinessDayIso } from "@/lib/business-day";
 import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 
@@ -41,16 +42,19 @@ export async function getCurrentOnlineVisitorCount() {
   return sessions.size;
 }
 
-// UTC, NOT THE SERVER'S LOCAL MIDNIGHT. The two other surfaces that put a
-// "Today" figure on the same screens both cut the day in UTC —
-// admin-revenue.getRevenueMetrics (Date.UTC(...)) and
-// admin-profit.getProfitWindowMetrics (the ISO date slice) — and this one used
-// `setHours(0,0,0,0)`. Identical wherever TZ is UTC (which production is), and
-// silently a different day anywhere else, which is exactly the kind of
-// disagreement between two tiles on one dashboard that nobody can explain.
+// ONE DEFINITION, AND IT IS THE STORE'S DAY — NOT THE SERVER'S, NOT UTC'S.
+//
+// This used to read `setHours(0,0,0,0)` (the server's zone) and was pinned to
+// UTC to match admin-revenue.getRevenueMetrics and
+// admin-profit.getProfitWindowMetrics, so that two tiles on one dashboard could
+// not disagree. Half right: sharing one definition is the point, but UTC is not
+// the day this store trades in. Midnight UTC is 8pm ET, so every evening
+// "today" rolled into tomorrow and the day's figures fell out of the tile —
+// while the timestamps rendered beside them, which format-date.ts puts in
+// America/New_York, still said today. business-day.ts is now that one
+// definition, in the zone the rest of the admin already displays.
 function dayStartIso() {
-  const date = new Date();
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())).toISOString();
+  return startOfBusinessDayIso();
 }
 
 function daysAgoIso(days: number) {
@@ -206,20 +210,18 @@ async function getRevenueRowsInRange(input: RevenueRangeInput) {
   return [...paid.rows, ...fallback.rows];
 }
 
-function isoDay(value: Date) {
-  return value.toISOString().slice(0, 10);
-}
-
+// The trend's buckets are the same days the tiles above it count, so a 9pm ET
+// sale lands on tonight's bar rather than tomorrow's. Bucketing on the UTC date
+// slice put it a day forward, which made the chart's last bar and the "today"
+// tile on the same dashboard disagree about the same order.
 function iterateDays(fromIso: string, toIso: string) {
   const points: string[] = [];
-  const cursor = new Date(fromIso);
-  cursor.setUTCHours(0, 0, 0, 0);
-  const end = new Date(toIso);
-  end.setUTCHours(0, 0, 0, 0);
+  const end = startOfBusinessDay(new Date(toIso));
+  let cursor = startOfBusinessDay(new Date(fromIso));
 
   while (cursor.getTime() <= end.getTime()) {
-    points.push(isoDay(cursor));
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    points.push(businessDayKey(cursor));
+    cursor = startOfBusinessDay(cursor, 1);
   }
 
   return points;
@@ -253,7 +255,7 @@ export async function getRevenueTrend(input: RevenueRangeInput) {
       continue;
     }
 
-    const day = timestamp.slice(0, 10);
+    const day = businessDayKey(new Date(timestamp));
     dayTotals.set(day, (dayTotals.get(day) ?? 0) + amount);
   }
 

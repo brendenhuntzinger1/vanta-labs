@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { startOfBusinessDay } from "./business-day";
 
 // ---------------------------------------------------------------------------
 // THE PROFIT NUMBER AT A HUNDRED ORDERS A DAY.
@@ -212,7 +213,7 @@ describe("3,000 orders in the window", () => {
     // exactly on the seven-day edge belongs inside it — hardcoding 7 x 100 here
     // was wrong by exactly one order, and asserting a guessed number would have
     // meant loosening the tolerance until a real error could hide too.
-    const dayStart = Date.parse(new Date(NOW).toISOString().slice(0, 10) + "T00:00:00.000Z");
+    const dayStart = startOfBusinessDay(new Date(NOW)).getTime();
     const inWindow = (since: number) =>
       orders.filter((order) => Date.parse(order.paid_at) >= since).length;
 
