@@ -396,8 +396,8 @@ export function CartDrawer() {
                   wording comes from the promotion itself (bxgy-engine.ts), so
                   the drawer cannot describe it differently from the checkout. */}
               {isBuy3Get1FreeEligible ? (
-                <div className="rounded-2xl border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.05] p-4">
-                  <p className="text-sm font-semibold text-[color:var(--accent-gold)]">{activePromotionName ?? "Promotion"} — active</p>
+                <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.04] p-4">
+                  <p className="text-sm font-semibold text-emerald-300">{activePromotionName ?? "Promotion"} — active</p>
                   <p className="mt-1.5 text-xs text-zinc-400">
                     {activePromotionMessage ?? "Your lowest-priced eligible items are discounted."} Referral discounts pause while this promotion applies.
                   </p>
@@ -431,8 +431,8 @@ export function CartDrawer() {
               ) : null}
 
               {bulkSavingsApplied ? (
-                <div className="rounded-2xl border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.05] p-4">
-                  <p className="text-sm font-semibold text-[color:var(--accent-gold)]">Member bulk discount applied</p>
+                <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.04] p-4">
+                  <p className="text-sm font-semibold text-emerald-300">Member bulk discount applied</p>
                   <p className="mt-1 text-xs text-zinc-400">{bulkSavingsPercent}% off this order.</p>
                 </div>
               ) : null}
