@@ -819,7 +819,7 @@ export function ambassadorApprovedTemplate(input: {
   `;
 
   return {
-    subject: "You're approved — welcome to the Vanta Labs Ambassador Program",
+    subject: "You're approved — Vanta Labs ambassador program",
     html: renderLayout({
       preheader: "You're approved. Set your payout method and start sharing.",
       titleHtml: `You're approved, ${name}!`,
@@ -1596,7 +1596,7 @@ export function cartRecoveryT72hTemplate(input: {
 }): EmailTemplate {
   const name = escapeHtml(input.name || "there");
   return {
-    subject: "Last chance - your cart expires soon",
+    subject: "Your saved cart expires soon",
     html: renderLayout({
       preheader: `Use code ${input.couponCode} before it expires.`,
       titleHtml: `${name}, last chance on your cart`,
@@ -1711,7 +1711,7 @@ export function wholesaleInquiryNotificationTemplate(input: {
 
   return {
     // Named so it is unmistakable in an inbox and filterable away from orders.
-    subject: `WHOLESALE INQUIRY — ${input.firstName} ${input.lastName}`,
+    subject: `Wholesale inquiry — ${input.firstName} ${input.lastName}`,
     html: renderLayout({
       preheader: `${input.firstName} ${input.lastName} — wholesale`,
       titleHtml: "New wholesale inquiry",

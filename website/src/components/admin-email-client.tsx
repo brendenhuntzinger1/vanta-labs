@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CampaignSummary, EmailDashboard } from "@/lib/admin-email";
 import type { AutomationRow } from "@/lib/email/automations";
+import { checkCampaignDeliverability } from "@/lib/email/deliverability-check";
 
 type Segment = { value: string; label: string; needsParam?: boolean; hint: string };
 
@@ -70,6 +71,22 @@ export function AdminEmailClient({
   const activeSegment = useMemo(
     () => segments.find((segment) => segment.value === form.segment) ?? segments[0],
     [segments, form.segment],
+  );
+
+  // Recomputed as the operator types. It is a pure function over the form —
+  // no request, no debounce — so the verdict moves with the copy instead of
+  // arriving after Send, which is the only moment it would be useless.
+  const deliverability = useMemo(
+    () =>
+      checkCampaignDeliverability({
+        subject: form.subject,
+        previewText: form.previewText,
+        headline: form.headline,
+        body: form.body,
+        promoCode: form.promoCode,
+        ctaLabel: form.ctaLabel,
+      }),
+    [form.subject, form.previewText, form.headline, form.body, form.promoCode, form.ctaLabel],
   );
 
   // Live audience size. Debounced because changing a segment with a parameter
@@ -181,6 +198,25 @@ export function AdminEmailClient({
   }
 
   async function handleSend(mode: "now" | "schedule") {
+    // THE HIGH-RISK GATE IS SEPARATE FROM, AND BEFORE, THE "are you sure"
+    // PROMPT — and it applies to a SCHEDULED send too. A campaign queued for
+    // Tuesday reaches the same inboxes as one sent now; the only difference is
+    // that nobody is watching when it goes. Naming the findings in the prompt
+    // is deliberate: "this looks spammy" teaches nothing, while "6 pressure
+    // phrases in 17 words" is a sentence the operator can act on.
+    if (deliverability.risk === "high") {
+      const detail = deliverability.findings
+        .filter((finding) => finding.severity === "critical")
+        .map((finding) => `• ${finding.message}\n  ${finding.fix}`)
+        .join("\n\n");
+      const proceed = window.confirm(
+        `This campaign is likely to be filtered as spam.\n\n${detail}\n\n` +
+          "Sending it anyway also costs the reputation of the domain that carries your receipts, " +
+          "password resets and affiliate mail.\n\nSend it regardless?",
+      );
+      if (!proceed) return;
+    }
+
     if (mode === "now") {
       const audience = audienceCount ?? 0;
       const confirmed = window.confirm(
@@ -450,6 +486,39 @@ export function AdminEmailClient({
                 Opted-in subscribers matching this segment, minus anyone who unsubscribed.
               </p>
             </div>
+
+            {/*
+              Shown only when there is something to say. A panel that is always
+              present, usually green, is a panel that stops being read — and the
+              one time it turns red it gets clicked past with everything else.
+            */}
+            {deliverability.findings.length > 0 ? (
+              <div
+                className={`rounded-xl border p-4 ${
+                  deliverability.risk === "high"
+                    ? "border-red-500/40 bg-red-500/[0.07]"
+                    : "border-amber-400/35 bg-amber-400/[0.06]"
+                }`}
+              >
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">
+                  {deliverability.risk === "high" ? "Likely to be filtered as spam" : "Could be stronger"}
+                </p>
+                <ul className="mt-3 space-y-3">
+                  {deliverability.findings.map((finding) => (
+                    <li key={finding.code} className="text-[13px] leading-relaxed">
+                      <span className={finding.severity === "critical" ? "text-red-200" : "text-amber-100"}>
+                        {finding.message}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] text-zinc-400">{finding.fix}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-3 border-t border-white/10 pt-2 text-[11px] text-zinc-500">
+                  A guide, not a verdict — no local check can predict a mailbox provider&apos;s decision.
+                  Clearing these removes the signals that are known to count against you.
+                </p>
+              </div>
+            ) : null}
 
             <label className="block">
               <span className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Send a test to</span>

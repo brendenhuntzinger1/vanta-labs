@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import * as templates from "@/lib/email/templates";
 import { INPUTS, URL_ } from "@/lib/email/template-standards-inputs";
+import { checkSubjectLine, findTriggerPhrases } from "@/lib/email/deliverability-check";
 
 // ---------------------------------------------------------------------------
 // ONE BAR, APPLIED TO EVERY EMAIL THIS APP CAN SEND.
@@ -109,6 +110,29 @@ describe("every email template", () => {
           styled.length > 0 || mailtoOnly,
           `${name} has anchors but none is a styled CTA: ${anchors.slice(0, 2).join(" ")}`,
         ).toBe(true);
+      });
+
+      // THE SUBJECT IS THE ONE LINE EVERY FILTER READS, AND THE ONLY PART OF
+      // THE MESSAGE A RECIPIENT SEES BEFORE DECIDING.
+      //
+      // The rest of this suite checks the message's shape — that it is branded,
+      // has a text part, repeats its links. None of it looked at the words in
+      // the subject, so a template could pass every bar above and still lead
+      // with the phrasing filters score hardest. Two did: an internal wholesale
+      // alert shouted its subject in capitals, and the 72-hour cart recovery —
+      // a live, customer-facing send — opened with "Last chance".
+      //
+      // This is the same check the campaign composer applies to copy typed by
+      // hand, pointed at the copy that is compiled in.
+      it("has a subject that carries no shouting, pressure phrasing or padding", () => {
+        const findings = [
+          ...checkSubjectLine(out.subject).map((f) => f.message),
+          ...findTriggerPhrases(out.subject).map((phrase) => `pressure phrase "${phrase}"`),
+        ];
+        expect(
+          findings,
+          `${name} subject ${JSON.stringify(out.subject)}: ${findings.join("; ")}`,
+        ).toEqual([]);
       });
     });
   }

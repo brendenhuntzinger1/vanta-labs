@@ -194,7 +194,7 @@ vi.mock("@/lib/supabase-server", () => {
 
 const { updatePartnerStatus } = await import("@/lib/partner-portal");
 
-const APPROVAL_SUBJECT = "You're approved — welcome to the Vanta Labs Ambassador Program";
+const APPROVAL_SUBJECT = "You're approved — Vanta Labs ambassador program";
 
 function approvalEmail() {
   return sent.find((m) => m.subject === APPROVAL_SUBJECT);

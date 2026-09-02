@@ -72,7 +72,7 @@ describe("the wholesale form is protected like the contact form, not less", () =
   });
 
   it("marks the subject unmistakably so it filters away from order mail", () => {
-    expect(read("src/lib/email/templates.ts")).toContain("WHOLESALE INQUIRY —");
+    expect(read("src/lib/email/templates.ts")).toContain("Wholesale inquiry —");
   });
 
   it("escapes every submitted value before it reaches an HTML email", () => {
