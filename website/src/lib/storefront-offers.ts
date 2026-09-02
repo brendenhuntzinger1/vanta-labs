@@ -35,7 +35,7 @@ import {
   offerId,
   type StorefrontOffer,
 } from "@/lib/storefront-offer-format";
-import { promotionHeadline, storefrontDescription, type BxgyPromotion } from "@/lib/bxgy-engine";
+import { advertisableBxgyPromotions, promotionHeadline, storefrontDescription, type BxgyPromotion } from "@/lib/bxgy-engine";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
 
 // Re-exported so existing importers of this module keep working unchanged.
@@ -237,10 +237,17 @@ export async function resolveStorefrontOffers(deps: ResolveOffersDeps = {}): Pro
 
   // Guarded on its own, like every other source here: a failed promotion read
   // costs the promotion offers, never the bar.
+  //
+  // advertisableBxgyPromotions is the LAST step, applied to the list the
+  // checkout prices from rather than to the config. That ordering is what
+  // makes "hidden" mean unadvertised and nothing else: the promotion is still
+  // resolved, still scheduled, still counted against its redemption cap — it
+  // simply does not reach the words. Exactly what `is_private` does one
+  // function down for a coupon code.
   const promotions: BxgyPromotion[] = await getApplicableBxgyPromotions(
     {},
     { promotions: control?.bxgyPromotions, now },
-  ).catch(() => []);
+  ).then(advertisableBxgyPromotions).catch(() => []);
 
   for (const row of couponRows) offers.push(couponOffer(row));
 
