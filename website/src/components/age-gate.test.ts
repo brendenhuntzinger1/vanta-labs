@@ -123,11 +123,37 @@ describe("the gate fails closed and locks the page behind it", () => {
     expect(gate).toMatch(/setAttribute\("data-age-verified",\s*isVerified \? "true" : "false"\)/);
   });
 
-  it("still requires all four attestations before entry", () => {
+  // TWO BOXES IS A PRESENTATION CHOICE. THE REPRESENTATIONS ARE NOT.
+  //
+  // The gate asked for four ticks and now asks for two, because four legal
+  // sentences in a column made the first screen of the store read as a warning
+  // notice. What may NOT change is what the visitor actually asserts: the four
+  // representations are all still made, just grouped into who-is-asking and
+  // what-is-being-agreed.
+  //
+  // So this pins both ends. Two is the floor as well as the ceiling: one box is
+  // a single click standing for every representation at once, which is the
+  // assent a regulator would question, and each required phrase is asserted
+  // individually so a rewrite cannot quietly drop one while keeping the count.
+  it("takes two ticks, and still carries every representation", () => {
     expect(gate).toContain("const agreed = ATTESTATIONS.every((a) => confirmed[a.id]);");
     expect(gate).toMatch(/disabled=\{!agreed\}/);
     const ids = gate.match(/\{\s*id:\s*"/g) ?? [];
-    expect(ids.length).toBe(4);
+    expect(ids.length).toBe(2);
+
+    const start = gate.indexOf("const ATTESTATIONS = [");
+    const copy = gate.slice(start, gate.indexOf("] as const;", start));
+    for (const required of [
+      /\b21 or older\b/,          // age
+      /\blab\b/,                  // ... on behalf of an organisation
+      /\bresearch organization\b/,
+      /laboratory research only/,  // research use only
+      /not for human consumption/,
+      /\bTerms\b/,                // and the two policies
+      /Research Use Policy/,
+    ]) {
+      expect(copy, `the attestations no longer assert ${required}`).toMatch(required);
+    }
   });
 
   it("exempts the staff areas, and ONLY the staff areas", () => {
@@ -222,8 +248,8 @@ describe("the hero vial is always visible", () => {
 //   * a tap aimed at the fourth row hit a policy link, and because an in-app
 //     webview has no second tab it NAVIGATED there — landing on the Research
 //     Disclaimer with the gate and every ticked box gone;
-//   * so all four boxes could never be held ticked at once, and the sign-in
-//     buttons stayed disabled.
+//   * so the boxes (four of them at the time) could never all be held ticked at
+//     once, and the sign-in buttons stayed disabled.
 // ---------------------------------------------------------------------------
 describe("the gate survives an in-app browser", () => {
   const gate = read("src/components/age-gate.tsx");
@@ -259,10 +285,10 @@ describe("the gate survives an in-app browser", () => {
     expect(gate).toContain('href="/legal/research-disclaimer"');
   });
 
-  it("gives all four rows real text now that none carries markup", () => {
+  it("gives every row real text now that none carries markup", () => {
     expect(gate).not.toMatch(/text:\s*null/);
     const ids = gate.match(/\{\s*id:\s*"/g) ?? [];
-    expect(ids.length).toBe(4);
+    expect(ids.length).toBe(2);
   });
 });
 

@@ -50,22 +50,41 @@ export function useAccessGranted() {
 // what carries a shopper through checkout.
 // -----------------------------------------------------------------------------
 
-// Each statement is acknowledged individually: a single combined tick is one
-// click that stands for four different representations, which is exactly the
-// assent a regulator would question. Entry is refused until all four are made.
+// TWO TICKS. NOT FOUR, AND NEVER ONE.
+//
+// This used to ask for four separate ticks — age, organisation, research use,
+// terms — on the reasoning that a single combined checkbox is one click
+// standing for four different representations, which is exactly the assent a
+// regulator would question.
+//
+// That reasoning is still right about ONE box. It was wrong that the only
+// alternative was four. A column of four legal sentences is what made the first
+// screen of the store read as a warning notice rather than a shop, and all four
+// clicks land on the same visitor in the same second regardless.
+//
+// So the representations are grouped by KIND instead of split by sentence, and
+// nothing is given up: every one of the four is still made, and entry is still
+// refused until both are ticked.
+//
+//   1. WHO IS ASKING        — 21 or older, and here on behalf of a lab,
+//                             business, school or research organisation.
+//   2. WHAT IS BEING AGREED — laboratory research only, not for human
+//                             consumption, plus the Terms and the Research Use
+//                             Policy.
+//
+// Those are two genuinely different assertions, made by two deliberate and
+// separate acts. Collapsing them further, into one "I agree", is the line this
+// must not cross. The test alongside pins both the count and every
+// representation the copy is required to carry, so neither can be edited away
+// by accident.
 const ATTESTATIONS = [
-  { id: "age", text: "I am 21 years of age or older" },
   {
-    id: "organization",
-    text: "I represent a laboratory, business, educational institution, or qualified research organization",
+    id: "eligibility",
+    text: "I'm 21 or older, and I'm here for a lab, business, school, or research organization",
   },
   {
     id: "researchUse",
-    text: "I understand products are sold for research/laboratory purposes only and are not intended for human consumption",
-  },
-  {
-    id: "terms",
-    text: "I agree to the Terms & Conditions and Research Use Policy",
+    text: "I understand these products are for laboratory research only — not for human consumption — and I accept the Terms & Research Use Policy",
   },
 ] as const;
 
@@ -421,12 +440,12 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
       {!isVerified ? (
       <div
         data-age-gate="true"
-        className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-[#060606] px-4 py-8 text-zinc-100 sm:items-center sm:px-6 sm:py-10"
+        className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-[#0a0908] px-4 py-8 text-zinc-100 sm:items-center sm:px-6 sm:py-10"
       >
         {/* Layered ambient light — warm gold + cool blue, matching the brand */}
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_28%_18%,_rgba(199,174,94,0.12),_transparent_52%),radial-gradient(ellipse_at_82%_85%,_rgba(140,180,255,0.09),_transparent_50%),linear-gradient(160deg,_#050505_0%,_#0c0c0c_48%,_#050505_100%)]" />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_28%_18%,_rgba(199,174,94,0.16),_transparent_58%),radial-gradient(ellipse_at_82%_85%,_rgba(140,180,255,0.06),_transparent_52%),linear-gradient(160deg,_#0b0a08_0%,_#15130f_48%,_#0b0a08_100%)]" />
         {/* Faint grid texture for depth */}
-        <div className="pointer-events-none absolute inset-0 opacity-[0.5] [background-image:linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] [background-size:46px_46px] [mask-image:radial-gradient(ellipse_at_center,black,transparent_72%)]" />
+        <div className="pointer-events-none absolute inset-0 opacity-[0.28] [background-image:linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] [background-size:46px_46px] [mask-image:radial-gradient(ellipse_at_center,black,transparent_72%)]" />
 
         <div
           ref={dialogRef}
@@ -441,9 +460,8 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
              attestations made the card 1052px tall, taller than a MacBook Air
              (900), a 14" (982) and a 1280x800 laptop, so it overflowed off the
              TOP of the screen and cut the wordmark in half.
-             Widening at lg and pairing the attestations two-up fixes both at
-             once: the card fills the screen properly AND gets short enough to
-             fit without scrolling. */
+             Widening at lg fixes both at once: the card fills the screen
+             properly AND gets short enough to fit without scrolling. */
           /* vl2-hero-enter, NOT vl2-fade-in. On a first visit this panel is the
              ONLY thing on the screen -- the storefront behind it is inert until
              the attestations are confirmed -- so holding it at opacity:0 for the
@@ -453,26 +471,36 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
              first visit reported `first-paint` at 780ms and NO
              first-contentful-paint and NO largest-contentful-paint entry, across
              every run. The panel still rises; it is simply legible while it does. */
-          className="vl2-hero-enter vl-focus-ring relative w-full max-w-lg rounded-[1.75rem] border border-white/10 bg-[rgba(12,12,12,0.72)] p-6 text-center shadow-[0_28px_80px_rgba(0,0,0,0.6)] backdrop-blur-2xl sm:rounded-[2rem] sm:p-9 lg:max-w-3xl lg:p-8 xl:max-w-4xl"
+          className="vl2-hero-enter vl-focus-ring relative w-full max-w-lg rounded-[1.75rem] border border-white/[0.09] bg-[rgba(24,21,17,0.72)] p-6 text-center shadow-[0_28px_80px_rgba(0,0,0,0.6)] backdrop-blur-2xl sm:rounded-[2rem] sm:p-9 lg:max-w-3xl lg:p-8 xl:max-w-4xl"
         >
-          {/* Monogram */}
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full lg:mx-0 border border-[color:var(--accent-gold)]/25 bg-gradient-to-br from-[color:var(--accent-gold)]/[0.12] to-white/[0.02] shadow-[0_0_28px_rgba(199,174,94,0.14)]">
-            <span className="vl2-serif text-xl tracking-[0.12em] text-white">VL</span>
-          </div>
-
           {/* TWO COLUMNS ON A LAPTOP, ONE ON A PHONE.
-              A single column of brand-then-form is 921px tall even paired
-              two-up, which still overflows a MacBook Air and a 1280x800
-              laptop. Setting the brand beside the form instead of above it
-              takes the tallest screen requirement to roughly 600px, so the
-              whole gate fits without scrolling on every laptop measured.
+              Setting the brand beside the form rather than above it is what
+              makes the gate fit a laptop without scrolling. It was introduced
+              when four attestations made a single column 921px tall, and
+              dropping to two did NOT make it unnecessary — measured in the
+              browser at 1280x800, with the same content: 628px in two
+              columns, 922px in one. The gate's own padding leaves 712px of
+              that screen, so one column would still overflow and two still
+              clears it by 84px.
               Below lg this is not a grid at all and the DOM order is
               unchanged, so the phone layout behaves exactly as before. */}
           <div className="lg:grid lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1fr)] lg:items-center lg:gap-9 lg:text-left">
           <div>
-          <p className="vl2-eyebrow mt-6 flex items-center justify-center gap-2 text-[color:var(--accent-gold)]/70 lg:mt-0 lg:justify-start">
+          {/* THE MONOGRAM SITS WITH THE BRAND, NOT ABOVE THE WHOLE CARD.
+              It used to be a sibling of the two-column grid, which was fine
+              while four attestations made the right-hand column tall. With two
+              it is shorter, the grid centres itself against it, and the
+              monogram was left stranded at the top of the card above roughly
+              120px of nothing. Inside the brand column it simply leads the
+              brand, and the phone layout is untouched: the DOM order is the
+              same, and it is still centred until lg. */}
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full sm:h-16 sm:w-16 lg:mx-0 border border-[color:var(--accent-gold)]/25 bg-gradient-to-br from-[color:var(--accent-gold)]/[0.12] to-white/[0.02] shadow-[0_0_28px_rgba(199,174,94,0.14)]">
+            <span className="vl2-serif text-xl tracking-[0.12em] text-white">VL</span>
+          </div>
+
+          <p className="vl2-eyebrow mt-5 flex items-center justify-center gap-2 text-[color:var(--accent-gold)]/70 sm:mt-6 lg:justify-start">
             <span className="h-px w-6 bg-[color:var(--accent-gold)]/30" />
-            Restricted Access · 21+
+            21+ · Research Use Only
             <span className="h-px w-6 bg-[color:var(--accent-gold)]/30" />
           </p>
 
@@ -490,27 +518,27 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
           <p className="mt-3 text-sm text-white/55 sm:text-base">Research Integrity. Verified Quality.</p>
 
           {/* Trust chips */}
-          <div className="mt-6 flex flex-wrap items-center justify-center gap-2 lg:justify-start">
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-1.5 sm:mt-6 sm:gap-2 lg:justify-start">
             {trustPoints().slice(0, 3).map((point: string) => (
-              <span key={point} className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[0.62rem] font-medium uppercase tracking-[0.14em] text-white/55">
+              <span key={point} className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[0.6rem] font-medium uppercase tracking-[0.1em] text-white/55 sm:px-3 sm:py-1.5 sm:text-[0.62rem] sm:tracking-[0.14em]">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3 text-[color:var(--accent-gold)]/80" aria-hidden="true"><path d="m5 12 4 4 10-10" /></svg>
                 {point}
               </span>
             ))}
           </div>
 
-          <div className="my-7 h-px w-full bg-gradient-to-r from-transparent via-white/12 to-transparent lg:hidden" />
+          <div className="my-6 h-px w-full bg-gradient-to-r from-transparent via-white/12 to-transparent lg:hidden" />
           </div>
 
           <div>
 
-          <p className="text-lg font-medium text-white sm:text-xl lg:mt-0">Confirm each statement to enter</p>
+          <p className="text-lg font-medium text-white sm:text-xl lg:mt-0">Two quick things before you browse</p>
 
-          <div className="mt-5 flex flex-col gap-2.5 lg:mt-4">
+          <div className="mt-5 flex flex-col gap-3 lg:mt-4">
             {ATTESTATIONS.map((attestation) => (
               <label
                 key={attestation.id}
-                className="group flex cursor-pointer items-start gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3.5 text-left text-[0.8125rem] leading-6 text-white/70 transition-colors duration-200 hover:border-white/20 has-[:checked]:border-[color:var(--accent-gold)]/40 has-[:checked]:bg-[var(--accent-gold-soft)] has-[:checked]:text-white/85"
+                className="group flex cursor-pointer items-start gap-3.5 rounded-2xl border border-white/[0.07] bg-white/[0.035] p-4 text-left text-sm leading-6 text-white/75 transition-colors duration-200 hover:border-white/20 hover:bg-white/[0.055] has-[:checked]:border-[color:var(--accent-gold)]/40 has-[:checked]:bg-[var(--accent-gold-soft)] has-[:checked]:text-white"
               >
                 <input
                   type="checkbox"
@@ -561,18 +589,33 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
             </a>
           </p>
 
-          {showPrompt ? <p role="alert" className="mt-3 text-sm text-[color:var(--accent-gold)]">Please confirm all four statements before continuing.</p> : null}
+          {showPrompt ? <p role="alert" className="mt-3 text-sm text-[color:var(--accent-gold)]">Please tick both boxes to continue.</p> : null}
 
-          {/* THE ENTRY BUTTONS STICK TO THE BOTTOM OF THE GATE.
+          {/* THE ENTRY BUTTONS MUST BE ON SCREEN WITHOUT SCROLLING.
               An in-app browser keeps its own top and bottom chrome on screen,
-              which leaves roughly 664px of a 844px iPhone. This card is taller
-              than that, so these two buttons sat about 200px BELOW the fold —
-              enabled, correct, and completely unreachable unless you knew to
-              scroll the panel. In Safari the chrome auto-hides, the viewport is
-              taller, and they were reachable. That is the entire difference
-              between "works in Safari" and "cannot sign in from TikTok".
-              Sticky keeps them on screen at any viewport height. */}
-          <div className="vl-gate-actions mt-7 flex flex-col gap-3 sm:flex-row sm:justify-center lg:mt-5 lg:justify-start">
+              which leaves roughly 664px of an 844px iPhone. When this card was
+              taller these two buttons sat about 200px BELOW the fold — enabled,
+              correct, and unreachable unless you knew to scroll the panel. In
+              Safari the chrome auto-hides, the viewport is taller, and they
+              were reachable: the entire difference between "works in Safari"
+              and "cannot sign in from TikTok".
+
+              They were pinned there with position: sticky, which cured that and
+              caused something worse — see .vl-gate-actions in globals.css: the
+              bar painted OVER the attestation rows scrolling beneath it, so a
+              tap aimed at a checkbox activated "Create account / Sign in"
+              instead. It is position: relative now, and HEIGHT is what keeps
+              them reachable. Measured on the harness at 390x844: both buttons
+              end at 820px, inside the fold, at the gate's initial scroll
+              position.
+
+              So height above these buttons is a constraint, not a preference.
+              Anything added above them has to be paid for.
+
+              lg:flex-col because side by side they do not fit the right-hand
+              column: at 1280 each of the pair wrapped onto two lines. Full
+              width of that column, stacked, is also the larger tap target. */}
+          <div className="vl-gate-actions mt-7 flex flex-col gap-3 sm:flex-row sm:justify-center lg:mt-5 lg:flex-col lg:justify-start">
             <button
               type="button"
               onClick={handleAccount}
@@ -592,7 +635,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
           </div>
 
           <p className="mx-auto mt-5 max-w-sm text-xs leading-6 text-white/45 lg:mx-0 lg:mt-4">
-            Create a free account to track orders, save your cart, and earn rewards — or continue as a guest and check out with just your email.
+            Create an account to track orders and earn rewards — or continue as a guest and check out with just your email.
           </p>
 
           </div>
@@ -603,7 +646,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
             onClick={handleExit}
             className="vl-focus-ring mt-5 lg:mt-4 text-xs text-white/40 underline-offset-4 transition hover:text-white/70 hover:underline"
           >
-            I am under 21 — exit
+            Not 21 yet? Leave the site
           </button>
 
           <p className="mt-6 border-t border-white/[0.07] pt-5 text-[0.62rem] lg:mt-4 lg:pt-4 uppercase tracking-[0.2em] text-white/30">
