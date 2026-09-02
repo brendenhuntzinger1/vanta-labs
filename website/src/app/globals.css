@@ -1303,6 +1303,235 @@ html[data-age-verified="false"] video {
   position: relative;
 }
 
+/* ------------------------------------------------------------------ */
+/*  THE GATE IS PART OF THE STORE, NOT A NOTICE IN FRONT OF IT.        */
+/*                                                                    */
+/*  It read as lifeless beside the storefront behind it, and the      */
+/*  reason is written out in full a few hundred lines below, in       */
+/*  .vl2-product-card: "ON A NEAR-BLACK PAGE, A BLACK SHADOW IS       */
+/*  INVISIBLE ... dark on dark separates nothing, and 5% gold over    */
+/*  #0b0b0b is below the threshold of sight. Separation on a dark     */
+/*  ground has to come from LIGHT."                                   */
+/*                                                                    */
+/*  The panel was doing precisely the thing that comment warns about: */
+/*  a flat translucent charcoal under 0 28px 80px rgba(0,0,0,0.6) — a */
+/*  black shadow, on black, carrying no separation at all — with the  */
+/*  only champagne on the screen a 0.7-alpha eyebrow and a ring round */
+/*  the monogram. Every product card in the catalogue is lit; the     */
+/*  first screen anyone sees was not.                                 */
+/*                                                                    */
+/*  So these rules are the product card's own five-layer warm recipe, */
+/*  scaled up for a full panel: an inset top edge that catches light, */
+/*  a tight contact shadow, an illuminated champagne rim, a close     */
+/*  halo, and one wider diffused pass. The black is kept only for the */
+/*  contact and for floating the panel over the store beneath it.     */
+/*                                                                    */
+/*  GLASS, NOT GOLD, still holds (see .vl2-btn-primary). Nothing here */
+/*  is filled with gold except the tick itself; the rest is gold      */
+/*  light falling on charcoal. Warm alpha per element stays in the    */
+/*  range the product card uses, and no blur is wide enough to cost a */
+/*  WebView a frame.                                                  */
+/* ------------------------------------------------------------------ */
+
+/* The light the panel sits in. Leads warm, with the original cool
+   counter-light kept as a quiet second source so the gold has something
+   to be gold against. */
+.vl-gate-glow {
+  background:
+    radial-gradient(ellipse 90% 62% at 22% 10%, rgba(199, 174, 94, 0.2), transparent 60%),
+    radial-gradient(ellipse 72% 52% at 84% 88%, rgba(199, 174, 94, 0.11), transparent 58%),
+    radial-gradient(ellipse 62% 46% at 88% 18%, rgba(140, 180, 255, 0.05), transparent 60%),
+    linear-gradient(165deg, #0b0a08 0%, #16130d 46%, #0a0908 100%);
+}
+
+.vl-gate-panel {
+  background:
+    radial-gradient(125% 90% at 10% 0%, rgba(199, 174, 94, 0.11), transparent 58%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.015)),
+    rgba(17, 15, 12, 0.82);
+  /* Champagne, not white: the focus ring was the only thing drawing a
+     visible edge here, so a visitor arriving by mouse — who gets no
+     :focus-visible — saw an unframed slab. The rim is the edge now, and the
+     ring is an addition to it rather than the whole of it. */
+  border: 1px solid rgba(199, 174, 94, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(232, 214, 170, 0.16),
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(199, 174, 94, 0.14),
+    0 4px 24px -10px rgba(199, 174, 94, 0.13),
+    0 22px 70px -26px rgba(199, 174, 94, 0.08),
+    0 40px 90px -34px rgba(0, 0, 0, 0.8);
+}
+
+/* An attestation is the one thing on this screen the visitor DOES, so it is
+   the one thing that visibly answers. At rest it is lit charcoal like any
+   card in the store; ticked, the champagne rim closes around it. */
+.vl-gate-row {
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.014));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.4);
+  transition:
+    border-color var(--duration-base) var(--ease-out-premium),
+    box-shadow var(--duration-base) var(--ease-out-premium),
+    background var(--duration-base) var(--ease-out-premium);
+}
+
+.vl-gate-row:hover {
+  border-color: rgba(199, 174, 94, 0.3);
+}
+
+.vl-gate-row:has(:checked) {
+  border-color: rgba(199, 174, 94, 0.44);
+  background: linear-gradient(180deg, rgba(199, 174, 94, 0.13), rgba(199, 174, 94, 0.04));
+  box-shadow:
+    inset 0 1px 0 rgba(232, 214, 170, 0.2),
+    0 0 0 1px rgba(199, 174, 94, 0.2),
+    0 2px 18px -8px rgba(199, 174, 94, 0.3);
+}
+
+/* Champagne is the store's label colour (see --accent-gold): borders, labels
+   and savings text. These are labels. */
+.vl-gate-chip {
+  border: 1px solid rgba(199, 174, 94, 0.24);
+  background: linear-gradient(180deg, rgba(199, 174, 94, 0.1), rgba(199, 174, 94, 0.03));
+  box-shadow: inset 0 1px 0 rgba(232, 214, 170, 0.12);
+  color: rgba(226, 210, 170, 0.78);
+}
+
+.vl-gate-monogram {
+  border: 1px solid rgba(199, 174, 94, 0.45);
+  background:
+    radial-gradient(125% 125% at 30% 18%, rgba(199, 174, 94, 0.32), rgba(199, 174, 94, 0.07) 58%, rgba(255, 255, 255, 0.02));
+  box-shadow:
+    inset 0 1px 0 rgba(232, 214, 170, 0.35),
+    0 0 34px -8px rgba(199, 174, 94, 0.42);
+}
+
+/* Light, not a line: the flanks either side of the eyebrow, and the rule that
+   separates brand from form on a phone. */
+.vl-gate-rule {
+  background: linear-gradient(90deg, transparent, rgba(199, 174, 94, 0.55), transparent);
+}
+
+/* SEPARATION AT REST, NOT ON HOVER — the same argument .vl2-product-card
+   makes. This is the single most important control on the site's first
+   screen, and most of the traffic that meets it is on a phone that can never
+   hover. So the primary entry button wears the champagne halo
+   .vl2-btn-primary otherwise keeps for :hover. It is still glass: the border
+   warms and a halo appears outside it, nothing is repainted gold. Disabled is
+   excluded — an unearned glow would be a lie about what the button will do. */
+.vl-gate-cta:not(:disabled) {
+  border-color: rgba(199, 174, 94, 0.45);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 2px 4px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(199, 174, 94, 0.14),
+    0 14px 32px -16px rgba(199, 174, 94, 0.45);
+}
+
+.vl-gate-cta:not(:disabled):hover {
+  border-color: rgba(199, 174, 94, 0.65);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 2px 4px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(199, 174, 94, 0.2),
+    0 18px 40px -16px rgba(199, 174, 94, 0.55);
+}
+
+/* THE PANEL'S OWN FOCUS RING, IN THE BRAND'S COLOUR.
+   The gate moves focus onto the panel as it opens, so keyboard and screen
+   reader users land inside the dialog rather than on the inert page behind
+   it. That means this ring is drawn on arrival, and the default
+   .vl-focus-ring white at 0.86 alpha was then the loudest thing on the
+   screen, framing the whole gate as exactly the "page of outlined boxes"
+   that --border-soft exists to avoid.
+   Champagne keeps the same 2px and clears the 3:1 non-text contrast minimum
+   against this backdrop by a wide margin (#c7ae5e on #0b0a08 is about 8:1),
+   so the indicator is not weakened, only brought in line. */
+.vl-gate-panel.vl-focus-ring:focus-visible {
+  outline: 2px solid rgba(199, 174, 94, 0.9);
+  outline-offset: 3px;
+}
+
+/* THE BOX A VISITOR ACTUALLY TICKS.
+   It was the browser's own control with accent-color set, which paints the
+   CHECKED state champagne and leaves the unchecked one a stock white square
+   with a grey border — the only piece of another design system left on the
+   panel, and the piece the eye goes to first because it is what you came here
+   to click.
+
+   appearance:none replaces it with the store's own materials, and the real
+   <input> is untouched underneath: same element, same events, same :checked,
+   so keyboard operation, screen readers and the QA harnesses that drive
+   `input[type=checkbox]` all behave exactly as before.
+
+   The unchecked border is rgba(199,174,94,0.62) and not the softer value that
+   would look tidier: a control boundary needs 3:1 against its background
+   under WCAG 1.4.11, and at 0.62 over the row it computes to about 3.5:1.
+   Below that this becomes a control a low-vision visitor cannot find. */
+.vl-gate-check {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-grid;
+  place-content: center;
+  border-radius: 0.45rem;
+  border: 1px solid rgba(199, 174, 94, 0.62);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.015));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out-premium),
+    border-color var(--duration-fast) var(--ease-out-premium),
+    box-shadow var(--duration-fast) var(--ease-out-premium);
+}
+
+.vl-gate-check::after {
+  content: "";
+  width: 0.6rem;
+  height: 0.3rem;
+  border-left: 2px solid #14120d;
+  border-bottom: 2px solid #14120d;
+  transform: rotate(-45deg) translateY(-0.08rem);
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out-premium);
+}
+
+/* Champagne fill, charcoal tick — the one place on the gate where gold is a
+   surface rather than light, because a tick has to read instantly. */
+.vl-gate-check:checked {
+  border-color: rgba(216, 192, 122, 0.95);
+  background: linear-gradient(180deg, var(--accent-gold-strong), var(--accent-gold));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 0 16px -3px rgba(199, 174, 94, 0.6);
+}
+
+.vl-gate-check:checked::after {
+  opacity: 1;
+}
+
+.vl-gate-check:focus-visible {
+  outline: 2px solid rgba(199, 174, 94, 0.9);
+  outline-offset: 2px;
+}
+
+/* An appearance:none control is drawn by us, and Windows High Contrast
+   replaces our colours with the user's — which would leave two empty squares
+   with no way to tell ticked from unticked. Hand the native control back
+   where that is in force. */
+@media (forced-colors: active) {
+  .vl-gate-check {
+    appearance: auto;
+    -webkit-appearance: auto;
+  }
+
+  .vl-gate-check::after {
+    display: none;
+  }
+}
+
 /* Published so the diagnostics panel can report what the device actually says. */
 :root {
   --sa-top: env(safe-area-inset-top, 0px);

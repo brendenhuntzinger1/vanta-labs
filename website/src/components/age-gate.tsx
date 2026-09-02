@@ -443,9 +443,9 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
         className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-[#0a0908] px-4 py-8 text-zinc-100 sm:items-center sm:px-6 sm:py-10"
       >
         {/* Layered ambient light — warm gold + cool blue, matching the brand */}
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_28%_18%,_rgba(199,174,94,0.16),_transparent_58%),radial-gradient(ellipse_at_82%_85%,_rgba(140,180,255,0.06),_transparent_52%),linear-gradient(160deg,_#0b0a08_0%,_#15130f_48%,_#0b0a08_100%)]" />
+        <div className="vl-gate-glow pointer-events-none absolute inset-0" />
         {/* Faint grid texture for depth */}
-        <div className="pointer-events-none absolute inset-0 opacity-[0.28] [background-image:linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] [background-size:46px_46px] [mask-image:radial-gradient(ellipse_at_center,black,transparent_72%)]" />
+        <div className="pointer-events-none absolute inset-0 opacity-[0.28] [background-image:linear-gradient(rgba(199,174,94,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(199,174,94,0.05)_1px,transparent_1px)] [background-size:46px_46px] [mask-image:radial-gradient(ellipse_at_center,black,transparent_72%)]" />
 
         <div
           ref={dialogRef}
@@ -471,7 +471,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
              first visit reported `first-paint` at 780ms and NO
              first-contentful-paint and NO largest-contentful-paint entry, across
              every run. The panel still rises; it is simply legible while it does. */
-          className="vl2-hero-enter vl-focus-ring relative w-full max-w-lg rounded-[1.75rem] border border-white/[0.09] bg-[rgba(24,21,17,0.72)] p-6 text-center shadow-[0_28px_80px_rgba(0,0,0,0.6)] backdrop-blur-2xl sm:rounded-[2rem] sm:p-9 lg:max-w-3xl lg:p-8 xl:max-w-4xl"
+          className="vl-gate-panel vl2-hero-enter vl-focus-ring relative w-full max-w-lg rounded-[1.75rem] p-6 text-center backdrop-blur-2xl sm:rounded-[2rem] sm:p-9 lg:max-w-3xl lg:p-8 xl:max-w-4xl"
         >
           {/* TWO COLUMNS ON A LAPTOP, ONE ON A PHONE.
               Setting the brand beside the form rather than above it is what
@@ -484,8 +484,8 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
               clears it by 84px.
               Below lg this is not a grid at all and the DOM order is
               unchanged, so the phone layout behaves exactly as before. */}
-          <div className="lg:grid lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1fr)] lg:items-center lg:gap-9 lg:text-left">
-          <div>
+          <div className="lg:grid lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1fr)] lg:items-center lg:gap-0 lg:text-left">
+          <div className="lg:pr-8">
           {/* THE MONOGRAM SITS WITH THE BRAND, NOT ABOVE THE WHOLE CARD.
               It used to be a sibling of the two-column grid, which was fine
               while four attestations made the right-hand column tall. With two
@@ -494,14 +494,14 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
               120px of nothing. Inside the brand column it simply leads the
               brand, and the phone layout is untouched: the DOM order is the
               same, and it is still centred until lg. */}
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full sm:h-16 sm:w-16 lg:mx-0 border border-[color:var(--accent-gold)]/25 bg-gradient-to-br from-[color:var(--accent-gold)]/[0.12] to-white/[0.02] shadow-[0_0_28px_rgba(199,174,94,0.14)]">
-            <span className="vl2-serif text-xl tracking-[0.12em] text-white">VL</span>
+          <div className="vl-gate-monogram mx-auto flex h-14 w-14 items-center justify-center rounded-full sm:h-16 sm:w-16 lg:mx-0">
+            <span className="vl2-serif text-xl tracking-[0.12em] text-[color:var(--accent-gold-strong)]">VL</span>
           </div>
 
-          <p className="vl2-eyebrow mt-5 flex items-center justify-center gap-2 text-[color:var(--accent-gold)]/70 sm:mt-6 lg:justify-start">
-            <span className="h-px w-6 bg-[color:var(--accent-gold)]/30" />
+          <p className="vl2-eyebrow mt-5 flex items-center justify-center gap-2 text-[color:var(--accent-gold)] sm:mt-6 lg:justify-start">
+            <span className="vl-gate-rule h-px w-6" />
             21+ · Research Use Only
-            <span className="h-px w-6 bg-[color:var(--accent-gold)]/30" />
+            <span className="vl-gate-rule h-px w-6" />
           </p>
 
           {/* h2, not h1. This dialog renders on all 111 public URLs, so an h1 here
@@ -520,17 +520,21 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
           {/* Trust chips */}
           <div className="mt-5 flex flex-wrap items-center justify-center gap-1.5 sm:mt-6 sm:gap-2 lg:justify-start">
             {trustPoints().slice(0, 3).map((point: string) => (
-              <span key={point} className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[0.6rem] font-medium uppercase tracking-[0.1em] text-white/55 sm:px-3 sm:py-1.5 sm:text-[0.62rem] sm:tracking-[0.14em]">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3 text-[color:var(--accent-gold)]/80" aria-hidden="true"><path d="m5 12 4 4 10-10" /></svg>
+              <span key={point} className="vl-gate-chip inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[0.6rem] font-medium uppercase tracking-[0.1em] sm:px-3 sm:py-1.5 sm:text-[0.62rem] sm:tracking-[0.14em]">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3 text-[color:var(--accent-gold)]" aria-hidden="true"><path d="m5 12 4 4 10-10" /></svg>
                 {point}
               </span>
             ))}
           </div>
 
-          <div className="my-6 h-px w-full bg-gradient-to-r from-transparent via-white/12 to-transparent lg:hidden" />
+          <div className="vl-gate-rule my-6 h-px w-full lg:hidden" />
           </div>
 
-          <div>
+          {/* The same rule the phone gets, stood up. Below lg the brand and the
+              form are one column separated by a champagne hairline; at lg they
+              sit side by side, so the hairline turns vertical rather than
+              disappearing and the two halves stay visibly related. */}
+          <div className="lg:border-l lg:border-[rgba(199,174,94,0.18)] lg:pl-8">
 
           <p className="text-lg font-medium text-white sm:text-xl lg:mt-0">Two quick things before you browse</p>
 
@@ -538,13 +542,13 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
             {ATTESTATIONS.map((attestation) => (
               <label
                 key={attestation.id}
-                className="group flex cursor-pointer items-start gap-3.5 rounded-2xl border border-white/[0.07] bg-white/[0.035] p-4 text-left text-sm leading-6 text-white/75 transition-colors duration-200 hover:border-white/20 hover:bg-white/[0.055] has-[:checked]:border-[color:var(--accent-gold)]/40 has-[:checked]:bg-[var(--accent-gold-soft)] has-[:checked]:text-white"
+                className="vl-gate-row group flex cursor-pointer items-start gap-3.5 rounded-2xl p-4 text-left text-sm leading-6 text-white/75 has-[:checked]:text-white"
               >
                 <input
                   type="checkbox"
                   checked={Boolean(confirmed[attestation.id])}
                   onChange={(event) => toggle(attestation.id, event.target.checked)}
-                  className="mt-0.5 h-5 w-5 shrink-0 rounded accent-[var(--accent-gold-bright)]"
+                  className="vl-gate-check mt-0.5 h-5 w-5 shrink-0"
                 />
                 {/* NO LINKS INSIDE THE ROW.
                     The policy links used to live in this label, inline with the
@@ -620,7 +624,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
               type="button"
               onClick={handleAccount}
               disabled={!agreed}
-              className="vl2-btn-primary vl-focus-ring px-6 py-3.5 text-sm disabled:cursor-not-allowed disabled:opacity-40"
+              className="vl2-btn-primary vl-gate-cta vl-focus-ring px-6 py-3.5 text-sm disabled:cursor-not-allowed disabled:opacity-40"
             >
               Create account / Sign in
             </button>

@@ -378,6 +378,56 @@ describe("the gate survives an app's own toolbars", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// THE TICK BOX IS DRAWN BY US NOW, WHICH MOVES THREE GUARANTEES ONTO US.
+//
+// It was the browser's own control with accent-color set. That paints the
+// CHECKED state champagne and leaves the unchecked one a stock white square —
+// the only piece of another design system on the panel, and the piece the eye
+// lands on first, because it is the thing you came here to click.
+//
+// appearance:none buys the store's own materials and takes on what the native
+// control was providing for free. All three below are invisible in a normal
+// desktop browser, which is exactly why they need pinning.
+// ---------------------------------------------------------------------------
+describe("the restyled tick box keeps what the native control gave for free", () => {
+  const gate = read("src/components/age-gate.tsx");
+  const css = read("src/app/globals.css");
+  const rules = css.slice(css.indexOf(".vl-gate-check {"));
+
+  it("is still a real checkbox, only repainted", () => {
+    // The moment this becomes a styled div, keyboard operation, the accessible
+    // role and every QA harness that drives input[type=checkbox] go with it.
+    expect(gate).toMatch(/<input\s+type="checkbox"/);
+    expect(gate).toMatch(/className="vl-gate-check/);
+    expect(gate).toMatch(/checked=\{Boolean\(confirmed\[attestation\.id\]\)\}/);
+    expect(gate).toMatch(/onChange=\{\(event\) => toggle\(/);
+  });
+
+  it("hands the native control back under forced colours", () => {
+    // Windows High Contrast replaces our colours with the user's, so an
+    // appearance:none box would render as two empty squares with no way to
+    // tell ticked from unticked.
+    expect(rules).toMatch(/@media \(forced-colors: active\)/);
+    const forced = rules.slice(rules.indexOf("@media (forced-colors: active)"));
+    expect(forced).toMatch(/appearance:\s*auto/);
+  });
+
+  it("draws its own focus indicator, since it no longer inherits one", () => {
+    expect(rules).toMatch(/\.vl-gate-check:focus-visible\s*\{[^}]*outline:/);
+  });
+
+  it("keeps a boundary strong enough to find (WCAG 1.4.11)", () => {
+    // A control boundary needs 3:1 against its background. The unchecked
+    // border is champagne at 0.62 over the row, which computes to about
+    // 3.5:1; the softer values that look tidier fall under it, and a
+    // low-vision visitor then cannot see where the box is.
+    const border = rules.match(/\.vl-gate-check\s*\{[^}]*border:\s*1px solid rgba\(199,\s*174,\s*94,\s*([\d.]+)\)/);
+    expect(border, "the unchecked border must stay a champagne rgba value").not.toBeNull();
+    expect(Number(border![1])).toBeGreaterThanOrEqual(0.6);
+  });
+});
+
 // The two policy links on the gate are the first links a visitor can tap, and
 // they were 107x17 at 320px — under the 24px minimum in WCAG 2.2 AA 2.5.8.
 // py-1 grows the box to 24px+ and -my-1 gives the layout back, so the
