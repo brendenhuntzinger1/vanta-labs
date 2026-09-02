@@ -3693,10 +3693,12 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   max-width: 1440px;
 }
 
+/* FULL WIDTH ON A PHONE, so the row below it belongs to the claim button and
+   the actions — and so the layout needs no `order` to get there. See the note
+   on .vl-offer-cta. */
 .vl-offer-main {
   min-width: 0;
-  order: 1;
-  flex: 1 1 10rem;
+  flex: 1 1 100%;
   text-decoration: none;
   color: inherit;
   /* A TAP TARGET, not just a text run. Hiding the eyebrow on narrow screens
@@ -3777,12 +3779,21 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
 }
 
 /* THE CLAIM CONTROL.
-   Its own row on a phone (order 3, 100% basis), inline from 36rem. `order` is
-   what keeps the ✕ and DETAILS on the headline's row while the button drops
-   below them rather than between them. */
+   NOT PLACED WITH `order`, AND THIS IS THE SECOND ATTEMPT.
+   The first one set order: 1/2/3 on main/actions/cta so the ✕ and DETAILS
+   stayed up on the headline's row while the button dropped below them. It
+   looked right and it broke keyboard navigation: the DOM runs main -> cta ->
+   actions, so on a phone the focus ring went headline (y=97) -> claim button
+   (y=144) -> DETAILS (y=100) -> ✕ (y=100), down the bar and then back up.
+   That is WCAG 2.4.3 Focus Order (Level A), and a sighted keyboard user
+   watches the ring jump.
+
+   `order` is a visual reordering that tab order does not follow, so the only
+   honest fix is to stop needing it: .vl-offer-main takes the whole first line
+   on a phone, and the claim button and the actions share the second in the
+   order they are written. Visual order is DOM order at every width. */
 .vl-offer-cta {
-  order: 3;
-  flex: 1 0 100%;
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -3848,7 +3859,6 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
 }
 
 .vl-offer-actions {
-  order: 2;
   display: flex;
   align-items: center;
   gap: 0.15rem;
@@ -3909,11 +3919,13 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   .vl-offer-link-short { display: none; }
 }
 
-/* From 36rem the claim button rejoins the headline's row and stops being
-   full-width — a 600px-wide pill would look like a form field, not a chip. */
+/* From 36rem everything shares one row: the headline stops claiming the full
+   line, and the claim button stops being full-width — a 600px-wide pill would
+   look like a form field, not a chip. Still no `order`; the row simply reads
+   in the order it is written. */
 @media (min-width: 36rem) {
-  .vl-offer-cta { order: 2; flex: 0 0 auto; }
-  .vl-offer-actions { order: 3; }
+  .vl-offer-main { flex: 1 1 10rem; }
+  .vl-offer-cta { flex: 0 0 auto; }
   .vl-offer-code { width: auto; }
 }
 
