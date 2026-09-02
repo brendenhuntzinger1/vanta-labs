@@ -436,3 +436,81 @@ describe("the site carries its own back control", () => {
     expect(header).toMatch(/aria-label="Go back"[\s\S]{0,400}h-11/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Reported from a phone, after a link was opened from Snapchat: clearing the
+// age gate filled the entire screen with a magnified vial on a white
+// background, with the headline landing on top of the vial's own label text.
+//
+// It was not the native fullscreen player this time -- the class of bug the
+// rest of this file guards. It was our own framing.
+//
+// THE ASSET IS SQUARE AND THE HERO IS PORTRAIT. The clip is 720x720 and the
+// poster 960x960; the hero box on a phone is 390x726. `object-fit: cover`
+// resolves that by scaling the square to 726x726 -- a 1.86x magnification that
+// throws away 46% of the frame's width and blows the vial up past the width of
+// the screen. Measured on the harness at 390x844:
+//
+//     390x726 box -> painted 726x726 -> 46% of the width cropped away
+//     375x628 box -> painted 628x628 -> 40% cropped
+//    1440x900 box -> painted 1440x1440 -> 0% of the width cropped
+//
+// The last line is why nobody caught it: on a laptop the composition survives
+// intact, so the defect is invisible in exactly the place it gets reviewed.
+//
+// The fix is to stop cover-cropping a square into a portrait box. Below the
+// desktop breakpoint the media gets a SQUARE box in the upper part of the hero
+// and the copy sits on the dark ground beneath it.
+// ---------------------------------------------------------------------------
+describe("the hero vial is framed on a phone, never magnified and cropped", () => {
+  const css = read("src/app/globals.css");
+
+  /** The `.vl2-hero-video` rule that applies below the desktop breakpoint. */
+  const mobileRule = (() => {
+    const at = css.indexOf("@media (max-width: 1023px)");
+    if (at === -1) return "";
+    let depth = 0;
+    let i = css.indexOf("{", at);
+    const open = i;
+    for (; i < css.length; i++) {
+      if (css[i] === "{") depth++;
+      else if (css[i] === "}" && --depth === 0) break;
+    }
+    const block = css.slice(open + 1, i);
+    const sel = block.indexOf(".vl2-hero-video");
+    return sel === -1 ? "" : block.slice(sel, block.indexOf("}", sel));
+  })();
+
+  const decl = (prop: string) =>
+    new RegExp(`(?:^|[;{\\s])${prop}\\s*:\\s*([^;]+)`, "m").exec(mobileRule)?.[1].trim() ?? null;
+
+  it("gives the media a square box, so a square asset loses nothing to the crop", () => {
+    // cover() discards 1 - min(w,h)/max(w,h) of a square source. That is zero
+    // only when the box is square, which is the entire point of this rule.
+    const width = decl("width");
+    const height = decl("height");
+    expect(width, "the mobile hero media must declare a width").toBeTruthy();
+    expect(height, "...and a height").toBeTruthy();
+    expect(height).toBe(width);
+  });
+
+  it("stops stretching the media across all four edges of the hero", () => {
+    // The base rule is `inset: 0`, which is what makes the box portrait and
+    // forces the magnification. Below desktop it must be released.
+    expect(mobileRule).toMatch(/inset:\s*auto/);
+  });
+
+  it("fades the shot into the hero instead of ending it on a hard edge", () => {
+    // The shot is lit on a white studio background. Dropped onto a near-black
+    // hero as a plain rectangle it reads as a bright panel pasted on the page,
+    // which is the complaint this rule exists to answer -- so it is masked out
+    // at the edges rather than cut off at them.
+    expect(mobileRule).toMatch(/mask-image:/);
+  });
+
+  it("keeps the full-bleed treatment on desktop, where nothing is cropped", () => {
+    const base = css.slice(css.indexOf(".vl2-hero-video"), css.indexOf(".vl2-hero-scrim"));
+    expect(base).toMatch(/inset:\s*0/);
+    expect(base).toMatch(/object-fit:\s*cover/);
+  });
+});

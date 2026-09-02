@@ -1366,6 +1366,69 @@ html[data-age-verified="false"] video {
   }
 }
 
+/* PHONES AND PORTRAIT TABLETS: FRAME THE SHOT, DO NOT CROP INTO IT.
+
+   Reported from a phone opening the site through Snapchat: clearing the age
+   gate filled the whole screen with a magnified vial on a white background,
+   the headline landing across the vial's own label text.
+
+   Not the native fullscreen player — the failure the rest of this hero is
+   built to prevent — but our own framing. THE ASSET IS SQUARE AND THE HERO IS
+   PORTRAIT: a 720x720 clip and a 960x960 poster, painted `object-fit: cover`
+   into a 390x726 box. Covering that with a square means scaling it to 726x726,
+   a 1.86x magnification that discards 46% of the frame's width and prints the
+   vial wider than the screen. Measured on the harness:
+
+       390x726  -> painted 726x726   -> 46% of the width cropped away
+       375x628  -> painted 628x628   -> 40% cropped
+      1440x900  -> painted 1440x1440 ->  0% of the width cropped
+
+   That last line is why this survived so long: on a laptop the composition is
+   untouched, so the defect is invisible in the one place it gets looked at.
+   It is a mobile bug that cannot be seen on the machine it is reviewed on.
+
+   So below the desktop breakpoint the media stops being a full-bleed
+   background and becomes what it actually is — a product shot, whole, at a
+   sane size, in the upper part of the hero, with the copy on the dark ground
+   beneath it. Desktop keeps the full-bleed treatment, where it crops nothing
+   and works as designed. */
+@media (max-width: 1023px) {
+  .vl2-hero-video {
+    /* `inset: 0` is what forced the box portrait. Release it. */
+    inset: auto;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    /* SQUARE, and equal by construction. cover() discards
+       1 - min(w,h)/max(w,h) of a square source, which is zero only here.
+       Whichever limit binds the box stays square: the viewport width on a
+       phone, the hero's height on a short landscape window. */
+    width: min(88vw, 46svh);
+    height: min(88vw, 46svh);
+    /* Belt and braces for the <img> that in-app browsers get: if the asset is
+       ever re-cut to another aspect, contain shows all of it rather than
+       quietly reintroducing the crop this rule exists to remove. */
+    object-fit: contain;
+    opacity: 0.95;
+    /* No hard edge, and WEIGHTED HIGH ON PURPOSE.
+
+       The vial is lit on a white studio background, so a plain rectangle of it
+       reads as a bright panel pasted onto a near-black page — that is the
+       complaint. The vignette lets it fall away into the hero on every side
+       instead of stopping at one.
+
+       Its centre sits at 33% rather than the middle because the copy is
+       bottom-anchored and the two must not fight: measured at 390x844 the
+       media overhangs the start of the copy by 129px, and at 375x667 by 199px,
+       which is precisely where the vial's own label — the brightest, most
+       text-heavy part of the shot — used to land across the headline. Fading
+       to nothing by ~82% of the box puts the glass and cap in the clear space
+       above and leaves only unlit background behind the words. */
+    -webkit-mask-image: radial-gradient(ellipse 82% 54% at 50% 31%, #000 32%, rgba(0, 0, 0, 0.4) 58%, transparent 76%);
+    mask-image: radial-gradient(ellipse 82% 54% at 50% 31%, #000 32%, rgba(0, 0, 0, 0.4) 58%, transparent 76%);
+  }
+}
+
 .vl2-hero-content {
   position: relative;
   z-index: 2;
