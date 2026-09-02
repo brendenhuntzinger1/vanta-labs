@@ -1,6 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { businessDayKey, startOfBusinessDay, startOfBusinessMonth, startOfBusinessWeek, startOfBusinessYear } from "@/lib/business-day";
 import { getProfitSettings, type ProfitSettingsConfig } from "@/lib/admin-control";
 import { computeOrderProfit, marginPercentOf, type OrderProfitLine, type OrderProfitResult } from "@/lib/order-profit";
 import { hasCapturedPayment, isEarnedCommission, isSaleOrder } from "@/lib/ledger";
@@ -599,7 +600,9 @@ export async function getProfitWindowMetrics(nowMs: number = Date.now()): Promis
   const oneDay = 24 * 60 * 60 * 1000;
   const fromIso = new Date(nowMs - 30 * oneDay).toISOString();
   const toIso = new Date(nowMs).toISOString();
-  const dayStart = new Date(new Date(nowMs).toISOString().slice(0, 10) + "T00:00:00.000Z").getTime();
+  // The store's midnight (business-day.ts), not the UTC date slice: that slice
+  // rolled "today" over at 8pm ET, emptying this tile mid-evening.
+  const dayStart = startOfBusinessDay(new Date(nowMs)).getTime();
   const weekStart = nowMs - 7 * oneDay;
   const monthStart = nowMs - 30 * oneDay;
 
@@ -646,7 +649,9 @@ export async function getProfitTrend(fromIso: string, toIso: string): Promise<Pr
   for (const row of rows) {
     const eventTime = Date.parse(row.paidAt ?? row.createdAt ?? "");
     if (!Number.isFinite(eventTime)) continue;
-    const day = new Date(eventTime).toISOString().slice(0, 10);
+    // The store's day, like every window above — otherwise this trend's last
+    // point and the "today" tile beside it describe different orders.
+    const day = businessDayKey(new Date(eventTime));
     byDay.set(day, (byDay.get(day) ?? 0) + row.profit);
   }
 
@@ -739,14 +744,16 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
 
   const rows = await computeProfitForOrders(orders);
 
+  // Every window cut at the store's midnight, not UTC's (business-day.ts).
+  // Subtracting a flat 24h for "yesterday" was also wrong twice a year, on the
+  // 23- and 25-hour days either side of a DST change; stepping the calendar
+  // date is not.
   const now = new Date(nowMs);
-  const startOfToday = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const startOfYesterday = startOfToday - 24 * 60 * 60 * 1000;
-  // Week starts Monday (ISO). getUTCDay(): 0=Sun … 6=Sat → days since Monday.
-  const daysSinceMonday = (now.getUTCDay() + 6) % 7;
-  const startOfWeek = startOfToday - daysSinceMonday * 24 * 60 * 60 * 1000;
-  const startOfMonth = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-  const startOfYear = Date.UTC(now.getUTCFullYear(), 0, 1);
+  const startOfToday = startOfBusinessDay(now).getTime();
+  const startOfYesterday = startOfBusinessDay(now, -1).getTime();
+  const startOfWeek = startOfBusinessWeek(now).getTime(); // Monday (ISO weeks)
+  const startOfMonth = startOfBusinessMonth(now).getTime();
+  const startOfYear = startOfBusinessYear(now).getTime();
 
   const profit = { today: 0, yesterday: 0, thisWeek: 0, thisMonth: 0, thisYear: 0, lifetime: 0 };
   let grossRevenue = 0;

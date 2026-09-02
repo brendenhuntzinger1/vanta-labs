@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { businessCalendarDate } from "@/lib/business-day";
 import { getControlSnapshot } from "@/lib/admin-control";
 import { calculateEarnedPoints, dollarsToPoints, pointsToDollars, POINTS_PER_DOLLAR_REDEMPTION } from "@/lib/points-math";
 import { getStoreCreditBalanceCents } from "@/lib/store-credit";
@@ -726,9 +727,15 @@ export async function runBirthdayBonusSweep(): Promise<{ granted: number; emaile
     return { granted: 0, emailed: 0 };
   }
 
+  // TODAY in the store's zone; the birthday itself stays on its UTC accessors
+  // because `birthday` is a DATE column, and "1990-05-14" parses to UTC
+  // midnight — reading THAT in Eastern would walk it back to May 13th.
+  //
+  // On UTC, a birthday started at 8pm ET the evening before and ended at 8pm ET
+  // on the day itself, so the bonus and its email arrived a day early for
+  // anyone who checked in the evening, and were gone by dinner on the day.
   const today = new Date();
-  const month = today.getUTCMonth();
-  const day = today.getUTCDate();
+  const { year: currentYear, month, day } = businessCalendarDate(today);
 
   // Read every stored birthday and match on month/day here. `birthday` is a
   // date, so "same day in any year" is not something a simple column filter can
@@ -744,14 +751,13 @@ export async function runBirthdayBonusSweep(): Promise<{ granted: number; emaile
     return { granted: 0, emailed: 0 };
   }
 
-  const currentYear = today.getUTCFullYear();
   let granted = 0;
   let emailed = 0;
 
   for (const row of data ?? []) {
     const birthday = new Date(String(row.birthday));
     if (Number.isNaN(birthday.getTime())) continue;
-    if (birthday.getUTCMonth() !== month || birthday.getUTCDate() !== day) continue;
+    if (birthday.getUTCMonth() + 1 !== month || birthday.getUTCDate() !== day) continue;
     if (Number(row.birthday_bonus_year) === currentYear) continue;
 
     const userId = String(row.user_id);
@@ -811,14 +817,15 @@ export async function checkAndAwardBirthdayBonus(userId: string, birthday: strin
     return false;
   }
 
-  const today = new Date();
+  // Same split as the sweep: today in the store's zone, the stored birthday on
+  // its UTC accessors because it is a plain date.
+  const { year: currentYear, month, day } = businessCalendarDate();
   const birthdayDate = new Date(birthday);
-  const isBirthdayToday = today.getUTCMonth() === birthdayDate.getUTCMonth() && today.getUTCDate() === birthdayDate.getUTCDate();
+  const isBirthdayToday = month === birthdayDate.getUTCMonth() + 1 && day === birthdayDate.getUTCDate();
   if (!isBirthdayToday) {
     return false;
   }
 
-  const currentYear = today.getUTCFullYear();
   // Same rule as every other already-granted guard here: a read that failed is
   // not a year with no bonus in it. Throwing leaves the caller's .catch() to
   // skip this page load; the customer's next visit today grants it once.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { qualifiesForMonthlyTierCount, monthStartUtc } from "@/lib/ambassador-commission";
+import { qualifiesForMonthlyTierCount, monthStartForTierCount } from "@/lib/ambassador-commission";
 
 // WHY THIS FILE EXISTS
 //
@@ -96,18 +96,23 @@ describe("what counts toward a commission tier", () => {
     });
   });
 
-  describe("the month boundary is computed in UTC", () => {
-    it("starts at midnight UTC on the first of the month", () => {
-      expect(monthStartUtc(new Date("2026-08-23T04:15:00.000Z")).toISOString()).toBe(
-        "2026-08-01T00:00:00.000Z",
+  describe("the month boundary is the store's month", () => {
+    it("starts at local midnight on the first of the month", () => {
+      // Midnight ET on August 1st, which is 04:00Z — not 00:00Z.
+      expect(monthStartForTierCount(new Date("2026-08-23T04:15:00.000Z")).toISOString()).toBe(
+        "2026-08-01T04:00:00.000Z",
       );
     });
 
-    it("does not roll back a month for a late-UTC-evening local date", () => {
-      // A US-Eastern owner on Aug 31 23:00 local is Sep 1 03:00 UTC. The
-      // window must follow UTC consistently, matching how created_at is stored.
-      expect(monthStartUtc(new Date("2026-09-01T03:00:00.000Z")).toISOString()).toBe(
-        "2026-09-01T00:00:00.000Z",
+    it("counts a late US evening in the month it was worked, not the next one", () => {
+      // Sep 1 03:00 UTC is 11pm ET on AUGUST 31. This used to assert September
+      // and justify it as "follow UTC consistently, matching how created_at is
+      // stored" — but storage format is not the question. Those four hours are
+      // the last of August's selling, and counting them toward September moved
+      // an ambassador up a tier a day early while leaving the month she
+      // actually worked short.
+      expect(monthStartForTierCount(new Date("2026-09-01T03:00:00.000Z")).toISOString()).toBe(
+        "2026-08-01T04:00:00.000Z",
       );
     });
   });

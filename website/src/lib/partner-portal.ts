@@ -4,6 +4,8 @@ import { generateReferralCode } from "@/lib/referral-code-utils";
 import { validateReferralCodeFormat } from "@/lib/referral-code-validation";
 import { isEarnedCommission, isRevenueOrderStatus, isSaleOrder, netOrderRevenue, REVENUE_ORDER_STATUSES } from "@/lib/ledger";
 import { readAllRowsBounded } from "@/lib/supabase-page";
+import { businessMonthKey, startOfBusinessDayIso, startOfBusinessMonth, startOfBusinessMonthIso } from "@/lib/business-day";
+import { formatDisplayDate } from "@/lib/format-date";
 import { sendEmail } from "@/lib/email/send";
 import { enqueueFailedEmail } from "@/lib/email/retry-queue";
 import type { EmailTemplate } from "@/lib/email/types";
@@ -623,8 +625,9 @@ export async function autoApproveEligibleCommissions() {
 }
 
 function toMonthKey(dateIso: string) {
-  const date = new Date(dateIso);
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+  // The store's calendar, like the tiles above these charts: a sale at 9pm ET
+  // on the last of the month belongs to the month it was made in, not the next.
+  return businessMonthKey(new Date(dateIso));
 }
 
 function monthLabel(monthKey: string) {
@@ -637,11 +640,9 @@ function monthLabel(monthKey: string) {
 }
 
 function toDateLabel(dateIso: string) {
-  return new Date(dateIso).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  });
+  // formatDisplayDate, so a point on this series carries the same date every
+  // other rendered timestamp in the admin would give it.
+  return formatDisplayDate(dateIso, "short") ?? "";
 }
 
 export async function getApprovedPartnerByAuthUserId(userId: string) {
@@ -1330,9 +1331,10 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
   const conversionRate = totalClicks > 0 ? roundMoney((conversions / totalClicks) * 100) : 0;
 
   // This calendar month's earned commissions (excludes clawed-back rows).
-  const monthStart = new Date();
-  monthStart.setUTCDate(1);
-  monthStart.setUTCHours(0, 0, 0, 0);
+  // Same month the admin tiles use — an ambassador reading "This month" on
+  // their own dashboard and the store reading it on /admin/partners have to be
+  // talking about the same month, including on its first and last evening.
+  const monthStart = startOfBusinessMonth();
   const monthlyCommissions = roundMoney(
     commissions
       .filter((c) => new Date(c.created_at).getTime() >= monthStart.getTime() && !["reversed", "voided"].includes(String(c.payment_status)))
@@ -1616,9 +1618,13 @@ export async function getAdminPartnerRows(input?: { search?: string; status?: st
 }
 
 export async function getAdminOperationsSummary(): Promise<AdminOperationsSummary> {
+  // Cut in the store's zone, not UTC. Cut at midnight UTC, these two tiles
+  // disagreed with each other every evening from 8pm ET: an order paid at
+  // 5:20pm ET was inside "this month" and outside "today", because "today" had
+  // already become tomorrow. See business-day.ts.
   const today = new Date();
-  const todayStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())).toISOString();
-  const monthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)).toISOString();
+  const todayStart = startOfBusinessDayIso(today);
+  const monthStart = startOfBusinessMonthIso(today);
 
   const [
     opsRpc,

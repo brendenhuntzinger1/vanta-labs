@@ -1,6 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { startOfBusinessDayIso } from "@/lib/business-day";
 import { REVENUE_ORDER_STATUSES, netOrderRevenue, NON_SALE_ORDER_TYPES } from "@/lib/ledger";
 import { rawStatusesFor } from "@/lib/order-pipeline";
 import { readAllRowsBounded } from "@/lib/supabase-page";
@@ -50,7 +51,10 @@ const MAX_REVENUE_ORDERS = 200_000;
 // (Supabase-js has no SUM without an RPC). Fine for a dashboard-scale table.
 export async function getRevenueMetrics(): Promise<RevenueMetrics> {
   const now = new Date();
-  const startOfToday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+  // The store's midnight, not UTC's — see business-day.ts. Cut at midnight UTC,
+  // "today's revenue" emptied itself at 8pm ET while the day was still trading.
+  const startOfToday = startOfBusinessDayIso(now);
+  const startOfTodayMs = Date.parse(startOfToday);
 
   const [pending, approved, awaiting, shippedResult, summaryRpc, byMethodRpc] = await Promise.all([
     supabaseAdmin.from("orders").select("id", { count: "exact", head: true }).in("payment_status", ["pending_payment", "awaiting_verification"]),
@@ -168,7 +172,9 @@ export async function getRevenueMetrics(): Promise<RevenueMetrics> {
       entry.orders += 1;
       methodMap.set(method, entry);
 
-      if (order.paid_at && String(order.paid_at) >= startOfToday) {
+      // Compared as instants. String order held only while the boundary was
+      // exactly midnight UTC and every paid_at came back in the same layout.
+      if (order.paid_at && Date.parse(String(order.paid_at)) >= startOfTodayMs) {
         todayRevenue += amount;
         todayOrders += 1;
       }

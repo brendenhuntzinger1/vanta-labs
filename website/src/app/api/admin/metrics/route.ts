@@ -1,33 +1,34 @@
 import { NextResponse } from "next/server";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { getCurrentOnlineVisitorCount, getRevenueTrend, getRevenueWindowMetrics } from "@/lib/admin-analytics";
+import { endOfBusinessDay, startOfBusinessDate, startOfBusinessDay } from "@/lib/business-day";
 
 function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
 }
 
+// Every preset spans WHOLE STORE DAYS (business-day.ts). Cut at midnight UTC,
+// "today" started at 8pm the previous evening ET and ended at 8pm tonight, so
+// the range the operator picked was never the range they got.
 function resolveRange(url: URL) {
   const preset = url.searchParams.get("preset") ?? "7d";
   const now = new Date();
-  const to = new Date(now);
-  to.setUTCHours(23, 59, 59, 999);
+  const to = endOfBusinessDay(now);
 
-  const from = new Date(now);
+  const daysBack = (n: number) => startOfBusinessDay(now, -n);
 
-  if (preset === "today") {
-    from.setUTCHours(0, 0, 0, 0);
-  } else if (preset === "30d") {
-    from.setUTCDate(from.getUTCDate() - 29);
-    from.setUTCHours(0, 0, 0, 0);
-  } else if (preset === "90d") {
-    from.setUTCDate(from.getUTCDate() - 89);
-    from.setUTCHours(0, 0, 0, 0);
-  } else if (preset === "custom") {
+  if (preset === "custom") {
     const fromParam = url.searchParams.get("from");
     const toParam = url.searchParams.get("to");
-    if (fromParam && toParam) {
-      const fromDate = new Date(`${fromParam}T00:00:00.000Z`);
-      const toDate = new Date(`${toParam}T23:59:59.999Z`);
+    const fromParts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(fromParam ?? "");
+    const toParts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(toParam ?? "");
+    if (fromParts && toParts) {
+      // The picker sends the store's calendar dates, so they resolve to the
+      // store's midnights — not to whatever instant those dates name in UTC.
+      const fromDate = startOfBusinessDate(Number(fromParts[1]), Number(fromParts[2]), Number(fromParts[3]));
+      const toDate = new Date(
+        startOfBusinessDate(Number(toParts[1]), Number(toParts[2]), Number(toParts[3]) + 1).getTime() - 1,
+      );
       if (Number.isFinite(fromDate.getTime()) && Number.isFinite(toDate.getTime()) && fromDate <= toDate) {
         return {
           preset,
@@ -36,12 +37,13 @@ function resolveRange(url: URL) {
         };
       }
     }
-    from.setUTCDate(from.getUTCDate() - 6);
-    from.setUTCHours(0, 0, 0, 0);
-  } else {
-    from.setUTCDate(from.getUTCDate() - 6);
-    from.setUTCHours(0, 0, 0, 0);
   }
+
+  const from =
+    preset === "today" ? daysBack(0)
+    : preset === "30d" ? daysBack(29)
+    : preset === "90d" ? daysBack(89)
+    : daysBack(6);
 
   return {
     preset,

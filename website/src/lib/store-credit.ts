@@ -1,5 +1,15 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { businessMonthKey, startOfBusinessMonthIso } from "@/lib/business-day";
 
+// BOTH HALVES OF THE PERIOD MOVE TOGETHER, and they have to. `period_month` is
+// the unique-index key that stops a member being granted twice, and
+// `startOfCurrentMonthIso` is the window that decides what they can still
+// spend; if one said August while the other said September, a member would
+// either be granted twice or hold credit the balance could not see. On UTC the
+// month turned at 8pm ET on the last evening, which is exactly how the one
+// grant in production dated 2026-09-01T00:01Z came to be issued at 8:01pm ET on
+// August 31st.
+//
 // Store credit is a dedicated, account-tied balance separate from loyalty
 // points. It is granted monthly to active paying members and is
 // use-it-or-lose-it: the spendable balance is only the CURRENT calendar
@@ -8,14 +18,14 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 // bounded and protects margin.
 
 /**
- * The grant period key, "YYYY-MM" in UTC. Exported so the monthly sweep can ask
+ * The grant period key, "YYYY-MM" in the STORE'S zone. Exported so the monthly sweep can ask
  * the ledger which members it has ALREADY granted this period and skip them,
  * rather than re-attempting an insert that the unique index will refuse. That
  * is what lets the sweep take a per-tick budget without the same handful of
  * members consuming it every half hour for the rest of the month.
  */
 export function currentPeriodMonth(now = new Date()): string {
-  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  return businessMonthKey(now);
 }
 
 /**
@@ -25,7 +35,7 @@ export function currentPeriodMonth(now = new Date()): string {
  * the whole ledger made admin show $35.00 against a real balance of $5.00.
  */
 export function startOfCurrentMonthIso(now = new Date()): string {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+  return startOfBusinessMonthIso(now);
 }
 
 // Spendable balance = sum of THIS month's ledger rows for the user (grants +,
