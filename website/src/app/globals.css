@@ -3724,12 +3724,25 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
 /* ---------------------------------------------------------------------------
    THE STOREFRONT OFFERS BAR.
 
-   A luxury house running an exclusive offer states it once, quietly, in good
-   type. So: near-black ground, ONE hairline of warm gold, the benefit set
-   large in the serif, and nothing that moves after it has arrived. No gold
-   fill, no glow, no shimmer, no marquee, no countdown, no pulse — every one of
-   those reads as a discount store, and contrast plus space does the work
-   instead.
+   A GOLD BAND ON A BLACK SITE. This block used to open by insisting on the
+   opposite — near-black ground, one hairline of gold, "no gold fill, no glow,
+   no shimmer" — and the restraint worked exactly as designed: measured on the
+   harness at 390x844, a 49px ribbon whose background (#0a0a0a) sat one point
+   away from the page behind it, carrying a 16px headline. It read as browser
+   chrome. The store owner's report was "it's kinda hidden up top", and that is
+   simply what the measurement says too.
+
+   So the ground is inverted. Gold on black is the largest contrast this
+   palette owns, it costs no extra height, and it is the one change that makes
+   the band unmissable on a phone in daylight. The type is bigger with it
+   (16px -> 22px on a phone, 20px -> 30px on a desktop) and the code now sits
+   in a filled dark control that reads CLAIM, because the entire point of the
+   bar is to get that code into somebody's clipboard.
+
+   WHAT IS STILL BANNED, and this half of the old doctrine was right: nothing
+   moves. No shimmer, no marquee, no ticking countdown, no pulse. Those cost a
+   repaint per frame on exactly the phones this has to stay smooth on, and they
+   are what actually makes a storefront look cheap — not the colour.
 
    IN NORMAL FLOW, like the consent bar and for the same reason: the site header
    is `position: fixed`, so anything pinned near the top either hides beneath it
@@ -3739,27 +3752,58 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
 .vl-offer-bar {
   position: relative;
   z-index: 1;
-  border-bottom: 1px solid rgba(199, 174, 94, 0.16);
-  background: #0a0a0a;
-  /* The single gold edge. A 1px top hairline reading as light catching a rim,
-     not a border drawn around a box. */
-  box-shadow: inset 0 1px 0 rgba(199, 174, 94, 0.14);
-  padding: calc(0.5rem + env(safe-area-inset-top, 0px)) 0.85rem 0.5rem;
+  /* Not a flat fill. The off-axis gradient reads as light moving across leaf
+     rather than a printed block of yellow, which is the difference between a
+     luxury band and a clearance sticker — and it is static, so it costs one
+     paint and never repaints. */
+  background: linear-gradient(101deg, #bd9d52 0%, #e6d296 20%, #cdb264 46%, #b3974a 72%, #e0cb8e 100%);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.4);
+  box-shadow:
+    inset 0 -1px 0 rgba(255, 255, 255, 0.22),
+    0 14px 34px -26px rgba(199, 174, 94, 0.85);
+  /* THE GUTTER IS THE HEADER'S GUTTER, not a number of its own. `.vl2-nav`
+     runs `mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-12`; this bar ran
+     max-width: 80rem with 1.5rem of padding, which put its first glyph at
+     x=80 on a 1440 desktop while the logo and the h1 both start at x=48. On a
+     near-black ribbon nobody could see that. On a gold band it is a visible
+     step in the left edge of the page, so the two containers are now the
+     same container. */
+  padding: calc(0.7rem + env(safe-area-inset-top, 0px)) 1rem 0.7rem;
+  /* Every child inherits ink, not paper. Anything left white would vanish. */
+  color: #14110a;
+}
+
+/* THE FOCUS RING HAS TO INVERT WITH THE GROUND.
+   .vl-focus-ring is a white outline, which is 2.2:1 on this gold and fails the
+   3:1 floor for a focus indicator (WCAG 2.2 AA 1.4.11). Dark ink is 8.5:1 on
+   the same band. Scoped to the bar, so every other surface keeps the white
+   ring it needs. */
+.vl-offer-bar .vl-focus-ring:focus-visible {
+  outline-color: #14110a;
 }
 
 .vl-offer-inner {
   margin: 0 auto;
   display: flex;
+  /* WRAPPING IS THE MOBILE LAYOUT. At 390px the headline at 22px and a claim
+     button carrying a code cannot share a row without one of them ellipsing,
+     and the one that would ellipse is the offer. So the button drops to its
+     own full-width row below (see .vl-offer-cta) and both get to be legible. */
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.55rem 0.8rem;
   /* Desktop does not get a mobile ribbon stretched across 1920px: the content
-     stops at the site's own measure and stays centred. */
-  max-width: 80rem;
+     stops at the site's own measure and stays centred. 1440px is the header's
+     measure, to the pixel. */
+  max-width: 1440px;
 }
 
+/* FULL WIDTH ON A PHONE, so the row below it belongs to the claim button and
+   the actions — and so the layout needs no `order` to get there. See the note
+   on .vl-offer-cta. */
 .vl-offer-main {
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 100%;
   text-decoration: none;
   color: inherit;
   /* A TAP TARGET, not just a text run. Hiding the eyebrow on narrow screens
@@ -3769,7 +3813,7 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
      already taller than this. */
   display: flex;
   align-items: center;
-  min-height: 2rem;
+  min-height: 2.25rem;
 }
 
 .vl-offer-body {
@@ -3789,105 +3833,134 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
 .vl-offer-text { min-width: 0; }
 
 .vl-offer-icon {
-  width: 1.05rem;
-  height: 1.05rem;
+  width: 1.15rem;
+  height: 1.15rem;
   flex-shrink: 0;
-  color: rgba(199, 174, 94, 0.75);
+  color: rgba(20, 17, 10, 0.72);
 }
 
 .vl-offer-eyebrow {
-  /* Hidden on the narrowest phones. It is a label on the offer, and at 320px
-     the width it costs comes straight out of the offer itself — which is the
-     one thing that must never be the part that gets cut. */
-  display: none;
-  font-size: 0.5625rem;
-  font-weight: 600;
-  letter-spacing: 0.22em;
+  /* IT STAYS ON AT EVERY WIDTH NOW. It used to be hidden below 30rem to buy
+     room for a single-row layout; the claim button has its own row on a phone,
+     so the room exists and the label — which is the word "offer" — is worth
+     more than the pixels it costs.
+     0.78 alpha, not the old 0.62: measured against the DARKEST stop of the
+     band (#b3974a, at 72%), 0.62 is 3.1:1 and 0.78 is 4.7:1. Checking the
+     mid-tone would have passed a label that fails at the one place on the
+     band it actually has to be read. */
+  display: block;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
-  color: rgba(199, 174, 94, 0.62);
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-/* THE BENEFIT. Largest thing in the bar, and the only serif in it. */
-.vl-offer-headline {
-  font-family: var(--font-fraunces), Georgia, serif;
-  font-size: 1rem;
-  line-height: 1.25;
-  color: #fff;
+  color: rgba(20, 17, 10, 0.78);
+  line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.vl-offer-code-group {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  flex-shrink: 0;
+/* THE BENEFIT. Largest thing in the bar, and the only serif in it. */
+.vl-offer-headline {
+  font-family: var(--font-fraunces), Georgia, serif;
+  font-size: 1.375rem;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.005em;
+  color: #14110a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.vl-offer-code-label {
-  display: none;
-  font-size: 0.5625rem;
-  font-weight: 600;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.35);
+/* The deadline sits on the eyebrow line, divided by a rule rather than a dot
+   so it reads as a second field and not as more of the same label. */
+.vl-offer-ends {
+  margin-left: 0.5rem;
+  padding-left: 0.5rem;
+  border-left: 1px solid rgba(20, 17, 10, 0.28);
+  font-weight: 700;
+  color: rgba(20, 17, 10, 0.84);
+}
+
+/* THE CLAIM CONTROL.
+   NOT PLACED WITH `order`, AND THIS IS THE SECOND ATTEMPT.
+   The first one set order: 1/2/3 on main/actions/cta so the ✕ and DETAILS
+   stayed up on the headline's row while the button dropped below them. It
+   looked right and it broke keyboard navigation: the DOM runs main -> cta ->
+   actions, so on a phone the focus ring went headline (y=97) -> claim button
+   (y=144) -> DETAILS (y=100) -> ✕ (y=100), down the bar and then back up.
+   That is WCAG 2.4.3 Focus Order (Level A), and a sighted keyboard user
+   watches the ring jump.
+
+   `order` is a visual reordering that tab order does not follow, so the only
+   honest fix is to stop needing it: .vl-offer-main takes the whole first line
+   on a phone, and the claim button and the actions share the second in the
+   order they are written. Visual order is DOM order at every width. */
+.vl-offer-cta {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .vl-offer-code {
-  display: inline-flex;
+  display: flex;
+  width: 100%;
   align-items: center;
-  gap: 0.45rem;
-  /* 2rem keeps the tap box over the 24px floor without inflating the bar. */
-  min-height: 2rem;
-  padding: 0.25rem 0.6rem;
-  border: 1px solid rgba(199, 174, 94, 0.3);
+  justify-content: center;
+  gap: 0.5rem;
+  /* 2.6rem is a comfortable thumb target, well over the 24px floor, and on a
+     phone it is the widest thing in the bar — which is the intent. */
+  min-height: 2.6rem;
+  padding: 0.4rem 1rem;
+  border: 1px solid rgba(0, 0, 0, 0.5);
   border-radius: 999px;
-  background: rgba(199, 174, 94, 0.05);
-  transition: border-color 200ms ease, background-color 200ms ease;
+  /* Dark fill, gold text: the inverse of the band, so the one control on it
+     cannot be mistaken for decoration. */
+  background: #0c0a06;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.28), 0 8px 18px -12px rgba(0, 0, 0, 0.9);
+  transition: background-color 200ms ease, transform 140ms ease;
 }
 
-.vl-offer-code:hover {
-  border-color: rgba(199, 174, 94, 0.55);
-  background: rgba(199, 174, 94, 0.09);
+.vl-offer-code:hover { background: #191308; }
+.vl-offer-code:active { transform: translateY(1px); }
+
+.vl-offer-claim {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #f2e7c6;
 }
 
 .vl-offer-code-text {
   font-family: var(--font-geist-mono), ui-monospace, monospace;
-  font-size: 0.75rem;
+  font-size: 0.9375rem;
   font-weight: 700;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.12em;
   color: var(--accent-gold);
 }
 
 .vl-offer-copy {
-  display: none;
   font-size: 0.5625rem;
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: rgba(199, 174, 94, 0.7);
+  color: rgba(242, 231, 198, 0.55);
 }
 
-/* An automatic offer gets a sentence, never a code-shaped chip. */
+/* An automatic offer gets a sentence, never a code-shaped chip. It shares the
+   claim slot so the bar keeps one shape whether or not there is a code. */
 .vl-offer-auto {
-  flex-shrink: 0;
-  font-size: 0.6875rem;
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.2rem;
+  padding: 0.35rem 0.95rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.14);
+  font-size: 0.75rem;
+  font-weight: 600;
   line-height: 1.3;
-  color: rgba(255, 255, 255, 0.45);
-  display: none;
-}
-
-.vl-offer-ends {
-  display: none;
-  flex-shrink: 0;
-  font-size: 0.625rem;
-  letter-spacing: 0.06em;
-  color: rgba(255, 255, 255, 0.38);
-  padding-left: 0.6rem;
-  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(20, 17, 10, 0.82);
 }
 
 .vl-offer-actions {
@@ -3905,15 +3978,15 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   align-items: center;
   justify-content: center;
   font-size: 0.625rem;
-  font-weight: 500;
+  font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.45);
+  color: rgba(20, 17, 10, 0.78);
   transition: color 200ms ease;
   white-space: nowrap;
 }
 
-.vl-offer-link:hover { color: rgba(255, 255, 255, 0.8); }
+.vl-offer-link:hover { color: rgba(20, 17, 10, 1); }
 
 .vl-offer-close {
   display: inline-flex;
@@ -3922,13 +3995,13 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   width: 2rem;
   height: 2rem;
   border-radius: 999px;
-  color: rgba(255, 255, 255, 0.3);
+  color: rgba(20, 17, 10, 0.62);
   transition: color 200ms ease, background-color 200ms ease;
 }
 
 .vl-offer-close:hover {
-  color: rgba(255, 255, 255, 0.75);
-  background: rgba(255, 255, 255, 0.06);
+  color: rgba(20, 17, 10, 0.95);
+  background: rgba(0, 0, 0, 0.1);
 }
 
 /* The narrow layout drops the label text; the icon-only control keeps its
@@ -3937,26 +4010,43 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
 .vl-offer-link-short { display: inline; font-size: 0.875rem; letter-spacing: 0; }
 
 /* From 30rem there is room for the supporting detail without crowding. */
+@media (min-width: 40rem) {
+  .vl-offer-bar { padding-left: 1.5rem; padding-right: 1.5rem; }
+}
+
+@media (min-width: 64rem) {
+  .vl-offer-bar { padding-left: 3rem; padding-right: 3rem; }
+}
+
 @media (min-width: 30rem) {
-  .vl-offer-headline { font-size: 1.1rem; }
-  .vl-offer-eyebrow { display: block; }
-  .vl-offer-copy { display: inline; }
-  .vl-offer-auto { display: block; }
+  .vl-offer-headline { font-size: 1.5rem; }
   .vl-offer-link-long { display: inline; }
   .vl-offer-link-short { display: none; }
 }
 
+/* From 36rem everything shares one row: the headline stops claiming the full
+   line, and the claim button stops being full-width — a 600px-wide pill would
+   look like a form field, not a chip. Still no `order`; the row simply reads
+   in the order it is written. */
 @media (min-width: 36rem) {
-  .vl-offer-code-label { display: inline; }
+  .vl-offer-main { flex: 1 1 10rem; }
+  .vl-offer-cta { flex: 0 0 auto; }
+  .vl-offer-code { width: auto; }
 }
 
 @media (min-width: 48rem) {
-  .vl-offer-bar { padding: 0.65rem 1.5rem; }
+  .vl-offer-bar {
+    padding-top: calc(0.85rem + env(safe-area-inset-top, 0px));
+    padding-bottom: 0.85rem;
+  }
   .vl-offer-inner { gap: 1rem; }
   .vl-offer-body { gap: 0.9rem; }
-  .vl-offer-headline { font-size: 1.25rem; }
-  .vl-offer-icon { width: 1.2rem; height: 1.2rem; }
-  .vl-offer-ends { display: inline; }
+  .vl-offer-headline { font-size: 1.875rem; }
+  .vl-offer-eyebrow { font-size: 0.6875rem; }
+  .vl-offer-icon { width: 1.45rem; height: 1.45rem; }
+  .vl-offer-code { min-height: 2.85rem; padding: 0.45rem 1.35rem; gap: 0.6rem; }
+  .vl-offer-code-text { font-size: 1.0625rem; }
+  .vl-offer-claim { font-size: 0.75rem; }
 }
 
 /* --- VIEW ALL OFFERS / DETAILS -------------------------------------------

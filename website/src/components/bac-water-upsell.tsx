@@ -271,7 +271,7 @@ export function BacWaterCartCheckboxes() {
                       removeFromCart(offer.cartKey);
                     }
                   }}
-                  className="h-4 w-4 accent-emerald-500"
+                  className="h-4 w-4 accent-[color:var(--accent-gold)]"
                   aria-label={`Add ${offer.sizeLabel} BAC Water`}
                 />
                 <span className="text-sm text-white">Add {offer.sizeLabel} BAC Water</span>
