@@ -116,9 +116,26 @@ failing tomorrow, nothing would tell you. Replace it with:
 v=DMARC1; p=none; rua=mailto:dmarc@vantalabsresearch.com; fo=1; adkim=r; aspf=r
 ```
 
-`dmarc@vantalabsresearch.com` must exist — a Google Workspace alias or group is
-fine, and the reports are daily XML. If you would rather not read XML, point
-`rua` at a reporting service instead; either way the address has to accept mail.
+**Choosing the `rua` address — the trap here is not obvious.**
+
+A `rua` address on a *different* domain than the one publishing the record only
+works if that other domain authorises it, by publishing
+`vantalabsresearch.com._report._dmarc.<their-domain>` (RFC 7489 §7.1). You
+cannot add records to `gmail.com`, so **pointing `rua` at a personal Gmail
+address silently receives nothing** — Google itself enforces this strictly. It
+is the most common way this step appears to be done and is not.
+
+Two options that actually work:
+
+- **A free DMARC reporting service (recommended, and needs no mailbox at all).**
+  Postmark's free DMARC monitor, EasyDMARC and dmarcian all have free tiers.
+  They give you a `rua` address on their own domain, publish the authorisation
+  record for it themselves, and email you a readable weekly summary instead of
+  raw XML. Sign up with any address you already read — a personal Gmail is fine,
+  because *they* are mailing you, not the reporting servers.
+- **A real mailbox on `vantalabsresearch.com`.** Same-domain `rua` needs no
+  authorisation, so this works with no extra setup — but only if the domain
+  actually receives mail. See §2.4, which is worth checking regardless.
 
 Then **wait two to four weeks**, confirm the reports show only your own senders
 passing, and tighten to:
@@ -177,6 +194,39 @@ Confirm someone reads that mailbox, or route it somewhere that is read.
 
 ---
 
+### 2.4 Confirm the domain can still RECEIVE mail
+
+DNS says mail for `vantalabsresearch.com` is routed to Google — `MX 1
+smtp.google.com`, `v=spf1 include:_spf.google.com ~all`, and a
+`google-site-verification` token. That is a Google Workspace configuration.
+
+**The owner reports not having Google Workspace.** DNS cannot settle this: the
+records say where mail is *routed*, not whether a subscription and mailboxes
+still exist behind them. A lapsed or cancelled Workspace leaves exactly these
+records in place, and mail to the domain then goes nowhere.
+
+This is not a side issue. Two addresses depend on it:
+
+- `orders@vantalabsresearch.com` — the `From:` on every message this store
+  sends, and the `mailto:` in every `List-Unsubscribe` header.
+- `support@vantalabsresearch.com` — printed in the footer of all 43 templates
+  by `renderLayout`.
+
+If neither receives mail, every customer reply and every opt-out request
+bounces. Beyond the customer-service cost, sending from an address that cannot
+accept replies is itself a signal filters weigh, and an unhonoured opt-out is
+the complaint that follows.
+
+**The 30-second test:** from a phone or personal account, send a message to
+`orders@vantalabsresearch.com` and another to `support@vantalabsresearch.com`.
+
+- Arrives → Workspace is live; either address can carry `rua`, and §2.3 is
+  answered at the same time.
+- Bounces, or vanishes → the domain receives no mail. Use a free DMARC service
+  for §2.1, and treat restoring a working inbox as its own piece of work:
+  either re-establish Workspace, or point the `MX` at a mail host you do have
+  and update `Reply-To`/`support@` to match.
+
 ## 3. How to actually find out where mail lands
 
 Everything above is upstream of the only question that matters, and neither the
@@ -224,8 +274,9 @@ and it is the only free source of truth on inbox placement you will get.
 
 | # | Item | Owner | Status |
 |---|---|---|---|
+| 2.4 | **Send a test to `orders@` and `support@` — do they arrive?** | Ops | ☐ |
 | 2.1 | DMARC `rua`, then `p=quarantine` | DNS | ☐ |
 | 2.2 | Verify `mail.vantalabsresearch.com`, set Marketing From | Resend + Admin | ☐ |
-| 2.3 | Confirm `orders@` is monitored | Ops | ☐ |
+| 2.3 | Confirm `orders@` is monitored (or restore a working inbox) | Ops | ☐ |
 | 3 | Seed test across Gmail / Outlook / Yahoo | Ops | ☐ |
 | 3 | Enrol in Google Postmaster Tools | Ops | ☐ |
