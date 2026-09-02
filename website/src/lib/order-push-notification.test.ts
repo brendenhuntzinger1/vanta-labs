@@ -993,3 +993,106 @@ describe("nothing here can break a paid order", () => {
     await expect(scheduleOrderPushNotification("ord_a1b2c3d4")).resolves.toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// CUTTING THROUGH A SILENT PHONE.
+//
+// Pushover's default priority is Normal, and a Normal message on a phone in Do
+// Not Disturb or a Focus mode arrives without a sound. "The notification was
+// delivered" and "the owner noticed it" are not the same claim, and only the
+// second one is worth anything at 9pm.
+//
+// So an order goes out at HIGH priority, and optionally with the owner's own
+// sound — the one they uploaded to Pushover precisely so a sale is
+// recognisable without looking.
+//
+// THE SOUND IS COSMETIC AND THE NOTIFICATION IS NOT. Pushover rejects an
+// unknown sound name with a 400, which would turn a mistyped preference into a
+// missed order — the exact class of failure this module exists to prevent. So a
+// rejected sound is retried once without it.
+// ---------------------------------------------------------------------------
+
+describe("an order has to be noticed, not merely delivered", () => {
+  const pushoverBody = (call: number) =>
+    new URLSearchParams(String((fetchMock.mock.calls[call][1] as { body?: string }).body));
+
+  it("sends at high priority, so Do Not Disturb does not swallow a sale", async () => {
+    control.notifications = { pushover_token: "t", pushover_user_key: "u" };
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await sendOrderPushNotification("ord_a1b2c3d4");
+
+    expect(pushoverBody(0).get("priority")).toBe("1");
+  });
+
+  it("plays the owner's own sound when one is configured", async () => {
+    control.notifications = { pushover_token: "t", pushover_user_key: "u", pushover_sound: "Brenden" };
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await sendOrderPushNotification("ord_a1b2c3d4");
+
+    expect(pushoverBody(0).get("sound")).toBe("Brenden");
+  });
+
+  it("says nothing about sound when none is configured, leaving Pushover's default", async () => {
+    control.notifications = { pushover_token: "t", pushover_user_key: "u" };
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await sendOrderPushNotification("ord_a1b2c3d4");
+
+    expect(pushoverBody(0).has("sound")).toBe(false);
+  });
+
+  it("delivers the order anyway when Pushover rejects the sound name", async () => {
+    // A renamed or deleted custom sound must not cost the owner an order.
+    control.notifications = { pushover_token: "t", pushover_user_key: "u", pushover_sound: "gone" };
+    fetchMock
+      .mockResolvedValueOnce({ ok: false, status: 400, json: async () => ({ errors: ["sound is invalid"] }) })
+      .mockResolvedValueOnce({ ok: true, status: 200 });
+
+    await expect(sendOrderPushNotification("ord_a1b2c3d4")).resolves.toEqual({ sent: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(pushoverBody(0).get("sound")).toBe("gone");
+    expect(pushoverBody(1).has("sound")).toBe(false);
+    // The message itself is unchanged — only the sound was dropped.
+    expect(pushoverBody(1).get("message")).toBe(pushoverBody(0).get("message"));
+    expect(pushoverBody(1).get("priority")).toBe("1");
+    expect(alerts).toEqual([]);
+  });
+
+  it("retries only once, and reports a genuine failure as a failure", async () => {
+    // Without the sound the second attempt is the honest test of the
+    // credentials; a second refusal is real and must alert.
+    control.notifications = { pushover_token: "t", pushover_user_key: "u", pushover_sound: "Brenden" };
+    fetchMock.mockResolvedValue({ ok: false, status: 400, json: async () => ({ errors: ["application token is invalid"] }) });
+
+    const result = await sendOrderPushNotification("ord_a1b2c3d4");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ sent: false, reason: "delivery_failed" });
+    expect(alerts.map((a) => a.type)).toEqual(["order_push_failed", "order_notification_missed"]);
+  });
+
+  it("does not retry when there was no sound to blame", async () => {
+    control.notifications = { pushover_token: "t", pushover_user_key: "u" };
+    fetchMock.mockResolvedValue({ ok: false, status: 400, json: async () => ({ errors: ["user key is invalid"] }) });
+
+    await sendOrderPushNotification("ord_a1b2c3d4");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives the test notification the same priority and sound, so a test proves what an order will do", async () => {
+    // A test that arrives differently from the real thing proves the wrong
+    // thing — the point of the button is to rehearse an order.
+    control.notifications = { pushover_token: "t", pushover_user_key: "u", pushover_sound: "Brenden" };
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await sendTestPushNotification();
+
+    const body = pushoverBody(0);
+    expect(body.get("priority")).toBe("1");
+    expect(body.get("sound")).toBe("Brenden");
+  });
+});

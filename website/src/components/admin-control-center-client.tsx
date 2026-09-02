@@ -111,6 +111,7 @@ export function AdminControlCenterClient() {
   const [pushoverToken, setPushoverToken] = useState("");
   const [pushoverUserKey, setPushoverUserKey] = useState("");
   const [orderPushWebhookUrl, setOrderPushWebhookUrl] = useState("");
+  const [pushoverSound, setPushoverSound] = useState("");
   const [pushTesting, setPushTesting] = useState(false);
   const [pushTestResult, setPushTestResult] = useState<string | null>(null);
   /** Which credentials the server holds. Their VALUES never reach this file. */
@@ -243,6 +244,7 @@ export function AdminControlCenterClient() {
     setPushoverToken("");
     setPushoverUserKey("");
     setSecretsSet(json.secretsSet ?? {});
+    setPushoverSound(String(notifications.pushover_sound ?? ""));
     setOrderPushWebhookUrl(String(notifications.order_push_webhook_url ?? ""));
     setAlertEmail(String((next.alerts ?? {}).email ?? ""));
 
@@ -377,6 +379,7 @@ export function AdminControlCenterClient() {
 
       { section: "notifications", key: "pushover_token", value: pushoverToken },
       { section: "notifications", key: "pushover_user_key", value: pushoverUserKey },
+      { section: "notifications", key: "pushover_sound", value: pushoverSound },
       { section: "notifications", key: "order_push_webhook_url", value: orderPushWebhookUrl },
       { section: "alerts", key: "email", value: alertEmail },
 
@@ -710,6 +713,13 @@ export function AdminControlCenterClient() {
               </label>
               <label className="text-zinc-300">Pushover user key
                 <input type="password" autoComplete="new-password" value={pushoverUserKey} onChange={(e) => setPushoverUserKey(e.target.value)} placeholder={secretsSet["notifications.pushover_user_key"] ? "stored — type to replace" : "from your pushover.net dashboard"} className="vl-input mt-1 w-full px-3 py-2" />
+              </label>
+              <label className="text-zinc-300 sm:col-span-2">Pushover sound (optional)
+                <input value={pushoverSound} onChange={(e) => setPushoverSound(e.target.value)} placeholder="the name of a sound in your Pushover account" className="vl-input mt-1 w-full px-3 py-2" />
+                <span className="mt-1 block text-[11px] text-zinc-500">
+                  Type the name exactly as Pushover lists it under Your Custom Sounds. Blank uses your device default. If Pushover ever rejects the
+                  name, the order notification still goes out — without the sound.
+                </span>
               </label>
               <label className="text-zinc-300 sm:col-span-2">Order push webhook URL (fallback)<input value={orderPushWebhookUrl} onChange={(e) => setOrderPushWebhookUrl(e.target.value)} placeholder="https://hooks.zapier.com/hooks/catch/..." className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300 sm:col-span-2">Critical alert email
