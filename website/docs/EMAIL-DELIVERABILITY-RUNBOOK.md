@@ -83,6 +83,23 @@ Gmail's danger threshold is a 0.3% complaint rate. This is zero.
 
 Three items. Each is a setting on a DNS zone or a third-party dashboard.
 
+**Where these live.** DNS for `vantalabsresearch.com` is hosted at **Squarespace**
+(`nsb1–nsb4.squarespacedns.com`); mailboxes are **Google Workspace** (`MX
+smtp.google.com`). Records are edited under
+**Settings → Domains → vantalabsresearch.com → DNS → Custom Records**.
+
+> ⚠️ **Two Squarespace-specific traps, both of which silently break things.**
+>
+> 1. **The Host field takes the subdomain only, not the full name.** Squarespace
+>    appends `.vantalabsresearch.com` for you. Resend will show you
+>    `resend._domainkey.mail.vantalabsresearch.com`; you type
+>    `resend._domainkey.mail`. Pasting the full name creates
+>    `…mail.vantalabsresearch.com.vantalabsresearch.com`, which resolves to
+>    nothing and gives no error.
+> 2. **A `_dmarc` TXT record already exists — edit it, never add a second.** Two
+>    DMARC records on one host make DMARC fail *entirely*, which is worse than
+>    the weak policy you started with.
+
 ### 2.1 Strengthen DMARC — highest value, lowest effort
 
 Today `_dmarc.vantalabsresearch.com` reads:
