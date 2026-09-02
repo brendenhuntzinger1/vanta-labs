@@ -81,7 +81,30 @@ export async function sendMarketingEmail(
 
   const token = generateUnsubscribeToken(email);
   const unsubscribeUrl = `${getSiteUrl()}/api/unsubscribe?email=${encodeURIComponent(email)}&token=${token}`;
-  const footerHtml = `<p style="margin:16px 0 0;font-size:11px;color:#71717a;">You're receiving this because you're a Vanta Labs customer or member. <a href="${unsubscribeUrl}" style="color:#a1a1aa;">Unsubscribe</a> from marketing emails.</p>`;
+  // WHY THIS PERSON IS RECEIVING IT — and it has to be TRUE of them.
+  //
+  // This line used to read "because you're a Vanta Labs customer or member" on
+  // every marketing send, affiliate broadcasts included. An affiliate need never
+  // have bought anything, so the one line explaining why a stranger's message is
+  // in their inbox was false for exactly the audience most likely to check it.
+  // A recipient who cannot place why they are being mailed is a recipient who
+  // presses "report spam", and a complaint costs the sending domain far more
+  // than it costs the campaign.
+  //
+  // Keyed off campaignType because that is already how the two audiences are
+  // told apart in email_send_log, so there is no second flag to keep in step.
+  const isAffiliateBroadcast = input.campaignType === "affiliate_campaign";
+  const reason = isAffiliateBroadcast
+    ? "You're receiving this because you're a Vanta Labs affiliate."
+    : "You're receiving this because you're a Vanta Labs customer or member.";
+  // Naming what the opt-out actually covers matters more for an affiliate:
+  // stopping the broadcasts must not read as leaving the programme, and their
+  // commission, payout and account email is transactional and unaffected.
+  const optOutOf = isAffiliateBroadcast ? "affiliate announcements" : "marketing emails";
+  const optOutScope = isAffiliateBroadcast
+    ? " Your commission, payout and account email is unaffected."
+    : "";
+  const footerHtml = `<p style="margin:16px 0 0;font-size:11px;color:#71717a;">${reason} <a href="${unsubscribeUrl}" style="color:#a1a1aa;">Unsubscribe</a> from ${optOutOf}.${optOutScope}</p>`;
 
   // Marketing sends from its OWN address when one is configured, so a campaign
   // that draws complaints damages only that domain's reputation — not the one
@@ -121,7 +144,11 @@ export async function sendMarketingEmail(
     ? input.html.replace("</body>", `${appendedHtml}</body>`)
     : `${input.html}${appendedHtml}`;
   const addressText = postalAddress && !input.text.includes(postalAddress) ? `\n\n${postalAddress}` : "";
-  const text = `${input.text}\n\nUnsubscribe: ${unsubscribeUrl}${addressText}`;
+  // The reason line is added ABOVE the opt-out, not folded into it: the literal
+  // "Unsubscribe: <url>" shape is what the plain-text part has always carried
+  // and what marketing-postal-address.test.ts pins, and a mail client that
+  // linkifies that line is not worth breaking for a tidier sentence.
+  const text = `${input.text}\n\n${reason}${optOutScope}\nUnsubscribe: ${unsubscribeUrl}${addressText}`;
   // ONE-CLICK UNSUBSCRIBE (RFC 8058), because a footer link is no longer enough.
   //
   // Gmail and Yahoo have required bulk senders to offer one-click opt-out since

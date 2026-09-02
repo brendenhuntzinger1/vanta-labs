@@ -267,7 +267,17 @@ export function AdminAffiliateEmailClient({ dashboard, canManage }: { dashboard:
         body: JSON.stringify({ mode: "now" }),
       });
       const data = await response.json();
-      if (data?.success) {
+      if (data?.success && data.status === "failed") {
+        // The send ran and reached NOBODY — every address was refused. Reported
+        // in the error tone rather than as a success with a zero next to it,
+        // because the owner has to know the message did not land before they
+        // move on believing it did.
+        setMessage({
+          tone: "error",
+          text: "Nobody received this. Every address was refused by the email provider — check Settings → Email (provider, API key or SMTP password), then duplicate this campaign and send the copy.",
+        });
+        await refreshHistory();
+      } else if (data?.success) {
         setMessage({ tone: "ok", text: `Sending to ${data.recipients ?? 0} affiliates. ${data.sent ?? 0} delivered so far; the rest go out on the next sweep.` });
         setDraft(EMPTY_DRAFT);
         setPreview(null);

@@ -223,6 +223,10 @@ export async function POST(request: Request, context: { params: Promise<{ campai
       failed: batch.failed,
       remaining: batch.remaining,
       finished: batch.finished,
+      // The campaign's verdict once its queue drained, so the admin can say
+      // "this reached nobody" instead of reporting a green send with a zero
+      // beside it. Null while the sweep still has work to do.
+      status: batch.status,
     });
   } catch (error) {
     // A SECOND CLICK IS A CONFLICT, NOT A FAILURE, AND NOT A SUCCESS.

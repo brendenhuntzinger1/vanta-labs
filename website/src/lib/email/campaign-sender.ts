@@ -309,6 +309,12 @@ export type BatchResult = {
   failed: number;
   remaining: number;
   finished: boolean;
+  /**
+   * The campaign's terminal status once the queue drained — 'sent' or 'failed'.
+   * Null while work remains, because a campaign still sending has not reached a
+   * verdict yet.
+   */
+  status: string | null;
 };
 
 /**
@@ -455,15 +461,53 @@ export async function sendCampaignBatch(input: {
   const remaining = remainingCount ?? 0;
   const finished = remaining === 0;
 
+  let terminalStatus: string | null = null;
   if (finished) {
+    // A DRAINED QUEUE IS NOT THE SAME AS A DELIVERED CAMPAIGN.
+    //
+    // This used to write 'sent' the moment nothing was left pending. A row that
+    // FAILED is not pending either, so a campaign whose every recipient was
+    // refused — an expired SMTP password, a revoked API key, a provider outage —
+    // closed as 'sent' and showed the owner a green "Sent" in the history. The
+    // failure count sat in its own column, but the status badge is what gets
+    // scanned, and it said the message went out. For an affiliate broadcast
+    // ("the new commission structure", "the sale starts Friday") that is the one
+    // report that must never be wrong: nobody received it, and nothing on screen
+    // said so.
+    //
+    // COUNTED FROM THE DATABASE, NOT FROM THIS BATCH'S OWN TALLIES. A large send
+    // spans several sweeps and only the last one closes it; that closing sweep
+    // may have sent nothing of its own while earlier sweeps delivered to
+    // thousands. The verdict is about the campaign, so it is read from the
+    // campaign's rows.
+    const [{ count: deliveredCount }, { count: failedCount }] = await Promise.all([
+      supabaseAdmin
+        .from("email_campaign_recipients")
+        .select("id", { count: "exact", head: true })
+        .eq("campaign_id", campaign.id)
+        .eq("status", "sent"),
+      supabaseAdmin
+        .from("email_campaign_recipients")
+        .select("id", { count: "exact", head: true })
+        .eq("campaign_id", campaign.id)
+        .eq("status", "failed"),
+    ]);
+
+    // Only the unambiguous case is called a failure: nothing delivered, and at
+    // least one refusal to explain why. A PARTIAL failure stays 'sent' — those
+    // people genuinely received it, and telling the owner to resend would mail
+    // them twice. An audience that was entirely suppressed also stays 'sent':
+    // nothing went wrong, there was simply nobody left to mail.
+    terminalStatus = (deliveredCount ?? 0) === 0 && (failedCount ?? 0) > 0 ? "failed" : "sent";
+
     await supabaseAdmin
       .from("email_campaigns")
-      .update({ status: "sent", completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .update({ status: terminalStatus, completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
       .eq("id", campaign.id)
       .eq("status", "sending");
   }
 
-  return { sent, suppressed, failed, remaining, finished };
+  return { sent, suppressed, failed, remaining, finished, status: terminalStatus };
 }
 
 export type CampaignSweepResult = {

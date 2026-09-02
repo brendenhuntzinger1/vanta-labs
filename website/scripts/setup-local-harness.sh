@@ -138,8 +138,21 @@ echo "==> post-parity migrations"
 # asserting "a retried webhook does not send a second confirmation" was
 # exercising the OLD path, so a pass there said nothing about the code
 # production actually runs.
+#
+# affiliate-email-system is in this list for the same reason, and it arrived the
+# same way: PR #130 shipped the affiliate broadcast feature, applied its columns
+# to production, and never added the file here. `alter table if exists` means it
+# has to run AFTER email-campaigns.sql creates the tables, which is why it is a
+# post-parity migration rather than a feature one.
+#
+# Left out, the harness has no email_campaigns.audience_kind and no
+# email_campaign_recipients.merge_context, so /admin/affiliates/emails 400s on
+# every read against the shim — which reads as the feature being broken rather
+# than as the harness being a schema behind. CLAUDE.md makes this harness the
+# DEFAULT browser-test target, so that false negative is the expensive kind.
 for f in referral-orders-commission-lifecycle referral-orders-manual-review-status \
-         refund-exactly-once-indexes pending-emails-order-link automation-send-once auth-email-debounce; do
+         refund-exactly-once-indexes pending-emails-order-link automation-send-once auth-email-debounce \
+         affiliate-email-system; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
 done
 
@@ -212,6 +225,16 @@ check "email_send_log_automation_once unique index exists (automation send-once)
 # emails carrying two different tokens, which is the repeated-mail complaint.
 check "email_send_log_auth_once_per_minute unique index exists (auth email debounce)" \
   "select exists (select 1 from pg_indexes where schemaname='public' and indexname='email_send_log_auth_once_per_minute');"
+# The affiliate broadcast columns. Without audience_kind every affiliate campaign
+# read is a PostgREST 400 and the admin tab cannot load at all; without
+# merge_context the send loop's `recipient.mergeContext !== null` guard is false
+# for every row, so an affiliate campaign silently renders through the CUSTOMER
+# template and mails literal "{{first_name}}" to real affiliates. The second
+# failure is the one that does not announce itself.
+check "email_campaigns.audience_kind exists (affiliate broadcasts)" \
+  "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='email_campaigns' and column_name='audience_kind');"
+check "email_campaign_recipients.merge_context exists (per-affiliate personalisation)" \
+  "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='email_campaign_recipients' and column_name='merge_context');"
 check "orders.inventory_committed_at exists (the restock SIGNAL)" \
   "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='orders' and column_name='inventory_committed_at');"
 # The four columns scripts/harness-pay-order.mjs SELECTs. They are created by

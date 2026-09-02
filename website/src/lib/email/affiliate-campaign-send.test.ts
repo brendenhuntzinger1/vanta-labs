@@ -34,6 +34,11 @@ const db = {
   nextId: 1,
   /** Set to make the audience read fail, as a truncated or outage read would. */
   failAudience: false,
+  /**
+   * Addresses the provider refuses, as a bad API key, an expired SMTP password
+   * or a provider outage would. Empty means everything delivers.
+   */
+  failDelivery: new Set<string>(),
 };
 
 function matches(row: Record<string, unknown>, filters: Array<[string, string, unknown]>): boolean {
@@ -130,6 +135,9 @@ vi.mock("@/lib/env", () => ({ getSiteUrl: () => "https://vantalabsresearch.com" 
 vi.mock("@/lib/email/marketing", () => ({
   sendMarketingEmail: async (input: { to: string; campaignType: string; subject: string; html: string; text: string }) => {
     if (db.suppressed.has(input.to)) return { success: false, suppressed: true, error: "unsubscribed" };
+    // NOT suppressed — a genuine delivery failure, which is a different thing
+    // and must not be reported as a completed send.
+    if (db.failDelivery.has(input.to)) return { success: false, error: "535 authentication failed" };
     db.delivered.push({ to: input.to, campaignType: input.campaignType, subject: input.subject, html: input.html, text: input.text });
     return { success: true };
   },
@@ -199,6 +207,7 @@ beforeEach(() => {
   db.suppressed = new Set();
   db.nextId = 1;
   db.failAudience = false;
+  db.failDelivery = new Set();
 });
 
 describe("queueing an affiliate campaign", () => {
@@ -308,6 +317,79 @@ describe("a double-click cannot send twice", () => {
     db.campaigns[0].status = "sending";
     await sendCampaignBatch({ campaignId: id, budgetMs: 5000 });
     expect(db.delivered).toHaveLength(2);
+  });
+});
+
+describe("a campaign that reached nobody does not report itself as sent", () => {
+  // THE FAILURE THIS EXISTS TO CATCH.
+  //
+  // sendCampaignBatch closed a campaign as 'sent' whenever the queue drained,
+  // and a row that FAILED is not pending — so a campaign whose every recipient
+  // was refused by the provider (expired SMTP password, revoked API key, a
+  // provider outage) ended up with a green "Sent" in the owner's history.
+  //
+  // The failure count was visible in its own column, but the status badge is
+  // what an owner scans, and it said the message went out. For a programme
+  // broadcast — "here is the new commission structure", "the sale starts
+  // Friday" — that is the one report that must never be wrong: nobody received
+  // it, and nothing on screen said so.
+
+  it("marks a campaign failed when every recipient was refused", async () => {
+    db.failDelivery = new Set(["jordan@example.com", "sam@example.com"]);
+    const id = seedCampaign();
+    await queueCampaign(id);
+    const result = await sendCampaignBatch({ campaignId: id, budgetMs: 5000 });
+
+    expect(db.delivered).toHaveLength(0);
+    expect(db.recipients.every((r) => r.status === "failed")).toBe(true);
+    expect(result.finished).toBe(true);
+    expect(db.campaigns[0].status).toBe("failed");
+  });
+
+  it("still says sent when some got through, because they did", async () => {
+    // A partial failure is a real send with visible failures, not a dead
+    // campaign. Marking it failed would tell the owner to resend to people who
+    // already received it.
+    db.failDelivery = new Set(["sam@example.com"]);
+    const id = seedCampaign();
+    await queueCampaign(id);
+    await sendCampaignBatch({ campaignId: id, budgetMs: 5000 });
+
+    expect(db.delivered.map((m) => m.to)).toEqual(["jordan@example.com"]);
+    expect(db.campaigns[0].status).toBe("sent");
+  });
+
+  it("says sent when the whole audience was suppressed", async () => {
+    // Nothing failed here. Everyone had opted out, which the audience already
+    // subtracts; a campaign with no one left to mail is complete, not broken.
+    db.suppressed = new Set(["jordan@example.com", "sam@example.com"]);
+    const id = seedCampaign();
+    await queueCampaign(id).catch(() => undefined);
+    await sendCampaignBatch({ campaignId: id, budgetMs: 5000 });
+
+    expect(db.campaigns[0].status).toBe("sent");
+  });
+
+  it("judges the whole campaign, not just the batch that happened to close it", async () => {
+    // A large send spans several sweeps, and only the LAST one closes the
+    // campaign. Here an earlier sweep already delivered to Jordan; the closing
+    // sweep has only Sam left, and Sam is refused — so that batch's own
+    // counters are sent=0, failed=1. A verdict read from those counters would
+    // call a campaign failed that half the programme has already read.
+    db.failDelivery = new Set(["sam@example.com"]);
+    const id = seedCampaign();
+    await queueCampaign(id);
+
+    // The state an earlier sweep would have left behind.
+    const jordan = db.recipients.find((r) => r.email === "jordan@example.com");
+    Object.assign(jordan!, { status: "sent", sent_at: new Date().toISOString(), attempts: 1 });
+    db.campaigns[0].status = "sending";
+
+    const closing = await sendCampaignBatch({ campaignId: id, budgetMs: 5000 });
+
+    expect(closing.sent).toBe(0);
+    expect(closing.finished).toBe(true);
+    expect(db.campaigns[0].status).toBe("sent");
   });
 });
 
