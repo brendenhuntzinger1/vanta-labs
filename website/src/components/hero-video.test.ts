@@ -465,52 +465,70 @@ describe("the site carries its own back control", () => {
 describe("the hero vial is framed on a phone, never magnified and cropped", () => {
   const css = read("src/app/globals.css");
 
-  /** The `.vl2-hero-video` rule that applies below the desktop breakpoint. */
-  const mobileRule = (() => {
-    const at = css.indexOf("@media (max-width: 1023px)");
-    if (at === -1) return "";
-    let depth = 0;
-    let i = css.indexOf("{", at);
-    const open = i;
-    for (; i < css.length; i++) {
-      if (css[i] === "{") depth++;
-      else if (css[i] === "}" && --depth === 0) break;
+  /** The `.vl2-hero-video` rule inside the media query starting at `at`. */
+  const ruleIn = (query: string) => {
+    for (let at = css.indexOf(query); at !== -1; at = css.indexOf(query, at + 1)) {
+      let depth = 0;
+      let i = css.indexOf("{", at);
+      const open = i;
+      for (; i < css.length; i++) {
+        if (css[i] === "{") depth++;
+        else if (css[i] === "}" && --depth === 0) break;
+      }
+      const block = css.slice(open + 1, i);
+      const sel = block.indexOf(".vl2-hero-video");
+      // Several blocks share a breakpoint (the scrim has one too) — take the
+      // one that actually styles the media.
+      if (sel !== -1) return block.slice(sel, block.indexOf("}", sel));
     }
-    const block = css.slice(open + 1, i);
-    const sel = block.indexOf(".vl2-hero-video");
-    return sel === -1 ? "" : block.slice(sel, block.indexOf("}", sel));
-  })();
+    return "";
+  };
 
-  const decl = (prop: string) =>
-    new RegExp(`(?:^|[;{\\s])${prop}\\s*:\\s*([^;]+)`, "m").exec(mobileRule)?.[1].trim() ?? null;
+  const decl = (rule: string, prop: string) =>
+    new RegExp(`(?:^|[;{\\s])${prop}\\s*:\\s*([^;]+)`, "m").exec(rule)?.[1].trim() ?? null;
 
-  it("gives the media a square box, so a square asset loses nothing to the crop", () => {
-    // cover() discards 1 - min(w,h)/max(w,h) of a square source. That is zero
-    // only when the box is square, which is the entire point of this rule.
-    const width = decl("width");
-    const height = decl("height");
-    expect(width, "the mobile hero media must declare a width").toBeTruthy();
-    expect(height, "...and a height").toBeTruthy();
-    expect(height).toBe(width);
-  });
+  // BOTH breakpoints, because the defect is on both — it just changes axis.
+  // A phone crops 46% of the WIDTH; a 1440x900 laptop crops 0% of the width
+  // and 37% of the HEIGHT, magnifying the frame 1.5x and landing the vial's
+  // label behind the headline at full reading size.
+  const breakpoints: Array<[string, string]> = [
+    ["phones and portrait tablets", "@media (max-width: 1023px)"],
+    ["desktop", "@media (min-width: 1024px)"],
+  ];
 
-  it("stops stretching the media across all four edges of the hero", () => {
-    // The base rule is `inset: 0`, which is what makes the box portrait and
-    // forces the magnification. Below desktop it must be released.
-    expect(mobileRule).toMatch(/inset:\s*auto/);
-  });
+  for (const [label, query] of breakpoints) {
+    describe(label, () => {
+      const rule = ruleIn(query);
 
-  it("fades the shot into the hero instead of ending it on a hard edge", () => {
-    // The shot is lit on a white studio background. Dropped onto a near-black
-    // hero as a plain rectangle it reads as a bright panel pasted on the page,
-    // which is the complaint this rule exists to answer -- so it is masked out
-    // at the edges rather than cut off at them.
-    expect(mobileRule).toMatch(/mask-image:/);
-  });
+      it("gives the media a square box, so a square asset loses nothing", () => {
+        // cover() discards 1 - min(w,h)/max(w,h) of a square source. That is
+        // zero only when the box is square, which is the point of the rule.
+        const width = decl(rule, "width");
+        const height = decl(rule, "height");
+        expect(width, `${label}: the hero media must declare a width`).toBeTruthy();
+        expect(height, `${label}: ...and a height`).toBeTruthy();
+        expect(height).toBe(width);
+      });
 
-  it("keeps the full-bleed treatment on desktop, where nothing is cropped", () => {
+      it("stops stretching the media across all four edges of the hero", () => {
+        // `inset: 0` on the base rule is what ties the box to the hero's own
+        // aspect and forces the magnification. Both breakpoints release it.
+        expect(rule).toMatch(/inset:\s*auto/);
+      });
+
+      it("fades the shot into the hero instead of ending it on a hard edge", () => {
+        // The shot is lit on a white studio background. Dropped onto a
+        // near-black hero as a plain rectangle it reads as a bright panel
+        // pasted on the page, which is the complaint these rules answer — so
+        // it is masked out at the edges rather than cut off at them.
+        expect(rule).toMatch(/mask-image:/);
+      });
+    });
+  }
+
+  it("keeps the base rule intact as the fallback both breakpoints override", () => {
     const base = css.slice(css.indexOf(".vl2-hero-video"), css.indexOf(".vl2-hero-scrim"));
-    expect(base).toMatch(/inset:\s*0/);
     expect(base).toMatch(/object-fit:\s*cover/);
+    expect(base).toMatch(/pointer-events:\s*none/);
   });
 });

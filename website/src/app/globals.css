@@ -1429,6 +1429,48 @@ html[data-age-verified="false"] video {
   }
 }
 
+/* DESKTOP HAS THE SAME DEFECT, ONE AXIS OVER.
+
+   The width survives on a laptop — 1440x900 crops 0% of it — which is what
+   made this look like a phone-only bug. It is not. Covering a 900-tall box
+   with a square still scales it to 1440x1440, so the frame is magnified 1.5x
+   and 37% of its HEIGHT is thrown away. That is why "VANTA LABS / GHK-Cu /
+   50 mg" sits behind the headline at full reading size: the crop lands the
+   label exactly where the copy is.
+
+   The desktop scrim was already built for copy-left, vial-right — it weights
+   itself along 100deg and falls away before the right edge. The media never
+   honoured that composition; it just filled the box and sat under everything.
+   So it is placed where the scrim always assumed it was.
+
+   Anchored to the CONTENT CONTAINER, not the viewport: the hero copy lives in
+   a max-w-[1440px] block with 48px gutters, so beyond 1440px the layout stops
+   growing and a viewport-anchored vial would drift off alone into the margin.
+   Measured headline right edge: 720px at 1024-1440, 960px at 1920, 1280px at
+   2560 — the media clears it at every one of those, and where it does not
+   (1024, the tightest) the vignette is what covers the difference. */
+@media (min-width: 1024px) {
+  .vl2-hero-video {
+    inset: auto;
+    top: 50%;
+    right: calc(max(0px, (100vw - 1440px) / 2) + 48px);
+    left: auto;
+    transform: translateY(-50%);
+    /* Square, for the same reason as the phone rule: cover() discards
+       1 - min(w,h)/max(w,h) of a square source, and that is zero only here.
+       The 700px cap is the content container's own limit expressed in the
+       media — past 1440px nothing else grows either. */
+    width: min(44vw, 82svh, 700px);
+    height: min(44vw, 82svh, 700px);
+    object-fit: contain;
+    opacity: 0.9;
+    /* Centre pushed right of the middle so the edge nearest the copy is the
+       first to fall away. */
+    -webkit-mask-image: radial-gradient(ellipse 70% 72% at 56% 50%, #000 40%, rgba(0, 0, 0, 0.5) 70%, transparent 88%);
+    mask-image: radial-gradient(ellipse 70% 72% at 56% 50%, #000 40%, rgba(0, 0, 0, 0.5) 70%, transparent 88%);
+  }
+}
+
 .vl2-hero-content {
   position: relative;
   z-index: 2;
