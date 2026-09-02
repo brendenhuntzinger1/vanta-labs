@@ -49,8 +49,8 @@ describe("the offers bar is louder than the page it sits on", () => {
 
   it("keeps the claim control a filled button, not a chip to read", () => {
     const code = css.slice(css.indexOf(".vl-offer-code {"), css.indexOf("}", css.indexOf(".vl-offer-code {")));
-    // Full width on a phone: the button gets its own row precisely so it can be
-    // the widest thing in the bar.
+    // It fills its slot on a phone, where that slot is most of the second row —
+    // measured 279px of 390, against a 32px ✕ beside it.
     expect(code).toMatch(/width:\s*100%/);
     const minHeight = code.match(/min-height:\s*([\d.]+)rem/);
     expect(minHeight, "the claim button must set a min-height").toBeTruthy();
@@ -98,6 +98,52 @@ describe("the claim control is a button and not a link's passenger", () => {
   it("confirms in place rather than through a toast", () => {
     expect(bar).toMatch(/copied \? "Copied" : "Copy"/);
     expect(bar).toMatch(/aria-live="polite"/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TAB ORDER FOLLOWS THE DOM. CSS `order` DOES NOT.
+//
+// The first version of the phone layout set `order: 1/2/3` on
+// main/actions/cta, so the ✕ and DETAILS stayed up on the headline's row
+// while the claim button dropped below them. It looked right, and it moved
+// the focus ring backwards: the DOM runs main -> cta -> actions, so tabbing
+// went headline (y=97) -> claim (y=144) -> DETAILS (y=100) -> ✕ (y=100).
+// Down the bar, then back up. WCAG 2.4.3 Focus Order, Level A — caught by the
+// Vercel review bot on #133, after that PR had already merged.
+//
+// The fix was to stop needing `order` at all: .vl-offer-main takes the whole
+// first line on a phone, and the two controls share the second in the order
+// they are written. So the property to pin is not "the layout looks like X",
+// it is that the bar reorders NOTHING — that is the thing which cannot be
+// reintroduced without the focus ring jumping again.
+// ---------------------------------------------------------------------------
+describe("the offers bar never reorders itself away from its DOM", () => {
+  const block = css.slice(css.indexOf(".vl-offer-bar {"), css.indexOf("/* --- VIEW ALL OFFERS"));
+
+  it("declares no CSS order anywhere in the bar", () => {
+    // Comments in this block discuss `order:` by name; strip them first so the
+    // history can stay written down without failing the test that records it.
+    const declarations = block.replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(declarations, "tab order does not follow CSS order — see this block's header")
+      .not.toMatch(/(^|[;{\s])order\s*:/);
+  });
+
+  it("gets the phone's two rows from the headline's basis instead", () => {
+    const main = css.slice(css.indexOf(".vl-offer-main {"), css.indexOf("}", css.indexOf(".vl-offer-main {")));
+    // 100% basis = the headline claims the whole first line, so the claim
+    // button and the actions wrap onto the second one in source order.
+    expect(main).toMatch(/flex:\s*1 1 100%/);
+    // ...and from 36rem it gives that up so all three share one row.
+    expect(css).toMatch(/@media \(min-width: 36rem\) \{[\s\S]{0,200}?\.vl-offer-main \{ flex: 1 1 10rem; \}/);
+  });
+
+  it("keeps the claim control ahead of the dismiss ✕ in the markup", () => {
+    // Source order IS tab order here, so this is the assertion that the ring
+    // moves forward: claim, then details, then dismiss.
+    const inner = bar.slice(bar.indexOf('className="vl-offer-inner"'), bar.indexOf("</section>"));
+    expect(inner.indexOf("vl-offer-cta"), "the claim control must come first")
+      .toBeLessThan(inner.indexOf("vl-offer-actions"));
   });
 });
 
