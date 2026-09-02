@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageSettings } from "@/lib/admin-roles";
 import { checkRateLimit } from "@/lib/rate-limit";
-import { sendTestPushNotification } from "@/lib/order-push-notification";
+import { describePushDestination, sendTestPushNotification } from "@/lib/order-push-notification";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +21,26 @@ export const dynamic = "force-dynamic";
  * A failure comes back in the response, not as a system alert — see
  * sendTestPushNotification. Someone is standing at the screen waiting for it.
  */
+/**
+ * Is the phone alert working RIGHT NOW — without sending anything.
+ *
+ * The panel reads this on load, so the answer is on screen before the owner
+ * has to wonder. It carries no credential: not the token, not the user key,
+ * not the webhook URL (which is itself the webhook's only credential).
+ */
+export async function GET(request: Request) {
+  const session = await verifyAdminSessionFromRequest(request);
+  if (!session) {
+    return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+  }
+  if (!canManageSettings(session.role)) {
+    return NextResponse.json({ success: false, error: "Your role does not have permission to view store settings." }, { status: 403 });
+  }
+
+  const status = await describePushDestination();
+  return NextResponse.json({ success: true, status });
+}
+
 export async function POST(request: Request) {
   const session = await verifyAdminSessionFromRequest(request);
   if (!session) {

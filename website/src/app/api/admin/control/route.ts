@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageSettings } from "@/lib/admin-roles";
 import { getControlSnapshot, getReferralProgramConfig, upsertControlValue } from "@/lib/admin-control";
-import { findDestructiveClears, type ControlUpdate } from "@/lib/admin-control-updates";
+import { findDestructiveClears, isBlankControlValue, type ControlUpdate } from "@/lib/admin-control-updates";
+import { isSecretControlKey, redactControlSnapshot } from "@/lib/admin-control-secrets";
 
 /**
  * What the referral rates ACTUALLY resolve to, and where each one comes from.
@@ -65,7 +66,11 @@ export async function GET(request: Request) {
       delete (snapshot as Record<string, unknown>)[secret];
     }
     const effective = { referral: await referralEffective(snapshot).catch(() => null) };
-    return NextResponse.json({ success: true, snapshot, effective });
+    // And never the individual credentials that live inside a section the panel
+    // does have to render — the Pushover pair. Reported as set/not-set, the same
+    // treatment the SMTP password and Resend key already get.
+    const { snapshot: safe, secretsSet } = redactControlSnapshot(snapshot);
+    return NextResponse.json({ success: true, snapshot: safe, secretsSet, effective });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to load control settings";
     return NextResponse.json({ success: false, error: message }, { status: 400 });
@@ -99,6 +104,18 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ success: false, error: "Use the Settings page to change email, processor, or fulfillment credentials." }, { status: 403 });
     }
 
+    // LEAVE BLANK TO KEEP. The panel never receives a stored credential, so it
+    // cannot send one back; an empty secret therefore means "unchanged", exactly
+    // as it does on the Settings page. Dropped BEFORE the blanking backstop
+    // below, so an empty credential field can never be read as an attempt to
+    // wipe live configuration and take the whole save down with it. Clearing one
+    // on purpose is still possible and still has to announce itself.
+    const writable = updates.filter((update) => !(
+      isSecretControlKey(String(update.section ?? ""), String(update.key ?? ""))
+      && isBlankControlValue(update.value)
+      && update.allowClear !== true
+    ));
+
     // THE BLANKING BACKSTOP (F-02). A save that would empty a setting which
     // currently holds a value is refused unless the caller declared that clear
     // deliberately. On 2026-08-15 an unloaded Control Center form PATCHed "" over
@@ -109,7 +126,7 @@ export async function PATCH(request: Request) {
     // leave settings half-wiped. The client applies the same rule when building
     // the request -- this is the copy that also covers a stale tab, a replayed
     // request, or any future caller that forgets to read before writing.
-    const destructive = findDestructiveClears(updates, await getControlSnapshot());
+    const destructive = findDestructiveClears(writable, await getControlSnapshot());
     if (destructive.length > 0) {
       return NextResponse.json(
         {
@@ -123,7 +140,7 @@ export async function PATCH(request: Request) {
       );
     }
 
-    for (const update of updates) {
+    for (const update of writable) {
       await upsertControlValue({
         section: String(update.section ?? ""),
         key: String(update.key ?? ""),

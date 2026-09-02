@@ -457,6 +457,43 @@ each one exports, so a route added without a guard fails it the moment it
 exists — which a hand-maintained list can never do, because nobody remembers to
 add the route they just wrote.
 
+### Three settings decide whether these prove anything
+
+Every one of them has already turned a green run into a run that checked
+nothing, and none of them announces itself.
+
+**Start the harness with `scripts/qa-harness-up.sh`, never by hand.** It starts
+the payment stub on :59999 as well as the shim and the app. Without the stub
+`createCheckoutSession` gets ECONNREFUSED, `payment-service.ts` cancels the
+brand-new order, and every order sits at `payment_status = 'canceled'` — which
+reads exactly like a payment bug and is not one. `qa:purchase` then fails at
+"the order is canceled, not paid".
+
+**`EMAIL_CAPTURE_DIR=/tmp/vanta-qa` in `.env.test.local`, and email DISABLED in
+the Control Center.** The email assertions read what the customer would read
+(`providers/noop.ts` writes `captured-emails.jsonl`), and the noop provider only
+runs when no real provider is configured. A leftover `email.provider = smtp`
+control value beats the env var, so the app tries a dead SMTP host, nothing is
+captured, and every email step reports `SKIP — no harness log configured`. Three
+of `qa:purchase`'s eighteen steps skipped that way for exactly this reason, and
+a skip is not a pass. The capture now records `headers` too, so
+`List-Unsubscribe` on a marketing send — and its absence on a receipt — can be
+read rather than assumed.
+
+**`VANTA_TEST_DATABASE_URL` for the concurrency proofs.**
+
+    VANTA_TEST_DATABASE_URL=postgres://postgres@localhost:55432/vanta_concurrency npx vitest run
+
+Without it, 121 tests across 14 files skip: double payout, the exactly-once
+payout claim, the auto-approve read/write race, refund correctness, the
+inventory return path, BXGY redemption claims, partner identity convergence and
+admin-invite atomicity. Every one of them is money, none is covered by an
+in-memory test, and the suite still prints a green summary without them. The
+harness Postgres from `setup-local-harness.sh` is already a throwaway, so a
+scratch database on it is all that is needed:
+
+    psql postgres://postgres@localhost:55432/postgres -c 'create database vanta_concurrency'
+
 **`qa:seed` is not optional, and this is why.** `qa:roles` used to take its role
 list from a `QA_ROLES` environment variable that nothing in this repository ever
 set. The loop that signs the roles in therefore never ran an iteration, the

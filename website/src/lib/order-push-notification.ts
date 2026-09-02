@@ -182,19 +182,10 @@ export async function sendTestPushNotification(): Promise<TestPushResult> {
   const url = siteUrl ? `${siteUrl}/admin/orders` : "";
 
   try {
+    // Same priority and same sound as a real order: a test that arrives
+    // differently from the thing it rehearses proves the wrong thing.
     const response = destination.kind === "pushover"
-      ? await fetch(PUSHOVER_API_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({
-            token: destination.token,
-            user: destination.userKey,
-            title,
-            message,
-            ...(url ? { url, url_title: "Open the admin" } : {}),
-          }).toString(),
-          signal: AbortSignal.timeout(ORDER_PUSH_TIMEOUT_MS),
-        })
+      ? await sendPushover(destination, { title, message, url: url || undefined, urlTitle: "Open the admin" })
       : await fetch(destination.url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -219,6 +210,77 @@ export async function sendTestPushNotification(): Promise<TestPushResult> {
       detail: `Could not reach the destination: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
+}
+
+/**
+ * High. Pushover's default is Normal (0), and a Normal message on a phone in Do
+ * Not Disturb or a Focus mode arrives without a sound — so "delivered" and
+ * "noticed" come apart exactly when it matters, at 9pm on a Sunday. High
+ * bypasses the quiet default. Deliberately NOT Emergency (2): that repeats
+ * until acknowledged, which is right for a pager and wrong for a shop.
+ */
+const PUSHOVER_HIGH_PRIORITY = "1";
+
+/**
+ * Post one message to Pushover, and never let the SOUND be the reason it fails.
+ *
+ * The sound is a preference; the notification is an order. Pushover rejects an
+ * unknown sound name with a 400, so a sound the owner renamed or deleted in
+ * their Pushover account would otherwise turn into a missed order — precisely
+ * the failure this module exists to prevent. When a send that carried a sound
+ * is refused, it goes again without one. That second attempt is also the honest
+ * test of the credentials: if it fails too, the credentials are the problem and
+ * the caller alerts.
+ *
+ * One retry, not a loop, and only when there was a sound to blame.
+ */
+async function sendPushover(
+  destination: { token: string; userKey: string; sound?: string },
+  message: { title: string; message: string; url?: string; urlTitle?: string },
+): Promise<Response> {
+  const post = (withSound: boolean) => fetch(PUSHOVER_API_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      token: destination.token,
+      user: destination.userKey,
+      title: message.title,
+      message: message.message,
+      priority: PUSHOVER_HIGH_PRIORITY,
+      ...(withSound && destination.sound ? { sound: destination.sound } : {}),
+      ...(message.url ? { url: message.url, url_title: message.urlTitle ?? "Open in admin" } : {}),
+    }).toString(),
+    signal: AbortSignal.timeout(ORDER_PUSH_TIMEOUT_MS),
+  });
+
+  const first = await post(true);
+  if (first.ok || !destination.sound) return first;
+  return await post(false);
+}
+
+export type PushDestinationStatus = PushDestinationHealth & {
+  /** A destination exists at all — separate from whether it works. */
+  configured: boolean;
+  /** When this answer was obtained. It is live, not remembered. */
+  checkedAt: string;
+};
+
+/**
+ * What the admin panel shows: configured or not, healthy or not, why, and when
+ * the answer was obtained.
+ *
+ * It carries NO credential — not the Pushover token, not the user key, not the
+ * webhook URL. The URL is the webhook's only credential, and anyone holding it
+ * can fire fake "you got an order" alerts at the owner's phone, so "a webhook
+ * is configured" is the whole of what the panel needs to know.
+ *
+ * The check is live rather than a remembered result. A stored "healthy as of
+ * this morning" is the kind of reassurance that let a dead destination look
+ * fine for a fortnight; asking now costs one request that sends nothing.
+ */
+export async function describePushDestination(): Promise<PushDestinationStatus> {
+  const health = await verifyPushDestination();
+  return { ...health, configured: health.kind !== "none", checkedAt: new Date().toISOString() };
 }
 
 /**
@@ -522,7 +584,7 @@ async function collectOrderPushInput(orderId: string): Promise<OrderPushInput | 
  * job is to still work when something else has broken.
  */
 type PushDestination =
-  | { kind: "pushover"; token: string; userKey: string }
+  | { kind: "pushover"; token: string; userKey: string; sound?: string }
   | { kind: "webhook"; url: string }
   | { kind: "none" };
 
@@ -537,12 +599,25 @@ async function resolvePushDestination(): Promise<PushDestination> {
   }
 
   const text = (value: unknown) => String(value ?? "").trim();
-  const token = text(configured.pushover_token);
-  const userKey = text(configured.pushover_user_key);
+
+  // CONTROL FIRST, ENVIRONMENT SECOND — the same ladder the webhook has always
+  // had, and for the same reason: the Control Center rung is what lets a
+  // credential change take effect without a deploy, and the environment rung is
+  // where an owner naturally puts a credential.
+  //
+  // Pushover used to have only the top rung. Production had no Pushover keys in
+  // the Control Center, so it fell through to ORDER_PUSH_WEBHOOK_URL — the dead
+  // Zapier hook — while looking, from the outside, exactly like a store with
+  // direct Pushover configured.
+  const token = text(configured.pushover_token) || text(process.env.PUSHOVER_API_TOKEN);
+  const userKey = text(configured.pushover_user_key) || text(process.env.PUSHOVER_USER_KEY);
+  // The owner's own uploaded sound, so a sale is recognisable without looking.
+  // Optional, and cosmetic — see sendPushover for why that distinction matters.
+  const sound = text(configured.pushover_sound) || text(process.env.PUSHOVER_SOUND);
 
   // BOTH keys or neither. A half-filled pair is a configuration mistake, and
   // posting with one of them would fail at Pushover while looking configured.
-  if (token && userKey) return { kind: "pushover", token, userKey };
+  if (token && userKey) return { kind: "pushover", token, userKey, sound: sound || undefined };
 
   const url = text(configured.order_push_webhook_url) || text(process.env.ORDER_PUSH_WEBHOOK_URL);
   return url ? { kind: "webhook", url } : { kind: "none" };
@@ -635,17 +710,10 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
     // url map one-to-one onto the payload the webhook already carries — so both
     // destinations announce exactly the same four facts.
     const response = destination.kind === "pushover"
-      ? await fetch(PUSHOVER_API_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({
-            token: destination.token,
-            user: destination.userKey,
-            title: payload.title,
-            message: payload.message,
-            ...(payload.url ? { url: payload.url, url_title: "Open in admin" } : {}),
-          }).toString(),
-          signal: AbortSignal.timeout(ORDER_PUSH_TIMEOUT_MS),
+      ? await sendPushover(destination, {
+          title: payload.title,
+          message: payload.message,
+          url: payload.url || undefined,
         })
       : await fetch(webhookUrl as string, {
           method: "POST",
