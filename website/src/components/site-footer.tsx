@@ -114,7 +114,12 @@ export function SiteFooter() {
               support@vantalabsresearch.com
             </a>
           </p>
-          <p className="text-white/45">© 2026 {BRAND_LEGAL_NAME}. All Rights Reserved.</p>
+          {/* Rendered, not typed. A hardcoded year is correct until midnight on
+              31 December and then quietly wrong on every page of the site, and
+              nothing fails when it is — it just reads as abandoned to the one
+              visitor deciding whether to trust a storefront with a card. This
+              is a server component, so the year comes from the render. */}
+          <p className="text-white/45">© {new Date().getFullYear()} {BRAND_LEGAL_NAME}. All Rights Reserved.</p>
         </div>
       </div>
     </footer>
