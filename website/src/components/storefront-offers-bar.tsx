@@ -17,17 +17,24 @@ import {
 // ---------------------------------------------------------------------------
 // THE OFFERS BAR.
 //
-// A thin ribbon at the top of the shopping pages carrying whatever the store is
+// The band at the top of the shopping pages carrying whatever the store is
 // genuinely running. Everything it says comes from storefront-offers.ts, which
 // reads the systems that actually apply the discounts — so the bar cannot get
 // out of step with the total.
 //
-// WHAT IT IS NOT. It is not a sale banner. There is no gold fill, no glow, no
-// shimmer, no countdown, no pulsing, and nothing moves after it has arrived.
-// The whole effect is one hairline of warm gold on near-black and a single
-// figure set large — the offer reads because it has room and contrast, not
-// because it is shouting. A luxury house running an exclusive offer states it
-// once, quietly, in good type.
+// IT IS MEANT TO BE SEEN FIRST, and it used to be a near-black ribbon (#0a0a0a)
+// with a hairline of gold, sitting on a near-black page. Measured on the
+// harness at 390x844: 49px tall, a 16px headline, and a background one point
+// off the page's own. The restraint was real and so was the cost — the store
+// owner's words were "it's kinda hidden up top", which is the correct reading
+// of a promotion rendered as chrome. A promotion nobody notices is not
+// restraint, it is a promotion that does not exist.
+//
+// So the band is now gold and the page is black, which is the largest contrast
+// this palette has, and the code sits in a filled dark control that says
+// CLAIM. Still no shimmer, no marquee, no countdown, no pulse: nothing moves
+// after it has arrived. It is loud in the one way that costs nothing to read —
+// colour and size — and quiet in every way that reads as a discount store.
 //
 // WHY IT IS IN NORMAL FLOW. Same reason the consent bar is (see
 // cookie-consent.tsx): the site header is `position: fixed`, and anything
@@ -80,7 +87,7 @@ function GiftIcon() {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.15"
+      strokeWidth="1.35"
       strokeLinecap="round"
       strokeLinejoin="round"
       className="vl-offer-icon"
@@ -94,45 +101,71 @@ function GiftIcon() {
   );
 }
 
-function OfferBody({ offer, onCopy, copied }: {
-  offer: StorefrontOffer;
-  onCopy: (code: string) => void;
-  copied: boolean;
-}) {
+/**
+ * The words: what is on offer, and by when. NOT the claim control.
+ *
+ * The claim control used to live in here, which put a <button> inside the <a>
+ * that wraps this block. That is invalid HTML, and on a phone it behaved
+ * exactly as badly as it reads: the tap copied the code AND bubbled to the
+ * anchor, so "claim the offer" navigated the shopper to /products mid-tap.
+ * The control is now a sibling of the link (see the bar below), so copying
+ * copies and nothing else.
+ */
+function OfferText({ offer }: { offer: StorefrontOffer }) {
   const ends = endsLabel(offer.endsAt);
   return (
     <div className="vl-offer-body">
       <GiftIcon />
       <div className="vl-offer-text">
-        <p className="vl-offer-eyebrow">{offer.eyebrow}</p>
+        <p className="vl-offer-eyebrow">
+          <span>{offer.eyebrow}</span>
+          {/* The deadline rides on the label line rather than at the far end of
+              the bar, so it survives on a phone instead of being the first
+              thing dropped — "Ends today" is the half of an offer that makes
+              somebody act on it now. */}
+          {ends ? <span className="vl-offer-ends">{ends}</span> : null}
+        </p>
         {/* The benefit, largest, first. Nothing above it competes for the eye. */}
         <p className="vl-offer-headline">{offer.headline}</p>
       </div>
-
-      {offer.code ? (
-        <div className="vl-offer-code-group">
-          <span className="vl-offer-code-label">Use code</span>
-          <button
-            type="button"
-            onClick={() => onCopy(offer.code as string)}
-            className="vl-offer-code vl-focus-ring"
-            aria-label={`Copy promo code ${offer.code}`}
-          >
-            <span className="vl-offer-code-text">{offer.code}</span>
-            {/* Confirmation lives inside the control that was tapped. A toast
-                for copying six characters is a modal interrupting a decision. */}
-            <span className="vl-offer-copy" aria-hidden="true">{copied ? "Copied" : "Copy"}</span>
-          </button>
-          <span aria-live="polite" className="sr-only">{copied ? `Code ${offer.code} copied` : ""}</span>
-        </div>
-      ) : (
-        // NO CODE MEANS NO CODE UI. A fake "AUTO" chip styled like a coupon
-        // teaches customers to look for something to type that does not exist.
-        <p className="vl-offer-auto">{offer.automaticNote}</p>
-      )}
-
-      {ends ? <span className="vl-offer-ends">{ends}</span> : null}
     </div>
+  );
+}
+
+/**
+ * THE CLAIM CONTROL. A filled, full-width-on-a-phone button, because the offer
+ * bar's whole job is to get the code into somebody's clipboard.
+ *
+ * It says CLAIM and it copies. The accessible name says both, in that order,
+ * so nothing about the word promises an action the button does not perform,
+ * and the state chip flips to "Copied" in place.
+ */
+function OfferClaim({ offer, onCopy, copied }: {
+  offer: StorefrontOffer;
+  onCopy: (code: string) => void;
+  copied: boolean;
+}) {
+  if (!offer.code) {
+    // NO CODE MEANS NO CODE UI. A fake "AUTO" chip styled like a coupon
+    // teaches customers to look for something to type that does not exist.
+    return <p className="vl-offer-auto">{offer.automaticNote}</p>;
+  }
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => onCopy(offer.code as string)}
+        className="vl-offer-code vl-focus-ring"
+        aria-label={`Claim this offer — copy promo code ${offer.code} to your clipboard`}
+      >
+        <span className="vl-offer-claim" aria-hidden="true">Claim</span>
+        <span className="vl-offer-code-text">{offer.code}</span>
+        {/* Confirmation lives inside the control that was tapped. A toast
+            for copying six characters is a modal interrupting a decision. */}
+        <span className="vl-offer-copy" aria-hidden="true">{copied ? "Copied" : "Copy"}</span>
+      </button>
+      <span aria-live="polite" className="sr-only">{copied ? `Code ${offer.code} copied` : ""}</span>
+    </>
   );
 }
 
@@ -186,13 +219,20 @@ export function StorefrontOffersBar({ offers }: { offers: StorefrontOffer[] }) {
         <div className="vl-offer-inner">
           {current.href ? (
             <Link href={current.href} className="vl-offer-main vl-focus-ring" aria-label={`${current.headline}. Shop the offer.`}>
-              <OfferBody offer={current} onCopy={copy} copied={copied === current.code} />
+              <OfferText offer={current} />
             </Link>
           ) : (
             <div className="vl-offer-main">
-              <OfferBody offer={current} onCopy={copy} copied={copied === current.code} />
+              <OfferText offer={current} />
             </div>
           )}
+
+          {/* OUTSIDE the link on purpose — see OfferClaim. On a phone this wraps
+              onto its own full-width row, which is what makes the code a
+              button somebody actually presses instead of a chip they read. */}
+          <div className="vl-offer-cta">
+            <OfferClaim offer={current} onCopy={copy} copied={copied === current.code} />
+          </div>
 
           <div className="vl-offer-actions">
             <button

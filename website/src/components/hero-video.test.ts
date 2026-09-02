@@ -436,3 +436,99 @@ describe("the site carries its own back control", () => {
     expect(header).toMatch(/aria-label="Go back"[\s\S]{0,400}h-11/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Reported from a phone, after a link was opened from Snapchat: clearing the
+// age gate filled the entire screen with a magnified vial on a white
+// background, with the headline landing on top of the vial's own label text.
+//
+// It was not the native fullscreen player this time -- the class of bug the
+// rest of this file guards. It was our own framing.
+//
+// THE ASSET IS SQUARE AND THE HERO IS PORTRAIT. The clip is 720x720 and the
+// poster 960x960; the hero box on a phone is 390x726. `object-fit: cover`
+// resolves that by scaling the square to 726x726 -- a 1.86x magnification that
+// throws away 46% of the frame's width and blows the vial up past the width of
+// the screen. Measured on the harness at 390x844:
+//
+//     390x726 box -> painted 726x726 -> 46% of the width cropped away
+//     375x628 box -> painted 628x628 -> 40% cropped
+//    1440x900 box -> painted 1440x1440 -> 0% of the width cropped
+//
+// The last line is why nobody caught it: on a laptop the composition survives
+// intact, so the defect is invisible in exactly the place it gets reviewed.
+//
+// The fix is to stop cover-cropping a square into a portrait box. Below the
+// desktop breakpoint the media gets a SQUARE box in the upper part of the hero
+// and the copy sits on the dark ground beneath it.
+// ---------------------------------------------------------------------------
+describe("the hero vial is framed on a phone, never magnified and cropped", () => {
+  const css = read("src/app/globals.css");
+
+  /** The `.vl2-hero-video` rule inside the media query starting at `at`. */
+  const ruleIn = (query: string) => {
+    for (let at = css.indexOf(query); at !== -1; at = css.indexOf(query, at + 1)) {
+      let depth = 0;
+      let i = css.indexOf("{", at);
+      const open = i;
+      for (; i < css.length; i++) {
+        if (css[i] === "{") depth++;
+        else if (css[i] === "}" && --depth === 0) break;
+      }
+      const block = css.slice(open + 1, i);
+      const sel = block.indexOf(".vl2-hero-video");
+      // Several blocks share a breakpoint (the scrim has one too) — take the
+      // one that actually styles the media.
+      if (sel !== -1) return block.slice(sel, block.indexOf("}", sel));
+    }
+    return "";
+  };
+
+  const decl = (rule: string, prop: string) =>
+    new RegExp(`(?:^|[;{\\s])${prop}\\s*:\\s*([^;]+)`, "m").exec(rule)?.[1].trim() ?? null;
+
+  // BOTH breakpoints, because the defect is on both — it just changes axis.
+  // A phone crops 46% of the WIDTH; a 1440x900 laptop crops 0% of the width
+  // and 37% of the HEIGHT, magnifying the frame 1.5x and landing the vial's
+  // label behind the headline at full reading size.
+  const breakpoints: Array<[string, string]> = [
+    ["phones and portrait tablets", "@media (max-width: 1023px)"],
+    ["desktop", "@media (min-width: 1024px)"],
+  ];
+
+  for (const [label, query] of breakpoints) {
+    describe(label, () => {
+      const rule = ruleIn(query);
+
+      it("gives the media a square box, so a square asset loses nothing", () => {
+        // cover() discards 1 - min(w,h)/max(w,h) of a square source. That is
+        // zero only when the box is square, which is the point of the rule.
+        const width = decl(rule, "width");
+        const height = decl(rule, "height");
+        expect(width, `${label}: the hero media must declare a width`).toBeTruthy();
+        expect(height, `${label}: ...and a height`).toBeTruthy();
+        expect(height).toBe(width);
+      });
+
+      it("stops stretching the media across all four edges of the hero", () => {
+        // `inset: 0` on the base rule is what ties the box to the hero's own
+        // aspect and forces the magnification. Both breakpoints release it.
+        expect(rule).toMatch(/inset:\s*auto/);
+      });
+
+      it("fades the shot into the hero instead of ending it on a hard edge", () => {
+        // The shot is lit on a white studio background. Dropped onto a
+        // near-black hero as a plain rectangle it reads as a bright panel
+        // pasted on the page, which is the complaint these rules answer — so
+        // it is masked out at the edges rather than cut off at them.
+        expect(rule).toMatch(/mask-image:/);
+      });
+    });
+  }
+
+  it("keeps the base rule intact as the fallback both breakpoints override", () => {
+    const base = css.slice(css.indexOf(".vl2-hero-video"), css.indexOf(".vl2-hero-scrim"));
+    expect(base).toMatch(/object-fit:\s*cover/);
+    expect(base).toMatch(/pointer-events:\s*none/);
+  });
+});

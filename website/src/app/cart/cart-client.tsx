@@ -323,11 +323,11 @@ export function CartPageClient() {
             ) : null}
 
             {bulkSavingsApplied ? (
-              <div className="mt-4 border border-amber-700/60 bg-amber-950/30 p-4">
-                <p className="text-sm font-semibold text-amber-300">
+              <div className="mt-4 border border-emerald-700/60 bg-emerald-950/30 p-4">
+                <p className="text-sm font-semibold text-emerald-300">
                   Congratulations! Your exclusive member bulk discount has been applied.
                 </p>
-                <p className="mt-1 text-xs text-amber-200/80">{bulkSavingsPercent}% off this order.</p>
+                <p className="mt-1 text-xs text-emerald-200/80">{bulkSavingsPercent}% off this order.</p>
               </div>
             ) : bulkSavingsProgress ? (
               <div className="mt-4 border border-white/10 p-4">
