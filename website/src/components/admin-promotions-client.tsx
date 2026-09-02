@@ -396,7 +396,24 @@ function PromotionCard({
           />
           Combine with Bundle &amp; Save pricing
         </label>
+        {/* THE ADVERTISING SWITCH, kept visibly apart from the on/off switch
+            above the card. Switching a promotion OFF stops the discount; this
+            keeps the discount and stops the storefront talking about it. */}
+        <label className="flex items-center gap-2 text-sm text-zinc-300">
+          <input
+            type="checkbox" checked={promotion.hidden}
+            onChange={(event) => onChange({ hidden: event.target.checked })}
+          />
+          Run privately (do not advertise)
+        </label>
       </div>
+      {promotion.hidden ? (
+        <p className="mt-2 text-xs text-amber-300/80">
+          Private: this discount still applies at checkout, but it is hidden from the offers banner, the
+          product pages and the cart&apos;s &quot;one more to unlock&quot; message. To stop the discount itself,
+          switch the promotion off instead.
+        </p>
+      ) : null}
       <p className="mt-2 text-xs text-zinc-500">
         With coupon stacking off, a coupon competes with this promotion and the larger discount wins. With bundle
         pricing off, a free item is valued at full price and competes with the quantity discount instead of adding to

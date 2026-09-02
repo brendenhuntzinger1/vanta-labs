@@ -38,7 +38,18 @@ describe("a blank homepage control field falls back to the designed copy", () =>
   });
 
   it("leaves the designed defaults in place for the page to fall back to", () => {
-    expect(homepage).toContain('control.heroHeadline ?? "Precision, in every vial."');
-    expect(homepage).toMatch(/control\.heroSubheadline \?\? "Vanta Labs sources/);
+    // WHAT THIS GUARDS IS THE `??`, NOT THE SENTENCE.
+    //
+    // It used to pin both defaults to their exact wording, and that made every
+    // hero copy edit fail here — reported as a broken fallback when nothing
+    // about the fallback had changed. The bug this file exists for is a blank
+    // admin field beating designed copy; the two assertions above hold that
+    // line in admin-control.ts. All this one needs to know is that the page
+    // still has real copy to fall back TO.
+    //
+    // So: a substantial string literal behind each `??`. An empty or token
+    // default still fails, which is the only regression this can see.
+    expect(homepage).toMatch(/control\.heroHeadline \?\? "[^"]{10,}"/);
+    expect(homepage).toMatch(/control\.heroSubheadline \?\? "[^"]{30,}"/);
   });
 });

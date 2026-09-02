@@ -7,6 +7,7 @@ import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
 import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
 import { getBundleDiscountedLineTotal, getBundleDiscountedUnitPrice, DEFAULT_BUNDLE_CONFIG, type BundleConfig } from "@/lib/bundle-pricing";
 import {
+  advertisableBxgyPromotions,
   nextOpportunityForCart,
   progressMessage,
   selectPromotionForCart,
@@ -889,8 +890,20 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // The promotion the shopper is CLOSEST to unlocking, and how far away it is.
   // Not necessarily the one already applied: a cart earning Buy-3-Get-1 may be
   // one unit from earning a second free item.
+  //
+  // THE ONLY PLACE IN THIS FILE THAT FILTERS ON `hidden`, and it is the only
+  // one that should: this message advertises a promotion the shopper has NOT
+  // earned yet ("add one more and the next is free"), so a promotion running
+  // privately must not appear in it. `activePromotion` above is deliberately
+  // computed from the unfiltered list — a hidden promotion still prices the
+  // cart, and once it has actually taken money off, the line that explains
+  // why is not advertising, it is arithmetic the customer is owed.
   const promotionOpportunity = useMemo(
-    () => nextOpportunityForCart(promotionCartLines, availablePromotions, { bundleStacking }),
+    () => nextOpportunityForCart(
+      promotionCartLines,
+      advertisableBxgyPromotions(availablePromotions),
+      { bundleStacking },
+    ),
     [promotionCartLines, availablePromotions, bundleStacking],
   );
   const promotionProgressMessage = promotionOpportunity

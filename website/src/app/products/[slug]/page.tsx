@@ -5,7 +5,7 @@ import { TikTokViewContent } from "@/components/tiktok-view-content";
 import { getCatalogProductBySlug, getCatalogProductsByCategory } from "@/lib/catalog";
 import { getHomepageControlConfig } from "@/lib/admin-control";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
-import { isSlugEligible, storefrontDescription } from "@/lib/bxgy-engine";
+import { advertisableBxgyPromotions, isSlugEligible, storefrontDescription } from "@/lib/bxgy-engine";
 import { getPublishedCoaDocumentsForProduct } from "@/lib/coa";
 import { getStorefrontCoupon } from "@/lib/coupons";
 import { isBacWater, resolveBacWaterProduct } from "@/lib/bac-water";
@@ -88,6 +88,7 @@ export default async function ProductDetailPage({
   // server so the panel is in the first paint, and described by the engine so
   // the product page cannot promise something the cart prices differently.
   const productPromotions = await getApplicableBxgyPromotions({}, { promotions: controlConfig.bxgyPromotions })
+    .then(advertisableBxgyPromotions)
     .then((promotions) => promotions
       .filter((promotion) => isSlugEligible(promotion, product.slug))
       .map((promotion) => ({
