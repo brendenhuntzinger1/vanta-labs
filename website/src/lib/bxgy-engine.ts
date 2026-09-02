@@ -56,7 +56,43 @@ export interface BxgyPromotion {
   id: string;
   /** Customer-facing name, e.g. "Buy 2 Get 1 Free". */
   name: string;
+  /**
+   * Does this promotion RUN? Nothing else. It is not an advertising switch.
+   *
+   * `enabled: false` stops the discount at the till as well as removing it
+   * from the storefront, because the same list prices the order and describes
+   * it (see storefront-offers.ts). That is deliberate — a bar that can
+   * advertise what checkout will not honour is the failure this whole design
+   * exists to prevent — but it left no way to run a promotion quietly, and a
+   * store owner reasonably read "turn the banner off" as an advertising
+   * action and switched the discount off with it.
+   */
   enabled: boolean;
+  /**
+   * Run it, but never advertise it. The promotion twin of `coupons.is_private`.
+   *
+   * HIDDEN IS NOT DISABLED, and the distinction is the entire point:
+   *
+   *   enabled && !hidden  -> prices the order AND appears on the storefront
+   *   enabled && hidden   -> prices the order, appears NOWHERE public
+   *   !enabled            -> neither
+   *
+   * So this flag is read ONLY by the surfaces that advertise — the offers bar,
+   * the product page's promotion panel, and the cart's "one more to unlock it"
+   * teaser. It is deliberately NOT read by anything that prices: quote-order,
+   * /api/catalog/promotions and selectPromotionForCart all keep seeing it.
+   *
+   * Filtering it out of the pricing list instead would be the obvious mistake
+   * and a costly one: the cart previews from /api/catalog/promotions while the
+   * server charges from quote-order, so hiding it from one and not the other
+   * makes the two totals disagree and the altered-total guard refuses the
+   * sale outright. Hidden changes what is SAID, never what is CHARGED.
+   *
+   * A discount still names itself on the line it discounts, once earned —
+   * "private" means unadvertised, not unexplained. A customer must always be
+   * able to see why their total went down.
+   */
+  hidden: boolean;
   /** X — units that must be bought at full price for one reward group. */
   buyQuantity: number;
   /** Y — units rewarded per group. */
@@ -311,6 +347,19 @@ export function liveBxgyPromotions(
   return promotions
     .filter((promotion) => isPromotionLive(promotion, now) && !exhausted.has(promotion.id))
     .sort((a, b) => b.priority - a.priority);
+}
+
+/**
+ * Of a live list, the ones the storefront may TALK ABOUT.
+ *
+ * Every caller of this is a customer-facing description; every caller that
+ * computes money uses the unfiltered list. If you are about to use this in a
+ * pricing path, you want `liveBxgyPromotions` instead — see BxgyPromotion.hidden.
+ */
+export function advertisableBxgyPromotions(
+  promotions: readonly BxgyPromotion[],
+): BxgyPromotion[] {
+  return promotions.filter((promotion) => !promotion.hidden);
 }
 
 /**

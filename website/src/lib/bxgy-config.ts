@@ -102,6 +102,10 @@ function templateToPromotion(template: PromotionTemplate): BxgyPromotion {
     id: template.id,
     name: template.name,
     enabled: false,
+    // Built-ins default to PUBLIC, so switching one on advertises it without a
+    // second setting to find — which is the behaviour the store owner asked
+    // for. Hiding is the deliberate act, not the showing.
+    hidden: false,
     buyQuantity: template.buyQuantity,
     getQuantity: template.getQuantity,
     rewardPercent: template.rewardPercent,
@@ -217,6 +221,10 @@ export function normalizeBxgyPromotion(raw: unknown): BxgyPromotion | null {
     id,
     name,
     enabled: record.enabled === true,
+    // Absent in every promotion stored before this field existed, and `!== true`
+    // reads that as PUBLIC — so an existing store keeps advertising exactly
+    // what it advertised yesterday rather than silently going dark.
+    hidden: record.hidden === true,
     buyQuantity,
     getQuantity,
     rewardPercent,
@@ -306,6 +314,7 @@ export function serializeBxgyPromotions(promotions: BxgyPromotion[]): Record<str
     id: promotion.id,
     name: promotion.name,
     enabled: promotion.enabled,
+    hidden: promotion.hidden,
     buyQuantity: promotion.buyQuantity,
     getQuantity: promotion.getQuantity,
     rewardPercent: promotion.rewardPercent,

@@ -34,6 +34,7 @@ function promo(overrides: Partial<BxgyPromotion> = {}): BxgyPromotion {
     id: "test-promo",
     name: "Test Promo",
     enabled: true,
+    hidden: false,
     buyQuantity: 2,
     getQuantity: 1,
     rewardPercent: 100,
