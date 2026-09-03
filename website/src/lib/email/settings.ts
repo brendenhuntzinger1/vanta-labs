@@ -94,6 +94,18 @@ export interface EmailRuntimeConfig {
    * sets up a subdomain and fills it in.
    */
   marketingFrom: string;
+  /**
+   * Where replies to MARKETING mail should go.
+   *
+   * A Resend sending domain is SEND-ONLY. `mail.vantalabsresearch.com` has no
+   * MX, so the address campaigns are sent FROM cannot receive a thing — and on
+   * the day marketing was split onto it, a customer pressing Reply and the
+   * `mailto:` in List-Unsubscribe both started bouncing.
+   *
+   * Empty resolves to the transactional From, which is a real mailbox. That is
+   * the safe default precisely because the marketing From may not be one.
+   */
+  marketingReplyTo: string;
 }
 
 function str(value: unknown): string {
@@ -141,6 +153,7 @@ export async function getEmailRuntimeConfig(): Promise<EmailRuntimeConfig> {
     },
     marketingPostalAddress: str(cfg.marketing_postal_address) || process.env.MARKETING_POSTAL_ADDRESS || "",
     marketingFrom: str(cfg.marketing_from) || process.env.MARKETING_EMAIL_FROM || "",
+    marketingReplyTo: str(cfg.marketing_reply_to) || process.env.MARKETING_REPLY_TO || "",
   };
 }
 
@@ -151,6 +164,22 @@ export async function getEmailRuntimeConfig(): Promise<EmailRuntimeConfig> {
  */
 export function resolveMarketingFrom(config: EmailRuntimeConfig): string {
   return config.marketingFrom.trim() || config.from;
+}
+
+/**
+ * The address replies to marketing mail should reach.
+ *
+ * NOT derived from the marketing From, and that is the whole point. Sending
+ * reputation wants marketing on its own subdomain; a reply wants a mailbox. A
+ * Resend sending domain provides the first and not the second, so the two are
+ * resolved separately — the message goes out FROM the subdomain and answers
+ * back TO an address that exists.
+ *
+ * Falling back to the transactional From is safe in a way the reverse would not
+ * be: that address receives, because it is the one customers already write to.
+ */
+export function resolveMarketingReplyTo(config: EmailRuntimeConfig): string {
+  return config.marketingReplyTo.trim() || config.from;
 }
 
 export interface EmailAdminSettings {

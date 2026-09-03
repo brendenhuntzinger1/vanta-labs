@@ -3,7 +3,7 @@ import { sendEmail } from "@/lib/email/send";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { generateUnsubscribeToken } from "@/lib/email/unsubscribe";
 import { getSiteUrl } from "@/lib/env";
-import { getEmailRuntimeConfig, resolveMarketingFrom } from "@/lib/email/settings";
+import { getEmailRuntimeConfig, resolveMarketingFrom, resolveMarketingReplyTo } from "@/lib/email/settings";
 import type { EmailSendResult, EmailTemplate } from "@/lib/email/types";
 import { escapeHtml } from "@/lib/email/templates";
 
@@ -178,8 +178,26 @@ export async function sendMarketingEmail(
   //
   // Deriving both from the same resolved value means turning separation on
   // cannot introduce the mismatch.
+  // A SENDING DOMAIN IS NOT A MAILBOX, AND THE OPT-OUT MAILTO HAS TO REACH ONE.
+  //
+  // This used to derive the mailto from `marketingFrom`, reasoning — correctly,
+  // about reputation — that an opt-out header naming a different domain than the
+  // message is the shape filters score against. What it assumed, and what turned
+  // out to be false, is that the marketing From is somewhere mail can arrive.
+  //
+  // A Resend SENDING domain is send-only. `mail.vantalabsresearch.com` has no MX
+  // at all, so on the day marketing moved onto it every Reply and every mailto
+  // opt-out began bouncing. RFC 8058 expects a mailto opt-out honoured within
+  // two days; one that bounces is the complaint that follows, which is the exact
+  // outcome the subdomain split existed to avoid.
+  //
+  // So the two are resolved separately and deliberately: FROM the subdomain, so
+  // reputation stays split, and REPLY-TO an address that receives. A
+  // cross-domain Reply-To is ordinary and costs nothing. A From nobody can
+  // answer costs a customer.
   const marketingFrom = resolveMarketingFrom(emailConfig);
-  const unsubscribeMailbox = extractEmailAddress(marketingFrom);
+  const marketingReplyTo = resolveMarketingReplyTo(emailConfig);
+  const unsubscribeMailbox = extractEmailAddress(marketingReplyTo);
   const listHeaders: Record<string, string> = {
     "List-Unsubscribe": `<${unsubscribeUrl}>${unsubscribeMailbox ? `, <mailto:${unsubscribeMailbox}?subject=unsubscribe>` : ""}`,
     "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
@@ -192,6 +210,7 @@ export async function sendMarketingEmail(
     html,
     text,
     from: marketingFrom,
+    replyTo: marketingReplyTo,
   });
 
   // Logged best-effort - a logging failure must never fail the send itself.

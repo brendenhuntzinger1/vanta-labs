@@ -43,6 +43,9 @@ const config = { value: { marketingPostalAddress: POSTAL, from: "orders@x.com", 
 vi.mock("@/lib/email/settings", () => ({
   getEmailRuntimeConfig: async () => config.value,
   resolveMarketingFrom: () => "news@x.com",
+  // Send-only marketing subdomain, replies routed to a real mailbox. Distinct
+  // from resolveMarketingFrom on purpose: see marketing-reply-path.test.ts.
+  resolveMarketingReplyTo: () => "orders@x.com",
 }));
 
 beforeEach(() => {

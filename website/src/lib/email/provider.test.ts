@@ -35,6 +35,7 @@ function baseConfig(overrides: Partial<EmailRuntimeConfig> = {}): EmailRuntimeCo
     sendgrid: { apiKey: "" },
     marketingPostalAddress: "",
     marketingFrom: "",
+    marketingReplyTo: "",
     ...overrides,
   };
 }

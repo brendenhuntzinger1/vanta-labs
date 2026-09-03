@@ -23,6 +23,7 @@ const config = (overrides: Partial<EmailRuntimeConfig> = {}): EmailRuntimeConfig
   sendgrid: { apiKey: "" },
   marketingPostalAddress: "",
   marketingFrom: "",
+  marketingReplyTo: "",
   ...overrides,
 });
 

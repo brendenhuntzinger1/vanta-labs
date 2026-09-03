@@ -63,10 +63,31 @@ describe("the From used by marketing and its opt-out header cannot diverge", () 
    * so it would have surfaced only on the day separation was switched on, as an
    * unaligned opt-out header and replies landing in the orders mailbox.
    */
-  it("derives the send From and the unsubscribe mailto from one resolved value", () => {
+  it("resolves the send From from one place, so the subdomain split cannot be half-applied", () => {
     expect(MARKETING).toContain("const marketingFrom = resolveMarketingFrom(emailConfig)");
     expect(MARKETING).toContain("from: marketingFrom,");
-    expect(MARKETING).toContain("extractEmailAddress(marketingFrom)");
+  });
+
+  /**
+   * SUPERSEDED, 2026-09-02 — and worth saying why rather than deleting.
+   *
+   * This used to require the unsubscribe mailto be built from `marketingFrom`,
+   * on the reasoning that an opt-out header naming a different domain than the
+   * message is the shape filters score against. True as far as it goes, and it
+   * assumed the marketing From was a mailbox.
+   *
+   * It is not. A Resend SENDING domain is send-only; mail.vantalabsresearch.com
+   * has no MX, so aligning the mailto to it pointed every opt-out at a black
+   * hole. A bouncing opt-out is worse than a cross-domain one by a wide margin —
+   * RFC 8058 expects it honoured in two days, and the complaint that follows is
+   * exactly what the split was protecting the transactional domain from.
+   *
+   * So the mailto now follows the REPLY address. The original concern it names —
+   * that the mailto must never silently drift back to the transactional From
+   * while the message ships from somewhere else — is still enforced below.
+   */
+  it("builds the unsubscribe mailto from an address that can actually receive", () => {
+    expect(MARKETING).toContain("extractEmailAddress(marketingReplyTo)");
   });
 
   it("no longer builds the unsubscribe mailto from the transactional From", () => {

@@ -6,7 +6,7 @@ import { buildAffiliateCampaignEmail, normalizeLinkButtons } from "@/lib/email/a
 import { buildSampleMergeContext } from "@/lib/email/affiliate-merge";
 import { campaignTemplate } from "@/lib/email/templates";
 import { sendEmail } from "@/lib/email/send";
-import { getEmailRuntimeConfig, marketingBlockedReason, resolveMarketingFrom } from "@/lib/email/settings";
+import { getEmailRuntimeConfig, marketingBlockedReason, resolveMarketingFrom, resolveMarketingReplyTo } from "@/lib/email/settings";
 import { extractEmailAddress, isMarketingSuppressed } from "@/lib/email/marketing";
 import { generateUnsubscribeToken } from "@/lib/email/unsubscribe";
 import { getSiteUrl } from "@/lib/env";
@@ -132,11 +132,17 @@ export async function POST(request: Request, context: { params: Promise<{ campai
     // The same headers sendMarketingEmail sets, built from the same HMAC token,
     // so the opt-out in a test behaves exactly as it will in the real send.
     const unsubscribeUrl = `${getSiteUrl()}/api/unsubscribe?email=${encodeURIComponent(testEmail)}&token=${generateUnsubscribeToken(testEmail)}`;
-    const unsubscribeMailbox = extractEmailAddress(resolveMarketingFrom(config));
+    // The mailto follows the REPLY address, not the From — a Resend sending
+    // domain is send-only, so aligning it to the marketing subdomain would point
+    // the opt-out at a mailbox that does not exist. Same reasoning, and the same
+    // resolver, as sendMarketingEmail; see lib/email/marketing.ts.
+    const marketingReplyTo = resolveMarketingReplyTo(config);
+    const unsubscribeMailbox = extractEmailAddress(marketingReplyTo);
     const result = await sendEmail({
       to: testEmail,
       ...template,
       from: resolveMarketingFrom(config),
+      replyTo: marketingReplyTo,
       headers: {
         "List-Unsubscribe": `<${unsubscribeUrl}>${unsubscribeMailbox ? `, <mailto:${unsubscribeMailbox}?subject=unsubscribe>` : ""}`,
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
