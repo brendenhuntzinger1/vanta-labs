@@ -262,13 +262,29 @@ async function recordDeliveryEvent(event: DeliveryEvent, suppressed: boolean): P
 /**
  * How many soft bounces in a row before an address is treated as unreachable.
  *
- * Three is a judgement call and is stated rather than buried. One transient
- * bounce is a full mailbox or a weekend outage and clears on its own; three in
- * a row, with no delivery in between, is an address that does not accept mail.
- * Raising it keeps mailing dead addresses for longer; lowering it to one would
- * turn every full mailbox into a permanent removal.
+ * FIVE, AND THE NUMBER IS PINNED TO SOMETHING REAL: it must exceed the longest
+ * automatic send sequence, which is cart recovery's four stages (t30m, t12h,
+ * t24h, t72h).
+ *
+ * It was three, and three was wrong for a reason that only shows up when you
+ * trace an actual customer through it. Cart recovery mails the same address
+ * four times inside 72 hours, and someone who abandoned a cart usually has no
+ * other mail in flight — so nothing DELIVERS in between to reset the run. At
+ * three, the third stage suppressed them: one abandoned cart at a greylisting
+ * provider was enough to drop a real, opted-in customer off every list. The
+ * pre-deploy review found this from three independent angles, and it bites
+ * hardest immediately after the move to a sending subdomain with no reputation,
+ * which is precisely when transient deferrals cluster.
+ *
+ * Above the sequence length, escalation needs failures spanning more than one
+ * sequence — a far better signal that an address is genuinely unreachable
+ * rather than briefly deferred. A dead address still gets there; it just takes
+ * a second sequence to prove it.
+ *
+ * If a longer automatic sequence is ever added, this has to move with it.
+ * soft-bounce-escalation.test.ts asserts the relationship rather than the value.
  */
-export const CONSECUTIVE_SOFT_BOUNCE_LIMIT = 3;
+export const CONSECUTIVE_SOFT_BOUNCE_LIMIT = 5;
 
 /**
  * The reason an ESCALATED soft-bounce run is recorded under.
