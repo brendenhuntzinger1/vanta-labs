@@ -135,8 +135,16 @@ export function BacWaterAccessoryBlock({ bacWater, host }: { bacWater: Product |
           </button>
         ))}
       </div>
+      {/* A statement about laboratory practice, not a purchase statistic —
+          matching the popup, which already said it this way. The previous line
+          ("Over 70% of customers add BAC Water to complete their order") was a
+          hard-coded number with no query behind it: there is no order-history
+          read in this component, and the store's own audits measured 50-57% on
+          samples of 18 and 7. An invented figure sitting beside genuine,
+          checkable claims is what devalues the honest ones. It also framed the
+          diluent as what "completes" an order, which implies a use. */}
       <p className="mt-3.5 text-xs leading-5 text-[#a3a3a3]">
-        Over 70% of customers add BAC Water to complete their order.
+        Commonly added to research orders.
       </p>
     </div>
   );

@@ -77,6 +77,24 @@ describe("customer-facing copy keeps the research-use boundary", () => {
     }
   });
 
+  it("quotes no statistic about other customers", () => {
+    // "Over 70% of customers add BAC Water to complete their order" shipped for
+    // months next to genuinely checkable claims. There is no order-history read
+    // in that component — the number was a literal, and the store's own audits
+    // measured 50-57% on samples of 18 and 7. One invented figure standing
+    // beside honest ones devalues the honest ones, which is the whole reason
+    // the documentation-led posture is worth anything.
+    for (const file of SURFACES) {
+      const copy = renderedCopy(read(file));
+      expect
+        .soft(copy, `${file} quotes a customer statistic`)
+        .not.toMatch(/\b(?:over\s+|about\s+|nearly\s+)?\d{1,3}\s?%\s+of\s+(?:customers|buyers|researchers|orders|shoppers)/i);
+      expect
+        .soft(copy, `${file} quotes a customer or review count`)
+        .not.toMatch(/\b\d{1,3}(?:,\d{3})*\+?\s+(?:happy\s+)?(?:customers|reviews|researchers|labs)\b/i);
+    }
+  });
+
   it("says BAC Water, never the full compound name", () => {
     // Owner decision: the storefront says "BAC Water" everywhere a customer can
     // read it. Comments, slugs and the isBacWater() detector are exempt on
