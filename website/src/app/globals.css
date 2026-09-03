@@ -1219,29 +1219,112 @@ html[data-age-verified="false"] [data-age-gate] {
 [data-age-gate] {
   min-height: 100vh;
   min-height: 100dvh;
+  /* AND AT LEAST AS TALL AS THE VIEWPORT CAN EVER GET.
+     `dvh` follows the viewport as it changes, which is right until it changes
+     faster than a repaint: an in-app toolbar retracting grows the visual
+     viewport, and for a frame the overlay is shorter than the screen. `lvh` is
+     the viewport with the browser chrome RETRACTED — its maximum — so an
+     overlay sized to it cannot be caught short by a toolbar getting out of the
+     way. Last of the three because it is the newest; anything that does not
+     know it keeps the dvh answer. */
+  min-height: 100lvh;
 }
 
-/* THE STOREFRONT IS HIDDEN, NOT MERELY COVERED.
-   The gate is a fixed full-screen overlay, which is enough on a desktop
-   browser. It is NOT enough in the TikTok/Instagram webviews: their toolbars
-   resize the visual viewport as you interact, and a fixed overlay can be left
-   momentarily shorter than the screen or offset from it. The owner reported
-   exactly that — tapping an attestation flashed the home page's hero vial out
-   from behind the gate, over and over.
+/* AN OPAQUE FIELD THAT EXISTS BEFORE THE STOREFRONT DOES, AND IS BIGGER THAN
+   THE SCREEN CAN GET.
 
-   Covering can fail. Hiding cannot. Everything in the body except the gate is
-   made invisible until the attribute flips to "true".
+   This is what replaces `visibility: hidden` (see the note below), and it has
+   to answer the two things hiding gave us for free:
 
-   visibility, deliberately, NOT display: the markup stays in the document and
-   in the server-rendered HTML, so crawlers still receive the real page rather
-   than a site where every URL looks like the same "Are you 21?" panel.
-   <script> is excluded because hiding it is meaningless and it must keep
-   running — analytics and consent load from here. */
+     * FIRST PAINT. HTML streams, and the storefront markup arrives BEFORE the
+       gate — the gate is rendered after {children}. A browser paints what it
+       has, so on a slow connection there is a window where the store is on
+       screen and the overlay has not been parsed yet. `visibility: hidden`
+       never had that window: it applied from the stylesheet, which is in the
+       head, so it was in force before the first box was laid out. A rule on
+       the ROOT element has the same property — `html` exists before anything
+       inside it — so the screen is opaque from the first paint rather than
+       from whenever the gate arrives.
+     * SHORTER THAN THE SCREEN, OR OFFSET FROM IT. `fixed inset-0` sizes
+       against the LAYOUT viewport, and in an in-app webview the VISUAL
+       viewport moves relative to it: a toolbar retracts, a keyboard opens, a
+       rubber-band scroll drags it. The overlay is then short by however far
+       the two have drifted, which is the strip the owner saw the home page
+       through. `inset: -50%` makes this field twice the screen in both
+       dimensions, so no drift of that kind uncovers any part of it.
+
+   z-index 99 because the gate is 100 and nothing else in the codebase goes
+   above 70 — so this sits under the gate and over the entire store. It paints
+   over the storefront WITHOUT taking it out of the render tree, which is the
+   whole point: a covered page is still a rendered page, and Google indexes
+   what it renders. */
+html[data-age-verified="false"]::before {
+  content: "";
+  position: fixed;
+  inset: -50%;
+  z-index: 99;
+  background: #0a0908;
+}
+
+/* THE STOREFRONT IS COVERED AND INERT. IT USED TO BE INVISIBLE AS WELL, AND
+   THAT COST MORE THAN IT WAS WORTH.
+
+   The rule here was `visibility: hidden` on everything but the gate, on the
+   reasoning that a fixed overlay can fail: in the TikTok and Instagram
+   webviews the toolbars resize the visual viewport as you interact, and the
+   overlay could be left momentarily shorter than the screen. The owner
+   reported exactly that — tapping an attestation flashed the home page's hero
+   vial out from behind the gate. "Covering can fail. Hiding cannot."
+
+   That was true, and the note above it — "the markup stays in the document, so
+   crawlers still receive the real page" — turned out to be half the story.
+   The markup does stay. The RENDERED page does not, and Google renders. What
+   its renderer saw, measured against production on 2026-09-03:
+
+       /                    2552 words in the HTML ->  115 rendered
+       /products            7330 words in the HTML ->  115 rendered
+       /products/bpc-157    2033 words in the HTML ->  115 rendered
+
+   The same 115 words every time: this gate. Every URL on the site rendered
+   identically, so Google was asked to index thirty-eight copies of one page.
+   Thirteen of them came back "Crawled - currently not indexed", which is the
+   bucket for pages judged not worth adding.
+
+   So the storefront is covered rather than hidden, and the two specific ways
+   covering failed are each answered directly:
+
+     * SHORTER THAN THE SCREEN, OR OFFSET FROM IT — the overlay is sized to
+       `100lvh` as well, the viewport at its maximum, and an opaque field on
+       the ROOT element now sits over the whole store, half a viewport past
+       every edge, from the first paint. Between them a toolbar retracting, a
+       keyboard opening or a rubber-band scroll cannot uncover a strip
+       anywhere, and neither can HTML that streams the store in before the
+       gate. See the two rules above.
+     * THE HERO VIAL SPECIFICALLY — that was never really a covering failure.
+       A playing video is promoted to its own compositing layer and on iOS that
+       layer paints through anything, `visibility: hidden` included; it has its
+       own targeted fix below (`display: none`), added after this rule, and
+       that fix does not depend on this one.
+
+   What has NOT changed: nothing can be browsed, scrolled, tapped OR REACHED BY
+   THE KEYBOARD. The overlay is opaque (bg-[#0a0908]), fixed, and at z-index
+   100 — the highest in the codebase, and the only one above 99 — so nothing
+   can paint over it. The scroll lock above pins html and body.
+   `pointer-events: none` below keeps a tap off the storefront, and the store
+   is wrapped in an `inert` shield (see age-gate.tsx) so it is out of the tab
+   order too — hiding did that for free, covering does not, and Tab walked
+   into the footer the first time this rule was tried without it. With
+   JavaScript disabled the attribute stays "false", the shield is still in the
+   server's HTML, and the gate stays up. The failure mode is still a locked
+   store.
+
+   <script> and the diagnostics panel are exempt for the same reasons as
+   before: one must keep running, the other exists to be readable exactly when
+   entry is misbehaving. */
 html[data-age-verified="false"] body > *:not([data-age-gate]):not(script):not([data-entry-diagnostics]) {
-  visibility: hidden;
-  /* A tap must not reach the storefront either. Hidden content does not take
-     hit-tests, but a compositing layer that escapes `visibility` can, so this
-     is stated rather than assumed. */
+  /* A tap must not reach the storefront. Covered content still takes
+     hit-tests where the overlay does not reach, so this is what makes the
+     store inert rather than merely out of sight. */
   pointer-events: none;
 }
 
