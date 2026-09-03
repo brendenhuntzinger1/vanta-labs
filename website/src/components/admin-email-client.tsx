@@ -44,6 +44,7 @@ export function AdminEmailClient({
   dashboard,
   automations,
   automationStats,
+  offerChoices,
   segments,
   categories,
   postalAddressSet,
@@ -53,6 +54,7 @@ export function AdminEmailClient({
   dashboard: EmailDashboard;
   automations: AutomationRow[];
   automationStats: Record<string, AutomationStats>;
+  offerChoices: Array<{ key: string; label: string }>;
   segments: Segment[];
   categories: string[];
   // Deliberately three separate flags rather than one "ready" boolean: the
@@ -308,6 +310,7 @@ export function AdminEmailClient({
         promoCode: row.promo_code,
         ctaLabel: row.cta_label,
         ctaPath: row.cta_path,
+        offerKey: row.offer_key ?? "",
       }),
     });
     const data = await response.json().catch(() => null);
@@ -877,6 +880,35 @@ export function AdminEmailClient({
                   A path like <code>/products</code>, or the full address from your browser. Must stay on this site.
                   Clear both boxes to send this automation with no button.
                 </p>
+
+                {/* THE GIFT. Attaching one mints a unique, single-use token per
+                    recipient — tied to their address, expiring on its own
+                    clock, and consumed permanently by their first paid order.
+                    This spends real stock, so it is deliberately off unless
+                    somebody chooses it. */}
+                <label className="mt-3 block">
+                  <span className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">One-time gift</span>
+                  <select
+                    data-testid={`automation-${row.key}-offer`}
+                    className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                    value={row.offer_key ?? ""}
+                    onChange={(event) => {
+                      const next = [...automationDrafts];
+                      next[index] = { ...row, offer_key: event.target.value || null };
+                      setAutomationDrafts(next);
+                    }}
+                  >
+                    <option value="">No gift</option>
+                    {offerChoices.map((choice) => (
+                      <option key={choice.key} value={choice.key}>{choice.label}</option>
+                    ))}
+                  </select>
+                  <span className="mt-1 block text-[11px] text-zinc-500">
+                    Each recipient gets their own single-use offer, tied to their email address and
+                    consumed permanently by their first paid order. It applies only once the order
+                    reaches the gift&apos;s minimum.
+                  </span>
+                </label>
 
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button

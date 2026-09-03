@@ -8,6 +8,7 @@ import { loadConsentedAudience } from "@/lib/email/audience";
 import { isPaidOrderStatus } from "@/lib/ledger";
 import { buildAutomationClickUrl, buildAutomationOpenUrl } from "@/lib/email/automation-links";
 import { resolveSitePath } from "@/lib/email/cta-path";
+import { isOfferKey, issueCustomerOffer } from "@/lib/offers/customer-offers";
 import { getSiteUrl } from "@/lib/env";
 
 /**
@@ -55,6 +56,8 @@ export type AutomationRow = {
   promo_code: string | null;
   cta_label: string;
   cta_path: string;
+  /** One-time offer minted per recipient, or null. See customer-offers.ts. */
+  offer_key: string | null;
   updated_at: string;
 };
 
@@ -72,7 +75,7 @@ export const AUTOMATION_BATCH_LIMIT = 50;
 export async function loadAutomations(): Promise<AutomationRow[]> {
   const { data, error } = await supabaseAdmin
     .from("email_automations")
-    .select("key, enabled, delay_days, subject, headline, body, promo_code, cta_label, cta_path, updated_at")
+    .select("key, enabled, delay_days, subject, headline, body, promo_code, cta_label, cta_path, offer_key, updated_at")
     .order("key");
   if (error) throw error;
   return (data ?? []).filter((row) => isAutomationKey(row.key)) as AutomationRow[];
@@ -326,9 +329,9 @@ export type AutomationSweepResult = {
  * one. If it cannot be minted the customer still gets a working button
  * pointing at the same place; only the click stamp is lost.
  */
-function trackedCtaUrl(key: AutomationKey, email: string, referenceId: string, ctaPath: string): string {
+function trackedCtaUrl(key: AutomationKey, email: string, referenceId: string, ctaPath: string, offerToken?: string): string {
   try {
-    return buildAutomationClickUrl(key, email, referenceId);
+    return buildAutomationClickUrl(key, email, referenceId, offerToken);
   } catch (error) {
     console.error("[automations] click tracking unavailable, sending a plain link", key, error);
     return resolveSitePath(ctaPath, getSiteUrl());
@@ -413,6 +416,22 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
         // The reference id is inside the signature, so each SEND is its own
         // cohort — a customer won back twice produces two references and two
         // separately measurable episodes.
+        // MINT THE ONE-TIME OFFER, IF THIS AUTOMATION CARRIES ONE.
+        //
+        // Per recipient, and only for the message about to go out. The token
+        // exists in exactly two places from here: this variable, and the email
+        // the customer receives — customer_offers stores only its hash.
+        //
+        // A null means no offer applies to this send, and there are three
+        // ordinary ways to get one: the automation has no offer configured,
+        // the recipient already holds a live token (the unique index refusing
+        // a second, which is the whole point of it), or the insert failed. In
+        // every case the message still goes, with its ordinary CTA. A gift is
+        // not worth failing a retention email over.
+        const offerToken = isOfferKey(automation.offer_key)
+          ? (await issueCustomerOffer({ offerKey: automation.offer_key, email: target.email }))?.token
+          : undefined;
+
         const template = campaignTemplate({
           subject: automation.subject,
           previewText: automation.headline,
@@ -420,7 +439,7 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
           body: automation.body,
           promoCode: automation.promo_code,
           ctaLabel: hasCta ? ctaLabel : "",
-          ctaUrl: hasCta ? trackedCtaUrl(automation.key, target.email, target.referenceId, ctaPath) : "",
+          ctaUrl: hasCta ? trackedCtaUrl(automation.key, target.email, target.referenceId, ctaPath, offerToken) : "",
           postalAddress: config.marketingPostalAddress,
         });
 

@@ -11,6 +11,7 @@ import {
   sanitizeText,
   type ServerProduct,
 } from "@/lib/quote-order";
+import { releaseCustomerOffer, reserveCustomerOffer } from "@/lib/offers/customer-offers";
 import {
   CLAIM_HOLD_SECONDS,
   MANUAL_CLAIM_HOLD_SECONDS,
@@ -48,6 +49,14 @@ export interface CreateCheckoutPayload {
  customer: CustomerInput;
  referralCode?: string;
  couponCode?: string;
+ /**
+  * The one-time offer token from the link in a win-back email.
+  *
+  * Opaque all the way through: nothing between the browser and
+  * customer_offers interprets it, and nothing the client sends can name the
+  * free product, its quantity or its price. See quoteOrder.
+  */
+ offerToken?: string;
  currency?: string;
  expectedTotal?: number;
  customerUserId?: string;
@@ -94,6 +103,7 @@ export async function createCheckoutSession(
    shippingProtection: payload.shippingProtection,
    paymentMethod: payload.paymentMethod,
    expectedTotal: payload.expectedTotal,
+   offerToken: payload.offerToken,
    mode: "full",
  });
 
@@ -303,6 +313,34 @@ export async function createCheckoutSession(
    }
  }
 
+ // RESERVE THE ONE-TIME OFFER BEFORE THE ORDER EXISTS, for exactly the
+ // reason the promotion claim above does — and with one difference that
+ // matters more here.
+ //
+ // quoteOrder has already put a $0 line in this order. It did that from an
+ // ADVISORY read that took no lock, so two checkouts holding the same token
+ // can both have been priced a free vial. This is the only place that can be
+ // resolved, and a failure here must REFUSE THE ORDER: letting it through
+ // would ship a free unit without consuming the offer, and the customer could
+ // do it again tomorrow.
+ //
+ // The reserve also re-checks expiry, revocation, prior redemption and the
+ // email binding under its lock, so a token that went stale between the quote
+ // and the order is caught here rather than honoured.
+ if (quote.appliedOffer) {
+   const reserved = await reserveCustomerOffer({
+     token: quote.appliedOffer.token,
+     orderId,
+     email: payload.customer.email,
+   });
+   if (!reserved) {
+     throw new Error(
+       "Your free gift is no longer available, so your total has been updated. "
+       + "Please refresh this page to see the current total, then place your order.",
+     );
+   }
+ }
+
  const insertOutcome = await insertOrderRow(orderRow);
  if (insertOutcome.status === "duplicate") {
    const dup = await returnExistingByIdempotency();
@@ -314,6 +352,12 @@ export async function createCheckoutSession(
    // hold expires. Best effort — the hold would release on its own anyway.
    if (quote.appliedPromotionId && quote.appliedPromotionLimits) {
      await releasePromotionRedemption(orderId);
+   }
+   // Same courtesy for the offer: the hold would age out on its own, but an
+   // order that was never written should not cost the customer half an hour
+   // of their gift. Refuses to touch an offer that is already redeemed.
+   if (quote.appliedOffer) {
+     await releaseCustomerOffer(orderId);
    }
    throw new Error("Unable to create order record");
  }

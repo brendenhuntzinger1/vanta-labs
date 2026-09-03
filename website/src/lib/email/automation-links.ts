@@ -90,13 +90,32 @@ export function verifyAutomationLink(
 }
 
 /** The click-tracked CTA URL that goes in an automation email. */
-export function buildAutomationClickUrl(automationKey: string, email: string, referenceId: string): string {
+export function buildAutomationClickUrl(
+  automationKey: string,
+  email: string,
+  referenceId: string,
+  offerToken?: string,
+): string {
   const params = new URLSearchParams({
     k: automationKey,
     e: email.trim().toLowerCase(),
     r: referenceId,
     t: signAutomationLink(automationKey, email, referenceId),
   });
+  // THE OFFER TOKEN RIDES ALONG, AND IT IS NOT A DESTINATION.
+  //
+  // The rule this route lives by is that nothing in the query string can
+  // change where somebody lands — the destination is read from the automation
+  // row. That rule is intact: `o` names no path and no host. It is an opaque
+  // bearer secret that the click route hands to the landing page, and the only
+  // thing that can interpret it is the customer_offers lookup, server-side, at
+  // checkout.
+  //
+  // It is deliberately NOT inside the HMAC. The signature binds the click to a
+  // recipient and a send; the token binds an offer to an address, and it is
+  // verified by being looked up rather than by being signed. Signing it twice
+  // would add a second thing to keep in step and no security.
+  if (offerToken) params.set("o", offerToken);
   return `${getSiteUrl().replace(/\/$/, "")}/api/email/automation-click?${params.toString()}`;
 }
 

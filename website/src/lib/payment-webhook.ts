@@ -9,6 +9,7 @@ import { enqueueFailedEmail } from "@/lib/email/retry-queue";
 import { commissionEarnedTemplate, orderConfirmationTemplate, refundConfirmationTemplate } from "@/lib/email/templates";
 import { scheduleOrderPushNotification } from "@/lib/order-push-notification";
 import { getSiteUrl } from "@/lib/env";
+import { redeemCustomerOffer } from "@/lib/offers/customer-offers";
 import { redeemCoupon } from "@/lib/coupons";
 import { normalizeCouponCode } from "@/lib/coupon-code";
 import { readAllRowsBounded } from "@/lib/supabase-page";
@@ -1472,6 +1473,13 @@ export async function finalizeManualPayment(
         total: amountPaid,
         orderUrl: `${getSiteUrl()}/order-confirmation/${orderId}`,
       });
+      // CONSUME THE ONE-TIME OFFER. The order is paid, so a free unit that was
+      // reserved at checkout is now spent — permanently, and deliberately not
+      // reversed by a later refund: a refunded order has usually shipped, and
+      // releasing the offer would let the same customer redeem it again.
+      // Idempotent (it only writes while redeemed_at is null) and non-throwing,
+      // so a replayed webhook and an un-migrated database both cost nothing.
+      await redeemCustomerOffer(orderId);
       // Send-once + audited. Returns without sending if a confirmation for this
       // order is already recorded, which is what makes a replayed manual
       // approval safe independently of the caller's own guards.
@@ -2427,6 +2435,13 @@ export async function processPaymentWebhook(payload: string, signature: string, 
             total: amountPaid,
             orderUrl: `${getSiteUrl()}/order-confirmation/${orderId}`,
           });
+          // CONSUME THE ONE-TIME OFFER. The order is paid, so a free unit that was
+          // reserved at checkout is now spent — permanently, and deliberately not
+          // reversed by a later refund: a refunded order has usually shipped, and
+          // releasing the offer would let the same customer redeem it again.
+          // Idempotent (it only writes while redeemed_at is null) and non-throwing,
+          // so a replayed webhook and an un-migrated database both cost nothing.
+          await redeemCustomerOffer(orderId);
           // Send-once + audited. The paid_side_effects_at claim above already
           // stops a duplicate delivery reaching this line; this is the second,
           // independent guarantee, enforced by a unique index rather than by

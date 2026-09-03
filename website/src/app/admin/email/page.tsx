@@ -4,6 +4,7 @@ import { canManageEmailCampaigns } from "@/lib/admin-roles";
 import { getEmailDashboard } from "@/lib/admin-email";
 import { loadAutomations } from "@/lib/email/automations";
 import { loadAutomationStats } from "@/lib/email/automation-stats";
+import { OFFER_CATALOG } from "@/lib/offers/customer-offers";
 import { getEmailAdminSettings } from "@/lib/email/settings";
 import { CAMPAIGN_SEGMENTS } from "@/lib/email/audience";
 import { AdminEmailClient } from "@/components/admin-email-client";
@@ -63,6 +64,7 @@ export default async function AdminEmailPage() {
             dashboard={dashboard}
             automations={automations}
             automationStats={automationStats}
+            offerChoices={Object.entries(OFFER_CATALOG).map(([key, value]) => ({ key, label: value.label }))}
             segments={CAMPAIGN_SEGMENTS}
             categories={categories}
             postalAddressSet={Boolean(emailSettings?.marketingPostalAddress)}

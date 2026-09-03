@@ -3,6 +3,7 @@ import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest
 import { canManageEmailCampaigns } from "@/lib/admin-roles";
 import { isAutomationKey } from "@/lib/email/automations";
 import { normalizeSitePathInput } from "@/lib/email/cta-path";
+import { isOfferKey } from "@/lib/offers/customer-offers";
 import { getSiteUrl } from "@/lib/env";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -60,6 +61,18 @@ export async function PATCH(request: Request) {
     );
   }
 
+  // WHICH ONE-TIME GIFT THIS SEQUENCE CARRIES, if any.
+  //
+  // Blank is the normal answer and means no gift. An unrecognised value is
+  // refused rather than stored: a typo here would silently mail a win-back with
+  // no offer attached, and the operator would have no way to tell from the
+  // admin that nothing was minted.
+  const rawOfferKey = text(body.offerKey, 60);
+  if (rawOfferKey && !isOfferKey(rawOfferKey)) {
+    return NextResponse.json({ success: false, error: "That gift offer is not one this store knows how to grant." }, { status: 400 });
+  }
+  const offerKey = rawOfferKey || null;
+
   // A delay of zero would mail someone the instant they place an order, which
   // reads as a glitch rather than a follow-up. One day is the floor.
   const delayDays = Math.max(1, Math.min(365, Math.round(Number(body.delayDays ?? 3) || 3)));
@@ -75,6 +88,7 @@ export async function PATCH(request: Request) {
       promo_code: text(body.promoCode, 60) || null,
       cta_label: ctaLabel,
       cta_path: ctaPath,
+      offer_key: offerKey,
       updated_at: new Date().toISOString(),
     })
     .eq("key", body.key);
@@ -94,6 +108,10 @@ export async function PATCH(request: Request) {
       // this, "who changed the button on the win-back and when" had no answer.
       ctaLabel,
       ctaPath,
+      // Attaching a gift to a sequence spends real product. It is the single
+      // most consequential thing on this form, so it is the one most worth
+      // being able to answer "who turned that on, and when" about.
+      offerKey,
       performedAt: new Date().toISOString(),
       performedBy: session.username,
       ipAddress: getRequestIpAddress(request),
@@ -107,7 +125,7 @@ export async function PATCH(request: Request) {
   // from the database until the next page load.
   const { data: saved } = await supabaseAdmin
     .from("email_automations")
-    .select("key, enabled, delay_days, subject, headline, body, promo_code, cta_label, cta_path, updated_at")
+    .select("key, enabled, delay_days, subject, headline, body, promo_code, cta_label, cta_path, offer_key, updated_at")
     .eq("key", body.key)
     .maybeSingle();
 

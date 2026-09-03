@@ -9,6 +9,7 @@ import {
 } from "@/lib/email/automation-links";
 import { isAutomationKey } from "@/lib/email/automations";
 import { hashIpAddress } from "@/lib/ip-hash";
+import { OFFER_COOKIE, OFFER_COOKIE_MAX_AGE_SECONDS } from "@/lib/offers/customer-offers";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +39,7 @@ export async function GET(request: NextRequest) {
   const email = (request.nextUrl.searchParams.get("e") ?? "").trim().toLowerCase();
   const referenceId = request.nextUrl.searchParams.get("r") ?? "";
   const token = request.nextUrl.searchParams.get("t") ?? "";
+  const offerToken = request.nextUrl.searchParams.get("o") ?? "";
 
   const fallback = safeAutomationDestination(null);
 
@@ -109,6 +111,33 @@ export async function GET(request: NextRequest) {
   }
 
   const response = NextResponse.redirect(destination, { status: 302 });
+
+  // THE OFFER TOKEN GOES IN AN httpOnly COOKIE, NOT IN THE REDIRECT URL.
+  //
+  // It is a bearer secret that grants a physical product. In a query string it
+  // would be readable by every script on the landing page, sent in the Referer
+  // header of every outbound request that page makes, captured by analytics and
+  // session recorders, and copied verbatim any time the customer shared the
+  // link. None of that is true of an httpOnly cookie, and the checkout reads it
+  // server-side anyway — the browser never needs to see it.
+  //
+  // Length-capped because anyone can put anything in `o`. Junk should cost a
+  // failed lookup, not a Set-Cookie header no proxy will forward.
+  if (offerToken && offerToken.length <= 128) {
+    response.cookies.set({
+      name: OFFER_COOKIE,
+      value: offerToken,
+      httpOnly: true,
+      // Lax, not Strict: the customer is arriving from their mail client, which
+      // is a cross-site top-level navigation. Strict drops the cookie on
+      // exactly the hop this exists for.
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: OFFER_COOKIE_MAX_AGE_SECONDS,
+    });
+  }
+
   response.cookies.set({
     name: AUTOMATION_COOKIE,
     value: encodeAutomationCookie(automationKey, clickedAt.getTime()),

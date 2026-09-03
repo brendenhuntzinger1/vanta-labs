@@ -417,6 +417,22 @@
     "renewal_reminder_sent_at",
     "veyra_membership_id"
   ],
+  "customer_offers": [
+    "id",
+    "offer_key",
+    "token_hash",
+    "email",
+    "product_slug",
+    "variant_id",
+    "min_subtotal_cents",
+    "issued_at",
+    "expires_at",
+    "reserved_order_id",
+    "reserved_at",
+    "redeemed_order_id",
+    "redeemed_at",
+    "revoked_at"
+  ],
   "customer_preferences": [
     "user_id",
     "order_update_emails",
@@ -447,7 +463,8 @@
     "promo_code",
     "cta_label",
     "cta_path",
-    "updated_at"
+    "updated_at",
+    "offer_key"
   ],
   "email_campaign_clicks": [
     "id",

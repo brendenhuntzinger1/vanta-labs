@@ -114,6 +114,34 @@ export function CartDrawer() {
   const freeShipThreshold = shippingConfig.freeShippingThreshold;
   const shippingProgress = getShippingProgress(subtotal, freeShipThreshold);
 
+  // THE FREE GIFT WAITING FOR THIS BROWSER, if any.
+  //
+  // Asked of the server rather than derived here, because the token that proves
+  // it lives in an httpOnly cookie the page cannot read — which is the whole
+  // reason it is safe. The response carries no secret: the product, the
+  // minimum and the expiry, which is what the customer's own email already
+  // told them.
+  //
+  // Showing it MATTERS. A gift the shopper only discovers on the confirmation
+  // screen cannot change what they put in the basket, and changing that is the
+  // entire point of attaching one to a win-back.
+  const [pendingOffer, setPendingOffer] = useState<{ productName: string; minSubtotalCents: number } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/offer/status", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.offer) setPendingOffer(data.offer);
+      })
+      // A gift banner is never worth a console error or a broken drawer.
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const offerShortfall = pendingOffer
+    ? Math.max(0, pendingOffer.minSubtotalCents / 100 - subtotal)
+    : 0;
+
   // Smart membership upsell: only for non-members, and only when joining
   // would genuinely put money in their pocket TODAY (cart savings + credit
   // exceed the first month's cost). Dollars, computed live from this cart.
@@ -401,6 +429,40 @@ export function CartDrawer() {
                   <p className="mt-1.5 text-xs text-zinc-400">
                     {activePromotionMessage ?? "Your lowest-priced eligible items are discounted."} Referral discounts pause while this promotion applies.
                   </p>
+                </div>
+              ) : null}
+
+              {/* The one-time win-back gift. Two states, because "you have a
+                  free thing" and "you have a free thing you have not unlocked"
+                  are different messages and only one of them is an ask. */}
+              {pendingOffer ? (
+                <div
+                  data-testid="offer-banner"
+                  className={`rounded-2xl border p-4 ${
+                    offerShortfall > 0
+                      ? "border-white/[0.06] bg-white/[0.02]"
+                      : "border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.06]"
+                  }`}
+                >
+                  {offerShortfall > 0 ? (
+                    <p className="text-sm text-zinc-300">
+                      Add{" "}
+                      <span className="font-semibold text-[color:var(--accent-gold)]">
+                        ${offerShortfall.toFixed(2)}
+                      </span>{" "}
+                      more to claim your free {pendingOffer.productName}.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-sm font-semibold text-[color:var(--accent-gold)]">
+                        Free {pendingOffer.productName} — added at checkout
+                      </p>
+                      <p className="mt-1.5 text-xs text-zinc-400">
+                        Your one-time gift is applied automatically. It is tied to the email address
+                        this offer was sent to, so use that address at checkout.
+                      </p>
+                    </>
+                  )}
                 </div>
               ) : null}
 
