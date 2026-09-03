@@ -56,8 +56,15 @@ describe("the message the owner wrote is the message that goes out", () => {
 
   it("invents nothing — no discount, deadline or bonus the owner did not type", () => {
     const email = build({ body: "Plain message.", headline: "Update", ctaLabel: "OPEN" });
+    // Anchored on the brand PARAGRAPH, not on the first occurrence of the
+    // words. renderLayout now carries a <title>Vanta Labs</title>, so splitting
+    // on the bare string started the "message" at the <head> and swept in the
+    // layout's own width="100%" tables — the assertion still failed, but for
+    // the wrapper rather than for anything the owner did or didn't type.
+    const message = email.html.toLowerCase().split(">vanta labs</p>")[1] ?? "";
+    expect(message, "brand paragraph not found — has renderLayout changed?").not.toBe("");
     for (const invented of ["%", "$", "bonus", "expires", "hurry", "limited time"]) {
-      expect(email.html.toLowerCase().split("vanta labs")[1] ?? "").not.toContain(invented.toLowerCase());
+      expect(message).not.toContain(invented.toLowerCase());
     }
   });
 
