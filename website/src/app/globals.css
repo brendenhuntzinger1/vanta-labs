@@ -1540,7 +1540,11 @@ html[data-age-verified="false"] video {
 
 .vl2-hero {
   position: relative;
-  min-height: 100svh;
+  /* Published as a variable because the media below is sized against it: the
+     vial has to fit the space the copy leaves, and that space is this height
+     minus the copy block. The phone override lives in the 640px block. */
+  --hero-h: 100svh;
+  min-height: var(--hero-h);
   overflow: hidden;
   /* Visible whenever the video hasn't painted yet (or fails to load/decode
      for a given browser) - keeps the hero from ever going flat black. */
@@ -1555,14 +1559,25 @@ html[data-age-verified="false"] video {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  opacity: 0.82;
-  /* A <video> with no frames yet paints whatever the compositor happens to
-     hold — which showed up on a phone as a light grey band washing over half
-     the hero. The file is 6.4 MB, so there is always a window before the first
-     frame decodes. Giving the element its own near-black ground means that
-     window looks like the designed dark hero instead of a grey panel. */
-  background-color: #0a0a0a;
-  /* Decorative and aria-hidden: it must never receive a tap. On iOS a tap that
+  opacity: 0.66;
+  /* Tailwind's preflight caps canvas at `max-width: 100%`, which silently
+     squashed a box declared square down to the width of the viewport — 390x437
+     at 390x844 — and a non-square box is exactly what re-introduces the
+     cover-crop these rules exist to remove. Measured before this line: the
+     media reported 390 wide and 437 tall. */
+  max-width: none;
+  /* NO BACKGROUND COLOUR, AND IT USED TO HAVE ONE.
+
+     `background-color: #0a0a0a` was here to cover the window before the first
+     frame decodes, back when that window could show whatever the compositor
+     happened to hold. It cannot any more: the element is a <canvas> that starts
+     fully transparent and is painted from a 36 KB still long before the clip
+     arrives, so there is nothing to cover — and a near-black plate behind a
+     media box that is deliberately smaller than the hero is itself a second
+     rectangle sitting on the hero's own gradient. The dark ground the rule was
+     reaching for belongs to `.vl2-hero`, which has it.
+
+     Decorative and aria-hidden: it must never receive a tap. On iOS a tap that
      reaches a <video> can hand the visitor to the native fullscreen player,
      which is a dead end with no way back to the store. */
   pointer-events: none;
@@ -1576,12 +1591,38 @@ html[data-age-verified="false"] video {
   /* Mobile: the copy is nearly full-width, so the lift has to come from the
      bottom rather than from one side.
 
-     The middle stop used to fall to 0.18, which is close enough to clear that a
-     bright stretch of video glared straight through it — on a phone that read
-     as a light panel over the hero. Held at 0.42 the vial still shows, but no
-     frame of it can wash the section out. */
+     IT USED TO HOLD 0.42 ACROSS THE MIDDLE AND 0.62 AT THE TOP, and that was
+     the right answer for a full-bleed white-backgrounded clip: a bright stretch
+     of it would otherwise glare straight through and read as a light panel over
+     the hero. It is the wrong answer now and it was half the "black box"
+     complaint — a flat 42%-to-93% black wash over the entire viewport is what
+     made the hero read as a dark rectangle with a picture in it rather than as
+     one lit surface.
+
+     The premise is gone: the media no longer fills the hero, its own edges are
+     black in the file, and the canvas fades it out with real alpha. Nothing
+     bright can reach the top of the section any more, so the top of the scrim
+     does not have to defend against it. What is left is the only job a scrim
+     ever had here — holding the copy at the bottom against whatever is behind
+     it.
+
+     THE COPY END IS ANCHORED TO THE COPY, IN REM, NOT TO A PERCENTAGE OF THE
+     HERO. The copy block is about the same height on every phone (~460px), but
+     the hero it sits in is 86svh — 574px on an iPhone SE and 726px on a 14. A
+     percentage stop therefore lands in a different place on each: on the 14 the
+     copy starts at 36% of the hero, on the SE at 20%, and one gradient cannot
+     be right for both. Measured in rem from the bottom, the copy starts at
+     ~29rem on both, so the ramp meets it in the same place everywhere. */
   background:
-    linear-gradient(180deg, rgba(0, 0, 0, 0.62) 0%, rgba(0, 0, 0, 0.42) 30%, rgba(0, 0, 0, 0.68) 68%, rgba(0, 0, 0, 0.93) 100%);
+    linear-gradient(
+      180deg,
+      rgba(0, 0, 0, 0.12) 0%,
+      rgba(0, 0, 0, 0) 22%,
+      rgba(0, 0, 0, 0.18) calc(100% - 30rem),
+      rgba(0, 0, 0, 0.55) calc(100% - 18rem),
+      rgba(0, 0, 0, 0.82) calc(100% - 7rem),
+      rgba(0, 0, 0, 0.94) 100%
+    );
 }
 
 /* Desktop: weight the scrim LEFT, where the headline and CTAs live, and let it
@@ -1590,8 +1631,8 @@ html[data-age-verified="false"] video {
 @media (min-width: 1024px) {
   .vl2-hero-scrim {
     background:
-      linear-gradient(180deg, rgba(0, 0, 0, 0.5) 0%, rgba(0, 0, 0, 0.12) 34%, rgba(0, 0, 0, 0.3) 74%, rgba(0, 0, 0, 0.82) 100%),
-      linear-gradient(100deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0.62) 24%, rgba(0, 0, 0, 0.28) 46%, transparent 66%);
+      linear-gradient(180deg, rgba(0, 0, 0, 0.42) 0%, rgba(0, 0, 0, 0.06) 34%, rgba(0, 0, 0, 0.24) 74%, rgba(0, 0, 0, 0.78) 100%),
+      linear-gradient(100deg, rgba(0, 0, 0, 0.72) 0%, rgba(0, 0, 0, 0.46) 26%, rgba(0, 0, 0, 0.16) 48%, transparent 64%);
   }
 }
 
@@ -1620,41 +1661,90 @@ html[data-age-verified="false"] video {
    background and becomes what it actually is — a product shot, whole, at a
    sane size, in the upper part of the hero, with the copy on the dark ground
    beneath it. Desktop keeps the full-bleed treatment, where it crops nothing
-   and works as designed. */
+   and works as designed.
+
+   THE BOX IS WIDER THAN THE VIEWPORT ON PURPOSE, and it did not used to be.
+   At 88vw the shot sat in the middle of the screen with a margin of hero on
+   either side, which is what turned it into a panel pasted on the page. It can
+   run past the edges now because the falloff is real alpha and is 94% complete
+   by the time it reaches them: the picture reads as lighting that happens to
+   fall on this part of the page, rather than as an object with a boundary. */
 @media (max-width: 1023px) {
   .vl2-hero-video {
     /* `inset: 0` is what forced the box portrait. Release it. */
     inset: auto;
-    top: 0;
     left: 50%;
     transform: translateX(-50%);
     /* SQUARE, and equal by construction. cover() discards
        1 - min(w,h)/max(w,h) of a square source, which is zero only here.
        Whichever limit binds the box stays square: the viewport width on a
-       phone, the hero's height on a short landscape window. */
-    width: min(88vw, 46svh);
-    height: min(88vw, 46svh);
-    /* Belt and braces for the <img> that in-app browsers get: if the asset is
-       ever re-cut to another aspect, contain shows all of it rather than
-       quietly reintroducing the crop this rule exists to remove. */
+       phone, the hero's height on a short landscape window.
+
+       SIZED TO THE SPACE THE COPY LEAVES, which is the only way this works
+       across the phones people actually use. A fixed fraction of the viewport
+       cannot: the copy block measures ~460px at every phone width (457px at
+       375, 466px at 390), while the hero is 86svh — 574px on an iPhone SE and
+       726px on a 14. So the room above the copy swings from 117px to 260px,
+       and one number is either tiny on the big phone or lands the vial's own
+       label across the headline on the small one. Both of those have shipped.
+
+       29rem is that copy block, rounded up — it was briefly 26rem, which is
+       where this went wrong: at 375x667 that gave a 272px box whose LABEL, not
+       its faded base, landed on "Research Use Only", and at 360x740 the eyebrow
+       ran into the vial's own printing. Both measured. The extra 3rem costs
+       nothing on any phone 390px or wider, where the 100vw cap binds first and
+       the box is unchanged.
+
+       Dividing by 0.58 turns "space available" into "box height", because the
+       bottom of the label sits at 0.68 of the frame and the box is lifted by
+       0.10 of its own height: the label therefore ends at 0.58 of the box, and
+       that is the part that must clear the copy. Everything below it is clear
+       glass on its way to being faded out anyway.
+
+       The lift is what puts the vial rather than the backdrop in the gap: the
+       frame is mostly empty above the cap, so 10% of it goes off the top.
+
+       The 9rem floor and the 78svh cap are guards, not design. A phone held
+       landscape makes the hero shorter than the copy block, so the subtraction
+       goes negative — and a negative width is invalid at computed-value time,
+       which drops the declaration and hands the canvas its intrinsic 300x150.
+       That is a squashed, cropped vial, which is the defect this whole rule
+       exists to prevent, arriving through the back door. */
+    --vial-size: min(100vw, 78svh, max(9rem, calc((var(--hero-h) - 29rem) / 0.58)));
+    width: var(--vial-size);
+    height: var(--vial-size);
+    top: calc(var(--vial-size) * -0.1);
     object-fit: contain;
-    opacity: 0.95;
-    /* No hard edge, and WEIGHTED HIGH ON PURPOSE.
+    /* 0.62, DOWN FROM 0.95, and this is the second half of the black-box
+       complaint. The shot is lit high-key on a white backdrop, so at full
+       strength what sits behind the vial is a bright white pool — on a
+       near-black page that reads as a hole punched in it, and no amount of
+       fading the EDGES fixes the middle. Blending it 38% into the hero turns
+       the pool into a soft graphite glow: the vial keeps every bit of its
+       shape and its label, and the page keeps being black.
 
-       The vial is lit on a white studio background, so a plain rectangle of it
-       reads as a bright panel pasted onto a near-black page — that is the
-       complaint. The vignette lets it fall away into the hero on every side
-       instead of stopping at one.
+       Compared at 0.95 / 0.75 / 0.62 / 0.48 side by side at 390x844 and
+       1440x900. Below about 0.55 the vial stops holding the eye; above about
+       0.75 the backdrop glares. */
+    opacity: 0.62;
+    /* NO mask-image, AND THERE USED TO BE ONE. It is the black box.
 
-       Its centre sits at 33% rather than the middle because the copy is
-       bottom-anchored and the two must not fight: measured at 390x844 the
-       media overhangs the start of the copy by 129px, and at 375x667 by 199px,
-       which is precisely where the vial's own label — the brightest, most
-       text-heavy part of the shot — used to land across the headline. Fading
-       to nothing by ~82% of the box puts the glass and cap in the clear space
-       above and leaves only unlit background behind the words. */
-    -webkit-mask-image: radial-gradient(ellipse 82% 54% at 50% 31%, #000 32%, rgba(0, 0, 0, 0.4) 58%, transparent 76%);
-    mask-image: radial-gradient(ellipse 82% 54% at 50% 31%, #000 32%, rgba(0, 0, 0, 0.4) 58%, transparent 76%);
+       A radial-gradient mask is sized against the element box, so a gradient
+       that wants to fade out beyond that box is clipped by it — and a clipped
+       ellipse is a rectangle with rounded corners. The rule here read
+
+           radial-gradient(ellipse 82% 54% at 50% 31%, ... transparent 76%)
+
+       whose transparent stop sits at 0.82 x 0.76 = 62% of the box width from a
+       centre at 50%: it asked to finish fading at -12% and 112% of the width,
+       and got straight vertical edges instead. Vertically it finished at 72%,
+       which is the hard line that cut the vial through its own label. Both
+       edges are visible in a screenshot at 390x844, and together they are the
+       "vial sitting in a random dark rectangle" this replaces.
+
+       The falloff is applied as real alpha by the canvas instead — see
+       FADE_START in hero-video.tsx — where it is bounded by construction and
+       does not depend on a compositing feature an in-app WebView may skip. */
   }
 }
 
@@ -1677,7 +1767,7 @@ html[data-age-verified="false"] video {
    growing and a viewport-anchored vial would drift off alone into the margin.
    Measured headline right edge: 720px at 1024-1440, 960px at 1920, 1280px at
    2560 — the media clears it at every one of those, and where it does not
-   (1024, the tightest) the vignette is what covers the difference. */
+   (1024, the tightest) the falloff is what covers the difference. */
 @media (min-width: 1024px) {
   .vl2-hero-video {
     inset: auto;
@@ -1687,16 +1777,34 @@ html[data-age-verified="false"] video {
     transform: translateY(-50%);
     /* Square, for the same reason as the phone rule: cover() discards
        1 - min(w,h)/max(w,h) of a square source, and that is zero only here.
-       The 700px cap is the content container's own limit expressed in the
-       media — past 1440px nothing else grows either. */
-    width: min(44vw, 82svh, 700px);
-    height: min(44vw, 82svh, 700px);
+       The 740px cap is the content container's own limit expressed in the
+       media — past 1440px nothing else grows either.
+
+       THE FOURTH TERM IS WHAT KEEPS THE HEADLINE OFF THE VIAL, and without it
+       the layout breaks at the narrow end of this breakpoint. The copy column
+       is 48px of gutter plus a max-w-2xl (672px) headline, so its right edge is
+       at 720px whatever the window is. The media is anchored 48px from the
+       right, and the part of it that must clear that edge is its bright middle
+       — the outer quarter is already faded to nothing, so text may sit there.
+       Requiring `boxLeft + 0.25 * W >= 736` and solving for W gives this term.
+
+       Measured at 1024x768 without it: the box ran from x=485 to x=976 while
+       the headline ran to 720, and "every" in "Precision, in every vial." was
+       printed across the vial's shoulder in white on near-white. At 1280 and
+       above the term is slack — 661px against the 614px that 48vw already
+       allows — so it changes nothing where nothing was wrong. */
+    --vial-size: min(48vw, 92svh, 740px, calc((100vw - 784px) / 0.75));
+    width: var(--vial-size);
+    height: var(--vial-size);
     object-fit: contain;
-    opacity: 0.9;
-    /* Centre pushed right of the middle so the edge nearest the copy is the
-       first to fall away. */
-    -webkit-mask-image: radial-gradient(ellipse 70% 72% at 56% 50%, #000 40%, rgba(0, 0, 0, 0.5) 70%, transparent 88%);
-    mask-image: radial-gradient(ellipse 70% 72% at 56% 50%, #000 40%, rgba(0, 0, 0, 0.5) 70%, transparent 88%);
+    /* Same reasoning as the phone rule, a touch stronger: the desktop vial has
+       far more black around it, so it can carry slightly more light without
+       the backdrop taking over. */
+    opacity: 0.66;
+    /* No mask here either, and for the same reason: the ellipse it used to
+       carry finished at 70% x 0.88 = 62% of the box width from a centre at
+       56%, i.e. past the right edge, so it left a straight edge down the side
+       nearest the page margin. The falloff is alpha on the canvas now. */
   }
 }
 
@@ -1704,7 +1812,7 @@ html[data-age-verified="false"] video {
   position: relative;
   z-index: 2;
   display: flex;
-  min-height: 100svh;
+  min-height: var(--hero-h);
   flex-direction: column;
   justify-content: flex-end;
 }
@@ -2430,10 +2538,13 @@ textarea {
 
   /* Compact hero on phones: the full-viewport hero is desktop drama — on a
      small screen it pushed all content a whole screen away. 86svh keeps the
-     impact while letting the catalog peek in sooner. */
-  .vl2-hero,
-  .vl2-hero-content {
-    min-height: 86svh;
+     impact while letting the catalog peek in sooner.
+
+     Set on the variable, not on min-height directly: `.vl2-hero-content` and
+     the media box both derive from it, and they must not be able to disagree
+     about how tall the hero is. */
+  .vl2-hero {
+    --hero-h: 86svh;
   }
 }
 

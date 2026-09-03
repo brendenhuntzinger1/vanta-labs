@@ -211,9 +211,19 @@ describe("the hero vial is always visible", () => {
   });
 
   it("keeps the element visible in CSS", () => {
-    // 0.82 is the designed blend with the hero gradient — visible, not hidden.
-    expect(css).toMatch(/\.vl2-hero-video\s*\{[^}]*opacity:\s*0\.8/);
-    expect(css).not.toMatch(/\.vl2-hero-video\s*\{[^}]*opacity:\s*0;/);
+    // WHAT MATTERS IS THAT IT IS NOT HIDDEN, not the exact number. This used
+    // to pin 0.82, which is a design value that has since moved: the shot is
+    // lit on a white studio backdrop, and blending it further into the hero is
+    // what stops that backdrop reading as a bright hole in a near-black page.
+    // Pinning the number turned a taste decision into a test failure while
+    // saying nothing about the bug this guards — a hero with no vial in it.
+    const opacities = [...css.matchAll(/\.vl2-hero-video\s*\{([\s\S]*?)\n\s*\}/g)]
+      .flatMap((rule) => [...rule[1].replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/opacity:\s*([0-9.]+)/g)])
+      .map((m) => Number(m[1]));
+    expect(opacities.length, "the media must declare an opacity somewhere").toBeGreaterThan(0);
+    // Comfortably visible at every breakpoint. Below ~0.5 the vial stops
+    // holding the eye, which is the failure this describe block is named for.
+    expect(Math.min(...opacities)).toBeGreaterThanOrEqual(0.55);
   });
 
   it("still refuses taps, and is a canvas with no native player", () => {
