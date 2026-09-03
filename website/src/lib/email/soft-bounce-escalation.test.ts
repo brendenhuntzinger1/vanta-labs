@@ -91,6 +91,26 @@ describe("softBouncesWarrantSuppression", () => {
     // full mailbox into a permanent removal from the list.
     expect(CONSECUTIVE_SOFT_BOUNCE_LIMIT).toBeGreaterThan(1);
   });
+
+  // ONE AUTOMATIC SEQUENCE MUST NOT BE ABLE TO SUPPRESS SOMEBODY BY ITSELF.
+  //
+  // Cart recovery mails the same address four times — t30m, t12h, t24h, t72h —
+  // inside 72 hours, and a cart abandoner typically has no other mail in flight,
+  // so nothing delivers in between to reset the run. At a limit of 3 the third
+  // stage suppressed them, which made ONE abandoned cart at a greylisting
+  // provider enough to drop a real, opted-in customer off every list.
+  //
+  // Three of the six pre-deploy review lenses converged on this independently,
+  // and it lands hardest right after the move to a sending subdomain with no
+  // reputation — the exact window where transient deferrals cluster.
+  //
+  // So the limit sits above the longest automatic sequence. Escalation now needs
+  // failures across more than one sequence, which is a far better signal that an
+  // address is genuinely unreachable rather than briefly deferred.
+  it("cannot be reached by the longest automatic send sequence alone", () => {
+    const LONGEST_AUTOMATIC_SEQUENCE = 4; // cart recovery: t30m, t12h, t24h, t72h
+    expect(CONSECUTIVE_SOFT_BOUNCE_LIMIT).toBeGreaterThan(LONGEST_AUTOMATIC_SEQUENCE);
+  });
 });
 
 describe("the webhook applies the escalation", () => {
