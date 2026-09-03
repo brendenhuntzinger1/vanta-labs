@@ -53,7 +53,7 @@ import type { CartItemInput, CustomerInput } from "@/lib/payment-types";
 // checkout, whereas the reverse would let a below-floor order through.
 // -------------------------------------------------------------------------
 
-export type QuoteMode = "full" | "address_optional" | "destination_only";
+export type QuoteMode = "full" | "address_optional" | "destination_only" | "preview";
 
 export interface ServerProduct {
   id: string;
@@ -94,6 +94,15 @@ export interface QuoteOrderInput {
    * "address_optional" (express session create): no address yet, shipping + tax
    * are 0 and `addressIndependentCents` carries the wallet sheet's opening
    * amount.
+   * "preview" (the cart drawer and the checkout summary, via
+   * /api/checkout/quote): the shopper is still filling the form, so the state
+   * may not be chosen yet and there is no contact at all. Shipping and tax are
+   * priced from whatever destination IS known — a US address with no state
+   * resolves tax to the ordinary `no_state` outcome rather than throwing, which
+   * is exactly what the summary already renders as "Enter address". Charges
+   * nothing and reserves nothing, like every other mode here; it exists so the
+   * numbers a shopper reads come from THIS function instead of a second one
+   * that has to be kept in step with it.
    * "destination_only" (express shipping callback): Apple redacts the street
    * address and the cardholder name until authorization, so only the
    * DESTINATION is validated — country/state, which is all shipping and tax
@@ -377,6 +386,16 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     validateCustomer(input.customer);
   } else if (input.mode === "destination_only") {
     validateDestination(input.customer);
+  } else if (input.mode === "preview") {
+    // A preview refuses an unshippable COUNTRY — quoting postage to a place the
+    // store does not serve would be a made-up number — but deliberately does
+    // not require the state that validateDestination insists on. That rule
+    // guards a real charge from dodging tax in a nexus state; a preview places
+    // no order, and a shopper who has not reached the state selector yet still
+    // needs to see what their gift is doing to the total.
+    if (!isShippableCountry(input.customer.country)) {
+      throw new Error("We currently ship only to the United States and Canada.");
+    }
   }
 
   const sanitizedItems = input.items.map((item) => ({
