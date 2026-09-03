@@ -108,6 +108,26 @@ describe("customer-facing copy keeps the research-use boundary", () => {
     }
   });
 
+  it("does not let a seed script revert the catalogue copy", () => {
+    // The component guard above scans four .tsx files. A storefront's copy does
+    // not live there — it lives in Postgres, and this script is what writes it.
+    // It is deliberately idempotent (`on conflict … name=excluded.name`, plus a
+    // bare UPDATE of all three description columns), so every re-run reasserts
+    // whatever literal it holds. Fixing the database without fixing this file
+    // buys a correction that lasts until the next seed run, with nothing in
+    // between to notice. SQL line comments are stripped so the rationale above
+    // the statements does not trip the check.
+    const sql = read("src/lib/sql/add-bacteriostatic-water.sql")
+      .replace(/^\s*--.*$/gm, " ");
+    expect(sql, "seed writes the full compound name").not.toMatch(/bacteriostatic\s+water/i);
+    expect(sql, "seed writes preparation-for-use copy").not.toMatch(
+      /\breconstitut(?:e|ion|ing)|multi-?dose/i,
+    );
+    // The slug is the detection key for isBacWater() and the live URL. It must
+    // survive: renaming it switches the cross-sell off and 404s the page.
+    expect(sql, "seed lost the detection slug").toMatch(/'bacteriostatic-water'/);
+  });
+
   it("keeps the Reconstitution row off the public specification table", () => {
     // The row rendered product.reconstitutionNote straight into the public
     // spec list, so anything an operator typed in Admin shipped unreviewed.

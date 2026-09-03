@@ -24,7 +24,14 @@ insert into public.products
   (slug, name, category, price_cents, product_cost_cents, is_featured, position,
    is_published, is_enabled, is_active, is_archived, stock_status, inventory_quantity)
 values
-  ('bacteriostatic-water', 'Bacteriostatic Water (0.9% Benzyl Alcohol)',
+  -- Name says "BAC Water", never the full compound name: owner decision, and
+  -- the same rule the storefront copy guard enforces in
+  -- src/components/research-use-copy.test.ts. It matters HERE because this
+  -- script is idempotent and re-applies name=excluded.name below, so a re-run
+  -- with the old literal would silently revert the catalogue. The slug stays
+  -- 'bacteriostatic-water' — it is the detection key for isBacWater() and the
+  -- live URL, and changing it would switch the cross-sell off and 404 the page.
+  ('bacteriostatic-water', 'BAC Water (0.9% Benzyl Alcohol)',
    'Solvents & Solutions', 1499, 800, false, 37,
    true, true, true, false, 'In Stock', 100)
 on conflict (slug) do update set
@@ -56,10 +63,22 @@ on conflict (product_id, slug_suffix) do update set
 -- ---------------------------------------------------------------------------
 -- 3. Compliant descriptions (research use only; no health claims). Idempotent.
 -- ---------------------------------------------------------------------------
+-- These describe WHAT THE MATERIAL IS, never what it is used for. The previous
+-- text said "multi-dose diluent … ideal for reconstituting lyophilized research
+-- compounds", which is preparation-for-use guidance: reconstitution is the step
+-- that only matters if someone intends to use the material, and "multi-dose" is
+-- dose language. On a research-use-only catalogue that is the one inference the
+-- copy must not invite, however firm the disclaimer that follows it.
+--
+-- All three columns matter and all three are overwritten on every run: catalog.ts
+-- resolves the public description as `long_description ?? description`, and
+-- short_description feeds the card and the meta description. Leaving any one of
+-- them on the old text just moves the problem to whichever rung the next operator
+-- clears in Admin.
 update public.products set
-  short_description='Sterile multi-dose diluent (0.9% benzyl alcohol) designed for research applications. Ideal for reconstituting lyophilized research compounds. For laboratory research use only.',
-  long_description='Bacteriostatic Water (0.9% benzyl alcohol) is a sterile multi-dose diluent designed for research applications, ideal for reconstituting lyophilized research compounds. Available in both 10 mL and 30 mL sterile glass vials. For laboratory research use only. Not for human or veterinary consumption; not a drug, food, cosmetic, or dietary supplement, and not intended to diagnose, treat, cure, or prevent any condition.',
-  description='Bacteriostatic Water (0.9% benzyl alcohol) is a sterile multi-dose diluent designed for research applications, ideal for reconstituting lyophilized research compounds. Available in both 10 mL and 30 mL sterile glass vials. For laboratory research use only. Not for human or veterinary consumption; not a drug, food, cosmetic, or dietary supplement, and not intended to diagnose, treat, cure, or prevent any condition.',
+  short_description='BAC Water (0.9% benzyl alcohol) in sterile glass vials, supplied for laboratory research applications. For laboratory research use only.',
+  long_description='BAC Water (0.9% benzyl alcohol) is a sterile solution supplied for laboratory research applications. Available in 10 mL and 30 mL sterile glass vials. For laboratory research use only. Not for human or veterinary consumption; not a drug, food, cosmetic, or dietary supplement, and not intended to diagnose, treat, cure, or prevent any condition.',
+  description='BAC Water (0.9% benzyl alcohol) is a sterile solution supplied for laboratory research applications. Available in 10 mL and 30 mL sterile glass vials. For laboratory research use only. Not for human or veterinary consumption; not a drug, food, cosmetic, or dietary supplement, and not intended to diagnose, treat, cure, or prevent any condition.',
   updated_at=now()
 where slug='bacteriostatic-water';
 
