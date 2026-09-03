@@ -381,45 +381,68 @@ export async function sendCampaignBatch(input: {
       // which only affiliate queue rows do.
       const isAffiliate = String(campaign.audience_kind ?? "customer") === "affiliate" && recipient.mergeContext !== null;
 
-      const template = isAffiliate
-        ? buildAffiliateCampaignEmail({
-            subject: campaign.subject,
-            previewText: campaign.preview_text,
-            headline: campaign.headline,
-            body: campaign.body,
-            ctaLabel: campaign.cta_label,
-            ctaPath: campaign.cta_path,
-            linkButtons: normalizeLinkButtons(campaign.link_buttons),
-            mergeContext: recipient.mergeContext as AffiliateMergeContext,
-            siteUrl: getSiteUrl(),
-            postalAddress: config.marketingPostalAddress,
-            trackedUrlFor: (linkIndex) => buildCampaignLinkClickUrl(campaign.id, recipient.email, linkIndex),
-          })
-        : campaignTemplate({
-            subject: campaign.subject,
-            previewText: campaign.preview_text,
-            headline: campaign.headline,
-            body: campaign.body,
-            promoCode: campaign.promo_code,
-            ctaLabel: campaign.cta_label,
-            ctaUrl: buildCampaignClickUrl(campaign.id, recipient.email),
-            postalAddress: config.marketingPostalAddress,
-          });
+      // ONE RECIPIENT CANNOT TAKE DOWN THE CAMPAIGN.
+      //
+      // Every other failure here is a RETURNED failure, and the branches below
+      // handle those. A THROWN one is a different shape with a much worse
+      // blast radius: sendMarketingEmail opens with a Supabase read of the
+      // suppression list, and a transient error there REJECTS rather than
+      // returning { success: false }. Uncaught, that unwinds this loop and
+      // abandons every recipient still claimed in the batch — they sit in
+      // `claiming` until reclaimStaleClaims releases them, so a scheduled
+      // broadcast stops halfway with nothing on screen saying why.
+      //
+      // Rendering can throw too (a merge context written before a schema
+      // change, a malformed link button), so the template build is inside the
+      // same guard. A throw is treated as exactly what it is: this recipient's
+      // attempt failed, and it is retried on the next sweep like any other.
+      let result: Awaited<ReturnType<typeof sendMarketingEmail>>;
+      try {
+        const template = isAffiliate
+          ? buildAffiliateCampaignEmail({
+              subject: campaign.subject,
+              previewText: campaign.preview_text,
+              headline: campaign.headline,
+              body: campaign.body,
+              ctaLabel: campaign.cta_label,
+              ctaPath: campaign.cta_path,
+              linkButtons: normalizeLinkButtons(campaign.link_buttons),
+              mergeContext: recipient.mergeContext as AffiliateMergeContext,
+              siteUrl: getSiteUrl(),
+              postalAddress: config.marketingPostalAddress,
+              trackedUrlFor: (linkIndex) => buildCampaignLinkClickUrl(campaign.id, recipient.email, linkIndex),
+            })
+          : campaignTemplate({
+              subject: campaign.subject,
+              previewText: campaign.preview_text,
+              headline: campaign.headline,
+              body: campaign.body,
+              promoCode: campaign.promo_code,
+              ctaLabel: campaign.cta_label,
+              ctaUrl: buildCampaignClickUrl(campaign.id, recipient.email),
+              postalAddress: config.marketingPostalAddress,
+            });
 
-      // THE SAME MARKETING WRAPPER EITHER WAY. Suppression, the one-click
-      // unsubscribe headers, the CAN-SPAM postal address and the marketing From
-      // identity are not re-implemented for affiliates — an affiliate broadcast
-      // is a commercial message and gets every protection a customer campaign
-      // gets. campaignType distinguishes the two in email_send_log so the
-      // histories stay separable.
-      const result = await sendMarketingEmail({
-        to: recipient.email,
-        campaignType: isAffiliate ? "affiliate_campaign" : "campaign",
-        referenceId: campaign.id,
-        templateKey: isAffiliate ? "affiliate_campaign" : "campaign",
-        openTrackingPixelUrl: buildCampaignOpenUrl(campaign.id, recipient.email),
-        ...template,
-      });
+        // THE SAME MARKETING WRAPPER EITHER WAY. Suppression, the one-click
+        // unsubscribe headers, the CAN-SPAM postal address and the marketing From
+        // identity are not re-implemented for affiliates — an affiliate broadcast
+        // is a commercial message and gets every protection a customer campaign
+        // gets. campaignType distinguishes the two in email_send_log so the
+        // histories stay separable.
+        result = await sendMarketingEmail({
+          to: recipient.email,
+          campaignType: isAffiliate ? "affiliate_campaign" : "campaign",
+          referenceId: campaign.id,
+          templateKey: isAffiliate ? "affiliate_campaign" : "campaign",
+          openTrackingPixelUrl: buildCampaignOpenUrl(campaign.id, recipient.email),
+          ...template,
+        });
+      } catch (error) {
+        result = {
+          success: false,
+          error: error instanceof Error ? error.message : "send failed unexpectedly",
+        };
+      }
 
       const attempts = recipient.attempts + 1;
       if (result.success) {

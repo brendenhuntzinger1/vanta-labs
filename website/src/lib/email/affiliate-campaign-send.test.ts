@@ -39,6 +39,15 @@ const db = {
    * or a provider outage would. Empty means everything delivers.
    */
   failDelivery: new Set<string>(),
+  /**
+   * Addresses whose send THROWS rather than returning a failure.
+   *
+   * Different from failDelivery in the one way that matters: a returned failure
+   * is handled, while a thrown one unwinds the loop. A transient Supabase error
+   * on the suppression lookup inside sendMarketingEmail throws exactly like
+   * this, and it must cost that recipient a retry — not the campaign.
+   */
+  throwDelivery: new Set<string>(),
 };
 
 function matches(row: Record<string, unknown>, filters: Array<[string, string, unknown]>): boolean {
@@ -138,6 +147,7 @@ vi.mock("@/lib/email/marketing", () => ({
     // NOT suppressed — a genuine delivery failure, which is a different thing
     // and must not be reported as a completed send.
     if (db.failDelivery.has(input.to)) return { success: false, error: "535 authentication failed" };
+    if (db.throwDelivery.has(input.to)) throw new Error("connection terminated unexpectedly");
     db.delivered.push({ to: input.to, campaignType: input.campaignType, subject: input.subject, html: input.html, text: input.text });
     return { success: true };
   },
@@ -208,6 +218,7 @@ beforeEach(() => {
   db.nextId = 1;
   db.failAudience = false;
   db.failDelivery = new Set();
+  db.throwDelivery = new Set();
 });
 
 describe("queueing an affiliate campaign", () => {
@@ -344,6 +355,47 @@ describe("a campaign that reached nobody does not report itself as sent", () => 
     expect(db.recipients.every((r) => r.status === "failed")).toBe(true);
     expect(result.finished).toBe(true);
     expect(db.campaigns[0].status).toBe("failed");
+  });
+
+  // ONE RECIPIENT CANNOT TAKE DOWN THE CAMPAIGN.
+  //
+  // Every failure path above is a RETURNED failure, which the loop handles. A
+  // THROWN one is different: sendMarketingEmail opens with a Supabase read for
+  // the suppression list, and a transient error there rejects rather than
+  // returning {success:false}. Unwinding the loop abandons every recipient
+  // still claimed in that batch — they sit in `claiming` until the reaper
+  // releases them, and a scheduled broadcast silently stops halfway.
+  //
+  // The recipient whose send threw must be retried like any other failure. The
+  // ones after them in the batch must simply be sent.
+  it("keeps sending when one recipient's send throws", async () => {
+    db.throwDelivery = new Set(["jordan@example.com"]);
+    const id = seedCampaign();
+    await queueCampaign(id);
+    await sendCampaignBatch({ campaignId: id, budgetMs: 5000 });
+
+    // Sam is after Jordan in the queue and must still receive the campaign.
+    // This is the assertion the whole test exists for: before the guard, the
+    // throw unwound the loop and Sam was never attempted at all.
+    expect(db.delivered.map((m) => m.to)).toEqual(["sam@example.com"]);
+
+    // Jordan was retried rather than abandoned mid-claim. The throw is
+    // deterministic here, so the retries exhaust and the row lands on `failed`
+    // exactly as a permanently-refused recipient does — the point is that it
+    // is never left in `claiming`, which is what stalls a scheduled broadcast.
+    const jordan = db.recipients.find((r) => r.email === "jordan@example.com");
+    expect(jordan?.status).not.toBe("claiming");
+    expect(Number(jordan?.attempts ?? 0)).toBeGreaterThanOrEqual(1);
+  });
+
+  it("records the thrown reason so an operator can see what happened", async () => {
+    db.throwDelivery = new Set(["jordan@example.com"]);
+    const id = seedCampaign();
+    await queueCampaign(id);
+    await sendCampaignBatch({ campaignId: id, budgetMs: 5000 });
+
+    const jordan = db.recipients.find((r) => r.email === "jordan@example.com");
+    expect(String(jordan?.error ?? "")).toContain("connection terminated unexpectedly");
   });
 
   it("still says sent when some got through, because they did", async () => {

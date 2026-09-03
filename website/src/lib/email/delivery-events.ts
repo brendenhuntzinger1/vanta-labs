@@ -252,6 +252,63 @@ async function recordDeliveryEvent(event: DeliveryEvent, suppressed: boolean): P
   }
 }
 
+/**
+ * How many soft bounces in a row before an address is treated as unreachable.
+ *
+ * Three is a judgement call and is stated rather than buried. One transient
+ * bounce is a full mailbox or a weekend outage and clears on its own; three in
+ * a row, with no delivery in between, is an address that does not accept mail.
+ * Raising it keeps mailing dead addresses for longer; lowering it to one would
+ * turn every full mailbox into a permanent removal.
+ */
+export const CONSECUTIVE_SOFT_BOUNCE_LIMIT = 3;
+
+/**
+ * Soft bounces since the address last accepted anything.
+ *
+ * CONSECUTIVE, not total. A delivery proves the mailbox works and resets the
+ * run — otherwise a customer whose mailbox was full twice last spring would be
+ * one bad afternoon away from being suppressed for ever.
+ *
+ * `events` is newest-first, the order the lookup returns. Kinds other than
+ * `soft_bounce` and `delivered` are skipped rather than treated as either: a
+ * `delayed` is the provider still trying, which neither proves reachability nor
+ * counts as a failure to reach.
+ */
+export function countConsecutiveSoftBounces(events: Array<{ kind: string }>): number {
+  let count = 0;
+  for (const event of events) {
+    if (event.kind === "delivered") break;
+    if (event.kind === "soft_bounce") count += 1;
+  }
+  return count;
+}
+
+export function softBouncesWarrantSuppression(consecutive: number): boolean {
+  return consecutive >= CONSECUTIVE_SOFT_BOUNCE_LIMIT;
+}
+
+/**
+ * Has this address soft-bounced enough times in a row to be suppressed?
+ *
+ * Reads the recent history rather than keeping a counter: the event log is
+ * already written on every webhook delivery, so there is no second piece of
+ * state to keep in step, and a replayed webhook cannot inflate a running total.
+ */
+async function softBounceRunExceeded(email: string): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
+    .from("email_delivery_events")
+    .select("kind")
+    .eq("recipient_email", email)
+    .order("received_at", { ascending: false })
+    // Only the newest few matter: the run is broken by the first delivery, and
+    // the limit is small. Bounded so a long-lived address cannot make this read
+    // grow without limit.
+    .limit(20);
+  if (error || !data) return false;
+  return softBouncesWarrantSuppression(countConsecutiveSoftBounces(data as Array<{ kind: string }>));
+}
+
 export async function applyDeliveryEvents(events: DeliveryEvent[]): Promise<DeliveryEventOutcome> {
   const outcome: DeliveryEventOutcome = { suppressed: 0, ignored: 0, writeFailed: false };
 
@@ -267,10 +324,23 @@ export async function applyDeliveryEvents(events: DeliveryEvent[]): Promise<Deli
     // sending domain.
     await recordDeliveryEvent(event, false).catch(() => {});
 
-    if (event.kind !== "hard_bounce" && event.kind !== "complaint") {
+    // A SOFT BOUNCE THAT KEEPS REPEATING IS NOT SOFT.
+    //
+    // Judged alone, every transient bounce looks temporary, so nothing ever
+    // suppressed one — and an address that never accepts mail stayed on every
+    // audience for ever. The 2026-09-02 audit found exactly that live, on a
+    // typo domain with no mailbox behind it. Escalated here rather than in the
+    // parser because it is the only place that can see the address's history.
+    const escalatedSoftBounce =
+      event.kind === "soft_bounce" && (await softBounceRunExceeded(event.email).catch(() => false));
+
+    if (event.kind !== "hard_bounce" && event.kind !== "complaint" && !escalatedSoftBounce) {
       outcome.ignored += 1;
       continue;
     }
+    // "bounced" for an escalated soft bounce too: it is the provider's verdict,
+    // not a customer preference, so PROVIDER_IMPOSED_SUPPRESSION_REASONS keeps
+    // the account page from putting the address straight back on the list.
     const reason = event.kind === "complaint" ? "complained" : "bounced";
     try {
       const { error } = await supabaseAdmin
