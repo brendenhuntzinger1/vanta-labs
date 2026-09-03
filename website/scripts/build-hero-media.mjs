@@ -75,16 +75,23 @@ const POSTER_FRAME = 29;
  * perimeter is black by construction rather than by eye. `hero-video.test.ts`
  * asserts it by sampling the shipped files.
  *
- * START at 0.50 is set against the subject, not by eye. The label — the bright,
- * high-contrast part that has to stay crisp — sits inside radius 0.4 and the
- * vial's shoulders inside 0.45, so neither is touched at all. What the ramp
- * reaches is the studio backdrop and, at the very ends, the black cap (radius
- * 0.76) and the clear base (0.69): dimming a black cap costs nothing, and
- * dimming the backdrop is the entire point. Held any later the backdrop
- * survives as a bright white pool round the vial, which is the shot fighting
- * the brand rather than carrying it.
+ * START at 0.66, AND IT WAS BRIEFLY 0.50, WHICH WAS WRONG.
+ *
+ * At 0.50 this stopped being a guard and became the composition: it ate the
+ * studio backdrop from the vial's shoulders outward, and with the media also
+ * blended further into the page, the hero went from a lit photograph to a small
+ * object on a black field. The owner's words were "why is it all black, it never
+ * was like that", and they were right — killing the rectangle never required
+ * killing the light.
+ *
+ * 0.66 is the honest line for a guard. The subject spans radius 0.76 at the cap
+ * and 0.69 at the base, so the ramp still only reaches the vial at its black cap
+ * and clear glass base, where dimming costs nothing. Everything inside — the
+ * label at 0.4, the shoulders at 0.45, and the lit backdrop that gives the hero
+ * its glow — is untouched. The perimeter is still absolutely black, which is the
+ * only thing this file has to guarantee.
  */
-const START = 0.5;
+const START = 0.66;
 const END = 1.0;
 
 /**
