@@ -130,27 +130,59 @@ const DEFAULT_PRODUCT_FAQ: ProductFaqItem[] = [
   },
 ];
 
+/**
+ * THE ANSWERS ARE ALWAYS IN THE DOCUMENT. THEY USED TO BE MOUNTED ON CLICK.
+ *
+ * `{openIndex === idx && <p>...}` meant an unopened answer did not exist in the
+ * HTML at all — and Googlebot does not click. Measured on production
+ * /products/bpc-157: the four questions were in the rendered page and none of
+ * the ~110 words of answers were.
+ *
+ * So every answer is rendered and the closed ones are hidden with the `hidden`
+ * attribute. That is deliberately `display: none` and not an off-screen or
+ * transparent trick: hidden content must leave the tab order and the
+ * accessibility tree, or a keyboard user tabs into invisible text. Google
+ * indexes content that is in the HTML behind a disclosure — what it cannot
+ * index is content that is not there until an interaction.
+ */
 function FaqAccordion({ items }: { items?: ProductFaqItem[] }) {
   const faqItems = items && items.length > 0 ? items : DEFAULT_PRODUCT_FAQ;
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   return (
     <div className="mt-3 divide-y divide-white/[0.08]">
-      {faqItems.map((item, idx) => (
-        <div key={idx}>
-          <button
-            type="button"
-            aria-expanded={openIndex === idx}
-            className="flex w-full items-center justify-between gap-4 py-4 text-left text-sm text-white transition hover:text-[#a3a3a3]"
-            onClick={() => setOpenIndex(openIndex === idx ? null : idx)}
-          >
-            <span className="font-medium">{item.question}</span>
-            <span className={`shrink-0 text-white/45 transition-transform duration-200 ${openIndex === idx ? "rotate-180" : ""}`}>▼</span>
-          </button>
-          {openIndex === idx && (
-            <p className="pb-4 text-sm leading-7 text-[#a3a3a3]">{item.answer}</p>
-          )}
-        </div>
-      ))}
+      {faqItems.map((item, idx) => {
+        const open = openIndex === idx;
+        const questionId = `product-faq-q${idx}`;
+        const answerId = `product-faq-a${idx}`;
+        return (
+          <div key={idx}>
+            <button
+              type="button"
+              id={questionId}
+              aria-expanded={open}
+              aria-controls={answerId}
+              className="flex w-full items-center justify-between gap-4 py-4 text-left text-sm text-white transition hover:text-[#a3a3a3]"
+              onClick={() => setOpenIndex(open ? null : idx)}
+            >
+              <span className="font-medium">{item.question}</span>
+              <span className={`shrink-0 text-white/45 transition-transform duration-200 ${open ? "rotate-180" : ""}`}>▼</span>
+            </button>
+            {/* role="region" is what the ARIA authoring practices ask for on a
+                disclosure's panel, and it is safe at this size — the guidance
+                is to stop at roughly six, to avoid a page full of landmarks.
+                There are four. */}
+            <p
+              id={answerId}
+              role="region"
+              aria-labelledby={questionId}
+              hidden={!open}
+              className="pb-4 text-sm leading-7 text-[#a3a3a3]"
+            >
+              {item.answer}
+            </p>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -190,7 +222,15 @@ export function ProductDetailClient({
   // with less stock must not carry the old number over.
   const [requestedQuantity, setQuantity] = useState(1);
   const [message, setMessage] = useState<string | null>(null);
-  // Collapsed by default — no panel is shown until the shopper taps a tab.
+  // Collapsed by default — no panel is SHOWN until the shopper taps a tab. All
+  // three are RENDERED regardless; see the panels below. The two are different
+  // things and the difference was costing the whole catalogue: this used to
+  // gate the panels on `activeTab === key`, so an unopened panel was not in the
+  // document, and the only substantial per-product prose the store owns
+  // (longDescription, ~73 words) reached the browser as serialized props and
+  // never as text. Googlebot does not tap tabs. Measured on production
+  // /products/bpc-157 before this change: the three tab LABELS were in the
+  // rendered page and all three panels were an empty <div>.
   const [activeTab, setActiveTab] = useState<TabKey | null>(null);
 
   const selectedDose = product.doses?.find((dose) => dose.id === selectedDoseId) ?? defaultDose;
@@ -479,8 +519,16 @@ export function ProductDetailClient({
                   <button
                     key={tab.key}
                     type="button"
+                    id={`product-tab-${tab.key}`}
                     onClick={() => setActiveTab((current) => (current === tab.key ? null : tab.key))}
                     aria-expanded={activeTab === tab.key}
+                    /* DISCLOSURE, NOT A TABLIST. `role="tab"` would be wrong
+                       here: ARIA requires exactly one tab selected at all
+                       times, and this control set is allowed to have none —
+                       every panel starts closed and clicking the open one
+                       closes it again. aria-expanded + aria-controls is the
+                       pattern that actually describes that. */
+                    aria-controls={`product-panel-${tab.key}`}
                     className={`min-w-0 flex-1 rounded-full px-2 py-2.5 text-[11px] font-medium uppercase tracking-normal transition sm:px-3 sm:text-xs sm:tracking-[0.16em] ${activeTab === tab.key ? "bg-[#111] text-white shadow-sm" : "text-[#a3a3a3] hover:text-white"}`}
                   >
                     {tab.label}
@@ -489,160 +537,172 @@ export function ProductDetailClient({
               </div>
 
               <div className="mt-4">
-                {activeTab === "description" && (
-                  <div className="vl2-lab-panel p-5">
-                    <p className="text-sm leading-7 text-[#a3a3a3]">{product.longDescription ?? product.description}</p>
-                    {product.molecularFormula && (
-                      <p className="mt-4 text-xs text-white/45">Molecular Formula: <span className="text-white">{product.molecularFormula}</span></p>
-                    )}
-                    <div className="mt-5 border border-white/[0.08] bg-[#141414] p-4 text-xs leading-6 text-[#a3a3a3]">
-                      <strong className="text-white">Research Use Only.</strong> This compound is intended strictly for laboratory research purposes. Not for human or veterinary use.
-                    </div>
+                <div
+                  id="product-panel-description"
+                  role="region"
+                  aria-labelledby="product-tab-description"
+                  hidden={activeTab !== "description"}
+                  className="vl2-lab-panel p-5"
+                >
+                  <p className="text-sm leading-7 text-[#a3a3a3]">{product.longDescription ?? product.description}</p>
+                  {product.molecularFormula && (
+                    <p className="mt-4 text-xs text-white/45">Molecular Formula: <span className="text-white">{product.molecularFormula}</span></p>
+                  )}
+                  <div className="mt-5 border border-white/[0.08] bg-[#141414] p-4 text-xs leading-6 text-[#a3a3a3]">
+                    <strong className="text-white">Research Use Only.</strong> This compound is intended strictly for laboratory research purposes. Not for human or veterinary use.
                   </div>
-                )}
+                </div>
 
-                {activeTab === "specs" && (
-                  <div className="vl2-lab-panel p-5">
-                    <dl className="space-y-3 text-sm">
-                      {([
-                        ["Batch Number", selectedBatchNumber],
-                        ["Purity Result", selectedPurity ?? "Pending"],
-                        ["Molecular Formula", product.molecularFormula],
-                        ["Molecular Weight", product.molecularWeight],
-                        ["CAS Number", product.casNumber],
-                        ["Storage", product.storageRecommendation],
-                        ["Reconstitution", product.reconstitutionNote],
-                        ["Testing Lab", product.labName],
-                        ["Testing Date", product.testingDate],
-                        ["Category", product.category],
-                        ["SKU", selectedDose?.sku ?? "N/A"],
-                      ] as Array<[string, string | undefined]>)
-                        .filter(([, value]) => value && String(value).trim().length > 0)
-                        .map(([label, value]) => (
-                          <div key={label} className="flex justify-between gap-3 border-b border-white/[0.06] pb-2 last:border-0">
-                            <dt className="text-white/45">{label}</dt>
-                            <dd className="min-w-0 break-words text-right font-medium text-white">{value}</dd>
-                          </div>
-                        ))}
-                    </dl>
-                    {product.peptideSequence && product.peptideSequence.trim().length > 0 && (
-                      <div className="mt-4 border-t border-white/[0.06] pt-4">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Amino Acid Sequence</p>
-                        <div className="mt-2 overflow-x-auto">
-                          <code className="block whitespace-pre-wrap break-all font-mono text-xs leading-6 text-white">{product.peptideSequence}</code>
+                <div
+                  id="product-panel-specs"
+                  role="region"
+                  aria-labelledby="product-tab-specs"
+                  hidden={activeTab !== "specs"}
+                  className="vl2-lab-panel p-5"
+                >
+                  <dl className="space-y-3 text-sm">
+                    {([
+                      ["Batch Number", selectedBatchNumber],
+                      ["Purity Result", selectedPurity ?? "Pending"],
+                      ["Molecular Formula", product.molecularFormula],
+                      ["Molecular Weight", product.molecularWeight],
+                      ["CAS Number", product.casNumber],
+                      ["Storage", product.storageRecommendation],
+                      ["Reconstitution", product.reconstitutionNote],
+                      ["Testing Lab", product.labName],
+                      ["Testing Date", product.testingDate],
+                      ["Category", product.category],
+                      ["SKU", selectedDose?.sku ?? "N/A"],
+                    ] as Array<[string, string | undefined]>)
+                      .filter(([, value]) => value && String(value).trim().length > 0)
+                      .map(([label, value]) => (
+                        <div key={label} className="flex justify-between gap-3 border-b border-white/[0.06] pb-2 last:border-0">
+                          <dt className="text-white/45">{label}</dt>
+                          <dd className="min-w-0 break-words text-right font-medium text-white">{value}</dd>
                         </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {activeTab === "coa" && (
-                  <div className="vl2-lab-panel p-5">
-                    {/* The notice below speaks for the catalogue. This speaks
-                        for THIS product, and only for the ones we know are
-                        still awaiting testing — so a shopper on an undocumented
-                        page gets an answer rather than an absence. It leads,
-                        because the general notice reads as the context and the
-                        remedy ("contact support before ordering") for it. */}
-                    {awaitingTesting ? (
-                      <div className="mb-5 border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.04] p-4">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[color:var(--accent-gold)]">
-                          {COA_TESTING_PENDING_HEADING}
-                        </p>
-                        <p className="mt-2 text-sm leading-relaxed text-[#a3a3a3]">
-                          {COA_TESTING_PENDING_BODY}
-                        </p>
-                      </div>
-                    ) : null}
-                    {/* The notice explains that batch-specific COAs are still
-                        being prepared. Once this product HAS published batch
-                        records, that is no longer true of it — showing both
-                        would have the page contradict itself. */}
-                    {coaDocuments.length === 0 ? <CoaLibraryNotice className="mb-5" /> : null}
-                    {/* Only describe a downloadable COA when one actually
-                        exists. This paragraph used to render unconditionally —
-                        "Every product lot is linked to a third-party
-                        Certificate of Analysis… Download the report below" —
-                        directly under a notice saying Vanta-branded COAs are
-                        still being prepared, with no download beneath it. Two
-                        contradictory claims, stacked. */}
-                    {selectedCoaUrl ? (
-                      <p className="text-sm leading-relaxed text-[#a3a3a3]">
-                        This lot is linked to a third-party Certificate of Analysis covering purity, testing
-                        methodology, batch traceability, and lab information. Download the report for your
-                        selected dose below.
-                      </p>
-                    ) : null}
-                    <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                      <div className="border border-white/[0.08] p-4">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Purity</p>
-                        <p className="mt-1.5 text-xl font-semibold text-white">{selectedPurity ?? "Pending"}</p>
-                      </div>
-                      <div className="border border-white/[0.08] p-4">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Batch</p>
-                        <p className="mt-1.5 text-sm font-medium text-white">{selectedBatchNumber}</p>
+                      ))}
+                  </dl>
+                  {product.peptideSequence && product.peptideSequence.trim().length > 0 && (
+                    <div className="mt-4 border-t border-white/[0.06] pt-4">
+                      <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Amino Acid Sequence</p>
+                      <div className="mt-2 overflow-x-auto">
+                        <code className="block whitespace-pre-wrap break-all font-mono text-xs leading-6 text-white">{product.peptideSequence}</code>
                       </div>
                     </div>
-                    {selectedCoaUrl && (
-                      <a
-                        href={selectedCoaUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="vl2-lab-btn-secondary vl-focus-ring mt-5 inline-flex items-center gap-2 px-5 py-2.5"
-                      >
-                        <span>↗</span> Download COA PDF
-                      </a>
-                    )}
+                  )}
+                </div>
 
-                    {/* Per-batch documentation from Admin → COA Library. One
-                        product accumulates one of these per production run, so
-                        the newest sits first and the rest stay reachable. */}
-                    {coaDocuments.length > 0 ? (
-                      <div className="mt-6 border-t border-white/[0.08] pt-5">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">
-                          Published batch records
-                        </p>
-                        <ul className="mt-3 space-y-2">
-                          {coaDocuments.map((doc) => (
-                            <li
-                              key={doc.id}
-                              className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border border-white/[0.08] px-4 py-3"
-                            >
-                              <div className="min-w-0">
-                                <p className="font-mono text-[13px] text-white">{doc.batchNumber}</p>
-                                <p className="mt-0.5 text-xs text-white/45">
-                                  {[doc.strength, doc.purity, formatCoaTestDate(doc.testDate), doc.labName]
-                                    .filter(Boolean)
-                                    .join(" · ") || "Certificate of Analysis"}
-                                </p>
-                              </div>
-                              <a
-                                href={`/api/coa/${doc.id}/file`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="vl-article-link vl-focus-ring rounded-[8px]"
-                              >
-                                View COA
-                                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
-                                  <path d="M14 4h6v6M20 4l-8.5 8.5M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
-                                </svg>
-                              </a>
-                            </li>
-                          ))}
-                        </ul>
-                        <Link
-                          href="/coa-library"
-                          className="vl-article-link vl-focus-ring mt-4 inline-flex rounded-[8px]"
-                        >
-                          Browse the full COA library
-                          <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
-                            <path d="M5 12h14M13 6l6 6-6 6" />
-                          </svg>
-                        </Link>
-                      </div>
-                    ) : null}
+                <div
+                  id="product-panel-coa"
+                  role="region"
+                  aria-labelledby="product-tab-coa"
+                  hidden={activeTab !== "coa"}
+                  className="vl2-lab-panel p-5"
+                >
+                  {/* The notice below speaks for the catalogue. This speaks
+                      for THIS product, and only for the ones we know are
+                      still awaiting testing — so a shopper on an undocumented
+                      page gets an answer rather than an absence. It leads,
+                      because the general notice reads as the context and the
+                      remedy ("contact support before ordering") for it. */}
+                  {awaitingTesting ? (
+                    <div className="mb-5 border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.04] p-4">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[color:var(--accent-gold)]">
+                        {COA_TESTING_PENDING_HEADING}
+                      </p>
+                      <p className="mt-2 text-sm leading-relaxed text-[#a3a3a3]">
+                        {COA_TESTING_PENDING_BODY}
+                      </p>
+                    </div>
+                  ) : null}
+                  {/* The notice explains that batch-specific COAs are still
+                      being prepared. Once this product HAS published batch
+                      records, that is no longer true of it — showing both
+                      would have the page contradict itself. */}
+                  {coaDocuments.length === 0 ? <CoaLibraryNotice className="mb-5" /> : null}
+                  {/* Only describe a downloadable COA when one actually
+                      exists. This paragraph used to render unconditionally —
+                      "Every product lot is linked to a third-party
+                      Certificate of Analysis… Download the report below" —
+                      directly under a notice saying Vanta-branded COAs are
+                      still being prepared, with no download beneath it. Two
+                      contradictory claims, stacked. */}
+                  {selectedCoaUrl ? (
+                    <p className="text-sm leading-relaxed text-[#a3a3a3]">
+                      This lot is linked to a third-party Certificate of Analysis covering purity, testing
+                      methodology, batch traceability, and lab information. Download the report for your
+                      selected dose below.
+                    </p>
+                  ) : null}
+                  <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                    <div className="border border-white/[0.08] p-4">
+                      <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Purity</p>
+                      <p className="mt-1.5 text-xl font-semibold text-white">{selectedPurity ?? "Pending"}</p>
+                    </div>
+                    <div className="border border-white/[0.08] p-4">
+                      <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Batch</p>
+                      <p className="mt-1.5 text-sm font-medium text-white">{selectedBatchNumber}</p>
+                    </div>
                   </div>
-                )}
+                  {selectedCoaUrl && (
+                    <a
+                      href={selectedCoaUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="vl2-lab-btn-secondary vl-focus-ring mt-5 inline-flex items-center gap-2 px-5 py-2.5"
+                    >
+                      <span>↗</span> Download COA PDF
+                    </a>
+                  )}
+
+                  {/* Per-batch documentation from Admin → COA Library. One
+                      product accumulates one of these per production run, so
+                      the newest sits first and the rest stay reachable. */}
+                  {coaDocuments.length > 0 ? (
+                    <div className="mt-6 border-t border-white/[0.08] pt-5">
+                      <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">
+                        Published batch records
+                      </p>
+                      <ul className="mt-3 space-y-2">
+                        {coaDocuments.map((doc) => (
+                          <li
+                            key={doc.id}
+                            className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border border-white/[0.08] px-4 py-3"
+                          >
+                            <div className="min-w-0">
+                              <p className="font-mono text-[13px] text-white">{doc.batchNumber}</p>
+                              <p className="mt-0.5 text-xs text-white/45">
+                                {[doc.strength, doc.purity, formatCoaTestDate(doc.testDate), doc.labName]
+                                  .filter(Boolean)
+                                  .join(" · ") || "Certificate of Analysis"}
+                              </p>
+                            </div>
+                            <a
+                              href={`/api/coa/${doc.id}/file`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="vl-article-link vl-focus-ring rounded-[8px]"
+                            >
+                              View COA
+                              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                                <path d="M14 4h6v6M20 4l-8.5 8.5M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+                              </svg>
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                      <Link
+                        href="/coa-library"
+                        className="vl-article-link vl-focus-ring mt-4 inline-flex rounded-[8px]"
+                      >
+                        Browse the full COA library
+                        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                          <path d="M5 12h14M13 6l6 6-6 6" />
+                        </svg>
+                      </Link>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
 
