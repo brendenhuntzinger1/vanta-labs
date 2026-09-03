@@ -135,23 +135,48 @@ function HeroVial({ className, src, poster }: { className?: string; src: string;
  * everywhere a canvas is, and it cannot half-apply: either the canvas paints or
  * it does not, and if it does not the hero is its own dark gradient.
  *
- * FADE_START is where the picture begins to give way, as a fraction of the
- * distance from the centre of the box to an edge midpoint. Everything reaches
- * fully transparent at 1.0, so the element disappears completely inside itself
- * on all four sides: there is no radius at which a border pixel is opaque, and
- * therefore no edge to see.
+ * FADE_START is where the picture begins to give way, measured in a space where
+ * the element's own edge midpoints are at 1.0 on BOTH axes — an ellipse
+ * inscribed in the box, not a circle. Everything reaches fully transparent at
+ * 1.0, so the element disappears completely inside itself on all four sides:
+ * there is no point on any border where a pixel is opaque, and therefore no
+ * edge to see, whatever shape the box is.
  *
- * 0.6 is chosen against the subject, not by eye. In the shipped frame the label
- * — the bright, high-contrast part that has to stay crisp — sits inside radius
- * 0.4 and is untouched. The ramp only reaches the vial at its cap (radius 0.76)
- * and its base (0.69), both of which are black or clear glass.
+ * THE ELLIPSE IS LOAD-BEARING, AND A CIRCLE WAS WRONG. A circle of radius
+ * min(halfWidth, halfHeight) fades out correctly on the short axis and leaves
+ * the long axis's ends fully transparent — fine for a square box, useless for
+ * a full-bleed one, where it would show the shot only through a circle in the
+ * middle of the section.
  *
- * It composes with the vignette already burnt into the media, which starts at
- * 0.5, so the effective falloff is wider than this number suggests: at radius
- * 0.7 the two together leave 61% of the picture, at 0.85 about 6%, and at the
- * box edge nothing at all.
+ * SCREEN SPACE, NOT FRAME SPACE, and this is what makes the full-bleed hero
+ * safe. `cover` on a portrait phone scales the square source to 726x726 in a
+ * 390-wide box and throws away 46% of its WIDTH — which is precisely where the
+ * vignette burnt into the file lives. Rely on the asset alone and a phone gets
+ * the bright middle of the frame running edge to edge: the "vial on a white
+ * background" report from Snapchat, exactly. Applied here, the falloff is
+ * computed on the element as it is actually laid out, so it cannot be cropped
+ * away by any viewport shape. The burnt-in vignette goes back to being what it
+ * was always meant to be — a guard for the raw file, not the composition.
+ *
+ * 0.55 keeps the middle of the section at full strength and spends the outer
+ * 45% dissolving into the page.
  */
-const FADE_START = 0.6;
+const FADE_START = 0.55;
+
+/**
+ * Where the shot sits along the hero when there is room to choose, as a
+ * fraction of the spare width: 0.5 is centred, 1 is hard right.
+ *
+ * Only a landscape hero has spare width (see the fit rule in cover()), and on a
+ * wide screen the copy is a column down the left. Centred, the vial's own label
+ * prints behind the headline at reading size — a defect this hero has shipped
+ * twice. Pushed right it sits where the desktop scrim has always assumed it
+ * was: copy left, product right.
+ *
+ * A phone has no spare width at all, so this has no effect there, which is
+ * correct — the shot is meant to fill a phone screen.
+ */
+const LANDSCAPE_BIAS = 0.76;
 
 function HeroVialCanvas({
   className,
@@ -198,10 +223,11 @@ function HeroVialCanvas({
         fade = null;
       }
       if (!fade) {
-        const cx = canvas.width / 2;
-        const cy = canvas.height / 2;
-        const outer = Math.min(cx, cy);
-        fade = context.createRadialGradient(cx, cy, outer * FADE_START, cx, cy, outer);
+        // Built in UNIT space — centre 0, edge 1 — and stretched to the box
+        // when it is filled, which is what makes it an ellipse matching the
+        // element rather than a circle inside it. Resolution-independent, so
+        // it survives a device-pixel-ratio change untouched.
+        fade = context.createRadialGradient(0, 0, FADE_START, 0, 0, 1);
         // Sampled smootherstep. A two-stop gradient leaves a visible ring where
         // the falloff starts; the extra stops are the same 6t^5-15t^4+10t^3
         // curve the burnt-in vignette uses, so the two compose smoothly.
@@ -248,22 +274,52 @@ function HeroVialCanvas({
       // vignette, so the element blends into the hero with no edge of any kind.
       context.globalCompositeOperation = "destination-in";
       if (fade) {
+        // Stretch the unit-space gradient over the box: an ellipse whose axes
+        // are the element's own half-width and half-height.
+        context.save();
+        context.translate(cw / 2, ch / 2);
+        context.scale(cw / 2, ch / 2);
         context.fillStyle = fade;
-        context.fillRect(0, 0, cw, ch);
+        context.fillRect(-1, -1, 2, 2);
+        context.restore();
       }
       context.globalCompositeOperation = "source-over";
     };
 
-    // object-fit: cover, by hand — the canvas is the hero's full area and the
-    // source must fill it without distorting.
+    /**
+     * Fill the hero without distorting, by hand.
+     *
+     * THE FIT RULE DEPENDS ON THE SHAPE OF THE HERO, and getting it wrong once
+     * is what put a 2x-magnified label behind the headline. The source is
+     * SQUARE, so:
+     *
+     *   * A PORTRAIT hero (a phone) is narrower than it is tall, so filling it
+     *     means matching its HEIGHT and letting the sides crop. The vial fills
+     *     the screen, which is the point.
+     *
+     *   * A LANDSCAPE hero (a laptop) is wider than it is tall. Filling it the
+     *     same way — matching the WIDTH — scales a 720px frame to 1440 and
+     *     throws away 37% of its height: the vial printed at twice life size
+     *     with its label across the copy. So a wide hero matches its height
+     *     too, which fills the section top to bottom and leaves spare width for
+     *     the copy to live in.
+     *
+     * Both cases are the same sentence — match the height — so there is no
+     * branch here, and there should not be one: a fit rule that reads
+     * differently for phones and laptops is how the two got different bugs.
+     */
     const cover = (source: CanvasImageSource, sw: number, sh: number) => {
       if (!pictureContext) return;
       const cw = picture.width;
       const ch = picture.height;
-      const scale = Math.max(cw / sw, ch / sh);
+      const scale = ch / sh;
       const dw = sw * scale;
       const dh = sh * scale;
-      pictureContext.drawImage(source, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+      // Zero on a phone, where the frame overflows the box, so the bias is
+      // inert there and the crop stays centred.
+      const spare = Math.max(0, cw - dw);
+      const x = (cw - dw) / 2 + spare * (LANDSCAPE_BIAS - 0.5);
+      pictureContext.drawImage(source, x, (ch - dh) / 2, dw, dh);
       hasPicture = true;
       present();
     };

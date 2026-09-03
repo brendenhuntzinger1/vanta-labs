@@ -529,117 +529,97 @@ describe("the site carries its own back control", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Reported from a phone, after a link was opened from Snapchat: clearing the
-// age gate filled the entire screen with a magnified vial on a white
-// background, with the headline landing on top of the vial's own label text.
+// THE CROP IS BACK, ON PURPOSE, AND THIS BLOCK USED TO FORBID IT.
 //
-// It was not the native fullscreen player this time -- the class of bug the
-// rest of this file guards. It was our own framing.
+// It was written for the fix to a Snapchat report: clearing the age gate filled
+// the entire screen with a magnified vial on a white background. The asset is
+// square (720x720) and the hero is portrait, so `object-fit: cover` scaled it to
+// 726x726 in a 390-wide box and threw away 46% of its width, leaving the bright
+// middle of a white studio frame running edge to edge. The answer at the time
+// was to stop cropping: a square media box, sized and positioned, masked at its
+// edges.
 //
-// THE ASSET IS SQUARE AND THE HERO IS PORTRAIT. The clip is 720x720 and the
-// poster 960x960; the hero box on a phone is 390x726. `object-fit: cover`
-// resolves that by scaling the square to 726x726 -- a 1.86x magnification that
-// throws away 46% of the frame's width and blows the vial up past the width of
-// the screen. Measured on the harness at 390x844:
+// That answer solved the report and cost the thing the hero was for. In the
+// store owner's words the boxed version was "a vial sitting in a random dark
+// rectangle", and what they asked for back was "the spinning vial taking up the
+// screen — it was very aesthetic". So the composition is full bleed again, and
+// these tests now guard the DEFENCE rather than the layout, because the layout
+// was never what made it safe.
 //
-//     390x726 box -> painted 726x726 -> 46% of the width cropped away
-//     375x628 box -> painted 628x628 -> 40% cropped
-//    1440x900 box -> painted 1440x1440 -> 0% of the width cropped
+// Three things stand between full bleed and that report, and each is asserted
+// below:
 //
-// The last line is why nobody caught it: on a laptop the composition survives
-// intact, so the defect is invisible in exactly the place it gets reviewed.
-//
-// The fix is to stop cover-cropping a square into a portrait box. Below the
-// desktop breakpoint the media gets a SQUARE box in the upper part of the hero
-// and the copy sits on the dark ground beneath it.
+//   1. The falloff is computed on the ELEMENT, in screen space, by the canvas —
+//      so the crop cannot discard it (see the block above). This is the one
+//      that actually answers the report.
+//   2. The media file's own border is black, so any path that renders it with
+//      no page CSS at all — iOS's fullscreen player, the URL opened directly —
+//      is on-brand rather than white.
+//   3. The scrim holds the copy against the picture it now sits on, which is
+//      the OTHER half of the original report: "the headline landing on top of
+//      the vial's own label text".
 // ---------------------------------------------------------------------------
-describe("the hero vial is framed on a phone, never magnified and cropped", () => {
+describe("the hero fills the screen, and cannot show a white one", () => {
   const css = read("src/app/globals.css");
+  const source = read("src/components/hero-video.tsx");
+  const base = css.slice(css.indexOf(".vl2-hero-video {"), css.indexOf(".vl2-hero-scrim"));
+  const code = base.replace(/\/\*[\s\S]*?\*\//g, "");
 
-  /** The `.vl2-hero-video` rule inside the media query starting at `at`. */
-  const ruleIn = (query: string) => {
-    for (let at = css.indexOf(query); at !== -1; at = css.indexOf(query, at + 1)) {
-      let depth = 0;
-      let i = css.indexOf("{", at);
-      const open = i;
-      for (; i < css.length; i++) {
-        if (css[i] === "{") depth++;
-        else if (css[i] === "}" && --depth === 0) break;
+  it("gives the media the whole hero", () => {
+    expect(code).toMatch(/inset:\s*0/);
+    expect(code).toMatch(/width:\s*100%/);
+    expect(code).toMatch(/height:\s*100%/);
+    expect(code).toMatch(/object-fit:\s*cover/);
+  });
+
+  it("no longer sizes or positions a box, at either breakpoint", () => {
+    // A width on the media is the signature of the boxed layout. Its absence is
+    // what makes this full bleed rather than a large rectangle.
+    for (const query of ["@media (max-width: 1023px)", "@media (min-width: 1024px)"]) {
+      for (let at = css.indexOf(query); at !== -1; at = css.indexOf(query, at + 1)) {
+        let depth = 0;
+        let i = css.indexOf("{", at);
+        const open = i;
+        for (; i < css.length; i++) {
+          if (css[i] === "{") depth++;
+          else if (css[i] === "}" && --depth === 0) break;
+        }
+        const block = css.slice(open + 1, i);
+        const sel = block.indexOf(".vl2-hero-video");
+        if (sel === -1) continue;
+        const rule = block.slice(sel, block.indexOf("}", sel)).replace(/\/\*[\s\S]*?\*\//g, "");
+        expect(rule, `${query} must not re-introduce a media box`).not.toMatch(/(^|[;{\s])width\s*:/);
+        expect(rule, `${query} must not re-introduce a media box`).not.toMatch(/--vial-size/);
+        expect(rule, `${query} must not re-introduce a mask`).not.toMatch(/mask-image:/);
       }
-      const block = css.slice(open + 1, i);
-      const sel = block.indexOf(".vl2-hero-video");
-      // Several blocks share a breakpoint (the scrim has one too) — take the
-      // one that actually styles the media.
-      if (sel !== -1) return block.slice(sel, block.indexOf("}", sel));
     }
-    return "";
-  };
+  });
 
-  /** Comments carry prose with colons in it; strip them before matching. */
-  const decl = (rule: string, prop: string) =>
-    new RegExp(`(?:^|[;{\\s])${prop}\\s*:\\s*([^;]+)`, "m")
-      .exec(rule.replace(/\/\*[\s\S]*?\*\//g, ""))?.[1]
-      .trim() ?? null;
+  it("keeps the copy readable on the picture it now sits on", () => {
+    // Full bleed means the copy is ON the photograph, and the part it lands on
+    // is the vial's printed label — black on white, at roughly the size of the
+    // headline. Measured with the copy hidden, the brightest pixel behind the
+    // headline is 34/255 on a phone and 56 at 1440; white type needs 118 or
+    // below for 4.5:1. The stops that buy that are these.
+    const scrim = css.slice(css.indexOf(".vl2-hero-scrim {"), css.indexOf(".vl2-hero-content {"));
+    const phone = scrim.slice(0, scrim.indexOf("@media"));
+    const alphas = [...phone.matchAll(/rgba\(0,\s*0,\s*0,\s*([0-9.]+)\)/g)].map((m) => Number(m[1]));
+    expect(alphas.length).toBeGreaterThan(3);
+    expect(Math.max(...alphas), "the copy end of the phone scrim").toBeGreaterThanOrEqual(0.9);
+    // Anchored to the copy, not to a fraction of a hero whose height varies by
+    // 150px between an SE and a 14.
+    expect(phone).toMatch(/calc\(100% - \d+rem\)/);
+    // Every breakpoint has to answer for itself; a tall portrait tablet cannot
+    // use the phone's rem stops, and a wide screen lifts from the side instead.
+    expect(scrim).toContain("@media (min-width: 641px) and (max-width: 1023px)");
+    expect(scrim).toContain("@media (min-width: 1024px)");
+  });
 
-  // BOTH breakpoints, because the defect is on both — it just changes axis.
-  // A phone crops 46% of the WIDTH; a 1440x900 laptop crops 0% of the width
-  // and 37% of the HEIGHT, magnifying the frame 1.5x and landing the vial's
-  // label behind the headline at full reading size.
-  const breakpoints: Array<[string, string]> = [
-    ["phones and portrait tablets", "@media (max-width: 1023px)"],
-    ["desktop", "@media (min-width: 1024px)"],
-  ];
-
-  for (const [label, query] of breakpoints) {
-    describe(label, () => {
-      const rule = ruleIn(query);
-
-      it("gives the media a square box, so a square asset loses nothing", () => {
-        // cover() discards 1 - min(w,h)/max(w,h) of a square source. That is
-        // zero only when the box is square, which is the point of the rule.
-        const width = decl(rule, "width");
-        const height = decl(rule, "height");
-        expect(width, `${label}: the hero media must declare a width`).toBeTruthy();
-        expect(height, `${label}: ...and a height`).toBeTruthy();
-        expect(height).toBe(width);
-      });
-
-      it("stops stretching the media across all four edges of the hero", () => {
-        // `inset: 0` on the base rule is what ties the box to the hero's own
-        // aspect and forces the magnification. Both breakpoints release it.
-        expect(rule).toMatch(/inset:\s*auto/);
-      });
-
-      // REVERSED DELIBERATELY, AND THIS IS THE BLACK BOX.
-      //
-      // This used to REQUIRE a `mask-image` here, on the reasoning that a
-      // white-backgrounded shot must be faded at its edges rather than cut off
-      // at them. The reasoning was right and the mechanism was wrong, in a way
-      // that is arithmetic rather than taste.
-      //
-      // A radial-gradient mask is sized against the element box, so a gradient
-      // whose transparent stop lands outside that box is CLIPPED BY IT, and a
-      // clipped ellipse is a rectangle with rounded corners. The phone rule
-      // read `ellipse 82% 54% at 50% 31% ... transparent 76%`: the transparent
-      // stop sat at 0.82 x 0.76 = 62% of the box width from a centre at 50%,
-      // i.e. at -12% and 112% of the width. Straight vertical edges, both
-      // sides. Vertically it finished at 72%, which is the straight line that
-      // cut the vial through its own label. The desktop rule had the same
-      // defect down its left side.
-      //
-      // So no mask, either breakpoint. The falloff is real alpha painted by
-      // the canvas (destination-in), which is bounded by construction and does
-      // not depend on a compositing feature a WebView may quietly skip.
-      it("fades into the hero with alpha, not with a mask that clips to a box", () => {
-        expect(rule).not.toMatch(/mask-image:/);
-      });
-    });
-  }
-
-  it("keeps the base rule intact as the fallback both breakpoints override", () => {
-    const base = css.slice(css.indexOf(".vl2-hero-video"), css.indexOf(".vl2-hero-scrim"));
-    expect(base).toMatch(/object-fit:\s*cover/);
-    expect(base).toMatch(/pointer-events:\s*none/);
+  it("still cannot put a bright edge on screen", () => {
+    // The three defences, in one place, so removing any of them fails here.
+    expect(source).toContain("createRadialGradient(0, 0, FADE_START, 0, 0, 1)");
+    expect(source).toContain('context.globalCompositeOperation = "destination-in"');
+    expect(read("scripts/build-hero-media.mjs")).toMatch(/^const END = 1(\.0)?;$/m);
   });
 });
 
@@ -771,32 +751,73 @@ describe("the shipped hero media cannot show a bright edge", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The falloff that replaced the mask has to be bounded, or it is the same bug
-// in a different language: a gradient that wants to finish outside the canvas
-// is clipped by the canvas, and a clipped ellipse is a rectangle.
+// The falloff that replaced the mask has to be bounded by the element, or it is
+// the same bug in a different language: a gradient that wants to finish outside
+// the canvas is clipped by the canvas, and a clipped ellipse is a rectangle.
+//
+// It also has to be computed in SCREEN space rather than from the source frame,
+// which is what makes a full-bleed hero survivable — see the block above.
 // ---------------------------------------------------------------------------
 describe("the canvas falloff is bounded by the element it paints", () => {
   const source = read("src/components/hero-video.tsx");
 
-  it("ends the gradient at the box's own inscribed radius", () => {
-    // min(cx, cy) is the distance to the NEAREST edge midpoint, so the ramp is
-    // complete before any border pixel on any axis. The corners, further out
-    // still, are transparent by definition.
-    expect(source).toContain("const outer = Math.min(cx, cy);");
-    expect(source).toContain("createRadialGradient(cx, cy, outer * FADE_START, cx, cy, outer)");
+  // CHANGED FROM A CIRCLE TO AN ELLIPSE, and the circle was a real limitation
+  // rather than a stylistic one. A circle of radius min(halfWidth, halfHeight)
+  // finishes correctly on the short axis and leaves the long axis's ends fully
+  // transparent — invisible on the square box this was written for, and fatal
+  // on a full-bleed one, where it would show the picture through a circle in
+  // the middle of the section.
+  //
+  // Building the gradient in unit space and stretching it to the box gives an
+  // ellipse inscribed in whatever shape the element is, so the guarantee holds
+  // for every box: 1.0 is an edge midpoint on BOTH axes, the ramp is complete
+  // there, and the corners are further out still.
+  it("fades out at every edge of the box, whatever shape the box is", () => {
+    expect(source).toContain("createRadialGradient(0, 0, FADE_START, 0, 0, 1)");
+    expect(source).toMatch(/context\.scale\(cw \/ 2, ch \/ 2\);[\s\S]{0,160}fillRect\(-1, -1, 2, 2\)/);
+    expect(source).not.toContain("Math.min(cx, cy)");
     const start = /^const FADE_START = ([0-9.]+);$/m.exec(source);
     expect(start).not.toBeNull();
     expect(Number(start![1])).toBeGreaterThan(0);
     expect(Number(start![1])).toBeLessThan(1);
   });
 
+  // `cover` on a portrait phone scales the square source to 726x726 inside a
+  // 390-wide box and throws away 46% of its WIDTH — exactly where the vignette
+  // burnt into the file lives. An asset-only defence therefore evaporates on
+  // the devices that reported the bug: what reaches the screen is the bright
+  // middle of the frame, running edge to edge. That is the Snapchat report.
+  it("computes the falloff from the element, not from the source frame", () => {
+    const present = source.slice(source.indexOf("const present = () => {"));
+    const body = present.slice(0, present.indexOf("\n    };"));
+    expect(body).toContain("const cw = canvas.width;");
+    expect(body).toContain("const ch = canvas.height;");
+    expect(body).not.toMatch(/videoWidth|naturalWidth/);
+    // And it is part of drawing the picture, not a separate step that could
+    // fail on its own and leave the shot bare.
+    expect(source).toMatch(/hasPicture = true;\s*present\(\);/);
+  });
+
   it("applies it as alpha on the canvas, not as a CSS mask", () => {
     expect(source).toContain('context.globalCompositeOperation = "destination-in"');
     // An opaque canvas cannot fade into anything, so the VISIBLE canvas must
-    // not ask for one. The offscreen buffer is a different matter — it is
-    // opaque on purpose, and it is never on screen.
+    // not ask for one. The offscreen buffer is opaque on purpose and is never
+    // on screen.
     expect(source).toContain('const context = canvas.getContext("2d");');
     expect(source).not.toMatch(/canvas\.getContext\("2d",\s*\{\s*alpha:\s*false/);
     expect(read("src/app/globals.css")).not.toMatch(/\.vl2-hero-video[\s\S]{0,400}?mask-image:/);
+  });
+
+  // The fit rule, which got this wrong once in a way that shipped a 2x label
+  // behind the headline: a square source in a box WIDER than it is tall fills
+  // the width unless you say otherwise, magnifying a 720px frame to 1440.
+  it("fills the hero by matching its height, on every shape of screen", () => {
+    expect(source).toContain("const scale = ch / sh;");
+    const bias = /^const LANDSCAPE_BIAS = ([0-9.]+);$/m.exec(source);
+    expect(bias).not.toBeNull();
+    expect(Number(bias![1])).toBeGreaterThan(0.5);
+    expect(Number(bias![1])).toBeLessThanOrEqual(1);
+    // Inert where there is no spare width, which is every phone.
+    expect(source).toContain("const spare = Math.max(0, cw - dw);");
   });
 });
