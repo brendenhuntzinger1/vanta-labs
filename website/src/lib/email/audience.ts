@@ -3,6 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { isPaidOrderStatus } from "@/lib/ledger";
 import { readAllRowsBounded } from "@/lib/supabase-page";
+import { isNonMailableAddress } from "@/lib/email/non-mailable";
 
 /**
  * F-A-19. These reads used `readAllRows`, which stops as soon as a page comes
@@ -171,6 +172,20 @@ export async function loadConsentedAudience(): Promise<ConsentedAudience> {
   const blocked = new Set(suppressed.map((row) => normalize(row.email)));
 
   for (const email of blocked) {
+    accounts.delete(email);
+    subscribers.delete(email);
+  }
+
+  // A TEST ADDRESS ON A REAL CAMPAIGN IS A SELF-INFLICTED BOUNCE.
+  //
+  // marketing_subscribers is written by the checkout opt-in, so testing
+  // checkout with a provider sink address puts it straight onto this list. A
+  // send to bounced@resend.dev is a bounce recorded against this domain and a
+  // send to complained@resend.dev is a spam complaint recorded against it —
+  // both on purpose, both every time. The audit found all three sink addresses
+  // already used from this account.
+  for (const email of [...accounts, ...subscribers]) {
+    if (!isNonMailableAddress(email)) continue;
     accounts.delete(email);
     subscribers.delete(email);
   }

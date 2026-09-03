@@ -1,4 +1,5 @@
 import type { AffiliateMergeContext } from "@/lib/email/affiliate-merge";
+import { isNonMailableAddress } from "@/lib/email/non-mailable";
 
 /**
  * Who an affiliate campaign goes to — the CLIENT-SAFE half.
@@ -139,6 +140,9 @@ export function selectAffiliateRecipients(input: {
     const email = normalizeEmail(row.email);
     if (!email) continue;
     if (suppressed.has(email)) continue;
+    // Same rule as the customer audience: a sink or reserved-domain address
+    // cannot be a real affiliate, and mailing one damages the sending domain.
+    if (isNonMailableAddress(email)) continue;
     if (seen.has(email)) continue;
     seen.add(email);
 
