@@ -227,6 +227,62 @@ the complaint that follows.
   either re-establish Workspace, or point the `MX` at a mail host you do have
   and update `Reply-To`/`support@` to match.
 
+### 2.5 Rotate the webhook secret — it is a weak value in a URL
+
+The delivery webhook is registered in Resend as:
+
+```
+https://www.vantalabsresearch.com/api/webhooks/email?secret=<value>
+```
+
+Two things are wrong with the value currently there, and only the owner can fix
+either.
+
+**It reads like a personal password**, not a generated secret. If it is reused
+anywhere else, that matters far more than this endpoint does.
+
+**It travels in a query string.** The route accepts the secret in a header too
+(`x-email-webhook-secret`) and compares it in constant time, and it fails closed
+when unset — that part is sound. But Resend can only store a URL, so in practice
+the secret sits in the provider dashboard, in delivery logs, and in any proxy or
+access log along the way.
+
+What the endpoint can do if someone guesses it: suppress any address from
+marketing. Quietly unsubscribing a customer list is the realistic abuse.
+
+To rotate — both halves, or the webhook breaks:
+
+1. Generate one: `openssl rand -hex 32`
+2. Vercel → Project → Settings → Environment Variables → `EMAIL_WEBHOOK_SECRET`
+3. Redeploy
+4. Resend → Webhooks → edit the endpoint URL to carry the new `?secret=`
+
+### 2.6 Reconciling Resend against our own tables (2026-09-02)
+
+Worth recording because the first read of it looked alarming and was not.
+
+Resend reported, over 30 days: 125 sent, 120 delivered, 5 bounced (3 permanent),
+**1 spam complaint**, 19 delayed. Our `email_delivery_events` had 42 rows, no
+complaint and no hard bounce. That gap is fully explained and benign:
+
+- The webhook was only created on 2026-08-31 02:58, so nothing before that
+  reached us. Sept 1 and Sept 2 reconcile **exactly** against Resend.
+- The complaint and the permanent bounce were `complained@resend.dev` and
+  `bounced@resend.dev` — Resend's own simulator addresses, from testing this
+  webhook. Both are correctly in `email_suppressions`. The loop works.
+
+The complaint rate of 0.8% is arithmetic on a deliberate test, not a real
+signal. Gmail's threshold is 0.3%; there are no genuine complaints on this
+domain.
+
+Two real gaps came out of it and are fixed:
+
+- The webhook was subscribed to three events. `email.delivery_delayed` (19 in 30
+  days) and `email.failed` were invisible. Both are now subscribed.
+- A transient bounce never escalated, so `kojonketia@iclouds.com` — a typo
+  domain with no mailbox — stayed permanently mailable. Three consecutive soft
+  bounces now suppress.
+
 ## 3. How to actually find out where mail lands
 
 Everything above is upstream of the only question that matters, and neither the
