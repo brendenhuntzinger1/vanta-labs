@@ -6,8 +6,10 @@ import { campaignTemplate } from "@/lib/email/templates";
 import { getEmailRuntimeConfig, marketingBlockedReason } from "@/lib/email/settings";
 import { loadConsentedAudience } from "@/lib/email/audience";
 import { isPaidOrderStatus } from "@/lib/ledger";
-import { getSiteUrl } from "@/lib/env";
+import { buildAutomationClickUrl, buildAutomationOpenUrl } from "@/lib/email/automation-links";
 import { resolveSitePath } from "@/lib/email/cta-path";
+import { isOfferKey, issueCustomerOffer } from "@/lib/offers/customer-offers";
+import { getSiteUrl } from "@/lib/env";
 
 /**
  * Automated retention sequences.
@@ -54,6 +56,8 @@ export type AutomationRow = {
   promo_code: string | null;
   cta_label: string;
   cta_path: string;
+  /** One-time offer minted per recipient, or null. See customer-offers.ts. */
+  offer_key: string | null;
   updated_at: string;
 };
 
@@ -71,7 +75,7 @@ export const AUTOMATION_BATCH_LIMIT = 50;
 export async function loadAutomations(): Promise<AutomationRow[]> {
   const { data, error } = await supabaseAdmin
     .from("email_automations")
-    .select("key, enabled, delay_days, subject, headline, body, promo_code, cta_label, cta_path, updated_at")
+    .select("key, enabled, delay_days, subject, headline, body, promo_code, cta_label, cta_path, offer_key, updated_at")
     .order("key");
   if (error) throw error;
   return (data ?? []).filter((row) => isAutomationKey(row.key)) as AutomationRow[];
@@ -122,16 +126,30 @@ async function claimAutomationSend(
   throw error;
 }
 
-/** Record how the claimed send actually went. */
+/**
+ * Record how the claimed send actually went.
+ *
+ * `providerMessageId` is the handle that joins this row to the delivery
+ * webhook's own record in email_delivery_events. Without it "we sent it" and
+ * "the provider delivered it" are two claims with nothing between them, and a
+ * per-automation delivery rate can only be guessed at by matching address and
+ * timestamp — which double-counts the moment one person is in two sequences.
+ * Absent for SMTP, which returns no id; a send without one is still a send.
+ */
 async function closeAutomationSend(
   campaignType: string,
   referenceId: string,
   status: "sent" | "failed",
+  providerMessageId?: string | null,
 ): Promise<void> {
   try {
     await supabaseAdmin
       .from("email_send_log")
-      .update({ status, sent_at: new Date().toISOString() })
+      .update({
+        status,
+        sent_at: new Date().toISOString(),
+        ...(providerMessageId ? { provider_message_id: providerMessageId } : {}),
+      })
       .eq("campaign_type", campaignType)
       .eq("reference_id", referenceId)
       .eq("status", "sending");
@@ -297,6 +315,38 @@ export type AutomationSweepResult = {
  * other jobs, and one automation with bad copy must not take down membership
  * billing or payment reconciliation alongside it.
  */
+/**
+ * TRACKING MUST NEVER COST A SEND.
+ *
+ * Both link builders sign with UNSUBSCRIBE_SECRET or SUPABASE_SERVICE_ROLE_KEY
+ * and throw when neither is set. That throw would escape into the per-automation
+ * try/catch in the sweep and drop EVERY recipient of that automation — a
+ * misconfigured secret would silently stop retention mail rather than merely
+ * stop measuring it, which is a strictly worse failure than the untracked links
+ * these replaced.
+ *
+ * So a tracked link is an upgrade attempted per send, not a precondition of
+ * one. If it cannot be minted the customer still gets a working button
+ * pointing at the same place; only the click stamp is lost.
+ */
+function trackedCtaUrl(key: AutomationKey, email: string, referenceId: string, ctaPath: string, offerToken?: string): string {
+  try {
+    return buildAutomationClickUrl(key, email, referenceId, offerToken);
+  } catch (error) {
+    console.error("[automations] click tracking unavailable, sending a plain link", key, error);
+    return resolveSitePath(ctaPath, getSiteUrl());
+  }
+}
+
+/** Same contract: no pixel is better than no email. */
+function trackedOpenUrl(key: AutomationKey, email: string, referenceId: string): string | undefined {
+  try {
+    return buildAutomationOpenUrl(key, email, referenceId);
+  } catch {
+    return undefined;
+  }
+}
+
 export async function runAutomationSweep(input?: { now?: number }): Promise<AutomationSweepResult> {
   const now = input?.now ?? Date.now();
   const result: AutomationSweepResult = { sent: 0, skipped: 0, failed: 0, byKey: {}, errors: [] };
@@ -326,8 +376,6 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
   const needsAccounts = automations.some((row) => row.key === "welcome_no_purchase");
   const accountCreatedAt = needsAccounts ? await loadAccountCreatedAt() : new Map<string, number>();
 
-  const site = getSiteUrl().replace(/\/$/, "");
-
   for (const automation of automations) {
     try {
       const alreadySent = await loadAlreadySent(automation.key);
@@ -343,11 +391,46 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
       });
 
       for (const target of targets) {
-        // Automations link straight to the destination rather than through the
-        // campaign click tracker: click attribution is keyed on a campaign id,
-        // and these have none. Their value is measured by orders following the
-        // send, not by a per-click stamp.
-        const destination = resolveSitePath(automation.cta_path, site);
+        const campaignType = `automation:${automation.key}`;
+        const templateKey = `automation_${automation.key}`;
+
+        // A BLANK BUTTON IS AN INSTRUCTION, NOT AN OVERSIGHT.
+        //
+        // An operator who clears the button text or the destination in Admin →
+        // Email means "no button on this one" — a plain note with no ask is a
+        // legitimate shape for a post-purchase check-in. Both halves are needed
+        // for a button, so either being blank removes it, and no tracked link
+        // is minted for a button that will not be rendered.
+        const ctaLabel = String(automation.cta_label ?? "").trim();
+        const ctaPath = String(automation.cta_path ?? "").trim();
+        const hasCta = Boolean(ctaLabel && ctaPath);
+
+        // THESE USED TO LINK STRAIGHT TO THE DESTINATION, and a comment here
+        // explained that click attribution was keyed on a campaign id which
+        // automations do not have. That was true and it left the only
+        // unattended part of the email system as the only unmeasurable one:
+        // four automations mailing customers with no click, conversion or
+        // revenue figure available for any of them.
+        //
+        // automation-links.ts is the keyed-on-text twin of campaign-links.ts.
+        // The reference id is inside the signature, so each SEND is its own
+        // cohort — a customer won back twice produces two references and two
+        // separately measurable episodes.
+        // MINT THE ONE-TIME OFFER, IF THIS AUTOMATION CARRIES ONE.
+        //
+        // Per recipient, and only for the message about to go out. The token
+        // exists in exactly two places from here: this variable, and the email
+        // the customer receives — customer_offers stores only its hash.
+        //
+        // A null means no offer applies to this send, and there are three
+        // ordinary ways to get one: the automation has no offer configured,
+        // the recipient already holds a live token (the unique index refusing
+        // a second, which is the whole point of it), or the insert failed. In
+        // every case the message still goes, with its ordinary CTA. A gift is
+        // not worth failing a retention email over.
+        const offerToken = isOfferKey(automation.offer_key)
+          ? (await issueCustomerOffer({ offerKey: automation.offer_key, email: target.email }))?.token
+          : undefined;
 
         const template = campaignTemplate({
           subject: automation.subject,
@@ -355,13 +438,10 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
           headline: automation.headline,
           body: automation.body,
           promoCode: automation.promo_code,
-          ctaLabel: automation.cta_label,
-          ctaUrl: destination,
+          ctaLabel: hasCta ? ctaLabel : "",
+          ctaUrl: hasCta ? trackedCtaUrl(automation.key, target.email, target.referenceId, ctaPath, offerToken) : "",
           postalAddress: config.marketingPostalAddress,
         });
-
-        const campaignType = `automation:${automation.key}`;
-        const templateKey = `automation_${automation.key}`;
 
         // CLAIM BEFORE SENDING. alreadySent above is a snapshot taken once per
         // automation; this is the check that holds across two sweeps running at
@@ -376,6 +456,9 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
           campaignType,
           referenceId: target.referenceId,
           templateKey,
+          // Opens land on the send-log row this sweep already claimed, keyed
+          // by the same (campaign_type, reference_id) pair.
+          openTrackingPixelUrl: trackedOpenUrl(automation.key, target.email, target.referenceId),
           // The claim row IS the log row now, so the sender must not write a
           // second one — that is what the unique index would reject anyway.
           alreadyLogged: true,
@@ -383,7 +466,7 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
         });
 
         if (sendResult.success) {
-          await closeAutomationSend(campaignType, target.referenceId, "sent");
+          await closeAutomationSend(campaignType, target.referenceId, "sent", sendResult.providerMessageId);
           result.sent++;
           result.byKey[automation.key] = (result.byKey[automation.key] ?? 0) + 1;
         } else if (sendResult.suppressed) {

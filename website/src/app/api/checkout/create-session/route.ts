@@ -2,6 +2,9 @@ import { NextResponse, after } from "next/server";
 import { reportRepeatedCheckoutFailure } from "@/lib/checkout-failure-alert";
 import { recordOrderAttribution } from "@/lib/order-attribution";
 import { attributeOrderToCampaign } from "@/lib/email/campaign-attribution";
+import { attributeOrderToAutomation } from "@/lib/email/automation-attribution";
+import { readAutomationCookie } from "@/lib/email/automation-links";
+import { readOfferCookie } from "@/lib/offers/customer-offers";
 import { readCampaignCookie } from "@/lib/email/campaign-links";
 import { createCheckoutSession, sanitizeCustomerInput } from "@/lib/payment-service";
 import { recordMarketingOptIn } from "@/lib/marketing-broadcast";
@@ -91,6 +94,17 @@ export async function POST(request: Request) {
       customer,
       referralCode,
       couponCode: body.couponCode,
+      // FROM THE COOKIE, NEVER FROM THE BODY.
+      //
+      // The click route set an httpOnly cookie the browser cannot read, so the
+      // token reaches here without ever having been exposed to a script, to the
+      // Referer header, or to anything the customer could paste. Taking it from
+      // the request body instead would hand that guarantee back for nothing:
+      // the client would have to hold the secret in order to send it.
+      //
+      // It is looked up against customer_offers server-side and grants nothing
+      // on its own — see quoteOrder.
+      offerToken: readOfferCookie(request) ?? undefined,
       // Hard-pin to USD. All amounts are computed in USD; honoring a
       // client-supplied currency code (e.g. "mxn") while sending the USD
       // numeric amount would let a crafted request massively underpay.
@@ -129,6 +143,16 @@ export async function POST(request: Request) {
     await attributeOrderToCampaign({
       orderId: result.orderId,
       cookieValue: readCampaignCookie(request),
+    });
+
+    // And the same for the retention automations, which until now linked
+    // straight to their destination and so could not be measured at all. A
+    // separate cookie and a separate column: an order can genuinely follow
+    // both a campaign click and an automation click, and neither should
+    // silently overwrite the other.
+    await attributeOrderToAutomation({
+      orderId: result.orderId,
+      cookieValue: readAutomationCookie(request),
     });
 
     // Notice a shopper who keeps starting checkout and never finishing. On

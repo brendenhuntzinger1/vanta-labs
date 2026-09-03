@@ -11,6 +11,7 @@ type CouponFormState = {
   endsAt: string;
   maxRedemptions: string;
   isPrivate: boolean;
+  freeShipping: boolean;
   memberScope: "all" | "members" | "non_members";
 };
 
@@ -22,6 +23,7 @@ const EMPTY_FORM: CouponFormState = {
   endsAt: "",
   maxRedemptions: "",
   isPrivate: false,
+  freeShipping: false,
   memberScope: "all",
 };
 
@@ -108,6 +110,7 @@ export function AdminCouponsClient({
           endsAt: fromDatetimeLocal(form.endsAt),
           maxRedemptions: form.maxRedemptions.trim() ? Number(form.maxRedemptions) : null,
           isPrivate: form.isPrivate,
+          freeShipping: form.freeShipping,
           memberScope: form.memberScope,
         }),
       });
@@ -281,6 +284,26 @@ export function AdminCouponsClient({
           <label className="flex items-start gap-2.5 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm text-zinc-300 sm:col-span-2">
             <input
               type="checkbox"
+              data-testid="coupon-free-shipping"
+              checked={form.freeShipping}
+              onChange={(e) => setForm((prev) => ({ ...prev, freeShipping: e.target.checked }))}
+              className="mt-0.5 h-4 w-4 accent-amber-300"
+            />
+            <span>
+              <span className="block font-medium text-white">Also waive shipping</span>
+              <span className="mt-0.5 block text-xs text-zinc-500">
+                On top of the discount above, so one code can give a percentage AND free shipping.
+                Shipping is not part of the &ldquo;single best discount&rdquo; rule, so this applies even
+                when the percentage loses to a customer&apos;s membership or ambassador pricing.
+                Worth nothing on orders that already ship free &mdash; over $200 domestic, $400 to the
+                rest of North America.
+              </span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2.5 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm text-zinc-300 sm:col-span-2">
+            <input
+              type="checkbox"
+              data-testid="coupon-is-private"
               checked={form.isPrivate}
               onChange={(e) => setForm((prev) => ({ ...prev, isPrivate: e.target.checked }))}
               className="mt-0.5 h-4 w-4 accent-amber-300"

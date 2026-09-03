@@ -14,6 +14,8 @@ import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { selectPromotionForCart, type BxgyCartLine } from "@/lib/bxgy-engine";
+import { offerMinimumMet, peekCustomerOffer, type CustomerOffer } from "@/lib/offers/customer-offers";
+import { calculateCouponDiscount } from "@/lib/coupons";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
 import { calculateShipping, isDomesticCountry, isShippableCountry } from "@/lib/shipping";
 import { normalizeUsState } from "@/lib/sales-tax";
@@ -79,6 +81,14 @@ export interface QuoteOrderInput {
    */
   expectedTotal?: number;
   /**
+   * A one-time customer offer token, from the link in their email.
+   *
+   * Opaque here. It is looked up server-side against customer_offers and is
+   * never trusted for anything the client says about it — see the free-unit
+   * block below, which is the only place an order can acquire a $0 line.
+   */
+  offerToken?: string;
+  /**
    * "full" (card checkout / express authorize): the whole contact is known and
    * validated, shipping + tax are priced.
    * "address_optional" (express session create): no address yet, shipping + tax
@@ -127,6 +137,16 @@ export interface QuoteResult {
   referral: ValidatedReferral | null;
   couponCode: string | null;
   isBuy3Get1Active: boolean;
+  /**
+   * The one-time offer this quote priced a free unit for, if any.
+   *
+   * ADVISORY, NOT A GRANT. quoteOrder takes no lock and reserves nothing — no
+   * order exists yet to reserve against. Order creation must call
+   * reserveCustomerOffer() with this token and REFUSE THE ORDER if the reserve
+   * comes back empty, or two concurrent checkouts both ship a free vial. Same
+   * contract as appliedPromotionLimits below.
+   */
+  appliedOffer: { token: string; offerKey: string; rewardKind: string; description: string } | null;
   /** Id of the Buy X Get Y promotion that priced this order, for orders.promotion_id. */
   appliedPromotionId: string | null;
   /** Its customer-facing name, for receipts and admin. */
@@ -393,7 +413,24 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     throw new Error("Order exceeds the maximum quantity. Please contact us for bulk orders.");
   }
 
-  const requestedSlugs = Array.from(new Set(sanitizedItems.map((item) => item.id.split("::")[0])));
+  // THE OFFER IS RESOLVED BEFORE THE CATALOGUE READ so its product is fetched
+  // in the same round trip as everything else — the free unit needs a real
+  // price row for its COGS, a real stock level, and a real dose id, exactly as
+  // a bought unit does.
+  //
+  // A quote with no known email cannot resolve one at all: the offer is bound
+  // to an address, and the express lane's "address_optional" pass has none yet.
+  // That pass prices the cart WITHOUT the gift, and the full quote at authorize
+  // adds it — which is the safe direction, since the wallet sheet then never
+  // shows a total lower than the one actually charged.
+  const offer: CustomerOffer | null = input.offerToken
+    ? await peekCustomerOffer({ token: input.offerToken, email: input.customer.email ?? "" })
+    : null;
+
+  const requestedSlugs = Array.from(new Set([
+    ...sanitizedItems.map((item) => item.id.split("::")[0]),
+    ...(offer?.product_slug ? [offer.product_slug] : []),
+  ]));
   const catalogProducts = await getCatalogProductsBySlugs(requestedSlugs);
   // Raw stock, read separately and server-side only. The catalog objects above
   // are the same ones handed to client components, so they carry no counts —
@@ -549,6 +586,113 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   const quantityBundleSavings = bundleStacking ? 0 : roundMoney(Math.max(0, fullSubtotal - subtotal));
   const discountBase = bundleStacking ? subtotal : fullSubtotal;
 
+  // ---------------------------------------------------------------------
+  // THE FREE UNIT.
+  //
+  // Added HERE, after subtotal, fullSubtotal and discountBase are all fixed,
+  // and that placement is the whole design:
+  //
+  //   * the MINIMUM is tested against what the customer is actually paying,
+  //     before the gift — so the gift can never help the order qualify for
+  //     the gift;
+  //   * no percentage discount, bundle tier or Buy X Get Y promotion can see
+  //     the extra line, so none of them can be enlarged by it;
+  //   * it IS in lineItems, so inventory reserves it, order_items records it,
+  //     and unitCostCentsForLine books its COGS against profit — the customer
+  //     pays nothing and the store still counts what it cost.
+  //
+  // Everything below is decided server-side from the customer_offers row. The
+  // client sends an opaque token and nothing else; it cannot name the product,
+  // the quantity or the price.
+  let appliedOffer: QuoteResult["appliedOffer"] = null;
+  // Set here, consumed by the shipping calculation below. Declared out here so
+  // the two cannot drift apart: the gift is decided in one place, and shipping
+  // reads the decision rather than re-deriving it.
+  let offerGrantsFreeShipping = false;
+
+  // FREE SHIPPING IS THE ABSENCE OF A FEE, not a line.
+  //
+  // So it joins the two conditions that already zero shipping — a bulk-savings
+  // tier and a membership perk — rather than inventing a parallel path. Nothing
+  // downstream needs to know an offer was involved; the order simply has no
+  // shipping charge, exactly as a member's would not.
+  //
+  // Worth knowing what this is worth: the store already ships free over $200
+  // domestic, so this grants $15 (or $25 to the rest of North America) on
+  // orders BELOW that and nothing at all above it. The catalogue's minimum is
+  // set with that ceiling in mind — see OFFER_CATALOG.
+  // The percentage half of a combined gift, in dollars. Fed to
+  // resolveCustomerDiscount through the COUPON slot further down, so it obeys
+  // the store's single-best-discount rule exactly as a coupon does rather than
+  // inventing a rule of its own — it competes, and it can lose to a better
+  // membership or ambassador price. The free-shipping half is decided above and
+  // is never in that race, so the worst case is "keeps the better discount, and
+  // still gets free shipping".
+  let offerPercentDiscount = 0;
+
+  if (offer && input.offerToken
+      && (offer.reward_kind === "free_shipping" || offer.reward_kind === "free_shipping_percent")) {
+    if (offerMinimumMet(offer, Math.round(subtotal * 100))) {
+      offerGrantsFreeShipping = true;
+      const percent = offer.reward_kind === "free_shipping_percent" ? Number(offer.percent_off ?? 0) : 0;
+      // Priced off discountBase, the same base every other percentage uses, so
+      // a combined gift and a coupon of the same size are worth the same.
+      if (percent > 0) offerPercentDiscount = calculateCouponDiscount(discountBase, "percent", percent);
+      appliedOffer = {
+        token: input.offerToken,
+        offerKey: offer.offer_key,
+        rewardKind: offer.reward_kind,
+        description: percent > 0 ? `Free shipping + ${percent}% off` : "Free shipping",
+      };
+    }
+  } else if (offer && input.offerToken) {
+    const offerProduct = catalogProducts.find((candidate) => candidate.slug === offer.product_slug);
+    const offerDose = offerProduct
+      ? (offer.variant_id
+          ? offerProduct.doses?.find((dose) => dose.id === offer.variant_id)
+          : offerProduct.doses?.find((dose) => dose.isDefault) ?? offerProduct.doses?.[0])
+      : undefined;
+    const offerStock = offerProduct
+      ? (offerDose ? stockLevels.get(offerDose.id) : stockLevels.get(offerProduct.slug))
+      : undefined;
+    const offerStockStatus = offerDose?.stockStatus ?? offerProduct?.stockStatus;
+
+    // A gift we cannot ship is worse than no gift: it would be promised in the
+    // email, shown in the cart, and then oversold. Out of stock means the
+    // offer simply does not apply to this order and stays spendable for later.
+    const shippable = Boolean(offerProduct)
+      && offerStockStatus !== "Out of Stock"
+      && offerStockStatus !== "Reserved"
+      && !(typeof offerStock === "number" && Number.isFinite(offerStock) && offerStock > 0 && offerStock < 1);
+
+    if (offerProduct && shippable && offerMinimumMet(offer, Math.round(subtotal * 100))) {
+      lineItems.push({
+        product: {
+          ...offerProduct,
+          id: offerDose ? `${offerProduct.slug}::${offerDose.id}` : offerProduct.slug,
+          // The only place in this function a price is forced rather than
+          // resolved. It is not a discount on a real price — it is the price.
+          price: 0,
+          stockStatus: offerDose?.stockStatus ?? offerProduct.stockStatus,
+          variantId: offerDose?.id,
+          variantLabel: offerDose?.label,
+          variantSku: offerDose?.sku,
+        },
+        quantity: 1,
+        // Zero here too, so fullSubtotal-style reads stay honest if this line
+        // is ever included in one: the customer was never charged for it and
+        // was never "discounted" from anything.
+        baseUnitPrice: 0,
+      });
+      appliedOffer = {
+        token: input.offerToken,
+        offerKey: offer.offer_key,
+        rewardKind: "free_product",
+        description: offerDose?.label ? `${offerProduct.name} (${offerDose.label})` : offerProduct.name,
+      };
+    }
+  }
+
   const [applicablePromotions, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, shippingConfig, memberPerks, referralProgram, couponPolicy] = await Promise.all([
     // Switched on, inside their schedule, and not used up — resolved once,
     // here, so the same list prices the order and the coupon rules read it.
@@ -572,17 +716,6 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // No service/handling fee is ever charged — customers pay merchandise (minus
   // discounts) + shipping + sales tax only.
   const bulkSavingsResult = calculateBulkSavingsDiscount(discountBase, bulkSavingsEligible, bulkSavingsConfig);
-  // Free shipping is a perk of reaching the bulk-savings threshold OR of an
-  // active membership tier whose plan includes free shipping. Both are
-  // account-tied and evaluated server-side.
-  //
-  // With no address yet (express wallet), shipping is NOT knowable, so it
-  // resolves to 0 here and is locked later from the wallet's address callback.
-  const shipping = !destinationKnown
-    ? 0
-    : (bulkSavingsResult.tier || memberPerks.freeShipping)
-      ? 0
-      : roundMoney(calculateShipping(subtotal, input.customer.country, shippingConfig));
   // THE ORDER'S BUY-X-GET-Y PROMOTION — at most one, the one worth the most.
   //
   // Each promotion is priced against its OWN valuation of a rewarded unit
@@ -706,6 +839,29 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     ? await validateCoupon(input.couponCode, discountBase, input.customer.email, { isActiveMember: memberPerks.isActiveMember })
     : null;
 
+  // WHO GETS FREE SHIPPING — four independent grants, any one of which is
+  // enough. Two are account-tied and were always here (a bulk-savings tier, a
+  // membership plan that includes it); two are new (a one-time offer whose
+  // reward is free shipping, and a coupon flagged to waive it).
+  //
+  // NONE OF THEM COMPETE. resolveCustomerDiscount below picks a single winner
+  // among referral, membership, bulk and coupon — shipping is not in that
+  // race. So a code can waive shipping AND lose the percentage race, and the
+  // customer still gets the free shipping they were promised, which is what
+  // "free shipping + 15% off" means to the person reading it.
+  //
+  // MOVED DOWN FROM ABOVE THE PROMOTION BLOCK so it can see `coupon`, which is
+  // resolved a few lines up. Nothing read `shipping` in between — checked, not
+  // assumed — so the value is unchanged for every order that has no coupon.
+  //
+  // With no address yet (express wallet), shipping is NOT knowable, so it
+  // resolves to 0 here and is locked later from the wallet's address callback.
+  const shipping = !destinationKnown
+    ? 0
+    : (bulkSavingsResult.tier || memberPerks.freeShipping || offerGrantsFreeShipping || coupon?.freeShipping)
+      ? 0
+      : roundMoney(calculateShipping(subtotal, input.customer.country, shippingConfig));
+
   // Personal ambassador discount: an approved ambassador gets a discount on
   // their OWN purchase. It earns NO commission (self-referral is blocked) and,
   // like every discount here, does not stack unless stacking is enabled.
@@ -741,7 +897,13 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       referralPercent: referralQualifiesForDiscount && referral ? referral.discountPercent : 0,
       isMember: memberPricingAmount > 0,
       membershipPercent: memberPerks.memberDiscountPercent,
-      couponDiscount: coupon ? coupon.discountAmount : 0,
+      // ONE SLOT, THE BETTER OF THE TWO. A combined gift's percentage and a
+      // typed coupon are the same kind of thing — a code-shaped percentage off
+      // — so they take the same slot and the customer keeps whichever is worth
+      // more. Adding a separate candidate would have meant changing
+      // resolveCustomerDiscount, which every other discount in the store also
+      // depends on, for no behaviour a customer could tell apart.
+      couponDiscount: Math.max(coupon ? coupon.discountAmount : 0, offerPercentDiscount),
       bulkSavingsAmount: bulkSavingsResult.amount,
       personalDiscountAmount,
       personalDiscountPercent: referralProgram.personalDiscountPercent,
@@ -1037,6 +1199,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     referral,
     couponCode: coupon?.code ?? null,
     isBuy3Get1Active,
+    appliedOffer,
     appliedPromotionId,
     appliedPromotionName,
     appliedPromotionLimits,

@@ -11,6 +11,20 @@ export interface CouponValidationResult {
   discountType: "percent" | "fixed";
   discountValue: number;
   discountAmount: number;
+  /**
+   * Whether this code also waives shipping, on top of whatever it takes off.
+   *
+   * SEPARATE FROM THE DISCOUNT, and deliberately so. resolveCustomerDiscount
+   * picks ONE winner among referral, membership, bulk and coupon, so a coupon's
+   * percentage competes. Shipping is not in that competition — it is decided by
+   * its own expression in quoteOrder alongside the bulk tier and the membership
+   * perk — so a code can waive shipping AND lose the percentage race, and the
+   * customer still gets the free shipping they were promised.
+   *
+   * That is the behaviour a customer expects from "free shipping + 15% off",
+   * and it is the one that does not require touching the discount rulebook.
+   */
+  freeShipping: boolean;
 }
 
 
@@ -121,6 +135,9 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
         discountType: "percent",
         discountValue: welcome.percent,
         discountAmount: calculateCouponDiscount(subtotal, "percent", welcome.percent),
+        // The welcome offer is synthetic — it has no coupons row to carry a
+        // flag — so it is percentage-only, as it has always been.
+        freeShipping: false,
       };
     }
   } catch (e) {
@@ -144,14 +161,14 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
   // (every coupon open to everyone) unchanged.
   let { data, error } = await supabaseAdmin
     .from("coupons")
-    .select("code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count, active, assigned_email, member_scope")
+    .select("code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count, active, assigned_email, member_scope, free_shipping")
     .ilike("code", normalizedCode)
     .maybeSingle();
 
   if (error) {
     const fallback = await supabaseAdmin
       .from("coupons")
-      .select("code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count, active, assigned_email")
+      .select("code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count, active, assigned_email, free_shipping")
       .ilike("code", normalizedCode)
       .maybeSingle();
     data = fallback.data as typeof data;
@@ -226,6 +243,10 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
     discountType,
     discountValue,
     discountAmount: calculateCouponDiscount(subtotal, discountType, discountValue),
+    // Defaults false for every row written before the column existed, which is
+    // all 375 of them — an existing code cannot start waiving shipping because
+    // this shipped.
+    freeShipping: data.free_shipping === true,
   };
 }
 

@@ -65,3 +65,56 @@ export function resolveSitePath(path: string | null | undefined, siteOrigin: str
   if (!isSafeSitePath(path, siteOrigin)) return `${origin}${fallback}`;
   return `${origin}${String(path)}`;
 }
+
+/**
+ * Turn whatever an operator typed into a storable site path.
+ *
+ * WHY THIS EXISTS. The admin used to accept only a bare path, and rejected
+ * anything else with "The button link must be a path on this site, like
+ * /products." That is correct about what gets STORED and unhelpful about what
+ * gets TYPED: the natural thing to do is copy the address out of the browser,
+ * which yields `https://www.vantalabsresearch.com/products` — the exact same
+ * destination, refused. So this accepts both spellings of a same-origin
+ * destination and normalises them to one stored form.
+ *
+ * IT DOES NOT WIDEN WHAT IS ALLOWED. An off-site URL still comes back null and
+ * is still refused by the caller. The security property is unchanged and is
+ * still decided by resolution against the site origin rather than by matching
+ * prefixes — `//evil.com`, `/\evil.com` and every other authority trick resolve
+ * to a different origin and fail here exactly as they always did.
+ *
+ * RETURNS:
+ *   ""      the operator cleared the field. A deliberate "no button", not an
+ *           error — the caller stores the blank and the email renders without
+ *           one.
+ *   string  a normalised site-relative path, always starting with "/".
+ *   null    off-site, malformed, or otherwise unusable. The caller refuses it.
+ */
+export function normalizeSitePathInput(value: string | null | undefined, siteOrigin: string): string | null {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  if (CONTROL_CHARACTERS.test(raw)) return null;
+
+  let base: URL;
+  try {
+    base = new URL(siteOrigin);
+  } catch {
+    return null;
+  }
+
+  // An absolute URL is accepted only when it lands on this origin, and it is
+  // stored as the path it resolves to — so the stored value stays in the one
+  // shape every reader of cta_path already expects.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) {
+    let parsed: URL;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      return null;
+    }
+    if (parsed.origin !== base.origin) return null;
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  }
+
+  return isSafeSitePath(raw, siteOrigin) ? raw : null;
+}

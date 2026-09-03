@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CampaignSummary, EmailDashboard } from "@/lib/admin-email";
 import type { AutomationRow } from "@/lib/email/automations";
+import type { AutomationStats } from "@/lib/email/automation-stats";
 import { checkCampaignDeliverability } from "@/lib/email/deliverability-check";
 
 type Segment = { value: string; label: string; needsParam?: boolean; hint: string };
@@ -42,6 +43,8 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
 export function AdminEmailClient({
   dashboard,
   automations,
+  automationStats,
+  offerChoices,
   segments,
   categories,
   postalAddressSet,
@@ -50,6 +53,8 @@ export function AdminEmailClient({
 }: {
   dashboard: EmailDashboard;
   automations: AutomationRow[];
+  automationStats: Record<string, AutomationStats>;
+  offerChoices: Array<{ key: string; label: string }>;
   segments: Segment[];
   categories: string[];
   // Deliberately three separate flags rather than one "ready" boolean: the
@@ -67,6 +72,8 @@ export function AdminEmailClient({
   const [testEmail, setTestEmail] = useState("");
   const [scheduleAt, setScheduleAt] = useState("");
   const [automationDrafts, setAutomationDrafts] = useState(automations);
+  const [automationPreview, setAutomationPreview] = useState<{ key: string; subject: string; html: string } | null>(null);
+  const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile">("desktop");
 
   const activeSegment = useMemo(
     () => segments.find((segment) => segment.value === form.segment) ?? segments[0],
@@ -303,14 +310,51 @@ export function AdminEmailClient({
         promoCode: row.promo_code,
         ctaLabel: row.cta_label,
         ctaPath: row.cta_path,
+        offerKey: row.offer_key ?? "",
       }),
     });
     const data = await response.json().catch(() => null);
+    // ADOPT WHAT WAS ACTUALLY STORED, rather than keeping the optimistic draft.
+    // The drafts are seeded from props once and never re-synced, so before this
+    // a value the server normalised (an absolute URL folded to a path) or
+    // rejected stayed on screen as the operator typed it until a page reload.
+    // Cleared CTA fields are the case that made it visible.
+    if (data?.success && data.automation) {
+      setAutomationDrafts((current) =>
+        current.map((entry) => (entry.key === row.key ? (data.automation as AutomationRow) : entry)),
+      );
+    }
     setMessage(
       data?.success
         ? { tone: "ok", text: `Saved "${row.key.replace(/_/g, " ")}".` }
         : { tone: "error", text: data?.error ?? "Unable to save this automation." },
     );
+    });
+  }
+
+  async function previewAutomation(row: AutomationRow) {
+    await run(async () => {
+      const response = await fetch("/api/admin/email/automations/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          key: row.key,
+          subject: row.subject,
+          headline: row.headline,
+          body: row.body,
+          promoCode: row.promo_code,
+          ctaLabel: row.cta_label,
+          ctaPath: row.cta_path,
+        }),
+      });
+      const data = await response.json().catch(() => null);
+      if (data?.success) {
+        setAutomationPreview({ key: row.key, subject: data.subject, html: data.html });
+        setMessage(null);
+      } else {
+        setAutomationPreview(null);
+        setMessage({ tone: "error", text: data?.error ?? "Unable to render this preview." });
+      }
     });
   }
 
@@ -362,6 +406,7 @@ export function AdminEmailClient({
               <span className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Campaign name</span>
               <input
                 className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                data-testid="field-campaign-name"
                 value={form.name}
                 onChange={(event) => setForm({ ...form, name: event.target.value })}
                 placeholder="Buy 2 Get 1 Promo"
@@ -373,6 +418,7 @@ export function AdminEmailClient({
               <span className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Subject line</span>
               <input
                 className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                data-testid="field-subject"
                 value={form.subject}
                 onChange={(event) => setForm({ ...form, subject: event.target.value })}
                 placeholder="Limited time: Buy 2, Get 1 Free"
@@ -393,6 +439,7 @@ export function AdminEmailClient({
               <span className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Headline</span>
               <input
                 className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                data-testid="field-headline"
                 value={form.headline}
                 onChange={(event) => setForm({ ...form, headline: event.target.value })}
                 placeholder="Limited-Time Buy 2, Get 1"
@@ -404,6 +451,7 @@ export function AdminEmailClient({
               <textarea
                 rows={7}
                 className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                data-testid="field-body"
                 value={form.body}
                 onChange={(event) => setForm({ ...form, body: event.target.value })}
                 placeholder={"Plain text. Leave a blank line between paragraphs.\n\nNo HTML — the branded layout is applied automatically."}
@@ -429,6 +477,7 @@ export function AdminEmailClient({
               <label className="block">
                 <span className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Button text</span>
                 <input
+                  data-testid="field-cta-label"
                   className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
                   value={form.ctaLabel}
                   onChange={(event) => setForm({ ...form, ctaLabel: event.target.value })}
@@ -438,6 +487,7 @@ export function AdminEmailClient({
                 <span className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Button link</span>
                 <input
                   className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                  data-testid="field-cta-path"
                   value={form.ctaPath}
                   onChange={(event) => setForm({ ...form, ctaPath: event.target.value })}
                   placeholder="/products"
@@ -703,6 +753,35 @@ export function AdminEmailClient({
                   </label>
                 </div>
 
+                {/* WHAT THIS AUTOMATION HAS ACTUALLY DONE.
+                    Until automation-links.ts these numbers did not exist: all
+                    four sequences were mailing customers and no click,
+                    conversion or dollar was recorded for any of them. Unique
+                    clicks sits next to sends deliberately — total clicks over
+                    sends is not a rate. */}
+                <dl
+                  data-testid={`automation-${row.key}-stats`}
+                  className="mt-3 grid grid-cols-3 gap-2 rounded-lg border border-white/5 bg-black/20 p-2 text-center sm:grid-cols-6"
+                >
+                  {([
+                    ["Sent", String(automationStats[row.key]?.sends ?? 0)],
+                    ["Delivered", String(automationStats[row.key]?.delivered ?? 0)],
+                    ["Opened", String(automationStats[row.key]?.opened ?? 0)],
+                    ["Clicks", String(automationStats[row.key]?.clicks ?? 0)],
+                    ["Unique", String(automationStats[row.key]?.uniqueClicks ?? 0)],
+                    ["Revenue", `${(automationStats[row.key]?.revenue ?? 0).toFixed(2)}`],
+                  ] as const).map(([label, value]) => (
+                    <div key={label}>
+                      <dt className="text-[10px] uppercase tracking-[0.14em] text-zinc-500">{label}</dt>
+                      <dd className="text-sm font-semibold text-white">{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+                <p className="mt-1 text-[11px] text-zinc-600">
+                  {automationStats[row.key]?.orders ?? 0} attributed order{(automationStats[row.key]?.orders ?? 0) === 1 ? "" : "s"}
+                  {(automationStats[row.key]?.failed ?? 0) > 0 ? ` · ${automationStats[row.key]?.failed} failed send(s), retried next sweep` : ""}
+                </p>
+
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <label className="block">
                     <span className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">Send after (days)</span>
@@ -759,14 +838,141 @@ export function AdminEmailClient({
                   />
                 </label>
 
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => saveAutomation(automationDrafts[index])}
-                  className="mt-3 rounded-full border border-white/15 px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
-                >
-                  Save
-                </button>
+                {/* THE BUTTON IS THE OPERATOR'S, NOT THE CODE'S.
+                    These two fields already existed in the database, in the
+                    PATCH payload this component sends, and in the send path —
+                    but nothing rendered an input for them, so the only way to
+                    change a win-back's button from "SHOP NOW" was to edit SQL.
+                    Clearing BOTH is a supported answer and removes the button. */}
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">CTA button text</span>
+                    <input
+                      data-testid={`automation-${row.key}-cta-label`}
+                      maxLength={40}
+                      placeholder="Leave blank for no button"
+                      className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                      value={row.cta_label}
+                      onChange={(event) => {
+                        const next = [...automationDrafts];
+                        next[index] = { ...row, cta_label: event.target.value };
+                        setAutomationDrafts(next);
+                      }}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">CTA destination</span>
+                    <input
+                      data-testid={`automation-${row.key}-cta-path`}
+                      maxLength={300}
+                      placeholder="/products"
+                      className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                      value={row.cta_path}
+                      onChange={(event) => {
+                        const next = [...automationDrafts];
+                        next[index] = { ...row, cta_path: event.target.value };
+                        setAutomationDrafts(next);
+                      }}
+                    />
+                  </label>
+                </div>
+                <p className="mt-1 text-[11px] text-zinc-500">
+                  A path like <code>/products</code>, or the full address from your browser. Must stay on this site.
+                  Clear both boxes to send this automation with no button.
+                </p>
+
+                {/* THE GIFT. Attaching one mints a unique, single-use token per
+                    recipient — tied to their address, expiring on its own
+                    clock, and consumed permanently by their first paid order.
+                    This spends real stock, so it is deliberately off unless
+                    somebody chooses it. */}
+                <label className="mt-3 block">
+                  <span className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">One-time gift</span>
+                  <select
+                    data-testid={`automation-${row.key}-offer`}
+                    className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                    value={row.offer_key ?? ""}
+                    onChange={(event) => {
+                      const next = [...automationDrafts];
+                      next[index] = { ...row, offer_key: event.target.value || null };
+                      setAutomationDrafts(next);
+                    }}
+                  >
+                    <option value="">No gift</option>
+                    {offerChoices.map((choice) => (
+                      <option key={choice.key} value={choice.key}>{choice.label}</option>
+                    ))}
+                  </select>
+                  <span className="mt-1 block text-[11px] text-zinc-500">
+                    Each recipient gets their own single-use offer, tied to their email address and
+                    consumed permanently by their first paid order. It applies only once the order
+                    reaches the gift&apos;s minimum.
+                  </span>
+                </label>
+
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    data-testid={`automation-${row.key}-save`}
+                    onClick={() => saveAutomation(automationDrafts[index])}
+                    className="rounded-full border border-white/15 px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    data-testid={`automation-${row.key}-preview`}
+                    onClick={() => previewAutomation(automationDrafts[index])}
+                    className="rounded-full border border-white/15 px-4 py-1.5 text-xs font-semibold text-zinc-300 disabled:opacity-40"
+                  >
+                    Preview
+                  </button>
+                </div>
+
+                {automationPreview?.key === row.key ? (
+                  <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-3" data-testid={`automation-${row.key}-preview-panel`}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-[11px] text-zinc-500">Subject: {automationPreview.subject}</p>
+                      <div className="flex gap-2">
+                        {(["desktop", "mobile"] as const).map((device) => (
+                          <button
+                            key={device}
+                            type="button"
+                            data-testid={`automation-preview-${device}`}
+                            onClick={() => setPreviewDevice(device)}
+                            className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] ${
+                              previewDevice === device ? "bg-zinc-100 text-zinc-950" : "border border-zinc-800 text-zinc-400"
+                            }`}
+                          >
+                            {device}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          data-testid="automation-preview-close"
+                          onClick={() => setAutomationPreview(null)}
+                          className="rounded-lg border border-zinc-800 px-3 py-1.5 text-[11px] font-semibold text-zinc-400"
+                        >
+                          Close
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex justify-center">
+                      <iframe
+                        title="Automation preview"
+                        data-testid="automation-preview-frame"
+                        srcDoc={automationPreview.html}
+                        // Sandboxed with NO allow-scripts: this renders
+                        // operator-typed content and must never execute anything.
+                        sandbox=""
+                        className="h-[560px] rounded-lg border border-white/10 bg-black"
+                        style={{ width: previewDevice === "mobile" ? 390 : "100%", maxWidth: "100%" }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ))}
           </div>

@@ -114,6 +114,49 @@ export function CartDrawer() {
   const freeShipThreshold = shippingConfig.freeShippingThreshold;
   const shippingProgress = getShippingProgress(subtotal, freeShipThreshold);
 
+  // THE FREE GIFT WAITING FOR THIS BROWSER, if any.
+  //
+  // Asked of the server rather than derived here, because the token that proves
+  // it lives in an httpOnly cookie the page cannot read — which is the whole
+  // reason it is safe. The response carries no secret: the product, the
+  // minimum and the expiry, which is what the customer's own email already
+  // told them.
+  //
+  // Showing it MATTERS. A gift the shopper only discovers on the confirmation
+  // screen cannot change what they put in the basket, and changing that is the
+  // entire point of attaching one to a win-back.
+  const [pendingOffer, setPendingOffer] = useState<{ rewardKind: string; rewardName: string; minSubtotalCents: number } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/offer/status", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.offer) setPendingOffer(data.offer);
+      })
+      // A gift banner is never worth a console error or a broken drawer.
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const offerShortfall = pendingOffer
+    ? Math.max(0, pendingOffer.minSubtotalCents / 100 - subtotal)
+    : 0;
+
+  // A GIFT THAT ALREADY WAIVES SHIPPING MAKES THE PROGRESS BAR A LIE.
+  //
+  // Caught in a 390px screenshot: the drawer said "You are $131.00 away from
+  // FREE SHIPPING" directly above a banner saying free shipping was already
+  // applied. Both were individually true — the bar measures the STORE threshold
+  // and knows nothing about offers — and together they are the kind of
+  // contradiction a customer reads as a broken cart.
+  //
+  // Suppressed only once the gift actually applies, i.e. its own minimum is
+  // met; below that the shopper genuinely still has the store threshold to
+  // chase and the bar is the honest thing to show.
+  const offerCoversShipping = Boolean(pendingOffer)
+    && pendingOffer!.rewardKind !== "free_product"
+    && offerShortfall <= 0;
+
   // Smart membership upsell: only for non-members, and only when joining
   // would genuinely put money in their pocket TODAY (cart savings + credit
   // exceed the first month's cost). Dollars, computed live from this cart.
@@ -267,7 +310,7 @@ export function CartDrawer() {
           ) : hasItems ? (
             <div className="space-y-5">
               {/* Free shipping progress card */}
-              {subtotal > 0 ? (
+              {subtotal > 0 && !offerCoversShipping ? (
                 <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
                   {shippingProgress.isEligibleForFreeShipping ? (
                     <div className="flex items-center gap-3">
@@ -401,6 +444,50 @@ export function CartDrawer() {
                   <p className="mt-1.5 text-xs text-zinc-400">
                     {activePromotionMessage ?? "Your lowest-priced eligible items are discounted."} Referral discounts pause while this promotion applies.
                   </p>
+                </div>
+              ) : null}
+
+              {/* The one-time win-back gift. Two states, because "you have a
+                  free thing" and "you have a free thing you have not unlocked"
+                  are different messages and only one of them is an ask. */}
+              {pendingOffer ? (
+                <div
+                  data-testid="offer-banner"
+                  className={`rounded-2xl border p-4 ${
+                    offerShortfall > 0
+                      ? "border-white/[0.06] bg-white/[0.02]"
+                      : "border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.06]"
+                  }`}
+                >
+                  {offerShortfall > 0 ? (
+                    <p className="text-sm text-zinc-300">
+                      Add{" "}
+                      <span className="font-semibold text-[color:var(--accent-gold)]">
+                        ${offerShortfall.toFixed(2)}
+                      </span>{" "}
+                      more to claim your{" "}
+                      {/* Only a PRODUCT gift needs the word "free" put in front
+                          of it. Every other reward's label already reads as a
+                          complete phrase, and prefixing it gives the nonsense
+                          "your free Free shipping + 15% off". */}
+                      {pendingOffer.rewardKind === "free_product"
+                        ? `free ${pendingOffer.rewardName}`
+                        : pendingOffer.rewardName.toLowerCase()}.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-sm font-semibold text-[color:var(--accent-gold)]">
+                        {pendingOffer.rewardKind === "free_product"
+                          ? `Free ${pendingOffer.rewardName}`
+                          : pendingOffer.rewardName}{" "}
+                        — applied at checkout
+                      </p>
+                      <p className="mt-1.5 text-xs text-zinc-400">
+                        Your one-time gift is applied automatically. It is tied to the email address
+                        this offer was sent to, so use that address at checkout.
+                      </p>
+                    </>
+                  )}
                 </div>
               ) : null}
 

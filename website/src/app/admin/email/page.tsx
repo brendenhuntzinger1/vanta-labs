@@ -3,6 +3,8 @@ import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { canManageEmailCampaigns } from "@/lib/admin-roles";
 import { getEmailDashboard } from "@/lib/admin-email";
 import { loadAutomations } from "@/lib/email/automations";
+import { loadAutomationStats } from "@/lib/email/automation-stats";
+import { OFFER_CATALOG } from "@/lib/offers/customer-offers";
 import { getEmailAdminSettings } from "@/lib/email/settings";
 import { CAMPAIGN_SEGMENTS } from "@/lib/email/audience";
 import { AdminEmailClient } from "@/components/admin-email-client";
@@ -30,14 +32,19 @@ export default async function AdminEmailPage() {
 
   // Every load is independently fault-tolerant: a campaign system that can't
   // render because one query failed is worse than one showing partial data.
-  const [dashboard, automations, emailSettings, categories] = canManage
+  const [dashboard, automations, automationStats, emailSettings, categories] = canManage
     ? await Promise.all([
         getEmailDashboard().catch(() => ({ subscribers: 0, campaigns: [], totals: { sent: 0, opened: 0, clicked: 0, orders: 0, revenue: 0 } })),
         loadAutomations().catch(() => []),
+        // loadAutomationStats never rejects — an operator locked out of editing
+        // their copy because a reporting query failed is a worse outcome than
+        // one looking at zeroes — but the catch stays for symmetry with the
+        // rest of this list.
+        loadAutomationStats().catch(() => ({})),
         getEmailAdminSettings().catch(() => null),
         loadCategories(),
       ])
-    : [{ subscribers: 0, campaigns: [], totals: { sent: 0, opened: 0, clicked: 0, orders: 0, revenue: 0 } }, [], null, []];
+    : [{ subscribers: 0, campaigns: [], totals: { sent: 0, opened: 0, clicked: 0, orders: 0, revenue: 0 } }, [], {}, null, []];
 
   return (
     <div className="vl-page-shell min-h-screen bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.1),transparent_52%),linear-gradient(145deg,#04060f_0%,#0b1324_50%,#060911_100%)] px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
@@ -56,6 +63,8 @@ export default async function AdminEmailPage() {
           <AdminEmailClient
             dashboard={dashboard}
             automations={automations}
+            automationStats={automationStats}
+            offerChoices={Object.entries(OFFER_CATALOG).map(([key, value]) => ({ key, label: value.label }))}
             segments={CAMPAIGN_SEGMENTS}
             categories={categories}
             postalAddressSet={Boolean(emailSettings?.marketingPostalAddress)}

@@ -379,7 +379,8 @@
     "is_private",
     "member_scope",
     "storefront_headline",
-    "storefront_priority"
+    "storefront_priority",
+    "free_shipping"
   ],
   "customer_addresses": [
     "id",
@@ -417,6 +418,24 @@
     "renewal_reminder_sent_at",
     "veyra_membership_id"
   ],
+  "customer_offers": [
+    "id",
+    "offer_key",
+    "token_hash",
+    "email",
+    "product_slug",
+    "variant_id",
+    "min_subtotal_cents",
+    "issued_at",
+    "expires_at",
+    "reserved_order_id",
+    "reserved_at",
+    "redeemed_order_id",
+    "redeemed_at",
+    "revoked_at",
+    "reward_kind",
+    "percent_off"
+  ],
   "customer_preferences": [
     "user_id",
     "order_update_emails",
@@ -428,6 +447,15 @@
     "referred_by_code",
     "phone"
   ],
+  "email_automation_clicks": [
+    "id",
+    "automation_key",
+    "reference_id",
+    "email",
+    "clicked_at",
+    "user_agent",
+    "ip_hash"
+  ],
   "email_automations": [
     "key",
     "enabled",
@@ -438,7 +466,8 @@
     "promo_code",
     "cta_label",
     "cta_path",
-    "updated_at"
+    "updated_at",
+    "offer_key"
   ],
   "email_campaign_clicks": [
     "id",
@@ -508,7 +537,8 @@
     "sent_at",
     "opened_at",
     "clicked_at",
-    "status"
+    "status",
+    "provider_message_id"
   ],
   "email_suppressions": [
     "email",
@@ -893,7 +923,9 @@
     "attributed_at",
     "shipping_protection_fee",
     "inventory_restocked_at",
-    "inventory_committed_at"
+    "inventory_committed_at",
+    "attributed_automation_key",
+    "attributed_automation_at"
   ],
   "partner_clicks": [
     "id",

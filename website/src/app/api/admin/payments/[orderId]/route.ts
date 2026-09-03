@@ -136,6 +136,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
               tax: roundMoney(Number(order.tax_amount ?? 0)),
               cardProcessingFee: roundMoney(Number(order.card_processing_fee ?? 0)),
               total: roundMoney(Number(order.amount_paid ?? 0)),
+              orderUrl: `${getSiteUrl()}/order-confirmation/${orderId}`,
             })
           : manualPaymentReceivedTemplate({
               customerName: String(order.customer_name ?? ""),
