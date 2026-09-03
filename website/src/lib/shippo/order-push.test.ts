@@ -207,6 +207,44 @@ describe("a paid physical order is pushed", () => {
     expect(flattened).toContain("33333");
   });
 
+  // -------------------------------------------------------------------------
+  // A CARRIER CANNOT EMAIL AN ADDRESS IT WAS NEVER GIVEN.
+  //
+  // The shopper's email used to travel with this push, and a customer received
+  // a UPS "Your package is on the way!" headed "From BRENDEN HUNTZINGER" — the
+  // owner's own name, from a carrier, about an order placed with Vanta Labs.
+  //
+  // This store speaks to its own customers: notifyCustomer() in service.ts
+  // sends one shipping email and one delivery email per order, branded, on the
+  // store's domain, with a tracking link resolved through the carrier
+  // allow-list. A carrier email beside them is a second voice saying whatever
+  // the label happens to say, and nothing in this codebase can edit a word of
+  // it.
+  //
+  // The row still HAS the address — every store email depends on it — so this
+  // is not about withholding data from ourselves. It is about which parties
+  // are given a channel to the customer, and the fixture below deliberately
+  // carries a customer_email so that removing it from the push is what the
+  // test proves, rather than the fixture being empty.
+  // -------------------------------------------------------------------------
+  it("never hands the shopper's email address to the carrier", async () => {
+    await sync();
+    const payload = createShippoOrder.mock.calls[0][0] as unknown as Record<string, unknown>;
+
+    // Not on the destination address, and not anywhere else in the payload:
+    // a nested copy would reach the carrier just as surely as a top-level one.
+    expect(JSON.stringify(payload)).not.toContain("buyer@example.test");
+
+    const to = payload.to_address as Record<string, unknown>;
+    expect(to.email, "the Shippo order's to_address must carry no email").toBeUndefined();
+
+    // The rest of the destination is untouched — this removes a channel, not
+    // the ability to deliver a parcel.
+    expect(to.name).toBe("A Buyer");
+    expect(to.street1).toBe("1 Test Street");
+    expect(to.zip).toBe("33333");
+  });
+
   it("sends the parcel weight, so the owner does not retype the box", async () => {
     await sync();
     const payload = createShippoOrder.mock.calls[0][0] as unknown as { weight: string; line_items: unknown[] };
