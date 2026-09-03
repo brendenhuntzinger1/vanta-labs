@@ -115,6 +115,8 @@ export type Product = {
    */
   requiresReconstitution?: boolean;
   faq?: ProductFaqItem[];
+  /** Row timestamp from the database. Used for sitemap <lastmod>, never shown. */
+  updatedAt?: string;
   seoTitle?: string;
   seoDescription?: string;
 };

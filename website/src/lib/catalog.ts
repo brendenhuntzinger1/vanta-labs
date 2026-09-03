@@ -22,7 +22,7 @@ const CATALOG_CACHE_TTL = 60; // seconds
 // Single source of truth for the product columns every public read selects, so
 // adding a field is a one-line change instead of editing four query strings.
 const PRODUCT_SELECT_COLUMNS =
-  "id, slug, name, category, short_description, long_description, description, price_cents, compare_at_price_cents, sale_price_cents, stock_status, inventory_quantity, is_published, is_enabled, is_archived, is_featured, badge, position, batch_number, purity_result, image_url, testing_date, lab_name, coa_url, molecular_formula, molecular_weight, cas_number, peptide_sequence, storage_recommendation, reconstitution_note, requires_reconstitution, product_faq, seo_title, seo_description";
+  "id, slug, name, category, short_description, long_description, description, price_cents, compare_at_price_cents, sale_price_cents, stock_status, inventory_quantity, is_published, is_enabled, is_archived, is_featured, badge, position, batch_number, purity_result, image_url, testing_date, lab_name, coa_url, molecular_formula, molecular_weight, cas_number, peptide_sequence, storage_recommendation, reconstitution_note, requires_reconstitution, product_faq, seo_title, seo_description, updated_at";
 
 // A stored "Out of Stock" is only honored once inventory tracking is switched
 // on in admin settings. Until then every product is treated as In Stock, so the
@@ -324,6 +324,9 @@ function mapProductRow(
     faq: parseProductFaq(row.product_faq),
     seoTitle: row.seo_title ? String(row.seo_title) : undefined,
     seoDescription: row.seo_description ? String(row.seo_description) : undefined,
+    // Surfaced for sitemap.xml's <lastmod>, which is the one hint Google acts
+    // on when deciding what to re-crawl. Nothing renders it.
+    updatedAt: row.updated_at ? String(row.updated_at) : undefined,
   };
 }
 

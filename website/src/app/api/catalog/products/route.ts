@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCatalogProducts } from "@/lib/catalog";
-import { getBestSellerSlugs } from "@/lib/best-sellers";
+import { getStorefrontCatalog } from "@/lib/storefront-catalog";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { customerSafeMessage } from "@/lib/safe-error";
 
@@ -8,16 +7,11 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const [products, bestSellerSlugs] = await Promise.all([
-      getCatalogProducts(),
-      getBestSellerSlugs().catch(() => new Set<string>()),
-    ]);
-    // Mark best sellers automatically from real sales. A manual "best_seller"
-    // badge still counts, so an admin can always feature something by hand.
-    const enriched = products.map((product) => ({
-      ...product,
-      isBestSeller: bestSellerSlugs.has(product.slug) || product.badge === "best_seller",
-    }));
+    // Shared with the /products page, which now paints this same list on the
+    // server. Two copies of the best-seller rule would drift, and a drift is
+    // visible: the default sort is best-sellers-first, so the grid would
+    // re-order itself under the reader when the client took over.
+    const enriched = await getStorefrontCatalog();
     return NextResponse.json({ success: true, products: enriched });
   } catch (error) {
     // THE CATALOGUE FAILING IS THE LOUDEST THING THIS SITE CAN DO AND IT USED
