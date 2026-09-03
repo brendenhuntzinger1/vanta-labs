@@ -178,13 +178,28 @@ export function AdminPartnersClient({
     return statusMatch && payoutMatch && searchMatch;
   }), [rows, search, status, payoutStatus]);
 
+  // THE WHOLE ROSTER, NEVER THE FILTERED VIEW.
+  //
+  // This forwarded status/payoutStatus/search to the API, which narrowed
+  // `rows` -- and `rows` is what every program-wide figure above is computed
+  // from. So the filters did not merely narrow the table, they redefined what
+  // "program-wide" meant: selecting Approved in the status dropdown made
+  // pendingCount 0, which hid the amber badge on the Applications tab and put
+  // 0 in the Pending Applications card. The page then said every ambassador
+  // was approved while an application sat unreviewed -- ROBINL applied
+  // 2026-09-03 and was invisible on exactly this path. Picking a payout bucket
+  // did the same to Commission Owed, Ambassador Sales and Commission Paid,
+  // which are the numbers payouts get decided on.
+  //
+  // Only the first paint was ever right: the server render asks for
+  // { status: "all" }, so the rollups were correct until the first refetch
+  // silently rewrote them.
+  //
+  // The server filter was redundant anyway -- filteredRows below already
+  // applies all three over the same fields the API matches on -- so this asks
+  // for the full roster and lets the client narrow the table.
   const refreshRows = async () => {
-    const params = new URLSearchParams();
-    if (status !== "all") params.set("status", status);
-    if (payoutStatus !== "all") params.set("payoutStatus", payoutStatus);
-    if (search.trim()) params.set("search", search.trim());
-
-    const response = await fetch(`/api/admin/partners?${params.toString()}`);
+    const response = await fetch("/api/admin/partners?status=all");
     const json = await response.json();
     if (!response.ok || !json.success) {
       throw new Error(json.error ?? "Unable to refresh partners");
