@@ -511,7 +511,15 @@ export function ProductDetailClient({
                         ["Molecular Weight", product.molecularWeight],
                         ["CAS Number", product.casNumber],
                         ["Storage", product.storageRecommendation],
-                        ["Reconstitution", product.reconstitutionNote],
+                        // No Reconstitution row. It rendered
+                        // product.reconstitutionNote directly into the public
+                        // spec table, so whatever an operator typed in Admin
+                        // shipped as preparation-for-use guidance with nothing
+                        // in between. Reconstitution is the step that only
+                        // matters if someone intends to use the material, which
+                        // is the one thing a research-use-only storefront must
+                        // never appear to instruct. The column and the admin
+                        // field are untouched — this is a rendering decision.
                         ["Testing Lab", product.labName],
                         ["Testing Date", product.testingDate],
                         ["Category", product.category],
@@ -569,8 +577,8 @@ export function ProductDetailClient({
                     {selectedCoaUrl ? (
                       <p className="text-sm leading-relaxed text-[#a3a3a3]">
                         This lot is linked to a third-party Certificate of Analysis covering purity, testing
-                        methodology, batch traceability, and lab information. Download the report for your
-                        selected dose below.
+                        methodology, batch traceability, and lab information. Download the report for the
+                        selected vial size below.
                       </p>
                     ) : null}
                     <div className="mt-5 grid gap-3 sm:grid-cols-2">

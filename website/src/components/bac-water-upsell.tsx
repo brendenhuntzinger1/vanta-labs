@@ -402,7 +402,7 @@ export function BacWaterAddedPopup() {
           ) : null}
           <div className="min-w-0">
             <p id="bac-water-nudge-title" className="vl2-serif text-[1.35rem] leading-tight text-white">
-              Need bacteriostatic water?
+              Need BAC Water?
             </p>
             {/* A statement about laboratory practice, not a purchase statistic.
                 There is no order-history query behind this component, so it
@@ -412,10 +412,16 @@ export function BacWaterAddedPopup() {
         </div>
 
         {/* Deliberately optional. The offer now appears for products of any
-            form, so it must never assert that THIS product needs it. */}
+            form, so it must never assert that THIS product needs it — and it
+            says nothing about what the item is FOR. The previous wording did
+            two things at once: it named the preparation step this material is
+            used for, and it addressed the reader in the second person as the
+            one performing it. Either alone undercuts research-use-only on the
+            page where the buying decision is made. (The banned strings are
+            asserted against in research-use-copy.test.ts rather than quoted
+            here — quoting them puts the phrasing back into the file.) */}
         <p className="mt-3.5 text-[0.8125rem] leading-6 text-white/55">
-          Bacteriostatic water is available separately for laboratory reconstitution. Add it if your
-          protocol calls for it.
+          BAC Water is stocked as a separate catalogue item. It is not required with this product.
         </p>
 
         <div className="mt-4 space-y-2">

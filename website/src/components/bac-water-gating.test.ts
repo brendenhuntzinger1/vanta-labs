@@ -73,8 +73,16 @@ describe("the copy stays optional and research-use only", () => {
   it("never claims the product requires reconstitution", () => {
     expect(UPSELL).not.toMatch(/supplied in lyophilized form/i);
     expect(UPSELL).not.toMatch(/you need bacteriostatic water/i);
-    expect(UPSELL).toContain("Need bacteriostatic water?");
-    expect(UPSELL).toContain("Add it if your");
+    expect(UPSELL).toContain("Need BAC Water?");
+    // Optionality is the thing under test, not a particular sentence. This
+    // asserted "Add it if your" — which carried the intent but also carried
+    // "your protocol", addressing the reader as the person with a protocol on
+    // a research-use-only page. The replacement states optionality outright
+    // and drops the second-person framing; see research-use-copy.test.ts.
+    // Whitespace-tolerant: the sentence is line-wrapped in the JSX, so a
+    // literal toContain() fails on formatting rather than on meaning.
+    expect(UPSELL).toMatch(/not\s+required\s+with\s+this\s+product/i);
+    expect(UPSELL).not.toMatch(/\byour\s+(?:\w+\s+){0,2}protocol\b/i);
   });
 
   it("contains no human-use language", () => {
