@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
@@ -265,20 +265,104 @@ describe("the gate survives an in-app browser", () => {
   const gate = read("src/components/age-gate.tsx");
   const css = read("src/app/globals.css");
 
-  it("HIDES the storefront rather than merely covering it", () => {
-    // A fixed overlay is enough on a desktop. It is not enough where the
-    // toolbar resizes the visual viewport underneath you.
-    // The diagnostics panel is exempt: it exists to be readable precisely when
-    // the entry flow is misbehaving, so hiding it would defeat it.
+  // THIS USED TO ASSERT `visibility: hidden`, AND THE ASSERTION WAS RIGHT UNTIL
+  // IT WAS EXPENSIVE. Hiding the storefront hid it from Google's renderer too:
+  // every URL on the site rendered as the same 115 words of this gate, and
+  // thirteen of them came back from Search Console as "Crawled - currently not
+  // indexed". The storefront is now covered rather than hidden, and these are
+  // the properties that have to hold for covering to be enough.
+  it("covers the storefront with something opaque that cannot be painted over", () => {
+    // Opaque, full-screen, fixed, and the highest z-index in the codebase.
+    expect(gate).toMatch(/data-age-gate="true"[\s\S]{0,200}?className="fixed inset-0 z-\[100\][^"]*bg-\[#0a0908\]/);
+    const others = [...css.matchAll(/z-index:\s*(\d+)/g)].map((m) => Number(m[1]));
+    expect(Math.max(0, ...others)).toBeLessThan(100);
+  });
+
+  it("cannot be caught shorter than the screen by a toolbar", () => {
+    // `dvh` follows the viewport; `lvh` is the viewport at its maximum, which
+    // is what a toolbar retracting exposes.
+    expect(css).toMatch(/\[data-age-gate\]\s*\{[\s\S]*?min-height:\s*100dvh/);
+    expect(css).toMatch(/\[data-age-gate\]\s*\{[\s\S]*?min-height:\s*100lvh/);
+  });
+
+  it("paints an opaque field from the ROOT, before the store can stream in", () => {
+    // The replacement for `visibility: hidden`, and it has to be on <html>
+    // rather than on the gate: the gate is rendered after {children}, so on a
+    // slow connection the store is parsed and painted before the overlay
+    // exists. A rule on the root element is in force from the first paint.
+    const at = css.indexOf('html[data-age-verified="false"]::before');
+    expect(at, "root backdrop rule must exist").toBeGreaterThan(-1);
+    const rule = css.slice(at, css.indexOf("}", at));
+    expect(rule).toMatch(/position:\s*fixed/);
+    // Twice the screen in both dimensions: the visual viewport can be OFFSET
+    // from the layout one, not merely taller.
+    expect(rule).toMatch(/inset:\s*-50%/);
+    expect(rule).toMatch(/background:\s*#0a0908/);
+    // Under the gate (100), over everything else the codebase uses.
+    expect(rule).toMatch(/z-index:\s*99/);
+  });
+
+  it("leaves the backdrop below the gate and above the whole store", () => {
+    // 99 only works while nothing else climbs past it, so the whole tree is
+    // checked rather than the two files this suite happens to have open.
+    const zs: number[] = [];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(join(process.cwd(), dir), { withFileTypes: true })) {
+        if (e.isDirectory()) walk(`${dir}/${e.name}`);
+        else if (/\.(tsx?|css)$/.test(e.name) && !e.name.endsWith(".test.ts")) {
+          const src = read(`${dir}/${e.name}`);
+          for (const m of src.matchAll(/z-index:\s*(\d+)|\bz-\[(\d+)\]/g)) {
+            zs.push(Number(m[1] ?? m[2]));
+          }
+        }
+      }
+    };
+    walk("src");
+    const others = zs.filter((z) => z !== 99 && z !== 100);
+    expect(Math.max(0, ...others)).toBeLessThan(99);
+    expect(zs).toContain(99);
+    expect(zs).toContain(100);
+  });
+
+  it("takes the storefront out of the tab order, not just out of reach", () => {
+    // `visibility: hidden` removed the store from the tab order for free.
+    // Covering does not: measured in Chromium at every viewport, 60 presses of
+    // Tab walked past the gate into the /vault shortcut in the footer, and End
+    // then scrolled the store behind the overlay. `inert` is the primitive
+    // that restores exactly that half of the old rule, and it is rendered by
+    // the server so it holds before hydration and without JavaScript at all.
+    expect(gate).toMatch(/<div data-storefront="" style=\{\{ display: "contents" \}\} inert=\{!isVerified\}>/);
+    // The wrapper must generate no box: <body> is `flex flex-col` and these
+    // are its flex items.
+    expect(read("src/app/layout.tsx")).toContain('className="min-h-full flex flex-col"');
+  });
+
+  it("makes the storefront inert to taps", () => {
     expect(css).toMatch(
-      /html\[data-age-verified="false"\] body > \*:not\(\[data-age-gate\]\):not\(script\):not\(\[data-entry-diagnostics\]\)\s*\{\s*visibility:\s*hidden/,
+      /html\[data-age-verified="false"\] body > \*:not\(\[data-age-gate\]\):not\(script\):not\(\[data-entry-diagnostics\]\)\s*\{[^}]*pointer-events:\s*none/,
     );
   });
 
-  it("keeps the page in the document so crawlers still see it", () => {
-    // visibility, not display — the server-rendered HTML must stay real.
-    const rule = css.slice(css.indexOf('body > *:not([data-age-gate])'));
-    expect(rule.slice(0, 120)).not.toMatch(/display:\s*none/);
+  it("keeps the storefront in the RENDERED page, not just the HTML", () => {
+    // The whole point of the change. Google renders before it indexes, so
+    // anything that removes the storefront from the render tree — display,
+    // visibility, opacity, content-visibility — puts every URL back to looking
+    // like the same age-gate page.
+    const start = css.indexOf('html[data-age-verified="false"] body > *:not([data-age-gate])');
+    expect(start).toBeGreaterThan(-1);
+    const rule = css.slice(start, css.indexOf("}", start));
+    expect(rule).not.toMatch(/display:\s*none/);
+    expect(rule).not.toMatch(/visibility:\s*hidden/);
+    expect(rule).not.toMatch(/opacity:\s*0/);
+    expect(rule).not.toMatch(/content-visibility:/);
+  });
+
+  it("still removes the video, which no overlay ever contained", () => {
+    // A playing video is its own compositing layer and on iOS it paints
+    // through an ancestor's visibility. That was never fixed by covering OR by
+    // hiding, so it keeps its own rule — and that rule must not depend on the
+    // one that just went away.
+    expect(css).toMatch(/html\[data-age-verified="false"\] video\s*\{\s*display:\s*none\s*!important/);
   });
 
   it("puts no link inside a tappable attestation row", () => {

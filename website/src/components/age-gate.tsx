@@ -436,7 +436,32 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
   // until they confirm; body scroll is locked so they can't interact behind it.
   return (
     <AccessContext.Provider value={isVerified}>
-      {children}
+      {/* INERT, NOT INVISIBLE.
+          The storefront used to be `visibility: hidden` while the gate was up,
+          which made it unreachable by every route at once — including the
+          keyboard, because a hidden element is not in the tab order. That rule
+          is gone (it also hid the page from Google's renderer, so every URL on
+          the site indexed as the same "Are you 21?" panel), and covering the
+          store with an opaque overlay does not replace the half of it that was
+          about focus: 60 presses of Tab walked straight past the gate and into
+          the staff shortcut in the footer, then End scrolled the store behind
+          the overlay.
+
+          `inert` is the exact primitive for that: the subtree cannot be
+          focused, clicked or reached by assistive technology, and it is still
+          laid out, painted and readable to a renderer. It is rendered by the
+          server, so it holds from the first byte rather than from hydration,
+          and it costs nothing when JavaScript never runs.
+
+          `display: contents` because <body> is `flex flex-col` and these are
+          its flex items. A wrapper that generated a box would collect all of
+          them into one item and re-lay-out the entire site; a wrapper that
+          generates none leaves the layout byte-identical. Inline rather than a
+          class so it cannot be lost if the stylesheet is slow — the wrapper is
+          in the HTML from the first parse, and so is its display. */}
+      <div data-storefront="" style={{ display: "contents" }} inert={!isVerified}>
+        {children}
+      </div>
       {!isVerified ? (
       <div
         data-age-gate="true"
