@@ -65,6 +65,18 @@ create unique index if not exists email_delivery_events_once
 create index if not exists email_delivery_events_received_at
   on public.email_delivery_events (received_at desc);
 
+-- The soft-bounce escalation reads one address's recent history on every
+-- transient bounce, inside the provider's webhook request: filter by
+-- recipient_email, order by received_at desc, take the newest few. The index
+-- above orders the WHOLE table and cannot serve that filter, so the read
+-- degrades as the log grows — on a table that only ever grows, inside a request
+-- the provider will retry if it times out.
+--
+-- Composite, in the query's own order, so the filter and the sort are one
+-- index scan. Cheap now (the log is small); the point is that it stays cheap.
+create index if not exists email_delivery_events_recipient_recent
+  on public.email_delivery_events (recipient_email, received_at desc);
+
 alter table public.email_delivery_events enable row level security;
 
 -- No policies: service-role only, like every other operational log here. The

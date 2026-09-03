@@ -69,12 +69,32 @@ describe("who may lift a suppression", () => {
       "src/lib/email/delivery-events.ts",
     ]) {
       const src = stripComments(readFileSync(join(process.cwd(), path), "utf8"));
-      // A literal `reason: "x"`, and the one place the value is chosen by a
-      // ternary that is then assigned to `reason`.
+      // Three shapes, because the reason is chosen three different ways and a
+      // scanner that knows only one of them fails open. The earlier version
+      // matched a FLAT ternary only; when delivery-events grew a third branch
+      // and moved one value into a named constant, it silently found two
+      // reasons instead of four and the coverage check stopped covering.
+      //
+      //   1. a literal          reason: "unsubscribed"
+      //   2. a named constant   export const SOFT_BOUNCE_RUN_REASON = "..."
+      //   3. any expression assigned to `reason`, however nested — every string
+      //      literal in it, plus the value of any constant it names.
+      const constants = new Map<string, string>();
+      for (const match of src.matchAll(/const\s+([A-Z][A-Z0-9_]*)\s*=\s*"([a-z_]+)"/g)) {
+        constants.set(match[1], match[2]);
+      }
       for (const match of src.matchAll(/reason:\s*"([a-z_]+)"/g)) written.add(match[1]);
-      for (const match of src.matchAll(/const reason = [^;]*?"([a-z_]+)"\s*:\s*"([a-z_]+)"/g)) {
-        written.add(match[1]);
-        written.add(match[2]);
+      for (const match of src.matchAll(/const reason =([\s\S]*?);/g)) {
+        const expression = match[1];
+        // BRANCH POSITION ONLY — after a `?`, `:` or `=`, and never after `==`.
+        // Taking every string in the expression also swept up the CONDITION
+        // (`event.kind === "complaint"`), which is an event kind, not a
+        // suppression reason, and made this fail on a value nothing writes.
+        for (const literal of expression.matchAll(/(?<![=!])[?:=]\s*"([a-z_]+)"/g)) written.add(literal[1]);
+        for (const name of expression.matchAll(/(?<![=!])[?:=]\s*([A-Z][A-Z0-9_]*)\b/g)) {
+          const value = constants.get(name[1]);
+          if (value) written.add(value);
+        }
       }
     }
 

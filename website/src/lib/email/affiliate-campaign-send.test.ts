@@ -388,6 +388,31 @@ describe("a campaign that reached nobody does not report itself as sent", () => 
     expect(Number(jordan?.attempts ?? 0)).toBeGreaterThanOrEqual(1);
   });
 
+  // A SYSTEMIC FAULT MUST NOT EAT EVERY RETRY IN ONE SWEEP.
+  //
+  // Catching the throw fixed the abandoned-batch bug and introduced a quieter
+  // one. The batch loop re-claims pending rows until its time budget runs out,
+  // so when the fault is systemic — Supabase refusing connections, the provider
+  // down — every recipient throws, returns to pending, is re-claimed at once and
+  // throws again. Three attempts burn in seconds and the campaign closes as
+  // permanently 'failed', for an outage that would have cleared before the next
+  // sweep.
+  //
+  // A throw now ENDS the sweep. A deterministic per-recipient throw still costs
+  // one attempt per sweep and terminates after three; an outage costs one in
+  // total, and the next scheduled sweep picks the campaign back up.
+  it("stops the sweep on a thrown error instead of burning every retry", async () => {
+    db.throwDelivery = new Set(["jordan@example.com", "sam@example.com"]);
+    const id = seedCampaign();
+    await queueCampaign(id);
+    await sendCampaignBatch({ campaignId: id, budgetMs: 5000 });
+
+    for (const r of db.recipients) {
+      expect(Number(r.attempts ?? 0), `${r.email} burned ${r.attempts} attempts in one sweep`).toBeLessThanOrEqual(1);
+      expect(r.status, `${r.email} should still be retryable`).not.toBe("failed");
+    }
+  });
+
   it("records the thrown reason so an operator can see what happened", async () => {
     db.throwDelivery = new Set(["jordan@example.com"]);
     const id = seedCampaign();

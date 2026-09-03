@@ -6,6 +6,7 @@ import { getSiteUrl } from "@/lib/env";
 import { getEmailRuntimeConfig, resolveMarketingFrom, resolveMarketingReplyTo } from "@/lib/email/settings";
 import type { EmailSendResult, EmailTemplate } from "@/lib/email/types";
 import { escapeHtml } from "@/lib/email/templates";
+import { isNonMailableAddress } from "@/lib/email/non-mailable";
 
 // Compliance wrapper for every promotional/marketing send (welcome,
 // monthly benefits, birthday, win-back, launch, back-in-stock, cart
@@ -68,6 +69,20 @@ export async function sendMarketingEmail(
   } & EmailTemplate,
 ): Promise<EmailSendResult & { suppressed?: boolean }> {
   const email = input.to.trim().toLowerCase();
+
+  // THE SINK-ADDRESS GUARD BELONGS HERE, NOT ONLY IN THE AUDIENCE RESOLVERS.
+  //
+  // Filtering it in resolveAudience covers campaigns, and campaigns are the one
+  // marketing path that goes through an audience at all. Cart recovery, the
+  // post-purchase and win-back automations, birthday and back-in-stock mail all
+  // pick their own recipient and call straight into this wrapper — so a sink
+  // address typed at checkout still reached them, and a send to
+  // bounced@resend.dev manufactures a bounce against the sending domain every
+  // time. One check at the choke point covers every marketing path there is,
+  // including the ones added after this comment.
+  if (isNonMailableAddress(email)) {
+    return { success: false, suppressed: true, error: "Address cannot receive mail (provider test domain)" };
+  }
 
   const { data: suppressed } = await supabaseAdmin
     .from("email_suppressions")
@@ -138,7 +153,20 @@ export async function sendMarketingEmail(
   const pixelHtml = input.openTrackingPixelUrl
     ? `<img src="${input.openTrackingPixelUrl}" width="1" height="1" alt="" style="display:none;" />`
     : "";
-  const appendedHtml = `${footerHtml}${addressHtml}${pixelHtml}`;
+  // WRAPPED IN THE SAME CENTRED CONTAINER AS THE CARD ABOVE IT.
+  //
+  // This block is injected before </body>, which is OUTSIDE renderLayout's
+  // table — so as bare <p> elements it rendered flush against the left edge of
+  // the window, full width, under a neatly centred 520px card. It is the
+  // legally required part of a commercial message and it looked like it had
+  // fallen out of the template. Same max-width, same 32px inset, same
+  // presentation-table idiom the layout uses so mail clients treat it alike.
+  const appendedHtml =
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#050505;">` +
+    `<tr><td align="center" style="padding:0 16px 32px;">` +
+    `<table role="presentation" width="100%" style="max-width:520px;">` +
+    `<tr><td style="padding:0 32px;">${footerHtml}${addressHtml}${pixelHtml}</td></tr>` +
+    `</table></td></tr></table>`;
 
   const html = input.html.includes("</body>")
     ? input.html.replace("</body>", `${appendedHtml}</body>`)

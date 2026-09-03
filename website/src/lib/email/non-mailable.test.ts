@@ -89,6 +89,15 @@ describe("isNonMailableAddress", () => {
   });
 });
 
+describe("every marketing send applies it, not just the ones with an audience", () => {
+  it("the marketing wrapper itself refuses a sink address", () => {
+    // Campaigns go through an audience; cart recovery, the automations,
+    // birthday and back-in-stock mail do not — they pick a recipient and call
+    // sendMarketingEmail directly. The pre-deploy review found the gap.
+    expect(read("lib/email/marketing.ts")).toContain("isNonMailableAddress");
+  });
+});
+
 describe("both marketing audiences apply it", () => {
   it("the customer audience filters non-mailable addresses", () => {
     expect(read("lib/email/audience.ts")).toContain("isNonMailableAddress");

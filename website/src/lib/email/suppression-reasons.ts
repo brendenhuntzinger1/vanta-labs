@@ -29,8 +29,22 @@
 // The receipts and password resets ride on that same domain.
 // ---------------------------------------------------------------------------
 
-/** Suppressions the customer created and may therefore lift themselves. */
-export const CUSTOMER_CHOSEN_SUPPRESSION_REASONS = ["account_preference", "unsubscribed"] as const;
+/**
+ * Suppressions the customer may lift themselves.
+ *
+ * "soft_bounce_run" is here rather than beside the provider verdicts, and the
+ * distinction is the point. A hard bounce and a complaint are STATEMENTS by the
+ * mailbox provider: the address does not exist, or its owner reported us. A run
+ * of transient bounces is an INFERENCE we drew — usually right, and wrong in
+ * exactly the case that costs most: a real, engaged customer whose mailbox was
+ * full for a few days, or a receiving server having a bad week.
+ *
+ * A dead address that re-subscribes simply re-escalates on the next send. A
+ * live customer who wants the mail gets it back the moment they ask. The
+ * asymmetry runs the other way from the provider verdicts, so the reversibility
+ * does too.
+ */
+export const CUSTOMER_CHOSEN_SUPPRESSION_REASONS = ["account_preference", "unsubscribed", "soft_bounce_run"] as const;
 
 /** Suppressions a mailbox provider imposed. Never lifted by a preference save. */
 export const PROVIDER_IMPOSED_SUPPRESSION_REASONS = ["complained", "bounced"] as const;

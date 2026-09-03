@@ -4,9 +4,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   CONSECUTIVE_SOFT_BOUNCE_LIMIT,
+  SOFT_BOUNCE_RUN_REASON,
   countConsecutiveSoftBounces,
   softBouncesWarrantSuppression,
 } from "@/lib/email/delivery-events";
+import { isCustomerReversibleSuppression } from "@/lib/email/suppression-reasons";
 
 const DELIVERY_EVENTS = readFileSync(
   path.resolve(process.cwd(), "src/lib/email/delivery-events.ts"),
@@ -100,5 +102,57 @@ describe("the webhook applies the escalation", () => {
     // PROVIDER_IMPOSED_SUPPRESSION_REASONS covers "bounced"; anything else here
     // would let the account page put the address straight back on the list.
     expect(DELIVERY_EVENTS).toContain('"bounced"');
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// WHAT THE PRE-DEPLOY REVIEW CAUGHT, HOURS AFTER THIS WAS WRITTEN.
+//
+// Three independent reviewers converged on the same objection, and both halves
+// of it were right.
+//
+// 1. THE RUN WAS ORDERED BY A COLUMN THAT MOVES. `received_at` is stamped at
+//    WRITE time, and recordDeliveryEvent upserts, so a webhook REDELIVERY —
+//    which Resend does routinely — rewrote an old event's timestamp to now and
+//    floated it to the top of the ordering. A delivery then stopped resetting
+//    the run, which is the one property the whole escalation rests on.
+//
+// 2. THE SUPPRESSION COULD NOT BE UNDONE BY THE PERSON IT HIT. It was written
+//    with reason "bounced", which PROVIDER_IMPOSED_SUPPRESSION_REASONS covers,
+//    so the account page refuses to lift it. That is correct for a real hard
+//    bounce — the mailbox does not exist — but an escalated soft-bounce run is
+//    INFERRED, not a verdict. A customer whose mailbox was full over a holiday
+//    would have been removed from marketing permanently, with no way back
+//    except a support ticket and a manual database edit.
+//
+// The timing made it sharp: the store is about to move marketing to a brand-new
+// sending subdomain with no reputation, which is exactly when transient bounces
+// are most likely.
+// ---------------------------------------------------------------------------
+
+describe("an inferred suppression must be undoable by the customer", () => {
+  it("uses its own reason, not the one a real hard bounce uses", () => {
+    expect(SOFT_BOUNCE_RUN_REASON).not.toBe("bounced");
+  });
+
+  it("lets a customer who wants the mail turn it back on", () => {
+    // A genuinely dead address simply re-escalates. A live customer gets their
+    // mail back the moment they ask for it, which is the asymmetry that matters:
+    // wrongly retiring an engaged customer for ever is the worse error.
+    expect(isCustomerReversibleSuppression(SOFT_BOUNCE_RUN_REASON)).toBe(true);
+  });
+});
+
+describe("the run is read in a stable order", () => {
+  // An earlier draft of this test banned ordering by received_at outright. That
+  // was the wrong requirement: the column is fine, it was the REWRITE that made
+  // it move. With the row kept on conflict, received_at is stamped once at first
+  // receipt and never changes, so ordering by it is stable — which is what the
+  // escalation actually needs.
+  it("does not let a webhook redelivery rewrite an event's recorded time", () => {
+    // ignoreDuplicates keeps the ORIGINAL row and its original timestamp, which
+    // also makes redelivery genuinely idempotent rather than merely harmless.
+    expect(DELIVERY_EVENTS).toContain("ignoreDuplicates: true");
   });
 });

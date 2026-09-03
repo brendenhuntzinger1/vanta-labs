@@ -100,3 +100,30 @@ describe("the marketing wrapper carries the CAN-SPAM postal address", () => {
     expect(message.html).toContain("/api/unsubscribe?email=");
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE WRAPPER'S OWN FOOTER WAS THE LAST THING HANGING OFF THE LEFT EDGE.
+//
+// renderLayout centres the message in a 520px card inset 32px from its border,
+// and on 2026-09-02 the CTA was brought into that inset with everything else.
+// This block is appended by the marketing wrapper AFTER the layout has closed —
+// injected before </body>, outside the table — so the unsubscribe line, the
+// CAN-SPAM postal address and the tracking pixel rendered flush against the
+// left edge of the window, full width, under a neatly centred card.
+//
+// It is the legally required part of a commercial message. It should not look
+// like it fell out of the template.
+// ---------------------------------------------------------------------------
+
+describe("the appended compliance footer sits inside the layout", () => {
+  it("is centred and width-limited like the card above it", async () => {
+    const { html } = await sendCartRecovery();
+    const appended = html.slice(html.indexOf("You're receiving this"));
+    // Walk back to the container the footer was injected into.
+    const container = html.slice(0, html.indexOf("You're receiving this"));
+    const lastTable = container.lastIndexOf("<table");
+    expect(lastTable, "the footer is not inside any table").toBeGreaterThan(-1);
+    const opening = container.slice(lastTable, container.indexOf(">", lastTable));
+    expect(opening + appended).toContain("max-width:520px");
+  });
+});

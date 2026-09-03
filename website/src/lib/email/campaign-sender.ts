@@ -40,6 +40,20 @@ export const CLAIM_RECLAIM_AFTER_MS = 10 * 60 * 1000;
 /** Give up on a recipient after this many failed attempts. */
 export const MAX_ATTEMPTS = 3;
 
+/**
+ * Consecutive THROWN sends before the sweep gives up and waits for the next one.
+ *
+ * Two, because the two failures this has to tell apart look identical from one
+ * data point. A single throw is usually about that recipient — a merge context
+ * written before a schema change, a malformed link — and the rest of the batch
+ * should still go out, which is the whole reason the throw is caught at all.
+ * Two in a row is not about the recipient: it is Supabase refusing connections
+ * or the provider down, and continuing would burn all three attempts for every
+ * recipient in seconds and close the campaign permanently 'failed' over an
+ * outage that clears in a minute.
+ */
+export const CONSECUTIVE_THROW_ABORT = 2;
+
 export type CampaignRow = {
   id: string;
   name: string;
@@ -356,6 +370,10 @@ export async function sendCampaignBatch(input: {
   let sent = 0;
   let suppressed = 0;
   let failed = 0;
+  // Consecutive THROWN sends. Reset by any recipient that resolves normally —
+  // delivered, suppressed or a returned failure. See CONSECUTIVE_THROW_ABORT.
+  let consecutiveThrows = 0;
+  let sweepAborted = false;
 
   while (Date.now() - started < budget) {
     const batch = await claimBatch(campaign.id, input.batchSize ?? CAMPAIGN_BATCH_SIZE, Date.now());
@@ -437,11 +455,30 @@ export async function sendCampaignBatch(input: {
           openTrackingPixelUrl: buildCampaignOpenUrl(campaign.id, recipient.email),
           ...template,
         });
+        // It RESOLVED — delivered, suppressed, or a returned failure. The
+        // pipeline works, so any previous throw was about that one recipient
+        // and the run starts over.
+        consecutiveThrows = 0;
       } catch (error) {
         result = {
           success: false,
           error: error instanceof Error ? error.message : "send failed unexpectedly",
         };
+        // A THROW ENDS THE SWEEP — it does not just cost this recipient.
+        //
+        // Catching the throw stopped the batch being abandoned, and on its own
+        // introduced a quieter fault. This loop re-claims pending rows until the
+        // time budget runs out, so a SYSTEMIC failure — Supabase refusing
+        // connections, the provider down — throws for every recipient, returns
+        // each to pending, re-claims it immediately and throws again. Three
+        // attempts burn in seconds and the campaign closes permanently 'failed',
+        // for an outage that would have cleared before the next sweep.
+        //
+        // Ending the sweep costs a deterministic per-recipient throw one attempt
+        // per sweep (so it still terminates after MAX_ATTEMPTS, across three
+        // sweeps) and costs an outage one attempt in total.
+        consecutiveThrows += 1;
+        sweepAborted = consecutiveThrows >= CONSECUTIVE_THROW_ABORT;
       }
 
       const attempts = recipient.attempts + 1;
@@ -472,6 +509,24 @@ export async function sendCampaignBatch(input: {
           })
           .eq("id", recipient.id);
       }
+
+      if (sweepAborted) break;
+    }
+
+    if (sweepAborted) {
+      // Hand the rest of this batch straight back rather than leaving it for
+      // reclaimStaleClaims ten minutes later. Scoped to the rows this sweep
+      // claimed, and conditioned on status, so a concurrent sweep's rows are
+      // untouched.
+      const stillClaimed = batch.map((row) => row.id);
+      if (stillClaimed.length) {
+        await supabaseAdmin
+          .from("email_campaign_recipients")
+          .update({ status: "pending", claimed_at: null })
+          .in("id", stillClaimed)
+          .eq("status", "claiming");
+      }
+      break;
     }
   }
 

@@ -237,7 +237,14 @@ async function recordDeliveryEvent(event: DeliveryEvent, suppressed: boolean): P
         suppressed,
         received_at: new Date().toISOString(),
       },
-      { onConflict: "provider_message_id,event_type,recipient_email" },
+      // ignoreDuplicates KEEPS THE ORIGINAL ROW, and that is what makes the
+      // soft-bounce run readable. This used to update on conflict, so a webhook
+      // REDELIVERY — which Resend does routinely — restamped an old event's
+      // received_at to now and floated it above later events. A delivery then
+      // stopped resetting the run, defeating the one property the escalation
+      // rests on. Keeping the first write also makes redelivery genuinely
+      // idempotent rather than merely harmless.
+      { onConflict: "provider_message_id,event_type,recipient_email", ignoreDuplicates: true },
     );
 
   // A missing table is the one expected failure (a deployment that has not run
@@ -262,6 +269,16 @@ async function recordDeliveryEvent(event: DeliveryEvent, suppressed: boolean): P
  * turn every full mailbox into a permanent removal.
  */
 export const CONSECUTIVE_SOFT_BOUNCE_LIMIT = 3;
+
+/**
+ * The reason an ESCALATED soft-bounce run is recorded under.
+ *
+ * Deliberately not "bounced". That reason is provider-imposed and cannot be
+ * lifted from the account page, which is right for an address the provider says
+ * does not exist — and wrong for one we merely inferred is unreachable. See
+ * suppression-reasons.ts.
+ */
+export const SOFT_BOUNCE_RUN_REASON = "soft_bounce_run";
 
 /**
  * Soft bounces since the address last accepted anything.
@@ -341,7 +358,14 @@ export async function applyDeliveryEvents(events: DeliveryEvent[]): Promise<Deli
     // "bounced" for an escalated soft bounce too: it is the provider's verdict,
     // not a customer preference, so PROVIDER_IMPOSED_SUPPRESSION_REASONS keeps
     // the account page from putting the address straight back on the list.
-    const reason = event.kind === "complaint" ? "complained" : "bounced";
+    // Three reasons, three different things. A complaint and a hard bounce are
+    // the provider's verdict and stay unliftable; an escalated soft-bounce run
+    // is our inference and the customer may undo it.
+    const reason = event.kind === "complaint"
+      ? "complained"
+      : escalatedSoftBounce
+        ? SOFT_BOUNCE_RUN_REASON
+        : "bounced";
     try {
       const { error } = await supabaseAdmin
         .from("email_suppressions")
@@ -396,12 +420,25 @@ export async function applyDeliveryEvents(events: DeliveryEvent[]): Promise<Deli
     // A complaint is the signal worth waking someone for: it damages the
     // sending domain that also carries receipts. A hard bounce is logged at
     // the lower severity — it is routine list hygiene.
+    // AN ESCALATED SOFT BOUNCE IS NOT A HARD BOUNCE, AND SAYING SO MATTERS.
+    //
+    // It used to raise "email_hard_bounce" at info severity. Both halves were
+    // wrong: the address did not hard-bounce, and info is the severity you scroll
+    // past. If a cold sending domain ever starts deferring at scale, this alert
+    // is the only thing that would show a wave of customers being retired — so
+    // it names what happened and is loud enough to notice.
     await recordSystemAlert({
-      type: event.kind === "complaint" ? "email_complaint" : "email_hard_bounce",
-      severity: event.kind === "complaint" ? "warning" : "info",
+      type: event.kind === "complaint"
+        ? "email_complaint"
+        : escalatedSoftBounce
+          ? "email_soft_bounce_run"
+          : "email_hard_bounce",
+      severity: event.kind === "complaint" || escalatedSoftBounce ? "warning" : "info",
       message: event.kind === "complaint"
         ? `A recipient marked Vanta Labs email as spam. Suppressed from all marketing.`
-        : `Email to a recipient hard-bounced. Address suppressed from marketing.`,
+        : escalatedSoftBounce
+          ? `An address soft-bounced ${CONSECUTIVE_SOFT_BOUNCE_LIMIT} times in a row with no delivery in between, so it was suppressed from marketing. The customer can re-enable it themselves.`
+          : `Email to a recipient hard-bounced. Address suppressed from marketing.`,
       // The address itself is the point of the alert — an operator cannot act
       // on "someone complained" — but the provider's id is carried too so the
       // event can be found in their dashboard.
