@@ -125,6 +125,8 @@ async function main() {
     return page.url();
   });
 
+  let transactionalOrderId = null;
+
   const labelBox = (key) => page.locator(`[data-testid="automation-${key}-cta-label"]`);
   const pathBox = (key) => page.locator(`[data-testid="automation-${key}-cta-path"]`);
   const saveBtn = (key) => page.locator(`[data-testid="automation-${key}-save"]`);
@@ -388,6 +390,70 @@ async function main() {
     return `1 row, winback_60`;
   });
 
+  await step("NO OTHER automation is credited with that click", async () => {
+    // THE POINT OF THE WHOLE TRACKING CHANGE, stated as an assertion.
+    //
+    // The value of per-automation attribution is knowing WHICH sequence earned
+    // the click. A scheme that recorded it against the wrong key — or against
+    // all of them — would look identical in the admin to one that worked, and
+    // the operator would scale the wrong email.
+    //
+    // The same address is mailed by all four sequences here, which is the case
+    // most likely to smear attribution: a dormant customer really can be in the
+    // win-back and the post-purchase sequence at once.
+    const reference = "qa-click@example.test:1700000000000";
+    for (const key of ["welcome_no_purchase", "post_purchase", "winback_30"]) {
+      await q(
+        `insert into email_send_log (campaign_type, reference_id, recipient_email, template_key, sent_at, status)
+         values ($1, $2, $3, $4, now(), 'sent')
+         on conflict do nothing`,
+        [`automation:${key}`, reference, "qa-click@example.test", `automation_${key}`],
+      );
+    }
+
+    const { rows: clicks } = await q(
+      "select automation_key, count(*)::int as n from email_automation_clicks where email = $1 group by automation_key",
+      ["qa-click@example.test"],
+    );
+    const byKey = Object.fromEntries(clicks.map((r) => [r.automation_key, r.n]));
+    assert(byKey.winback_60 === 1, `winback_60 has ${byKey.winback_60 ?? 0} clicks, expected 1`);
+    for (const key of ["welcome_no_purchase", "post_purchase", "winback_30"]) {
+      assert(!byKey[key], `${key} was credited with ${byKey[key]} click(s) it did not earn`);
+    }
+
+    // And the per-send first-touch stamp is equally exclusive: three sequences
+    // mailed this person, one was clicked, and only that one's row is marked.
+    const { rows: stamped } = await q(
+      "select campaign_type, clicked_at from email_send_log where recipient_email = $1 and campaign_type like 'automation:%'",
+      ["qa-click@example.test"],
+    );
+    const clickedKeys = stamped.filter((r) => r.clicked_at).map((r) => r.campaign_type);
+    assert(clickedKeys.length === 1 && clickedKeys[0] === "automation:winback_60",
+      `clicked_at is set on ${JSON.stringify(clickedKeys)}`);
+    return `winback_60: 1 · other three: 0, across ${stamped.length} sends to one address`;
+  });
+
+  await step("a link for one automation cannot be replayed against another", async () => {
+    // Swapping the key in the URL while keeping the signature. The key is
+    // inside the signed payload, so this must verify as nothing at all — not
+    // as a click for the substituted automation.
+    const { createHmac } = await import("node:crypto");
+    const secret = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "local-shim-not-a-real-key";
+    const reference = "qa-click@example.test:1700000000000";
+    const winback60Token = createHmac("sha256", secret)
+      .update(`automation:winback_60:qa-click@example.test:${reference}`)
+      .digest("hex").slice(0, 32);
+
+    const before = (await q("select count(*)::int as n from email_automation_clicks where automation_key = $1", ["winback_30"])).rows[0].n;
+    const url = `${BASE}/api/email/automation-click?k=winback_30&e=${encodeURIComponent("qa-click@example.test")}&r=${encodeURIComponent(reference)}&t=${winback60Token}`;
+    const clicker = await context.newPage();
+    await clicker.goto(url, { waitUntil: "domcontentloaded" });
+    await clicker.close();
+    const after = (await q("select count(*)::int as n from email_automation_clicks where automation_key = $1", ["winback_30"])).rows[0].n;
+    assert(after === before, `winback_30 gained ${after - before} click(s) from a winback_60 signature`);
+    return "signature is bound to its own automation";
+  });
+
   await step("the send-log row is first-touch stamped for unique clicks", async () => {
     const { rows } = await q(
       "select clicked_at from email_send_log where campaign_type='automation:winback_60' and reference_id=$1",
@@ -445,7 +511,59 @@ async function main() {
   });
 
   // --- nothing else broke --------------------------------------------------
-  section("11. The shared CTA change did not break other mail");
+  section("11. The button markup is email-client-safe");
+  await step("the rendered button leans on nothing a mail client strips", async () => {
+    // A browser renders anything. Gmail strips <style> blocks in some contexts,
+    // Outlook ignores most positioning, and no client guarantees CSS custom
+    // properties. Every one of these would look perfect in the Playwright
+    // screenshot above and break in a real inbox, which is exactly why the
+    // screenshot is not the test.
+    const { body } = await postAsPage(page, "/api/admin/email/automations/preview", {
+      key: "winback_30", subject: "QA", headline: "QA headline",
+      body: "Body copy.", ctaLabel: "SEE WHAT'S NEW", ctaPath: "/products?new=1",
+    });
+    assert(body?.success, `preview failed: ${JSON.stringify(body?.error ?? body)}`);
+    const html = body.html;
+
+    // Isolate the button so a banned token elsewhere in the shell cannot mask
+    // or manufacture a failure.
+    const start = html.indexOf('<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center"');
+    assert(start >= 0, "the button table is not in the rendered email");
+    const button = html.slice(start, html.indexOf("</table>", start) + 8);
+
+    const BANNED = [
+      ["display:flex", "flexbox"],
+      ["display:grid", "grid"],
+      ["position:", "positioning"],
+      ["var(--", "CSS custom properties"],
+      // Matched with a boundary, not as a substring: `text-transform` is a
+      // different property, is supported everywhere including Outlook, and is
+      // what makes the label uppercase. Catching it here would be a false
+      // positive that pushed the fix in the wrong direction.
+      [/[;"\s]transform:/, "transforms"],
+      ["box-shadow", "box-shadow"],
+      ["!important", "!important"],
+      ["@media", "media queries"],
+      ["class=", "a class hook with no stylesheet to match it"],
+      ["<style", "an embedded stylesheet"],
+      ["rem", "root-relative units"],
+    ];
+    for (const [token, why] of BANNED) {
+      const present = token instanceof RegExp ? token.test(button) : button.includes(token);
+      assert(!present, `the button depends on ${why}: ${token}`);
+    }
+
+    // And the things it MUST have, which are what make it work where CSS does not.
+    assert(/<table role="presentation"/.test(button), "the button is not table-based");
+    assert(/<td[^>]*bgcolor="#/.test(button), "the fill is not on a bgcolor attribute");
+    assert(button.includes("mso-padding-alt"), "no Word-specific padding");
+    assert(button.includes("mso-line-height-rule:exactly"), "the line box is not pinned for Word");
+    assert(/font-family:[^;]*Arial/.test(button), "no websafe font fallback");
+    assert(!/font-size:\s*\d+(\.\d+)?(em|%)/.test(button), "font-size is not in absolute units");
+    return "table + bgcolor + mso, no browser-only CSS";
+  });
+
+  section("12. The shared CTA change did not break other mail");
   await step("a customer campaign can still be composed and saved", async () => {
     // The composer is the other writer of cta_label/cta_path and shares the
     // validator the automations route uses, so a change there could break it
@@ -476,6 +594,96 @@ async function main() {
     assert(body.html.includes("mso-padding-alt"), "campaign CTA is not Outlook-safe");
     writeFileSync(`${SHOTS}/email-campaign.html`, body.html);
     return "campaign button intact";
+  });
+
+  await step("a real transactional email still renders, and stays neutral", async () => {
+    // Not a rendered fixture — an ACTUAL order placed through checkout, whose
+    // confirmation is read back out of the capture file the noop provider
+    // writes (providers/noop.ts, EMAIL_CAPTURE_DIR). That is the same message
+    // a customer would receive.
+    //
+    // The assertion that matters is the LAST one. The brief was explicit that
+    // transactional mail must not become sales mail, and the failure mode is
+    // silent: a receipt that quietly turns gold looks fine in isolation and is
+    // only wrong next to the marketing it now resembles.
+    const { existsSync, readFileSync, statSync } = await import("node:fs");
+    const CAPTURE = "/tmp/vanta-qa/captured-emails.jsonl";
+    const before = existsSync(CAPTURE) ? statSync(CAPTURE).size : 0;
+
+    await q("delete from rate_limit_hits").catch(() => {});
+    const buyer = `qa-txn-${Date.now()}@example.test`;
+    const shop = await context.newPage();
+    await shop.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
+    const created = await shop.evaluate(async ([payload]) => {
+      const res = await fetch("/api/checkout/create-session", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        credentials: "same-origin", body: JSON.stringify(payload),
+      });
+      return { status: res.status, body: await res.json().catch(() => null) };
+    }, [{
+      items: [{ id: "bpc-157-10mg", quantity: 1 }],
+      customer: {
+        email: buyer, fullName: "Txn Tester", address: "1 Harness Way",
+        city: "Testville", state: "CA", postalCode: "90000", country: "US", phone: "5555555555",
+      },
+      currency: "USD",
+      complianceAcknowledgements: { researchCompliance: true, returnsPolicy: true },
+    }]);
+    await shop.close();
+    assert(created.body?.orderId, `checkout failed: ${JSON.stringify(created.body).slice(0, 200)}`);
+
+    // Drive it to paid through the real webhook handler, which is what sends
+    // the confirmation.
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("node", ["scripts/harness-pay-order.mjs", created.body.orderId], {
+      env: { ...process.env, PAYMENT_WEBHOOK_SECRET: "harness-webhook-secret" },
+      stdio: "pipe",
+    });
+
+    const raw = existsSync(CAPTURE) ? readFileSync(CAPTURE) : Buffer.alloc(0);
+    const fresh = raw.subarray(Math.min(before, raw.length)).toString("utf8")
+      .split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(Boolean);
+    const confirmation = fresh.find((m) => /order confirmed/i.test(m.subject ?? ""));
+    assert(confirmation, `no order confirmation captured; got ${JSON.stringify(fresh.map((m) => m.subject))}`);
+
+    const html = confirmation.html;
+    assert(html.includes("background:#050505"), "the confirmation lost the branded shell");
+    assert(html.includes("order-confirmation/"), "the new View order CTA is missing");
+    assert(html.includes("border-radius:999px"), "the CTA is not a styled button");
+    assert(html.includes("mso-padding-alt"), "the transactional CTA is not Outlook-safe");
+    assert(html.includes('bgcolor="#F4F4F4"'), "the transactional CTA is not the neutral variant");
+    assert(!html.includes("#F2C94C"), "a RECEIPT was rendered in marketing gold");
+    // Transactional mail must not carry marketing's unsubscribe furniture.
+    assert(!/List-Unsubscribe/i.test(JSON.stringify(confirmation.headers ?? {})),
+      "a receipt carried List-Unsubscribe headers");
+    writeFileSync(`${SHOTS}/email-transactional.html`, html);
+    transactionalOrderId = created.body.orderId;
+    return `${confirmation.subject} — neutral button, Outlook-safe, no unsubscribe header`;
+  });
+
+  await step("an order after the click is attributed to that automation", async () => {
+    // The last link in the chain the brief asks for: sends, clicks, and then
+    // ORDERS and REVENUE per automation. This order was placed in the same
+    // browser context that clicked the winback_60 link in section 9 — which is
+    // exactly what a customer does — so the attribution cookie the click route
+    // set is what stamps it.
+    //
+    // Checked on the column rather than on the admin strip, because the strip
+    // reads this column: asserting on the strip alone would pass if both were
+    // wrong in the same direction.
+    assert(transactionalOrderId, "no order id captured from the transactional step");
+    const { rows } = await q(
+      "select attributed_automation_key, attributed_automation_at, attributed_campaign_id from orders where order_id = $1",
+      [transactionalOrderId],
+    );
+    assert(rows[0]?.attributed_automation_key === "winback_60",
+      `attributed to ${rows[0]?.attributed_automation_key ?? "nothing"}`);
+    assert(rows[0].attributed_automation_at, "stamped with no timestamp");
+    // And the campaign column is untouched, because this was not a campaign.
+    // The two attributions are separate slots by design.
+    assert(!rows[0].attributed_campaign_id, "an automation click wrote the campaign column");
+    return "winback_60, campaign column untouched";
   });
 
   await step("no console errors and no failed requests", async () => {
