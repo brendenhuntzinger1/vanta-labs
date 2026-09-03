@@ -7,6 +7,7 @@ import { useCart } from "@/components/cart-context";
 import type { Product } from "@/lib/catalog-types";
 import { CatalogTrustRail } from "@/components/catalog-trust-rail";
 import { hasCoa } from "@/lib/coa-url";
+import { inDefaultCatalogOrder } from "@/lib/catalog-order";
 
 type SortKey = "default" | "price-asc" | "price-desc" | "name-asc" | "purity";
 
@@ -28,15 +29,18 @@ function parsePurity(purity?: string) {
   return Number((purity ?? "0").replace(/[^0-9.]/g, "")) || 0;
 }
 
-function ProductsPageContent() {
+function ProductsPageContent({ initialProducts }: { initialProducts: Product[] }) {
   const searchParams = useSearchParams();
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [products, setProducts] = useState<Product[]>([]);
+  const [products, setProducts] = useState<Product[]>(initialProducts);
   const [sort, setSort] = useState<SortKey>("default");
   const [searchQuery, setSearchQuery] = useState(() => searchParams.get("search") ?? "");
   const [selectedCategory, setSelectedCategory] = useState(() => searchParams.get("category") ?? "All");
   const [imageOverrides, setImageOverrides] = useState<Record<string, string>>({});
-  const [isLoading, setIsLoading] = useState(true);
+  // The server has usually already resolved the catalogue, in which case there
+  // is nothing to wait for and the skeleton would be a flash of nothing over
+  // content we can already draw.
+  const [isLoading, setIsLoading] = useState(initialProducts.length === 0);
   const [loadError, setLoadError] = useState(false);
   const [stockFilter, setStockFilter] = useState(false);
   const [bestSellersOnly, setBestSellersOnly] = useState(false);
@@ -67,10 +71,22 @@ function ProductsPageContent() {
       .catch(() => setImageOverrides({}));
   }, []);
 
+  // THE RETRY PATH, NOT THE LOAD PATH. The page resolves the catalogue on the
+  // server now, so in the normal case there is nothing to fetch — asking again
+  // here would be a second request for a list we are already rendering, and
+  // both go through the same `unstable_cache`, so it would not even be fresher.
+  //
+  // It still runs when the server handed down nothing, which is the case the
+  // error state was written for: a catalogue read that failed. One retry from
+  // the browser can catch a blip the server request happened to land in.
+  const needsClientLoad = initialProducts.length === 0;
   useEffect(() => {
+    if (!needsClientLoad) return;
+    let cancelled = false;
     fetch("/api/catalog/products", { cache: "no-store" })
       .then((response) => response.json())
       .then((json) => {
+        if (cancelled) return;
         if (json?.success && Array.isArray(json.products)) {
           setProducts(json.products as Product[]);
           setLoadError(false);
@@ -82,11 +98,17 @@ function ProductsPageContent() {
       .catch(() => {
         // Distinguish a real load failure from an empty catalog so the page can
         // show a retry instead of a misleading "no products" state.
+        if (cancelled) return;
         setProducts([]);
         setLoadError(true);
       })
-      .finally(() => setIsLoading(false));
-  }, []);
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [needsClientLoad]);
 
   const categories = useMemo(() => {
     const productCategories = Array.from(new Set(products.map((product) => product.category))).sort();
@@ -508,43 +530,91 @@ function CatalogGridSkeleton() {
 }
 
 /**
- * SERVER-RENDERED PLACEHOLDER — this is what fixes the catalog "jumping".
+ * SERVER-RENDERED CATALOGUE — this is the only version of this page that a
+ * crawler, or anyone on a slow connection, sees before JavaScript runs.
  *
  * ProductsPageContent calls useSearchParams(), which opts it out of
- * server-rendering: Next renders THIS fallback into the HTML instead. It used
- * to be `null`, so the catalog page shipped an empty body — the footer landed
- * at the top of the viewport, and then everything slammed down when the client
- * fetch resolved. Measured cumulative layout shift was 1.04 on a phone and
- * 0.61 on desktop, where anything above 0.25 is classed "poor". It is the most
- * visible instability on the site.
+ * server-rendering: Next renders THIS into the HTML instead. It was `null`
+ * once, so the page shipped an empty body — the footer landed at the top of
+ * the viewport and everything slammed down when the client fetch resolved
+ * (measured CLS 1.04 on a phone, 0.61 on desktop, against 0.25 for "poor").
+ * That was fixed by reserving the space with a grey skeleton.
  *
- * The fallback therefore reserves the same space the real page occupies. The
- * header block is a fixed-height spacer rather than a copy of the real
+ * A SKELETON WAS STILL THE WRONG THING TO SHIP, and it took a search-engine
+ * audit to notice. Reserving the space fixed the layout shift and left the
+ * page's actual content — thirty-seven products and every link to them —
+ * existing only after a round trip in the browser. Measured against production
+ * on 2026-09-03: zero links to product pages in this page's HTML, against six
+ * on the home page. The catalogue is the page whose whole job is to point at
+ * the products, and it pointed at none of them.
+ *
+ * So it renders the real grid, from the list the server already has. Same
+ * component, same classes, same order as the hydrated version, so the handover
+ * is invisible; and it is what a customer sees too, so there is nothing here a
+ * crawler is shown that a person is not.
+ *
+ * The header block stays a fixed-height spacer rather than a copy of the real
  * catalogue header: duplicating that copy would guarantee it drifts out of
- * sync, and it is replaced within a frame of hydration anyway.
- *
- * The site nav is `position: fixed` (out of flow), so it is deliberately not
- * repeated here — including it would change nothing about the layout.
+ * sync, and it is replaced within a frame of hydration anyway. The site nav is
+ * `position: fixed` (out of flow), so it is deliberately not repeated.
  */
-function CatalogFallback() {
+function CatalogFallback({ products }: { products: Product[] }) {
+  // Nothing to draw — a catalogue read that failed, or a genuinely empty shop.
+  // The skeleton is right here: the client is about to retry.
+  if (products.length === 0) {
+    return (
+      <div className="min-h-screen bg-[#0b0b0b] text-white">
+        <main className="vl-nav-clearance mx-auto max-w-[1440px] px-4 sm:px-6 pb-14 pt-16 sm:pb-20 sm:pt-32 lg:px-12">
+          <div className="h-[13.5rem] sm:h-[15.5rem]" aria-hidden="true" />
+          <section className="mt-8">
+            <div className="mb-5 h-5" aria-hidden="true" />
+            <CatalogGridSkeleton />
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  const ordered = inDefaultCatalogOrder(products);
   return (
     <div className="min-h-screen bg-[#0b0b0b] text-white">
       <main className="vl-nav-clearance mx-auto max-w-[1440px] px-4 sm:px-6 pb-14 pt-16 sm:pb-20 sm:pt-32 lg:px-12">
         {/* Stands in for the catalogue header + filter row. */}
         <div className="h-[13.5rem] sm:h-[15.5rem]" aria-hidden="true" />
         <section className="mt-8">
-          <div className="mb-5 h-5" aria-hidden="true" />
-          <CatalogGridSkeleton />
+          <div className="mb-5 flex items-center justify-between">
+            <p className="text-sm text-white/45">
+              {ordered.length} product{ordered.length === 1 ? "" : "s"}
+            </p>
+          </div>
+          {/* Mirrors the hydrated grid exactly — same heading structure, same
+              classes, same cards — so hydration replaces it with itself. */}
+          <section aria-labelledby="catalog-grid-heading">
+            <h2 id="catalog-grid-heading" className="sr-only">Products</h2>
+            <div className="grid grid-cols-2 gap-3 sm:gap-5 xl:grid-cols-4">
+              {ordered.map((product, index) => (
+                <ProductCard
+                  key={product.slug}
+                  product={product}
+                  image={product.coverImage || product.image}
+                  priority={index < 4}
+                />
+              ))}
+            </div>
+          </section>
         </section>
+        <CatalogTrustRail
+          everyProductHasCoa={ordered.length > 0 && ordered.every((product) => hasCoa(product.coaUrl))}
+        />
       </main>
     </div>
   );
 }
 
-export function ProductsPageClient() {
+export function ProductsPageClient({ initialProducts }: { initialProducts: Product[] }) {
   return (
-    <Suspense fallback={<CatalogFallback />}>
-      <ProductsPageContent />
+    <Suspense fallback={<CatalogFallback products={initialProducts} />}>
+      <ProductsPageContent initialProducts={initialProducts} />
     </Suspense>
   );
 }
