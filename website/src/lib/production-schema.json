@@ -431,7 +431,8 @@
     "reserved_at",
     "redeemed_order_id",
     "redeemed_at",
-    "revoked_at"
+    "revoked_at",
+    "reward_kind"
   ],
   "customer_preferences": [
     "user_id",

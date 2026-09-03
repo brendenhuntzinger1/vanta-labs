@@ -74,6 +74,17 @@ async function issueOffer(email, { hours = 24, minCents = 6000 } = {}) {
   return token;
 }
 
+/** Mint a FREE SHIPPING offer — no product, its own reward kind. */
+async function issueShippingOffer(email, { hours = 24, minCents = 3500 } = {}) {
+  const token = randomBytes(32).toString("base64url");
+  await q(
+    `insert into customer_offers (offer_key, token_hash, email, reward_kind, product_slug, min_subtotal_cents, expires_at)
+     values ('winback_60_free_shipping', $1, $2, 'free_shipping', null, $3, now() + make_interval(hours => $4))`,
+    [hash(token), email.toLowerCase(), minCents, hours],
+  );
+  return token;
+}
+
 /**
  * A fresh browser context with its own client IP.
  *
@@ -320,8 +331,106 @@ async function main() {
     return "redeemed, refunded, and still spent";
   });
 
+  // --- the second kind of gift ---------------------------------------------
+  section("5. Free shipping is the other kind of gift");
+
+  await step("an ordinary order pays shipping, so the gift has something to give", async () => {
+    // The control. Without it, "shipping is 0 with the gift" proves nothing —
+    // the store ships free over $200 anyway, and a test that happened to cross
+    // that line would pass with the feature removed.
+    await q("delete from customer_offers where email = $1", [BUYER]);
+    const context = await freshContext();
+    const page = await context.newPage();
+    await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
+    const { body } = await checkout(page, { email: BUYER, items: [LINE] });
+    const { rows } = await q("select shipping_amount from orders where order_id = $1", [body.orderId]);
+    assert(Number(rows[0].shipping_amount) > 0, `baseline order already shipped free (${rows[0].shipping_amount})`);
+    await context.close();
+    return `baseline shipping ${rows[0].shipping_amount}`;
+  });
+
+  await step("the shipping gift zeroes the shipping charge", async () => {
+    await q("delete from customer_offers where email = $1", [BUYER]);
+    const token = await issueShippingOffer(BUYER);
+    const context = await freshContext();
+    const page = await browserHoldingOffer(context, token);
+    await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
+    const { body } = await checkout(page, { email: BUYER, items: [LINE] });
+    const { rows } = await q("select shipping_amount, subtotal from orders where order_id = $1", [body.orderId]);
+    assert(Number(rows[0].shipping_amount) === 0, `shipping was ${rows[0].shipping_amount}`);
+    // And it is NOT a product gift: no $0 line, no stock consumed.
+    const { rows: lines } = await q("select unit_price from order_items where order_id = $1", [body.orderId]);
+    assert(!lines.some((r) => Number(r.unit_price) === 0), "a shipping gift added a free product line");
+    await context.close();
+    return `subtotal ${rows[0].subtotal}, shipping $0, ${lines.length} paid line(s)`;
+  });
+
+  await step("below its minimum the shipping gift does not apply", async () => {
+    await q("delete from customer_offers where email = $1", [BUYER]);
+    // $100 minimum against a $69 cart.
+    const token = await issueShippingOffer(BUYER, { minCents: 10000 });
+    const context = await freshContext();
+    const page = await browserHoldingOffer(context, token);
+    await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
+    const { body } = await checkout(page, { email: BUYER, items: [LINE] });
+    const { rows } = await q("select shipping_amount from orders where order_id = $1", [body.orderId]);
+    assert(Number(rows[0].shipping_amount) > 0, "shipping was waived below the minimum");
+    await context.close();
+    return `shipping still ${rows[0].shipping_amount}`;
+  });
+
+  await step("a stranger cannot spend somebody else's shipping gift", async () => {
+    await q("delete from customer_offers where email = $1", [BUYER]);
+    const token = await issueShippingOffer(BUYER);
+    const context = await freshContext();
+    const page = await browserHoldingOffer(context, token);
+    await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
+    const { body } = await checkout(page, { email: STRANGER, items: [LINE] });
+    const { rows } = await q("select shipping_amount from orders where order_id = $1", [body.orderId]);
+    assert(Number(rows[0].shipping_amount) > 0, "a different address got free shipping");
+    await context.close();
+    return `shipping charged: ${rows[0].shipping_amount}`;
+  });
+
+  await step("the shipping gift is consumed permanently by a paid order", async () => {
+    await q("delete from customer_offers where email = $1", [BUYER]);
+    const token = await issueShippingOffer(BUYER);
+    const context = await freshContext();
+    const page = await browserHoldingOffer(context, token);
+    await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
+
+    const first = await checkout(page, { email: BUYER, items: [LINE] });
+    await q("update orders set payment_status = 'paid' where order_id = $1", [first.body.orderId]);
+    await q("select customer_offer_redeem($1)", [first.body.orderId]);
+    await q("update orders set payment_status = 'refunded' where order_id = $1", [first.body.orderId]);
+
+    const second = await checkout(page, { email: BUYER, items: [LINE] });
+    const { rows } = await q("select shipping_amount from orders where order_id = $1", [second.body.orderId]);
+    assert(Number(rows[0].shipping_amount) > 0, "a refund handed the shipping gift back");
+    await context.close();
+    return "redeemed, refunded, still spent";
+  });
+
+  await step("the cart announces a shipping gift as shipping, not as a product", async () => {
+    await q("delete from customer_offers where email = $1", [BUYER]);
+    const token = await issueShippingOffer(BUYER);
+    const context = await freshContext();
+    const page = await browserHoldingOffer(context, token);
+    await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
+    const status = await page.evaluate(async () => {
+      const res = await fetch("/api/offer/status", { cache: "no-store" });
+      return res.json();
+    });
+    assert(status?.offer, `offer status returned ${JSON.stringify(status)}`);
+    assert(status.offer.rewardKind === "free_shipping", `kind is ${status.offer.rewardKind}`);
+    assert(/shipping/i.test(status.offer.rewardName), `named ${status.offer.rewardName}`);
+    assert(!/GHK/i.test(status.offer.rewardName), "a shipping gift was described as a product");
+    await context.close();
+    return `${status.offer.rewardName}, min ${status.offer.minSubtotalCents / 100}`;
+  });
+
   // --- what the customer sees ----------------------------------------------
-  section("5. The customer can see the gift before they pay");
+  section("6. The customer can see the gift before they pay");
   await step("the cart drawer announces the pending gift", async () => {
     await q("delete from customer_offers where email = $1", [BUYER]);
     const token = await issueOffer(BUYER);
@@ -334,11 +443,11 @@ async function main() {
       return res.json();
     });
     assert(status?.offer, `offer status returned ${JSON.stringify(status)}`);
-    assert(/GHK/i.test(status.offer.productName), `status names ${status.offer.productName}`);
+    assert(/GHK/i.test(status.offer.rewardName), `status names ${status.offer.rewardName}`);
     assert(status.offer.minSubtotalCents === 6000, `minimum is ${status.offer.minSubtotalCents}`);
     await page.screenshot({ path: `${SHOTS}/offer-status.png` });
     await context.close();
-    return `${status.offer.productName}, min $${status.offer.minSubtotalCents / 100}`;
+    return `${status.offer.rewardName}, min $${status.offer.minSubtotalCents / 100}`;
   });
 
   await step("the status endpoint leaks no token", async () => {

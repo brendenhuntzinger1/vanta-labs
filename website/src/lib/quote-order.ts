@@ -145,7 +145,7 @@ export interface QuoteResult {
    * comes back empty, or two concurrent checkouts both ship a free vial. Same
    * contract as appliedPromotionLimits below.
    */
-  appliedOffer: { token: string; offerKey: string; productName: string } | null;
+  appliedOffer: { token: string; offerKey: string; rewardKind: string; description: string } | null;
   /** Id of the Buy X Get Y promotion that priced this order, for orders.promotion_id. */
   appliedPromotionId: string | null;
   /** Its customer-facing name, for receipts and admin. */
@@ -428,7 +428,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
 
   const requestedSlugs = Array.from(new Set([
     ...sanitizedItems.map((item) => item.id.split("::")[0]),
-    ...(offer ? [offer.product_slug] : []),
+    ...(offer?.product_slug ? [offer.product_slug] : []),
   ]));
   const catalogProducts = await getCatalogProductsBySlugs(requestedSlugs);
   // Raw stock, read separately and server-side only. The catalog objects above
@@ -604,7 +604,33 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // client sends an opaque token and nothing else; it cannot name the product,
   // the quantity or the price.
   let appliedOffer: QuoteResult["appliedOffer"] = null;
-  if (offer && input.offerToken) {
+  // Set here, consumed by the shipping calculation below. Declared out here so
+  // the two cannot drift apart: the gift is decided in one place, and shipping
+  // reads the decision rather than re-deriving it.
+  let offerGrantsFreeShipping = false;
+
+  // FREE SHIPPING IS THE ABSENCE OF A FEE, not a line.
+  //
+  // So it joins the two conditions that already zero shipping — a bulk-savings
+  // tier and a membership perk — rather than inventing a parallel path. Nothing
+  // downstream needs to know an offer was involved; the order simply has no
+  // shipping charge, exactly as a member's would not.
+  //
+  // Worth knowing what this is worth: the store already ships free over $200
+  // domestic, so this grants $15 (or $25 to the rest of North America) on
+  // orders BELOW that and nothing at all above it. The catalogue's minimum is
+  // set with that ceiling in mind — see OFFER_CATALOG.
+  if (offer && input.offerToken && offer.reward_kind === "free_shipping") {
+    if (offerMinimumMet(offer, Math.round(subtotal * 100))) {
+      offerGrantsFreeShipping = true;
+      appliedOffer = {
+        token: input.offerToken,
+        offerKey: offer.offer_key,
+        rewardKind: "free_shipping",
+        description: "Free shipping",
+      };
+    }
+  } else if (offer && input.offerToken) {
     const offerProduct = catalogProducts.find((candidate) => candidate.slug === offer.product_slug);
     const offerDose = offerProduct
       ? (offer.variant_id
@@ -646,7 +672,8 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       appliedOffer = {
         token: input.offerToken,
         offerKey: offer.offer_key,
-        productName: offerDose?.label ? `${offerProduct.name} (${offerDose.label})` : offerProduct.name,
+        rewardKind: "free_product",
+        description: offerDose?.label ? `${offerProduct.name} (${offerDose.label})` : offerProduct.name,
       };
     }
   }
@@ -682,7 +709,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // resolves to 0 here and is locked later from the wallet's address callback.
   const shipping = !destinationKnown
     ? 0
-    : (bulkSavingsResult.tier || memberPerks.freeShipping)
+    : (bulkSavingsResult.tier || memberPerks.freeShipping || offerGrantsFreeShipping)
       ? 0
       : roundMoney(calculateShipping(subtotal, input.customer.country, shippingConfig));
   // THE ORDER'S BUY-X-GET-Y PROMOTION — at most one, the one worth the most.

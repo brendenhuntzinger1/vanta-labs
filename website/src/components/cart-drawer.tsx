@@ -125,7 +125,7 @@ export function CartDrawer() {
   // Showing it MATTERS. A gift the shopper only discovers on the confirmation
   // screen cannot change what they put in the basket, and changing that is the
   // entire point of attaching one to a win-back.
-  const [pendingOffer, setPendingOffer] = useState<{ productName: string; minSubtotalCents: number } | null>(null);
+  const [pendingOffer, setPendingOffer] = useState<{ rewardKind: string; rewardName: string; minSubtotalCents: number } | null>(null);
   useEffect(() => {
     let cancelled = false;
     fetch("/api/offer/status", { cache: "no-store" })
@@ -450,12 +450,21 @@ export function CartDrawer() {
                       <span className="font-semibold text-[color:var(--accent-gold)]">
                         ${offerShortfall.toFixed(2)}
                       </span>{" "}
-                      more to claim your free {pendingOffer.productName}.
+                      more to claim your{" "}
+                      {/* "your free Free shipping" is what naive interpolation
+                          gives, so the word "free" belongs to the product
+                          wording only — the shipping label already carries it. */}
+                      {pendingOffer.rewardKind === "free_shipping"
+                        ? "free shipping"
+                        : `free ${pendingOffer.rewardName}`}.
                     </p>
                   ) : (
                     <>
                       <p className="text-sm font-semibold text-[color:var(--accent-gold)]">
-                        Free {pendingOffer.productName} — added at checkout
+                        {pendingOffer.rewardKind === "free_shipping"
+                          ? "Free shipping"
+                          : `Free ${pendingOffer.rewardName}`}{" "}
+                        — applied at checkout
                       </p>
                       <p className="mt-1.5 text-xs text-zinc-400">
                         Your one-time gift is applied automatically. It is tied to the email address

@@ -271,3 +271,41 @@ alter table if exists public.email_automations
 
 comment on column public.email_automations.offer_key is
   'One-time offer minted per recipient when this automation sends, e.g. winback_60_free_ghkcu. Null for no offer. Values come from OFFER_CATALOG in customer-offers.ts.';
+
+-- ---------------------------------------------------------------------------
+-- MORE THAN ONE KIND OF GIFT.
+--
+-- The first offer was a free product, and the table said so structurally:
+-- `product_slug` was NOT NULL because every offer had one. Free shipping does
+-- not — it zeroes a charge rather than adding a line — so the shape has to say
+-- WHAT is being granted, not assume.
+--
+-- WHY THE KIND IS STORED RATHER THAN LOOKED UP. OFFER_CATALOG in
+-- customer-offers.ts already owns the product, the minimum and the lifetime,
+-- and the kind could be read from there by offer_key. It is written down here
+-- anyway because a token lives for thirty days and the catalogue is code: an
+-- offer minted in March must still redeem as the thing it promised in March,
+-- even if the entry is edited or retired in the meantime. The row is the
+-- promise; the catalogue is only how new ones are made.
+alter table if exists public.customer_offers
+  add column if not exists reward_kind text not null default 'free_product';
+
+comment on column public.customer_offers.reward_kind is
+  'What this offer grants: free_product (a $0 order line, product_slug set) or free_shipping (the shipping charge zeroed). Written at issue time so an old token redeems as what it promised.';
+
+-- Free shipping has no product, so the column can no longer be mandatory.
+-- Existing rows are all free_product and already carry a slug, so nothing is
+-- rewritten and nothing becomes ambiguous.
+alter table if exists public.customer_offers
+  alter column product_slug drop not null;
+
+-- The one invariant that replaces the NOT NULL: a product gift must name a
+-- product, and a shipping gift must not pretend to. Enforced in the database
+-- because the alternative is trusting every future writer to remember.
+do $$ begin
+  alter table public.customer_offers
+    add constraint customer_offers_reward_shape check (
+      (reward_kind = 'free_product' and product_slug is not null)
+      or (reward_kind = 'free_shipping' and product_slug is null)
+    );
+exception when duplicate_object then null; end $$;

@@ -511,6 +511,37 @@ async function main() {
   });
 
   // --- nothing else broke --------------------------------------------------
+  section("10b. The gift picker offers every reward the catalogue knows");
+  await step("both gift kinds are selectable, and save", async () => {
+    // The picker is generated from OFFER_CATALOG, so a new entry appears with
+    // no admin change at all. This proves that end of the wiring — and that
+    // "No gift" is still the default an operator has to move off deliberately,
+    // because attaching one spends real product or real margin.
+    const picker = page.locator('[data-testid="automation-winback_60-offer"]');
+    await picker.scrollIntoViewIfNeeded();
+    const options = await picker.locator("option").allTextContents();
+    assert(options[0] === "No gift", `first option is ${JSON.stringify(options[0])}, expected the safe default`);
+    assert(options.some((o) => /GHK/i.test(o)), `no product gift in ${JSON.stringify(options)}`);
+    assert(options.some((o) => /shipping/i.test(o)), `no shipping gift in ${JSON.stringify(options)}`);
+
+    // Select the shipping gift, save, reload, confirm it stuck.
+    await picker.selectOption({ label: "Free shipping" });
+    await saveAutomation("winback_60");
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByRole("heading", { name: "Automated sequences" }).waitFor();
+    const saved = await page.locator('[data-testid="automation-winback_60-offer"]').inputValue();
+    assert(saved === "winback_60_free_shipping", `stored ${JSON.stringify(saved)}`);
+    const { rows } = await q("select offer_key from email_automations where key = 'winback_60'");
+    assert(rows[0].offer_key === "winback_60_free_shipping", `db has ${rows[0].offer_key}`);
+
+    // Put it back to no gift — this harness must not leave a sequence armed.
+    await page.locator('[data-testid="automation-winback_60-offer"]').selectOption("");
+    await saveAutomation("winback_60");
+    const { rows: after } = await q("select offer_key from email_automations where key = 'winback_60'");
+    assert(after[0].offer_key === null, `gift left attached: ${after[0].offer_key}`);
+    return `${options.length} options, round-tripped and cleared`;
+  });
+
   section("11. The button markup is email-client-safe");
   await step("the rendered button leans on nothing a mail client strips", async () => {
     // A browser renders anything. Gmail strips <style> blocks in some contexts,

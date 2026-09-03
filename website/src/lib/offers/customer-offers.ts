@@ -60,11 +60,29 @@ export function readOfferCookie(request: Request): string | null {
   return null;
 }
 
+/**
+ * WHAT AN OFFER CAN GRANT.
+ *
+ * Two shapes, because they are genuinely different operations rather than two
+ * settings of one:
+ *
+ *   free_product   adds a real order line at $0. Inventory reserves it and its
+ *                  COGS is booked, so the store knows what the gift cost.
+ *   free_shipping  zeroes the shipping charge. There is no line, no stock and
+ *                  no COGS — it is the absence of a fee.
+ *
+ * Adding a third kind means a new branch in quoteOrder and nothing else; adding
+ * another PRODUCT gift means one entry below and no code at all.
+ */
+export type OfferReward =
+  | { kind: "free_product"; productSlug: string }
+  | { kind: "free_shipping" };
+
 /** The offers this store knows how to grant. */
 export const OFFER_CATALOG = {
   winback_60_free_ghkcu: {
     label: "Free GHK-Cu",
-    productSlug: "ghk-cu",
+    reward: { kind: "free_product", productSlug: "ghk-cu" } as OfferReward,
     /**
      * The gate, and it is not optional.
      *
@@ -80,6 +98,27 @@ export const OFFER_CATALOG = {
      *  that the liability does not sit open forever. */
     ttlDays: 30,
   },
+  winback_60_free_shipping: {
+    label: "Free shipping",
+    reward: { kind: "free_shipping" } as OfferReward,
+    /**
+     * THIS MINIMUM HAS A CEILING AS WELL AS A FLOOR, which is particular to
+     * free shipping and easy to get wrong.
+     *
+     * The store already ships free over $200 domestic and $400 to the rest of
+     * North America (shipping.ts, and the live admin config agrees). So a
+     * free-shipping gift is worth $15 or $25 BELOW those thresholds and worth
+     * exactly nothing at or above them — set the minimum to $200 and the gift
+     * silently grants no discount at all, while still looking like a gift in
+     * the email.
+     *
+     * $35 is a floor with room underneath the ceiling: about half a vial, so
+     * the order is real, and far enough below $200 that the offer has value
+     * across the whole band it can apply to.
+     */
+    minSubtotalCents: 3500,
+    ttlDays: 30,
+  },
 } as const;
 
 export type OfferKey = keyof typeof OFFER_CATALOG;
@@ -92,7 +131,10 @@ export type CustomerOffer = {
   id: string;
   offer_key: string;
   email: string;
-  product_slug: string;
+  /** 'free_product' | 'free_shipping'. Stored, not inferred — see the SQL. */
+  reward_kind: string;
+  /** Null for a shipping gift. A check constraint keeps the two in step. */
+  product_slug: string | null;
   variant_id: string | null;
   min_subtotal_cents: number;
   expires_at: string;
@@ -134,7 +176,11 @@ export async function issueCustomerOffer(input: {
     offer_key: input.offerKey,
     token_hash: hashOfferToken(token),
     email,
-    product_slug: config.productSlug,
+    // The row records what was promised, so a token minted today still redeems
+    // as this even if the catalogue entry is edited or retired inside its
+    // thirty-day life.
+    reward_kind: config.reward.kind,
+    product_slug: config.reward.kind === "free_product" ? config.reward.productSlug : null,
     min_subtotal_cents: config.minSubtotalCents,
     expires_at: expiresAt,
   });
@@ -266,7 +312,7 @@ export async function peekCustomerOffer(input: {
   try {
     const { data, error } = await supabaseAdmin
       .from("customer_offers")
-      .select("id, offer_key, email, product_slug, variant_id, min_subtotal_cents, expires_at, reserved_order_id, redeemed_at, revoked_at")
+      .select("id, offer_key, email, reward_kind, product_slug, variant_id, min_subtotal_cents, expires_at, reserved_order_id, redeemed_at, revoked_at")
       .eq("token_hash", hashOfferToken(token))
       .maybeSingle();
     if (error || !data) return null;
@@ -304,7 +350,8 @@ export async function peekCustomerOffer(input: {
  */
 export async function readOfferStatus(token: string | null | undefined, now = Date.now()): Promise<{
   offerKey: string;
-  productSlug: string;
+  rewardKind: string;
+  productSlug: string | null;
   minSubtotalCents: number;
   expiresAt: string;
 } | null> {
@@ -313,15 +360,16 @@ export async function readOfferStatus(token: string | null | undefined, now = Da
   try {
     const { data } = await supabaseAdmin
       .from("customer_offers")
-      .select("offer_key, product_slug, min_subtotal_cents, expires_at, redeemed_at, revoked_at")
+      .select("offer_key, reward_kind, product_slug, min_subtotal_cents, expires_at, redeemed_at, revoked_at")
       .eq("token_hash", hashOfferToken(value))
       .maybeSingle();
     if (!data) return null;
-    const row = data as { offer_key: string; product_slug: string; min_subtotal_cents: number; expires_at: string; redeemed_at: string | null; revoked_at: string | null };
+    const row = data as { offer_key: string; reward_kind: string; product_slug: string | null; min_subtotal_cents: number; expires_at: string; redeemed_at: string | null; revoked_at: string | null };
     if (row.redeemed_at || row.revoked_at) return null;
     if (new Date(row.expires_at).getTime() <= now) return null;
     return {
       offerKey: row.offer_key,
+      rewardKind: row.reward_kind,
       productSlug: row.product_slug,
       minSubtotalCents: Number(row.min_subtotal_cents ?? 0),
       expiresAt: row.expires_at,

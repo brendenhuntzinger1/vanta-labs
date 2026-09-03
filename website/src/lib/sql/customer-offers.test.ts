@@ -268,6 +268,65 @@ describeDb("customer_offers", () => {
     });
   });
 
+  describe("reward shapes", () => {
+    // Two kinds of gift now share this table, and the constraint is what stops
+    // a half-described one from ever being written: a product gift with no
+    // product would grant nothing at checkout and still look valid in every
+    // report, which is the quiet failure the NOT NULL used to prevent.
+    it("stores a shipping gift with no product", async () => {
+      const token = `ship-${Math.random().toString(36).slice(2)}`;
+      await client.query(
+        `insert into public.customer_offers (offer_key, token_hash, email, reward_kind, product_slug, min_subtotal_cents, expires_at)
+         values ('winback_60_free_shipping', $1, $2, 'free_shipping', null, 3500, now() + interval '24 hours')`,
+        [hash(token), "buyer@example.test"],
+      );
+      const rows = await reserve(token, "order-ship", "buyer@example.test");
+      expect(rows).toHaveLength(1);
+      expect(rows[0].reward_kind).toBe("free_shipping");
+      expect(rows[0].product_slug).toBeNull();
+    });
+
+    it("refuses a product gift with no product", async () => {
+      await expect(client.query(
+        `insert into public.customer_offers (offer_key, token_hash, email, reward_kind, product_slug, min_subtotal_cents, expires_at)
+         values ('winback_60_free_ghkcu', $1, $2, 'free_product', null, 6000, now() + interval '24 hours')`,
+        [hash("bad-product"), "buyer@example.test"],
+      )).rejects.toThrow(/customer_offers_reward_shape|violates check/i);
+    });
+
+    it("refuses a shipping gift that names a product", async () => {
+      await expect(client.query(
+        `insert into public.customer_offers (offer_key, token_hash, email, reward_kind, product_slug, min_subtotal_cents, expires_at)
+         values ('winback_60_free_shipping', $1, $2, 'free_shipping', 'ghk-cu', 3500, now() + interval '24 hours')`,
+        [hash("bad-shipping"), "buyer@example.test"],
+      )).rejects.toThrow(/customer_offers_reward_shape|violates check/i);
+    });
+
+    it("defaults an un-migrated insert to the kind that used to be the only one", async () => {
+      // Every row written before reward_kind existed was a product gift, and
+      // the default is what keeps those rows meaning what they meant.
+      const token = `legacy-${Math.random().toString(36).slice(2)}`;
+      await client.query(
+        `insert into public.customer_offers (offer_key, token_hash, email, product_slug, min_subtotal_cents, expires_at)
+         values ('winback_60_free_ghkcu', $1, $2, 'ghk-cu', 6000, now() + interval '24 hours')`,
+        [hash(token), "buyer@example.test"],
+      );
+      const rows = await reserve(token, "order-legacy", "buyer@example.test");
+      expect(rows[0].reward_kind).toBe("free_product");
+    });
+
+    it("one person can hold a product gift AND a shipping gift", async () => {
+      // The unique index is per (offer_key, email), not per address — two
+      // different campaigns may each mail the same person once.
+      await issue("buyer@example.test");
+      await expect(client.query(
+        `insert into public.customer_offers (offer_key, token_hash, email, reward_kind, product_slug, min_subtotal_cents, expires_at)
+         values ('winback_60_free_shipping', $1, $2, 'free_shipping', null, 3500, now() + interval '24 hours')`,
+        [hash("both-kinds"), "buyer@example.test"],
+      )).resolves.toBeTruthy();
+    });
+  });
+
   it("a browser key can reach none of it", async () => {
     // The rows carry customer addresses and the shape of who was mailed what,
     // and the functions grant free product. Neither is anon's business.

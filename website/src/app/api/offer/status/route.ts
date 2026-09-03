@@ -26,20 +26,26 @@ export async function GET(request: Request) {
     return NextResponse.json({ offer: null });
   }
 
-  // The display name comes from the catalogue rather than from the offer row,
+  // What to call the gift in the cart.
+  //
+  // A product gift is named from the CATALOGUE rather than from the offer row,
   // so a renamed product reads correctly in a banner shown weeks after the
-  // token was minted.
-  let productName: string = OFFER_CATALOG[status.offerKey].label;
-  try {
-    const [product] = await getCatalogProductsBySlugs([status.productSlug]);
-    if (product?.name) productName = product.name;
-  } catch {
-    // The catalogue being unavailable is not a reason to hide the offer.
+  // token was minted. A shipping gift has no product to name, so it falls back
+  // to the catalogue entry's own label.
+  let rewardName: string = OFFER_CATALOG[status.offerKey].label;
+  if (status.rewardKind === "free_product" && status.productSlug) {
+    try {
+      const [product] = await getCatalogProductsBySlugs([status.productSlug]);
+      if (product?.name) rewardName = product.name;
+    } catch {
+      // The catalogue being unavailable is not a reason to hide the offer.
+    }
   }
 
   return NextResponse.json({
     offer: {
-      productName,
+      rewardKind: status.rewardKind,
+      rewardName,
       minSubtotalCents: status.minSubtotalCents,
       expiresAt: status.expiresAt,
     },
