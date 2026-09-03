@@ -332,7 +332,80 @@ and it is the only free source of truth on inbox placement you will get.
 |---|---|---|---|
 | 2.2a | Create + verify `mail.vantalabsresearch.com` in Resend | Resend | ☑ 2026-09-02 |
 | 2.2b | Publish its DKIM / SPF / Return-Path records | DNS | ☑ 2026-09-02 |
-| 2.2c | **Deploy the `resolveMarketingReplyTo` commit, THEN set Marketing From** | Deploy → Admin | ☐ |
+| 2.2c | Deploy the reply-path commit, then set Marketing From | Deploy → Admin | ☑ 2026-09-03 |
+| 2.1 | DMARC `rua`, then `p=quarantine` | DNS | ☐ |
+| 2.3 | Confirm `orders@` is monitored | Ops | ☐ |
+| 3 | Seed test across Gmail / Outlook / Yahoo | Ops | ☐ |
+
+> **2.2c — DONE 2026-09-03.** The subdomain split is LIVE. Deployment `7259f44`
+> reached production first, then `marketing_from` was set to
+> `Vanta Labs <news@mail.vantalabsresearch.com>`.
+>
+> Because `mail.vantalabsresearch.com` is send-only, the deployed code splits the
+> two identities: campaigns are **FROM** the subdomain, so their complaints land
+> on it and not on the receipts, and **Reply-To** plus the `List-Unsubscribe`
+> mailto resolve to `orders@vantalabsresearch.com`, which receives.
+> `marketing_reply_to` is unset and falls back to that; there is no admin field
+> for it yet, so changing it needs a row in `admin_control` or a small addition
+> to `/api/admin/settings`.
+>
+> **What to watch over the next two weeks.** The subdomain has no sending
+> reputation, so early campaigns may perform worse than the root domain did —
+> that is the price of insulating the transactional mail, and it fades with
+> volume. Keep sends modest. Suppressions written as `soft_bounce_run` are the
+> signal to watch: they are customer-reversible by design, but a cluster of them
+> means the new domain is being deferred and volume should come down, not up.
+
+## 3. How to actually find out where mail lands
+
+Everything above is upstream of the only question that matters, and neither the
+provider dashboard nor this repository can answer it. Two ways:
+
+**Seed testing — do this after any change in §2.** Create real accounts on
+Gmail, Outlook/Hotmail and Yahoo. Send yourself one of each kind of mail: an
+order confirmation, an affiliate application acknowledgement, a password reset,
+and a test campaign. Note the folder each lands in. In Gmail, open
+**⋮ → Show original** and confirm all three lines read `PASS`:
+
+```
+SPF:   PASS with domain send.vantalabsresearch.com
+DKIM:  PASS with domain vantalabsresearch.com
+DMARC: PASS
+```
+
+The `DKIM` domain is the one to check most carefully — it must be
+`vantalabsresearch.com` (or `mail.vantalabsresearch.com` once §2.2 is done), not
+a Resend-owned domain. That is what proves alignment on a real message rather
+than in a DNS lookup.
+
+**Google Postmaster Tools** — add `vantalabsresearch.com` at
+<https://postmaster.google.com>. It reports domain reputation, spam rate and
+authentication success for Gmail specifically, which is where most of this
+store's recipients are. It needs a few days of volume before it shows anything,
+and it is the only free source of truth on inbox placement you will get.
+
+---
+
+## 4. Standing rules
+
+- Marketing copy goes through the composer's deliverability panel. A high-risk
+  campaign takes a deliberate confirmation; that prompt is not there to be
+  clicked past.
+- A new template must pass `template-standards.test.ts`, which now includes
+  subject-line hygiene. If it fails, fix the subject rather than the test.
+- Never mail an address in `email_suppressions`. The suppression path exists
+  because repeatedly mailing dead addresses and people who complained is the
+  fastest way to lose the domain.
+- Watch the complaint rate. Above 0.1% is worth investigating; Gmail's stated
+  threshold is 0.3%, and by the time you reach it the damage is already done.
+
+## 5. Open items
+
+| # | Item | Owner | Status |
+|---|---|---|---|
+| 2.2a | Create + verify `mail.vantalabsresearch.com` in Resend | Resend | ☑ 2026-09-02 |
+| 2.2b | Publish its DKIM / SPF / Return-Path records | DNS | ☑ 2026-09-02 |
+| 2.2c | Deploy the reply-path commit, then set Marketing From | Deploy → Admin | ☑ 2026-09-03 |
 | 2.1 | DMARC `rua`, then `p=quarantine` | DNS | ☐ |
 | 2.3 | Confirm `orders@` is monitored | Ops | ☐ |
 | 3 | Seed test across Gmail / Outlook / Yahoo | Ops | ☐ |
