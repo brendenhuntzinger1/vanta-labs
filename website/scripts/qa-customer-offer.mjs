@@ -85,6 +85,17 @@ async function issueShippingOffer(email, { hours = 24, minCents = 3500 } = {}) {
   return token;
 }
 
+/** Mint a COMBINED gift: free shipping and a percentage, in one token. */
+async function issueComboOffer(email, { hours = 24, minCents = 3500, percent = 15 } = {}) {
+  const token = randomBytes(32).toString("base64url");
+  await q(
+    `insert into customer_offers (offer_key, token_hash, email, reward_kind, product_slug, percent_off, min_subtotal_cents, expires_at)
+     values ('winback_60_free_shipping_15', $1, $2, 'free_shipping_percent', null, $3, $4, now() + make_interval(hours => $5))`,
+    [hash(token), email.toLowerCase(), percent, minCents, hours],
+  );
+  return token;
+}
+
 /**
  * A fresh browser context with its own client IP.
  *
@@ -125,7 +136,26 @@ async function clearRateLimit() {
   await q("delete from rate_limit_hits").catch(() => {});
 }
 
-/** Place an order through the real checkout API, as the page. */
+/**
+ * Get past the 21+ gate.
+ *
+ * It stands in front of every storefront page and is the reason a UI-driving
+ * test sees "Continue as guest" where it expected "Add to cart". CLAUDE.md
+ * calls this out; the API-driven tests above never meet it because they POST
+ * straight to checkout.
+ */
+async function passAgeGate(page) {
+  const guest = page.getByRole("button", { name: /continue as guest/i });
+  if (!(await guest.count())) return false;
+  for (const box of await page.locator('input[type="checkbox"]:visible').all()) {
+    if (!(await box.isChecked())) await box.check();
+  }
+  await guest.click();
+  await page.waitForTimeout(1200);
+  return true;
+}
+
+/** Place an order through the real checkout API, as the page. *//** Place an order through the real checkout API, as the page. */
 async function checkout(page, { email, items, expectFailure = false }) {
   await clearRateLimit();
   const result = await page.evaluate(async ([payload]) => {
@@ -429,8 +459,159 @@ async function main() {
     return `${status.offer.rewardName}, min ${status.offer.minSubtotalCents / 100}`;
   });
 
+  // --- both halves at once --------------------------------------------------
+  section("6. Free shipping AND a percentage, in one gift");
+
+  await step("the combined gift waives shipping and takes the percentage off", async () => {
+    await q("delete from customer_offers where email = $1", [BUYER]);
+    const token = await issueComboOffer(BUYER, { percent: 15 });
+    const context = await freshContext();
+    const page = await browserHoldingOffer(context, token);
+    await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
+    const { body } = await checkout(page, { email: BUYER, items: [LINE] });
+    const { rows } = await q(
+      "select subtotal, shipping_amount, discount_amount from orders where order_id = $1", [body.orderId],
+    );
+    const r = rows[0];
+    assert(Number(r.shipping_amount) === 0, `shipping was ${r.shipping_amount}`);
+    // 15% of the $69 line.
+    const expected = Math.round(Number(r.subtotal) * 0.15 * 100) / 100;
+    assert(Math.abs(Number(r.discount_amount) - expected) < 0.02,
+      `discount was ${r.discount_amount}, expected about ${expected}`);
+    // And it is not a product gift.
+    const { rows: lines } = await q("select unit_price from order_items where order_id = $1", [body.orderId]);
+    assert(!lines.some((x) => Number(x.unit_price) === 0), "a combined gift added a free product line");
+    await context.close();
+    return `subtotal ${r.subtotal}, shipping $0, discount ${r.discount_amount}`;
+  });
+
+  await step("below its minimum neither half applies", async () => {
+    await q("delete from customer_offers where email = $1", [BUYER]);
+    const token = await issueComboOffer(BUYER, { minCents: 10000 });
+    const context = await freshContext();
+    const page = await browserHoldingOffer(context, token);
+    await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
+    const { body } = await checkout(page, { email: BUYER, items: [LINE] });
+    const { rows } = await q("select shipping_amount, discount_amount from orders where order_id = $1", [body.orderId]);
+    assert(Number(rows[0].shipping_amount) > 0, "shipping was waived below the minimum");
+    assert(Number(rows[0].discount_amount) === 0, `discount ${rows[0].discount_amount} applied below the minimum`);
+    await context.close();
+    return "neither half";
+  });
+
+  await step("the cart drawer names both halves, and says 'free' exactly once", async () => {
+    // READ THE RENDERED BANNER, not the API response. The bug this guards
+    // against is a wording bug — the component prefixes "Free " onto a product
+    // name, and doing that to a label that already begins with "Free" gives
+    // "Free Free shipping + 15% off". Only the DOM can show that.
+    await q("delete from customer_offers where email = $1", [BUYER]);
+    const token = await issueComboOffer(BUYER);
+    const context = await freshContext({ width: 390, height: 844 });
+    const page = await browserHoldingOffer(context, token);
+    await page.goto(`${BASE}/products/bpc-157-10mg`, { waitUntil: "domcontentloaded" });
+    await passAgeGate(page);
+
+    // Put something in the basket that clears the $35 minimum, then open the
+    // drawer the way a shopper does.
+    await page.getByRole("button", { name: /add to cart/i }).first().click();
+    await page.getByRole("button", { name: /open cart/i }).click();
+
+    const banner = page.locator('[data-testid="offer-banner"]');
+    await banner.waitFor({ timeout: 15_000 });
+    const text = (await banner.innerText()).replace(/\s+/g, " ").trim();
+
+    assert(/shipping/i.test(text), `banner does not mention shipping: ${text}`);
+    assert(/15%/.test(text), `banner does not mention the percentage: ${text}`);
+    assert(!/free free/i.test(text), `banner doubles the word free: ${text}`);
+    // And the drawer must not contradict itself. A 390px screenshot caught the
+    // store threshold bar ("You are $131.00 away from FREE SHIPPING") sitting
+    // directly above a banner saying free shipping was already applied.
+    const drawer = (await page.locator("text=Your order").locator("xpath=ancestor::*[3]").first().innerText())
+      .replace(/\s+/g, " ");
+    assert(!/away from free shipping/i.test(drawer),
+      "the cart still counts down to free shipping the customer already has");
+    await page.screenshot({ path: `${SHOTS}/combo-banner-390.png` });
+    await context.close();
+    return text.slice(0, 90);
+  });
+
+  // --- the typed-code route -------------------------------------------------
+  section("7. A coupon code can waive shipping as well as discount");
+
+  await step("a free-shipping coupon zeroes shipping AND takes its percentage", async () => {
+    await q("delete from coupons where code = 'QASHIP15'");
+    await q(
+      `insert into coupons (code, discount_type, discount_value, active, redemptions_count, free_shipping, created_at)
+       values ('QASHIP15', 'percent', 15, true, 0, true, now())`,
+    );
+    const context = await freshContext();
+    const page = await context.newPage();
+    await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
+    await clearRateLimit();
+    const res = await page.evaluate(async ([payload]) => {
+      const r = await fetch("/api/checkout/create-session", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        credentials: "same-origin", body: JSON.stringify(payload),
+      });
+      return { status: r.status, body: await r.json().catch(() => null) };
+    }, [{
+      items: [LINE],
+      customer: {
+        email: "qa-coupon@example.test", fullName: "Coupon Tester", address: "1 Harness Way",
+        city: "Testville", state: "CA", postalCode: "90000", country: "US", phone: "5555555555",
+      },
+      currency: "USD", couponCode: "QASHIP15",
+      complianceAcknowledgements: { researchCompliance: true, returnsPolicy: true },
+    }]);
+    assert(res.body?.orderId, `checkout failed: ${JSON.stringify(res.body).slice(0, 200)}`);
+    const { rows } = await q(
+      "select subtotal, shipping_amount, discount_amount, coupon_code from orders where order_id = $1",
+      [res.body.orderId],
+    );
+    const r = rows[0];
+    assert(Number(r.shipping_amount) === 0, `shipping was ${r.shipping_amount}`);
+    assert(Number(r.discount_amount) > 0, `no discount applied (${r.discount_amount})`);
+    await context.close();
+    return `${r.coupon_code}: shipping $0, discount ${r.discount_amount}`;
+  });
+
+  await step("a plain percentage coupon still charges shipping", async () => {
+    // The control for the flag: same shape of code, flag off, shipping charged.
+    // Without this, the test above would pass with free_shipping ignored.
+    await q("delete from coupons where code = 'QAPLAIN15'");
+    await q(
+      `insert into coupons (code, discount_type, discount_value, active, redemptions_count, free_shipping, created_at)
+       values ('QAPLAIN15', 'percent', 15, true, 0, false, now())`,
+    );
+    const context = await freshContext();
+    const page = await context.newPage();
+    await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
+    await clearRateLimit();
+    const res = await page.evaluate(async ([payload]) => {
+      const r = await fetch("/api/checkout/create-session", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        credentials: "same-origin", body: JSON.stringify(payload),
+      });
+      return { status: r.status, body: await r.json().catch(() => null) };
+    }, [{
+      items: [LINE],
+      customer: {
+        email: "qa-coupon2@example.test", fullName: "Coupon Tester", address: "1 Harness Way",
+        city: "Testville", state: "CA", postalCode: "90000", country: "US", phone: "5555555555",
+      },
+      currency: "USD", couponCode: "QAPLAIN15",
+      complianceAcknowledgements: { researchCompliance: true, returnsPolicy: true },
+    }]);
+    assert(res.body?.orderId, `checkout failed: ${JSON.stringify(res.body).slice(0, 200)}`);
+    const { rows } = await q("select shipping_amount, discount_amount from orders where order_id = $1", [res.body.orderId]);
+    assert(Number(rows[0].shipping_amount) > 0, "an unflagged coupon waived shipping");
+    assert(Number(rows[0].discount_amount) > 0, "the control coupon gave no discount");
+    await context.close();
+    return `shipping ${rows[0].shipping_amount}, discount ${rows[0].discount_amount}`;
+  });
+
   // --- what the customer sees ----------------------------------------------
-  section("6. The customer can see the gift before they pay");
+  section("8. The customer can see the gift before they pay");
   await step("the cart drawer announces the pending gift", async () => {
     await q("delete from customer_offers where email = $1", [BUYER]);
     const token = await issueOffer(BUYER);

@@ -379,7 +379,8 @@
     "is_private",
     "member_scope",
     "storefront_headline",
-    "storefront_priority"
+    "storefront_priority",
+    "free_shipping"
   ],
   "customer_addresses": [
     "id",
@@ -432,7 +433,8 @@
     "redeemed_order_id",
     "redeemed_at",
     "revoked_at",
-    "reward_kind"
+    "reward_kind",
+    "percent_off"
   ],
   "customer_preferences": [
     "user_id",

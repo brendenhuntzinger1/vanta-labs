@@ -142,6 +142,21 @@ export function CartDrawer() {
     ? Math.max(0, pendingOffer.minSubtotalCents / 100 - subtotal)
     : 0;
 
+  // A GIFT THAT ALREADY WAIVES SHIPPING MAKES THE PROGRESS BAR A LIE.
+  //
+  // Caught in a 390px screenshot: the drawer said "You are $131.00 away from
+  // FREE SHIPPING" directly above a banner saying free shipping was already
+  // applied. Both were individually true — the bar measures the STORE threshold
+  // and knows nothing about offers — and together they are the kind of
+  // contradiction a customer reads as a broken cart.
+  //
+  // Suppressed only once the gift actually applies, i.e. its own minimum is
+  // met; below that the shopper genuinely still has the store threshold to
+  // chase and the bar is the honest thing to show.
+  const offerCoversShipping = Boolean(pendingOffer)
+    && pendingOffer!.rewardKind !== "free_product"
+    && offerShortfall <= 0;
+
   // Smart membership upsell: only for non-members, and only when joining
   // would genuinely put money in their pocket TODAY (cart savings + credit
   // exceed the first month's cost). Dollars, computed live from this cart.
@@ -295,7 +310,7 @@ export function CartDrawer() {
           ) : hasItems ? (
             <div className="space-y-5">
               {/* Free shipping progress card */}
-              {subtotal > 0 ? (
+              {subtotal > 0 && !offerCoversShipping ? (
                 <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
                   {shippingProgress.isEligibleForFreeShipping ? (
                     <div className="flex items-center gap-3">
@@ -451,19 +466,20 @@ export function CartDrawer() {
                         ${offerShortfall.toFixed(2)}
                       </span>{" "}
                       more to claim your{" "}
-                      {/* "your free Free shipping" is what naive interpolation
-                          gives, so the word "free" belongs to the product
-                          wording only — the shipping label already carries it. */}
-                      {pendingOffer.rewardKind === "free_shipping"
-                        ? "free shipping"
-                        : `free ${pendingOffer.rewardName}`}.
+                      {/* Only a PRODUCT gift needs the word "free" put in front
+                          of it. Every other reward's label already reads as a
+                          complete phrase, and prefixing it gives the nonsense
+                          "your free Free shipping + 15% off". */}
+                      {pendingOffer.rewardKind === "free_product"
+                        ? `free ${pendingOffer.rewardName}`
+                        : pendingOffer.rewardName.toLowerCase()}.
                     </p>
                   ) : (
                     <>
                       <p className="text-sm font-semibold text-[color:var(--accent-gold)]">
-                        {pendingOffer.rewardKind === "free_shipping"
-                          ? "Free shipping"
-                          : `Free ${pendingOffer.rewardName}`}{" "}
+                        {pendingOffer.rewardKind === "free_product"
+                          ? `Free ${pendingOffer.rewardName}`
+                          : pendingOffer.rewardName}{" "}
                         — applied at checkout
                       </p>
                       <p className="mt-1.5 text-xs text-zinc-400">

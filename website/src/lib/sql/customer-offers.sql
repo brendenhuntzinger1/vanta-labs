@@ -309,3 +309,31 @@ do $$ begin
       or (reward_kind = 'free_shipping' and product_slug is null)
     );
 exception when duplicate_object then null; end $$;
+
+-- ---------------------------------------------------------------------------
+-- A THIRD KIND: FREE SHIPPING **AND** A PERCENTAGE, in one gift.
+--
+-- The percentage rides in the coupon slot of resolveCustomerDiscount, so it
+-- obeys the store's existing single-best-discount rule exactly as a coupon
+-- does — it competes, and it can lose to a better membership or ambassador
+-- price. The free shipping half does NOT compete, because shipping was never
+-- in that race. So the worst case is "the customer keeps their better
+-- discount and still gets free shipping", which is the right worst case.
+alter table if exists public.customer_offers
+  add column if not exists percent_off integer;
+
+comment on column public.customer_offers.percent_off is
+  'Percentage off for reward_kind = free_shipping_percent. Null for the other kinds. Competes as a coupon-style discount; the free shipping it comes with does not.';
+
+-- The shape constraint has to learn the new kind. Dropped and recreated rather
+-- than added alongside, so there is exactly one rule to read.
+alter table public.customer_offers
+  drop constraint if exists customer_offers_reward_shape;
+
+alter table public.customer_offers
+  add constraint customer_offers_reward_shape check (
+    (reward_kind = 'free_product' and product_slug is not null and percent_off is null)
+    or (reward_kind = 'free_shipping' and product_slug is null and percent_off is null)
+    or (reward_kind = 'free_shipping_percent' and product_slug is null
+        and percent_off is not null and percent_off > 0 and percent_off <= 100)
+  );

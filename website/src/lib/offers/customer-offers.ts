@@ -70,13 +70,20 @@ export function readOfferCookie(request: Request): string | null {
  *                  COGS is booked, so the store knows what the gift cost.
  *   free_shipping  zeroes the shipping charge. There is no line, no stock and
  *                  no COGS — it is the absence of a fee.
+ *   free_shipping_percent
+ *                  both at once. The percentage competes in the store's
+ *                  single-best-discount rule exactly as a coupon does; the free
+ *                  shipping does not, because shipping was never in that race.
+ *                  Worst case: the customer keeps a better discount and still
+ *                  gets free shipping.
  *
- * Adding a third kind means a new branch in quoteOrder and nothing else; adding
+ * Adding another kind means a new branch in quoteOrder and nothing else; adding
  * another PRODUCT gift means one entry below and no code at all.
  */
 export type OfferReward =
   | { kind: "free_product"; productSlug: string }
-  | { kind: "free_shipping" };
+  | { kind: "free_shipping" }
+  | { kind: "free_shipping_percent"; percent: number };
 
 /** The offers this store knows how to grant. */
 export const OFFER_CATALOG = {
@@ -119,6 +126,16 @@ export const OFFER_CATALOG = {
     minSubtotalCents: 3500,
     ttlDays: 30,
   },
+  winback_60_free_shipping_15: {
+    label: "Free shipping + 15% off",
+    reward: { kind: "free_shipping_percent", percent: 15 } as OfferReward,
+    // Same ceiling logic as the shipping-only gift: below $200 the customer
+    // gets both halves, above it the shipping half is already theirs and only
+    // the percentage bites. That degrades gracefully, so the floor is the only
+    // number that needs choosing.
+    minSubtotalCents: 3500,
+    ttlDays: 30,
+  },
 } as const;
 
 export type OfferKey = keyof typeof OFFER_CATALOG;
@@ -135,6 +152,8 @@ export type CustomerOffer = {
   reward_kind: string;
   /** Null for a shipping gift. A check constraint keeps the two in step. */
   product_slug: string | null;
+  /** Set only for free_shipping_percent. */
+  percent_off: number | null;
   variant_id: string | null;
   min_subtotal_cents: number;
   expires_at: string;
@@ -181,6 +200,7 @@ export async function issueCustomerOffer(input: {
     // thirty-day life.
     reward_kind: config.reward.kind,
     product_slug: config.reward.kind === "free_product" ? config.reward.productSlug : null,
+    percent_off: config.reward.kind === "free_shipping_percent" ? config.reward.percent : null,
     min_subtotal_cents: config.minSubtotalCents,
     expires_at: expiresAt,
   });
@@ -312,7 +332,7 @@ export async function peekCustomerOffer(input: {
   try {
     const { data, error } = await supabaseAdmin
       .from("customer_offers")
-      .select("id, offer_key, email, reward_kind, product_slug, variant_id, min_subtotal_cents, expires_at, reserved_order_id, redeemed_at, revoked_at")
+      .select("id, offer_key, email, reward_kind, product_slug, percent_off, variant_id, min_subtotal_cents, expires_at, reserved_order_id, redeemed_at, revoked_at")
       .eq("token_hash", hashOfferToken(token))
       .maybeSingle();
     if (error || !data) return null;
@@ -352,6 +372,7 @@ export async function readOfferStatus(token: string | null | undefined, now = Da
   offerKey: string;
   rewardKind: string;
   productSlug: string | null;
+  percentOff: number | null;
   minSubtotalCents: number;
   expiresAt: string;
 } | null> {
@@ -360,17 +381,18 @@ export async function readOfferStatus(token: string | null | undefined, now = Da
   try {
     const { data } = await supabaseAdmin
       .from("customer_offers")
-      .select("offer_key, reward_kind, product_slug, min_subtotal_cents, expires_at, redeemed_at, revoked_at")
+      .select("offer_key, reward_kind, product_slug, percent_off, min_subtotal_cents, expires_at, redeemed_at, revoked_at")
       .eq("token_hash", hashOfferToken(value))
       .maybeSingle();
     if (!data) return null;
-    const row = data as { offer_key: string; reward_kind: string; product_slug: string | null; min_subtotal_cents: number; expires_at: string; redeemed_at: string | null; revoked_at: string | null };
+    const row = data as { offer_key: string; reward_kind: string; product_slug: string | null; percent_off: number | null; min_subtotal_cents: number; expires_at: string; redeemed_at: string | null; revoked_at: string | null };
     if (row.redeemed_at || row.revoked_at) return null;
     if (new Date(row.expires_at).getTime() <= now) return null;
     return {
       offerKey: row.offer_key,
       rewardKind: row.reward_kind,
       productSlug: row.product_slug,
+      percentOff: row.percent_off === null ? null : Number(row.percent_off),
       minSubtotalCents: Number(row.min_subtotal_cents ?? 0),
       expiresAt: row.expires_at,
     };

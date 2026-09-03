@@ -15,6 +15,7 @@ import { getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { selectPromotionForCart, type BxgyCartLine } from "@/lib/bxgy-engine";
 import { offerMinimumMet, peekCustomerOffer, type CustomerOffer } from "@/lib/offers/customer-offers";
+import { calculateCouponDiscount } from "@/lib/coupons";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
 import { calculateShipping, isDomesticCountry, isShippableCountry } from "@/lib/shipping";
 import { normalizeUsState } from "@/lib/sales-tax";
@@ -620,14 +621,28 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // domestic, so this grants $15 (or $25 to the rest of North America) on
   // orders BELOW that and nothing at all above it. The catalogue's minimum is
   // set with that ceiling in mind — see OFFER_CATALOG.
-  if (offer && input.offerToken && offer.reward_kind === "free_shipping") {
+  // The percentage half of a combined gift, in dollars. Fed to
+  // resolveCustomerDiscount through the COUPON slot further down, so it obeys
+  // the store's single-best-discount rule exactly as a coupon does rather than
+  // inventing a rule of its own — it competes, and it can lose to a better
+  // membership or ambassador price. The free-shipping half is decided above and
+  // is never in that race, so the worst case is "keeps the better discount, and
+  // still gets free shipping".
+  let offerPercentDiscount = 0;
+
+  if (offer && input.offerToken
+      && (offer.reward_kind === "free_shipping" || offer.reward_kind === "free_shipping_percent")) {
     if (offerMinimumMet(offer, Math.round(subtotal * 100))) {
       offerGrantsFreeShipping = true;
+      const percent = offer.reward_kind === "free_shipping_percent" ? Number(offer.percent_off ?? 0) : 0;
+      // Priced off discountBase, the same base every other percentage uses, so
+      // a combined gift and a coupon of the same size are worth the same.
+      if (percent > 0) offerPercentDiscount = calculateCouponDiscount(discountBase, "percent", percent);
       appliedOffer = {
         token: input.offerToken,
         offerKey: offer.offer_key,
-        rewardKind: "free_shipping",
-        description: "Free shipping",
+        rewardKind: offer.reward_kind,
+        description: percent > 0 ? `Free shipping + ${percent}% off` : "Free shipping",
       };
     }
   } else if (offer && input.offerToken) {
@@ -701,17 +716,6 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // No service/handling fee is ever charged — customers pay merchandise (minus
   // discounts) + shipping + sales tax only.
   const bulkSavingsResult = calculateBulkSavingsDiscount(discountBase, bulkSavingsEligible, bulkSavingsConfig);
-  // Free shipping is a perk of reaching the bulk-savings threshold OR of an
-  // active membership tier whose plan includes free shipping. Both are
-  // account-tied and evaluated server-side.
-  //
-  // With no address yet (express wallet), shipping is NOT knowable, so it
-  // resolves to 0 here and is locked later from the wallet's address callback.
-  const shipping = !destinationKnown
-    ? 0
-    : (bulkSavingsResult.tier || memberPerks.freeShipping || offerGrantsFreeShipping)
-      ? 0
-      : roundMoney(calculateShipping(subtotal, input.customer.country, shippingConfig));
   // THE ORDER'S BUY-X-GET-Y PROMOTION — at most one, the one worth the most.
   //
   // Each promotion is priced against its OWN valuation of a rewarded unit
@@ -835,6 +839,29 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     ? await validateCoupon(input.couponCode, discountBase, input.customer.email, { isActiveMember: memberPerks.isActiveMember })
     : null;
 
+  // WHO GETS FREE SHIPPING — four independent grants, any one of which is
+  // enough. Two are account-tied and were always here (a bulk-savings tier, a
+  // membership plan that includes it); two are new (a one-time offer whose
+  // reward is free shipping, and a coupon flagged to waive it).
+  //
+  // NONE OF THEM COMPETE. resolveCustomerDiscount below picks a single winner
+  // among referral, membership, bulk and coupon — shipping is not in that
+  // race. So a code can waive shipping AND lose the percentage race, and the
+  // customer still gets the free shipping they were promised, which is what
+  // "free shipping + 15% off" means to the person reading it.
+  //
+  // MOVED DOWN FROM ABOVE THE PROMOTION BLOCK so it can see `coupon`, which is
+  // resolved a few lines up. Nothing read `shipping` in between — checked, not
+  // assumed — so the value is unchanged for every order that has no coupon.
+  //
+  // With no address yet (express wallet), shipping is NOT knowable, so it
+  // resolves to 0 here and is locked later from the wallet's address callback.
+  const shipping = !destinationKnown
+    ? 0
+    : (bulkSavingsResult.tier || memberPerks.freeShipping || offerGrantsFreeShipping || coupon?.freeShipping)
+      ? 0
+      : roundMoney(calculateShipping(subtotal, input.customer.country, shippingConfig));
+
   // Personal ambassador discount: an approved ambassador gets a discount on
   // their OWN purchase. It earns NO commission (self-referral is blocked) and,
   // like every discount here, does not stack unless stacking is enabled.
@@ -870,7 +897,13 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       referralPercent: referralQualifiesForDiscount && referral ? referral.discountPercent : 0,
       isMember: memberPricingAmount > 0,
       membershipPercent: memberPerks.memberDiscountPercent,
-      couponDiscount: coupon ? coupon.discountAmount : 0,
+      // ONE SLOT, THE BETTER OF THE TWO. A combined gift's percentage and a
+      // typed coupon are the same kind of thing — a code-shaped percentage off
+      // — so they take the same slot and the customer keeps whichever is worth
+      // more. Adding a separate candidate would have meant changing
+      // resolveCustomerDiscount, which every other discount in the store also
+      // depends on, for no behaviour a customer could tell apart.
+      couponDiscount: Math.max(coupon ? coupon.discountAmount : 0, offerPercentDiscount),
       bulkSavingsAmount: bulkSavingsResult.amount,
       personalDiscountAmount,
       personalDiscountPercent: referralProgram.personalDiscountPercent,
