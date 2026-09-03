@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { TITLE_TEMPLATE } from "@/lib/site-identity";
@@ -166,20 +167,50 @@ describe("the hero can never wash out light", () => {
   const css = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
   const heroRule = css.slice(css.indexOf(".vl2-hero-video"), css.indexOf(".vl2-hero-scrim"));
 
-  it("the video paints on its own dark ground before any frame decodes", () => {
-    // A <video> with nothing decoded yet shows whatever the compositor holds.
-    // The file is 6.4 MB, so that window always exists.
-    expect(heroRule).toMatch(/background-color:\s*#0a0a0a/);
+  // REVERSED DELIBERATELY. This used to require `background-color: #0a0a0a` on
+  // the media, to cover the window before the first frame decodes.
+  //
+  // That premise is gone twice over. There is no <video> in the document to
+  // show a stale compositor buffer — it is a <canvas>, which starts fully
+  // transparent and is painted from a 36 KB still long before the 460 KB clip
+  // arrives. And the media box is now deliberately SMALLER than the hero, so an
+  // opaque plate behind it is a second rectangle sitting on the hero's own
+  // gradient: the exact defect the rest of this file is now removing.
+  it("paints on the hero's ground, not on a plate of its own", () => {
+    // Comments in this rule NAME the removed declaration while explaining it.
+    expect(heroRule.replace(/\/\*[\s\S]*?\*\//g, "")).not.toMatch(/background-color:/);
+    // The dark ground still has to come from somewhere. It is the hero's.
+    const hero = css.slice(css.indexOf(".vl2-hero {"), css.indexOf(".vl2-hero-video"));
+    expect(hero).toMatch(/background:/);
   });
 
-  it("the mobile scrim never falls close to transparent", () => {
-    // Its middle stop used to drop to 0.18, which a bright stretch of video
-    // glared straight through.
+  // NARROWED DELIBERATELY. This used to demand that EVERY stop of the mobile
+  // scrim stay at 0.4 or darker, because a full-bleed white-backgrounded clip
+  // would otherwise glare through the middle of it.
+  //
+  // Holding the whole viewport at 42%-to-93% black is also what made the hero
+  // read as a dark rectangle with a picture in it, which is half the "black
+  // box" complaint. The premise for the blanket floor is gone: the media no
+  // longer fills the hero, its own border is black in the file, and the canvas
+  // fades it out with real alpha, so nothing bright can reach the top of the
+  // section.
+  //
+  // What the scrim is actually for is holding the copy legible, and that is
+  // asserted here instead — on the stops that sit behind the copy rather than
+  // on all of them.
+  it("keeps the copy end of the mobile scrim dark enough to read on", () => {
     const scrim = css.slice(css.indexOf(".vl2-hero-scrim"), css.indexOf(".vl2-hero-content"));
     const mobile = scrim.slice(0, scrim.indexOf("@media"));
-    const alphas = [...mobile.matchAll(/rgba\(0,\s*0,\s*0,\s*([0-9.]+)\)/g)].map((m) => Number(m[1]));
-    expect(alphas.length).toBeGreaterThan(0);
-    expect(Math.min(...alphas)).toBeGreaterThanOrEqual(0.4);
+    const stops = [...mobile.matchAll(/rgba\(0,\s*0,\s*0,\s*([0-9.]+)\)\s+([0-9.]+)%/g)]
+      .map((m) => ({ alpha: Number(m[1]), at: Number(m[2]) }));
+    expect(stops.length).toBeGreaterThan(2);
+    // The copy block is bottom-anchored and roughly the lower half of the hero.
+    const overCopy = stops.filter((stop) => stop.at >= 60);
+    expect(overCopy.length).toBeGreaterThan(0);
+    expect(Math.min(...overCopy.map((stop) => stop.alpha))).toBeGreaterThanOrEqual(0.55);
+    // And it must still finish opaque enough for the trust row at the very
+    // bottom, which is the smallest, lowest-contrast text in the hero.
+    expect(Math.max(...stops.map((stop) => stop.alpha))).toBeGreaterThanOrEqual(0.85);
   });
 });
 
@@ -366,10 +397,51 @@ describe("the hero fails to a still vial, never to nothing", () => {
   });
 
   it("leaves the still frame up when nothing has decoded", () => {
-    // The paint loop must RETURN rather than clear the canvas, or a failed
-    // decode would wipe the poster and leave an empty rectangle.
+    // The paint loop must RETURN rather than paint an empty frame.
     expect(source).toMatch(/if \(video\.readyState < 2 \|\| !video\.videoWidth\) return;/);
-    expect(source).not.toContain("clearRect");
+  });
+
+  // THIS IS THE ONE THE PREVIOUS BUILD PASSED BY ACCIDENT.
+  //
+  // That build never cleared the canvas, so a `drawImage(video)` that produced
+  // nothing left the poster where it was. Correct behaviour, no reasoning
+  // behind it — and the moment a clear became necessary (the canvas carries
+  // alpha now, and without a clear the previous frame shows through the new
+  // one's faded edges) the accident turned into a blank hero.
+  //
+  // It is not hypothetical. Measured in WebKit against this very page: the
+  // detached element reported readyState 4 and videoWidth 720, was not paused,
+  // and every drawImage was a no-op with currentTime frozen at 0. Clear-then-
+  // draw in that state paints nothing at all.
+  //
+  // So the frames are composed in an opaque offscreen buffer that is never
+  // cleared, and the visible canvas is repainted from the buffer. A draw that
+  // yields nothing leaves the last good picture — the poster, at worst.
+  it("composes into a buffer that a dead decoder cannot wipe", () => {
+    expect(source).toContain("const picture = document.createElement(\"canvas\");");
+    // The buffer is opaque and IS NEVER CLEARED — that is the whole guarantee.
+    expect(source).toContain('picture.getContext("2d", { alpha: false })');
+    expect(source, "clearing the buffer would reinstate the blank-hero bug")
+      .not.toMatch(/pictureContext\.clearRect/);
+    // The only clear is on the visible canvas, inside present(), which refuses
+    // to run until there is something to present.
+    const clears = [...source.matchAll(/\.clearRect\(/g)];
+    expect(clears.length, "exactly one clear, on the visible canvas").toBe(1);
+    const present = source.slice(source.indexOf("const present = () => {"));
+    expect(present.slice(0, 200)).toMatch(/if \(!hasPicture\) return;/);
+    expect(present.indexOf("context.clearRect")).toBeLessThan(present.indexOf("context.drawImage(picture"));
+  });
+
+  it("stops asking a decoder that has proved it will not deliver", () => {
+    // Otherwise a browser in that state repaints one still picture at 60 Hz
+    // for as long as the page is open — the battery cost of an animation,
+    // without the animation. currentTime advances if and only if frames are
+    // being presented, and reading it cannot be refused by an origin rule the
+    // way sampling the canvas can.
+    expect(source).toContain("video.currentTime !== lastTime");
+    expect(source).toMatch(/window\.clearInterval\(liveness\);[\s\S]{0,120}cancelAnimationFrame\(raf\)/);
+    // ...and it settles on the still rather than on nothing.
+    expect(source).toMatch(/if \(stillReady\) cover\(stillFrame/);
   });
 
   it("uses the compressed, audio-free clip", () => {
@@ -392,11 +464,30 @@ describe("an app's browser gets a still hero, never a clip", () => {
   const hero = read("src/components/hero-video.tsx");
   const detect = read("src/lib/in-app-browser.ts");
 
-  it("renders an image, not a canvas or a video, in an in-app browser", () => {
+  // CHANGED FROM <img> TO A STILL-ONLY CANVAS, and the rule it enforces is
+  // unchanged: NO VIDEO IS CREATED. The <img> was one way to guarantee that;
+  // passing the canvas a null source is another, and it is the better one here
+  // because the still then gets the same alpha falloff as the animated hero
+  // instead of being a bare rectangle of a white-backgrounded JPEG — which is
+  // the white-box report itself, handed straight to the WebViews that produce
+  // it. Nothing about the fullscreen-player rule is relaxed: a canvas has no
+  // player to hand over, and with src === null no decoder is started at all.
+  it("creates no video at all in an in-app browser", () => {
     expect(hero).toContain("detectInAppBrowser");
-    expect(hero).toMatch(/if \(inApp\) \{[\s\S]*?<img/);
-    // The still is the poster; no source is requested at all.
-    expect(hero).toMatch(/<img[\s\S]*?src=\{poster\}/);
+    // The still-only branch is chosen by data, and it is what suppresses the
+    // source. `src={still ? null : src}` is the whole mechanism.
+    expect(hero).toMatch(/src=\{still \? null : src\}/);
+    // ...and a null source must short-circuit BEFORE the video element exists.
+    const nullGuard = hero.indexOf("if (src === null)");
+    const createVideo = hero.indexOf('document.createElement("video")');
+    expect(nullGuard).toBeGreaterThan(-1);
+    expect(nullGuard, "the still-only return must precede any video").toBeLessThan(createVideo);
+  });
+
+  it("also stands down for a visitor who asked for reduced motion", () => {
+    // A ten-second looping background clip is exactly what the setting is for,
+    // and the honest way to honour it is not to fetch or decode it at all.
+    expect(hero).toContain('window.matchMedia("(prefers-reduced-motion: reduce)").matches');
   });
 
   it("keeps the animation everywhere else", () => {
@@ -484,8 +575,11 @@ describe("the hero vial is framed on a phone, never magnified and cropped", () =
     return "";
   };
 
+  /** Comments carry prose with colons in it; strip them before matching. */
   const decl = (rule: string, prop: string) =>
-    new RegExp(`(?:^|[;{\\s])${prop}\\s*:\\s*([^;]+)`, "m").exec(rule)?.[1].trim() ?? null;
+    new RegExp(`(?:^|[;{\\s])${prop}\\s*:\\s*([^;]+)`, "m")
+      .exec(rule.replace(/\/\*[\s\S]*?\*\//g, ""))?.[1]
+      .trim() ?? null;
 
   // BOTH breakpoints, because the defect is on both — it just changes axis.
   // A phone crops 46% of the WIDTH; a 1440x900 laptop crops 0% of the width
@@ -516,12 +610,28 @@ describe("the hero vial is framed on a phone, never magnified and cropped", () =
         expect(rule).toMatch(/inset:\s*auto/);
       });
 
-      it("fades the shot into the hero instead of ending it on a hard edge", () => {
-        // The shot is lit on a white studio background. Dropped onto a
-        // near-black hero as a plain rectangle it reads as a bright panel
-        // pasted on the page, which is the complaint these rules answer — so
-        // it is masked out at the edges rather than cut off at them.
-        expect(rule).toMatch(/mask-image:/);
+      // REVERSED DELIBERATELY, AND THIS IS THE BLACK BOX.
+      //
+      // This used to REQUIRE a `mask-image` here, on the reasoning that a
+      // white-backgrounded shot must be faded at its edges rather than cut off
+      // at them. The reasoning was right and the mechanism was wrong, in a way
+      // that is arithmetic rather than taste.
+      //
+      // A radial-gradient mask is sized against the element box, so a gradient
+      // whose transparent stop lands outside that box is CLIPPED BY IT, and a
+      // clipped ellipse is a rectangle with rounded corners. The phone rule
+      // read `ellipse 82% 54% at 50% 31% ... transparent 76%`: the transparent
+      // stop sat at 0.82 x 0.76 = 62% of the box width from a centre at 50%,
+      // i.e. at -12% and 112% of the width. Straight vertical edges, both
+      // sides. Vertically it finished at 72%, which is the straight line that
+      // cut the vial through its own label. The desktop rule had the same
+      // defect down its left side.
+      //
+      // So no mask, either breakpoint. The falloff is real alpha painted by
+      // the canvas (destination-in), which is bounded by construction and does
+      // not depend on a compositing feature a WebView may quietly skip.
+      it("fades into the hero with alpha, not with a mask that clips to a box", () => {
+        expect(rule).not.toMatch(/mask-image:/);
       });
     });
   }
@@ -530,5 +640,163 @@ describe("the hero vial is framed on a phone, never magnified and cropped", () =
     const base = css.slice(css.indexOf(".vl2-hero-video"), css.indexOf(".vl2-hero-scrim"));
     expect(base).toMatch(/object-fit:\s*cover/);
     expect(base).toMatch(/pointer-events:\s*none/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE WHITE BOX, AT ITS SOURCE.
+//
+// Every "the vial renders with a white box round it" report traces to one fact
+// that no amount of CSS could change: THE ASSET IS A WHITE SQUARE WITH A VIAL
+// IN THE MIDDLE. It is a high-key product film, lit on a white studio
+// backdrop. Measured on the pre-fix file, frame 60 had a median luminance of
+// 217/255 and corners between 172 and 200. There is no alpha channel and never
+// was one — H.264 cannot carry it — so nothing about the shot is transparent.
+//
+// What made the page look right was CSS painted OVER it: an opacity, a scrim,
+// and latterly a mask. Every one of those is a compositing feature, and every
+// rendering path that skips them shows the asset as it is:
+//
+//   * a WebView that ignores or mis-composites `mask-image`;
+//   * iOS's native fullscreen player, which paints no page CSS at all — "the
+//     vial alone on white", the exact wording of the reports;
+//   * opening the media URL directly.
+//
+// So the fix is in the pixels. `scripts/build-hero-media.mjs` burns a vignette
+// into both files that reaches true black BEFORE the frame border, on every
+// side. After it there is no rendering path — no browser, no player, no failed
+// mask, no disabled JavaScript — that can put a bright edge on screen, because
+// the file no longer contains one.
+//
+// This is the assertion that would have caught the original bug, and it is the
+// only one in this file that reads the shipped bytes rather than the source.
+// ---------------------------------------------------------------------------
+describe("the shipped hero media cannot show a bright edge", () => {
+  const script = read("scripts/build-hero-media.mjs");
+
+  it("fades to black strictly inside the frame, by construction", () => {
+    // END at 1.0 is what makes the guarantee total rather than approximate:
+    // radius is normalised so an edge midpoint is exactly 1 and a corner is
+    // 1.41, so every pixel on the perimeter is at or past the end of the ramp.
+    expect(script).toMatch(/^const END = 1(\.0)?;$/m);
+    const start = /^const START = ([0-9.]+);$/m.exec(script);
+    expect(start, "the ramp must declare where it begins").not.toBeNull();
+    expect(Number(start![1])).toBeGreaterThan(0);
+    expect(Number(start![1])).toBeLessThan(1);
+  });
+
+  it("derives both files from the untouched master, so it cannot double-apply", () => {
+    // Re-running must be a no-op, not a second vignette. Reading the shipped
+    // poster to make the next poster is how that happens; both outputs come
+    // from the master clip instead.
+    expect(script).toMatch(/-i", MASTER_VIDEO,[\s\S]*?-i", MASTER_VIDEO,/);
+    expect(script).not.toMatch(/"-i", OUT_POSTER/);
+    expect(script).not.toMatch(/"-i", OUT_VIDEO/);
+  });
+
+  // The bytes themselves. ffmpeg is the only way to decode them here and it is
+  // not a dependency of this project, so this measures when it is available and
+  // says so when it is not, rather than silently passing.
+  const ffmpeg = (() => {
+    try {
+      execFileSync("ffmpeg", ["-version"], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  /** Brightest channel found anywhere on the one-pixel border of a frame. */
+  const brightestBorder = (file: string, extraFilters: string) => {
+    const size = 160;
+    const raw = execFileSync(
+      "ffmpeg",
+      ["-v", "error", "-i", file, "-vf", `${extraFilters}scale=${size}:${size}`,
+       "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+      { maxBuffer: 1 << 26 },
+    );
+    let worst = 0;
+    const at = (x: number, y: number) => {
+      const i = (y * size + x) * 3;
+      worst = Math.max(worst, raw[i], raw[i + 1], raw[i + 2]);
+    };
+    for (let i = 0; i < size; i++) {
+      at(i, 0);
+      at(i, size - 1);
+      at(0, i);
+      at(size - 1, i);
+    }
+    return worst;
+  };
+
+  // 16/255 is the hero's own darkest gradient stop (#0b0b0b is 11). Anything
+  // at or below this is indistinguishable from the page it sits on; the file
+  // this replaces measured 172-200 in the same places.
+  const INDISTINGUISHABLE_FROM_THE_PAGE = 16;
+
+  it.skipIf(!ffmpeg)("the poster's border is black", () => {
+    expect(brightestBorder("public/images/hero-vial-poster.jpg", ""))
+      .toBeLessThanOrEqual(INDISTINGUISHABLE_FROM_THE_PAGE);
+  });
+
+  it.skipIf(!ffmpeg)("every sampled frame of the clip has a black border", () => {
+    // Across the whole ten seconds, not just the opening shot: the vial
+    // descends into water part-way through and the backdrop changes with it.
+    for (const frame of [0, 40, 80, 120, 160, 200, 240]) {
+      expect(
+        brightestBorder("public/videos/vanta-labs-hero-opt.mp4", `select='eq(n\\,${frame})',`),
+        `frame ${frame} of the hero clip has a bright border`,
+      ).toBeLessThanOrEqual(INDISTINGUISHABLE_FROM_THE_PAGE);
+    }
+  });
+
+  it.skipIf(!ffmpeg)("the still and the clip are the same picture", () => {
+    // They are painted into the same canvas one after the other, so a mismatch
+    // shows up as a jump the moment playback starts.
+    const poster = "public/images/hero-vial-poster.jpg";
+    const clip = "public/videos/vanta-labs-hero-opt.mp4";
+    const grab = (file: string, filters: string) =>
+      execFileSync(
+        "ffmpeg",
+        ["-v", "error", "-i", file, "-vf", `${filters}scale=64:64`, "-frames:v", "1",
+         "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+        { maxBuffer: 1 << 24 },
+      );
+    const a = grab(poster, "");
+    const b = grab(clip, "select='eq(n\\,29)',");
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) diff += Math.abs(a[i] - b[i]);
+    expect(diff / a.length, "the poster is not the clip's frame 29").toBeLessThan(6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The falloff that replaced the mask has to be bounded, or it is the same bug
+// in a different language: a gradient that wants to finish outside the canvas
+// is clipped by the canvas, and a clipped ellipse is a rectangle.
+// ---------------------------------------------------------------------------
+describe("the canvas falloff is bounded by the element it paints", () => {
+  const source = read("src/components/hero-video.tsx");
+
+  it("ends the gradient at the box's own inscribed radius", () => {
+    // min(cx, cy) is the distance to the NEAREST edge midpoint, so the ramp is
+    // complete before any border pixel on any axis. The corners, further out
+    // still, are transparent by definition.
+    expect(source).toContain("const outer = Math.min(cx, cy);");
+    expect(source).toContain("createRadialGradient(cx, cy, outer * FADE_START, cx, cy, outer)");
+    const start = /^const FADE_START = ([0-9.]+);$/m.exec(source);
+    expect(start).not.toBeNull();
+    expect(Number(start![1])).toBeGreaterThan(0);
+    expect(Number(start![1])).toBeLessThan(1);
+  });
+
+  it("applies it as alpha on the canvas, not as a CSS mask", () => {
+    expect(source).toContain('context.globalCompositeOperation = "destination-in"');
+    // An opaque canvas cannot fade into anything, so the VISIBLE canvas must
+    // not ask for one. The offscreen buffer is a different matter — it is
+    // opaque on purpose, and it is never on screen.
+    expect(source).toContain('const context = canvas.getContext("2d");');
+    expect(source).not.toMatch(/canvas\.getContext\("2d",\s*\{\s*alpha:\s*false/);
+    expect(read("src/app/globals.css")).not.toMatch(/\.vl2-hero-video[\s\S]{0,400}?mask-image:/);
   });
 });
