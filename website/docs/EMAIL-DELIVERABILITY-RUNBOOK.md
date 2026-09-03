@@ -274,9 +274,24 @@ and it is the only free source of truth on inbox placement you will get.
 
 | # | Item | Owner | Status |
 |---|---|---|---|
-| 2.4 | **Send a test to `orders@` and `support@` — do they arrive?** | Ops | ☐ |
+| 2.2a | Create + verify `mail.vantalabsresearch.com` in Resend | Resend | ☑ 2026-09-02 |
+| 2.2b | Publish its DKIM / SPF / Return-Path records | DNS | ☑ 2026-09-02 |
+| 2.2c | **Deploy the `resolveMarketingReplyTo` commit, THEN set Marketing From** | Deploy → Admin | ☐ |
 | 2.1 | DMARC `rua`, then `p=quarantine` | DNS | ☐ |
-| 2.2 | Verify `mail.vantalabsresearch.com`, set Marketing From | Resend + Admin | ☐ |
-| 2.3 | Confirm `orders@` is monitored (or restore a working inbox) | Ops | ☐ |
+| 2.3 | Confirm `orders@` is monitored | Ops | ☐ |
+| 3 | Seed test across Gmail / Outlook / Yahoo | Ops | ☐ |
+
+> **2.2c — the ordering is not optional, and it is the reason this is still open.**
+>
+> The subdomain is verified and its DNS is correct. Marketing From was set on
+> 2026-09-02 and **deliberately reverted the same day**, because a Resend
+> sending domain is send-only: with the reply-path fix undeployed, campaigns
+> would have gone out from an address that bounces both replies and the
+> `List-Unsubscribe` mailto. Cart recovery and the automations run through
+> `sendMarketingEmail`, so that window was live, not theoretical.
+>
+> Deploy first. Then set Marketing From to
+> `Vanta Labs <news@mail.vantalabsresearch.com>` in Admin → Settings → Email.
+> Nothing else needs redoing — Resend and DNS are already in place.
 | 3 | Seed test across Gmail / Outlook / Yahoo | Ops | ☐ |
 | 3 | Enrol in Google Postmaster Tools | Ops | ☐ |
