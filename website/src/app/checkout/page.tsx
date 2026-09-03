@@ -9,6 +9,7 @@ import { readAttributionForCheckout } from "@/lib/attribution-client";
 import { calculateShipping, isDomesticCountry } from "@/lib/shipping";
 import { resolveSalesTax } from "@/lib/sales-tax";
 import { useApplePayOffered } from "@/components/use-apple-pay-offered";
+import { useOfferQuote } from "@/lib/offer-quote";
 import { CHECKOUT_SHORT, COA_SHORT, FULFILMENT_SHORT, TESTING_SHORT, trustPoints } from "@/lib/trust-claims";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { pointsToDollars } from "@/lib/points-math";
@@ -398,8 +399,83 @@ export default function CheckoutPage() {
     }
     return calculateCardProcessingFee(total, cardFeeConfig);
   }, [cardFeeConfig, selectedMethod, total]);
-  const finalTotal = Math.max(0, total + cardFee.amount);
-  const totalSaved = discountAmount + storeCreditApplied + pointsRedeemedDiscount;
+  const clientFinalTotal = Math.max(0, total + cardFee.amount);
+
+  // ---------------------------------------------------------------------
+  // THE ONE-TIME OFFER, AND WHY THIS PAGE CANNOT PRICE IT ITSELF.
+  //
+  // Everything above is the browser's own arithmetic, kept deliberately in
+  // step with quote-order.ts line for line. An emailed offer cannot join that
+  // arrangement: the token lives in an httpOnly cookie so the page cannot read
+  // it, cannot tell whether it applies, and cannot know what it is worth.
+  //
+  // The result was a checkout that showed $15.00 shipping and no free vial on
+  // an order the server was about to price with $0 shipping and a vial in it.
+  // The customer was charged correctly and told incorrectly, at the exact
+  // moment they were deciding whether to go through with it.
+  //
+  // So the numbers come from the server, via quoteOrder — the same function
+  // that will charge them, not a second copy of its rules. Nothing below
+  // computes an offer's effect; it only chooses whether to render the server's
+  // figure or its own. Without an armed offer there is no request and no
+  // change to anything.
+  // ---------------------------------------------------------------------
+  const [pendingOffer, setPendingOffer] = useState<{ rewardKind: string; rewardName: string; minSubtotalCents: number } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/offer/status", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => { if (!cancelled && data?.offer) setPendingOffer(data.offer); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const offerQuote = useOfferQuote({
+    active: Boolean(pendingOffer) && items.length > 0,
+    items,
+    email: form.email,
+    country: form.country,
+    state: form.state,
+    couponCode,
+    referralCode,
+    shippingProtection: shippingProtectionEnabled,
+    pointsToRedeem,
+    paymentMethod: selectedMethod?.kind === "card" ? "card" : selectedMethod?.id,
+  });
+
+  // The server's answer wherever it has one, this page's own otherwise. Falling
+  // back rather than blanking is deliberate: a preview one request behind must
+  // show the previous number, never no number.
+  const shownSubtotal = offerQuote ? offerQuote.subtotal : subtotal;
+  const shownShipping = offerQuote ? offerQuote.shipping : shipping;
+  const shownDiscount = offerQuote ? offerQuote.discountAmount : discountAmount;
+  const shownTaxAmount = offerQuote ? offerQuote.taxAmount : taxAmount;
+  const shownCardFeeAmount = offerQuote ? offerQuote.cardFeeAmount : cardFee.amount;
+  // Store credit and points are resolved from the total AFTER discounts, so an
+  // offer moves their base. Left on the client's own figures these two rows
+  // would be computed against an un-discounted total while the total beside
+  // them came from the server — rows that individually look right and do not
+  // add up. Every row in this summary comes from one arithmetic or the other,
+  // never a mix.
+  const shownStoreCredit = offerQuote ? offerQuote.storeCreditRedeemedCents / 100 : storeCreditApplied;
+  const shownPointsDiscount = offerQuote ? offerQuote.pointsDiscountAmount : pointsRedeemedDiscount;
+  const shownDiscountLabel = ambassadorDiscountApplied
+    ? `Ambassador ${ambassadorDiscountPercent}% off`
+    : (appliedDiscountLabel ?? offerQuote?.offer?.description ?? "Discount");
+  const giftLines = offerQuote?.giftLines ?? [];
+
+  // WHAT IS POSTED MUST BE WHAT WAS SHOWN.
+  //
+  // expectedTotal is the anti-tamper assertion: the server refuses an order
+  // whose client total is LOWER than its own. Posting this page's own figure
+  // while displaying the server's would mean claiming one number and showing
+  // another, and would defeat the guard's purpose — it is meant to catch
+  // exactly the case where the screen and the charge disagree. When the
+  // preview priced this cart, its total is both what the shopper read and what
+  // is claimed here.
+  const postedTotal = offerQuote ? offerQuote.expectedTotal : total;
+  const finalTotal = offerQuote ? offerQuote.finalTotal : clientFinalTotal;
+  const totalSaved = shownDiscount + shownStoreCredit + shownPointsDiscount;
 
   // Load the configured payment methods + card fee, and default to the first
   // recommended (no-fee) method.
@@ -632,7 +708,7 @@ export default function CheckoutPage() {
         pointsToRedeem: pointsToRedeem > 0 ? pointsToRedeem : undefined,
         shippingProtection: shippingProtectionEnabled,
         marketingOptIn,
-        expectedTotal: total,
+        expectedTotal: postedTotal,
         paymentMethod: selectedMethodId || undefined,
         complianceAcknowledgements: acknowledgements,
         idempotencyKey: idempotencyKeyRef.current,
@@ -748,33 +824,33 @@ export default function CheckoutPage() {
   const summaryLines = (
     <div className="space-y-2.5 text-sm">
       <div className="flex justify-between"><span className="text-white/45">Items</span><span className="text-white/70 tabular-nums">{orderCount}</span></div>
-      <div className="flex justify-between"><span className="text-white/45">Subtotal</span><span className="text-white/80 tabular-nums">{formatCartCurrency(subtotal)}</span></div>
+      <div className="flex justify-between"><span className="text-white/45">Subtotal</span><span className="text-white/80 tabular-nums" data-testid="summary-subtotal">{formatCartCurrency(shownSubtotal)}</span></div>
       <div className="flex justify-between">
         <span className="text-white/45">Shipping</span>
-        <span className="text-white/80 tabular-nums">{shipping === 0 && memberFreeShipping ? "Free (member)" : shipping === 0 ? "Free" : formatCartCurrency(shipping)}</span>
+        <span className="text-white/80 tabular-nums" data-testid="summary-shipping">{shownShipping === 0 && memberFreeShipping ? "Free (member)" : shownShipping === 0 ? "Free" : formatCartCurrency(shownShipping)}</span>
       </div>
       {shippingProtectionFee > 0 ? (
         <div className="flex justify-between"><span className="text-white/45">Shipping protection</span><span className="text-white/80 tabular-nums">+{formatCartCurrency(shippingProtectionFee)}</span></div>
       ) : null}
-      {taxAmount > 0 ? (
+      {shownTaxAmount > 0 ? (
         <div className="flex justify-between">
           <span className="text-white/45">Sales tax{taxQuote.state ? ` · ${taxQuote.state} ${taxQuote.ratePercent}%` : ""}</span>
-          <span className="text-white/80 tabular-nums">{formatCartCurrency(taxAmount)}</span>
+          <span className="text-white/80 tabular-nums" data-testid="summary-tax">{formatCartCurrency(shownTaxAmount)}</span>
         </div>
       ) : taxQuote.reason === "no_state" && isDomesticCountry(form.country) && salesTaxConfig.nexusStates.length > 0 ? (
         <div className="flex justify-between"><span className="text-white/45">Sales tax</span><span className="text-white/30">Enter address</span></div>
       ) : null}
-      {discountAmount > 0 ? (
-        <div className="flex justify-between text-emerald-300"><span>{ambassadorDiscountApplied ? `Ambassador ${ambassadorDiscountPercent}% off` : (appliedDiscountLabel ?? "Discount")}</span><span className="tabular-nums">−{formatCartCurrency(discountAmount)}</span></div>
+      {shownDiscount > 0 ? (
+        <div className="flex justify-between text-emerald-300" data-testid="summary-discount"><span>{shownDiscountLabel}</span><span className="tabular-nums">−{formatCartCurrency(shownDiscount)}</span></div>
       ) : null}
-      {storeCreditApplied > 0 ? (
-        <div className="flex justify-between text-emerald-300"><span>Member store credit</span><span className="tabular-nums">−{formatCartCurrency(storeCreditApplied)}</span></div>
+      {shownStoreCredit > 0 ? (
+        <div className="flex justify-between text-emerald-300" data-testid="summary-store-credit"><span>Member store credit</span><span className="tabular-nums">−{formatCartCurrency(shownStoreCredit)}</span></div>
       ) : null}
-      {pointsRedeemedDiscount > 0 ? (
-        <div className="flex justify-between text-emerald-300"><span>Points redeemed</span><span className="tabular-nums">−{formatCartCurrency(pointsRedeemedDiscount)}</span></div>
+      {shownPointsDiscount > 0 ? (
+        <div className="flex justify-between text-emerald-300" data-testid="summary-points"><span>Points redeemed</span><span className="tabular-nums">−{formatCartCurrency(shownPointsDiscount)}</span></div>
       ) : null}
-      {cardFee.amount > 0 ? (
-        <div className="flex justify-between"><span className="text-white/45">{cardFeeConfig?.label ?? "Card processing fee"} ({cardFee.percentage}%)</span><span className="text-white/80 tabular-nums">+{formatCartCurrency(cardFee.amount)}</span></div>
+      {shownCardFeeAmount > 0 ? (
+        <div className="flex justify-between"><span className="text-white/45">{cardFeeConfig?.label ?? "Card processing fee"} ({cardFee.percentage}%)</span><span className="text-white/80 tabular-nums">+{formatCartCurrency(shownCardFeeAmount)}</span></div>
       ) : null}
       {autoBestDiscountApplied ? (
         <p className="pt-1 text-[11px] text-emerald-300/70">✓ Your best available discount was applied automatically.</p>
@@ -800,6 +876,88 @@ export default function CheckoutPage() {
         </div>
       </div>
       <p className="text-sm text-white/75 tabular-nums">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig))}</p>
+    </div>
+  ));
+
+  // WHY THE GIFT IS, OR IS NOT, ON THIS ORDER.
+  //
+  // Three states, because they are three different messages and only one of
+  // them is good news. The middle one is the reason this exists at all: an
+  // offer is bound to the address it was mailed to, so a shopper who checks
+  // out under a different email gets nothing — and finding that out from a
+  // receipt is precisely the "it disappeared" experience this work removes.
+  // The server has already answered whether the gift applies to the address
+  // currently typed; this only says so.
+  const offerShortfall = pendingOffer
+    ? Math.max(0, pendingOffer.minSubtotalCents / 100 - shownSubtotal)
+    : 0;
+  const offerApplied = Boolean(offerQuote?.offer);
+  const offerBlockedByEmail = Boolean(pendingOffer)
+    && offerShortfall <= 0
+    && Boolean(offerQuote)
+    && !offerApplied
+    && form.email.trim().length > 0;
+
+  const offerNotice = pendingOffer ? (
+    <div
+      data-testid="checkout-offer-banner"
+      className={`rounded-xl border p-3.5 text-sm ${
+        offerApplied
+          ? "border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.06]"
+          : "border-white/[0.08] bg-white/[0.02]"
+      }`}
+    >
+      {offerShortfall > 0 ? (
+        <p className="text-white/70">
+          Add <span className="font-semibold text-[color:var(--accent-gold)]">${offerShortfall.toFixed(2)}</span> more to claim your{" "}
+          {pendingOffer.rewardKind === "free_product"
+            ? `free ${pendingOffer.rewardName}`
+            : pendingOffer.rewardName.toLowerCase()}.
+        </p>
+      ) : offerBlockedByEmail ? (
+        <p className="text-white/70">
+          Your{" "}
+          <span className="font-semibold text-[color:var(--accent-gold)]">
+            {pendingOffer.rewardKind === "free_product" ? `free ${pendingOffer.rewardName}` : pendingOffer.rewardName}
+          </span>{" "}
+          is tied to the email address it was sent to. Enter that address above to claim it.
+        </p>
+      ) : (
+        <>
+          <p className="font-semibold text-[color:var(--accent-gold)]">
+            {offerQuote?.offer?.description
+              ?? (pendingOffer.rewardKind === "free_product" ? `Free ${pendingOffer.rewardName}` : pendingOffer.rewardName)}
+            {" "}— applied to this order
+          </p>
+          {offerQuote?.assumedBoundEmail ? (
+            <p className="mt-1 text-xs text-white/45">
+              Shown for the email this offer was sent to. Enter that address above to keep it.
+            </p>
+          ) : null}
+        </>
+      )}
+    </div>
+  ) : null;
+
+  // THE GIFT, SHOWN AS A LINE. Rendered after the chosen items and with no
+  // quantity controls, because it is not theirs to edit — the server adds it
+  // and the server can take it away (below the minimum, or under a different
+  // email). It comes from the server's own line items; this page never invents
+  // a free product, which is the difference between showing a gift and
+  // creating one.
+  const giftProductLines = giftLines.map((line) => (
+    <div key={`gift-${line.name}-${line.variantLabel ?? ""}`} className="flex items-start gap-3" data-testid="checkout-gift-line">
+      <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-lg border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.06] text-[10px] uppercase tracking-[0.16em] text-[color:var(--accent-gold)]">
+        Gift
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm text-white">{line.name}</p>
+        {line.variantLabel ? <p className="mt-0.5 text-xs text-white/40">{line.variantLabel}</p> : null}
+        <p className="mt-1.5 text-xs text-[color:var(--accent-gold)]">
+          Your one-time gift{line.quantity > 1 ? ` × ${line.quantity}` : ""}
+        </p>
+      </div>
+      <p className="text-sm font-semibold text-[color:var(--accent-gold)] tabular-nums">Free</p>
     </div>
   ));
 
@@ -868,11 +1026,11 @@ export default function CheckoutPage() {
                 Order summary
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={`h-4 w-4 text-white/35 transition-transform duration-300 ${summaryOpen ? "rotate-180" : ""}`} aria-hidden><path d="m6 9 6 6 6-6" /></svg>
               </span>
-              <span className="text-base font-semibold text-white tabular-nums">{formatCartCurrency(finalTotal)}</span>
+              <span className="text-base font-semibold text-white tabular-nums" data-testid="summary-total-mobile">{formatCartCurrency(finalTotal)}</span>
             </button>
             <Collapse open={summaryOpen}>
               <div className="space-y-4 border-t border-white/[0.06] px-4 py-4">
-                <div className="space-y-4">{productLines}</div>
+                <div className="space-y-4">{productLines}{giftProductLines}{offerNotice}</div>
                 <div className="border-t border-white/[0.06] pt-4">{summaryLines}</div>
               </div>
             </Collapse>
@@ -1287,7 +1445,7 @@ export default function CheckoutPage() {
               ) : items.length === 0 ? (
                 <div className="mt-5 rounded-xl border border-dashed border-white/[0.10] p-6 text-center text-sm text-white/35">No items in cart.</div>
               ) : (
-                <div className="mt-5 space-y-4 border-b border-white/[0.06] pb-5">{productLines}</div>
+                <div className="mt-5 space-y-4 border-b border-white/[0.06] pb-5">{productLines}{giftProductLines}{offerNotice}</div>
               )}
 
               <div className="mt-5">{summaryLines}</div>
@@ -1296,7 +1454,7 @@ export default function CheckoutPage() {
 
               <div className="flex items-end justify-between">
                 <span className="text-xs uppercase tracking-[0.24em] text-white/40">Total</span>
-                <span className="text-[2rem] font-semibold leading-none tracking-tight text-white tabular-nums">{formatCartCurrency(finalTotal)}</span>
+                <span className="text-[2rem] font-semibold leading-none tracking-tight text-white tabular-nums" data-testid="summary-total">{formatCartCurrency(finalTotal)}</span>
               </div>
 
               {totalSaved > 0 ? (
@@ -1320,7 +1478,7 @@ export default function CheckoutPage() {
                   <PaymentMethodPicker
                     methods={paymentMethods}
                     cardFeeConfig={cardFeeConfig}
-                    baseTotal={total}
+                    baseTotal={postedTotal}
                     selectedMethodId={selectedMethodId}
                     onSelect={setSelectedMethodId}
                   />
@@ -1379,7 +1537,7 @@ export default function CheckoutPage() {
           ) : null}
           <div className="mb-2.5 flex items-baseline justify-between">
             <span className="text-[11px] uppercase tracking-[0.24em] text-white/40">Total</span>
-            <span className="text-xl font-semibold text-white tabular-nums">{formatCartCurrency(finalTotal)}</span>
+            <span className="text-xl font-semibold text-white tabular-nums" data-testid="summary-total-sticky">{formatCartCurrency(finalTotal)}</span>
           </div>
           <button
             type="button"

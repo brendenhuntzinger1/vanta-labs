@@ -277,4 +277,7 @@ echo "==> tables: $($PSQL -tAc "select count(*) from information_schema.tables w
 echo "==> products seeded: $($PSQL -tAc "select count(*) from products;")"
 echo "==> done. Start the shim:  node scripts/pgrst-shim.mjs --port 54321 --db postgres://postgres@localhost:${PORT}/${DB}"
 echo "    NOTE: getCatalogProducts is wrapped in unstable_cache, which caches FAILURES too."
-echo "    After any schema fix, restart the app server or the catalogue will keep 400ing."
+echo "    A RESTART DOES NOT CLEAR IT — the cache is on disk under .next/cache and"
+echo "    survives one. After any schema or catalogue change:  rm -rf .next/cache"
+echo "    (This line used to say 'restart the app server', which reliably sends you"
+echo "     looking for a data bug that is really a cached 404. See the runbook.)"
