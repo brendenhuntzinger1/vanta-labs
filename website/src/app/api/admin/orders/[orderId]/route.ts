@@ -303,6 +303,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
               ? deliveryConfirmationTemplate({
                   customerName: String(order.customer_name ?? ""),
                   orderId: orderReference,
+                  // A delivered parcel is the highest-intent moment this store
+                  // has, and the message was a dead end. Soft, not a hard sell:
+                  // the copy still leads with "hope it arrived in good shape".
+                  shopUrl: `${getSiteUrl()}/products`,
                 })
               : shippingUpdateTemplate({
                   customerName: String(order.customer_name ?? ""),
@@ -758,6 +762,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
             originalOrderNumber: original?.order_number ? String(original.order_number) : orderId,
             replacementOrderNumber: replacement.orderNumber,
             items: replacement.items,
+            // The order id is an unguessable bearer token, so this works for a
+            // guest exactly as it does for an account holder — the same
+            // property /pay/[orderId] and the checkout return URL rely on.
+            orderUrl: `${getSiteUrl()}/order-confirmation/${replacement.orderId}`,
           });
           const sent = await sendEmail({ to: replacement.customerEmail, ...template });
           customerNotified = sent.success;
@@ -876,6 +884,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
           tax: roundMoney(Number(order.tax_amount ?? 0)),
           cardProcessingFee: roundMoney(Number(order.card_processing_fee ?? 0)),
           total: roundMoney(Number(order.amount_paid ?? 0)),
+          orderUrl: `${getSiteUrl()}/order-confirmation/${orderId}`,
         });
 
         const result = await sendEmail({ to: String(order.customer_email), ...template });

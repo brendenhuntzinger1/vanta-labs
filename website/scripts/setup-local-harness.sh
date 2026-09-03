@@ -152,7 +152,7 @@ echo "==> post-parity migrations"
 # DEFAULT browser-test target, so that false negative is the expensive kind.
 for f in referral-orders-commission-lifecycle referral-orders-manual-review-status \
          refund-exactly-once-indexes pending-emails-order-link automation-send-once auth-email-debounce \
-         affiliate-email-system; do
+         affiliate-email-system email-automation-tracking; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
 done
 
@@ -231,6 +231,12 @@ check "email_send_log_auth_once_per_minute unique index exists (auth email debou
 # for every row, so an affiliate campaign silently renders through the CUSTOMER
 # template and mails literal "{{first_name}}" to real affiliates. The second
 # failure is the one that does not announce itself.
+check "email_automation_clicks exists (automation click tracking)" \
+  "select exists (select 1 from information_schema.tables where table_schema='public' and table_name='email_automation_clicks');"
+check "orders.attributed_automation_key exists (automation revenue attribution)" \
+  "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='orders' and column_name='attributed_automation_key');"
+check "email_send_log.provider_message_id exists (delivery-event join)" \
+  "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='email_send_log' and column_name='provider_message_id');"
 check "email_campaigns.audience_kind exists (affiliate broadcasts)" \
   "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='email_campaigns' and column_name='audience_kind');"
 check "email_campaign_recipients.merge_context exists (per-affiliate personalisation)" \

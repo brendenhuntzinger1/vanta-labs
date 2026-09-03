@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageEmailCampaigns } from "@/lib/admin-roles";
 import { isAutomationKey } from "@/lib/email/automations";
-import { isSafeSitePath } from "@/lib/email/cta-path";
+import { normalizeSitePathInput } from "@/lib/email/cta-path";
 import { getSiteUrl } from "@/lib/env";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -29,9 +29,35 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ success: false, error: "Subject, headline and message are all required." }, { status: 400 });
   }
 
-  const ctaPath = text(body.ctaPath, 300) || "/products";
-  if (!isSafeSitePath(ctaPath, getSiteUrl())) {
-    return NextResponse.json({ success: false, error: "The button link must be a path on this site, like /products." }, { status: 400 });
+  // THE CTA IS THE OPERATOR'S TO SET, INCLUDING TO NOTHING.
+  //
+  // Both fields used to fall back to a hard-coded default — `|| "SHOP NOW"` and
+  // `|| "/products"` — which meant clearing the button text in the admin saved
+  // "SHOP NOW" instead. The box looked empty, the database said otherwise, and
+  // the two only reconciled on a page reload. An operator cannot own their
+  // button copy while the server silently overrules it, so blank now round-trips
+  // as blank and removes the button (see renderCtaButton).
+  //
+  // The 40-character cap stays: a label longer than that wraps inside the pill
+  // on a phone, which is a broken-looking button rather than a long one.
+  const ctaLabel = text(body.ctaLabel, 40);
+  // Accepts either "/products" or the full same-origin URL an operator gets by
+  // copying the address bar, and stores the path either way. Off-site is still
+  // refused — see normalizeSitePathInput.
+  const ctaPath = normalizeSitePathInput(text(body.ctaPath, 300), getSiteUrl());
+  if (ctaPath === null) {
+    return NextResponse.json(
+      { success: false, error: "The button link must point at this site — a path like /products, or its full https:// address." },
+      { status: 400 },
+    );
+  }
+  // Half a button is not a button. Saying so here beats rendering a labelled
+  // pill that goes nowhere, or an unlabelled one that goes somewhere.
+  if (Boolean(ctaLabel) !== Boolean(ctaPath)) {
+    return NextResponse.json(
+      { success: false, error: "Set both the button text and its destination, or clear both to send this automation with no button." },
+      { status: 400 },
+    );
   }
 
   // A delay of zero would mail someone the instant they place an order, which
@@ -47,7 +73,7 @@ export async function PATCH(request: Request) {
       headline,
       body: messageBody,
       promo_code: text(body.promoCode, 60) || null,
-      cta_label: text(body.ctaLabel, 40) || "SHOP NOW",
+      cta_label: ctaLabel,
       cta_path: ctaPath,
       updated_at: new Date().toISOString(),
     })
@@ -64,6 +90,10 @@ export async function PATCH(request: Request) {
     metadata: {
       enabled: Boolean(body.enabled),
       delayDays,
+      // The CTA is now operator-editable, so it is operator-auditable. Without
+      // this, "who changed the button on the win-back and when" had no answer.
+      ctaLabel,
+      ctaPath,
       performedAt: new Date().toISOString(),
       performedBy: session.username,
       ipAddress: getRequestIpAddress(request),
@@ -71,5 +101,15 @@ export async function PATCH(request: Request) {
     },
   });
 
-  return NextResponse.json({ success: true });
+  // The saved row goes back so the client can replace its local draft with what
+  // was actually stored, rather than keeping the values it optimistically holds.
+  // This is what makes a cleared CTA visibly stay cleared instead of diverging
+  // from the database until the next page load.
+  const { data: saved } = await supabaseAdmin
+    .from("email_automations")
+    .select("key, enabled, delay_days, subject, headline, body, promo_code, cta_label, cta_path, updated_at")
+    .eq("key", body.key)
+    .maybeSingle();
+
+  return NextResponse.json({ success: true, automation: saved ?? null });
 }

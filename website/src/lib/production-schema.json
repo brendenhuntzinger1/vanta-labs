@@ -428,6 +428,15 @@
     "referred_by_code",
     "phone"
   ],
+  "email_automation_clicks": [
+    "id",
+    "automation_key",
+    "reference_id",
+    "email",
+    "clicked_at",
+    "user_agent",
+    "ip_hash"
+  ],
   "email_automations": [
     "key",
     "enabled",
@@ -508,7 +517,8 @@
     "sent_at",
     "opened_at",
     "clicked_at",
-    "status"
+    "status",
+    "provider_message_id"
   ],
   "email_suppressions": [
     "email",
@@ -893,7 +903,9 @@
     "attributed_at",
     "shipping_protection_fee",
     "inventory_restocked_at",
-    "inventory_committed_at"
+    "inventory_committed_at",
+    "attributed_automation_key",
+    "attributed_automation_at"
   ],
   "partner_clicks": [
     "id",

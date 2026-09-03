@@ -47,9 +47,26 @@ describe("renderLayout keeps one left edge", () => {
   it("gives the CTA cell the same horizontal inset as the body copy", () => {
     // Anchored on the button itself, not on a padding value: several cells use
     // a 28px top padding, and matching on that found the header instead.
-    const ctaRow = rendered.match(/<td style="([^"]*)"[^>]*>\s*<a href="[^"]*"[^>]*border-radius:999px/);
+    //
+    // The button is now a nested table rather than a bare anchor (see
+    // renderCtaButton — Outlook needs a real cell to put a background and
+    // padding on), so this looks for the CTA ROW, whose only child is that
+    // table. The assertion it makes is unchanged and is the whole point of the
+    // file: whatever the button is built from, its row carries the same 32px
+    // inset as the heading and the body copy, so the pill can never touch the
+    // card edge on a narrow phone.
+    const ctaRow = rendered.match(/<td align="center" style="([^"]*)"[^>]*>\s*<table[^>]*>[\s\S]*?border-radius:999px/);
     expect(ctaRow, "no CTA cell found — has renderLayout changed?").toBeTruthy();
     expect(horizontalPadding(`padding:${(ctaRow as RegExpMatchArray)[1].match(/padding:\s*([^;]+)/)?.[1] ?? ""}`)).toBe("32px");
+  });
+
+  it("centres the button inside that inset rather than pinning it left", () => {
+    // The inset stops the button touching the edge; the centring is what makes
+    // it read as the primary action rather than as one more left-aligned line
+    // of copy. Both matter, and they are separate properties — an earlier
+    // version of this file only had the first.
+    expect(rendered).toMatch(/<td align="center" style="padding:28px 32px 4px;">/);
+    expect(rendered).toMatch(/<table role="presentation"[^>]*align="center"[^>]*style="margin:0 auto;/);
   });
 
   it("insets every padded card cell by the same amount", () => {

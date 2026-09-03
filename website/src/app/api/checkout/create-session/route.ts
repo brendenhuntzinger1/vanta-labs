@@ -2,6 +2,8 @@ import { NextResponse, after } from "next/server";
 import { reportRepeatedCheckoutFailure } from "@/lib/checkout-failure-alert";
 import { recordOrderAttribution } from "@/lib/order-attribution";
 import { attributeOrderToCampaign } from "@/lib/email/campaign-attribution";
+import { attributeOrderToAutomation } from "@/lib/email/automation-attribution";
+import { readAutomationCookie } from "@/lib/email/automation-links";
 import { readCampaignCookie } from "@/lib/email/campaign-links";
 import { createCheckoutSession, sanitizeCustomerInput } from "@/lib/payment-service";
 import { recordMarketingOptIn } from "@/lib/marketing-broadcast";
@@ -129,6 +131,16 @@ export async function POST(request: Request) {
     await attributeOrderToCampaign({
       orderId: result.orderId,
       cookieValue: readCampaignCookie(request),
+    });
+
+    // And the same for the retention automations, which until now linked
+    // straight to their destination and so could not be measured at all. A
+    // separate cookie and a separate column: an order can genuinely follow
+    // both a campaign click and an automation click, and neither should
+    // silently overwrite the other.
+    await attributeOrderToAutomation({
+      orderId: result.orderId,
+      cookieValue: readAutomationCookie(request),
     });
 
     // Notice a shopper who keeps starting checkout and never finishing. On

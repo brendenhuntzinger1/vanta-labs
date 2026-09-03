@@ -1470,6 +1470,7 @@ export async function finalizeManualPayment(
         tax: Number(order.tax_amount ?? 0),
         cardProcessingFee: Number(order.card_processing_fee ?? 0),
         total: amountPaid,
+        orderUrl: `${getSiteUrl()}/order-confirmation/${orderId}`,
       });
       // Send-once + audited. Returns without sending if a confirmation for this
       // order is already recorded, which is what makes a replayed manual
@@ -2424,6 +2425,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
             tax: Number(orderRecord?.tax_amount ?? 0),
             cardProcessingFee: Number(orderRecord?.card_processing_fee ?? 0),
             total: amountPaid,
+            orderUrl: `${getSiteUrl()}/order-confirmation/${orderId}`,
           });
           // Send-once + audited. The paid_side_effects_at claim above already
           // stops a duplicate delivery reaching this line; this is the second,

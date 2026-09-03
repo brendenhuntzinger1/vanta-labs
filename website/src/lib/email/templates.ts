@@ -43,10 +43,155 @@ function money(value: number) {
 // exists for the CAN-SPAM postal address that commercial mail must carry and
 // transactional mail must not be forced to invent; anything else that belongs
 // below the rule can use it too.
-export function renderLayout(input: { preheader: string; titleHtml: string; bodyHtml: string; ctaLabel?: string; ctaUrl?: string; footerNoteHtml?: string }) {
-  const cta = input.ctaUrl && input.ctaLabel
-    ? `<tr><td style="padding:28px 32px 4px;"><a href="${escapeHtml(input.ctaUrl)}" style="display:inline-block;background:#f4f4f4;color:#111111;text-decoration:none;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;font-size:13px;padding:12px 24px;border-radius:999px;">${escapeHtml(input.ctaLabel)}</a></td></tr>`
-    : "";
+/**
+ * Brand palette for email. Kept here rather than imported from the web theme
+ * because an email cannot load a stylesheet: every colour has to be a literal
+ * in the markup, and the two surfaces drift on purpose (the site's gold is a
+ * CSS variable that can be themed; this one is baked into messages already
+ * sitting in people's inboxes and can never be restyled after the fact).
+ */
+const VANTA_GOLD = "#F2C94C";
+const CARD_INK = "#111111";
+const NEUTRAL_SURFACE = "#F4F4F4";
+
+/**
+ * Which job a button is doing, because "click here" is not one job.
+ *
+ *   primary  → the commercial ask. Shop, reorder, claim, restore a cart. Gold,
+ *              because it should be the loudest thing in the message.
+ *   utility  → the functional ask. Confirm an address, reset a password, open a
+ *              dashboard, track a parcel. Neutral, because dressing a password
+ *              reset up as a sales button is how a transactional message starts
+ *              looking like marketing to a filter — and to a reader.
+ *
+ * Utility is the DEFAULT deliberately. A template that says nothing gets the
+ * restrained treatment; selling is opt-in. The reverse default would quietly
+ * turn every receipt gold the moment someone added a button to it.
+ */
+export type EmailCtaVariant = "primary" | "utility";
+
+const CTA_PALETTE: Record<EmailCtaVariant, { background: string; text: string }> = {
+  primary: { background: VANTA_GOLD, text: CARD_INK },
+  utility: { background: NEUTRAL_SURFACE, text: CARD_INK },
+};
+
+/**
+ * True when a CTA destination is safe to put in an anchor.
+ *
+ * The CTA path validator in cta-path.ts guards what an OPERATOR may store; this
+ * guards what may be RENDERED, and they are not the same question. By the time
+ * a URL reaches here it may have come from a database row written before those
+ * checks existed, from a template's own hard-coded string, or from a caller
+ * that built it by concatenation. `javascript:` and `data:` in an href are
+ * inert in every mail client worth naming, but they are not inert in a browser
+ * preview, in a webmail client that renders the message in-page, or in the
+ * admin preview iframe this repo now serves — so they are refused here rather
+ * than assumed harmless.
+ */
+function isRenderableCtaUrl(url: string): boolean {
+  if (/[\x00-\x1F\x7F]/.test(url)) return false;
+  return /^(https?:\/\/|mailto:|\/)/i.test(url);
+}
+
+/**
+ * The one button markup every Vanta email uses.
+ *
+ * WHY THIS IS A TABLE AND NOT THE ONE-LINE ANCHOR IT REPLACED.
+ *
+ * The previous button was `<a style="display:inline-block;padding:12px 24px;
+ * background:#f4f4f4;…">`. That is correct CSS and it renders correctly in
+ * Gmail, Apple Mail and every webmail client — and it falls apart in Outlook on
+ * Windows, which renders mail through Word's layout engine. Word supports
+ * neither `display:inline-block` nor padding on an inline element, so the
+ * padding box collapses and the "button" degrades to a run of text with a
+ * background colour behind the glyphs. It still worked; it stopped looking like
+ * a button in the one client where looking like a button matters most, because
+ * Outlook's audience skews to exactly the desktop buyers who convert.
+ *
+ * The fix is the standard bulletproof shape, and each piece earns its place:
+ *
+ *   `<td bgcolor>`        Word honours a table cell's background attribute. This
+ *                         is what actually fills the button in Outlook.
+ *   `mso-padding-alt`     Word-only padding. Outlook reads it and gets a real
+ *                         padded cell; every other client ignores the property
+ *                         entirely, so it cannot double up with the anchor's
+ *                         own padding below.
+ *   anchor padding        What every non-Outlook client uses. Kept on the <a>
+ *                         rather than the <td> so the whole pill stays
+ *                         clickable, not just the glyphs.
+ *   `border-radius:999px` On the anchor. Word ignores it, so Outlook shows a
+ *                         square button — the one accepted degradation. It is
+ *                         also load-bearing for template-standards.test.ts,
+ *                         which uses it to tell a real CTA from a naked anchor.
+ *
+ * A VML `roundrect` would buy back the rounded corner and the full click target
+ * in Outlook, and it is deliberately not used: VML needs a fixed pixel width,
+ * which means guessing the rendered width of operator-typed label text. A label
+ * one character too long for the guess overflows its own button. A square
+ * button that always fits beats a round one that sometimes does not.
+ *
+ * `mso-line-height-rule:exactly` stops Word inflating the line box and turning
+ * a 52px button into a 60px one.
+ *
+ * RETURNS EMPTY STRING when there is nothing to render — see renderLayout.
+ */
+export function renderCtaButton(input: {
+  label: string;
+  url: string;
+  variant?: EmailCtaVariant;
+}): string {
+  const label = String(input.label ?? "").trim();
+  const url = String(input.url ?? "").trim();
+  if (!label || !url || !isRenderableCtaUrl(url)) return "";
+
+  const { background, text } = CTA_PALETTE[input.variant ?? "utility"];
+
+  // THE NUMBERS ARE MEASURED, NOT CHOSEN.
+  //
+  // 16px of vertical padding around a 20px line box is a 52px target, clear of
+  // the 44px minimum Apple and Google both publish for touch. The old button
+  // was 12px around a 13px line — about 37px, small enough on a phone that a
+  // near-miss scrolls the message instead of opening the store.
+  //
+  // The horizontal padding and tracking were tightened from 36px/0.08em after
+  // rendering every real label at 390px in Chromium: "CLAIM YOUR FREE GHK-CU"
+  // wrapped to two lines and broke mid-word as "GHK-/CU", which reads as a
+  // broken template rather than a long label. At 28px/0.05em every label an
+  // operator is likely to type — up to "BROWSE THE CATALOG" and beyond — sits
+  // on one line, and the button is still 52px tall.
+  //
+  // `word-break` is the one that stops a real defect rather than a cosmetic
+  // one. The admin caps a label at 40 characters, and 40 characters with no
+  // space in them is a single unbreakable word: without this the anchor grew to
+  // 553px inside a 390px viewport and the whole EMAIL scrolled sideways.
+  // `max-width` is in pixels, not a percentage, because
+  // affiliate-campaign-template.test.ts forbids "%" below the brand paragraph
+  // — 456px is the card's 520px inner width less its two 32px insets.
+  return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center" style="margin:0 auto;border-collapse:separate;">`
+    + `<tr><td align="center" bgcolor="${background}" style="border-radius:999px;mso-padding-alt:16px 28px;">`
+    + `<a href="${escapeHtml(url)}" style="display:inline-block;padding:16px 28px;`
+    + `font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;`
+    + `font-size:15px;line-height:20px;mso-line-height-rule:exactly;font-weight:700;`
+    + `letter-spacing:0.05em;text-transform:uppercase;color:${text};`
+    + `text-decoration:none;border-radius:999px;max-width:456px;word-break:break-word;">${escapeHtml(label)}</a>`
+    + `</td></tr></table>`;
+}
+
+export function renderLayout(input: { preheader: string; titleHtml: string; bodyHtml: string; ctaLabel?: string; ctaUrl?: string; ctaVariant?: EmailCtaVariant; footerNoteHtml?: string }) {
+  // Blank is a legitimate answer, not a bug. An operator who clears the button
+  // text or the destination on an automation means "no button on this one", and
+  // the message must then render as a clean piece of copy — not as an empty
+  // pill, and not as a button pointing at nowhere. renderCtaButton returns ""
+  // for every unusable combination, so the row simply does not exist.
+  const button = renderCtaButton({
+    label: input.ctaLabel ?? "",
+    url: input.ctaUrl ?? "",
+    variant: input.ctaVariant,
+  });
+  // The cell keeps the card's 32px inset even though the button is centred
+  // inside it: the inset is what stops the pill touching the card edge on a
+  // narrow phone, and layout-alignment.test.ts holds every card row to it.
+  const cta = button ? `<tr><td align="center" style="padding:28px 32px 4px;">${button}</td></tr>` : "";
 
   return `<!doctype html>
 <html lang="en">
@@ -107,6 +252,7 @@ export function couponAnnouncementTemplate(input: {
       bodyHtml: `${message}<p>Use this code at checkout for <strong style="color:#ffffff;">${discountLabel}</strong>:</p>${codeBlock}${expiryHtml}`,
       ctaLabel: "Shop Now",
       ctaUrl: input.shopUrl,
+      ctaVariant: "primary",
     }),
     text: toText([
       input.headline,
@@ -249,6 +395,7 @@ export function orderConfirmationTemplate(input: {
   tax?: number;
   cardProcessingFee?: number;
   total: number;
+  orderUrl?: string;
 }): EmailTemplate {
   const name = escapeHtml(input.customerName || "there");
   const tax = input.tax ?? 0;
@@ -318,6 +465,8 @@ export function orderConfirmationTemplate(input: {
           ${summaryRow("Total", money(input.total), { bold: true })}
         </table>
       `,
+      ctaLabel: input.orderUrl ? "View order" : undefined,
+      ctaUrl: input.orderUrl,
     }),
     text: toText([
       `Thanks, ${input.customerName || "there"}.`,
@@ -334,6 +483,8 @@ export function orderConfirmationTemplate(input: {
       cardFee > 0 ? `${CARD_FEE_LABEL}: ${money(cardFee)}` : null,
       addOn > 0 ? `Shipping protection: ${money(addOn)}` : null,
       `Total: ${money(input.total)}`,
+      input.orderUrl ? "" : null,
+      input.orderUrl ? `View your order: ${input.orderUrl}` : null,
       "",
       "- Vanta Labs",
     ]),
@@ -588,6 +739,7 @@ export function replacementOrderTemplate(input: {
   replacementOrderNumber: string;
   items: Array<{ name: string; quantity: number }>;
   supportEmail?: string;
+  orderUrl?: string;
 }): EmailTemplate {
   const name = escapeHtml(input.customerName || "there");
   const itemRows = input.items
@@ -609,6 +761,8 @@ export function replacementOrderTemplate(input: {
         <p style="margin-top:14px;">You'll receive a shipping confirmation with tracking as soon as it leaves the warehouse. Nothing is charged and nothing else is needed from you.</p>
         ${support ? `<p style="margin-top:10px;color:#a1a1aa;">Questions? Reach us at <a href="mailto:${support}" style="color:#e8d5a4;">${support}</a>.</p>` : ""}
       `,
+      ctaLabel: input.orderUrl ? "Track my replacement" : undefined,
+      ctaUrl: input.orderUrl,
     }),
     text: [
       `Hi ${input.customerName || "there"},`,
@@ -618,6 +772,7 @@ export function replacementOrderTemplate(input: {
       ...input.items.map((item) => `  - ${item.name} × ${Math.max(1, Math.floor(item.quantity))}`),
       ``,
       `You'll receive tracking as soon as it ships. Nothing is charged.`,
+      ...(input.orderUrl ? [``, `Track your replacement: ${input.orderUrl}`] : []),
     ].join("\n"),
   };
 }
@@ -625,6 +780,7 @@ export function replacementOrderTemplate(input: {
 export function deliveryConfirmationTemplate(input: {
   customerName: string;
   orderId: string;
+  shopUrl?: string;
 }): EmailTemplate {
   const name = escapeHtml(input.customerName || "there");
   return {
@@ -633,12 +789,17 @@ export function deliveryConfirmationTemplate(input: {
       preheader: `Your order ${input.orderId} has been delivered.`,
       titleHtml: `${name}, your order was delivered`,
       bodyHtml: `<p>Order <strong>${escapeHtml(input.orderId)}</strong> has been marked <strong>delivered</strong>. We hope everything arrived in great shape.</p><p>If anything's not right, just reply to this email and we'll help.</p>`,
+      ctaLabel: input.shopUrl ? "Explore Vanta" : undefined,
+      ctaUrl: input.shopUrl,
+      ctaVariant: "primary",
     }),
     text: toText([
       `${input.customerName || "there"}, your order was delivered.`,
       "",
       `Order ${input.orderId} has been marked delivered.`,
       "If anything's not right, reply to this email and we'll help.",
+      input.shopUrl ? "" : null,
+      input.shopUrl ? `Explore the catalog: ${input.shopUrl}` : null,
       "",
       "- Vanta Labs",
     ]),
@@ -1462,12 +1623,13 @@ export function membershipBenefitsMonthlyTemplate(input: { name: string; headlin
       bodyHtml: input.bodyHtml,
       ctaLabel: input.ctaLabel,
       ctaUrl: input.ctaUrl,
+      ctaVariant: "primary",
     }),
     text: toText([`${input.name || "there"}, ${input.headline}`, "", input.ctaUrl ?? null, "", "- Vanta Labs"]),
   };
 }
 
-export function membershipBirthdayTemplate(input: { name: string; bonusPoints: number }): EmailTemplate {
+export function membershipBirthdayTemplate(input: { name: string; bonusPoints: number; rewardUrl?: string }): EmailTemplate {
   const name = escapeHtml(input.name || "there");
   return {
     subject: "Happy birthday from Vanta Labs",
@@ -1475,8 +1637,11 @@ export function membershipBirthdayTemplate(input: { name: string; bonusPoints: n
       preheader: `A birthday gift of ${input.bonusPoints} points is in your account.`,
       titleHtml: `Happy birthday, ${name}!`,
       bodyHtml: `<p>We've added <strong>${input.bonusPoints} bonus points</strong> to your account as a birthday gift.</p>`,
+      ctaLabel: input.rewardUrl ? "Use my reward" : undefined,
+      ctaUrl: input.rewardUrl,
+      ctaVariant: "primary",
     }),
-    text: toText([`Happy birthday, ${input.name || "there"}!`, "", `${input.bonusPoints} bonus points have been added to your account.`, "", "- Vanta Labs"]),
+    text: toText([`Happy birthday, ${input.name || "there"}!`, "", `${input.bonusPoints} bonus points have been added to your account.`, input.rewardUrl ? `Spend them here: ${input.rewardUrl}` : null, "", "- Vanta Labs"]),
   };
 }
 
@@ -1490,6 +1655,7 @@ export function membershipWinBackTemplate(input: { name: string; tierName: strin
       bodyHtml: `<p>Your membership was canceled. As a thank-you for being a member, here's <strong>${input.offerPercent}% off</strong> your first month if you rejoin.</p>`,
       ctaLabel: "Rejoin",
       ctaUrl: input.resubscribeUrl,
+      ctaVariant: "primary",
     }),
     text: toText([`${input.name || "there"}, come back to ${input.tierName}.`, "", `${input.offerPercent}% off your first month: ${input.resubscribeUrl}`, "", "- Vanta Labs"]),
   };
@@ -1505,6 +1671,7 @@ export function newProductLaunchTemplate(input: { name: string; productName: str
       bodyHtml: `<p>As a member, you can shop <strong>${escapeHtml(input.productName)}</strong> before it's available to the public.</p>`,
       ctaLabel: "Shop Now",
       ctaUrl: input.productUrl,
+      ctaVariant: "primary",
     }),
     text: toText([`${input.name || "there"}, you have early access to ${input.productName}.`, "", input.productUrl, "", "- Vanta Labs"]),
   };
@@ -1520,6 +1687,7 @@ export function backInStockTemplate(input: { name: string; productName: string; 
       bodyHtml: `<p><strong>${escapeHtml(input.productName)}</strong> is back in stock.</p>`,
       ctaLabel: "Shop Now",
       ctaUrl: input.productUrl,
+      ctaVariant: "primary",
     }),
     text: toText([`${input.name || "there"}, ${input.productName} is back in stock.`, "", input.productUrl, "", "- Vanta Labs"]),
   };
@@ -1544,6 +1712,7 @@ export function cartRecoveryT30mTemplate(input: { name: string; items: Array<{ n
       bodyHtml: `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(input.items)}</table><p style="margin-top:16px;">Cart total: <strong>${money(input.cartValueCents / 100)}</strong></p>`,
       ctaLabel: "Restore My Cart",
       ctaUrl: input.restoreUrl,
+      ctaVariant: "primary",
     }),
     text: toText([`${input.name || "there"}, you left something behind.`, "", ...input.items.map((i) => `${i.name} x ${i.quantity}`), "", `Total: ${money(input.cartValueCents / 100)}`, input.restoreUrl, "", "- Vanta Labs"]),
   };
@@ -1559,6 +1728,7 @@ export function cartRecoveryT12hTemplate(input: { name: string; items: Array<{ n
       bodyHtml: `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(input.items)}</table><p style="margin-top:16px;">Cart total: <strong>${money(input.cartValueCents / 100)}</strong></p>`,
       ctaLabel: "Resume Checkout",
       ctaUrl: input.restoreUrl,
+      ctaVariant: "primary",
     }),
     text: toText([`${input.name || "there"}, your cart is still here.`, "", ...input.items.map((i) => `${i.name} x ${i.quantity}`), "", `Total: ${money(input.cartValueCents / 100)}`, input.restoreUrl, "", "- Vanta Labs"]),
   };
@@ -1581,6 +1751,7 @@ export function cartRecoveryT24hTemplate(input: {
       bodyHtml: `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(input.items)}</table><p style="margin-top:16px;">Cart total: <strong>${money(input.cartValueCents / 100)}</strong></p><p>Use code <strong>${escapeHtml(input.couponCode)}</strong> for 5% off - expires ${escapeHtml(input.expiresAt)}.</p>`,
       ctaLabel: "Resume Checkout",
       ctaUrl: input.restoreUrl,
+      ctaVariant: "primary",
     }),
     text: toText([`${input.name || "there"}, here's 5% off to complete your order.`, "", `Code: ${input.couponCode} (expires ${input.expiresAt})`, "", ...input.items.map((i) => `${i.name} x ${i.quantity}`), "", `Total: ${money(input.cartValueCents / 100)}`, input.restoreUrl, "", "- Vanta Labs"]),
   };
@@ -1603,6 +1774,7 @@ export function cartRecoveryT72hTemplate(input: {
       bodyHtml: `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(input.items)}</table><p style="margin-top:16px;">Cart total: <strong>${money(input.cartValueCents / 100)}</strong></p><p>Use code <strong>${escapeHtml(input.couponCode)}</strong> for 5% off - expires ${escapeHtml(input.expiresAt)}.</p>`,
       ctaLabel: "Resume Checkout",
       ctaUrl: input.restoreUrl,
+      ctaVariant: "primary",
     }),
     text: toText([`${input.name || "there"}, last chance on your cart.`, "", `Code: ${input.couponCode} (expires ${input.expiresAt})`, "", ...input.items.map((i) => `${i.name} x ${i.quantity}`), "", `Total: ${money(input.cartValueCents / 100)}`, input.restoreUrl, "", "- Vanta Labs"]),
   };
@@ -1820,6 +1992,7 @@ export function campaignTemplate(input: {
     bodyHtml: `${paragraphs}${codeBlock}`,
     ctaLabel: input.ctaLabel,
     ctaUrl: input.ctaUrl,
+    ctaVariant: "primary",
     footerNoteHtml,
   });
 

@@ -6,6 +6,7 @@ import { getStoreCreditBalanceCents } from "@/lib/store-credit";
 import { isMembershipActive } from "@/lib/membership-status";
 import { sendMarketingEmail } from "@/lib/email/marketing";
 import { membershipBirthdayTemplate } from "@/lib/email/templates";
+import { getSiteUrl } from "@/lib/env";
 
 export { isMembershipActive } from "@/lib/membership-status";
 
@@ -796,6 +797,9 @@ export async function runBirthdayBonusSweep(): Promise<{ granted: number; emaile
         ...membershipBirthdayTemplate({
           name: fullName.trim().split(/\s+/)[0] ?? "",
           bonusPoints: settings.birthdayBonusPoints,
+          // Points with nowhere to spend them is the whole complaint about
+          // this email. The catalog is the shortest path to using them.
+          rewardUrl: `${getSiteUrl().replace(/\/$/, "")}/products`,
         }),
       });
       if (result.success) emailed += 1;
