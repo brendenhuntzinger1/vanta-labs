@@ -4193,7 +4193,33 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
      same container. */
   padding: calc(0.7rem + env(safe-area-inset-top, 0px)) 1rem 0.7rem;
   /* Every child inherits ink, not paper. Anything left white would vanish. */
-  color: #14110a;
+  color: var(--offer-ink);
+
+  /* THE BAR'S INK, IN ONE PLACE.
+     These nine values were the literal #14110a repeated down the file, which
+     was fine while there was one band and became nine edits the moment there
+     were two. A seasonal theme now redefines the tokens and nothing else — see
+     .vl-offer-bar--americana. Every value below is EXACTLY what was hard-coded
+     before, so the gold bar renders identically to the pixel. */
+  --offer-ink: #14110a;
+  --offer-ink-strong: rgba(20, 17, 10, 1);
+  --offer-ink-soft: rgba(20, 17, 10, 0.78);
+  --offer-ink-faint: rgba(20, 17, 10, 0.62);
+  --offer-ink-hover: rgba(20, 17, 10, 0.95);
+  --offer-ink-icon: rgba(20, 17, 10, 0.72);
+  --offer-ink-ends: rgba(20, 17, 10, 0.84);
+  --offer-rule: rgba(20, 17, 10, 0.28);
+  --offer-wash: rgba(0, 0, 0, 0.14);
+  --offer-wash-strong: rgba(0, 0, 0, 0.1);
+  --offer-auto-ink: rgba(20, 17, 10, 0.82);
+  --offer-focus: #14110a;
+  /* The claim pill: dark fill, gold text — the inverse of the band. */
+  --offer-pill: #0c0a06;
+  --offer-pill-hover: #191308;
+  --offer-pill-border: rgba(0, 0, 0, 0.5);
+  --offer-pill-claim: #f2e7c6;
+  --offer-pill-code: var(--accent-gold);
+  --offer-pill-copy: rgba(242, 231, 198, 0.55);
 }
 
 /* THE FOCUS RING HAS TO INVERT WITH THE GROUND.
@@ -4202,11 +4228,19 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
    the same band. Scoped to the bar, so every other surface keeps the white
    ring it needs. */
 .vl-offer-bar .vl-focus-ring:focus-visible {
-  outline-color: #14110a;
+  outline-color: var(--offer-focus);
 }
 
 .vl-offer-inner {
   margin: 0 auto;
+  /* ABOVE THE SEASONAL FLAG, AND THIS IS NOT OPTIONAL.
+     .vl-offer-flag is absolutely positioned, and a positioned element paints
+     above the in-flow text of its parent no matter how low its z-index —
+     z-index: 0 does not put it "behind the words", it puts it in front of
+     them. Lifting the content into its own positioned layer is what actually
+     orders the two. Harmless on the gold bar, where there is no flag. */
+  position: relative;
+  z-index: 1;
   display: flex;
   /* WRAPPING IS THE MOBILE LAYOUT. At 390px the headline at 22px and a claim
      button carrying a code cannot share a row without one of them ellipsing,
@@ -4259,7 +4293,7 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   width: 1.15rem;
   height: 1.15rem;
   flex-shrink: 0;
-  color: rgba(20, 17, 10, 0.72);
+  color: var(--offer-ink-icon);
 }
 
 .vl-offer-eyebrow {
@@ -4276,7 +4310,7 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   font-weight: 700;
   letter-spacing: 0.2em;
   text-transform: uppercase;
-  color: rgba(20, 17, 10, 0.78);
+  color: var(--offer-ink-soft);
   line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
@@ -4290,7 +4324,7 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   font-weight: 600;
   line-height: 1.15;
   letter-spacing: -0.005em;
-  color: #14110a;
+  color: var(--offer-ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4301,9 +4335,9 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
 .vl-offer-ends {
   margin-left: 0.5rem;
   padding-left: 0.5rem;
-  border-left: 1px solid rgba(20, 17, 10, 0.28);
+  border-left: 1px solid var(--offer-rule);
   font-weight: 700;
-  color: rgba(20, 17, 10, 0.84);
+  color: var(--offer-ink-ends);
 }
 
 /* THE CLAIM CONTROL.
@@ -4335,16 +4369,16 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
      phone it is the widest thing in the bar — which is the intent. */
   min-height: 2.6rem;
   padding: 0.4rem 1rem;
-  border: 1px solid rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--offer-pill-border);
   border-radius: 999px;
   /* Dark fill, gold text: the inverse of the band, so the one control on it
      cannot be mistaken for decoration. */
-  background: #0c0a06;
+  background: var(--offer-pill);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.28), 0 8px 18px -12px rgba(0, 0, 0, 0.9);
   transition: background-color 200ms ease, transform 140ms ease;
 }
 
-.vl-offer-code:hover { background: #191308; }
+.vl-offer-code:hover { background: var(--offer-pill-hover); }
 .vl-offer-code:active { transform: translateY(1px); }
 
 .vl-offer-claim {
@@ -4352,7 +4386,7 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   font-weight: 700;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: #f2e7c6;
+  color: var(--offer-pill-claim);
 }
 
 .vl-offer-code-text {
@@ -4360,7 +4394,7 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   font-size: 0.9375rem;
   font-weight: 700;
   letter-spacing: 0.12em;
-  color: var(--accent-gold);
+  color: var(--offer-pill-code);
 }
 
 .vl-offer-copy {
@@ -4368,7 +4402,7 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: rgba(242, 231, 198, 0.55);
+  color: var(--offer-pill-copy);
 }
 
 /* An automatic offer gets a sentence, never a code-shaped chip. It shares the
@@ -4379,11 +4413,11 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   min-height: 2.2rem;
   padding: 0.35rem 0.95rem;
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.14);
+  background: var(--offer-wash);
   font-size: 0.75rem;
   font-weight: 600;
   line-height: 1.3;
-  color: rgba(20, 17, 10, 0.82);
+  color: var(--offer-auto-ink);
 }
 
 .vl-offer-actions {
@@ -4404,12 +4438,12 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: rgba(20, 17, 10, 0.78);
+  color: var(--offer-ink-soft);
   transition: color 200ms ease;
   white-space: nowrap;
 }
 
-.vl-offer-link:hover { color: rgba(20, 17, 10, 1); }
+.vl-offer-link:hover { color: var(--offer-ink-strong); }
 
 .vl-offer-close {
   display: inline-flex;
@@ -4418,13 +4452,13 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   width: 2rem;
   height: 2rem;
   border-radius: 999px;
-  color: rgba(20, 17, 10, 0.62);
+  color: var(--offer-ink-faint);
   transition: color 200ms ease, background-color 200ms ease;
 }
 
 .vl-offer-close:hover {
-  color: rgba(20, 17, 10, 0.95);
-  background: rgba(0, 0, 0, 0.1);
+  color: var(--offer-ink-hover);
+  background: var(--offer-wash-strong);
 }
 
 /* The narrow layout drops the label text; the icon-only control keeps its
@@ -4470,6 +4504,193 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   .vl-offer-code { min-height: 2.85rem; padding: 0.45rem 1.35rem; gap: 0.6rem; }
   .vl-offer-code-text { font-size: 1.0625rem; }
   .vl-offer-claim { font-size: 0.75rem; }
+}
+
+/* --- THE AMERICANA BAND (seasonal) ---------------------------------------
+   Labor Day dress for the offers bar. Switched on by an offer carrying
+   `theme: "americana"` (labor-day-campaign.ts), which happens only inside a
+   dated window — so this whole block is inert 360 days a year and needs
+   nobody to turn it off.
+
+   PREMIUM MEANS DESATURATED. A flag rendered in #B22234 and #3C3B6E — the
+   actual federal colours — is a car-dealership banner, and on a near-black
+   luxury storefront it reads as a different website. So the palette is the
+   flag put through the same filter as the rest of the site: navy dropped to
+   an ink-blue (#0d1b33), red pulled to an oxblood crimson (#8f2233), white
+   warmed to the ivory the brand already uses. It is unmistakably a flag and
+   it is nobody's idea of a clearance sticker. There is no gold anywhere in
+   it, deliberately — this is the one surface on the site that is allowed to
+   leave the brand accent behind.
+
+   Contrast is the reason the ink is nearly-white rather than mid-grey:
+   #f4efe4 on the LIGHTEST stripe the text can sit over (#20344f at the far
+   right of the base gradient) is 9.6:1, and on the navy ground 14.8:1. The
+   stripes themselves are capped at 0.14 alpha so they never darken or lighten
+   the ground enough to put the headline near the 4.5:1 floor. */
+.vl-offer-bar--americana {
+  /* The ground: ink-navy, very slightly lighter to the right so the band has
+     depth rather than reading as a flat rectangle of blue. */
+  background: linear-gradient(101deg, #0b1729 0%, #0d1b33 38%, #142440 72%, #20344f 100%);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.55);
+  box-shadow:
+    inset 0 -1px 0 rgba(244, 239, 228, 0.14),
+    0 14px 34px -26px rgba(13, 27, 51, 0.9);
+
+  /* Ivory ink on navy — the exact inverse of the gold band's dark-on-light.
+     Redefining the tokens is the whole theme: not one rule below this block
+     knows a holiday exists. */
+  --offer-ink: #f4efe4;
+  --offer-ink-strong: #ffffff;
+  --offer-ink-soft: rgba(244, 239, 228, 0.82);
+  --offer-ink-faint: rgba(244, 239, 228, 0.6);
+  --offer-ink-hover: rgba(244, 239, 228, 0.95);
+  --offer-ink-icon: rgba(244, 239, 228, 0.75);
+  --offer-ink-ends: rgba(244, 239, 228, 0.9);
+  --offer-rule: rgba(244, 239, 228, 0.3);
+  --offer-wash: rgba(244, 239, 228, 0.12);
+  --offer-wash-strong: rgba(244, 239, 228, 0.16);
+  --offer-auto-ink: rgba(244, 239, 228, 0.88);
+  /* White ring is correct again here: 12.1:1 on the navy, where the gold
+     band's dark ring would be 1.4:1 and fail WCAG 1.4.11 outright. */
+  --offer-focus: #f4efe4;
+  /* The pill inverts with the band — ivory fill, navy text — so the one
+     control on the bar still cannot be mistaken for decoration. */
+  --offer-pill: #f4efe4;
+  --offer-pill-hover: #ffffff;
+  --offer-pill-border: rgba(244, 239, 228, 0.5);
+  --offer-pill-claim: #8f2233;
+  --offer-pill-code: #0b1729;
+  --offer-pill-copy: rgba(11, 23, 41, 0.6);
+}
+
+/* The pill's shadow assumed a dark fill on a light band. Inverted, the white
+   top-highlight sits on ivory and does nothing; a soft drop is what gives it
+   its lift instead. */
+.vl-offer-bar--americana .vl-offer-code {
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.5), 0 10px 22px -14px rgba(0, 0, 0, 0.85);
+}
+
+/* --- THE FLAG ------------------------------------------------------------
+   Two layers on one decorative element: a star canton pinned at the left, and
+   the stripes that drift under everything. Painted with gradients rather than
+   an image so it costs no request, scales to any width, and stays crisp on a
+   3x phone. */
+.vl-offer-flag {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  /* Behind the words. .vl-offer-bar is position:relative/z-index:1 already and
+     .vl-offer-inner establishes its own stacking above this. */
+  z-index: 0;
+}
+
+/* THE STRIPES. Six oxblood bands raked at 101deg — the same angle as the gold
+   band's gradient, so the two treatments sit on the same optical grid — over
+   an ivory wash that lifts the right-hand end. The layer is 200% wide and
+   translates by exactly half its width, which is what makes the loop seamless:
+   at -50% the pattern has advanced by one full period and is pixel-identical
+   to its start, so there is no jump to see. */
+.vl-offer-flag::after {
+  content: "";
+  position: absolute;
+  top: -25%;
+  left: 0;
+  width: 200%;
+  height: 150%;
+  background-image: repeating-linear-gradient(
+    101deg,
+    rgba(143, 34, 51, 0) 0px,
+    rgba(143, 34, 51, 0.17) 1px,
+    rgba(143, 34, 51, 0.17) 34px,
+    rgba(143, 34, 51, 0) 35px,
+    rgba(143, 34, 51, 0) 40px,
+    rgba(244, 239, 228, 0.07) 41px,
+    rgba(244, 239, 228, 0.07) 74px,
+    rgba(143, 34, 51, 0) 75px,
+    rgba(143, 34, 51, 0) 80px
+  );
+  /* ~8px A SECOND, THE SAME ON EVERY SCREEN. Fast enough to be alive if you
+     watch it, slow enough that nobody reading a headline notices it move.
+     `linear` because any easing would make the seam at the loop point visible
+     as a stutter. */
+  animation: vl-flag-drift 30s linear infinite;
+  will-change: transform;
+}
+
+/* THE TRAVEL IS IN PIXELS, AND IT USED TO BE A PERCENTAGE. THAT WAS A BUG.
+   `translate3d(-50%, ...)` is 50% of the LAYER, and the layer is 200% of the
+   band — so the distance covered scaled with the viewport and the drift ran at
+   whatever speed the window happened to imply. Measured on the harness: 9.8px/s
+   at 390px and 36px/s at 1440px, near enough four times faster on a desktop
+   than on the phone it was tuned on. Nothing about a stripe should care how
+   wide the window is.
+
+   244.49px is three stripe periods, and the arithmetic is why it loops without
+   a seam: the pattern repeats every 80px measured ALONG the gradient axis, and
+   the gradient is at 101deg, so a horizontal shift of Δx advances it by
+   Δx·sin(101°) = Δx·0.98163. Three periods therefore need
+   3 × 80 ÷ 0.98163 = 244.49px, at which point the layer is pixel-identical to
+   where it started. The 200%-wide layer covers that travel down to a 320px
+   phone (640 ≥ 320 + 245) so no right edge is ever exposed. */
+@keyframes vl-flag-drift {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(-244.49px, 0, 0); }
+}
+
+/* THE CANTON. Two offset grids of real five-pointed stars — the flag's own
+   alternating rows — fading out before the text starts so nothing is ever read
+   through a star. It does not move; only the stripes do, which is what keeps
+   the band from feeling like it is sliding sideways as a whole.
+
+   THEY ARE STARS, NOT DOTS, AND THAT TURNED OUT TO MATTER. This was two
+   radial-gradients, which is the cheap way to get a repeating speck and is
+   what most "flag" backgrounds settle for. On the band at 390px it read as
+   polka dots: the eye gets no five-point silhouette at 7px, so it files the
+   texture under confetti and the whole thing stops looking like a flag. An
+   inline SVG polygon costs no request, scales to any DPR, and is unmistakable
+   at the same size. The star is drawn once in a 26x22 tile — outer radius 3.4,
+   inner 1.36, the standard 0.382 ratio — and the second layer is the same tile
+   pushed half a cell down and across, which is what makes the rows alternate
+   5-and-6 the way the real canton does. */
+.vl-offer-flag::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: min(46%, 20rem);
+  background-image:
+    url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='26'%20height='22'%3E%3Cpolygon%20points='13,8.2%2013.66,10.09%2015.66,10.14%2014.07,11.35%2014.65,13.27%2013,12.12%2011.35,13.27%2011.94,11.35%2010.34,10.14%2012.34,10.09'%20fill='%23f4efe4'%20fill-opacity='.46'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='26'%20height='22'%3E%3Cpolygon%20points='13,8.2%2013.66,10.09%2015.66,10.14%2014.07,11.35%2014.65,13.27%2013,12.12%2011.35,13.27%2011.94,11.35%2010.34,10.14%2012.34,10.09'%20fill='%23f4efe4'%20fill-opacity='.28'/%3E%3C/svg%3E");
+  background-size: 26px 22px, 26px 22px;
+  background-position: 0 0, 13px 11px;
+  /* The fade is what separates "star field" from "polka dots": the grid is at
+     full strength off the left edge and gone by 85%, so it reads as a canton
+     dissolving into the stripes rather than a texture tiled across the band. */
+  -webkit-mask-image: linear-gradient(to right, #000 0%, rgba(0, 0, 0, 0.5) 38%, transparent 72%);
+  mask-image: linear-gradient(to right, #000 0%, rgba(0, 0, 0, 0.5) 38%, transparent 72%);
+}
+
+/* MOTION IS A PREFERENCE, NOT A DECISION THIS FILE GETS TO MAKE.
+   Stopped dead rather than slowed: the stripes are decorative, so a reader who
+   asked for no motion loses nothing by having them hold still. The flag, the
+   canton and every colour stay exactly as they are. */
+@media (prefers-reduced-motion: reduce) {
+  .vl-offer-flag::after {
+    animation: none;
+    /* Parked one stripe period in, so the still frame shows stripes across the
+       whole band instead of the layer's leading edge. Pixels for the same
+       reason the keyframe uses them: a percentage here would park the layer
+       somewhere different on every screen width. */
+    transform: translate3d(-81.5px, 0, 0);
+  }
+}
+
+/* On a phone the band is two rows tall and the claim button spans the full
+   width, so the canton would sit directly under the headline. Narrowing it
+   keeps the stars beside the gift icon, where they decorate rather than
+   interfere. */
+@media (max-width: 40rem) {
+  .vl-offer-flag::before { width: min(32%, 7.5rem); }
 }
 
 /* --- VIEW ALL OFFERS / DETAILS -------------------------------------------

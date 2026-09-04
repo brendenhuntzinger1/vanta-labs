@@ -57,13 +57,68 @@ describe("the offers bar is louder than the page it sits on", () => {
     expect(Number(minHeight![1]), "a thumb target, not a 24px floor").toBeGreaterThanOrEqual(2.5);
   });
 
-  it("still refuses anything that moves", () => {
+  it("still refuses anything that moves on the default band", () => {
     // The half of the original doctrine that was right, and the half that
     // actually costs battery: a shimmer repaints every frame for as long as
     // the page is open, on exactly the phones this has to stay smooth on.
-    const block = css.slice(css.indexOf(".vl-offer-bar {"), css.indexOf("/* --- VIEW ALL OFFERS"));
-    expect(block, "no keyframe animation on the offers bar").not.toMatch(/animation:/);
-    expect(block, "no marquee/shimmer/pulse on the offers bar").not.toMatch(/@keyframes/);
+    //
+    // NARROWED, NOT RELAXED. The rule used to cover every line from
+    // .vl-offer-bar to the sheet, which now includes the seasonal Americana
+    // band and its drifting stripes. The band a shopper sees 360 days a year
+    // is still absolutely static — that is what this measures — and the
+    // exception the flag takes is fenced by the three tests below it.
+    const block = css.slice(css.indexOf(".vl-offer-bar {"), css.indexOf("/* --- THE AMERICANA BAND"));
+    expect(block, "no keyframe animation on the default offers bar").not.toMatch(/animation:/);
+    expect(block, "no marquee/shimmer/pulse on the default offers bar").not.toMatch(/@keyframes/);
+  });
+
+  it("moves only a decorative layer, never the words or the controls", () => {
+    // The reason the rule above can be narrowed at all. Text that moves is a
+    // marquee; a background that drifts behind stationary text is a texture.
+    // If an `animation` ever appears on anything but .vl-offer-flag's own
+    // pseudo-element, this is the line that should stop it.
+    const animated = [...css.matchAll(/([^\s{}]+(?:::?[\w-]+)?)\s*\{[^}]*animation:\s*vl-flag-drift/g)];
+    expect(animated.map((m) => m[1]), "only the flag's own layer may animate")
+      .toEqual([".vl-offer-flag::after"]);
+  });
+
+  it("stops the drift for anyone who asked for less motion", () => {
+    const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce) {\n  .vl-offer-flag"));
+    expect(reduced.slice(0, 400), "the flag must stop under prefers-reduced-motion")
+      .toMatch(/animation:\s*none/);
+  });
+
+  it("drifts slowly enough that it reads as texture rather than a marquee", () => {
+    // SPEED IS THE MEASUREMENT, NOT DURATION, and this test asserted duration
+    // until the browser showed why that is not the same thing. The travel was
+    // `translate3d(-50%, ...)` — 50% of a layer that is itself 200% of the band
+    // — so the distance scaled with the viewport and only the TIME was fixed.
+    // Measured on the harness: 9.8px/s at 390px against 36px/s at 1440px, from
+    // a rule that looked constant and passed a 40s duration check. Pinning
+    // pixels per second is what actually holds the design still.
+    const duration = css.match(/animation:\s*vl-flag-drift\s+(\d+)s/);
+    expect(duration, "the flag drift must declare a duration").toBeTruthy();
+
+    const travel = driftTravel();
+    expect(travel.unit, "travel must be in px — a percentage scales with the viewport")
+      .toBe("px");
+
+    const pxPerSecond = travel.value / Number(duration![1]);
+    expect(pxPerSecond, "faster than ~12px/s starts reading as a marquee")
+      .toBeLessThanOrEqual(12);
+    expect(pxPerSecond, "slower than ~4px/s is not worth animating at all")
+      .toBeGreaterThanOrEqual(4);
+  });
+
+  it("loops without a visible seam, which fixes the travel distance", () => {
+    // The stripes repeat every 80px along a 101deg axis, so a horizontal shift
+    // of Δx advances the pattern by Δx·sin(101°). Only whole multiples of the
+    // period land back on an identical frame; anything else jumps once a cycle.
+    const travel = driftTravel().value;
+    const period = 80 / Math.sin((101 * Math.PI) / 180);
+    const periods = travel / period;
+    expect(Math.abs(periods - Math.round(periods)), `${travel}px is ${periods.toFixed(3)} stripe periods, not a whole number`)
+      .toBeLessThan(0.01);
   });
 });
 
@@ -171,6 +226,18 @@ const hex = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16))
 const over = (ink: number[], alpha: number, ground: number[]) =>
   ink.map((c, i) => alpha * c + (1 - alpha) * ground[i]);
 
+/** The `to` frame's horizontal travel, read out of the drift keyframes. */
+function driftTravel(): { value: number; unit: string } {
+  const start = css.indexOf("@keyframes vl-flag-drift");
+  expect(start, "globals.css must define the vl-flag-drift keyframes").toBeGreaterThan(-1);
+  // Past `from { ... }` to the `to` frame — `[^}]*` cannot cross the closing
+  // brace of the first frame, which is why this is sliced rather than matched.
+  const block = css.slice(start, css.indexOf("\n}", start));
+  const to = block.match(/to\s*\{[^}]*translate3d\(\s*(-?[\d.]+)(px|%)/);
+  expect(to, "the drift keyframe must declare its travel").toBeTruthy();
+  return { value: Math.abs(Number(to![1])), unit: to![2] };
+}
+
 /** The declaration block for a single selector. */
 function ruleFor(selector: string): string {
   const start = css.indexOf(`${selector} {`);
@@ -187,13 +254,71 @@ function ruleFor(selector: string): string {
  * measured 3.4:1 on the band. Parsing the real declaration is the difference
  * between a test that pins the design and one that pins a comment.
  */
-function inkOf(selector: string): { ink: number[]; alpha: number } {
-  const rule = ruleFor(selector);
-  const rgba = rule.match(/color:\s*rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
-  if (rgba) return { ink: [+rgba[1], +rgba[2], +rgba[3]], alpha: Number(rgba[4]) };
-  const solid = rule.match(/color:\s*(#[0-9a-f]{6})/i);
+function inkOf(selector: string, scope = ".vl-offer-bar"): { ink: number[]; alpha: number } {
+  return parseInk(colorDeclaredBy(selector, scope), selector);
+}
+
+/**
+ * THE INK TOKENS DECLARED BY A BAND, e.g. `--offer-ink-soft: rgba(...)`.
+ *
+ * The bar's ink moved into custom properties when the Americana theme landed,
+ * so that a seasonal band redefines a dozen values instead of overriding a
+ * dozen rules. That is good for the CSS and it put this suite one indirection
+ * away from the numbers it exists to measure — `color: var(--offer-ink-soft)`
+ * told the old regex nothing. Resolving the token is what keeps the test
+ * measuring the colour a browser will actually paint.
+ */
+function tokensIn(scope: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [, name, value] of ruleFor(scope).matchAll(/(--[\w-]+):\s*([^;]+);/g)) {
+    out.set(name, value.trim());
+  }
+  return out;
+}
+
+/**
+ * The `color` a selector paints, with `var(--x)` followed to its value.
+ *
+ * A theme's tokens are looked up first and the base bar's second, which is
+ * exactly the cascade a browser applies: `.vl-offer-bar--americana` redefines
+ * some tokens and inherits the rest from `.vl-offer-bar`.
+ */
+function colorDeclaredBy(selector: string, scope: string): string {
+  const declared = ruleFor(selector).match(/[^-]color:\s*([^;]+);/);
+  expect(declared, `${selector} must declare a colour`).toBeTruthy();
+  let value = declared![1].trim();
+
+  const scopes = scope === ".vl-offer-bar"
+    ? [tokensIn(".vl-offer-bar")]
+    : [tokensIn(scope), tokensIn(".vl-offer-bar")];
+
+  // Bounded rather than `while (true)`: a token that resolves to itself is a
+  // stylesheet bug, and hanging the suite is a poor way to report one.
+  for (let hop = 0; hop < 8; hop += 1) {
+    const ref = value.match(/^var\((--[\w-]+)\)$/);
+    if (!ref) return value;
+    const next = scopes.map((s) => s.get(ref[1])).find(Boolean);
+    expect(next, `${scope} or .vl-offer-bar must define ${ref[1]}`).toBeTruthy();
+    value = next!.trim();
+  }
+  throw new Error(`${selector}: ${scope} token chain does not terminate`);
+}
+
+function parseInk(value: string, selector: string): { ink: number[]; alpha: number } {
+  const rgba = value.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+  if (rgba) return { ink: [+rgba[1], +rgba[2], +rgba[3]], alpha: rgba[4] ? Number(rgba[4]) : 1 };
+  const solid = value.match(/(#[0-9a-f]{6})/i);
   expect(solid, `${selector} must declare a colour this test can read`).toBeTruthy();
   return { ink: hex(solid![1]), alpha: 1 };
+}
+
+/** The darkest and lightest stops of a band's gradient — the two worst cases. */
+function gradientStops(rule: string, label: string): number[][] {
+  const gradient = rule.match(/background:\s*linear-gradient\(([^)]*)\)/);
+  expect(gradient, `${label} must declare a linear-gradient background`).toBeTruthy();
+  const stops = (gradient![1].match(/#[0-9a-f]{6}/gi) ?? []).map(hex);
+  expect(stops.length, `${label}'s gradient must carry hex stops`).toBeGreaterThan(1);
+  return stops.slice().sort((a, b) => luminance(a) - luminance(b));
 }
 
 describe("dark ink on the gold band clears AA where the band is darkest", () => {
@@ -236,6 +361,73 @@ describe("dark ink on the gold band clears AA where the band is darkest", () => 
       .toBeLessThan(3);
     expect(contrast([20, 17, 10], darkest), "dark ink is what replaces it")
       .toBeGreaterThanOrEqual(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE AMERICANA BAND IS HELD TO THE SAME FLOOR AS THE GOLD ONE.
+//
+// A seasonal theme is the easiest place in a stylesheet to lose accessibility,
+// because it is written once, in a hurry, against a deadline nobody controls,
+// and looked at on one monitor. It inverts the whole band — ivory ink on navy
+// instead of dark ink on gold — so every contrast the gold bar earned has to be
+// earned again rather than assumed.
+//
+// The worst case is the LIGHTEST stop here, not the darkest: light ink loses
+// contrast as the ground brightens, which is the mirror of the gold band. The
+// stripes add at most 0.14 alpha of #8f2233 and 0.055 of ivory on top of that,
+// which moves the ground by a few points either way — the floors below are
+// cleared with enough margin to absorb it.
+// ---------------------------------------------------------------------------
+describe("ivory ink on the Americana band clears AA where the band is lightest", () => {
+  const americana = ".vl-offer-bar--americana";
+  const lightest = gradientStops(ruleFor(americana), americana).slice(-1)[0];
+
+  const inks: [string, string, number][] = [
+    ["headline", ".vl-offer-headline", 4.5],
+    ["eyebrow", ".vl-offer-eyebrow", 4.5],
+    ["ends label", ".vl-offer-ends", 4.5],
+    ["details link", ".vl-offer-link", 4.5],
+    ["automatic note", ".vl-offer-auto", 4.5],
+    ["dismiss ✕", ".vl-offer-close", 3],
+  ];
+
+  for (const [name, selector, floor] of inks) {
+    it(`${name} clears ${floor}:1 on the lightest stop`, () => {
+      const { ink, alpha } = inkOf(selector, americana);
+      expect(contrast(over(ink, alpha, lightest), lightest)).toBeGreaterThanOrEqual(floor);
+    });
+  }
+
+  it("puts the focus ring back to ivory, which passes on navy", () => {
+    // The gold band overrides the shared white ring to dark ink because white
+    // fails there. On navy that override would be 1.4:1 — worse than the
+    // problem it was written to solve — so the theme has to undo it.
+    const ring = tokensIn(americana).get("--offer-focus");
+    expect(ring, "the Americana band must redefine --offer-focus").toBeTruthy();
+    expect(contrast(parseInk(ring!, "--offer-focus").ink, lightest)).toBeGreaterThanOrEqual(3);
+    expect(contrast([20, 17, 10], lightest), "the gold band's dark ring is why")
+      .toBeLessThan(3);
+  });
+
+  it("inverts the claim pill so its code stays legible on its own fill", () => {
+    // The pill is the one control on the band. On gold it is dark-filled with
+    // gold text; inverted to an ivory fill, the code has to darken with it or
+    // it disappears into its own button.
+    const tokens = tokensIn(americana);
+    const fill = parseInk(tokens.get("--offer-pill")!, "--offer-pill").ink;
+    const code = parseInk(tokens.get("--offer-pill-code")!, "--offer-pill-code").ink;
+    expect(contrast(code, fill)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("carries no gold anywhere, which is the whole point of the theme", () => {
+    // The brand accent is #c7ae5e and its relatives. This band is the one
+    // surface allowed to leave it behind, and "premium, not gold" was the
+    // brief — a stray var(--accent-gold) inherited from the base bar would
+    // undo it silently.
+    const block = css.slice(css.indexOf("/* --- THE AMERICANA BAND"), css.indexOf("/* --- VIEW ALL OFFERS"));
+    expect(block, "no gold token may survive into the Americana band").not.toMatch(/accent-gold/);
+    expect(block, "no literal brand gold either").not.toMatch(/#c7ae5e|#bd9d52|#e6d296|#cdb264|#b3974a/i);
   });
 });
 
