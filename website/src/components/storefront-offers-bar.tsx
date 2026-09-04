@@ -52,12 +52,26 @@ import {
 // ---------------------------------------------------------------------------
 
 /** Routes where an offer would be a distraction or a risk, not a service. */
-function isSuppressedRoute(pathname: string | null): boolean {
+export function isSuppressedRoute(pathname: string | null): boolean {
   if (!pathname) return false;
   return (
+    // THE HOME PAGE CARRIES NO PROMOTION, EVER, AND THIS IS A STANDING RULE
+    // RATHER THAN A DECISION ABOUT ANY ONE SALE.
+    //
+    // The store owner's instruction: the front page stays brand-only — no
+    // banner, no coupon, no popup, for this campaign and every campaign after
+    // it. Promotions begin where shopping begins, which is the catalogue.
+    // Writing it as a route rule rather than as a flag on the Labor Day
+    // campaign is what makes it hold for the next one automatically.
+    //
+    // EXACT MATCH, and it has to be. `startsWith("/")` is true of every path on
+    // the site, so the prefix form used by the entries below would silently
+    // suppress the bar everywhere — the promotion would simply never appear
+    // again, and nothing here would look wrong.
+    pathname === "/"
     // Money in progress. Nothing new goes on the screen during payment, and
     // nothing in this component is allowed anywhere near that flow.
-    pathname.startsWith("/checkout")
+    || pathname.startsWith("/checkout")
     || pathname.startsWith("/order")
     // Operator surfaces, not shopping surfaces.
     || pathname.startsWith("/admin")
