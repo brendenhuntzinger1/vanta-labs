@@ -25,7 +25,7 @@ import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { isApprovedAmbassadorCustomer } from "@/lib/ambassador-status";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
 import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getShippingConfig, getReferralProgramConfig, getCouponPolicyConfig, getProfitSettings } from "@/lib/admin-control";
-import { computeProfit, meetsFloor, resolveCustomerDiscount } from "@/lib/profit-engine";
+import { computeProfit, meetsFloor, resolveCustomerDiscount, type DiscountComponent } from "@/lib/profit-engine";
 import { calculateCardProcessingFee, getPaymentMethodById, isManualPaymentMethod, type PaymentMethodConfig } from "@/lib/payment-methods";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -162,7 +162,26 @@ export interface QuoteResult {
    * comes back empty, or two concurrent checkouts both ship a free vial. Same
    * contract as appliedPromotionLimits below.
    */
-  appliedOffer: { token: string; offerKey: string; rewardKind: string; description: string } | null;
+  appliedOffer: {
+    token: string;
+    offerKey: string;
+    rewardKind: string;
+    /**
+     * Only the halves that actually changed this order, in reading order:
+     * product, then shipping, then the percentage. A gift whose every half
+     * was beaten by a better discount is NOT applied and this is null — so it
+     * is neither described to the shopper nor reserved and burned at payment.
+     */
+    description: string;
+    productApplied: boolean;
+    shippingApplied: boolean;
+    percentApplied: boolean;
+  } | null;
+  /**
+   * The resolved discount's own label ("Coupon", "15% gift", "Membership
+   * pricing", "Bundle"), so every surface names the winner the same way.
+   */
+  discountLabel: string;
   /** Id of the Buy X Get Y promotion that priced this order, for orders.promotion_id. */
   appliedPromotionId: string | null;
   /** Its customer-facing name, for receipts and admin. */
@@ -662,6 +681,10 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // still gets free shipping".
   let offerPercentDiscount = 0;
 
+  // What the gift promised, kept until the discount race below decides what it
+  // actually granted. Null when no gift is in play.
+  let offerGrant: { productDescription: string | null; wantsShipping: boolean; percent: number } | null = null;
+
   // ONE BLOCK FOR EVERY KIND. A reward is up to three grants — a $0 product
   // line, a waived shipping fee, a percentage — and each kind is a subset:
   //   free_product          line
@@ -737,19 +760,22 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     // a gift's percentage and a coupon of the same size are worth the same.
     if (percent > 0) offerPercentDiscount = calculateCouponDiscount(discountBase, "percent", percent);
 
-    // The description names what was actually granted, in the order the
-    // customer reads it: product, then shipping, then the percentage.
-    const parts = [
-      productDescription,
-      wantsShipping ? "Free shipping" : null,
-      percent > 0 ? `${percent}% off` : null,
-    ].filter((part): part is string => Boolean(part));
-    if (parts.length > 0) {
+    // PROVISIONAL. The product line is real from here on — it is in lineItems
+    // — but whether the shipping waiver and the percentage change THIS order
+    // is not known until the coupon, the promotions and the other discounts
+    // have been resolved below. appliedOffer is finalised there from what was
+    // GRANTED rather than what was promised; before that, a 15% gift beaten
+    // by a 50% coupon was described as applied and reserved for consumption.
+    if (productDescription || wantsShipping || percent > 0) {
+      offerGrant = { productDescription, wantsShipping, percent };
       appliedOffer = {
         token: input.offerToken,
         offerKey: offer.offer_key,
         rewardKind: kind,
-        description: parts.join(" + "),
+        description: "",
+        productApplied: Boolean(productDescription),
+        shippingApplied: false,
+        percentApplied: false,
       };
     }
   }
@@ -917,11 +943,8 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   //
   // With no address yet (express wallet), shipping is NOT knowable, so it
   // resolves to 0 here and is locked later from the wallet's address callback.
-  const shipping = !destinationKnown
-    ? 0
-    : (bulkSavingsResult.tier || memberPerks.freeShipping || offerGrantsFreeShipping || coupon?.freeShipping)
-      ? 0
-      : roundMoney(calculateShipping(subtotal, input.customer.country, shippingConfig));
+  // (shipping is computed a few lines down, after the gift's minimum has been
+  // judged on the qualifying subtotal — the waiver is one of its inputs.)
 
   // Personal ambassador discount: an approved ambassador gets a discount on
   // their OWN purchase. It earns NO commission (self-referral is blocked) and,
@@ -947,39 +970,136 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   //  • Coupons stack only when the admin enables it.
   // Ambassador commission is handled separately below — it is NOT a customer
   // discount and is never removed because another discount applied.
+  const DISCOUNT_COMPONENTS = new Set<DiscountComponent>(["coupon", "referral", "bundle", "membership"]);
+  const couponAmount = coupon ? coupon.discountAmount : 0;
+  // Everything the rulebook needs except the coupon slot, which is filled two
+  // different ways below: without the gift's percentage to judge the gift's
+  // minimum, and with it to price the order.
+  const discountInputsBase = {
+    subtotal,
+    fullSubtotal: discountBase,
+    quantityBundleSavings,
+    productCost: 0,
+    bundleDiscount: promotionDiscount,
+    referralAccepted: referralQualifiesForDiscount,
+    referralPercent: referralQualifiesForDiscount && referral ? referral.discountPercent : 0,
+    isMember: memberPricingAmount > 0,
+    membershipPercent: memberPerks.memberDiscountPercent,
+    bulkSavingsAmount: bulkSavingsResult.amount,
+    personalDiscountAmount,
+    personalDiscountPercent: referralProgram.personalDiscountPercent,
+    allowCouponStacking: couponPolicy.allowStacking || promotionAllowsCouponStacking,
+    commissionPercent: 0,
+    processingFeePercent: 0,
+    shippingCollected: 0,
+    shippingCost: 0,
+    handlingCollected: 0,
+    taxPercent: 0,
+  };
+
+  // THE QUALIFYING SUBTOTAL.
+  //
+  // The gift's minimum was first tested above against the list-price subtotal,
+  // which is all that is known before the coupon and the promotions resolve.
+  // That let a $40 basket clear a $35 floor and then hand over a 50% coupon:
+  // the customer paid $20 for goods and still collected the gift. So it is
+  // judged again here on what they will actually pay for merchandise after
+  // every OTHER discount — a coupon, a promotion, member pricing, a quantity
+  // tier — and excluding only the gift's own percentage, which would otherwise
+  // argue against itself. Below the floor the gift is withdrawn entirely: the
+  // $0 line comes out, the shipping waiver and the percentage are dropped, and
+  // nothing is reserved. Legitimate promotions are unaffected; only the gift
+  // is stricter.
+  if (offerGrant && offer) {
+    const baseline = resolveCustomerDiscount({ ...discountInputsBase, couponDiscount: couponAmount }, DISCOUNT_COMPONENTS);
+    const qualifyingCents = Math.round((subtotal - baseline.amount) * 100);
+    if (!offerMinimumMet(offer, qualifyingCents)) {
+      for (let i = lineItems.length - 1; i >= 0; i--) {
+        if (lineItems[i].gift) lineItems.splice(i, 1);
+      }
+      offerGrantsFreeShipping = false;
+      offerPercentDiscount = 0;
+      offerGrant = null;
+      appliedOffer = null;
+    }
+  }
+
+  // WHO GETS FREE SHIPPING — four independent grants, any one of which is
+  // enough (a bulk-savings tier, a membership plan that includes it, a gift
+  // whose reward is free shipping, a coupon flagged to waive it). None of them
+  // compete: resolveCustomerDiscount picks a single winner among referral,
+  // membership, bulk and coupon, and shipping is not in that race.
+  //
+  // With no address yet (express wallet), shipping is NOT knowable, so it
+  // resolves to 0 here and is locked later from the wallet's address callback.
+  const shippingOtherwiseWaived = Boolean(bulkSavingsResult.tier || memberPerks.freeShipping || coupon?.freeShipping);
+  const shippingAtListTerms = destinationKnown
+    ? roundMoney(calculateShipping(subtotal, input.customer.country, shippingConfig))
+    : 0;
+  const shipping = !destinationKnown
+    ? 0
+    : (shippingOtherwiseWaived || offerGrantsFreeShipping)
+      ? 0
+      : shippingAtListTerms;
+
+  // Does the gift's percentage fill the coupon slot? Strictly greater: a tie
+  // goes to the code the customer typed, so the gift is not spent for nothing.
+  const giftPercentFillsSlot = offerPercentDiscount > 0 && offerPercentDiscount > couponAmount;
+
   const customerDiscount = resolveCustomerDiscount(
     {
-      subtotal,
-      fullSubtotal: discountBase,
-      quantityBundleSavings,
-      productCost: 0,
-      bundleDiscount: promotionDiscount,
-      referralAccepted: referralQualifiesForDiscount,
-      referralPercent: referralQualifiesForDiscount && referral ? referral.discountPercent : 0,
-      isMember: memberPricingAmount > 0,
-      membershipPercent: memberPerks.memberDiscountPercent,
-      // ONE SLOT, THE BETTER OF THE TWO. A combined gift's percentage and a
-      // typed coupon are the same kind of thing — a code-shaped percentage off
-      // — so they take the same slot and the customer keeps whichever is worth
-      // more. Adding a separate candidate would have meant changing
-      // resolveCustomerDiscount, which every other discount in the store also
-      // depends on, for no behaviour a customer could tell apart.
-      couponDiscount: Math.max(coupon ? coupon.discountAmount : 0, offerPercentDiscount),
-      bulkSavingsAmount: bulkSavingsResult.amount,
-      personalDiscountAmount,
-      personalDiscountPercent: referralProgram.personalDiscountPercent,
-      allowCouponStacking: couponPolicy.allowStacking || promotionAllowsCouponStacking,
-      commissionPercent: 0,
-      processingFeePercent: 0,
-      shippingCollected: 0,
-      shippingCost: 0,
-      handlingCollected: 0,
-      taxPercent: 0,
+      ...discountInputsBase,
+      // ONE SLOT, THE BETTER OF THE TWO. A gift's percentage and a typed
+      // coupon are the same kind of thing — a code-shaped percentage off — so
+      // they take the same slot and the customer keeps whichever is worth
+      // more. The label follows the value, so a receipt never calls a gift a
+      // "Coupon".
+      couponDiscount: Math.max(couponAmount, offerPercentDiscount),
+      couponLabel: giftPercentFillsSlot && offerGrant ? `${offerGrant.percent}% gift` : "Coupon",
     },
-    new Set(["coupon", "referral", "bundle", "membership"]),
+    DISCOUNT_COMPONENTS,
   );
   const discountAmount = customerDiscount.amount;
   const bulkDiscountTier = customerDiscount.label === "Bulk savings" ? bulkSavingsResult.tier : null;
+
+  // WHAT THE GIFT ACTUALLY GRANTED, read off the resolved winner.
+  //
+  //   percentage  applied only if the coupon slot won the race AND the gift's
+  //               value is what filled the slot;
+  //   shipping    applied only if this order would otherwise have paid it —
+  //               over the store's own free-shipping threshold, or on a plan
+  //               that already includes it, the waiver changes nothing;
+  //   product     applied whenever the $0 line is in the order.
+  //
+  // A gift with nothing left after this is NOT applied: appliedOffer is null,
+  // so the cart says nothing, order creation reserves nothing, and the token
+  // survives for an order it can actually improve.
+  const couponSlotWon = customerDiscount.components.includes("coupon") && discountAmount > 0;
+  const offerPercentApplied = couponSlotWon && giftPercentFillsSlot;
+  const offerShippingApplied = Boolean(offerGrant?.wantsShipping)
+    && (destinationKnown ? (!shippingOtherwiseWaived && shippingAtListTerms > 0) : true);
+  if (offerGrant && appliedOffer) {
+    const parts = [
+      offerGrant.productDescription,
+      offerShippingApplied ? "Free shipping" : null,
+      offerPercentApplied ? `${offerGrant.percent}% off` : null,
+    ].filter((part): part is string => Boolean(part));
+    appliedOffer = parts.length > 0
+      ? {
+          ...appliedOffer,
+          description: parts.join(" + "),
+          productApplied: Boolean(offerGrant.productDescription),
+          shippingApplied: offerShippingApplied,
+          percentApplied: offerPercentApplied,
+        }
+      : null;
+  }
+
+  // A typed code that lost the slot to the gift and waived no shipping gave
+  // the customer nothing. It is not recorded on the order, so the paid path
+  // does not redeem it for a discount it never provided. (A code beaten by
+  // membership, referral or bulk pricing is recorded exactly as before.)
+  const couponCodeForOrder = coupon && !(offerPercentApplied && !coupon.freeShipping) ? coupon.code : null;
   // IS THE SHOPPER ACTUALLY GETTING A REFERRAL DISCOUNT?
   //
   // Read off the resolved winner rather than re-derived, because every
@@ -1258,9 +1378,10 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     taxQuote,
     taxAmount,
     referral,
-    couponCode: coupon?.code ?? null,
+    couponCode: couponCodeForOrder,
     isBuy3Get1Active,
     appliedOffer,
+    discountLabel: customerDiscount.label,
     appliedPromotionId,
     appliedPromotionName,
     appliedPromotionLimits,
