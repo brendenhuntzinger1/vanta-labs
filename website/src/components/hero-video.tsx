@@ -48,10 +48,15 @@ export function HeroVideo({
   className,
   src,
   poster = "/images/hero-vial-poster.jpg",
+  phoneSrc = "/videos/vanta-labs-hero-phone.mp4",
+  phonePoster = "/images/hero-vial-poster-phone.jpg",
 }: {
   className?: string;
   src: string;
   poster?: string;
+  /** The same film, rotated so it opens where the label is turned away. */
+  phoneSrc?: string;
+  phonePoster?: string;
 }) {
   const granted = useAccessGranted();
   const [settled, setSettled] = useState(false);
@@ -68,7 +73,57 @@ export function HeroVideo({
   }, [granted]);
 
   if (!granted || !settled) return null;
-  return <HeroVial className={className} src={src} poster={poster} />;
+  return (
+    <HeroVial
+      className={className}
+      src={src}
+      poster={poster}
+      phoneSrc={phoneSrc}
+      phonePoster={phonePoster}
+    />
+  );
+}
+
+/**
+ * THE PHONE GETS A DIFFERENT CUT OF THE SAME FILM.
+ *
+ * A wide screen puts the copy in a column beside the vial; a phone puts it ON
+ * the picture, and the part of the picture it lands on is the vial's printed
+ * label — black type on white at roughly the size of the headline. No scrim
+ * fixes that, because a wash multiplies the label's white and its black by the
+ * same factor and the ratio the eye reads type by survives it. Measured at
+ * 390x844 with the copy hidden: the ground behind the headline sat at 43/255,
+ * well inside the 118 white type needs for 4.5:1, and "GHK-Cu" still read
+ * straight across the headline.
+ *
+ * So the phone loads a copy of the film rotated to start in the two-second
+ * window where the vial has turned and the label is edge-on — see LOOP_START in
+ * scripts/build-hero-media.mjs. Nothing about the composition changes: same
+ * full-bleed shot, same fit, same falloff. There is simply no type in the
+ * opening frame to compete with the headline.
+ *
+ * ONLY THE PHONE, and that is the point rather than an optimisation. By the
+ * time the label turns, the vial has descended into water — a moodier, darker
+ * setup than the studio opening, and rendered at 1440x900 it is visibly less
+ * clean than what a wide screen shows today. There is no collision to fix
+ * there, so there is nothing to trade for.
+ *
+ * 640px is the CSS's own phone breakpoint, the one the scrim is anchored to.
+ * Read once, at mount, like `still` below: a device does not cross it in normal
+ * use, and re-fetching a 535 KB clip on an orientation change would be a worse
+ * bug than the one this fixes.
+ */
+const PHONE_QUERY = "(max-width: 640px)";
+
+function matchesPhone(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+  try {
+    return window.matchMedia(PHONE_QUERY).matches;
+  } catch {
+    // A browser that cannot answer gets the film as shot, which is the
+    // composition every screen had before the phone cut existed.
+    return false;
+  }
 }
 
 /**
@@ -96,7 +151,19 @@ export function HeroVideo({
  * falloff as the animated hero. The two heroes differ only in whether the
  * picture moves.
  */
-function HeroVial({ className, src, poster }: { className?: string; src: string; poster: string }) {
+function HeroVial({
+  className,
+  src,
+  poster,
+  phoneSrc,
+  phonePoster,
+}: {
+  className?: string;
+  src: string;
+  poster: string;
+  phoneSrc: string;
+  phonePoster: string;
+}) {
   // Read once, on the client. Server-rendered markup is identical either way
   // because this component only ever mounts after entry.
   const [still] = useState(
@@ -106,8 +173,16 @@ function HeroVial({ className, src, poster }: { className?: string; src: string;
         typeof window.matchMedia === "function" &&
         window.matchMedia("(prefers-reduced-motion: reduce)").matches),
   );
+  // Same read, same reason: once, at mount, before anything is fetched.
+  const [phone] = useState(matchesPhone);
 
-  return <HeroVialCanvas className={className} src={still ? null : src} poster={poster} />;
+  return (
+    <HeroVialCanvas
+      className={className}
+      src={still ? null : phone ? phoneSrc : src}
+      poster={phone ? phonePoster : poster}
+    />
+  );
 }
 
 /**
