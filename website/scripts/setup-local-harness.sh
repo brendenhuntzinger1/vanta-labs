@@ -196,6 +196,15 @@ check() { # name, sql returning boolean
 check "orders.inventory_restocked_at exists (cancel/refund restock claim)" \
   "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='orders' and column_name='inventory_restocked_at');"
 
+# payment-failure-detail.sql (2026-09-04). getAdminOrderRows SELECTs these
+# columns by name, and the orders page swallows the read error into an empty
+# list — so a harness without them renders /admin/orders as "no orders" and
+# every browser check of the failure badges passes vacuously.
+check "orders.payment_failure_kind exists (why a payment failed; admin orders list selects it)" \
+  "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='orders' and column_name='payment_failure_kind');"
+check "orders_payment_failure_kind_check constraint exists (closed vocabulary)" \
+  "select exists (select 1 from pg_constraint where conname='orders_payment_failure_kind_check');"
+
 # C-02. retryPendingEmails checks for these columns at RUNTIME and quietly falls
 # back to the legacy query when they are absent, so their absence does not
 # error — it just moves the sweep onto the code path that sends a second
