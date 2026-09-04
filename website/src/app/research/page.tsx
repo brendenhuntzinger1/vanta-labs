@@ -6,9 +6,16 @@ import { getAllArticles } from "@/lib/articles";
 
 export const dynamic = "force-dynamic";
 
+// "Guides & Education", matching the h1 — NOT "Research Library". The entity
+// name is "Vanta Labs Research", and with the "| Vanta Labs" suffix the old
+// title spelled that name out in two halves on a URL that repeats the word.
+// Search Console showed every impression for the query "vanta labs research"
+// landing here rather than on the homepage. The on-page label and the URL are
+// unchanged; the <title> is what a search result shows and matches on.
+// Pinned by brand-query-competition.test.ts.
 export const metadata: Metadata = pageMetadata({
   path: "/research",
-  title: "Research Library",
+  title: "Guides & Education",
   description:
     "Educational guides on research-use-only materials: reading a COA, purity and third-party testing, storage, and more.",
 });
