@@ -5,6 +5,7 @@ import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { getArticle, isArticleSlug, ARTICLE_SLUGS } from "@/lib/articles";
 import { articleBreadcrumbs, articleSchema } from "@/lib/article-structured-data";
 import { organizationId, siteUrl } from "@/lib/site-identity";
+import { pageMetadata } from "@/lib/page-metadata";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +17,15 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const { slug } = await params;
   if (!isArticleSlug(slug)) return {};
   const article = await getArticle(slug);
-  return { title: article.title, description: article.excerpt, alternates: { canonical: `/research/${slug}` } };
+  // Via pageMetadata, NOT a bare object. Metadata merges shallowly, so a route
+  // that returns only title/description/canonical inherits the ROOT LAYOUT's
+  // Open Graph whole — and the root layout's og:title, og:description and
+  // og:url all describe the home page. Measured on 2026-09-04: the four
+  // articles and the six legal policies, eleven URLs in all, shared one
+  // preview card reading "Vanta Labs Research | Premium Research Peptides",
+  // and their og:url contradicted the canonical in the same <head>. Every
+  // shared article link rendered as the generic storefront.
+  return pageMetadata({ path: `/research/${slug}`, title: article.title, description: article.excerpt });
 }
 
 function renderBody(body: string) {
