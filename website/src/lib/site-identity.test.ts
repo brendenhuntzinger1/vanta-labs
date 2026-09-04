@@ -6,6 +6,7 @@ import {
   HOME_DESCRIPTION,
   HOME_TITLE,
   organizationSchema,
+  siteStructuredData,
   siteUrl,
   webSiteSchema,
 } from "./site-identity";
@@ -121,5 +122,37 @@ describe("WebSite schema", () => {
 
   it("attributes the site to the Organization node rather than duplicating it", () => {
     expect(site.publisher).toEqual({ "@id": "https://www.vantalabsresearch.com/#organization" });
+  });
+});
+
+describe("site-wide structured data block", () => {
+  // Sentry VANTA-LABS-J: a third-party script on the homepage parsed our
+  // JSON-LD and evaluated `r["@context"].toLowerCase()`. The root layout was
+  // the one place on the site emitting a bare ARRAY of nodes, so on `/` — the
+  // only page with no other block — that expression read `undefined` and
+  // threw. Every other page emits an object with a string @context; the site
+  // block must too, which is what @graph is for.
+  const block = JSON.parse(JSON.stringify(siteStructuredData()));
+
+  it("is a single object whose @context is a string, so naive consumers can read it", () => {
+    expect(Array.isArray(block)).toBe(false);
+    expect(typeof block["@context"]).toBe("string");
+    expect(block["@context"].toLowerCase()).toBe("https://schema.org");
+  });
+
+  it("carries the Organization and WebSite nodes under @graph", () => {
+    const types = block["@graph"].map((node: { "@type": string }) => node["@type"]);
+    expect(types).toEqual(["Organization", "WebSite"]);
+  });
+
+  it("declares the context once, not again on each node", () => {
+    for (const node of block["@graph"]) {
+      expect(node).not.toHaveProperty("@context");
+    }
+  });
+
+  it("still resolves both nodes to the one entity", () => {
+    const [org, site] = block["@graph"];
+    expect(site.publisher).toEqual({ "@id": org["@id"] });
   });
 });

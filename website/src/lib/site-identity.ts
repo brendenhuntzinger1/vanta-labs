@@ -114,7 +114,6 @@ export const ORG_DESCRIPTION =
 export function organizationSchema() {
   const base = siteUrl();
   return {
-    "@context": "https://schema.org",
     "@type": "Organization",
     "@id": organizationId(),
     name: BRAND_LEGAL_NAME,
@@ -144,7 +143,6 @@ export function organizationSchema() {
 
 export function webSiteSchema() {
   return {
-    "@context": "https://schema.org",
     "@type": "WebSite",
     "@id": `${siteUrl()}/#website`,
     name: BRAND_LEGAL_NAME,
@@ -153,5 +151,24 @@ export function webSiteSchema() {
     // Reference, not a second copy. Two nodes describing the same company with
     // duplicated properties is how a site ends up with two competing entities.
     publisher: { "@id": organizationId() },
+  };
+}
+
+/**
+ * The one site-wide JSON-LD block the root layout emits.
+ *
+ * This used to be a bare ARRAY of the two nodes above, each carrying its own
+ * @context. Valid JSON-LD, but the only place on the whole site that shaped a
+ * block that way — every product and article page emits an object. It cost a
+ * real error: a third-party script on the homepage parsed each ld+json block
+ * and evaluated `r["@context"].toLowerCase()`, which on an array is
+ * `undefined.toLowerCase()` (Sentry VANTA-LABS-J). Two nodes sharing one
+ * context is exactly what @graph exists for, so the block is now an object
+ * like all the others, and the nodes no longer repeat the context.
+ */
+export function siteStructuredData() {
+  return {
+    "@context": "https://schema.org",
+    "@graph": [organizationSchema(), webSiteSchema()],
   };
 }

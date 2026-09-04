@@ -26,9 +26,8 @@ import {
   HOME_TITLE,
   BRAND_LEGAL_NAME,
   TITLE_TEMPLATE,
-  organizationSchema,
+  siteStructuredData,
   siteUrl as resolveSiteUrl,
-  webSiteSchema,
 } from "@/lib/site-identity";
 import { ConsentedAnalytics } from "@/components/consented-analytics";
 import { TikTokPixel } from "@/components/tiktok-pixel";
@@ -251,7 +250,7 @@ export default async function RootLayout({
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{
-            __html: JSON.stringify([organizationSchema(), webSiteSchema()]),
+            __html: JSON.stringify(siteStructuredData()),
           }}
         />
         {/* Mounted OUTSIDE the age gate on purpose: a customer arriving on a
