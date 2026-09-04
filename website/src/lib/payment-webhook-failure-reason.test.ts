@@ -105,6 +105,24 @@ describe("a declined charge records the processor's reason", () => {
     expect(row.payment_failure_reason).toBe("Insufficient funds");
   });
 
+  it("a decline landing on a row the sweep retired as EXPIRED replaces the expired reason, even with none of its own", async () => {
+    // Otherwise "The checkout session expired ... No charge was attempted."
+    // would sit under a "Declined by bank / processor" badge.
+    seedOrder("order-expired-then-declined", {
+      payment_status: "payment_failed",
+      payment_failure_kind: "checkout_expired",
+      payment_failure_code: "expired",
+      payment_failure_reason: "The checkout session expired at the processor before a payment was completed. No charge was attempted.",
+    });
+    const payload = veyraFailure("order-expired-then-declined", {});
+    await processPaymentWebhook(payload, sign(payload), SECRET, "evt-expired-then-declined");
+
+    const row = read("order-expired-then-declined");
+    expect(row.payment_failure_kind).toBe("processor_declined");
+    expect(row.payment_failure_code).toBeNull();
+    expect(row.payment_failure_reason).toBeNull();
+  });
+
   it("accepts the flat shape the internal mock gateway sends", async () => {
     seedOrder("order-mock");
     const payload = JSON.stringify({ orderId: "order-mock", type: "payment.failed", reason: "Test decline" });

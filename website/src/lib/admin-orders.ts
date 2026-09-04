@@ -106,7 +106,14 @@ export async function getAdminOrderRows(filters: AdminOrderFilters = {}): Promis
     // under a subtitle promising abandoned checkouts were hidden. Declines and
     // failures with no recorded kind stay visible; NULL kinds must pass, which
     // is why this is an .or() and not a plain .neq().
-    query = query.or("payment_failure_kind.is.null,payment_failure_kind.neq.checkout_expired");
+    //
+    // SCOPED TO ROWS THAT ARE STILL FAILED. The paid flip never clears the
+    // failure columns (a paid row keeps "first attempt declined" as history),
+    // and payment_failed -> paid is an allowed transition — a session the
+    // sweep retired as expired can still settle late. Keyed on the kind alone,
+    // that order would have vanished from the default list the moment it was
+    // paid. Caught by the round-two pre-merge review.
+    query = query.or("payment_status.neq.payment_failed,payment_failure_kind.is.null,payment_failure_kind.neq.checkout_expired");
   } else if (filters.paymentStatus && filters.paymentStatus !== "all") {
     query = query.eq("payment_status", filters.paymentStatus);
   }

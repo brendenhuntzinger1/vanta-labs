@@ -538,7 +538,7 @@ async function releaseEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, order_number, order_type, membership_tier_id, membership_cycle, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, shipping_address, city, postal_code, points_redeemed, store_credit_redeemed_cents, inventory_committed_at")
+    .select("id, order_id, order_number, order_type, membership_tier_id, membership_cycle, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, shipping_address, city, postal_code, points_redeemed, store_credit_redeemed_cents, inventory_committed_at, payment_failure_kind")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -576,7 +576,15 @@ async function upsertOrderRecord(input: {
    * upsert is recording a payment_failed status. Absent on every other event so
    * a later refund or cancel never blanks a reason already on the row.
    */
-  paymentFailure?: PaymentFailureDetail | null;
+  paymentFailure?: (PaymentFailureDetail & {
+    /**
+     * The row's recorded kind differs from this one (a decline landing on a
+     * row the sweep retired as expired), so the code and reason are replaced
+     * even when this event carries none: an "expired ... no charge was
+     * attempted" sentence must not sit under a "Declined by bank" badge.
+     */
+    replaceDetail?: boolean;
+  }) | null;
   items?: Array<{
     productId?: string;
     productName?: string;
@@ -632,8 +640,12 @@ async function upsertOrderRecord(input: {
     ...(input.paymentFailure
       ? {
           payment_failure_kind: input.paymentFailure.kind,
-          ...(input.paymentFailure.code ? { payment_failure_code: input.paymentFailure.code } : {}),
-          ...(input.paymentFailure.reason ? { payment_failure_reason: input.paymentFailure.reason } : {}),
+          ...(input.paymentFailure.code || input.paymentFailure.replaceDetail
+            ? { payment_failure_code: input.paymentFailure.code }
+            : {}),
+          ...(input.paymentFailure.reason || input.paymentFailure.replaceDetail
+            ? { payment_failure_reason: input.paymentFailure.reason }
+            : {}),
           payment_failed_at: new Date().toISOString(),
         }
       : {}),
@@ -2212,7 +2224,13 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       // arriving for an order in a CAPTURED_PAYMENT_STATES state, or a fully
       // terminal one, returned before this point, so a reason can only land on
       // a row that is genuinely being marked failed.
-      paymentFailure: nextStatus === "payment_failed" ? extractProcessorFailure(eventPayload) : null,
+      paymentFailure: nextStatus === "payment_failed"
+        ? (() => {
+            const failure = extractProcessorFailure(eventPayload);
+            const recordedKind = orderRecord?.payment_failure_kind ? String(orderRecord.payment_failure_kind) : null;
+            return { ...failure, replaceDetail: recordedKind !== null && recordedKind !== failure.kind };
+          })()
+        : null,
       items: eventPayload.items,
     });
     await upsertOrderItems(orderId, eventPayload.items);

@@ -85,3 +85,14 @@ describe("express authorize: a decline is recorded with its reason", () => {
     expect(afterResult).not.toMatch(/\bfailure\b/);
   });
 });
+
+describe("admin orders: the default view hides expired checkouts only while they are still failed", () => {
+  it("scopes the checkout_expired filter to payment_failed rows", () => {
+    const source = read("src/lib/admin-orders.ts");
+    const active = source.slice(source.indexOf('if (filters.paymentStatus === "active") {'), source.indexOf("} else if"));
+    // A session the sweep retired as expired can still settle late, and the paid
+    // flip never clears the failure columns. Keyed on the kind alone, that paid
+    // order would disappear from the default list.
+    expect(active).toContain('.or("payment_status.neq.payment_failed,payment_failure_kind.is.null,payment_failure_kind.neq.checkout_expired")');
+  });
+});
