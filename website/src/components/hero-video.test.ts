@@ -604,9 +604,10 @@ describe("the hero fills the screen, and cannot show a white one", () => {
   it("keeps the copy readable on the picture it now sits on", () => {
     // Full bleed means the copy is ON the photograph, and the part it lands on
     // is the vial's printed label — black on white, at roughly the size of the
-    // headline. Measured with the copy hidden, the brightest pixel behind the
-    // headline is 34/255 on a phone and 56 at 1440; white type needs 118 or
-    // below for 4.5:1. The stops that buy that are these.
+    // headline. Measured with the copy hidden: the brightest pixel behind the
+    // headline is 43/255 on a phone, 41 on an SE, 107 on a portrait tablet and
+    // 82 at 1440; white type needs 118 or below for 4.5:1. The stops that buy
+    // that are these.
     const scrim = css.slice(css.indexOf(".vl2-hero-scrim {"), css.indexOf(".vl2-hero-content {"));
     const phone = scrim.slice(0, scrim.indexOf("@media"));
     const alphas = [...phone.matchAll(/rgba\(0,\s*0,\s*0,\s*([0-9.]+)\)/g)].map((m) => Number(m[1]));
@@ -619,6 +620,80 @@ describe("the hero fills the screen, and cannot show a white one", () => {
     // use the phone's rem stops, and a wide screen lifts from the side instead.
     expect(scrim).toContain("@media (min-width: 641px) and (max-width: 1023px)");
     expect(scrim).toContain("@media (min-width: 1024px)");
+  });
+
+  // -------------------------------------------------------------------------
+  // AND THE PICTURE ABOVE THE COPY MUST NOT PAY FOR IT.
+  //
+  // The rule above only says the copy end is dark enough, and on its own that
+  // is exactly half a requirement — every stop could be 0.9 and it would still
+  // pass. It nearly was: the phone scrim reached 0.68 four rem ABOVE the first
+  // line of copy and ran to 0.97, the media carried a flat 0.9 opacity, and the
+  // canvas began dissolving the shot at 0.55 of the way out. Three layers, none
+  // of them wrong on its own, and together they took the vial's body, shoulder
+  // and whole lit halo down with the label.
+  //
+  // What the owner saw was a black hero, and the numbers agreed: with the copy
+  // hidden, the top 55% of the section averaged 23/255 on a phone and 14 on an
+  // SE. The store's front page is a lit product shot; that is not one.
+  //
+  // Measured after, same method, same viewports: 54 and 27, with every headline
+  // ground still inside the 118 budget above. The picture roughly doubled and
+  // the copy did not move.
+  //
+  // These pin the three layers so none of them can quietly take it back.
+  // -------------------------------------------------------------------------
+  it("gives the shot its full strength, at every breakpoint", () => {
+    // A flat opacity dims the WHOLE frame, including everything no type will
+    // ever sit on, so it can never be the right tool for legibility — that is
+    // the scrim's job, and the scrim is anchored to the copy.
+    for (const [start, end] of [
+      [".vl2-hero-video {", ".vl2-hero-scrim"],
+      ["@media (max-width: 1023px)", ".vl2-hero-content"],
+      ["@media (min-width: 1024px)", ".vl2-hero-content"],
+    ]) {
+      const from = css.indexOf(start);
+      if (from === -1) continue;
+      const block = css.slice(from, css.indexOf(end, from)).replace(/\/\*[\s\S]*?\*\//g, "");
+      for (const [, value] of block.matchAll(/opacity:\s*([0-9.]+)/g)) {
+        expect(Number(value), `the hero media is dimmed to ${value} in "${start}"`).toBe(1);
+      }
+    }
+  });
+
+  it("leaves the picture above the copy essentially clear", () => {
+    const scrim = css.slice(css.indexOf(".vl2-hero-scrim {"), css.indexOf(".vl2-hero-content {"));
+    const phone = scrim.slice(0, scrim.indexOf("@media"));
+    // The copy block is ~29rem tall, bottom-anchored, on every phone. Any stop
+    // anchored FURTHER from the bottom than that is above the first line of
+    // copy, and nothing up there is holding any type legible.
+    const aboveCopy = [...phone.matchAll(/rgba\(0,\s*0,\s*0,\s*([0-9.]+)\)\s+calc\(100% - ([0-9.]+)rem\)/g)]
+      .map((m) => ({ alpha: Number(m[1]), rem: Number(m[2]) }))
+      .filter((stop) => stop.rem > 30);
+    expect(aboveCopy.length, "the phone scrim must stay clear above the copy").toBeGreaterThan(0);
+    for (const stop of aboveCopy) {
+      expect(stop.alpha, `${stop.rem}rem from the bottom is above the copy`).toBeLessThanOrEqual(0.15);
+    }
+    // The very top too, which is stated as a percentage rather than in rem.
+    const top = [...phone.matchAll(/rgba\(0,\s*0,\s*0,\s*([0-9.]+)\)\s+([0-9.]+)%/g)]
+      .map((m) => ({ alpha: Number(m[1]), at: Number(m[2]) }))
+      .filter((stop) => stop.at <= 20);
+    for (const stop of top) {
+      expect(stop.alpha, `${stop.at}% down is nowhere near the copy`).toBeLessThanOrEqual(0.15);
+    }
+  });
+
+  it("keeps the falloff a falloff, not a hole punched in the middle", () => {
+    // FADE_START only has to guarantee the EDGES reach zero, so that no
+    // viewport shape can leave the white studio backdrop on screen. Where the
+    // ramp BEGINS is a separate question, and 0.55 answered it so
+    // conservatively that the shot was dissolving from just past the centre —
+    // the vial's shoulder painted at partial alpha over a near-black ground.
+    const start = /^const FADE_START = ([0-9.]+);$/m.exec(source);
+    expect(start).not.toBeNull();
+    expect(Number(start![1]), "the vial is the middle of the frame").toBeGreaterThanOrEqual(0.65);
+    // Still short of the edge, or there is no falloff left to speak of.
+    expect(Number(start![1])).toBeLessThanOrEqual(0.85);
   });
 
   it("still cannot put a bright edge on screen", () => {

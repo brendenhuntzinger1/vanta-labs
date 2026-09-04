@@ -158,10 +158,24 @@ function HeroVial({ className, src, poster }: { className?: string; src: string;
  * away by any viewport shape. The burnt-in vignette goes back to being what it
  * was always meant to be — a guard for the raw file, not the composition.
  *
- * 0.55 keeps the middle of the section at full strength and spends the outer
- * 45% dissolving into the page.
+ * 0.72 keeps the middle of the section at full strength and spends the outer
+ * 28% dissolving into the page.
+ *
+ * IT WAS 0.55, AND THAT SPENT NEARLY HALF THE PICTURE. The guarantee this
+ * number carries is about the EDGES: reach fully transparent by 1.0 on both
+ * axes so no viewport shape can leave a bright band on screen. Where the ramp
+ * BEGINS is a separate question, and 0.55 answered it far more conservatively
+ * than the guarantee needs — the shot was already dissolving from just past
+ * the centre, so the vial's shoulder and most of its lit halo were painted at
+ * partial alpha over the hero's own near-black gradient. Together with a flat
+ * 0.9 opacity and a scrim that started four rem above the copy, that is what
+ * made the owner report the hero as black.
+ *
+ * 0.72 keeps the falloff — every edge still reaches zero at 1.0, so the white
+ * studio backdrop still cannot appear at any viewport shape — and gives the
+ * middle of the frame, which is the vial, back its brightness.
  */
-const FADE_START = 0.55;
+const FADE_START = 0.72;
 
 /**
  * Where the shot sits along the hero when there is room to choose, as a
