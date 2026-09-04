@@ -204,11 +204,13 @@ export async function sendTestPushNotification(): Promise<TestPushResult> {
     }
     return { sent: true, kind: destination.kind };
   } catch (error) {
-    return {
-      sent: false,
-      kind: destination.kind,
-      detail: `Could not reach the destination: ${error instanceof Error ? error.message : String(error)}`,
-    };
+    // Same redaction as the order path: the message is shown verbatim in the
+    // admin, and undici's parse failures quote the whole URL.
+    const detail = redactUrls(
+      error instanceof Error ? error.message : String(error),
+      destination.kind === "webhook" ? destination.url : undefined,
+    );
+    return { sent: false, kind: destination.kind, detail: `Could not reach the destination: ${detail}` };
   }
 }
 
@@ -752,7 +754,10 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
     // startsWith("https://"). The path of a webhook URL is its credential, so
     // every URL is redacted from the detail before it reaches an alert row,
     // Sentry, the emailed order_notification_missed critical, or the caller.
-    const detail = redactUrls(error instanceof Error ? error.message : String(error));
+    const detail = redactUrls(
+      error instanceof Error ? error.message : String(error),
+      destination.kind === "webhook" ? destination.url : undefined,
+    );
     const where = destination.kind === "pushover" ? "Pushover" : `webhook at ${hostOf(destination.url)}`;
     await safeAlert(
       "order_push_failed",
@@ -765,9 +770,23 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
   }
 }
 
-/** Every URL in a message replaced by a placeholder. Belt and braces for text that came from a library, not from us. */
-function redactUrls(message: string): string {
-  return message.replace(/https?:\/\/[^\s)'"<>]+/gi, "<webhook url>");
+/**
+ * Every URL in a message replaced by a placeholder, and — when the configured
+ * webhook URL is known — its path removed wherever it appears, however it got
+ * there. The regex alone stops at whitespace or a quote, and a URL undici
+ * refuses to parse is malformed precisely because it may contain one of those
+ * inside the authority, which would leave the path (the credential) behind.
+ * The path is cut out of the configured URL with string ops, not URL parsing,
+ * for the same reason.
+ */
+function redactUrls(message: string, configuredUrl?: string): string {
+  let redacted = message.replace(/https?:\/\/[^\s)'"<>]+/gi, "<webhook url>");
+  if (configuredUrl) {
+    const path = configuredUrl.trim().replace(/^https?:\/\/[^/]*/i, "");
+    if (path.length > 1) redacted = redacted.split(path).join("<webhook path>");
+    redacted = redacted.split(configuredUrl.trim()).join("<webhook url>");
+  }
+  return redacted;
 }
 
 /**

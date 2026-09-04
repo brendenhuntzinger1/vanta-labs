@@ -435,6 +435,18 @@ describe("what happens when things break", () => {
     expect(relevant.find((a) => a.type === "order_push_failed")?.message).toContain("hooks.example.com");
   });
 
+  it("still strips the path when the URL is malformed in a way the URL regex stops at", async () => {
+    // A quote inside the authority is exactly the kind of malformation undici
+    // refuses; the regex alone would stop there and leave the path behind.
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", 'https://hooks."example.com/catch/1/abc');
+    fetchMock.mockRejectedValue(new TypeError('Failed to parse URL from https://hooks."example.com/catch/1/abc'));
+    const result = await sendOrderPushNotification("ord_a1b2c3d4");
+    expect(JSON.stringify(result)).not.toContain("/catch/1/abc");
+    for (const alert of alerts) {
+      expect(JSON.stringify(alert)).not.toContain("/catch/1/abc");
+    }
+  });
+
   it("names Pushover when Pushover is the destination that refused", async () => {
     vi.stubEnv("PUSHOVER_API_TOKEN", "tok");
     vi.stubEnv("PUSHOVER_USER_KEY", "usr");
@@ -809,6 +821,15 @@ describe("the scheduled health check", () => {
 // ---------------------------------------------------------------------------
 
 describe("sending a test notification on demand", () => {
+  it("does not hand the admin's browser the webhook path inside a fetch error", async () => {
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.example.com/catch/1/abc");
+    fetchMock.mockRejectedValue(new TypeError("Failed to parse URL from https://hooks.example.com/catch/1/abc"));
+    const result = await sendTestPushNotification();
+    expect(result.sent).toBe(false);
+    expect(result.detail).toContain("Could not reach the destination");
+    expect(result.detail).not.toContain("/catch/1/abc");
+  });
+
   it("delivers through Pushover using the same message endpoint a real order does", async () => {
     control.notifications = { pushover_token: "app-token", pushover_user_key: "user-key" };
     fetchMock.mockResolvedValue({ ok: true, status: 200 });
