@@ -287,15 +287,22 @@ async function reclaimStaleClaims(campaignId: string, now: number): Promise<numb
 type ClaimedRecipient = { id: string; email: string; attempts: number; mergeContext: AffiliateMergeContext | null };
 
 async function claimBatch(campaignId: string, limit: number, now: number): Promise<ClaimedRecipient[]> {
-  const { data: candidates, error: selectError } = await supabaseAdmin
+  const pending = () => supabaseAdmin
     .from("email_campaign_recipients")
     .select("id")
     .eq("campaign_id", campaignId)
-    .eq("status", "pending")
-    // A recipient the frequency guard sent back waits until its window opens;
-    // without this filter the loop below would re-claim it immediately.
+    .eq("status", "pending");
+  // A recipient the frequency guard sent back waits until its window opens;
+  // without this filter the loop below would re-claim it immediately.
+  let { data: candidates, error: selectError } = await pending()
     .or(`deferred_until.is.null,deferred_until.lte.${new Date(now).toISOString()}`)
     .limit(limit);
+  if (selectError && String((selectError as { code?: string }).code ?? "") === "42703") {
+    // deferred_until has not been migrated here. The guard falls open on that
+    // database, so its parking column must too — a campaign must not stall
+    // on a filter for a column nothing on this database writes.
+    ({ data: candidates, error: selectError } = await pending().limit(limit));
+  }
   if (selectError) throw selectError;
   const ids = (candidates ?? []).map((row) => String(row.id));
   if (ids.length === 0) return [];

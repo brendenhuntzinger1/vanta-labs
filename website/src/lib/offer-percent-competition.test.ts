@@ -58,6 +58,7 @@ vi.mock("@/lib/coupons", async () => {
   const CODES: Record<string, { percent: number; freeShipping: boolean }> = {
     SAVE50: { percent: 50, freeShipping: false },
     SAVE5: { percent: 5, freeShipping: false },
+    SAVE10: { percent: 10, freeShipping: false },
     SHIPFREE: { percent: 0, freeShipping: true },
   };
   return {
@@ -119,6 +120,7 @@ const PRODUCTS = {
   "peptide-b": { name: "Peptide B", category: "Research Peptides", price: "$40.00", stockStatus: "In Stock", image: "/b.png", description: "" },
   "vial-70": { name: "Vial 70", category: "Research Peptides", price: "$70.00", stockStatus: "In Stock", image: "/c.png", description: "" },
   "vial-6998": { name: "Vial 69.98", category: "Research Peptides", price: "$69.98", stockStatus: "In Stock", image: "/d.png", description: "" },
+  "vial-37": { name: "Vial 37", category: "Research Peptides", price: "$37.00", stockStatus: "In Stock", image: "/e.png", description: "" },
   "ghk-cu": { name: "GHK-Cu", category: "Research Peptides", price: "$47.99", stockStatus: "In Stock", image: "/g.png", description: "" },
   "bacteriostatic-water": { name: "BAC Water", category: "Supplies", price: "$9.99", stockStatus: "In Stock", image: "/w.png", description: "" },
 } as const;
@@ -338,6 +340,38 @@ describe("the qualifying subtotal: what the customer actually pays for merchandi
     expect(q.discountAmount).toBe(20);
     expect(q.shipping).toBe(15);
     expect(q.appliedOffer).toBeNull();
+  });
+
+  it("a typed code that will LOSE to the gift's percentage does not count against the minimum: $37 with a 10% code and a 15% gift qualifies on $37", async () => {
+    state.offer = percent15();
+    const q = await quote([{ id: "vial-37", quantity: 1 }], { couponCode: "SAVE10" });
+    expect(q.discountAmount).toBe(5.55);
+    expect(q.appliedOffer?.percentApplied).toBe(true);
+    expect(q.couponCode).toBeNull();
+  });
+
+  it("a typed code that WINS does count: $37 with a 50% code pays $18.50 and the gift is withdrawn", async () => {
+    state.offer = percent15();
+    const q = await quote([{ id: "vial-37", quantity: 1 }], { couponCode: "SAVE50" });
+    expect(q.discountAmount).toBe(18.5);
+    expect(q.appliedOffer).toBeNull();
+    expect(q.couponCode).toBe("SAVE50");
+  });
+
+  it("a free-shipping code that waived nothing (the order already ships free) is not recorded when the gift takes the slot", async () => {
+    state.offer = percent15();
+    const q = await quote([{ id: "peptide-b", quantity: 6 }], { couponCode: "SHIPFREE" });
+    expect(q.shipping).toBe(0);
+    expect(q.appliedOffer?.percentApplied).toBe(true);
+    expect(q.couponCode).toBeNull();
+  });
+
+  it("a free-shipping code that DID waive shipping is recorded even though the gift took the percentage slot", async () => {
+    state.offer = percent15();
+    const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SHIPFREE" });
+    expect(q.shipping).toBe(0);
+    expect(q.appliedOffer?.percentApplied).toBe(true);
+    expect(q.couponCode).toBe("SHIPFREE");
   });
 
   it("exactly $35 of paid merchandise qualifies", async () => {

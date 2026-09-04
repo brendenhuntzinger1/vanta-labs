@@ -150,6 +150,9 @@ export async function claimMarketingSend(input: {
  * Bounded by time rather than by row count, and keyed by lower-cased email.
  * A failed send is not pressure on anyone's inbox and is excluded.
  */
+/** A 'sending' claim older than this is a crash, not a send — mirrors the RPC. */
+export const STRANDED_CLAIM_MS = 15 * 60 * 1000;
+
 export async function loadLastMarketingSendAt(input: {
   now: number;
   lookbackMs?: number;
@@ -173,6 +176,10 @@ export async function loadLastMarketingSendAt(input: {
       if (!isMarketingCampaignType(String(row.campaign_type ?? ""))) continue;
       const email = String(row.recipient_email ?? "").trim().toLowerCase();
       const at = new Date(String(row.sent_at)).getTime();
+      // The same rule as marketing_send_claim: a claim still at 'sending'
+      // after fifteen minutes was stranded by a crash, not delivered, and must
+      // not hold an inbox shut for a day.
+      if (String(row.status ?? "") === "sending" && at < input.now - STRANDED_CLAIM_MS) continue;
       if (!email || !Number.isFinite(at)) continue;
       const existing = last.get(email);
       if (existing === undefined || at > existing) last.set(email, at);
@@ -207,8 +214,22 @@ export async function enqueueDeferredMarketingEmail(input: {
   notBefore: number;
 }): Promise<boolean> {
   try {
+    const recipient = input.rendered.to.trim().toLowerCase();
+    // ONE QUEUED COPY PER (message, recipient). A deferral writes no send-log
+    // row, so the senders' own dedup cannot see a parked message; an operator
+    // who clicks Send twice inside the window must not park it twice.
+    let existing = supabaseAdmin
+      .from("marketing_send_queue")
+      .select("id")
+      .eq("recipient_email", recipient)
+      .eq("campaign_type", input.campaignType)
+      .eq("status", "queued")
+      .limit(1);
+    existing = input.referenceId ? existing.eq("reference_id", input.referenceId) : existing.is("reference_id", null);
+    const { data: already, error: readError } = await existing;
+    if (!readError && (already ?? []).length > 0) return true;
     const { error } = await supabaseAdmin.from("marketing_send_queue").insert({
-      recipient_email: input.rendered.to.trim().toLowerCase(),
+      recipient_email: recipient,
       campaign_type: input.campaignType,
       reference_id: input.referenceId ?? null,
       template_key: input.templateKey,

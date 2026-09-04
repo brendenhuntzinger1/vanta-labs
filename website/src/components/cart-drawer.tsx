@@ -187,7 +187,11 @@ export function CartDrawer() {
   // A typed code keeps its own wording; otherwise the server's resolved label
   // ("15% gift", "Membership pricing") names the winner, so the drawer never
   // credits a gift with a discount that a better offer actually provided.
-  const shownDiscountLabel = appliedDiscountLabel ?? offerQuote?.discountLabel ?? offerQuote?.offer?.description ?? "Discount";
+  // The amount shown comes from the server's quote whenever there is one, so
+  // the label must too: the client's own winner can name a member discount or
+  // a promo code for a figure that is actually the gift's, or a code the
+  // order will not even record.
+  const shownDiscountLabel = offerQuote?.discountLabel ?? appliedDiscountLabel ?? offerQuote?.offer?.description ?? "Discount";
   const giftLines = offerQuote?.giftLines ?? [];
 
   // Smart membership upsell: only for non-members, and only when joining

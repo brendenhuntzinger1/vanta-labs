@@ -104,7 +104,8 @@ export function CartPageClient() {
   const shownShipping = offerQuote ? offerQuote.shipping : shipping;
   const shownDiscount = offerQuote ? offerQuote.discountAmount : discountAmount;
   const shownTotal = offerQuote ? offerQuote.expectedTotal : total;
-  const shownDiscountLabel = appliedDiscountLabel ?? offerQuote?.offer?.description ?? "Discount";
+  // The server's label travels with the server's amount — see cart-drawer.
+  const shownDiscountLabel = offerQuote?.discountLabel ?? appliedDiscountLabel ?? offerQuote?.offer?.description ?? "Discount";
   const giftLines = offerQuote?.giftLines ?? [];
   const offerShortfall = pendingOffer ? Math.max(0, pendingOffer.minSubtotalCents / 100 - subtotal) : 0;
 

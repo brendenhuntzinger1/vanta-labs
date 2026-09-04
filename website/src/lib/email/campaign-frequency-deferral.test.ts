@@ -44,6 +44,8 @@ const db = vi.hoisted(() => ({
   retryAt: 0,
   /** Every address sendMarketingEmail was asked to write to, in order. */
   attempts: [] as string[],
+  /** An un-migrated database: email_campaign_recipients has no deferred_until column. */
+  deferredColumnMissing: false,
   delivered: [] as string[],
 }));
 
@@ -89,6 +91,9 @@ vi.mock("@/lib/supabase-server", () => {
 
     const run = () => {
       const all = rowsFor();
+      if (db.deferredColumnMissing && filters.some(([o, , v]) => o === "or" && String(v).includes("deferred_until"))) {
+        return { data: null, error: { code: "42703", message: 'column email_campaign_recipients.deferred_until does not exist' }, count: 0 };
+      }
       if (op === "update") {
         const hit = all.filter((row) => matches(row, filters)).slice(0, limit);
         for (const row of hit) Object.assign(row, patch);
@@ -219,6 +224,17 @@ afterEach(() => {
 });
 
 describe("a recipient the frequency guard defers", () => {
+  it("an un-migrated database (no deferred_until column) does not stall the campaign: the batch is claimed without the filter", async () => {
+    db.deferredColumnMissing = true;
+    const id = seedCampaign();
+    await queueCampaign(id);
+    const result = await sendCampaignBatch({ campaignId: id, budgetMs: 5000 });
+    expect(result.failed).toBe(0);
+    expect(result.sent).toBe(2);
+    expect(db.delivered.sort()).toEqual([ALICE, BOB].sort());
+    db.deferredColumnMissing = false;
+  });
+
   it("goes back to pending with deferred_until = retryAt, no attempt counted, and the campaign stays open", async () => {
     const id = seedCampaign();
     await queueCampaign(id);

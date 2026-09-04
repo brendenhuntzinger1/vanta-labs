@@ -1011,7 +1011,18 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // nothing is reserved. Legitimate promotions are unaffected; only the gift
   // is stricter.
   if (offerGrant && offer) {
-    const baseline = resolveCustomerDiscount({ ...discountInputsBase, couponDiscount: couponAmount }, DISCOUNT_COMPONENTS);
+    // A typed coupon only counts against the minimum if it will actually
+    // apply. When the gift's own percentage is the larger of the two and the
+    // slot cannot stack, the coupon is the loser and takes nothing off — so
+    // it must not be the thing that pushes the basket under the floor. (A
+    // $37 basket with a 10% code and a 15% gift qualifies for a $35 gift on
+    // its $37, not on $33.30 that was never going to be the price.)
+    const couponWillApply = couponAmount > 0
+      && (couponAmount >= offerPercentDiscount || couponPolicy.allowStacking || promotionAllowsCouponStacking);
+    const baseline = resolveCustomerDiscount(
+      { ...discountInputsBase, couponDiscount: couponWillApply ? couponAmount : 0 },
+      DISCOUNT_COMPONENTS,
+    );
     const qualifyingCents = Math.round((subtotal - baseline.amount) * 100);
     if (!offerMinimumMet(offer, qualifyingCents)) {
       for (let i = lineItems.length - 1; i >= 0; i--) {
@@ -1097,9 +1108,15 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
 
   // A typed code that lost the slot to the gift and waived no shipping gave
   // the customer nothing. It is not recorded on the order, so the paid path
-  // does not redeem it for a discount it never provided. (A code beaten by
-  // membership, referral or bulk pricing is recorded exactly as before.)
-  const couponCodeForOrder = coupon && !(offerPercentApplied && !coupon.freeShipping) ? coupon.code : null;
+  // does not redeem it for a discount it never provided. Its shipping waiver
+  // only counts if this order would otherwise have paid shipping: over the
+  // store's threshold, on a plan that ships free, or on a bulk tier, the
+  // waiver changes nothing either. (A code beaten by membership, referral or
+  // bulk pricing is recorded exactly as before.)
+  const couponWaivedShipping = Boolean(coupon?.freeShipping)
+    && !(bulkSavingsResult.tier || memberPerks.freeShipping)
+    && (destinationKnown ? shippingAtListTerms > 0 : true);
+  const couponCodeForOrder = coupon && (!offerPercentApplied || couponWaivedShipping) ? coupon.code : null;
   // IS THE SHOPPER ACTUALLY GETTING A REFERRAL DISCOUNT?
   //
   // Read off the resolved winner rather than re-derived, because every

@@ -960,7 +960,7 @@ export function AdminEmailClient({
                           ["Unique", num(stats?.uniqueClicks)],
                           ["Orders", num(stats?.orders)],
                           ["Revenue", money(stats?.revenue)],
-                          ["Per recipient", money(stats?.revenuePerRecipient ?? 0)],
+                          ["Per recipient", stats?.revenuePerRecipient == null ? "n/a" : money(stats.revenuePerRecipient)],
                           ["Conversion", pct(stats?.conversionRate)],
                           ["Gifts issued", num(stats?.offersIssued)],
                           ["Gifts redeemed", num(stats?.offersRedeemed)],

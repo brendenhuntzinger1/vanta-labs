@@ -41,6 +41,12 @@ const state = vi.hoisted(() => ({
   sends: [] as Array<{ to: string; subject: string; html: string; text: string; headers?: Record<string, string> }>,
   logUpdates: [] as Array<{ id: string; patch: Record<string, unknown> }>,
   logInserts: [] as Array<Record<string, unknown>>,
+  /** email_send_log rows the "already delivered?" read can see. */
+  sentLog: [] as Array<Record<string, unknown>>,
+  /** What the wire answers. */
+  sendResult: { success: true, providerMessageId: "m1" } as { success: boolean; providerMessageId?: string; error?: string },
+  /** Settings → email switched off, as marketingBlockedReason reports it. */
+  blockedReason: null as string | null,
   suppressed: new Set<string>(),
 }));
 
@@ -49,11 +55,12 @@ vi.mock("@/lib/env", () => ({ getSiteUrl: () => "https://www.vantalabsresearch.c
 vi.mock("@/lib/email/send", () => ({
   sendEmail: vi.fn(async (message: { to: string; subject: string; html: string; text: string; headers?: Record<string, string> }) => {
     state.sends.push({ to: message.to, subject: message.subject, html: message.html, text: message.text, headers: message.headers });
-    return { success: true, providerMessageId: "m1" };
+    return state.sendResult;
   }),
 }));
 vi.mock("@/lib/email/settings", () => ({
   getEmailRuntimeConfig: async () => ({ enabled: true, provider: "resend", from: "Vanta <hello@example.test>", marketingPostalAddress: "1 Test Street, Testville" }),
+  marketingBlockedReason: () => state.blockedReason,
   resolveMarketingFrom: () => "Vanta <news@mail.example.test>",
   resolveMarketingReplyTo: () => "Vanta <hello@example.test>",
 }));
@@ -100,12 +107,21 @@ vi.mock("@/lib/supabase-server", () => {
       return chain;
     }
     if (table === "email_send_log") {
-      return {
+      const filters: Array<(row: Record<string, unknown>) => boolean> = [];
+      const b: Record<string, unknown> = {
+        select: () => b,
+        eq: (c: string, v: unknown) => { filters.push((r) => String(r[c]) === String(v)); return b; },
+        is: (c: string, v: unknown) => { filters.push((r) => (r[c] ?? null) === v); return b; },
+        gte: (c: string, v: unknown) => { filters.push((r) => String(r[c] ?? "") >= String(v)); return b; },
+        limit: () => b,
+        then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+          Promise.resolve({ data: state.sentLog.filter((r) => filters.every((f) => f(r))), error: null }).then(resolve, reject),
         insert: async (row: Record<string, unknown>) => { state.logInserts.push(row); return { error: null }; },
         update: (patch: Record<string, unknown>) => ({
           eq: async (_col: string, id: string) => { state.logUpdates.push({ id, patch }); return { error: null }; },
         }),
       };
+      return b;
     }
     throw new Error(`unexpected table ${table}`);
   };
@@ -116,7 +132,7 @@ vi.mock("@/lib/supabase-server", () => {
   return { supabaseAdmin: { from, rpc } };
 });
 
-const { drainMarketingSendQueue, MARKETING_QUEUE_MAX_ATTEMPTS } = await import("@/lib/email/marketing-queue");
+const { drainMarketingSendQueue, MARKETING_QUEUE_MAX_ATTEMPTS, MARKETING_QUEUE_RETRY_MS } = await import("@/lib/email/marketing-queue");
 
 const STORED = {
   subject: "BPC-157 is back in stock",
@@ -137,6 +153,7 @@ function seedQueued(overrides: Record<string, unknown> = {}): Record<string, unk
     attempts: 0,
     status: "queued",
     not_before: new Date(NOW - HOUR).toISOString(),
+    created_at: new Date(NOW - 25 * HOUR).toISOString(),
     ...overrides,
   };
   state.queue.push(row);
@@ -152,6 +169,9 @@ beforeEach(() => {
   state.sends = [];
   state.logUpdates = [];
   state.logInserts = [];
+  state.sentLog = [];
+  state.sendResult = { success: true, providerMessageId: "m1" };
+  state.blockedReason = null;
   state.suppressed = new Set();
   vi.clearAllMocks();
 });
@@ -247,6 +267,65 @@ describe("drainMarketingSendQueue", () => {
     const after = await drainMarketingSendQueue({ now: NOW + 30 * 24 * HOUR });
     expect(after).toEqual({ sent: 0, deferredAgain: 0, cancelled: 0, failed: 0, errors: [] });
     expect(state.rpcCalls).toHaveLength(MARKETING_QUEUE_MAX_ATTEMPTS);
+  });
+
+  it("email switched off in Settings HOLDS the queue: nothing attempted, nothing failed, rows intact", async () => {
+    state.blockedReason = "Email sending is disabled in Settings";
+    const row = seedQueued();
+    const result = await drainMarketingSendQueue({ now: NOW });
+    expect(result.sent + result.failed + result.deferredAgain + result.cancelled).toBe(0);
+    expect(result.errors[0]).toMatch(/^queue held: /);
+    expect(state.rpcCalls).toHaveLength(0);
+    expect(state.sends).toHaveLength(0);
+    expect(row.status).toBe("queued");
+    expect(state.queueUpdates).toHaveLength(0);
+  });
+
+  it("a provider failure backs the row off and keeps it queued, rather than failing it on its first bad minute", async () => {
+    state.sendResult = { success: false, error: "provider 503" };
+    const row = seedQueued();
+    const result = await drainMarketingSendQueue({ now: NOW });
+    expect(result.failed).toBe(1);
+    expect(row.status).toBe("queued");
+    expect(row.attempts).toBe(1);
+    expect(row.not_before).toBe(new Date(NOW + MARKETING_QUEUE_RETRY_MS).toISOString());
+    expect(String(row.last_error)).toContain("provider 503");
+    // The guard's own row for this attempt is closed failed by the wrapper.
+    expect(state.logUpdates).toContainEqual({ id: "log-1", patch: expect.objectContaining({ status: "failed" }) });
+  });
+
+  it(`a provider failure on attempt ${MARKETING_QUEUE_MAX_ATTEMPTS} is the last: the row is closed failed`, async () => {
+    state.sendResult = { success: false, error: "provider 503" };
+    const row = seedQueued({ attempts: MARKETING_QUEUE_MAX_ATTEMPTS - 1 });
+    await drainMarketingSendQueue({ now: NOW });
+    expect(row.status).toBe("failed");
+    expect(row.attempts).toBe(MARKETING_QUEUE_MAX_ATTEMPTS);
+  });
+
+  it("a message an earlier drain delivered but could not record is marked sent, not sent again", async () => {
+    const row = seedQueued();
+    state.sentLog = [{
+      id: "log-prior", recipient_email: BUYER, campaign_type: "back_in_stock", reference_id: "bpc-157",
+      status: "sent", sent_at: new Date(NOW - 20 * HOUR).toISOString(),
+    }];
+    const result = await drainMarketingSendQueue({ now: NOW });
+    expect(result.sent).toBe(1);
+    expect(state.sends).toHaveLength(0);
+    expect(state.rpcCalls).toHaveLength(0);
+    expect(row.status).toBe("sent");
+    expect(String(row.last_error)).toContain("earlier drain");
+  });
+
+  it("a send-log row OLDER than the queue row is not 'already delivered' — that was the send that got it deferred", async () => {
+    const row = seedQueued();
+    state.sentLog = [{
+      id: "log-cause", recipient_email: BUYER, campaign_type: "back_in_stock", reference_id: "bpc-157",
+      status: "sent", sent_at: new Date(NOW - 30 * HOUR).toISOString(),
+    }];
+    const result = await drainMarketingSendQueue({ now: NOW });
+    expect(result.sent).toBe(1);
+    expect(state.sends).toHaveLength(1);
+    expect(row.status).toBe("sent");
   });
 
   it("leaves a row whose not_before is still ahead untouched", async () => {

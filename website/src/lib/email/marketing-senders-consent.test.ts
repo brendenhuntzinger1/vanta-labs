@@ -53,6 +53,19 @@ describe("promotional senders use the marketing wrapper", () => {
     }
   }
 
+  it("the admin's manual cart-recovery resend asks the frequency guard BEFORE minting a coupon or resetting the tracking row", () => {
+    const whole = read("admin-cart-recovery.ts");
+    const code = whole.slice(whole.indexOf("export async function resendCartRecoveryEmail"));
+    const claimAt = code.indexOf("claimMarketingSend({");
+    const mintAt = code.indexOf("mintCartRecoveryCoupon(");
+    const resetAt = code.indexOf('from("abandoned_cart_emails")');
+    expect(claimAt).toBeGreaterThan(0);
+    expect(claimAt).toBeLessThan(mintAt);
+    expect(claimAt).toBeLessThan(resetAt);
+    // Every one of the four stage sends closes the claim it holds rather than claiming again.
+    expect(code.split("claimedLogId,").length - 1).toBeGreaterThanOrEqual(4);
+  });
+
   it("the wrapper itself checks suppression and the sink list before the guard, on every path", () => {
     const code = read("email/marketing.ts");
     // Both entry points refuse a suppressed or sink address before any claim is

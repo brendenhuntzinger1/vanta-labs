@@ -51,6 +51,7 @@ import { recordSystemAlert } from "@/lib/monitoring";
 import { getOrderAttribution } from "@/lib/order-attribution";
 import { toAnalyticsAttribution } from "@/lib/attribution";
 import { creditFundedOrderNotice } from "@/lib/credit-funded-order-notice";
+import { isSaleOrder } from "@/lib/ledger";
 
 /**
  * The billing cycle to activate for a paid membership order.
@@ -1527,7 +1528,13 @@ export async function finalizeManualPayment(
       // this address holds is revoked, so the day-30 / day-40 / day-50 gifts
       // cannot each be spent on a separate later order. Non-throwing, idempotent,
       // and scoped to this one address — see closeCustomerOfferCycle.
-      await closeCustomerOfferCycle({ orderId, email: String(order.customer_email) });
+      // Only a SALE closes it: a membership plan or a replacement shipment is
+      // not the reorder the ladder is waiting for, and the ladder itself does
+      // not restart on one — so revoking the gift there would leave the
+      // customer with nothing and no new gift on the way.
+      if (!isMembershipOrder && isSaleOrder(order.order_type as string | null)) {
+        await closeCustomerOfferCycle({ orderId, email: String(order.customer_email) });
+      }
       // THE PRIMARY MARKETING SOURCE, decided now that the gift redemption and
       // the coupon are known. Write-once with one upgrade (click → redeemed
       // gift); a replayed approval decides the same thing again. Never throws.
@@ -2520,7 +2527,9 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           // lane above. buyerEmail is the same address markAbandonedCartsRecovered
           // used, so a processor callback that omits the email is covered by the
           // order row exactly as the cart recovery stop is.
-          await closeCustomerOfferCycle({ orderId, email: buyerEmail });
+          if (!isMembershipOrder && isSaleOrder(orderRecord?.order_type as string | null)) {
+            await closeCustomerOfferCycle({ orderId, email: buyerEmail });
+          }
           // THE PRIMARY MARKETING SOURCE — see the manual-approval lane above.
           await finalizeMarketingSource({ orderId });
           // Send-once + audited. The paid_side_effects_at claim above already

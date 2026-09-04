@@ -321,6 +321,38 @@ describe("runAutomationSweep and the frequency guard", () => {
     expect(state.sendLog).toEqual([expect.objectContaining({ id: "log-prior", status: "sent" })]);
   });
 
+  it("QUIET PRE-FILTER: a claim stranded at 'sending' for more than fifteen minutes is a crash, not a send — the recipient is offered to the guard", async () => {
+    state.claim = "claimed";
+    state.sendLog = [{
+      id: "log-stranded",
+      campaign_type: "campaign",
+      reference_id: "c-1",
+      recipient_email: LAPSED,
+      status: "sending",
+      sent_at: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+    }];
+    const result = await runAutomationSweep();
+    expect(state.rpcCalls).toHaveLength(1);
+    expect(result.sent).toBe(1);
+    expect(result.deferred).toBe(0);
+  });
+
+  it("QUIET PRE-FILTER: a claim at 'sending' from five minutes ago IS pressure — someone is mid-send", async () => {
+    state.claim = "claimed";
+    state.sendLog = [{
+      id: "log-live",
+      campaign_type: "campaign",
+      reference_id: "c-1",
+      recipient_email: LAPSED,
+      status: "sending",
+      sent_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    }];
+    const result = await runAutomationSweep();
+    expect(state.rpcCalls).toHaveLength(0);
+    expect(result.sent).toBe(0);
+    expect(result.deferred).toBe(1);
+  });
+
   it("QUIET PRE-FILTER (control): a send just outside the window does not hold the recipient back", async () => {
     state.claim = "claimed";
     state.sendLog = [{

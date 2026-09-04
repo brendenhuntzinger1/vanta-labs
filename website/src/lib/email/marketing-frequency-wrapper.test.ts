@@ -31,6 +31,8 @@ const state = vi.hoisted(() => ({
   logInserts: [] as Array<Record<string, unknown>>,
   logUpdates: [] as Array<{ patch: Record<string, unknown>; id: string }>,
   queueInserts: [] as Array<Record<string, unknown>>,
+  /** Rows already parked in marketing_send_queue, as the dedup read sees them. */
+  queueRows: [] as Array<Record<string, unknown>>,
   suppressed: new Set<string>(),
 }));
 
@@ -67,7 +69,16 @@ vi.mock("@/lib/supabase-server", () => {
       };
     }
     if (table === "marketing_send_queue") {
-      return { insert: async (row: Record<string, unknown>) => { state.queueInserts.push(row); return { error: null }; } };
+      const b: Record<string, unknown> = {
+        select: () => b,
+        eq: () => b,
+        is: () => b,
+        limit: () => b,
+        then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+          Promise.resolve({ data: state.queueRows, error: null }).then(resolve, reject),
+        insert: async (row: Record<string, unknown>) => { state.queueInserts.push(row); return { error: null }; },
+      };
+      return b;
     }
     throw new Error(`unexpected table ${table}`);
   };
@@ -102,6 +113,7 @@ beforeEach(() => {
   state.logInserts = [];
   state.logUpdates = [];
   state.queueInserts = [];
+  state.queueRows = [];
   state.suppressed = new Set();
 });
 
@@ -164,6 +176,34 @@ describe("sendMarketingEmail and the frequency guard", () => {
     expect(String(row.html)).toContain("/api/unsubscribe?email=buyer%40example.test");
     expect(String(row.html)).toContain("1 Test Street, Testville");
     expect(String(row.text_body)).toContain("Unsubscribe:");
+  });
+
+  it("DEFERRED with onDeferred: queue parks a message ONCE per recipient, however often the sender asks", async () => {
+    state.claim = { outcome: "deferred", log_id: null, last_marketing_at: new Date(Date.now() - 2 * 3_600_000).toISOString() };
+    state.queueRows = [{ id: "q-already-parked" }];
+    const result = await sendMarketingEmail({ ...MESSAGE, onDeferred: "queue" });
+    expect(result.success).toBe(false);
+    expect(result.deferred).toBe(true);
+    expect(result.queued).toBe(true);
+    expect(state.queueInserts).toHaveLength(0);
+    expect(state.sends).toHaveLength(0);
+  });
+
+  it("guardUnavailable: the caller already found the guard down — no second claim, logged after the fact", async () => {
+    const result = await sendMarketingEmail({ ...MESSAGE, guardUnavailable: true });
+    expect(result.success).toBe(true);
+    expect(state.rpcCalls).toHaveLength(0);
+    expect(state.sends).toHaveLength(1);
+    expect(state.logInserts).toHaveLength(1);
+    expect(state.logUpdates).toHaveLength(0);
+  });
+
+  it("a refused address releases the claim the caller was holding, so the row does not sit at 'sending'", async () => {
+    state.suppressed.add("buyer@example.test");
+    const result = await sendMarketingEmail({ ...MESSAGE, claimedLogId: "log-held" });
+    expect(result.suppressed).toBe(true);
+    expect(state.sends).toHaveLength(0);
+    expect(state.logUpdates).toEqual([{ id: "log-held", patch: { status: "failed" } }]);
   });
 
   it("DUPLICATE: sends nothing and says so", async () => {

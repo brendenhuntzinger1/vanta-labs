@@ -394,6 +394,15 @@ export async function reserveCustomerOffer(input: {
   token: string;
   orderId: string;
   email: string;
+  /**
+   * How long this order's hold outlasts a competing checkout. Defaults to the
+   * database's 30 minutes, which fits a card checkout that is abandoned. The
+   * manual-payment lane holds stock for a day while the transfer arrives and
+   * must hold the gift for exactly as long — otherwise a second checkout by
+   * the same customer 31 minutes later is priced with the same gift, takes
+   * over the hold, and both orders ship the free unit on one token.
+   */
+  holdSeconds?: number;
 }): Promise<CustomerOffer | null> {
   const token = String(input.token ?? "").trim();
   if (!token) return null;
@@ -403,6 +412,7 @@ export async function reserveCustomerOffer(input: {
       p_token_hash: hashOfferToken(token),
       p_order_id: String(input.orderId ?? "").trim(),
       p_email: String(input.email ?? "").trim().toLowerCase(),
+      ...(input.holdSeconds !== undefined ? { p_hold_seconds: Math.max(0, Math.round(input.holdSeconds)) } : {}),
     });
     if (error) {
       console.error("[offers] reserve failed", error.message);

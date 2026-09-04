@@ -130,12 +130,14 @@ async function writeDecision(orderId: string, current: SourceRow | null, decisio
   query = current?.marketing_source_kind
     ? query.eq("marketing_source_basis", "click")
     : query.is("marketing_source_kind", null);
-  const { error } = await query;
+  const { data, error } = await query.select("order_id");
   if (error) {
     console.error("[marketing-source] unable to stamp order", orderId, error.message);
     return false;
   }
-  return true;
+  // Zero rows is the guard doing its job: another writer got there first, or
+  // the order is no longer in the state this decision was made against.
+  return (data ?? []).length > 0;
 }
 
 /**
@@ -197,39 +199,78 @@ export async function finalizeMarketingSource(input: { orderId: string; now?: nu
       attributed_automation_key: string | null; attributed_automation_at: string | null;
     };
 
-    const [redeemedOffer, recoveryCoupon, adTouch] = await Promise.all([
+    // EVERY SIGNAL IS READ, OR NOTHING IS WRITTEN. supabase-js resolves a
+    // PostgREST error rather than throwing it, so a lookup shaped "data or
+    // null" turns an un-migrated column, a permissions problem or a passing
+    // outage into "no gift, no coupon, no ad touch" — and the decision below
+    // is write-once. A read that failed is a reason to abstain, not evidence.
+    type Read<T> = { ok: true; value: T } | { ok: false; reason: string };
+    const failed = (what: string, error: unknown): Read<never> => ({
+      ok: false,
+      reason: `${what}: ${error instanceof Error ? error.message : String((error as { message?: string })?.message ?? error)}`,
+    });
+    const [redeemedRead, couponRead, adRead] = await Promise.all([
       supabaseAdmin
         .from("customer_offers")
         .select("automation_key, offer_key")
         .eq("redeemed_order_id", orderId)
         .limit(1)
-        .then(({ data }) => {
+        .then(({ data, error }): Read<{ automationKey: string | null; offerKey: string } | null> => {
+          if (error) return failed("customer_offers", error);
           const hit = (data ?? [])[0] as { automation_key?: string | null; offer_key?: string } | undefined;
-          return hit ? { automationKey: hit.automation_key ?? null, offerKey: String(hit.offer_key ?? "") } : null;
-        }, () => null),
+          return { ok: true, value: hit ? { automationKey: hit.automation_key ?? null, offerKey: String(hit.offer_key ?? "") } : null };
+        }, (error) => failed("customer_offers", error)),
       row.coupon_code
         ? supabaseAdmin
             .from("coupons")
             .select("code, source")
             .eq("code", row.coupon_code)
             .maybeSingle()
-            .then(({ data }) => {
+            .then(({ data, error }): Read<{ code: string } | null> => {
+              if (error) return failed("coupons", error);
               const hit = data as { code?: string; source?: string | null } | null;
-              return hit && hit.source === "cart_recovery" ? { code: String(hit.code) } : null;
-            }, () => null)
-        : Promise.resolve(null),
+              return { ok: true, value: hit && hit.source === "cart_recovery" ? { code: String(hit.code) } : null };
+            }, (error) => failed("coupons", error))
+        : Promise.resolve<Read<{ code: string } | null>>({ ok: true, value: null }),
       supabaseAdmin
         .from("order_attribution")
         .select("last_utm_source, last_utm_campaign, last_ttclid, last_fbclid, last_gclid")
         .eq("order_id", orderId)
         .maybeSingle()
-        .then(({ data }) => {
+        .then(({ data, error }): Read<{ source: string | null; campaign: string | null; clickId: string | null } | null> => {
+          if (error) return failed("order_attribution", error);
           const hit = data as { last_utm_source?: string | null; last_utm_campaign?: string | null; last_ttclid?: string | null; last_fbclid?: string | null; last_gclid?: string | null } | null;
-          if (!hit) return null;
+          if (!hit) return { ok: true, value: null };
           const clickId = hit.last_ttclid ? "ttclid" : hit.last_fbclid ? "fbclid" : hit.last_gclid ? "gclid" : null;
-          return { source: hit.last_utm_source ?? null, campaign: hit.last_utm_campaign ?? null, clickId };
-        }, () => null),
+          return { ok: true, value: { source: hit.last_utm_source ?? null, campaign: hit.last_utm_campaign ?? null, clickId } };
+        }, (error) => failed("order_attribution", error)),
     ]);
+    if (!redeemedRead.ok || !couponRead.ok || !adRead.ok) {
+      const reasons = [redeemedRead, couponRead, adRead].flatMap((r) => (r.ok ? [] : [r.reason]));
+      console.error("[marketing-source] abstaining: a signal could not be read", orderId, reasons.join("; "));
+      return null;
+    }
+    let redeemedOffer = redeemedRead.value;
+    const recoveryCoupon = couponRead.value;
+    const adTouch = adRead.value;
+
+    // A gift minted before automation_key existed still belongs to exactly
+    // one automation: the one whose configuration carries that offer. Look
+    // it up so the order lands on that automation's row rather than on a
+    // reference no panel can render.
+    if (redeemedOffer && !redeemedOffer.automationKey && redeemedOffer.offerKey) {
+      const { data: carriers, error: carrierError } = await supabaseAdmin
+        .from("email_automations")
+        .select("key")
+        .eq("offer_key", redeemedOffer.offerKey)
+        .limit(1);
+      if (carrierError) {
+        console.error("[marketing-source] abstaining: email_automations could not be read", orderId, carrierError.message);
+        return null;
+      }
+      const carrier = (carriers ?? [])[0] as { key?: string } | undefined;
+      if (carrier?.key) redeemedOffer = { ...redeemedOffer, automationKey: String(carrier.key) };
+    }
 
     // Clicks: the creation stamp already chose the later one and recorded it
     // as the primary; the per-channel columns say what was touched at all. The

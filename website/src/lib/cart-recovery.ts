@@ -409,7 +409,9 @@ async function reserveAndSendStage(input: {
     templateKey: input.templateKey,
     openTrackingPixelUrl,
     // The guard's row already exists for this send; close it, don't claim twice.
+    // And if the guard was unavailable just now, do not ask it a second time.
     claimedLogId,
+    guardUnavailable: guard.outcome === "unavailable",
     ...input.buildTemplate(trackedRestoreUrl, coupon),
   });
 

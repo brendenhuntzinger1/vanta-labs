@@ -459,9 +459,10 @@ export default function CheckoutPage() {
   // never a mix.
   const shownStoreCredit = offerQuote ? offerQuote.storeCreditRedeemedCents / 100 : storeCreditApplied;
   const shownPointsDiscount = offerQuote ? offerQuote.pointsDiscountAmount : pointsRedeemedDiscount;
+  // The server's label travels with the server's amount — see cart-drawer.
   const shownDiscountLabel = ambassadorDiscountApplied
     ? `Ambassador ${ambassadorDiscountPercent}% off`
-    : (appliedDiscountLabel ?? offerQuote?.offer?.description ?? "Discount");
+    : (offerQuote?.discountLabel ?? appliedDiscountLabel ?? offerQuote?.offer?.description ?? "Discount");
   const giftLines = offerQuote?.giftLines ?? [];
 
   // WHAT IS POSTED MUST BE WHAT WAS SHOWN.

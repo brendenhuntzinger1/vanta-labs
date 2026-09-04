@@ -91,7 +91,28 @@ export type MarketingSendOptions = {
    * sweep to deliver once the window opens — for event mail with no sweep.
    */
   onDeferred?: "report" | "queue";
+  /**
+   * The caller already asked the guard and found it UNAVAILABLE (un-migrated
+   * database, transient error). Do not ask again — a second answer of
+   * "deferred" after the caller has minted a coupon and taken its stage claim
+   * would strand both. Send, and log after the fact, exactly as the legacy path.
+   */
+  guardUnavailable?: boolean;
 };
+
+/**
+ * A caller-held claim row must not stay at 'sending' when this wrapper refuses
+ * the address before the wire: the row would count as pressure for fifteen
+ * minutes and read as a stranded send for ever. Best-effort, never throws.
+ */
+async function releaseHeldClaim(logId: string | null | undefined): Promise<void> {
+  if (!logId) return;
+  try {
+    await supabaseAdmin.from("email_send_log").update({ status: "failed" }).eq("id", logId);
+  } catch {
+    // The row stays 'sending'; the guard ignores it after fifteen minutes.
+  }
+}
 
 export async function sendMarketingEmail(
   input: {
@@ -112,6 +133,7 @@ export async function sendMarketingEmail(
   // time. One check at the choke point covers every marketing path there is,
   // including the ones added after this comment.
   if (isNonMailableAddress(email)) {
+    await releaseHeldClaim(input.claimedLogId);
     return { success: false, suppressed: true, error: "Address cannot receive mail (provider test domain)" };
   }
 
@@ -122,6 +144,7 @@ export async function sendMarketingEmail(
     .maybeSingle();
 
   if (suppressed) {
+    await releaseHeldClaim(input.claimedLogId);
     return { success: false, suppressed: true, error: "Recipient has unsubscribed from marketing emails" };
   }
 
@@ -271,6 +294,7 @@ export async function sendMarketingEmail(
     claimedLogId: input.claimedLogId ?? null,
     alreadyLogged: input.alreadyLogged,
     onDeferred: input.onDeferred ?? "report",
+    guardUnavailable: input.guardUnavailable,
     unsubscribeUrl,
     emailConfig,
   });
@@ -305,6 +329,7 @@ export async function sendRenderedMarketingEmail(input: {
   // applies before rendering are applied again: a person may have
   // unsubscribed since the message was parked.
   if (isNonMailableAddress(email)) {
+    await releaseHeldClaim(input.claimedLogId);
     return { success: false, suppressed: true, error: "Address cannot receive mail (provider test domain)" };
   }
   if (!input.unsubscribeUrl) {
@@ -314,6 +339,7 @@ export async function sendRenderedMarketingEmail(input: {
       .eq("email", email)
       .maybeSingle();
     if (suppressed) {
+      await releaseHeldClaim(input.claimedLogId);
       return { success: false, suppressed: true, error: "Recipient has unsubscribed from marketing emails" };
     }
   }
@@ -329,7 +355,9 @@ export async function sendRenderedMarketingEmail(input: {
   //   otherwise      claim here, and let the guard decide.
   let logId: string | null = input.claimedLogId ?? null;
   let legacyLogAfterSend = false;
-  if (!logId && !input.alreadyLogged) {
+  if (!logId && !input.alreadyLogged && input.guardUnavailable) {
+    legacyLogAfterSend = true;
+  } else if (!logId && !input.alreadyLogged) {
     const claim = await claimMarketingSend({
       email,
       campaignType: input.campaignType,

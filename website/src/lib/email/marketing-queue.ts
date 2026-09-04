@@ -2,6 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendRenderedMarketingEmail, type RenderedMarketingEmail } from "@/lib/email/marketing";
+import { getEmailRuntimeConfig, marketingBlockedReason } from "@/lib/email/settings";
 
 /**
  * THE DEFERRED QUEUE for event-driven marketing mail.
@@ -20,6 +21,8 @@ import { sendRenderedMarketingEmail, type RenderedMarketingEmail } from "@/lib/e
  */
 
 export const MARKETING_QUEUE_MAX_ATTEMPTS = 8;
+/** A provider failure waits this long times the attempt count before the next try. */
+export const MARKETING_QUEUE_RETRY_MS = 30 * 60 * 1000;
 
 export type MarketingQueueDrainResult = {
   sent: number;
@@ -43,11 +46,36 @@ export async function drainMarketingSendQueue(input?: { now?: number; limit?: nu
   const limit = input?.limit ?? 50;
   const result: MarketingQueueDrainResult = { sent: 0, deferredAgain: 0, cancelled: 0, failed: 0, errors: [] };
 
+  // Email switched off in Settings holds the queue exactly as it holds the
+  // campaign and automation sweeps: nothing is attempted, nothing is failed,
+  // and the rows are still there when it is switched back on.
+  try {
+    const blocked = marketingBlockedReason(await getEmailRuntimeConfig());
+    if (blocked) {
+      result.errors.push(`queue held: ${blocked}`);
+      return result;
+    }
+  } catch (error) {
+    result.errors.push(`settings read: ${error instanceof Error ? error.message : String(error)}`);
+    return result;
+  }
+
+  // Bookkeeping that is CHECKED. supabase-js resolves an error rather than
+  // throwing it, and an unrecorded 'sent' is a message delivered again
+  // tomorrow — so a failed update is retried once and then reported.
+  const mark = async (id: string, patch: Record<string, unknown>) => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { error } = await supabaseAdmin.from("marketing_send_queue").update(patch).eq("id", id);
+      if (!error) return;
+      if (attempt === 1) result.errors.push(`${id}: bookkeeping failed: ${error.message}`);
+    }
+  };
+
   let rows: Array<Record<string, unknown>> = [];
   try {
     const { data, error } = await supabaseAdmin
       .from("marketing_send_queue")
-      .select("id, recipient_email, campaign_type, reference_id, template_key, subject, html, text_body, attempts")
+      .select("id, recipient_email, campaign_type, reference_id, template_key, subject, html, text_body, attempts, created_at")
       .eq("status", "queued")
       .lte("not_before", new Date(now).toISOString())
       .order("not_before", { ascending: true })
@@ -71,6 +99,28 @@ export async function drainMarketingSendQueue(input?: { now?: number; limit?: nu
       text: String(row.text_body ?? ""),
     };
     try {
+      // ALREADY DELIVERED? A sent-log row for this very message, written after
+      // the row was queued, means a previous drain sent it and could not record
+      // it. Mark it and move on rather than mailing the same thing twice.
+      const queuedAt = row.created_at ? String(row.created_at) : null;
+      if (queuedAt) {
+        let delivered = supabaseAdmin
+          .from("email_send_log")
+          .select("id")
+          .eq("recipient_email", rendered.to.trim().toLowerCase())
+          .eq("campaign_type", String(row.campaign_type ?? ""))
+          .eq("status", "sent")
+          .gte("sent_at", queuedAt)
+          .limit(1);
+        delivered = row.reference_id ? delivered.eq("reference_id", String(row.reference_id)) : delivered.is("reference_id", null);
+        const { data: priorSend, error: priorError } = await delivered;
+        if (!priorError && (priorSend ?? []).length > 0) {
+          result.sent++;
+          await mark(id, { status: "sent", sent_at: new Date().toISOString(), attempts, last_error: "delivered by an earlier drain" });
+          continue;
+        }
+      }
+
       const outcome = await sendRenderedMarketingEmail({
         rendered,
         campaignType: String(row.campaign_type ?? ""),
@@ -81,25 +131,22 @@ export async function drainMarketingSendQueue(input?: { now?: number; limit?: nu
 
       if (outcome.success) {
         result.sent++;
-        await supabaseAdmin.from("marketing_send_queue")
-          .update({ status: "sent", sent_at: new Date().toISOString(), attempts, last_error: null })
-          .eq("id", id);
+        await mark(id, { status: "sent", sent_at: new Date().toISOString(), attempts, last_error: null });
       } else if (outcome.deferred && attempts < MARKETING_QUEUE_MAX_ATTEMPTS) {
         result.deferredAgain++;
-        await supabaseAdmin.from("marketing_send_queue")
-          .update({ not_before: new Date(outcome.retryAt ?? now + 60 * 60 * 1000).toISOString(), attempts, last_error: "deferred by the frequency guard" })
-          .eq("id", id);
+        await mark(id, { not_before: new Date(outcome.retryAt ?? now + 60 * 60 * 1000).toISOString(), attempts, last_error: "deferred by the frequency guard" });
       } else if (outcome.suppressed || outcome.duplicate) {
         // Unsubscribed since it was queued, or already delivered another way.
         result.cancelled++;
-        await supabaseAdmin.from("marketing_send_queue")
-          .update({ status: "cancelled", attempts, last_error: outcome.error ?? null })
-          .eq("id", id);
+        await mark(id, { status: "cancelled", attempts, last_error: outcome.error ?? null });
+      } else if (!outcome.deferred && attempts < MARKETING_QUEUE_MAX_ATTEMPTS) {
+        // The wire refused (provider error, rate limit): a message the guard
+        // has already let through is not thrown away on its first bad minute.
+        result.failed++;
+        await mark(id, { not_before: new Date(now + MARKETING_QUEUE_RETRY_MS * attempts).toISOString(), attempts, last_error: (outcome.error ?? "send failed").slice(0, 300) });
       } else {
         result.failed++;
-        await supabaseAdmin.from("marketing_send_queue")
-          .update({ status: "failed", attempts, last_error: (outcome.error ?? "send failed").slice(0, 300) })
-          .eq("id", id);
+        await mark(id, { status: "failed", attempts, last_error: (outcome.error ?? "send failed").slice(0, 300) });
       }
     } catch (error) {
       result.failed++;

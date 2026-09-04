@@ -53,7 +53,9 @@ create index if not exists orders_marketing_source_idx
   on public.orders (marketing_source_kind, marketing_source_ref)
   where marketing_source_kind is not null;
 
--- Backfill for orders paid before this existed. They never carried a click
+-- Backfill for orders paid before this existed. Same precedence as the
+-- runtime rule: a cart-recovery coupon is the stronger claim than a referral
+-- code that was stored beside it. They never carried a click
 -- stamp (attribution columns are all null in production as of 2026-09-04), so
 -- the only evidence is what the order row itself records. Runs once; a row
 -- with a kind already set is never touched.
@@ -61,28 +63,28 @@ update public.orders o
 set marketing_source_kind = case
       when o.attributed_automation_key is not null then 'automation'
       when o.attributed_campaign_id is not null then 'campaign'
-      when o.ambassador_id is not null then 'ambassador'
       when o.coupon_code is not null and exists (
         select 1 from public.coupons c where c.code = o.coupon_code and c.source = 'cart_recovery'
       ) then 'cart_recovery'
+      when o.ambassador_id is not null then 'ambassador'
       else 'organic'
     end,
     marketing_source_ref = case
       when o.attributed_automation_key is not null then o.attributed_automation_key
       when o.attributed_campaign_id is not null then o.attributed_campaign_id::text
-      when o.ambassador_id is not null then o.ambassador_id::text
       when o.coupon_code is not null and exists (
         select 1 from public.coupons c where c.code = o.coupon_code and c.source = 'cart_recovery'
       ) then o.coupon_code
+      when o.ambassador_id is not null then o.ambassador_id::text
       else null
     end,
     marketing_source_basis = case
       when o.attributed_automation_key is not null then 'click'
       when o.attributed_campaign_id is not null then 'click'
-      when o.ambassador_id is not null then 'referral_code'
       when o.coupon_code is not null and exists (
         select 1 from public.coupons c where c.code = o.coupon_code and c.source = 'cart_recovery'
       ) then 'recovery_coupon'
+      when o.ambassador_id is not null then 'referral_code'
       else 'none'
     end,
     marketing_source_at = now()
