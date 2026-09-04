@@ -1703,87 +1703,190 @@ export function backInStockTemplate(input: { name: string; productName: string; 
 // ---------------------------------------------------------------------
 // Abandoned cart recovery sequence. All marketing-class (sent via
 // sendMarketingEmail()).
+//
+// THE SEQUENCE HAS A SHAPE, AND EACH MESSAGE HAS ONE JOB.
+//
+//   1 h   "we kept it" — the plain reminder, nothing to argue with
+//   24 h  "what you might want to know" — testing, shipping, a person to ask
+//   72 h  "the last note" — closes the loop, carries the discount if allowed
+//
+// The copy says what is true and nothing more. There is no countdown the
+// database will not enforce, no "hurry", no shouting: this store sells to
+// researchers who read the COA before the price, and the message that earns
+// their order is the one that reads like it was written by someone who knows
+// that. Every subject passes checkSubjectLine and findTriggerPhrases in
+// deliverability-check.ts — template-standards.test.ts holds them there.
 // ---------------------------------------------------------------------
 
 function cartItemsHtml(items: Array<{ name: string; quantity: number }>) {
   return items.map((item) => `<tr><td style="padding:4px 0;color:#e4e4e7;">${escapeHtml(item.name)} × ${item.quantity}</td></tr>`).join("");
 }
 
+function cartSummaryHtml(items: Array<{ name: string; quantity: number }>, cartValueCents: number) {
+  return `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(items)}</table>`
+    + `<p style="margin-top:12px;">Cart total: <strong style="color:#ffffff;">${money(cartValueCents / 100)}</strong></p>`;
+}
+
+function cartSummaryText(items: Array<{ name: string; quantity: number }>, cartValueCents: number): string[] {
+  return [...items.map((i) => `${i.name} x ${i.quantity}`), "", `Cart total: ${money(cartValueCents / 100)}`];
+}
+
+/** "Hi Sam," when a name is known; nothing when it is not. Never "Hi there". */
+function greeting(name: string): { html: string; text: string | null } {
+  const first = name.trim().split(/\s+/)[0] ?? "";
+  return first
+    ? { html: `<p style="margin:0 0 12px;">Hi ${escapeHtml(first)},</p>`, text: `Hi ${first},` }
+    : { html: "", text: null };
+}
+
 export function cartRecoveryT30mTemplate(input: { name: string; items: Array<{ name: string; quantity: number }>; cartValueCents: number; restoreUrl: string }): EmailTemplate {
-  const name = escapeHtml(input.name || "there");
+  const hi = greeting(input.name);
   return {
-    subject: "You left something behind",
+    subject: "We kept your cart",
     html: renderLayout({
-      preheader: "Your cart is saved and waiting for you.",
-      titleHtml: `${name}, you left something behind`,
-      bodyHtml: `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(input.items)}</table><p style="margin-top:16px;">Cart total: <strong>${money(input.cartValueCents / 100)}</strong></p>`,
-      ctaLabel: "Restore My Cart",
+      preheader: "Everything you selected is still here, at the price you saw.",
+      titleHtml: "Your selection is saved",
+      bodyHtml: `${hi.html}<p style="margin:0 0 4px;">You left these in your cart. We have held them for you, at the same price.</p>${cartSummaryHtml(input.items, input.cartValueCents)}<p style="margin-top:14px;color:#a1a1aa;">Pick up where you left off whenever you are ready.</p>`,
+      ctaLabel: "Return to my cart",
       ctaUrl: input.restoreUrl,
       ctaVariant: "primary",
     }),
-    text: toText([`${input.name || "there"}, you left something behind.`, "", ...input.items.map((i) => `${i.name} x ${i.quantity}`), "", `Total: ${money(input.cartValueCents / 100)}`, input.restoreUrl, "", "- Vanta Labs"]),
+    text: toText([
+      hi.text,
+      hi.text ? "" : null,
+      "You left these in your cart. We have held them for you, at the same price.",
+      "",
+      ...cartSummaryText(input.items, input.cartValueCents),
+      "",
+      `Return to your cart: ${input.restoreUrl}`,
+      "",
+      "- Vanta Labs",
+    ]),
   };
 }
 
 export function cartRecoveryT12hTemplate(input: { name: string; items: Array<{ name: string; quantity: number }>; cartValueCents: number; restoreUrl: string }): EmailTemplate {
-  const name = escapeHtml(input.name || "there");
+  const hi = greeting(input.name);
   return {
-    subject: "Your cart is still waiting for you",
+    subject: "Your cart is still saved",
     html: renderLayout({
-      preheader: "Friendly reminder - your cart hasn't gone anywhere.",
-      titleHtml: `${name}, your cart is still here`,
-      bodyHtml: `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(input.items)}</table><p style="margin-top:16px;">Cart total: <strong>${money(input.cartValueCents / 100)}</strong></p>`,
-      ctaLabel: "Resume Checkout",
+      preheader: "A quick note: your selection is held and ready whenever you are.",
+      titleHtml: "Still here when you are",
+      bodyHtml: `${hi.html}<p style="margin:0 0 4px;">A quick note that your cart is still saved.</p>${cartSummaryHtml(input.items, input.cartValueCents)}`,
+      ctaLabel: "Return to my cart",
       ctaUrl: input.restoreUrl,
       ctaVariant: "primary",
     }),
-    text: toText([`${input.name || "there"}, your cart is still here.`, "", ...input.items.map((i) => `${i.name} x ${i.quantity}`), "", `Total: ${money(input.cartValueCents / 100)}`, input.restoreUrl, "", "- Vanta Labs"]),
+    text: toText([
+      hi.text,
+      hi.text ? "" : null,
+      "A quick note that your cart is still saved.",
+      "",
+      ...cartSummaryText(input.items, input.cartValueCents),
+      "",
+      `Return to your cart: ${input.restoreUrl}`,
+      "",
+      "- Vanta Labs",
+    ]),
   };
 }
 
-export function cartRecoveryT24hTemplate(input: {
-  name: string;
-  items: Array<{ name: string; quantity: number }>;
-  cartValueCents: number;
-  restoreUrl: string;
-  couponCode: string;
-  expiresAt: string;
-}): EmailTemplate {
-  const name = escapeHtml(input.name || "there");
+/**
+ * The second message carries no discount, and that is the point of it.
+ *
+ * Someone who has not finished checking out a research compound after a day
+ * is usually weighing something — is the batch tested, will it arrive intact,
+ * is there a person behind the site. Answering those is worth more than five
+ * percent to the people who were hesitating and costs nothing for the people
+ * who were merely busy. Every claim below is one the site already makes:
+ * per-batch COAs in the COA library, tracked shipping, a monitored support
+ * address in the footer of every message.
+ */
+export function cartRecoveryT24hTemplate(input: { name: string; items: Array<{ name: string; quantity: number }>; cartValueCents: number; restoreUrl: string }): EmailTemplate {
+  const hi = greeting(input.name);
+  const points = [
+    ["Tested per batch", "Every batch is third-party tested and its certificate of analysis is available before you order."],
+    ["Tracked, discreet shipping", "Orders ship with tracking in plain packaging, and you get an email at every step."],
+    ["A person to ask", "Reply to this email or write to support and a member of the team answers — no ticket maze."],
+  ];
+  const pointsHtml = points
+    .map(([title, body]) => `<tr><td style="padding:8px 0;border-top:1px solid rgba(255,255,255,0.08);"><strong style="color:#ffffff;">${escapeHtml(title)}</strong><br/><span style="color:#d4d4d4;">${escapeHtml(body)}</span></td></tr>`)
+    .join("");
   return {
-    subject: "5% off - your cart is waiting",
+    subject: "Before you order: testing, shipping, support",
     html: renderLayout({
-      preheader: `Use code ${input.couponCode} for 5% off.`,
-      titleHtml: `${name}, here's 5% off to complete your order`,
-      bodyHtml: `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(input.items)}</table><p style="margin-top:16px;">Cart total: <strong>${money(input.cartValueCents / 100)}</strong></p><p>Use code <strong>${escapeHtml(input.couponCode)}</strong> for 5% off - expires ${escapeHtml(input.expiresAt)}.</p>`,
-      ctaLabel: "Resume Checkout",
+      preheader: "The three things most people want to know before their first order.",
+      titleHtml: "A few things worth knowing",
+      bodyHtml: `${hi.html}<p style="margin:0 0 4px;">Your cart is still saved. If you were weighing it up, these are the three questions we hear most.</p><table role="presentation" width="100%" style="margin-top:12px;font-size:14px;">${pointsHtml}</table>${cartSummaryHtml(input.items, input.cartValueCents)}`,
+      ctaLabel: "Finish checking out",
       ctaUrl: input.restoreUrl,
       ctaVariant: "primary",
     }),
-    text: toText([`${input.name || "there"}, here's 5% off to complete your order.`, "", `Code: ${input.couponCode} (expires ${input.expiresAt})`, "", ...input.items.map((i) => `${i.name} x ${i.quantity}`), "", `Total: ${money(input.cartValueCents / 100)}`, input.restoreUrl, "", "- Vanta Labs"]),
+    text: toText([
+      hi.text,
+      hi.text ? "" : null,
+      "Your cart is still saved. If you were weighing it up, these are the three questions we hear most.",
+      "",
+      ...points.map(([title, body]) => `${title}: ${body}`),
+      "",
+      ...cartSummaryText(input.items, input.cartValueCents),
+      "",
+      `Finish checking out: ${input.restoreUrl}`,
+      "",
+      "- Vanta Labs",
+    ]),
   };
 }
 
+/**
+ * The last message about this cart, with or without a code.
+ *
+ * `couponCode` empty means no discount was allowed for this shopper (see
+ * recoveryDiscountAllowed in cart-recovery.ts); the email then says only that
+ * it is the last note, which is true, and asks nothing else. When a code is
+ * present, `discountPercent` and `expiresAt` describe the row the checkout will
+ * honour — never a number computed here.
+ */
 export function cartRecoveryT72hTemplate(input: {
   name: string;
   items: Array<{ name: string; quantity: number }>;
   cartValueCents: number;
   restoreUrl: string;
   couponCode: string;
+  discountPercent?: number;
   expiresAt: string;
 }): EmailTemplate {
-  const name = escapeHtml(input.name || "there");
+  const hi = greeting(input.name);
+  const code = input.couponCode.trim();
+  const percent = Math.max(0, Math.round(Number(input.discountPercent ?? 0)));
+  const hasOffer = Boolean(code) && percent > 0;
+  const closing = "This is the last note we will send about this cart.";
+  const offerHtml = hasOffer
+    ? `<p style="margin-top:14px;">If it is still useful, code <strong style="color:#ffffff;">${escapeHtml(code)}</strong> takes ${percent}% off this order${input.expiresAt ? ` through ${escapeHtml(input.expiresAt)}` : ""}.</p>`
+    : "";
   return {
-    subject: "Your saved cart expires soon",
+    subject: hasOffer ? `One last note on your cart, with ${percent}% off` : "One last note on your cart",
     html: renderLayout({
-      preheader: `Use code ${input.couponCode} before it expires.`,
-      titleHtml: `${name}, last chance on your cart`,
-      bodyHtml: `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(input.items)}</table><p style="margin-top:16px;">Cart total: <strong>${money(input.cartValueCents / 100)}</strong></p><p>Use code <strong>${escapeHtml(input.couponCode)}</strong> for 5% off - expires ${escapeHtml(input.expiresAt)}.</p>`,
-      ctaLabel: "Resume Checkout",
+      preheader: hasOffer ? `Code ${code} takes ${percent}% off if you finish this order.` : "Your selection is still saved if you want it.",
+      titleHtml: "One last note",
+      bodyHtml: `${hi.html}<p style="margin:0 0 4px;">${closing} Your selection is still saved if you want it.</p>${cartSummaryHtml(input.items, input.cartValueCents)}${offerHtml}`,
+      ctaLabel: "Finish my order",
       ctaUrl: input.restoreUrl,
       ctaVariant: "primary",
     }),
-    text: toText([`${input.name || "there"}, last chance on your cart.`, "", `Code: ${input.couponCode} (expires ${input.expiresAt})`, "", ...input.items.map((i) => `${i.name} x ${i.quantity}`), "", `Total: ${money(input.cartValueCents / 100)}`, input.restoreUrl, "", "- Vanta Labs"]),
+    text: toText([
+      hi.text,
+      hi.text ? "" : null,
+      `${closing} Your selection is still saved if you want it.`,
+      "",
+      ...cartSummaryText(input.items, input.cartValueCents),
+      hasOffer ? "" : null,
+      hasOffer ? `Code ${code} takes ${percent}% off this order${input.expiresAt ? ` through ${input.expiresAt}` : ""}.` : null,
+      "",
+      `Finish your order: ${input.restoreUrl}`,
+      "",
+      "- Vanta Labs",
+    ]),
   };
 }
 

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CampaignSummary, EmailDashboard } from "@/lib/admin-email";
 import type { AutomationRow } from "@/lib/email/automations";
+import { AUTOMATION_KEYS, AUTOMATION_LABELS, type AutomationKey } from "@/lib/email/automation-catalog";
 import type { AutomationStats } from "@/lib/email/automation-stats";
 import { checkCampaignDeliverability } from "@/lib/email/deliverability-check";
 
@@ -71,9 +72,14 @@ export function AdminEmailClient({
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [testEmail, setTestEmail] = useState("");
   const [scheduleAt, setScheduleAt] = useState("");
-  const [automationDrafts, setAutomationDrafts] = useState(automations);
+  // Priority order, which is also the order they fire in a sweep.
+  const [automationDrafts, setAutomationDrafts] = useState(
+    [...automations].sort((a, b) => AUTOMATION_KEYS.indexOf(a.key as AutomationKey) - AUTOMATION_KEYS.indexOf(b.key as AutomationKey)),
+  );
   const [automationPreview, setAutomationPreview] = useState<{ key: string; subject: string; html: string } | null>(null);
   const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile">("desktop");
+  const [campaignPreview, setCampaignPreview] = useState<{ subject: string; html: string } | null>(null);
+  const [campaignPreviewDevice, setCampaignPreviewDevice] = useState<"desktop" | "mobile">("desktop");
 
   const activeSegment = useMemo(
     () => segments.find((segment) => segment.value === form.segment) ?? segments[0],
@@ -262,19 +268,67 @@ export function AdminEmailClient({
     });
   }
 
-  function loadIntoComposer(campaign: CampaignSummary) {
-    // Only the fields the summary carries; the composer is for drafting a new
-    // send, so this is a starting point rather than a full round-trip edit.
-    setForm({
-      ...EMPTY_FORM,
-      name: `${campaign.name} (copy)`,
-      subject: campaign.subject,
-      segment: campaign.segment,
-      segmentParam: campaign.segmentParam ?? "",
+  async function loadIntoComposer(campaign: CampaignSummary) {
+    // The WHOLE campaign — headline, message, code, button — not just the
+    // name and subject the summary row carries. "Duplicate" used to load four
+    // fields and tell the operator to retype the rest, which is not a
+    // duplicate. Falls back to the summary if the detail read fails.
+    await run(async () => {
+      let detail: Record<string, unknown> | null = null;
+      try {
+        const response = await fetch(`/api/admin/email/campaigns/${campaign.id}`);
+        const data = await response.json().catch(() => null);
+        if (data?.success && data.campaign) detail = data.campaign as Record<string, unknown>;
+      } catch {
+        detail = null;
+      }
+      const str = (value: unknown, fallback = "") => (typeof value === "string" ? value : fallback);
+      setForm({
+        ...EMPTY_FORM,
+        name: `${campaign.name} (copy)`,
+        subject: campaign.subject,
+        previewText: str(detail?.preview_text),
+        headline: str(detail?.headline),
+        body: str(detail?.body),
+        promoCode: str(detail?.promo_code),
+        ctaLabel: str(detail?.cta_label, EMPTY_FORM.ctaLabel),
+        ctaPath: str(detail?.cta_path, EMPTY_FORM.ctaPath),
+        segment: campaign.segment,
+        segmentParam: campaign.segmentParam ?? "",
+      });
+      setEditingId(null);
+      setCampaignPreview(null);
+      setMessage({
+        tone: "ok",
+        text: detail ? "Duplicated as a new draft. Nothing is sent until you press Send." : "Loaded as a new draft. Fill in the headline and message.",
+      });
+      window.scrollTo({ top: 0, behavior: "smooth" });
     });
-    setEditingId(null);
-    setMessage({ tone: "ok", text: "Loaded as a new draft. Fill in the headline and message." });
-    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function previewCampaign() {
+    await run(async () => {
+      const response = await fetch("/api/admin/email/campaigns/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subject: form.subject,
+          previewText: form.previewText,
+          headline: form.headline,
+          body: form.body,
+          promoCode: form.promoCode,
+          ctaLabel: form.ctaLabel,
+          ctaPath: form.ctaPath,
+        }),
+      });
+      const data = await response.json().catch(() => null);
+      if (data?.success) {
+        setCampaignPreview({ subject: data.subject, html: data.html });
+      } else {
+        setCampaignPreview(null);
+        setMessage({ tone: "error", text: data?.error ?? "Unable to render this preview." });
+      }
+    });
   }
 
   async function handleStop(campaign: CampaignSummary) {
@@ -616,6 +670,15 @@ export function AdminEmailClient({
           <button
             type="button"
             disabled={busy}
+            data-testid="campaign-preview"
+            onClick={previewCampaign}
+            className="rounded-full border border-white/15 px-5 py-2 text-sm font-semibold text-white disabled:opacity-40"
+          >
+            Preview
+          </button>
+          <button
+            type="button"
+            disabled={busy}
             onClick={handleSave}
             className="rounded-full border border-white/15 px-5 py-2 text-sm font-semibold text-white disabled:opacity-40"
           >
@@ -640,6 +703,46 @@ export function AdminEmailClient({
             </button>
           ) : null}
         </div>
+
+        {campaignPreview ? (
+          <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-3" data-testid="campaign-preview-panel">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[11px] text-zinc-500">Subject: {campaignPreview.subject}</p>
+              <div className="flex gap-2">
+                {(["desktop", "mobile"] as const).map((device) => (
+                  <button
+                    key={device}
+                    type="button"
+                    data-testid={`campaign-preview-${device}`}
+                    onClick={() => setCampaignPreviewDevice(device)}
+                    className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] ${
+                      campaignPreviewDevice === device ? "bg-zinc-100 text-zinc-950" : "border border-zinc-800 text-zinc-400"
+                    }`}
+                  >
+                    {device}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setCampaignPreview(null)}
+                  className="rounded-lg border border-zinc-800 px-3 py-1.5 text-[11px] font-semibold text-zinc-400"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="mt-3 flex justify-center">
+              <iframe
+                title="Campaign preview"
+                data-testid="campaign-preview-frame"
+                srcDoc={campaignPreview.html}
+                sandbox=""
+                className="h-[560px] rounded-lg border border-white/10 bg-black"
+                style={{ width: campaignPreviewDevice === "mobile" ? 390 : "100%", maxWidth: "100%" }}
+              />
+            </div>
+          </div>
+        ) : null}
       </section>
 
       {/* History ------------------------------------------------------- */}
@@ -649,12 +752,14 @@ export function AdminEmailClient({
           <p className="mt-3 text-sm text-zinc-500">No campaigns yet.</p>
         ) : (
           <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[820px] text-left text-sm">
+            <table className="w-full min-w-[980px] text-left text-sm">
               <thead>
                 <tr className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">
                   <th className="py-2 pr-3">Campaign</th>
                   <th className="py-2 pr-3">Status</th>
                   <th className="py-2 pr-3">Sent</th>
+                  <th className="py-2 pr-3" title="Accepted by the receiving server, per the provider webhook">Delivered</th>
+                  <th className="py-2 pr-3" title="Bounces / spam complaints / unsubscribes from this campaign">Bounce · Spam · Unsub</th>
                   <th className="py-2 pr-3">Opened</th>
                   <th className="py-2 pr-3">Clicked</th>
                   <th className="py-2 pr-3">Orders</th>
@@ -679,6 +784,14 @@ export function AdminEmailClient({
                       ) : null}
                     </td>
                     <td className="py-2.5 pr-3">{campaign.sent}</td>
+                    <td className="py-2.5 pr-3">{campaign.delivered}</td>
+                    <td className="py-2.5 pr-3">
+                      <span className={campaign.bounced > 0 ? "text-amber-300" : ""}>{campaign.bounced}</span>
+                      {" · "}
+                      <span className={campaign.complained > 0 ? "text-rose-300" : ""}>{campaign.complained}</span>
+                      {" · "}
+                      <span>{campaign.unsubscribed}</span>
+                    </td>
                     <td className="py-2.5 pr-3">{percent(campaign.opened, campaign.sent)}</td>
                     <td className="py-2.5 pr-3">{percent(campaign.clicked, campaign.sent)}</td>
                     <td className="py-2.5 pr-3">{campaign.orders}</td>
@@ -723,6 +836,12 @@ export function AdminEmailClient({
           These send themselves when a customer crosses the threshold — no campaign needed. Each person receives
           any given sequence once; a win-back can fire again only after they buy and lapse a second time.
         </p>
+        <p className="mt-2 max-w-3xl text-[12px] text-zinc-500">
+          They run in the order shown. Nobody receives more than one marketing email a day from these: an
+          automation that finds the person was mailed in the last 24 hours (a cart reminder, a campaign, another
+          automation) waits for the next sweep. Switching a flow on does not backfill old events — a reorder
+          reminder never goes to an order older than its delay plus two weeks.
+        </p>
 
         {automationDrafts.length === 0 ? (
           <p className="mt-3 text-sm text-zinc-500">Run the email-campaigns migration to enable automations.</p>
@@ -732,11 +851,9 @@ export function AdminEmailClient({
               <div key={row.key} className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <p className="font-medium capitalize text-white">{row.key.replace(/_/g, " ")}</p>
-                    <p className="text-[11px] text-zinc-500">
-                      {row.key === "welcome_no_purchase" && "Signed up but hasn't ordered yet."}
-                      {row.key === "post_purchase" && "Sent after each order."}
-                      {row.key.startsWith("winback") && "Sent once a customer goes quiet."}
+                    <p className="font-medium text-white">{AUTOMATION_LABELS[row.key as AutomationKey]?.label ?? row.key.replace(/_/g, " ")}</p>
+                    <p className="max-w-xl text-[11px] text-zinc-500">
+                      {AUTOMATION_LABELS[row.key as AutomationKey]?.description ?? ""}
                     </p>
                   </div>
                   <label className="flex items-center gap-2 text-sm text-zinc-300">

@@ -95,7 +95,13 @@ export async function sendMarketingEmail(
   }
 
   const token = generateUnsubscribeToken(email);
-  const unsubscribeUrl = `${getSiteUrl()}/api/unsubscribe?email=${encodeURIComponent(email)}&token=${token}`;
+  // WHICH MESSAGE THEY UNSUBSCRIBED FROM. Carried as a plain parameter, not
+  // signed: it changes nothing about whether the opt-out is honoured (the
+  // token does that) and only says which send prompted it, so a campaign or a
+  // flow with an unusual unsubscribe rate can be found. Capped and sanitised
+  // again on the receiving side.
+  const unsubscribeSource = `${input.campaignType}${input.referenceId && input.campaignType === "campaign" ? `:${input.referenceId}` : ""}`.slice(0, 120);
+  const unsubscribeUrl = `${getSiteUrl()}/api/unsubscribe?email=${encodeURIComponent(email)}&token=${token}&s=${encodeURIComponent(unsubscribeSource)}`;
   // WHY THIS PERSON IS RECEIVING IT — and it has to be TRUE of them.
   //
   // This line used to read "because you're a Vanta Labs customer or member" on
@@ -256,6 +262,10 @@ export async function sendMarketingEmail(
       template_key: input.templateKey,
       sent_at: new Date().toISOString(),
       status: result.success ? "sent" : "failed",
+      // The join to the provider's delivery events. Automations already kept
+      // it; campaigns and cart recovery did not, so their delivered and
+      // bounced counts could only be guessed at. Nullable for SMTP.
+      ...(result.providerMessageId ? { provider_message_id: result.providerMessageId } : {}),
     });
   } catch {
     // Non-fatal.

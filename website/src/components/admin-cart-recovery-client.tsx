@@ -4,6 +4,13 @@ import { useMemo, useState } from "react";
 import type { AbandonedCartRow, CartRecoveryStats, RecoveryTrendPoint } from "@/lib/admin-cart-recovery";
 import type { CartRecoveryConfig } from "@/lib/admin-control";
 
+const STAGE_LABELS: Record<string, string> = {
+  t30m: "1 h reminder",
+  t12h: "12 h reminder",
+  t24h: "24 h details",
+  t72h: "72 h last note",
+};
+
 function money(cents: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
 }
@@ -135,6 +142,16 @@ export function AdminCartRecoveryClient({
           <div className="vl-panel-soft rounded-xl p-4">
             <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Coupon Redemption Rate</p>
             <p className="mt-2 text-2xl font-semibold text-white">{stats.couponRedemptionRatePercent}%</p>
+            {stats.stages.length > 0 ? (
+              <dl className="mt-3 space-y-1 border-t border-white/10 pt-2 text-[11px] text-zinc-400" data-testid="cart-recovery-stage-funnel">
+                {stats.stages.map((row) => (
+                  <div key={row.stage} className="flex justify-between gap-2">
+                    <dt>{STAGE_LABELS[row.stage] ?? row.stage}</dt>
+                    <dd className="text-zinc-200">{row.sent} sent · {row.opened} opened · {row.clicked} clicked</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
           </div>
         </div>
       </section>

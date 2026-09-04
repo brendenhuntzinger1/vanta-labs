@@ -204,7 +204,18 @@ values
    'Still researching?',
    'Come back and see what''s new',
    E'It''s been a couple of months. Here''s what''s waiting whenever you need to restock.',
-   'SHOP NOW', '/products')
+   'SHOP NOW', '/products'),
+  -- Added 2026-09-04 (see email-lifecycle-2026-09-04.sql for the copy rationale).
+  ('welcome_intro', false, 1,
+   'What Vanta Labs is, in one email',
+   'Welcome to Vanta Labs',
+   E'Thanks for joining. Here is the short version of how we work.\n\nEvery batch is third-party tested, and the certificate of analysis for any product is available before you order.\n\nOrders ship tracked in plain packaging, and you get an email at every step.\n\nIf you have a question, reply to this email. A member of the team reads and answers every one.',
+   'BROWSE THE CATALOG', '/products'),
+  ('replenishment', false, 30,
+   'Time to restock?',
+   'Running low?',
+   E'It has been about a month since your last order, which is roughly how long most research cycles run.\n\nIf you are due to restock, your previous order is saved in your account and can be reordered in a couple of clicks.\n\nIf you are set for now, no action needed.',
+   'REORDER FROM MY ACCOUNT', '/account/orders')
 on conflict (key) do nothing;
 
 -- 7. Send outcome on the shared log ------------------------------------------

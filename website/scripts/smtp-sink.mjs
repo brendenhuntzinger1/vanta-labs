@@ -43,9 +43,25 @@ function decodeBody(body, encoding) {
     return Buffer.from(body.replace(/\r?\n/g, ""), "base64").toString("utf8");
   }
   if (/quoted-printable/i.test(encoding)) {
-    return body
-      .replace(/=\r?\n/g, "")                                        // soft line breaks
-      .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+    // BYTES, THEN UTF-8. `String.fromCharCode` per escaped byte decoded each
+    // byte of a multi-byte character as its own Latin-1 code point, so every
+    // "×", "—" and "·" in a captured message came out as mojibake ("Ã—",
+    // "â€”", "Â·") and a screenshot of the capture looked like a broken
+    // template. The wire message was fine; the capture was not.
+    const unfolded = body.replace(/=\r?\n/g, "");                    // soft line breaks
+    const bytes = [];
+    for (let i = 0; i < unfolded.length; i += 1) {
+      if (unfolded[i] === "=" && /^[0-9A-Fa-f]{2}$/.test(unfolded.slice(i + 1, i + 3))) {
+        bytes.push(parseInt(unfolded.slice(i + 1, i + 3), 16));
+        i += 2;
+      } else {
+        const code = unfolded.charCodeAt(i);
+        // Anything already outside ASCII was never QP-encoded; keep it as is.
+        if (code < 0x80) bytes.push(code);
+        else bytes.push(...Buffer.from(unfolded[i], "utf8"));
+      }
+    }
+    return Buffer.from(bytes).toString("utf8");
   }
   return body;
 }

@@ -14,6 +14,23 @@ async function guard(request: Request) {
   return { session };
 }
 
+// The full row, for "Duplicate" in the composer. The history table carries
+// only a summary; a duplicate that dropped the headline, message and button
+// was not a duplicate.
+export async function GET(request: Request, context: { params: Promise<{ campaignId: string }> }) {
+  const guarded = await guard(request);
+  if ("error" in guarded) return guarded.error;
+  const { campaignId } = await context.params;
+  const { data, error } = await supabaseAdmin
+    .from("email_campaigns")
+    .select("id, name, subject, preview_text, headline, body, promo_code, cta_label, cta_path, segment, segment_param, status, scheduled_at, audience_kind")
+    .eq("id", campaignId)
+    .maybeSingle();
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 });
+  if (!data) return NextResponse.json({ success: false, error: "Campaign not found" }, { status: 404 });
+  return NextResponse.json({ success: true, campaign: data });
+}
+
 // Edit a draft. A campaign that has already started sending is NOT editable:
 // half its audience would have received the old copy and half the new, and
 // there is no honest way to report that as one campaign.

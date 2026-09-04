@@ -65,20 +65,21 @@ describe("welcome_no_purchase", () => {
 });
 
 describe("post_purchase", () => {
-  it("keys on the ORDER, so every order gets its own follow-up", () => {
+  it("keys on the customer's FIRST order, and on nothing after it", () => {
+    // The follow-up explains the COA, storage and support. A second-time
+    // buyer knows all of that; their second order is the reorder reminder's
+    // job. So o2 is never a post_purchase target, sent or not.
     const targets = selectAutomationTargets({
       ...base,
       key: "post_purchase",
       delayDays: 14,
       consented: new Set(["repeat@example.com"]),
       paidOrders: [
-        { email: "repeat@example.com", orderId: "o1", at: NOW - 40 * DAY },
-        { email: "repeat@example.com", orderId: "o2", at: NOW - 20 * DAY },
+        { email: "repeat@example.com", orderId: "o1", at: NOW - 20 * DAY },
+        { email: "repeat@example.com", orderId: "o2", at: NOW - 16 * DAY },
       ],
-      // The first order's follow-up already went out.
-      alreadySent: new Set(["o1"]),
     });
-    expect(targets).toEqual([{ email: "repeat@example.com", referenceId: "o2" }]);
+    expect(targets).toEqual([{ email: "repeat@example.com", referenceId: "o1" }]);
   });
 
   it("waits out the delay", () => {
@@ -198,5 +199,113 @@ describe("isAutomationKey", () => {
     expect(isAutomationKey("winback_30")).toBe(true);
     expect(isAutomationKey("winback_999")).toBe(false);
     expect(isAutomationKey(undefined)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-09-04: the lifecycle engine grew two flows and three rules. Each has a
+// customer-visible failure if it regresses, which is why they are pinned here.
+// ---------------------------------------------------------------------------
+
+describe("welcome flows reach guest subscribers too", () => {
+  it("times the welcome from a guest's opt-in, not only from account creation", () => {
+    const targets = selectAutomationTargets({
+      ...base,
+      key: "welcome_intro",
+      delayDays: 1,
+      consented: new Set(["guest@example.com"]),
+      subscribedAt: new Map([["guest@example.com", NOW - 2 * DAY]]),
+    });
+    expect(targets).toEqual([{ email: "guest@example.com", referenceId: "guest@example.com" }]);
+  });
+
+  it("does not backfill someone who subscribed months ago when the flow is switched on", () => {
+    const targets = selectAutomationTargets({
+      ...base,
+      key: "welcome_intro",
+      delayDays: 1,
+      consented: new Set(["old@example.com"]),
+      subscribedAt: new Map([["old@example.com", NOW - 120 * DAY]]),
+    });
+    expect(targets).toEqual([]);
+  });
+});
+
+describe("post_purchase is for the first order", () => {
+  it("does not send it again for a second order", () => {
+    const targets = selectAutomationTargets({
+      ...base,
+      key: "post_purchase",
+      delayDays: 5,
+      consented: new Set(["repeat@example.com"]),
+      paidOrders: [
+        { email: "repeat@example.com", orderId: "o1", at: NOW - 40 * DAY },
+        { email: "repeat@example.com", orderId: "o2", at: NOW - 10 * DAY },
+      ],
+      alreadySent: new Set(["o1"]),
+    });
+    expect(targets).toEqual([]);
+  });
+
+  it("does not backfill an order older than the delay plus the grace window", () => {
+    const targets = selectAutomationTargets({
+      ...base,
+      key: "post_purchase",
+      delayDays: 5,
+      consented: new Set(["old@example.com"]),
+      paidOrders: [{ email: "old@example.com", orderId: "o1", at: NOW - 90 * DAY }],
+    });
+    expect(targets).toEqual([]);
+  });
+});
+
+describe("replenishment", () => {
+  it("fires for the latest order once the delay has passed", () => {
+    const targets = selectAutomationTargets({
+      ...base,
+      key: "replenishment",
+      delayDays: 30,
+      consented: new Set(["lab@example.com"]),
+      paidOrders: [{ email: "lab@example.com", orderId: "o1", at: NOW - 32 * DAY }],
+    });
+    expect(targets).toEqual([{ email: "lab@example.com", referenceId: "o1" }]);
+  });
+
+  it("stops for an order the customer has already reordered after", () => {
+    // The reminder for o1 is due, but o2 exists: they restocked on their own.
+    const targets = selectAutomationTargets({
+      ...base,
+      key: "replenishment",
+      delayDays: 30,
+      consented: new Set(["lab@example.com"]),
+      paidOrders: [
+        { email: "lab@example.com", orderId: "o1", at: NOW - 32 * DAY },
+        { email: "lab@example.com", orderId: "o2", at: NOW - 3 * DAY },
+      ],
+    });
+    expect(targets).toEqual([]);
+  });
+});
+
+describe("the quiet period", () => {
+  it("skips someone mailed by any marketing flow in the last day, and reconsiders them later", () => {
+    const input = {
+      ...base,
+      key: "winback_30" as const,
+      delayDays: 30,
+      consented: new Set(["busy@example.com"]),
+      paidOrders: [{ email: "busy@example.com", orderId: "o1", at: NOW - 45 * DAY }],
+    };
+    const quiet = selectAutomationTargets({
+      ...input,
+      lastMarketingSentAt: new Map([["busy@example.com", NOW - 3 * 60 * 60 * 1000]]),
+    });
+    expect(quiet).toEqual([]);
+
+    const later = selectAutomationTargets({
+      ...input,
+      lastMarketingSentAt: new Map([["busy@example.com", NOW - 2 * DAY]]),
+    });
+    expect(later).toHaveLength(1);
   });
 });

@@ -6,6 +6,7 @@ import { getCartRecoveryControlConfig, type CartRecoveryConfig } from "@/lib/adm
 import { getSiteUrl } from "@/lib/env";
 import { formatDisplayDate } from "@/lib/format-date";
 import { isMarketingSuppressed, sendMarketingEmail } from "@/lib/email/marketing";
+import { isPaidOrderStatus } from "@/lib/ledger";
 import {
   cartRecoveryT30mTemplate,
   cartRecoveryT12hTemplate,
@@ -41,7 +42,18 @@ export interface TrackCartInput {
 // query builder's upsert() (see the read-then-branch pattern also used in
 // payment-webhook.ts's upsertOrderRecord).
 export async function trackCart(input: TrackCartInput) {
-  if (!input.items.length || !input.email.trim()) {
+  const email = input.email.trim().toLowerCase();
+  if (!email) return;
+
+  // AN EMPTY CART IS AN EXIT, NOT A NON-EVENT.
+  //
+  // This used to return early on an empty item list, which left the last
+  // non-empty snapshot 'active' for ever: a shopper who removed everything
+  // still received every recovery stage for products they had already decided
+  // against. Clearing the row is what "they changed their mind" looks like to
+  // the sweep.
+  if (!input.items.length) {
+    await clearAbandonedCart(input.sessionId);
     return;
   }
 
@@ -57,7 +69,7 @@ export async function trackCart(input: TrackCartInput) {
   const payload = {
     session_id: input.sessionId,
     customer_user_id: input.customerUserId ?? null,
-    email: input.email.trim().toLowerCase(),
+    email,
     customer_name: input.customerName ?? null,
     items: input.items,
     cart_value_cents: Math.round(input.cartValueCents),
@@ -76,6 +88,25 @@ export async function trackCart(input: TrackCartInput) {
     status: "active",
     created_at: new Date().toISOString(),
   });
+  if (error) throw error;
+}
+
+/**
+ * Retire the active cart for a browser session: the shopper emptied it.
+ *
+ * 'cleared' rather than deleted, so the admin history still shows the cart
+ * existed and what was in it; the sweep only ever reads 'active' rows, so a
+ * cleared cart can never be mailed again. A later add-to-cart in the same
+ * session starts a NEW row with its own clock, which is what a new decision
+ * deserves.
+ */
+export async function clearAbandonedCart(sessionId: string): Promise<void> {
+  if (!sessionId) return;
+  const { error } = await supabaseAdmin
+    .from("abandoned_carts")
+    .update({ status: "cleared", last_updated_at: new Date().toISOString() })
+    .eq("session_id", sessionId)
+    .eq("status", "active");
   if (error) throw error;
 }
 
@@ -189,22 +220,25 @@ export async function mintCartRecoveryCoupon(email: string, discountPercent: num
  *
  * Never describe a coupon that was not read back from the database.
  */
-async function resolveLastChanceCoupon(
-  cartId: string,
-  email: string,
-  discountPercent: number,
-  expiresInHours: number,
-): Promise<RecoveryCoupon | null> {
-  const { data: priorStage } = await supabaseAdmin
+/**
+ * The live coupon an EARLIER stage of this cart already minted, or null.
+ *
+ * Re-offering it is not a new discount — the shopper already holds it — so it
+ * is offered regardless of the per-address cooldown that gates minting. Only a
+ * code the checkout will still accept counts: same predicate validateCoupon
+ * runs (active, and not past ends_at).
+ */
+async function findLiveCouponForCart(cartId: string): Promise<RecoveryCoupon | null> {
+  const { data: priorStages } = await supabaseAdmin
     .from("abandoned_cart_emails")
     .select("coupon_id")
-    .eq("abandoned_cart_id", cartId)
-    .eq("stage", "t24h")
-    .maybeSingle();
+    .eq("abandoned_cart_id", cartId);
 
-  const priorCouponId = (priorStage as { coupon_id?: string | null } | null)?.coupon_id ?? null;
+  const priorCouponIds = ((priorStages ?? []) as Array<{ coupon_id?: string | null }>)
+    .map((row) => row.coupon_id)
+    .filter((id): id is string => Boolean(id));
 
-  if (priorCouponId) {
+  for (const priorCouponId of priorCouponIds) {
     const { data: existing } = await supabaseAdmin
       .from("coupons")
       .select("id, code, ends_at, active")
@@ -212,22 +246,27 @@ async function resolveLastChanceCoupon(
       .maybeSingle();
 
     const row = existing as { id: string; code: string; ends_at: string | null; active: boolean } | null;
-    // Same predicate the checkout will run (coupons.ts validateCoupon): active,
-    // and not past ends_at. Anything this rejects would be rejected at the till.
-    const stillLive = Boolean(
-      row
-      && row.active
-      && row.ends_at
-      && new Date(row.ends_at).getTime() > Date.now(),
-    );
-    if (stillLive && row) {
-      return { id: row.id, code: row.code, expiresAt: row.ends_at as string };
-    }
+    const stillLive = Boolean(row && row.active && row.ends_at && new Date(row.ends_at).getTime() > Date.now());
+    if (stillLive && row) return { id: row.id, code: row.code, expiresAt: row.ends_at as string };
   }
+  return null;
+}
 
-  // Expired, missing, or never recorded. A fresh code is the only way to keep
-  // the promise the email is about to make.
-  return mintCartRecoveryCoupon(email, discountPercent, expiresInHours);
+/**
+ * The coupon the LAST message may advertise: the cart's own live code if it
+ * has one, otherwise a fresh mint.
+ *
+ * K-05 still holds: never describe a coupon that was not read back from the
+ * database. A code this cart was given earlier is re-offered only while it is
+ * live; expired, missing or never recorded means a fresh one.
+ */
+async function resolveLastChanceCoupon(
+  cartId: string,
+  email: string,
+  discountPercent: number,
+  expiresInHours: number,
+): Promise<RecoveryCoupon | null> {
+  return (await findLiveCouponForCart(cartId)) ?? mintCartRecoveryCoupon(email, discountPercent, expiresInHours);
 }
 
 interface DueCartRow {
@@ -237,17 +276,10 @@ interface DueCartRow {
   items: AbandonedCartItemSnapshot[];
   cart_value_cents: number;
   first_seen_at: string;
+  /** Last cart change. Absent on rows written before the column existed. */
+  last_updated_at?: string | null;
 }
 
-/**
- * The coupon a previous stage already minted for this cart, if any.
- *
- * t72h re-offers the code from t24h rather than minting a second one. It used to
- * print the literal string "SEE PREVIOUS EMAIL", which was already poor, and
- * became wrong once a claimed stage stopped implying a delivered email: the
- * "previous email" may never have arrived. Reading the real coupon off the
- * reservation gives the shopper a usable code either way, and mints nothing new.
- */
 function restoreUrl(cartId: string) {
   return `${getSiteUrl()}/cart/restore?id=${cartId}`;
 }
@@ -272,8 +304,7 @@ function restoreUrl(cartId: string) {
  * not attempted again, and the shopper does not get that email. It is the
  * deliberate trade. An unbounded retry that re-mints is worse in every
  * direction — it spams the shopper if the failure was a false negative, and it
- * mints for ever for someone who has UNSUBSCRIBED. Bounded retry is a follow-up
- * and needs a column to count attempts; see PROPOSED-abandoned-cart-email-retry.sql.
+ * mints for ever for someone who has UNSUBSCRIBED.
  *
  * A FAILED MINT releases the claim, and that is safe for the opposite reason: no
  * coupon row exists, so a later pass cannot accumulate one. It is the only path
@@ -281,12 +312,19 @@ function restoreUrl(cartId: string) {
  */
 async function reserveAndSendStage(input: {
   cartId: string;
-  stage: "t30m" | "t12h" | "t24h" | "t72h";
+  stage: RecoveryStage;
   email: string;
   campaignType: string;
   templateKey: string;
   /** Stages that carry a discount supply this; it runs only once the slot is held. */
   mintCoupon?: () => Promise<RecoveryCoupon | null>;
+  /**
+   * False when the message is allowed to go out WITHOUT a coupon — the final
+   * stage for a shopper the cooldown says not to pay, who may still hold a
+   * live code from an earlier stage. Default true: a stage that promises a
+   * code and cannot produce one releases its claim and waits.
+   */
+  couponRequired?: boolean;
   buildTemplate: (restoreUrlForEmail: string, coupon: RecoveryCoupon | null) => { subject: string; html: string; text: string };
 }): Promise<boolean> {
   const { data: inserted, error: insertError } = await supabaseAdmin
@@ -309,17 +347,19 @@ async function reserveAndSendStage(input: {
   let coupon: RecoveryCoupon | null = null;
   if (input.mintCoupon) {
     coupon = await input.mintCoupon();
-    if (!coupon) {
+    if (!coupon && input.couponRequired !== false) {
       // No coupon exists, so releasing the slot cannot accumulate one. Let a
       // later sweep try again rather than silently dropping the stage.
       await supabaseAdmin.from("abandoned_cart_emails").delete().eq("id", reservationId);
       return false;
     }
     // Link the claim to the coupon so a later stage re-offers this code.
-    await supabaseAdmin
-      .from("abandoned_cart_emails")
-      .update({ coupon_id: coupon.id })
-      .eq("id", reservationId);
+    if (coupon) {
+      await supabaseAdmin
+        .from("abandoned_cart_emails")
+        .update({ coupon_id: coupon.id })
+        .eq("id", reservationId);
+    }
   }
 
   const trackedRestoreUrl = `${getSiteUrl()}/api/email/track/click?id=${reservationId}&url=${encodeURIComponent(restoreUrl(input.cartId))}`;
@@ -358,23 +398,44 @@ export interface AbandonedCartSweepResult {
   scanned: number;
   /** Carts that actually had an unsent stage due. */
   eligible: number;
+  /** Carts closed because a paid order turned up that the webhook had not linked. */
+  recoveredLate: number;
+  /** New sequences not started because the address was mailed about another cart recently. */
+  heldForCooldown: number;
 }
 
-/**
- * WHEN EACH STAGE BECOMES DUE. Stated once, because two things now need it:
- * the send blocks below, and the candidate filter that decides which carts are
- * worth spending the tick's budget on. Two copies of these numbers would drift,
- * and the drift would be silent — a cart the filter thought had nothing due
- * simply never gets its email.
- */
-const STAGE_DUE_AFTER_MS = {
-  t30m: 30 * MINUTE_MS,
-  t12h: 12 * HOUR_MS,
-  t24h: 24 * HOUR_MS,
-  t72h: 72 * HOUR_MS,
-} as const;
+export const RECOVERY_STAGES = ["t30m", "t12h", "t24h", "t72h"] as const;
+export type RecoveryStage = (typeof RECOVERY_STAGES)[number];
 
-type RecoveryStage = keyof typeof STAGE_DUE_AFTER_MS;
+/**
+ * WHEN EACH STAGE IS DUE — AS A WINDOW, NOT A THRESHOLD.
+ *
+ * A stage used to be due the moment its delay had elapsed, for ever after. Two
+ * production defects followed directly. A cart first processed at hour 25 had
+ * three stages "due" and received all three in one sweep (cart c1bb28a8: t24h
+ * and t12h in the same minute). And a stage switched on after the fact fired
+ * for every old cart still in the window (cart e7a0adde: a t12h thirty-nine
+ * days after its t72h).
+ *
+ * A window closes the moment the next stage opens. A stage whose window has
+ * passed is simply skipped — the shopper gets the message that fits where they
+ * are now, and never two at once. The keys keep their historic names because
+ * they are stored in abandoned_cart_emails.stage and shown in the admin;
+ * the numbers are what changed. Stage 1 opens at ONE hour, not thirty
+ * minutes: a shopper still comparing products forty minutes in is not an
+ * abandoner, and the clock runs from their LAST cart change (see elapsedFor).
+ *
+ * The sequence, with the shipped defaults (t12h off):
+ *   1 h   reminder, no offer
+ *   24 h  the things worth knowing before ordering — COA, shipping, support
+ *   72 h  the last message about this cart, with the discount if allowed
+ */
+export const STAGE_WINDOWS: Record<RecoveryStage, { opensAfterMs: number; closesAfterMs: number }> = {
+  t30m: { opensAfterMs: 60 * MINUTE_MS, closesAfterMs: 12 * HOUR_MS },
+  t12h: { opensAfterMs: 12 * HOUR_MS, closesAfterMs: 24 * HOUR_MS },
+  t24h: { opensAfterMs: 24 * HOUR_MS, closesAfterMs: 72 * HOUR_MS },
+  t72h: { opensAfterMs: 72 * HOUR_MS, closesAfterMs: 96 * HOUR_MS },
+};
 
 const STAGE_ENABLED: Record<RecoveryStage, (config: CartRecoveryConfig) => boolean> = {
   t30m: (config) => config.t30mEnabled,
@@ -382,6 +443,72 @@ const STAGE_ENABLED: Record<RecoveryStage, (config: CartRecoveryConfig) => boole
   t24h: (config) => config.t24hEnabled,
   t72h: (config) => config.t72hEnabled,
 };
+
+/**
+ * ONE SEQUENCE PER ADDRESS PER WEEK.
+ *
+ * A shopper who abandons a cart on Monday, buys on Tuesday and abandons another
+ * on Wednesday is a customer, not two abandoners. Starting a fresh three-message
+ * sequence for every cart turned one July shopper's nine days into four
+ * sequences and four discount codes. A sequence already under way for a cart
+ * continues; a NEW one waits until a week has passed since the last recovery
+ * message to that address.
+ */
+export const RECOVERY_SEQUENCE_COOLDOWN_MS = 7 * 24 * HOUR_MS;
+
+/**
+ * WHEN A DISCOUNT MAY BE OFFERED.
+ *
+ * The code is the most expensive thing in the sequence and the easiest to
+ * teach people to wait for. So it appears on the final stage only, once per
+ * address per thirty days, and never to someone who has bought in the last
+ * thirty days — a customer inside their own reorder cycle does not need paying
+ * to come back, and paying them anyway is margin given away to the people most
+ * likely to have ordered regardless.
+ */
+export const RECOVERY_DISCOUNT_COOLDOWN_MS = 30 * 24 * HOUR_MS;
+export const RECOVERY_DISCOUNT_RECENT_BUYER_MS = 30 * 24 * HOUR_MS;
+
+export function recoveryDiscountAllowed(input: {
+  lastRecoveryCouponAt: number | null;
+  lastPaidAt: number | null;
+  now: number;
+}): boolean {
+  if (input.lastRecoveryCouponAt !== null && input.now - input.lastRecoveryCouponAt < RECOVERY_DISCOUNT_COOLDOWN_MS) return false;
+  if (input.lastPaidAt !== null && input.now - input.lastPaidAt < RECOVERY_DISCOUNT_RECENT_BUYER_MS) return false;
+  return true;
+}
+
+/**
+ * The single stage this cart should receive right now, or null.
+ *
+ * Pure, so the window rules can be asserted without a database: exactly one
+ * window contains any given elapsed time, and a stage is due only if that
+ * window is its own, the operator has it switched on, and it has not already
+ * been claimed.
+ */
+export function selectDueStage(
+  elapsedMs: number,
+  config: CartRecoveryConfig,
+  claimed: ReadonlySet<string>,
+): RecoveryStage | null {
+  for (const stage of RECOVERY_STAGES) {
+    const window = STAGE_WINDOWS[stage];
+    if (elapsedMs < window.opensAfterMs || elapsedMs >= window.closesAfterMs) continue;
+    if (!STAGE_ENABLED[stage](config)) return null;
+    if (claimed.has(stage)) return null;
+    return stage;
+  }
+  return null;
+}
+
+/** Time since the shopper last touched the cart, falling back to first sight for old rows. */
+function elapsedFor(row: DueCartRow, now: number): number {
+  const last = row.last_updated_at ? new Date(row.last_updated_at).getTime() : NaN;
+  const first = new Date(row.first_seen_at).getTime();
+  const anchor = Number.isFinite(last) ? Math.max(last, Number.isFinite(first) ? first : last) : first;
+  return now - anchor;
+}
 
 /**
  * HOW MUCH RECOVERY ONE TICK MAY DO.
@@ -395,7 +522,7 @@ const STAGE_ENABLED: Record<RecoveryStage, (config: CartRecoveryConfig) => boole
  * A bare `.limit()` would have been actively harmful here: the oldest carts sort
  * first and have already had every stage claimed, so the budget would have been
  * spent proving that, tick after tick, while newer carts — the ones with a
- * t30m email actually due — were never reached. So the stage claims are read in
+ * first email actually due — were never reached. So the stage claims are read in
  * bulk first and carts with nothing outstanding are dropped for free; the
  * budget is spent only on carts that have an unsent stage due right now. That
  * drains, because sending a stage removes it from the outstanding set for good.
@@ -404,16 +531,10 @@ const CART_SWEEP_BUDGET = 200;
 const CART_SCAN_PAGE = 500;
 const CART_MAX_SCAN = 5000;
 
-/** Stages this cart is old enough for, that the operator has left switched on. */
-function dueStages(elapsedMs: number, config: CartRecoveryConfig): RecoveryStage[] {
-  return (Object.keys(STAGE_DUE_AFTER_MS) as RecoveryStage[]).filter(
-    (stage) => STAGE_ENABLED[stage](config) && elapsedMs >= STAGE_DUE_AFTER_MS[stage],
-  );
-}
-
 /** Which (cart, stage) slots are already claimed, for a page of carts. */
-async function claimedStagesFor(cartIds: string[]): Promise<Set<string>> {
-  if (cartIds.length === 0) return new Set();
+async function claimedStagesFor(cartIds: string[]): Promise<Map<string, Set<string>>> {
+  const claimed = new Map<string, Set<string>>();
+  if (cartIds.length === 0) return claimed;
   const { data, error } = await supabaseAdmin
     .from("abandoned_cart_emails")
     .select("abandoned_cart_id, stage")
@@ -422,35 +543,149 @@ async function claimedStagesFor(cartIds: string[]): Promise<Set<string>> {
   // Fail OPEN: an unreadable claim table means we cannot subtract anything, so
   // every cart stays a candidate and the unique index does the deduplication as
   // it always did. Slower for a tick, never a wrong send.
-  if (error || !data) return new Set();
-  return new Set(data.map((row) => `${String(row.abandoned_cart_id)}::${String(row.stage)}`));
+  if (error || !data) return claimed;
+  for (const row of data) {
+    const id = String(row.abandoned_cart_id);
+    const set = claimed.get(id) ?? new Set<string>();
+    set.add(String(row.stage));
+    claimed.set(id, set);
+  }
+  return claimed;
 }
+
+/**
+ * What the sweep needs to know about an address before mailing it, read once
+ * per tick for every candidate rather than once per cart.
+ *
+ * Every read here FAILS OPEN to "nothing known", deliberately and separately:
+ * an orders table that cannot be read must not stop recovery mail (the payment
+ * webhook's own mark still ends a sequence), and a coupon table that cannot be
+ * read must not stop a stage. What it may cost is a discount offered one time
+ * too many, which is the cheaper mistake.
+ */
+type RecoveryContext = {
+  /** Paid orders per address, newest first. */
+  paidOrders: Map<string, Array<{ orderId: string; at: number }>>;
+  /** Newest recovery-stage send per address across ALL carts, within the cooldown. */
+  lastRecoverySendAt: Map<string, { at: number; cartId: string }>;
+  /** Newest cart-recovery coupon per address, within the discount cooldown. */
+  lastRecoveryCouponAt: Map<string, number>;
+};
+
+async function loadRecoveryContext(emails: string[], now: number): Promise<RecoveryContext> {
+  const context: RecoveryContext = { paidOrders: new Map(), lastRecoverySendAt: new Map(), lastRecoveryCouponAt: new Map() };
+  if (emails.length === 0) return context;
+
+  try {
+    const { data } = await supabaseAdmin
+      .from("orders")
+      .select("order_id, customer_email, payment_status, created_at")
+      .in("customer_email", emails);
+    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+      if (!isPaidOrderStatus(row.payment_status as string | null)) continue;
+      const email = String(row.customer_email ?? "").trim().toLowerCase();
+      const at = new Date(String(row.created_at)).getTime();
+      if (!email || !Number.isFinite(at)) continue;
+      const list = context.paidOrders.get(email) ?? [];
+      list.push({ orderId: String(row.order_id ?? ""), at });
+      context.paidOrders.set(email, list);
+    }
+    for (const list of context.paidOrders.values()) list.sort((a, b) => b.at - a.at);
+  } catch (error) {
+    console.error("[cart-recovery] could not read orders for the sweep; relying on the webhook mark", error);
+  }
+
+  try {
+    const { data: carts } = await supabaseAdmin
+      .from("abandoned_carts")
+      .select("id, email")
+      .in("email", emails);
+    const emailByCart = new Map<string, string>();
+    for (const row of (carts ?? []) as Array<Record<string, unknown>>) {
+      emailByCart.set(String(row.id), String(row.email ?? "").trim().toLowerCase());
+    }
+    if (emailByCart.size > 0) {
+      const { data: stages } = await supabaseAdmin
+        .from("abandoned_cart_emails")
+        .select("abandoned_cart_id, sent_at")
+        .in("abandoned_cart_id", [...emailByCart.keys()])
+        .gte("sent_at", new Date(now - RECOVERY_SEQUENCE_COOLDOWN_MS).toISOString());
+      for (const row of (stages ?? []) as Array<Record<string, unknown>>) {
+        const cartId = String(row.abandoned_cart_id);
+        const email = emailByCart.get(cartId);
+        const at = new Date(String(row.sent_at)).getTime();
+        if (!email || !Number.isFinite(at)) continue;
+        const existing = context.lastRecoverySendAt.get(email);
+        if (!existing || at > existing.at) context.lastRecoverySendAt.set(email, { at, cartId });
+      }
+    }
+  } catch (error) {
+    console.error("[cart-recovery] could not read recent recovery sends; cooldown not applied this tick", error);
+  }
+
+  try {
+    const { data } = await supabaseAdmin
+      .from("coupons")
+      .select("assigned_email, created_at")
+      .eq("source", "cart_recovery")
+      .in("assigned_email", emails)
+      .gte("created_at", new Date(now - RECOVERY_DISCOUNT_COOLDOWN_MS).toISOString());
+    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+      const email = String(row.assigned_email ?? "").trim().toLowerCase();
+      const at = new Date(String(row.created_at)).getTime();
+      if (!email || !Number.isFinite(at)) continue;
+      const existing = context.lastRecoveryCouponAt.get(email);
+      if (existing === undefined || at > existing) context.lastRecoveryCouponAt.set(email, at);
+    }
+  } catch (error) {
+    console.error("[cart-recovery] could not read recent recovery coupons; discount cooldown not applied this tick", error);
+  }
+
+  return context;
+}
+
+/** Close a cart the payment webhook missed, so the sweep stops looking at it. */
+async function markRecoveredLate(cartId: string, orderId: string): Promise<void> {
+  try {
+    await supabaseAdmin
+      .from("abandoned_carts")
+      .update({ status: "recovered", recovered_order_id: orderId || null })
+      .eq("id", cartId);
+  } catch (error) {
+    console.error("[cart-recovery] could not mark a late recovery", cartId, error);
+  }
+}
+
+const STAGE_RESULT_KEY: Record<RecoveryStage, keyof Pick<AbandonedCartSweepResult, "t30mSent" | "t12hSent" | "t24hSent" | "t72hSent">> = {
+  t30m: "t30mSent", t12h: "t12hSent", t24h: "t24hSent", t72h: "t72hSent",
+};
 
 // Idempotent - each stage reserves its slot in abandoned_cart_emails via a
 // unique index before sending (see reserveAndSendStage), so a coarser cron
 // interval just means coarser timing on when a stage fires, never a
-// duplicate send.
+// duplicate send. At most ONE stage per cart per sweep, by construction of
+// selectDueStage.
 export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult> {
   const config = await getCartRecoveryControlConfig();
   const now = Date.now();
   const result: AbandonedCartSweepResult = {
-    t30mSent: 0, t12hSent: 0, t24hSent: 0, t72hSent: 0, scanned: 0, eligible: 0,
+    t30mSent: 0, t12hSent: 0, t24hSent: 0, t72hSent: 0, scanned: 0, eligible: 0, recoveredLate: 0, heldForCooldown: 0,
   };
 
   // Only sweep carts new enough to still have a pending stage. The last stage
-  // fires at 72h; past ~96h every stage has been sent (or is past its value), so
-  // a still-"active" cart older than that would just be re-scanned every tick
-  // forever. Bounding by first_seen_at keeps per-tick work flat as active carts
-  // accumulate. (If the sweep is down >96h, those carts are past recovery value
-  // anyway.)
-  const RECOVERY_MAX_AGE_MS = 96 * HOUR_MS;
+  // closes at 96h, so a still-"active" cart older than that would just be
+  // re-scanned every tick forever. Bounding by first_seen_at keeps per-tick
+  // work flat as active carts accumulate. (A cart kept alive by edits for more
+  // than four days simply ages out of recovery; that shopper is browsing, not
+  // abandoning.)
+  const RECOVERY_MAX_AGE_MS = STAGE_WINDOWS.t72h.closesAfterMs;
   const oldestFirstSeenIso = new Date(now - RECOVERY_MAX_AGE_MS).toISOString();
 
-  const candidates: DueCartRow[] = [];
+  const candidates: Array<{ row: DueCartRow; stage: RecoveryStage; claimed: Set<string> }> = [];
   for (let offset = 0; offset < CART_MAX_SCAN && candidates.length < CART_SWEEP_BUDGET; offset += CART_SCAN_PAGE) {
     const { data, error } = await supabaseAdmin
       .from("abandoned_carts")
-      .select("id, email, customer_name, items, cart_value_cents, first_seen_at")
+      .select("id, email, customer_name, items, cart_value_cents, first_seen_at, last_updated_at")
       .eq("status", "active")
       .gte("first_seen_at", oldestFirstSeenIso)
       // Oldest first: the cart closest to ageing out of the window is the one
@@ -464,15 +699,13 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     if (page.length === 0) break;
     result.scanned += page.length;
 
-    const claimed = await claimedStagesFor(page.map((row) => String(row.id)));
+    const claimedByCart = await claimedStagesFor(page.map((row) => String(row.id)));
 
     for (const row of page) {
-      const elapsedMs = now - new Date(row.first_seen_at).getTime();
-      const outstanding = dueStages(elapsedMs, config).some(
-        (stage) => !claimed.has(`${String(row.id)}::${stage}`),
-      );
-      if (!outstanding) continue;
-      candidates.push(row);
+      const claimed = claimedByCart.get(String(row.id)) ?? new Set<string>();
+      const stage = selectDueStage(elapsedFor(row, now), config, claimed);
+      if (!stage) continue;
+      candidates.push({ row, stage, claimed });
       if (candidates.length >= CART_SWEEP_BUDGET) break;
     }
 
@@ -480,11 +713,18 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
   }
 
   result.eligible = candidates.length;
+  if (candidates.length === 0) return result;
 
-  for (const row of candidates) {
-    const elapsedMs = now - new Date(row.first_seen_at).getTime();
+  const context = await loadRecoveryContext(
+    [...new Set(candidates.map((c) => String(c.row.email ?? "").trim().toLowerCase()).filter(Boolean))],
+    now,
+  );
+
+  for (const { row, stage, claimed } of candidates) {
     const items = Array.isArray(row.items) ? row.items : [];
     if (items.length === 0) continue;
+    const email = String(row.email ?? "").trim().toLowerCase();
+    if (!email) continue;
 
     // UNSUBSCRIBED SHOPPERS ARE SKIPPED BEFORE ANYTHING IS WRITTEN.
     //
@@ -498,92 +738,99 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     // shopper produces NO coupon, NO reservation row and NO send attempt at all.
     // It is re-checked each sweep rather than recorded, so re-subscribing
     // restores normal service by itself.
-    if (await isMarketingSuppressed(row.email)) continue;
+    if (await isMarketingSuppressed(email)) continue;
+
+    // THEY ALREADY BOUGHT. The payment webhook marks carts recovered by email,
+    // and it is the primary exit; this is the second line for the case where
+    // that mark did not land (a webhook retry that never came, an order taken
+    // through a path that forgot to call it). A recovery email to someone who
+    // paid an hour ago is the single most irritating message this store can
+    // send, so the sequence ends here as well.
+    const firstSeenAt = new Date(row.first_seen_at).getTime();
+    const paidSince = (context.paidOrders.get(email) ?? []).find((order) => order.at >= firstSeenAt);
+    if (paidSince) {
+      await markRecoveredLate(String(row.id), paidSince.orderId);
+      result.recoveredLate++;
+      continue;
+    }
+
+    // A NEW sequence waits out the cooldown; one already under way continues.
+    if (claimed.size === 0) {
+      const recent = context.lastRecoverySendAt.get(email);
+      if (recent && recent.cartId !== String(row.id) && now - recent.at < RECOVERY_SEQUENCE_COOLDOWN_MS) {
+        result.heldForCooldown++;
+        continue;
+      }
+    }
 
     const name = row.customer_name ?? "";
+    const cartId = String(row.id);
+    const base = { name, items, cartValueCents: row.cart_value_cents };
+    let sent = false;
 
-    if (config.t30mEnabled && elapsedMs >= STAGE_DUE_AFTER_MS.t30m) {
-      const sent = await reserveAndSendStage({
-        cartId: row.id,
-        stage: "t30m",
-        email: row.email,
+    if (stage === "t30m") {
+      sent = await reserveAndSendStage({
+        cartId, stage, email,
         campaignType: "cart_recovery_t30m",
         templateKey: "cartRecoveryT30mTemplate",
-        buildTemplate: (url) => cartRecoveryT30mTemplate({ name, items, cartValueCents: row.cart_value_cents, restoreUrl: url }),
+        buildTemplate: (url) => cartRecoveryT30mTemplate({ ...base, restoreUrl: url }),
       });
-      if (sent) result.t30mSent += 1;
-    }
-
-    if (config.t12hEnabled && elapsedMs >= STAGE_DUE_AFTER_MS.t12h) {
-      const sent = await reserveAndSendStage({
-        cartId: row.id,
-        stage: "t12h",
-        email: row.email,
+    } else if (stage === "t12h") {
+      sent = await reserveAndSendStage({
+        cartId, stage, email,
         campaignType: "cart_recovery_t12h",
         templateKey: "cartRecoveryT12hTemplate",
-        buildTemplate: (url) => cartRecoveryT12hTemplate({ name, items, cartValueCents: row.cart_value_cents, restoreUrl: url }),
+        buildTemplate: (url) => cartRecoveryT12hTemplate({ ...base, restoreUrl: url }),
       });
-      if (sent) result.t12hSent += 1;
-    }
-
-    if (config.t24hEnabled && elapsedMs >= STAGE_DUE_AFTER_MS.t24h) {
-      // C-06: the mint is handed to reserveAndSendStage rather than performed
-      // here, so it cannot run until the (cart, stage) slot is claimed. Minting
-      // first, then claiming, is what let a failed send re-mint on every sweep —
-      // 2,994 passes and 335 live coupons in production.
-      const sent = await reserveAndSendStage({
-        cartId: row.id,
-        stage: "t24h",
-        email: row.email,
+    } else if (stage === "t24h") {
+      // No code here any more. The second message answers the questions a
+      // first-time buyer of a research compound actually has — testing,
+      // shipping, who to ask — which is worth more than five percent to the
+      // people who were hesitating, and costs nothing for the people who were
+      // merely busy.
+      sent = await reserveAndSendStage({
+        cartId, stage, email,
         campaignType: "cart_recovery_t24h",
         templateKey: "cartRecoveryT24hTemplate",
-        mintCoupon: () => mintCartRecoveryCoupon(row.email, config.discountPercent, config.couponExpirationHours),
-        buildTemplate: (url, coupon) => cartRecoveryT24hTemplate({
-          name,
-          items,
-          cartValueCents: row.cart_value_cents,
+        buildTemplate: (url) => cartRecoveryT24hTemplate({ ...base, restoreUrl: url }),
+      });
+    } else {
+      const lastPaid = context.paidOrders.get(email)?.[0]?.at ?? null;
+      const discountAllowed = config.discountPercent > 0 && recoveryDiscountAllowed({
+        lastRecoveryCouponAt: context.lastRecoveryCouponAt.get(email) ?? null,
+        lastPaidAt: lastPaid,
+        now,
+      });
+
+      // C-06 and K-05 both hold here: the claim comes first, and any code the
+      // email advertises is one the database will honour at the till. When the
+      // discount is not allowed the message still goes — it is the last note
+      // about this cart either way — it simply carries no code.
+      sent = await reserveAndSendStage({
+        cartId, stage, email,
+        campaignType: "cart_recovery_t72h",
+        templateKey: "cartRecoveryT72hTemplate",
+        // Not allowed a NEW code: re-offer one this cart already holds, if it
+        // is live, and otherwise send without. Allowed: the cart's own live
+        // code first, a fresh mint second — and a stage that can mint nothing
+        // waits for the next sweep rather than promising a code it lacks.
+        mintCoupon: discountAllowed
+          ? () => resolveLastChanceCoupon(cartId, email, config.discountPercent, config.couponExpirationHours)
+          : () => findLiveCouponForCart(cartId),
+        couponRequired: discountAllowed,
+        buildTemplate: (url, coupon) => cartRecoveryT72hTemplate({
+          ...base,
           restoreUrl: url,
           couponCode: coupon?.code ?? "",
+          discountPercent: coupon ? config.discountPercent : 0,
           // K-01. Vercel runs UTC, so a bare toLocaleString told a Pacific
           // customer 10 PM for a code that died at 3 PM their time.
           expiresAt: coupon?.expiresAt ? formatDisplayDate(coupon.expiresAt, "datetime") ?? "" : "",
         }),
       });
-      if (sent) result.t24hSent += 1;
     }
 
-    if (config.t72hEnabled && elapsedMs >= STAGE_DUE_AFTER_MS.t72h) {
-      // Both fixes, and they need each other.
-      //
-      // C-06 says claim the slot BEFORE resolving a coupon, so a failed send can
-      // never re-mint. K-05 says the coupon this email advertises must be one
-      // the database will actually honour — the old code invented the literal
-      // string "SEE PREVIOUS EMAIL" and an expiry no row held, and simply
-      // re-offering t24h's code is not enough either: under the shipped
-      // defaults that code is already 24 hours dead by the time this stage
-      // fires (t24h and t72h are 48h apart; couponExpirationHours defaults to
-      // 48). resolveLastChanceCoupon re-offers it only while it is still live
-      // and mints a fresh one otherwise, and it runs behind the claim.
-      const sent = await reserveAndSendStage({
-        cartId: row.id,
-        stage: "t72h",
-        email: row.email,
-        campaignType: "cart_recovery_t72h",
-        templateKey: "cartRecoveryT72hTemplate",
-        mintCoupon: () => resolveLastChanceCoupon(
-          row.id, row.email, config.discountPercent, config.couponExpirationHours,
-        ),
-        buildTemplate: (url, coupon) => cartRecoveryT72hTemplate({
-          name,
-          items,
-          cartValueCents: row.cart_value_cents,
-          restoreUrl: url,
-          couponCode: coupon?.code ?? "",
-          expiresAt: coupon?.expiresAt ? formatDisplayDate(coupon.expiresAt, "datetime") ?? "" : "",
-        }),
-      });
-      if (sent) result.t72hSent += 1;
-    }
+    if (sent) result[STAGE_RESULT_KEY[stage]] += 1;
   }
 
   return result;

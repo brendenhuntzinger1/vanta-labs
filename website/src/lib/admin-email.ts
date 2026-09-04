@@ -39,6 +39,17 @@ export type CampaignSummary = {
   cancelled: number;
   opened: number;
   clicked: number;
+  /**
+   * From the provider's delivery webhook, joined through the message id each
+   * send recorded. Zero for sends made before provider_message_id was kept on
+   * campaign rows (2026-09-04), and for SMTP, which returns no id — which is
+   * why these sit beside `sent` rather than being expressed as a rate of it.
+   */
+  delivered: number;
+  bounced: number;
+  complained: number;
+  /** People who used THIS campaign's unsubscribe link. */
+  unsubscribed: number;
   orders: number;
   revenue: number;
 };
@@ -144,10 +155,13 @@ export async function getEmailDashboard(): Promise<EmailDashboard> {
     revenueByCampaign.set(id, entry);
   }
 
+  const deliveryByCampaign = await loadCampaignDeliveryOutcomes((campaignRows ?? []).map((row) => String(row.id)));
+
   const campaigns: CampaignSummary[] = (campaignRows ?? []).map((row) => {
     const id = String(row.id);
     const tally = tallies.get(id) ?? blank();
     const money = revenueByCampaign.get(id) ?? { orders: 0, revenue: 0 };
+    const delivery = deliveryByCampaign.get(id) ?? { delivered: 0, bounced: 0, complained: 0, unsubscribed: 0 };
     return {
       id,
       name: String(row.name ?? ""),
@@ -160,6 +174,7 @@ export async function getEmailDashboard(): Promise<EmailDashboard> {
       completedAt: (row.completed_at as string | null) ?? null,
       recipientCount: Number(row.recipient_count ?? 0),
       ...tally,
+      ...delivery,
       orders: money.orders,
       revenue: Math.round(money.revenue * 100) / 100,
     };
@@ -186,6 +201,82 @@ export async function getEmailDashboard(): Promise<EmailDashboard> {
   );
 
   return { subscribers, campaigns, totals };
+}
+
+type DeliveryOutcomes = { delivered: number; bounced: number; complained: number; unsubscribed: number };
+
+/**
+ * What the provider and the recipients said about each campaign, after the send.
+ *
+ * Sends are joined to email_delivery_events EXACTLY, through the provider
+ * message id the send log keeps, so one person on two campaigns is counted
+ * against the right one. Unsubscribes come from email_suppressions.source,
+ * written by /api/unsubscribe from the `s=` parameter each marketing link
+ * carries. Never throws: a reporting read must not blank the composer.
+ */
+async function loadCampaignDeliveryOutcomes(campaignIds: string[]): Promise<Map<string, DeliveryOutcomes>> {
+  const outcomes = new Map<string, DeliveryOutcomes>();
+  if (campaignIds.length === 0) return outcomes;
+  const entry = (id: string) => {
+    const existing = outcomes.get(id);
+    if (existing) return existing;
+    const fresh = { delivered: 0, bounced: 0, complained: 0, unsubscribed: 0 };
+    outcomes.set(id, fresh);
+    return fresh;
+  };
+
+  try {
+    const { rows: sends } = await readAllRowsBounded<{ reference_id: string | null; provider_message_id: string | null }>(
+      (from, to) => supabaseAdmin
+        .from("email_send_log")
+        .select("reference_id, provider_message_id")
+        .eq("campaign_type", "campaign")
+        .in("reference_id", campaignIds)
+        .not("provider_message_id", "is", null)
+        .order("id", { ascending: true })
+        .range(from, to),
+      { maxRows: 500_000, label: "campaign send-log read" },
+    );
+    const campaignByMessage = new Map<string, string>();
+    for (const row of sends) {
+      if (row.provider_message_id && row.reference_id) campaignByMessage.set(row.provider_message_id, row.reference_id);
+    }
+
+    const ids = [...campaignByMessage.keys()];
+    const CHUNK = 200;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const { data } = await supabaseAdmin
+        .from("email_delivery_events")
+        .select("provider_message_id, kind")
+        .in("provider_message_id", ids.slice(i, i + CHUNK));
+      for (const row of (data ?? []) as Array<{ provider_message_id: string | null; kind: string }>) {
+        const campaignId = row.provider_message_id ? campaignByMessage.get(row.provider_message_id) : undefined;
+        if (!campaignId) continue;
+        const tally = entry(campaignId);
+        if (row.kind === "delivered") tally.delivered++;
+        else if (row.kind === "hard_bounce" || row.kind === "soft_bounce") tally.bounced++;
+        else if (row.kind === "complaint") tally.complained++;
+      }
+    }
+  } catch (error) {
+    console.error("[admin-email] delivery outcome read failed", error);
+  }
+
+  try {
+    const { data } = await supabaseAdmin
+      .from("email_suppressions")
+      .select("source")
+      .in("source", campaignIds.map((id) => `campaign:${id}`));
+    for (const row of (data ?? []) as Array<{ source: string | null }>) {
+      const id = String(row.source ?? "").replace(/^campaign:/, "");
+      if (id) entry(id).unsubscribed++;
+    }
+  } catch {
+    // The `source` column is added by email-lifecycle-2026-09-04.sql; until
+    // then unsubscribes simply read as zero.
+  }
+
+  return outcomes;
 }
 
 /**

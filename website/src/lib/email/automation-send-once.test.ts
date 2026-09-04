@@ -54,6 +54,8 @@ vi.mock("@/lib/supabase-server", () => {
       select: () => builder,
       eq: (col: string, val: string) => { filters[col] = val; return builder; },
       neq: () => builder,
+      is: () => builder,
+      gte: () => builder,
       order: () => builder,
       maybeSingle: async () => {
         if (name === "email_suppressions") {

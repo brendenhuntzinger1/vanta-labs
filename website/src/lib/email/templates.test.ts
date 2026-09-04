@@ -52,8 +52,6 @@ describe("customer emails never reference the ambassador program", () => {
       items: [{ name: "Sample", quantity: 1 }],
       cartValueCents: 5000,
       restoreUrl: "https://vantalabsresearch.com/cart/restore",
-      couponCode: "SAVE5",
-      expiresAt: "soon",
     }),
   ];
 

@@ -91,6 +91,11 @@ vi.mock("@/lib/supabase-server", () => {
         _excludeFailed: false,
         select: () => b,
         eq: () => b,
+        // The quiet-period read (frequency.ts) chains these; it reads
+        // recipient_email/sent_at, which this fake does not carry, so it sees
+        // nobody recently mailed and gates nothing here.
+        gte: () => b,
+        order: () => b,
         neq(column: string, value: string) {
           if (column === "status" && value === "failed") {
             (b as { _excludeFailed: boolean })._excludeFailed = true;
@@ -171,9 +176,12 @@ vi.mock("@/lib/supabase-server", () => {
       select: () => noop,
       eq: () => noop,
       neq: () => noop,
+      is: () => noop,
+      gte: () => noop,
       insert: async () => ({ error: null }),
       async range() { return { data: [], error: null }; },
-      async order() { return { data: [], error: null }; },
+      order: () => noop,
+      then(resolve: (v: unknown) => unknown) { return Promise.resolve({ data: [], error: null }).then(resolve); },
     };
     return noop;
   };
@@ -190,7 +198,7 @@ vi.mock("@/lib/supabase-server", () => {
                     id: `u${i}`,
                     email,
                     // Well past any delay_days window.
-                    created_at: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString(),
+                    created_at: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
                   }))
                 : [],
             },

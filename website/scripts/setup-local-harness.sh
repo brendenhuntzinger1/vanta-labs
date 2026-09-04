@@ -152,7 +152,8 @@ echo "==> post-parity migrations"
 # DEFAULT browser-test target, so that false negative is the expensive kind.
 for f in referral-orders-commission-lifecycle referral-orders-manual-review-status \
          refund-exactly-once-indexes pending-emails-order-link automation-send-once auth-email-debounce \
-         affiliate-email-system email-automation-tracking customer-offers coupon-free-shipping; do
+         affiliate-email-system email-automation-tracking customer-offers coupon-free-shipping \
+         email-delivery-event-log email-lifecycle-2026-09-04; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
 done
 
