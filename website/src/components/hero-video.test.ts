@@ -481,8 +481,10 @@ describe("an app's browser gets a still hero, never a clip", () => {
   it("creates no video at all in an in-app browser", () => {
     expect(hero).toContain("detectInAppBrowser");
     // The still-only branch is chosen by data, and it is what suppresses the
-    // source. `src={still ? null : src}` is the whole mechanism.
-    expect(hero).toMatch(/src=\{still \? null : src\}/);
+    // source. `still` must be tested FIRST, ahead of which cut of the film this
+    // screen would otherwise get, or a phone in an in-app browser would fetch a
+    // clip to decode after all.
+    expect(hero).toMatch(/src=\{still \? null : phone \? phoneSrc : src\}/);
     // ...and a null source must short-circuit BEFORE the video element exists.
     const nullGuard = hero.indexOf("if (src === null)");
     const createVideo = hero.indexOf('document.createElement("video")');
@@ -497,7 +499,10 @@ describe("an app's browser gets a still hero, never a clip", () => {
   });
 
   it("keeps the animation everywhere else", () => {
-    expect(hero).toContain("return <HeroVialCanvas");
+    expect(hero).toContain("<HeroVialCanvas");
+    // And the poster follows the clip, so the still a visitor sees is always
+    // the opening frame of the film they would have been played.
+    expect(hero).toMatch(/poster=\{phone \? phonePoster : poster\}/);
   });
 
   it("recognises the browsers that actually cause this", () => {
@@ -883,6 +888,12 @@ describe("the shipped hero media cannot show a bright edge", () => {
   it.skipIf(!ffmpeg)("the still and the clip are the same picture", () => {
     // They are painted into the same canvas one after the other, so a mismatch
     // shows up as a jump the moment playback starts.
+    //
+    // It is now the clip's OWN FIRST FRAME, which is the strongest form of this
+    // and the reason the comparison moved off frame 29. The clip is rotated to
+    // start where the vial's label is turned away from camera (see LOOP_START in
+    // scripts/build-hero-media.mjs), and the poster is derived from the same
+    // frame number, so the two are the same picture by construction.
     const poster = "public/images/hero-vial-poster.jpg";
     const clip = "public/videos/vanta-labs-hero-opt.mp4";
     const grab = (file: string, filters: string) =>
@@ -893,10 +904,94 @@ describe("the shipped hero media cannot show a bright edge", () => {
         { maxBuffer: 1 << 24 },
       );
     const a = grab(poster, "");
-    const b = grab(clip, "select='eq(n\\,29)',");
+    const b = grab(clip, "select='eq(n\\,0)',");
     let diff = 0;
     for (let i = 0; i < a.length; i++) diff += Math.abs(a[i] - b[i]);
-    expect(diff / a.length, "the poster is not the clip's frame 29").toBeLessThan(6);
+    expect(diff / a.length, "the poster is not the clip's opening frame").toBeLessThan(6);
+  });
+
+  // -------------------------------------------------------------------------
+  // AND THE OPENING FRAME IS ONE WHERE THE LABEL IS TURNED AWAY.
+  //
+  // The vial's printed label is black type on white at roughly the size of the
+  // headline, and a full-bleed phone hero puts the two in the same place. No
+  // scrim fixes that — a wash multiplies the label's white and its black by the
+  // same factor, so the ratio the eye reads type by survives any alpha; at an
+  // alpha that measured 43/255 behind the headline, well inside the 118 budget,
+  // "GHK-Cu" still read straight across it.
+  //
+  // The film solves it: the vial turns, and for a two-second window the label
+  // is edge-on and not legible. The clip is rotated to start there, so the
+  // first paint — and the still that reduced-motion visitors keep — has no type
+  // in it to compete.
+  // -------------------------------------------------------------------------
+  it.skipIf(!ffmpeg)("the phone pair is the same picture too", () => {
+    const grab = (file: string, filters: string) =>
+      execFileSync(
+        "ffmpeg",
+        ["-v", "error", "-i", file, "-vf", `${filters}scale=64:64`, "-frames:v", "1",
+         "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+        { maxBuffer: 1 << 24 },
+      );
+    const a = grab("public/images/hero-vial-poster-phone.jpg", "");
+    const b = grab("public/videos/vanta-labs-hero-phone.mp4", "select='eq(n\\,0)',");
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) diff += Math.abs(a[i] - b[i]);
+    expect(diff / a.length, "the phone still is not the phone clip's opening frame")
+      .toBeLessThan(6);
+  });
+
+  it.skipIf(!ffmpeg)("the phone clip has a black border too", () => {
+    for (const frame of [0, 40, 80, 120, 160, 200, 240]) {
+      expect(
+        brightestBorder("public/videos/vanta-labs-hero-phone.mp4", `select='eq(n\\,${frame})',`),
+        `frame ${frame} of the phone clip has a bright border`,
+      ).toBeLessThanOrEqual(INDISTINGUISHABLE_FROM_THE_PAGE);
+    }
+    expect(brightestBorder("public/images/hero-vial-poster-phone.jpg", ""))
+      .toBeLessThanOrEqual(INDISTINGUISHABLE_FROM_THE_PAGE);
+  });
+
+  it.skipIf(!ffmpeg)("opens on a frame with no legible label", () => {
+    /** Horizontal edge energy over the label band: printed type, essentially. */
+    const typeEnergy = (file: string, filters: string) => {
+      const size = 480;
+      const raw = execFileSync(
+        "ffmpeg",
+        ["-v", "error", "-i", file, "-vf", `${filters}scale=${size}:${size},format=gray`,
+         "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+        { maxBuffer: 1 << 26 },
+      );
+      const at = (x: number, y: number) => raw[y * size + x];
+      const x0 = Math.floor(size * 0.34);
+      const x1 = Math.floor(size * 0.66);
+      let peak = 0;
+      for (let y = Math.floor(size * 0.4); y < size * 0.8; y++) {
+        let e = 0;
+        for (let x = x0 + 1; x < x1; x++) e += Math.abs(at(x, y) - at(x - 1, y));
+        peak = Math.max(peak, e / (x1 - x0));
+      }
+      return peak;
+    };
+    // Measured across all 241 frames of the master: 43 with the label facing
+    // camera, 3-7 through the turned-away window. 12 sits well clear of both.
+    expect(
+      typeEnergy("public/videos/vanta-labs-hero-phone.mp4", "select='eq(n\\,0)',"),
+      "the phone clip opens with the label facing camera",
+    ).toBeLessThan(12);
+    expect(
+      typeEnergy("public/images/hero-vial-poster-phone.jpg", ""),
+      "the phone still has the label facing camera",
+    ).toBeLessThan(12);
+
+    // And a wide screen still gets the film as shot. Its copy is a column
+    // beside the vial, so there is no collision to trade the studio opening for
+    // — the turned-away window is a darker, moodier setup and this is the
+    // assertion that stops it being handed to everyone by accident.
+    expect(
+      typeEnergy("public/videos/vanta-labs-hero-opt.mp4", "select='eq(n\\,0)',"),
+      "the desktop clip no longer opens on the film as shot",
+    ).toBeGreaterThan(20);
   });
 });
 

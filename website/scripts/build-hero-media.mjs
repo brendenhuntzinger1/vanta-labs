@@ -56,14 +56,57 @@ const MASTER_VIDEO = join(PUBLIC, "videos/vanta-labs-hero.mp4");
 /** What the page actually loads: 720x720, Constrained Baseline, no audio. */
 const OUT_VIDEO = join(PUBLIC, "videos/vanta-labs-hero-opt.mp4");
 const OUT_POSTER = join(PUBLIC, "images/hero-vial-poster.jpg");
+/** The same film, rotated for phones. See LOOP_START. */
+const OUT_VIDEO_PHONE = join(PUBLIC, "videos/vanta-labs-hero-phone.mp4");
+const OUT_POSTER_PHONE = join(PUBLIC, "images/hero-vial-poster-phone.jpg");
 /**
- * The still is master frame 29 — established by comparing the poster that has
- * always shipped against the first thirty frames of the master, where 29 is the
- * closest at a mean absolute error of 1.7/255. Deriving it rather than
- * re-processing the shipped JPEG keeps the still and the clip's opening frame
- * the same picture.
+ * WHERE THE PHONE'S LOOP STARTS, AND WHY ONLY THE PHONE'S.
+ *
+ * The vial's printed label — "VANTA LABS / GHK-Cu / 50 mg" — is black type on
+ * white at roughly the size of the homepage headline. On a phone the hero is
+ * full bleed and the copy sits ON the picture, so the two land in the same
+ * place. That collision cannot be scrimmed away: a wash multiplies the label's
+ * white AND its black by the same factor, so the ratio the eye reads type by
+ * survives any alpha. Measured at 390x844 with the copy hidden, the ground
+ * behind the headline was 43/255 — well inside the 118 that white type needs
+ * for 4.5:1 — and "GHK-Cu" still read straight across it. Cropping the frame
+ * instead was tried and taken back out: it magnified the shot 43% and cost the
+ * hero a third of its light.
+ *
+ * The film solves it. The vial turns, and for frames 136-184 the label is
+ * edge-on and not legible at all — measured across all 241 frames by horizontal
+ * edge energy over the label band, 43 facing camera against 3-7 through that
+ * window. Rotating the loop to start there gives a phone an opening with no
+ * type in it to compete with the headline.
+ *
+ * A WIDE SCREEN GETS THE FILM AS SHOT, AND THAT IS DELIBERATE. Its copy is a
+ * column on the LEFT and the vial is biased right, so the two never touch —
+ * there is no collision to fix. And the turned-away window is not a free
+ * substitution: the vial has descended into water by then, so it is a moodier,
+ * darker setup than the studio opening. Rendered at 1440x900 it is visibly less
+ * clean than what ships today. A phone-only asset costs a second file that only
+ * phones fetch; giving it to everyone would cost the desktop hero.
+ *
+ * The rotation itself is free. The film's own wrap (frame 240 -> 0) measures a
+ * 9.6/255 step, and re-ordering as [136..240, 0..135] simply moves that step
+ * into the middle of the loop; the new wrap is 135 -> 136, two adjacent frames,
+ * measured at 3.5 — the same as ordinary motion, and smoother than the join it
+ * replaces.
+ *
+ * Set this to 0 and the phone pair becomes a copy of the desktop pair.
  */
-const POSTER_FRAME = 29;
+const LOOP_START = 136;
+
+/**
+ * The still is always the clip's OWN first frame.
+ *
+ * It used to be master frame 29, chosen to match the shipped poster while the
+ * clip also started at zero. The rule underneath has not changed and is the one
+ * that matters: a still that is not the clip's opening frame shows up as a jump
+ * the moment playback starts. Deriving both from one frame number per variant
+ * keeps that true by construction rather than by luck.
+ */
+const POSTER_FRAME = 0;
 
 /**
  * The guard vignette, in normalised frame coordinates where the centre is 0 and
@@ -130,19 +173,33 @@ try {
   //
   // Processed in 10-bit and dithered back down: crushing a smooth studio
   // gradient towards black in 8 bits bands visibly.
-  run([
-    "-i", MASTER_VIDEO,
-    "-i", join(tmp, "vignette-720.png"),
-    "-filter_complex",
-    "[0:v]scale=720:720:flags=lanczos,format=gbrp10le,format=rgba[v];" +
-      "[v][1:v]overlay=0:0,format=yuv420p",
-    "-an",
-    "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.1",
-    "-preset", "veryslow", "-crf", "26", "-maxrate", "700k", "-bufsize", "1400k",
-    "-pix_fmt", "yuv420p", "-r", "24", "-g", "48",
-    "-movflags", "+faststart",
-    OUT_VIDEO,
-  ]);
+  //
+  // `startFrame` rotates the loop: 0 is the film as shot, which is what a wide
+  // screen gets. See LOOP_START for why a phone gets a different one and why
+  // re-ordering the frames costs nothing.
+  const encode = (startFrame, out) => {
+    const rotate = startFrame
+      ? "split=2[s0][s1];" +
+        `[s0]trim=start_frame=${startFrame},setpts=PTS-STARTPTS[tail];` +
+        `[s1]trim=end_frame=${startFrame},setpts=PTS-STARTPTS[head];` +
+        "[tail][head]concat=n=2:v=1:a=0[v];"
+      : "null[v];";
+    run([
+      "-i", MASTER_VIDEO,
+      "-i", join(tmp, "vignette-720.png"),
+      "-filter_complex",
+      // Rotated BEFORE the vignette is overlaid, so every output frame carries
+      // the guard whichever order the frames end up in.
+      `[0:v]scale=720:720:flags=lanczos,format=gbrp10le,format=rgba,${rotate}` +
+        "[v][1:v]overlay=0:0,format=yuv420p",
+      "-an",
+      "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.1",
+      "-preset", "veryslow", "-crf", "26", "-maxrate", "700k", "-bufsize", "1400k",
+      "-pix_fmt", "yuv420p", "-r", "24", "-g", "48",
+      "-movflags", "+faststart",
+      out,
+    ]);
+  };
 
   // POSTER, at the master's own 960x960.
   //
@@ -151,18 +208,32 @@ try {
   // overlay chain limited-range, and pure black comes out at 16/255 — a grey
   // border, which is precisely the edge this script exists to remove. Measured
   // both ways; the corner pixel is 16,16,16 one way and 0,0,0 the other.
-  run([
-    "-i", MASTER_VIDEO,
-    "-i", join(tmp, "vignette-960.png"),
-    "-filter_complex",
-    `[0:v]select='eq(n\\,${POSTER_FRAME})',format=gbrp10le,format=rgba[v];` +
-      "[v][1:v]overlay=0:0,format=rgb24",
-    "-frames:v", "1", "-pix_fmt", "yuvj420p", "-q:v", "4",
-    join(tmp, "poster.jpg"),
-  ]);
-  execFileSync("cp", [join(tmp, "poster.jpg"), OUT_POSTER]);
+  //
+  // The frame is the clip's own opening one, so the still and the first painted
+  // video frame are the same picture and playback cannot start with a jump.
+  const still = (frame, out, name) => {
+    run([
+      "-i", MASTER_VIDEO,
+      "-i", join(tmp, "vignette-960.png"),
+      "-filter_complex",
+      `[0:v]select='eq(n\\,${frame})',format=gbrp10le,format=rgba[v];` +
+        "[v][1:v]overlay=0:0,format=rgb24",
+      "-frames:v", "1", "-pix_fmt", "yuvj420p", "-q:v", "4",
+      join(tmp, name),
+    ]);
+    execFileSync("cp", [join(tmp, name), out]);
+  };
 
-  for (const f of [OUT_VIDEO, OUT_POSTER]) {
+  // The film as shot, for every screen wide enough to put its copy beside the
+  // vial rather than on it.
+  encode(POSTER_FRAME, OUT_VIDEO);
+  still(POSTER_FRAME, OUT_POSTER, "poster.jpg");
+
+  // And the phone's, rotated to the window where the label is turned away.
+  encode(LOOP_START, OUT_VIDEO_PHONE);
+  still(LOOP_START, OUT_POSTER_PHONE, "poster-phone.jpg");
+
+  for (const f of [OUT_VIDEO, OUT_POSTER, OUT_VIDEO_PHONE, OUT_POSTER_PHONE]) {
     console.log(`${f.replace(PUBLIC, "public/")}  ${(statSync(f).size / 1024).toFixed(1)} KB`);
   }
 } finally {
