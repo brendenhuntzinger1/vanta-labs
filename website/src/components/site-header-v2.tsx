@@ -11,10 +11,16 @@ const NAV_LINKS = [
   { href: "/wholesale", label: "Wholesale" },
   { href: "/partner", label: "Partner Program" },
   { href: "/contact", label: "Contact us" },
-  // COA Library sits last and intentionally understated — a quiet reference
-  // link, not a primary destination.
-  { href: "/coa-library", label: "COA Library", discreet: true },
+  { href: "/coa-library", label: "COA Library" },
 ];
+
+// One treatment for every link. Membership used to sit in a filled white pill
+// and COA Library was dimmed to a "quiet reference"; both were asked to match
+// their neighbours, so the row now has no per-link styling at all.
+const DESKTOP_LINK_CLASS =
+  "vl-focus-ring rounded-full px-3.5 py-2 text-[0.72rem] font-medium uppercase tracking-[0.16em] text-white/75 transition hover:text-white";
+const MOBILE_LINK_CLASS =
+  "vl-focus-ring flex min-h-[44px] items-center rounded-lg px-3 py-3 text-sm uppercase tracking-[0.12em] text-white/85 transition hover:bg-white/5 hover:text-white";
 
 function CartIcon() {
   return (
@@ -138,13 +144,7 @@ export function SiteHeaderV2() {
               key={link.href}
               href={link.href}
               aria-current={isActive(link.href) ? "page" : undefined}
-              className={`vl-focus-ring rounded-full px-3.5 py-2 text-[0.72rem] font-medium uppercase tracking-[0.16em] transition ${
-                link.href === "/membership"
-                  ? "bg-white text-black shadow-sm ring-1 ring-inset ring-white/70 hover:bg-white/90"
-                  : link.discreet
-                    ? "text-[0.66rem] font-normal tracking-[0.14em] text-white/40 hover:text-white/70"
-                    : "text-white/75 hover:text-white"
-              }`}
+              className={DESKTOP_LINK_CLASS}
             >
               {link.label}
             </Link>
@@ -240,13 +240,7 @@ export function SiteHeaderV2() {
                 href={link.href}
                 onClick={() => setMobileNavOpen(false)}
                 aria-current={isActive(link.href) ? "page" : undefined}
-                className={`vl-focus-ring flex min-h-[44px] items-center rounded-lg px-3 py-3 text-sm uppercase tracking-[0.12em] transition ${
-                  link.href === "/membership"
-                    ? "bg-white text-black ring-1 ring-inset ring-white/70 hover:bg-white/90"
-                    : link.discreet
-                      ? "text-xs text-white/45 hover:bg-white/5 hover:text-white/75"
-                      : "text-white/85 hover:bg-white/5 hover:text-white"
-                }`}
+                className={MOBILE_LINK_CLASS}
               >
                 {link.label}
               </Link>

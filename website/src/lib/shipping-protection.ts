@@ -9,20 +9,41 @@
 // $2.49/$3.49/$4.99 tiers), so coverage cost scales with the value being
 // protected.
 //
-// OFF BY DEFAULT, AND NEVER PRE-SELECTED. The published Shipping Policy says so
-// in those words, so this is a promise to customers rather than a preference:
-// pre-ticking a paid add-on while telling people in writing that it is never
-// pre-ticked is what regulators call negative-option billing. This comment used
-// to claim protection was "ADDED BY DEFAULT", which contradicted both the policy
-// and the code (cart-context.tsx: useState(false)) — a future change made to
-// match the comment would have reintroduced exactly that.
-// See shipping-protection-default.test.ts.
+// PRE-SELECTED BY DEFAULT — BUT ONLY WHERE THE SHOPPER CAN SEE AND REMOVE IT.
+//
+// Two rules, and they are load-bearing together rather than separately:
+//
+//   1. The cart drawer, /cart and /checkout start with protection ON. Each of
+//      those surfaces renders a checkbox with the fee beside it and removes the
+//      charge in one click, and the published Shipping Policy says so in the
+//      store's own words. Code and policy are two halves of one promise: change
+//      this default and legal-content.ts changes in the same commit.
+//      See shipping-protection-default.test.ts.
+//
+//   2. Express/wallet checkout (Apple Pay, Google Pay) does NOT inherit that
+//      default. A wallet can go from tap to authorized payment without ever
+//      rendering our checkbox, so protection rides along there only when the
+//      shopper explicitly chose it first — cart-context exposes
+//      `shippingProtectionChosen` for exactly this, and the express button
+//      sends that rather than `shippingProtectionEnabled`.
+//      See shipping-protection-wallet.test.ts.
+//
+// Rule 2 is what keeps rule 1 honest. Pre-ticking an add-on the shopper can see
+// and untick is a default; pre-ticking one they never see before paying is a
+// silent charge, and the two are only distinguishable by which surface is
+// asking.
+//
+// Pricing: a flat PERCENTAGE of the merchandise subtotal, admin-adjustable in
+// Control Center -> Shipping -> "Shipping protection rate (%)". The rate is
+// carried on ShippingConfig, so the client preview and the authoritative server
+// total (quote-order.ts) read the one number and cannot drift. The constant
+// below is only the fallback for a blank/absent setting.
 //
 // The UI shows the DOLLAR amount of the fee next to the checkbox but not the
-// percentage, per the owner's preference. That amount is what ticking the box
-// WOULD cost — computed from the subtotal, not from whether it is currently
-// ticked — so the shopper decides against the real price rather than a $0.00
-// that only becomes the real price once they have agreed to it.
+// percentage, per the owner's preference. That amount is what protection costs
+// whether or not the box is currently ticked — computed from the subtotal, not
+// from the tick — so a shopper who unticks it still sees the real price of
+// putting it back rather than $0.00.
 // See shipping-protection-offer-price.test.ts.
 
 export const SHIPPING_PROTECTION_PERCENT = 4;

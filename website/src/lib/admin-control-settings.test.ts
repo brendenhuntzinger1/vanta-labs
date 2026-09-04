@@ -279,3 +279,64 @@ describe("coupon policy", () => {
     expect((await getCouponPolicyConfig()).allowStacking).toBe(false);
   });
 });
+
+describe("the shipping protection rate", () => {
+  // A PERCENT of the merchandise subtotal, newly owner-editable in Control
+  // Center -> Shipping. It multiplies every protected order, and protection is
+  // now pre-selected, so a value this reader lets through reaches essentially
+  // every cart. Same clamp reasoning as the processor fee above, with one
+  // extra hazard: the fee is added ON TOP of the total rather than taken out
+  // of it, so an unclamped "400" would quintuple what the shopper is charged.
+
+  it("falls back to the coded default when nothing is stored", async () => {
+    const { getShippingConfig } = await mod();
+    const { DEFAULT_SHIPPING_CONFIG } = await import("@/lib/shipping");
+    expect((await getShippingConfig()).protectionPercent)
+      .toBe(DEFAULT_SHIPPING_CONFIG.protectionPercent);
+  });
+
+  it("applies a rate the owner actually set", async () => {
+    state.rows = [control("shipping", "protection_percent", "6.5")];
+    const { getShippingConfig } = await mod();
+    expect((await getShippingConfig()).protectionPercent).toBe(6.5);
+  });
+
+  it("treats an explicit zero as a real choice, making protection free", async () => {
+    // Not the same as blank. An owner who types 0 wants a $0.00 add-on, and
+    // collapsing that to the 4% default would charge for something they had
+    // deliberately made free.
+    state.rows = [control("shipping", "protection_percent", "0")];
+    const { getShippingConfig } = await mod();
+    expect((await getShippingConfig()).protectionPercent).toBe(0);
+  });
+
+  describe("falls back to the default rather than applying a value a text box can produce", () => {
+    for (const stored of ["-1", "400", "100.01", "4%", "abc", "", "   ", "NaN"]) {
+      it(JSON.stringify(stored), async () => {
+        state.rows = [control("shipping", "protection_percent", stored)];
+        const { getShippingConfig } = await mod();
+        const { DEFAULT_SHIPPING_CONFIG } = await import("@/lib/shipping");
+        expect((await getShippingConfig()).protectionPercent)
+          .toBe(DEFAULT_SHIPPING_CONFIG.protectionPercent);
+      });
+    }
+  });
+
+  it("survives a database failure with the default, because it sits in the checkout path", async () => {
+    state.throwOnRead = true;
+    const { getShippingConfig } = await mod();
+    const { DEFAULT_SHIPPING_CONFIG } = await import("@/lib/shipping");
+    expect((await getShippingConfig()).protectionPercent)
+      .toBe(DEFAULT_SHIPPING_CONFIG.protectionPercent);
+  });
+
+  it("prices the fee from the configured rate, not the coded one", async () => {
+    // The reader and the pricer, together: this is the pair that has to agree
+    // for the cart preview and the server total to match.
+    state.rows = [control("shipping", "protection_percent", "10")];
+    const { getShippingConfig } = await mod();
+    const { calculateShippingProtectionFee } = await import("@/lib/shipping-protection");
+    const percent = (await getShippingConfig()).protectionPercent;
+    expect(calculateShippingProtectionFee(80, percent)).toBeCloseTo(8, 2);
+  });
+});

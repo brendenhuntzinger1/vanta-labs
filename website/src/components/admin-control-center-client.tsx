@@ -99,6 +99,7 @@ export function AdminControlCenterClient() {
   const [shippingIntlFreeThreshold, setShippingIntlFreeThreshold] = useState("");
   const [shippingNaFlatRate, setShippingNaFlatRate] = useState("");
   const [shippingNaFreeThreshold, setShippingNaFreeThreshold] = useState("");
+  const [shippingProtectionPercent, setShippingProtectionPercent] = useState("");
   // Sales tax nexus: the states where the store is registered and must
   // collect. Checkout collects tax ONLY for these destinations, at each
   // state's built-in combined rate (override-able below).
@@ -227,6 +228,7 @@ export function AdminControlCenterClient() {
     setShippingIntlFreeThreshold(String(shipping.international_free_shipping_threshold ?? ""));
     setShippingNaFlatRate(String(shipping.north_america_flat_rate ?? ""));
     setShippingNaFreeThreshold(String(shipping.north_america_free_shipping_threshold ?? ""));
+    setShippingProtectionPercent(String(shipping.protection_percent ?? ""));
     const tax = next.tax ?? {};
     setTaxNexusStates(String(tax.nexus_states ?? "").split(",").map((s) => s.trim().toUpperCase()).filter((s) => Boolean(US_STATE_TAX_TABLE[s])));
     setTaxRateOverrides(String(tax.rate_overrides ?? ""));
@@ -368,6 +370,7 @@ export function AdminControlCenterClient() {
       { section: "shipping", key: "international_free_shipping_threshold", value: shippingIntlFreeThreshold },
       { section: "shipping", key: "north_america_flat_rate", value: shippingNaFlatRate },
       { section: "shipping", key: "north_america_free_shipping_threshold", value: shippingNaFreeThreshold },
+      { section: "shipping", key: "protection_percent", value: shippingProtectionPercent },
       { section: "tax", key: "nexus_states", value: taxNexusStates.join(",") },
       { section: "tax", key: "rate_overrides", value: taxRateOverrides },
 
@@ -611,6 +614,13 @@ export function AdminControlCenterClient() {
               <label className="text-zinc-300">Canada free shipping over ($)<input value={shippingNaFreeThreshold} onChange={(e) => setShippingNaFreeThreshold(e.target.value)} placeholder="400" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">International flat rate ($)<input value={shippingIntlFlatRate} onChange={(e) => setShippingIntlFlatRate(e.target.value)} placeholder="60" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">International free shipping over ($)<input value={shippingIntlFreeThreshold} onChange={(e) => setShippingIntlFreeThreshold(e.target.value)} placeholder="600" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              {/* Shipping Protection rate. A PERCENT, not a dollar amount — the
+                  add-on is priced off the merchandise subtotal, so this field
+                  scales the fee on every cart the moment it is saved. Blank
+                  keeps the coded default; a value outside 0-100 is ignored on
+                  read (getShippingConfig falls back to the default) so a typo
+                  cannot multiply an order total. */}
+              <label className="text-zinc-300">Shipping protection rate (%)<input value={shippingProtectionPercent} onChange={(e) => setShippingProtectionPercent(e.target.value)} placeholder={String(DEFAULT_SHIPPING_CONFIG.protectionPercent ?? "")} className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>
           </section>
 

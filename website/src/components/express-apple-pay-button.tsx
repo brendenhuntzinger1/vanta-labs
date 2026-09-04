@@ -145,9 +145,22 @@ export interface ExpressApplePayButtonProps {
 // because `-apple-pay-button` is not in the CSSProperties value union.
 const APPLE_PAY_APPEARANCE = { WebkitAppearance: "-apple-pay-button" } as React.CSSProperties;
 
+// WALLETS READ `shippingProtectionChosen`, NOT `shippingProtectionEnabled`.
+//
+// Shipping Protection is pre-selected in the cart drawer, /cart and /checkout,
+// where it sits next to a visible checkbox showing its price and can be removed
+// in one click. Apple Pay / Google Pay have no such checkbox: the shopper can
+// go from this button to an authorized payment without our UI ever rendering
+// the add-on. Passing the default-on flag through here would bill them for
+// something they were never shown and never agreed to.
+//
+// `shippingProtectionChosen` is true only once the shopper has moved the
+// control themselves — which can only have happened on a surface that was
+// displaying the fee at the time. So express checkout carries protection when
+// it was deliberately chosen, and never merely because it defaults on.
 export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavailable }: ExpressApplePayButtonProps) {
   const router = useRouter();
-  const { items, referralCode, couponCode, shippingProtectionEnabled, closeCart } = useCart();
+  const { items, referralCode, couponCode, shippingProtectionChosen, closeCart } = useCart();
 
   const [session, setSession] = useState<SessionResponse | null>(null);
   const [config, setConfig] = useState<ConfigResponse | null>(null);
@@ -177,9 +190,9 @@ export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavai
         items: items.map((item) => [item.variantId ? `${item.slug}::${item.variantId}` : item.slug, item.quantity]),
         referralCode: referralCode ?? "",
         couponCode: couponCode ?? "",
-        shippingProtectionEnabled,
+        shippingProtectionChosen,
       }),
-    [items, referralCode, couponCode, shippingProtectionEnabled],
+    [items, referralCode, couponCode, shippingProtectionChosen],
   );
 
   // Platform gate. Read through useSyncExternalStore so it is false during SSR
@@ -227,7 +240,7 @@ export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavai
           })),
           referralCode: referralCode ?? undefined,
           couponCode: couponCode ?? undefined,
-          shippingProtection: shippingProtectionEnabled,
+          shippingProtection: shippingProtectionChosen,
           acknowledgements,
         }),
       });
@@ -260,7 +273,7 @@ export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavai
     } finally {
       if (!controller.signal.aborted) setWarming(false);
     }
-  }, [items, referralCode, couponCode, shippingProtectionEnabled, acknowledgements, onUnavailable]);
+  }, [items, referralCode, couponCode, shippingProtectionChosen, acknowledgements, onUnavailable]);
 
   // Re-mint on every input change. sessionId AND amountCents are dropped
   // SYNCHRONOUSLY first: leaving either behind while a new session is in flight

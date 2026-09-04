@@ -3,15 +3,19 @@ import {
   buildCoaStoragePath,
   coaFileKindFromMime,
   coaSearchHaystack,
+  coaStrengthKey,
   compareCoaDocuments,
+  compareCoaDocumentsByStrength,
   formatCoaFileSize,
   formatCoaPurity,
   formatCoaTestDate,
   formatCoaTextResult,
+  listCoaStrengths,
   matchesCoaSearch,
   normalizeCoaDateInput,
   normalizeCoaStatus,
   normalizeCoaText,
+  parseCoaStrengthValue,
   sniffCoaFileType,
   slugifyCoaSegment,
 } from "@/lib/coa-format";
@@ -264,5 +268,88 @@ describe("compareCoaDocuments", () => {
       doc({ id: "undated-a", batchNumber: "A", testDate: null }),
     ].sort(compareCoaDocuments);
     expect(sorted.map((item) => item.id)).toEqual(["dated", "undated-a", "undated-b"]);
+  });
+});
+
+describe("parseCoaStrengthValue", () => {
+  it("reads the number out of a dose label, in milligrams", () => {
+    expect(parseCoaStrengthValue("5mg")).toBe(5);
+    expect(parseCoaStrengthValue("2.5 mg")).toBe(2.5);
+    expect(parseCoaStrengthValue("10 MG")).toBe(10);
+  });
+
+  it("scales micrograms and grams so mixed units still order by dose", () => {
+    expect(parseCoaStrengthValue("500mcg")).toBe(0.5);
+    expect(parseCoaStrengthValue("250µg")).toBe(0.25);
+    expect(parseCoaStrengthValue("1g")).toBe(1000);
+  });
+
+  it("returns null when the label carries no number", () => {
+    expect(parseCoaStrengthValue("")).toBeNull();
+    expect(parseCoaStrengthValue(null)).toBeNull();
+    expect(parseCoaStrengthValue("Standard")).toBeNull();
+  });
+});
+
+describe("compareCoaDocumentsByStrength", () => {
+  it("walks the doses from lowest to highest, by value rather than by text", () => {
+    // "10mg" sorts before "5mg" as a string; a reader stepping through the
+    // doses expects 2.5 → 5 → 10, the order the product's own selector uses.
+    const sorted = [
+      doc({ id: "ten", strength: "10mg", batchNumber: "A" }),
+      doc({ id: "five", strength: "5mg", batchNumber: "B" }),
+      doc({ id: "two-five", strength: "2.5mg", batchNumber: "C" }),
+    ].sort(compareCoaDocumentsByStrength);
+    expect(sorted.map((item) => item.id)).toEqual(["two-five", "five", "ten"]);
+  });
+
+  it("keeps the newest batch first within one dose", () => {
+    const sorted = [
+      doc({ id: "five-old", strength: "5mg", batchNumber: "A", testDate: "2026-01-01" }),
+      doc({ id: "ten", strength: "10mg", batchNumber: "B", testDate: "2026-08-01" }),
+      doc({ id: "five-new", strength: "5mg", batchNumber: "C", testDate: "2026-07-01" }),
+    ].sort(compareCoaDocumentsByStrength);
+    expect(sorted.map((item) => item.id)).toEqual(["five-new", "five-old", "ten"]);
+  });
+
+  it("treats the same dose written differently as one dose", () => {
+    const sorted = [
+      doc({ id: "b", strength: "5 mg", batchNumber: "B", testDate: "2026-01-01" }),
+      doc({ id: "a", strength: "5mg", batchNumber: "A", testDate: "2026-02-01" }),
+    ].sort(compareCoaDocumentsByStrength);
+    expect(sorted.map((item) => item.id)).toEqual(["a", "b"]);
+  });
+
+  it("sends records with no dose to the end, newest first", () => {
+    const sorted = [
+      doc({ id: "none-old", strength: null, batchNumber: "A", testDate: "2026-01-01" }),
+      doc({ id: "none-new", strength: null, batchNumber: "B", testDate: "2026-06-01" }),
+      doc({ id: "ten", strength: "10mg", batchNumber: "C", testDate: "2025-01-01" }),
+    ].sort(compareCoaDocumentsByStrength);
+    expect(sorted.map((item) => item.id)).toEqual(["ten", "none-new", "none-old"]);
+  });
+});
+
+describe("listCoaStrengths", () => {
+  it("lists each documented dose once, in dose order", () => {
+    const strengths = listCoaStrengths([
+      doc({ id: "1", strength: "10mg" }),
+      doc({ id: "2", strength: "5mg" }),
+      doc({ id: "3", strength: "5 mg" }),
+      doc({ id: "4", strength: null }),
+      doc({ id: "5", strength: "15mg" }),
+    ]);
+    expect(strengths).toEqual(["5mg", "10mg", "15mg"]);
+  });
+
+  it("is empty when no record names a dose", () => {
+    expect(listCoaStrengths([doc({ id: "1", strength: null })])).toEqual([]);
+  });
+});
+
+describe("coaStrengthKey", () => {
+  it("collapses spacing and case so grouping matches what a reader means", () => {
+    expect(coaStrengthKey("5 mg")).toBe(coaStrengthKey("5MG"));
+    expect(coaStrengthKey(null)).toBe("");
   });
 });

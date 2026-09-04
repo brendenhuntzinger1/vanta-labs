@@ -74,6 +74,7 @@ export function CartDrawer() {
     shippingProtectionEnabled,
     setShippingProtectionEnabled,
     shippingProtectionFee,
+    shippingProtectionPercent,
     closeCart,
     updateQuantity,
     removeFromCart,
@@ -666,7 +667,7 @@ export function CartDrawer() {
                       <span className="block text-sm font-medium text-white">Shipping protection</span>
                       <span className="block text-xs text-zinc-500">Protect against loss, theft, or damage.</span>
                     </span>
-                    <span className="flex-shrink-0 text-sm font-medium text-zinc-300 tabular-nums">+{formatCartCurrency(calculateShippingProtectionFee(subtotal))}</span>
+                    <span className="flex-shrink-0 text-sm font-medium text-zinc-300 tabular-nums">+{formatCartCurrency(calculateShippingProtectionFee(subtotal, shippingProtectionPercent))}</span>
                   </label>
                   <button
                     type="button"

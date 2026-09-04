@@ -113,17 +113,36 @@ describe("CFG-09/SOT-09: shipping placeholders state the real blank-field defaul
 // CFG-12 / SOT-12 — comments asserting the opposite of the code beside them.
 // ---------------------------------------------------------------------------
 describe("CFG-12/SOT-12: no comment contradicts the code it sits on", () => {
-  it("the cart does not claim shipping protection is added by default", () => {
+  it("the cart's shipping-protection comment matches its actual default", () => {
+    // Shipping protection is now PRE-SELECTED, so this test asserts the
+    // opposite of what it used to — but the rule it enforces is unchanged: the
+    // prose beside the declaration must describe the declaration.
+    //
+    // The old assertion was `expect(cart).toContain("useState(false)")`, which
+    // is satisfied by any of the ~10 unrelated booleans in this file that start
+    // false, so it kept passing after the default flipped and proved nothing.
+    // Anchored to the declaration itself now.
     const cart = source("src/components/cart-context.tsx");
-    expect(cart).toContain("useState(false)");
-    expect(cart).not.toMatch(/Added by DEFAULT/i);
-    expect(cart).not.toMatch(/pre-checked line item/i);
+    const declaration = /const \[shippingProtectionEnabled, setShippingProtectionEnabled\] = useState\(([^)]*)\)/
+      .exec(cart);
+    expect(declaration, "no shippingProtectionEnabled declaration found").toBeTruthy();
+    expect(declaration![1].trim()).toBe("true");
+
+    // ...and the comment above it must not still be arguing for opt-in.
+    expect(cart).not.toMatch(/OFF BY DEFAULT/);
+    expect(cart).toMatch(/PRE-SELECTED BY DEFAULT/);
   });
 
-  it("the wallet breakdown does not claim shipping protection defaults on", () => {
+  it("the wallet breakdown describes the wallet rule, not the cart default", () => {
+    // quote-order builds the line items shown INSIDE the Apple/Google Pay
+    // sheet. Protection is pre-selected in the cart but deliberately not
+    // inherited by that lane, so a comment here claiming either "off by
+    // default" (stale) or "defaults on" (true of the cart, false of this file)
+    // would misdescribe the code beside it.
     const quote = source("src/lib/quote-order.ts");
     expect(quote).not.toContain("paid add-on that defaults on");
-    expect(quote).toContain("off by default and never");
+    expect(quote).not.toContain("off by default and never");
+    expect(quote).toContain("shippingProtectionChosen");
   });
 
   it("payment-methods does not claim the card fee is absorbed by the merchant", () => {
