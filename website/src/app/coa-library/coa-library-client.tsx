@@ -398,7 +398,9 @@ function CoaViewer({
 
         {documents.length > 1 ? (
           <>
-            <div className="flex items-center gap-3 px-5 py-3 sm:px-7">
+            {/* Stacked on a phone: beside the stepper the dose row had ~240px
+                and three doses already scrolled. Side by side from sm up. */}
+            <div className="flex flex-col gap-3 px-5 py-3 sm:flex-row sm:items-center sm:px-7">
               <div className="min-w-0 flex-1 space-y-2">
                 {/* One pill per dose; picking one opens its newest batch. */}
                 {strengths.length > 1 ? (
@@ -447,7 +449,7 @@ function CoaViewer({
               </div>
 
               {/* Previous / next across everything, in dose order. */}
-              <div className="flex flex-shrink-0 items-center gap-1">
+              <div className="flex flex-shrink-0 items-center gap-1 self-end sm:self-auto">
                 <button
                   type="button"
                   onClick={() => previousDocument && selectDocument(previousDocument.id)}

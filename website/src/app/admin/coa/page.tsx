@@ -997,7 +997,7 @@ function DraftPanel({
               }}
               className="rounded-lg bg-cyan-300 px-5 py-2 text-sm font-semibold text-zinc-950 hover:bg-cyan-200 disabled:opacity-40"
             >
-              {saving ? "Saving…" : drafts.length === 1 ? "Save COA" : `Save ${drafts.length} COAs`}
+              {saving ? "Saving…" : drafts.length <= 1 ? "Save COA" : `Save ${drafts.length} COAs`}
             </button>
           </div>
         </div>
