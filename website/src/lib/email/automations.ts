@@ -264,6 +264,12 @@ export function selectAutomationTargets(input: {
   /** Most recent marketing send per address — see frequency.ts. */
   lastMarketingSentAt?: Map<string, number>;
   quietMs?: number;
+  /**
+   * Called for every target that is DUE but held by the quiet period. Nothing
+   * is consumed for it and the next sweep reconsiders it; the caller counts
+   * these as deferred so the sweep's numbers say what actually happened.
+   */
+  onDeferred?: (target: AutomationTarget) => void;
   now: number;
   limit?: number;
 }): AutomationTarget[] {
@@ -282,13 +288,20 @@ export function selectAutomationTargets(input: {
   }
 
   // THE QUIET PERIOD, applied once here for every flow. A recipient mailed by
-  // anything marketing-shaped inside the window is skipped THIS SWEEP and
-  // reconsidered next time; nothing is consumed and no slot is claimed.
-  const quiet = (email: string) => isInQuietPeriod({
-    lastMarketingSentAt: input.lastMarketingSentAt?.get(email),
-    now: input.now,
-    quietMs: input.quietMs,
-  });
+  // anything marketing-shaped inside the window is DEFERRED this sweep and
+  // reconsidered next time; nothing is consumed and no slot is claimed. The
+  // database claim in the sweep is the check that holds under concurrency —
+  // this one is the cheap pre-read that keeps the sweep from minting a gift
+  // for a message it will not send.
+  const quiet = (target: AutomationTarget) => {
+    const held = isInQuietPeriod({
+      lastMarketingSentAt: input.lastMarketingSentAt?.get(target.email),
+      now: input.now,
+      quietMs: input.quietMs,
+    });
+    if (held) input.onDeferred?.(target);
+    return held;
+  };
 
   if (input.key === "welcome_intro" || input.key === "welcome_no_purchase") {
     // "Consented at" is the account's creation for an account holder and the
@@ -301,7 +314,7 @@ export function selectAutomationTargets(input: {
         : input.subscribedAt?.get(email);
       if (consentedAt === undefined || consentedAt > cutoff || consentedAt < oldest) continue;
       if (input.alreadySent.has(email)) continue;
-      if (quiet(email)) continue;
+      if (quiet({ email, referenceId: email })) continue;
       targets.push({ email, referenceId: email });
     }
   } else if (input.key === "post_purchase") {
@@ -313,7 +326,7 @@ export function selectAutomationTargets(input: {
       if (firstPaidAt.get(order.email) !== order.at) continue;
       if (order.at > cutoff || order.at < oldest) continue;
       if (input.alreadySent.has(order.orderId)) continue;
-      if (quiet(order.email)) continue;
+      if (quiet({ email: order.email, referenceId: order.orderId })) continue;
       targets.push({ email: order.email, referenceId: order.orderId });
     }
   } else if (input.key === "replenishment") {
@@ -325,7 +338,7 @@ export function selectAutomationTargets(input: {
       if (lastPaidAt.get(order.email) !== order.at) continue;
       if (order.at > cutoff || order.at < oldest) continue;
       if (input.alreadySent.has(order.orderId)) continue;
-      if (quiet(order.email)) continue;
+      if (quiet({ email: order.email, referenceId: order.orderId })) continue;
       targets.push({ email: order.email, referenceId: order.orderId });
     }
   } else {
@@ -339,7 +352,7 @@ export function selectAutomationTargets(input: {
       // the customer becomes eligible again after they lapse a second time.
       const reference = `${email}:${at}`;
       if (input.alreadySent.has(reference)) continue;
-      if (quiet(email)) continue;
+      if (quiet({ email, referenceId: reference })) continue;
       targets.push({ email, referenceId: reference });
     }
   }
@@ -498,6 +511,7 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
         paidOrders,
         alreadySent,
         lastMarketingSentAt,
+        onDeferred: () => { result.deferred++; },
         now,
       });
 

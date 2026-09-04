@@ -443,13 +443,30 @@ const server = http.createServer(async (req, res) => {
       const fn = path.slice(5);
       const body = (await readBody(req)) ?? {};
       const names = Object.keys(body);
-      const sql = names.length
-        ? `SELECT public.${ident(fn)}(${names.map((n, i) => `${ident(n)} => $${i + 1}`).join(", ")}) AS result`
-        : `SELECT public.${ident(fn)}() AS result`;
+      const argList = names.map((n, i) => `${ident(n)} => $${i + 1}`).join(", ");
+      // PostgREST answers a set-returning function (`returns table` /
+      // `returns setof`) with a JSON array of row objects, and a scalar
+      // function with the bare value. `SELECT fn(...)` flattens a set of
+      // composites into their TEXT form — `"(claimed,<uuid>,)"` — which is
+      // exactly what the marketing-frequency guard's caller could not parse,
+      // so under the harness every automation "claimed" a row it never saw and
+      // then tripped over its own duplicate. Ask the catalogue which shape the
+      // function has and select from it accordingly.
+      const { rows: meta } = await pool.query(
+        `SELECT p.proretset AS set_returning
+           FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public' AND p.proname = $1
+          LIMIT 1`,
+        [fn],
+      );
+      const setReturning = Boolean(meta[0]?.set_returning);
+      const sql = setReturning
+        ? `SELECT * FROM public.${ident(fn)}(${argList})`
+        : `SELECT public.${ident(fn)}(${argList}) AS result`;
       const { rows } = await pool.query(sql, names.map((n) => body[n]));
+      if (setReturning) return send(res, 200, wantsSingle ? (rows[0] ?? null) : rows);
       const value = rows[0]?.result;
-      // A set-returning function comes back as rows, not a scalar.
-      return send(res, 200, value === undefined ? rows : value);
+      return send(res, 200, value === undefined ? null : value);
     }
 
     const tableName = path.replace(/^\//, "");

@@ -298,7 +298,7 @@ describe("runAutomationSweep and the frequency guard", () => {
     expect(state.sendLog).toEqual([expect.objectContaining({ reference_id: REFERENCE, status: "sent" })]);
   });
 
-  it("QUIET PRE-FILTER: a recipient mailed inside 24h is not even offered to the guard", async () => {
+  it("QUIET PRE-FILTER: a recipient mailed inside 24h is not even offered to the guard, and is counted as deferred", async () => {
     state.claim = "claimed";
     state.sendLog = [{
       id: "log-prior",
@@ -314,7 +314,8 @@ describe("runAutomationSweep and the frequency guard", () => {
     expect(state.rpcCalls).toHaveLength(0);
     expect(sendMarketingEmail).not.toHaveBeenCalled();
     expect(result.sent).toBe(0);
-    expect(result.deferred).toBe(0);
+    // Held, not lost: the sweep says so, and the next one reconsiders.
+    expect(result.deferred).toBe(1);
     expect(result.errors).toEqual([]);
     // Nothing touched the prior row or added to it.
     expect(state.sendLog).toEqual([expect.objectContaining({ id: "log-prior", status: "sent" })]);
