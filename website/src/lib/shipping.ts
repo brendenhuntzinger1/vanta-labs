@@ -1,3 +1,5 @@
+import { SHIPPING_PROTECTION_PERCENT } from "@/lib/shipping-protection";
+
 // Shared shipping math, imported identically by the client cart preview
 // (cart-context.tsx, checkout/page.tsx) and the server checkout total
 // (payment-service.ts) - same reasoning as bundle-pricing.ts: one formula,
@@ -34,6 +36,18 @@ export interface ShippingConfig {
   northAmericaFreeShippingThreshold: number;
   internationalFee: number;
   internationalFreeShippingThreshold: number;
+  /**
+   * Shipping Protection rate, as a PERCENT of the merchandise subtotal.
+   *
+   * Lives here rather than in its own config because the add-on is already
+   * priced off the same admin "shipping" control section, and because riding
+   * this object is what guarantees the client preview and the authoritative
+   * server total read one number — the same property that keeps the shipping
+   * fee itself from drifting. Optional so a payload from an older deploy
+   * (or a cached /api/catalog/promotions response) falls back to the coded
+   * default instead of pricing protection at NaN.
+   */
+  protectionPercent?: number;
 }
 
 export const DEFAULT_SHIPPING_CONFIG: ShippingConfig = {
@@ -43,6 +57,7 @@ export const DEFAULT_SHIPPING_CONFIG: ShippingConfig = {
   northAmericaFreeShippingThreshold: NORTH_AMERICA_FREE_SHIPPING_THRESHOLD,
   internationalFee: INTERNATIONAL_SHIPPING_FEE,
   internationalFreeShippingThreshold: INTERNATIONAL_FREE_SHIPPING_THRESHOLD,
+  protectionPercent: SHIPPING_PROTECTION_PERCENT,
 };
 
 const DOMESTIC_COUNTRY_NAMES = new Set([
