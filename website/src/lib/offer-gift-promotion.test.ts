@@ -165,6 +165,31 @@ beforeEach(() => {
   stockState.levels = new Map();
 });
 
+describe("a percentage-only gift", () => {
+  it("takes the percentage off and charges shipping as usual", async () => {
+    offerState.offer = { ...freeGhkOffer(), offer_key: "winback_60_percent_15", reward_kind: "percent", product_slug: null, percent_off: 15, min_subtotal_cents: 3500 };
+
+    // 2 x $40 = $80: over the $35 floor. 15% of $80 is $12.
+    const quoted = await quote([{ id: "peptide-b", quantity: 2 }], "token");
+
+    expect(quoted.appliedOffer?.rewardKind).toBe("percent");
+    expect(quoted.appliedOffer?.description).toBe("15% off");
+    expect(quoted.discountAmount).toBe(12);
+    expect(quoted.lineItems.some((line) => line.gift)).toBe(false);
+    expect(quoted.expectedTotal).toBe(68);
+  });
+
+  it("gives nothing under its floor, and keeps the token", async () => {
+    offerState.offer = { ...freeGhkOffer(), offer_key: "winback_60_percent_15", reward_kind: "percent", product_slug: null, percent_off: 15, min_subtotal_cents: 6000 };
+
+    // $40 is under a $60 floor: no discount, and the offer is not "applied".
+    const under = await quote([{ id: "peptide-b", quantity: 1 }], "token");
+    expect(under.appliedOffer).toBeNull();
+    expect(under.discountAmount).toBe(0);
+    expect(under.expectedTotal).toBe(40);
+  });
+});
+
 describe("a gift the store cannot ship is not added", () => {
   it("skips a tracked gift product with nothing on the shelf, and prices the rest of the order normally", async () => {
     offerState.offer = freeGhkOffer();

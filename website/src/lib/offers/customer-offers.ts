@@ -83,7 +83,10 @@ export function readOfferCookie(request: Request): string | null {
 export type OfferReward =
   | { kind: "free_product"; productSlug: string }
   | { kind: "free_shipping" }
-  | { kind: "free_shipping_percent"; percent: number };
+  | { kind: "free_shipping_percent"; percent: number }
+  /** A percentage off and nothing else. Competes in the coupon slot exactly
+   *  as the combined gift's percentage does; shipping is charged as usual. */
+  | { kind: "percent"; percent: number };
 
 /** The offers this store knows how to grant. */
 export const OFFER_CATALOG = {
@@ -133,6 +136,15 @@ export const OFFER_CATALOG = {
     // gets both halves, above it the shipping half is already theirs and only
     // the percentage bites. That degrades gracefully, so the floor is the only
     // number that needs choosing.
+    minSubtotalCents: 3500,
+    ttlDays: 30,
+  },
+  winback_60_percent_15: {
+    label: "15% off",
+    reward: { kind: "percent", percent: 15 } as OfferReward,
+    // The same floor as the other discount gifts: about half a vial, so the
+    // order is real. No ceiling to worry about — unlike free shipping, a
+    // percentage is worth something at every basket size.
     minSubtotalCents: 3500,
     ttlDays: 30,
   },
@@ -201,7 +213,7 @@ export async function issueCustomerOffer(input: {
       // thirty-day life.
       reward_kind: config.reward.kind,
       product_slug: config.reward.kind === "free_product" ? config.reward.productSlug : null,
-      percent_off: config.reward.kind === "free_shipping_percent" ? config.reward.percent : null,
+      percent_off: config.reward.kind === "free_shipping_percent" || config.reward.kind === "percent" ? config.reward.percent : null,
       min_subtotal_cents: config.minSubtotalCents,
       expires_at: expiresAt,
     });
@@ -328,7 +340,9 @@ export function describeOfferTerms(offerKey: OfferKey, expiresAt: string): strin
     ? `a free ${config.label.replace(/^free\s+/i, "")} is added to your order`
     : config.reward.kind === "free_shipping_percent"
       ? `${config.reward.percent}% off plus free shipping`
-      : "free shipping";
+      : config.reward.kind === "percent"
+        ? `${config.reward.percent}% off`
+        : "free shipping";
   return `Your gift: ${gift} on any order of ${minimum} or more, through ${deadline}. `
     + "One per customer, for this email address only. It is applied automatically when you shop through the button below — no code needed.";
 }

@@ -663,10 +663,12 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   let offerPercentDiscount = 0;
 
   if (offer && input.offerToken
-      && (offer.reward_kind === "free_shipping" || offer.reward_kind === "free_shipping_percent")) {
+      && (offer.reward_kind === "free_shipping" || offer.reward_kind === "free_shipping_percent" || offer.reward_kind === "percent")) {
     if (offerMinimumMet(offer, Math.round(subtotal * 100))) {
-      offerGrantsFreeShipping = true;
-      const percent = offer.reward_kind === "free_shipping_percent" ? Number(offer.percent_off ?? 0) : 0;
+      // A plain percentage waives nothing; the two shipping kinds waive the fee.
+      const waivesShipping = offer.reward_kind !== "percent";
+      if (waivesShipping) offerGrantsFreeShipping = true;
+      const percent = offer.reward_kind === "free_shipping" ? 0 : Number(offer.percent_off ?? 0);
       // Priced off discountBase, the same base every other percentage uses, so
       // a combined gift and a coupon of the same size are worth the same.
       if (percent > 0) offerPercentDiscount = calculateCouponDiscount(discountBase, "percent", percent);
@@ -674,7 +676,9 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
         token: input.offerToken,
         offerKey: offer.offer_key,
         rewardKind: offer.reward_kind,
-        description: percent > 0 ? `Free shipping + ${percent}% off` : "Free shipping",
+        description: !waivesShipping
+          ? `${percent}% off`
+          : percent > 0 ? `Free shipping + ${percent}% off` : "Free shipping",
       };
     }
   } else if (offer && input.offerToken) {

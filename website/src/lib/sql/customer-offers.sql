@@ -354,3 +354,17 @@ drop index if exists public.customer_offers_one_live_per_email;
 create unique index if not exists customer_offers_one_live_per_email
   on public.customer_offers (offer_key, email)
   where revoked_at is null and redeemed_at is null;
+
+-- ---------------------------------------------------------------------------
+-- A PERCENTAGE ON ITS OWN. reward_kind = 'percent': no product, no shipping
+-- waiver, percent_off set. Idempotent; safe to re-run.
+-- ---------------------------------------------------------------------------
+alter table public.customer_offers
+  drop constraint if exists customer_offers_reward_shape;
+alter table public.customer_offers
+  add constraint customer_offers_reward_shape check (
+    (reward_kind = 'free_product' and product_slug is not null and percent_off is null)
+    or (reward_kind = 'free_shipping' and product_slug is null and percent_off is null)
+    or (reward_kind in ('free_shipping_percent', 'percent') and product_slug is null
+        and percent_off is not null and percent_off > 0 and percent_off <= 100)
+  );
