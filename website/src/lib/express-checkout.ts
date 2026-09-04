@@ -9,8 +9,23 @@
 // To turn it on: run src/lib/sql/express-checkout.sql, register the serving
 // host for Apple Pay, set the env vars documented in .env.example, then set the
 // flag below to "true" in the deployment environment (Vercel).
+//
+// AND ONE MORE GATE, WHICH THE ENV VAR CANNOT OPEN ON ITS OWN.
+//
+// The express lane (api/checkout/express/session + authorize) prices its quotes
+// WITHOUT the one-time offer cookie and stamps NO email attribution, so a
+// wallet customer would silently lose the gift their email promised and the
+// sale would never be credited to the automation or campaign that produced it
+// (audit, 2026-09-04). Until those routes carry the same wiring the card lane
+// has — readOfferCookie/offerToken into the quote, reserveCustomerOffer before
+// the order, attributeOrderToAutomation + attributeOrderToCampaign after it —
+// this stays false, and express-checkout-parity-guard.test.ts refuses to let
+// it become true while any of that is missing. Flipping the env var alone
+// changes nothing, which is the point.
+export const EXPRESS_OFFER_PARITY = false;
+
 export const EXPRESS_CHECKOUT_ENABLED =
-  process.env.NEXT_PUBLIC_EXPRESS_CHECKOUT_ENABLED === "true";
+  process.env.NEXT_PUBLIC_EXPRESS_CHECKOUT_ENABLED === "true" && EXPRESS_OFFER_PARITY;
 
 // Hosts registered for Apple Pay, comma-separated.
 //

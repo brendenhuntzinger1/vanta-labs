@@ -8,7 +8,7 @@ import { SiteHeaderV2 } from "@/components/site-header-v2";
 function CartRestoreInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { restoreItems } = useCart();
+  const { restoreItems, restoreCoupon } = useCart();
   const [message, setMessage] = useState("Restoring your cart...");
 
   useEffect(() => {
@@ -21,14 +21,26 @@ function CartRestoreInner() {
 
       try {
         const response = await fetch(`/api/cart/restore?id=${encodeURIComponent(id)}`, { cache: "no-store" });
-        const result = await response.json() as { success: boolean; items?: Array<{ slug: string; variantId?: string; name: string; quantity: number; unitPrice: number; image?: string }>; error?: string };
+        const result = await response.json() as {
+          success: boolean;
+          items?: Array<{ slug: string; variantId?: string; name: string; quantity: number; unitPrice: number; image?: string }>;
+          sessionId?: string | null;
+          email?: string;
+          coupon?: { code: string; discountType: "percent" | "fixed"; discountValue: number };
+          error?: string;
+        };
 
         if (!result.success || !result.items) {
           setMessage(result.error ?? "This cart link is no longer valid.");
           return;
         }
 
-        restoreItems(result.items);
+        // Continue the cart's own session, so the tracker updates this cart
+        // rather than opening a second one for the same shopper.
+        restoreItems(result.items, { sessionId: result.sessionId ?? null });
+        // The recovery code the email promised, already validated server-side
+        // against the address it is bound to; the checkout validates it again.
+        if (result.coupon && result.email) restoreCoupon({ ...result.coupon, email: result.email });
         router.push("/cart");
       } catch {
         setMessage("Unable to restore this cart right now.");

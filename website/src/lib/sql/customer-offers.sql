@@ -384,3 +384,88 @@ alter table public.customer_offers
     or (reward_kind = 'free_product_percent' and product_slug is not null
         and percent_off is not null and percent_off > 0 and percent_off <= 100)
   );
+
+-- ---------------------------------------------------------------------------
+-- A PAID ORDER CLOSES THE RETENTION CYCLE (2026-09-04).
+--
+-- A retention offer exists to recover ONE purchase. Before this, the day-30,
+-- day-40 and day-50 gifts each lived for thirty days from issue, so a customer
+-- could hold all three at once and spend each on a separate order — and a
+-- customer who reordered WITHOUT clicking the email kept an unused day-30 gift
+-- spendable on a later order. Expiry was the only thing that ended a gift.
+--
+-- Now the paid-order side effects call this once, right after
+-- customer_offer_redeem. Every unredeemed, unrevoked offer for the address
+-- dies, except the one this order itself holds (redeem already marked it, and
+-- the reserved_order_id guard keeps it safe even if the two calls ever run in
+-- the other order). Expiry stays as the second layer, not the mechanism.
+--
+-- Scope is deliberately narrow: ONE address, customer_offers ONLY. Coupons,
+-- promotion claims, memberships and other customers are untouched.
+--
+-- `revoke_reason` and `closed_by_order_id` say WHY a row died, so "revoked by
+-- an operator", "retired for a reissue" and "closed by order X" stop looking
+-- identical in reports. `automation_key` and `reference_id` record which
+-- automation send minted the gift, so a redemption can credit that automation
+-- without a click cookie. All four are additive and nullable; an older row
+-- simply carries null.
+-- ---------------------------------------------------------------------------
+alter table if exists public.customer_offers
+  add column if not exists automation_key text,
+  add column if not exists reference_id text,
+  add column if not exists revoke_reason text,
+  add column if not exists closed_by_order_id text;
+
+comment on column public.customer_offers.automation_key is
+  'The automation whose send minted this gift (email_automations.key). Null for rows minted before 2026-09-04 or by hand.';
+comment on column public.customer_offers.reference_id is
+  'The send this gift rode on — email_send_log.reference_id for that automation. Joins a redemption back to one send.';
+comment on column public.customer_offers.revoke_reason is
+  'Why revoked_at was set: cycle_closed (a paid order ended the cycle), reissued (retired for a fresh token), or null for an operator revocation.';
+comment on column public.customer_offers.closed_by_order_id is
+  'The paid order that closed the cycle this gift belonged to, when revoke_reason = cycle_closed.';
+
+create or replace function public.customer_offer_close_cycle(
+  p_order_id text,
+  p_email text
+) returns integer
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_email text := nullif(lower(trim(coalesce(p_email, ''))), '');
+  v_order text := nullif(trim(coalesce(p_order_id, '')), '');
+  v_closed integer := 0;
+begin
+  if v_order is null or v_email is null then
+    return 0;
+  end if;
+
+  -- Serialise against a sweep minting a fresh gift for the same address at
+  -- the same instant: whichever runs second sees the other's row.
+  perform pg_advisory_xact_lock(hashtext('customer_offer_cycle:' || v_email));
+
+  with closed as (
+    update public.customer_offers
+    set revoked_at = now(),
+        revoke_reason = 'cycle_closed',
+        closed_by_order_id = v_order
+    where email = v_email
+      and redeemed_at is null
+      and revoked_at is null
+      -- The gift this order is spending is redeem's to mark, not ours to kill.
+      and (reserved_order_id is null or reserved_order_id <> v_order)
+    returning 1
+  )
+  select count(*) into v_closed from closed;
+
+  return v_closed;
+end;
+$$;
+
+comment on function public.customer_offer_close_cycle(text, text) is
+  'Revoke every unredeemed retention gift held by this address except the one the paid order itself is spending. Called from the paid side-effects path after customer_offer_redeem. Idempotent.';
+
+revoke execute on function public.customer_offer_close_cycle(text, text) from public, anon, authenticated;
+grant execute on function public.customer_offer_close_cycle(text, text) to service_role;

@@ -59,6 +59,20 @@ function matches(row: Record<string, unknown>, filters: Array<[string, string, u
       case "lt": return actual !== null && actual !== undefined && String(actual) < String(value);
       case "gte": return Number(actual ?? 0) >= Number(value);
       case "is": return value === null ? actual === null || actual === undefined : actual === value;
+      case "or": {
+        // PostgREST's `or=(a.is.null,a.lte.X)` — the batch claim uses it to skip
+        // recipients the frequency guard deferred until later.
+        return String(value).split(",").some((clause) => {
+          const [c, o, ...rest] = clause.split(".");
+          const v = rest.join(".");
+          const a = row[c];
+          if (o === "is" && v === "null") return a === null || a === undefined;
+          if (o === "lte") return a !== null && a !== undefined && String(a) <= v;
+          if (o === "gte") return a !== null && a !== undefined && String(a) >= v;
+          if (o === "eq") return String(a) === v;
+          return false;
+        });
+      }
       default: return true;
     }
   });
@@ -120,6 +134,7 @@ vi.mock("@/lib/supabase-server", () => {
       lt: (col: string, value: unknown) => { filters.push(["lt", col, value]); return builder; },
       gte: (col: string, value: unknown) => { filters.push(["gte", col, value]); return builder; },
       is: (col: string, value: unknown) => { filters.push(["is", col, value]); return builder; },
+      or: (clauses: string) => { filters.push(["or", "", clauses]); return builder; },
       not: () => builder,
       order: () => builder,
       limit: (value: number) => { limit = value; return builder; },

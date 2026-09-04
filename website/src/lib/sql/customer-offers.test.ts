@@ -399,6 +399,117 @@ describeDb("customer_offers", () => {
     });
   });
 
+  describe("a paid order closes the retention cycle", () => {
+    // A retention offer exists to recover ONE purchase. Once the customer has
+    // paid, every other unredeemed gift from that cycle is dead: they cannot
+    // collect the day-30, day-40 and day-50 gifts and spend each on a later
+    // order. Expiry stays as the second layer, not the mechanism.
+    async function issueKind(email: string, offerKey: string, kind: string, extra: { slug?: string | null; percent?: number | null } = {}) {
+      const token = `token-${offerKey}-${Math.random().toString(36).slice(2)}`;
+      await client.query(
+        `insert into public.customer_offers (offer_key, token_hash, email, reward_kind, product_slug, percent_off, min_subtotal_cents, expires_at)
+         values ($1, $2, $3, $4, $5, $6, 3500, now() + interval '30 days')`,
+        [offerKey, hash(token), email.toLowerCase(), kind, extra.slug ?? null, extra.percent ?? null],
+      );
+      return token;
+    }
+    const closeCycle = async (orderId: string, email: string) =>
+      (await client.query("select public.customer_offer_close_cycle($1, $2) as closed", [orderId, email])).rows[0].closed;
+    const rowsFor = async (email: string) =>
+      (await client.query(
+        "select offer_key, redeemed_at, revoked_at, revoke_reason, closed_by_order_id from public.customer_offers where email = $1 order by offer_key",
+        [email],
+      )).rows;
+
+    it("kills the unused day-30 gift when the day-40 gift is redeemed", async () => {
+      const day30 = await issueKind("buyer@example.test", "winback_60_free_shipping", "free_shipping");
+      const day40 = await issueKind("buyer@example.test", "winback_60_bac_water_10", "free_product_percent", { slug: "bacteriostatic-water", percent: 10 });
+      expect(await reserve(day40, "order-40", "buyer@example.test")).toHaveLength(1);
+      expect(await redeem("order-40")).toBe(true);
+      expect(await closeCycle("order-40", "buyer@example.test")).toBe(1);
+
+      const rows = await rowsFor("buyer@example.test");
+      const shipping = rows.find((r) => r.offer_key === "winback_60_free_shipping");
+      const bac = rows.find((r) => r.offer_key === "winback_60_bac_water_10");
+      expect(shipping?.revoked_at, "the ignored day-30 gift should be dead").not.toBeNull();
+      expect(shipping?.revoke_reason).toBe("cycle_closed");
+      expect(shipping?.closed_by_order_id).toBe("order-40");
+      expect(bac?.redeemed_at, "the gift that was actually used stays redeemed").not.toBeNull();
+      expect(bac?.revoked_at, "a redeemed gift is history, not a revocation").toBeNull();
+      // And the dead token can no longer be spent, even on a later order.
+      expect(await reserve(day30, "order-later", "buyer@example.test")).toHaveLength(0);
+    });
+
+    it("a purchase WITHOUT clicking the email still closes the cycle", async () => {
+      const day30 = await issueKind("buyer@example.test", "winback_60_free_shipping", "free_shipping");
+      // No reservation at all: the customer typed the URL and paid full price.
+      expect(await closeCycle("order-plain", "buyer@example.test")).toBe(1);
+      expect(await reserve(day30, "order-next", "buyer@example.test")).toHaveLength(0);
+      const [row] = await rowsFor("buyer@example.test");
+      expect(row.revoke_reason).toBe("cycle_closed");
+      expect(row.closed_by_order_id).toBe("order-plain");
+    });
+
+    it("never touches another customer's gifts", async () => {
+      await issueKind("buyer@example.test", "winback_60_free_shipping", "free_shipping");
+      const other = await issueKind("other@example.test", "winback_60_free_shipping", "free_shipping");
+      expect(await closeCycle("order-1", "buyer@example.test")).toBe(1);
+      expect(await reserve(other, "order-other", "other@example.test")).toHaveLength(1);
+    });
+
+    it("leaves the paying order's own reservation alone until redeem records it", async () => {
+      const gift = await issueKind("buyer@example.test", "winback_60_free_ghkcu", "free_product", { slug: "ghk-cu" });
+      expect(await reserve(gift, "order-1", "buyer@example.test")).toHaveLength(1);
+      // Close BEFORE redeem (defensive ordering): the row this order holds must survive.
+      expect(await closeCycle("order-1", "buyer@example.test")).toBe(0);
+      expect(await redeem("order-1")).toBe(true);
+      const [row] = await rowsFor("buyer@example.test");
+      expect(row.redeemed_at).not.toBeNull();
+      expect(row.revoked_at).toBeNull();
+    });
+
+    it("is idempotent and safe to replay", async () => {
+      await issueKind("buyer@example.test", "winback_60_free_shipping", "free_shipping");
+      expect(await closeCycle("order-1", "buyer@example.test")).toBe(1);
+      expect(await closeCycle("order-1", "buyer@example.test")).toBe(0);
+      expect(await closeCycle("order-2", "buyer@example.test")).toBe(0);
+    });
+
+    it("does nothing for a missing order id or address", async () => {
+      await issueKind("buyer@example.test", "winback_60_free_shipping", "free_shipping");
+      expect(await closeCycle("", "buyer@example.test")).toBe(0);
+      expect(await closeCycle("order-1", "")).toBe(0);
+      const [row] = await rowsFor("buyer@example.test");
+      expect(row.revoked_at).toBeNull();
+    });
+
+    it("a fresh cycle can be issued after the close, because the index only counts live rows", async () => {
+      await issueKind("buyer@example.test", "winback_60_free_shipping", "free_shipping");
+      await closeCycle("order-1", "buyer@example.test");
+      await expect(issueKind("buyer@example.test", "winback_60_free_shipping", "free_shipping")).resolves.toBeTruthy();
+    });
+
+    it("records which automation and send minted a gift, for redemption attribution", async () => {
+      await client.query(
+        `insert into public.customer_offers (offer_key, token_hash, email, reward_kind, product_slug, min_subtotal_cents, expires_at, automation_key, reference_id)
+         values ('winback_60_free_ghkcu', $1, 'buyer@example.test', 'free_product', 'ghk-cu', 6000, now() + interval '30 days', 'winback_60', 'buyer@example.test:1700000000000')`,
+        [hash("minted-by")],
+      );
+      const { rows } = await client.query("select automation_key, reference_id from public.customer_offers where token_hash = $1", [hash("minted-by")]);
+      expect(rows[0]).toEqual({ automation_key: "winback_60", reference_id: "buyer@example.test:1700000000000" });
+    });
+
+    it("a browser key cannot close anyone's cycle", async () => {
+      for (const role of ["anon", "authenticated"]) {
+        const { rows } = await client.query(
+          "select has_function_privilege($1, 'public.customer_offer_close_cycle(text,text)', 'execute') as can_close",
+          [role],
+        ).catch(() => ({ rows: [{ can_close: false }] }));
+        expect(rows[0].can_close, `${role} can close a cycle`).toBe(false);
+      }
+    });
+  });
+
   it("a browser key can reach none of it", async () => {
     // The rows carry customer addresses and the shape of who was mailed what,
     // and the functions grant free product. Neither is anon's business.

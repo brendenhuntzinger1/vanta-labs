@@ -434,7 +434,11 @@
     "redeemed_at",
     "revoked_at",
     "reward_kind",
-    "percent_off"
+    "percent_off",
+    "automation_key",
+    "reference_id",
+    "revoke_reason",
+    "closed_by_order_id"
   ],
   "customer_preferences": [
     "user_id",
@@ -492,7 +496,8 @@
     "clicked_at",
     "created_at",
     "ambassador_id",
-    "merge_context"
+    "merge_context",
+    "deferred_until"
   ],
   "email_campaigns": [
     "id",
@@ -538,6 +543,7 @@
     "opened_at",
     "clicked_at",
     "status",
+    "auth_send_minute",
     "provider_message_id"
   ],
   "email_suppressions": [
@@ -675,6 +681,22 @@
     "actor",
     "order_id",
     "created_at"
+  ],
+  "marketing_send_queue": [
+    "id",
+    "recipient_email",
+    "campaign_type",
+    "reference_id",
+    "template_key",
+    "subject",
+    "html",
+    "text_body",
+    "not_before",
+    "attempts",
+    "status",
+    "last_error",
+    "created_at",
+    "sent_at"
   ],
   "marketing_subscribers": [
     "email",
@@ -925,12 +947,17 @@
     "shipping_protection_fee",
     "inventory_restocked_at",
     "inventory_committed_at",
+    "promotion_id",
     "attributed_automation_key",
     "attributed_automation_at",
     "payment_failure_kind",
     "payment_failure_code",
     "payment_failure_reason",
-    "payment_failed_at"
+    "payment_failed_at",
+    "marketing_source_kind",
+    "marketing_source_ref",
+    "marketing_source_basis",
+    "marketing_source_at"
   ],
   "partner_clicks": [
     "id",
@@ -1152,6 +1179,12 @@
     "shipping_weight_oz",
     "incoming_quantity",
     "requires_reconstitution"
+  ],
+  "promotion_redemption_claims": [
+    "order_id",
+    "promotion_id",
+    "customer_email",
+    "claimed_at"
   ],
   "promotional_point_events": [
     "id",

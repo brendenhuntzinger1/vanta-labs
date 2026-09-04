@@ -18,7 +18,8 @@ import { enqueueFailedEmail } from "@/lib/email/retry-queue";
 import { commissionEarnedTemplate, orderConfirmationTemplate, refundConfirmationTemplate } from "@/lib/email/templates";
 import { scheduleOrderPushNotification } from "@/lib/order-push-notification";
 import { getSiteUrl } from "@/lib/env";
-import { redeemCustomerOffer } from "@/lib/offers/customer-offers";
+import { closeCustomerOfferCycle, redeemCustomerOffer } from "@/lib/offers/customer-offers";
+import { finalizeMarketingSource } from "@/lib/marketing-source";
 import { redeemCoupon } from "@/lib/coupons";
 import { normalizeCouponCode } from "@/lib/coupon-code";
 import { readAllRowsBounded } from "@/lib/supabase-page";
@@ -50,6 +51,7 @@ import { recordSystemAlert } from "@/lib/monitoring";
 import { getOrderAttribution } from "@/lib/order-attribution";
 import { toAnalyticsAttribution } from "@/lib/attribution";
 import { creditFundedOrderNotice } from "@/lib/credit-funded-order-notice";
+import { isSaleOrder } from "@/lib/ledger";
 
 /**
  * The billing cycle to activate for a paid membership order.
@@ -1522,6 +1524,21 @@ export async function finalizeManualPayment(
       // Idempotent (it only writes while redeemed_at is null) and non-throwing,
       // so a replayed webhook and an un-migrated database both cost nothing.
       await redeemCustomerOffer(orderId);
+      // A PAID ORDER CLOSES THE RETENTION CYCLE: every other unredeemed gift
+      // this address holds is revoked, so the day-30 / day-40 / day-50 gifts
+      // cannot each be spent on a separate later order. Non-throwing, idempotent,
+      // and scoped to this one address — see closeCustomerOfferCycle.
+      // Only a SALE closes it: a membership plan or a replacement shipment is
+      // not the reorder the ladder is waiting for, and the ladder itself does
+      // not restart on one — so revoking the gift there would leave the
+      // customer with nothing and no new gift on the way.
+      if (!isMembershipOrder && isSaleOrder(order.order_type as string | null)) {
+        await closeCustomerOfferCycle({ orderId, email: String(order.customer_email) });
+      }
+      // THE PRIMARY MARKETING SOURCE, decided now that the gift redemption and
+      // the coupon are known. Write-once with one upgrade (click → redeemed
+      // gift); a replayed approval decides the same thing again. Never throws.
+      await finalizeMarketingSource({ orderId });
       // Send-once + audited. Returns without sending if a confirmation for this
       // order is already recorded, which is what makes a replayed manual
       // approval safe independently of the caller's own guards.
@@ -2506,6 +2523,15 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           // Idempotent (it only writes while redeemed_at is null) and non-throwing,
           // so a replayed webhook and an un-migrated database both cost nothing.
           await redeemCustomerOffer(orderId);
+          // A PAID ORDER CLOSES THE RETENTION CYCLE — see the manual-approval
+          // lane above. buyerEmail is the same address markAbandonedCartsRecovered
+          // used, so a processor callback that omits the email is covered by the
+          // order row exactly as the cart recovery stop is.
+          if (!isMembershipOrder && isSaleOrder(orderRecord?.order_type as string | null)) {
+            await closeCustomerOfferCycle({ orderId, email: buyerEmail });
+          }
+          // THE PRIMARY MARKETING SOURCE — see the manual-approval lane above.
+          await finalizeMarketingSource({ orderId });
           // Send-once + audited. The paid_side_effects_at claim above already
           // stops a duplicate delivery reaching this line; this is the second,
           // independent guarantee, enforced by a unique index rather than by

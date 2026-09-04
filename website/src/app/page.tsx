@@ -6,7 +6,7 @@ import { ProductCard } from "@/components/product-card";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { getHomepageControlConfig } from "@/lib/admin-control";
 import { getCatalogProducts } from "@/lib/catalog";
-import { COA_SHORT, trustPoints } from "@/lib/trust-claims";
+import { COA_SHORT, FULFILMENT_CUTOFF, trustPoints } from "@/lib/trust-claims";
 import { BRAND_LEGAL_NAME } from "@/lib/site-identity";
 
 export const dynamic = "force-dynamic";
@@ -49,7 +49,10 @@ const TESTING_PROOFS = [
 const FAQ = [
   {
     q: "How quickly are orders processed?",
-    a: "Most in-stock orders are prepared within one business day, with secure tracking sent after dispatch.",
+    // The canonical promise (trust-claims.ts): dispatch, with its cutoff and
+    // weekday qualifier, never delivery. Built from the constant so it cannot
+    // drift back into "one business day".
+    a: `In-stock orders placed before ${FULFILMENT_CUTOFF} on a business day are dispatched the same day, with secure tracking sent after dispatch. Carrier transit time is additional.`,
   },
   {
     q: "Can I review COAs before ordering?",

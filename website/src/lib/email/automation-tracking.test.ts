@@ -14,6 +14,7 @@ import {
   buildAutomationClickUrl,
   buildAutomationOpenUrl,
   decodeAutomationCookie,
+  destinationForVisitor,
   encodeAutomationCookie,
   readAutomationCookie,
   safeAutomationDestination,
@@ -135,6 +136,39 @@ describe("the destination can never leave this site", () => {
 
   it("passes a real site path through", () => {
     expect(safeAutomationDestination("/products/bpc-157")).toBe(`${SITE}/products/bpc-157`);
+  });
+});
+
+describe("a guest is never sent from an email into a login wall", () => {
+  // The reorder reminder's button points at /account/orders. Two of the four
+  // buyers on the marketing list have no account, so the click landed them on
+  // the login page with nothing to do. The gift cookie was already armed by
+  // then, so the fix is only the landing page: a signed-out visitor bound for
+  // a gated account page goes to the catalogue instead. Nothing about
+  // authentication changes — the account pages still require a session.
+  it("sends a signed-out visitor bound for the account area to the catalogue", () => {
+    expect(destinationForVisitor(`${SITE}/account/orders`, false)).toBe(`${SITE}/products`);
+    expect(destinationForVisitor(`${SITE}/account`, false)).toBe(`${SITE}/products`);
+    expect(destinationForVisitor(`${SITE}/account/rewards?tab=points`, false)).toBe(`${SITE}/products`);
+  });
+
+  it("keeps the account destination for a signed-in customer", () => {
+    expect(destinationForVisitor(`${SITE}/account/orders`, true)).toBe(`${SITE}/account/orders`);
+  });
+
+  it("leaves the public account pages alone, signed in or not", () => {
+    for (const path of ["/account/login", "/account/forgot-password", "/account/reset-password"]) {
+      expect(destinationForVisitor(`${SITE}${path}`, false)).toBe(`${SITE}${path}`);
+    }
+  });
+
+  it("does not touch destinations outside the account area", () => {
+    expect(destinationForVisitor(`${SITE}/products/bpc-157`, false)).toBe(`${SITE}/products/bpc-157`);
+    expect(destinationForVisitor(`${SITE}/accounting-faq`, false)).toBe(`${SITE}/accounting-faq`);
+  });
+
+  it("falls back to the destination it was given when it cannot parse it", () => {
+    expect(destinationForVisitor("not a url", false)).toBe("not a url");
   });
 });
 

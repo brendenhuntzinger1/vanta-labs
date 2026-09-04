@@ -132,8 +132,27 @@ async function openDrawer(page) {
   await page.waitForTimeout(1600);
 }
 
+/**
+ * Shipping Protection is ticked by default since #147 (cart drawer, /cart and
+ * /checkout). It is a paid add-on and none of the figures this script asserts
+ * include it, so it is declined wherever it is visible before a summary is
+ * read — the shopper's own one-click removal, nothing more.
+ */
+async function declineShippingProtection(page) {
+  const boxes = page.locator('input[type="checkbox"]:visible');
+  let changed = false;
+  for (const box of await boxes.all()) {
+    const label = await box.evaluate((el) => (el.closest("label") ?? el.parentElement?.closest("label") ?? el.parentElement)?.innerText ?? "").catch(() => "");
+    if (!/shipping protection/i.test(label)) continue;
+    if (await box.isChecked()) { await box.click().catch(() => {}); changed = true; }
+  }
+  // The debounced quote and the client arithmetic both settle after a change.
+  if (changed) await page.waitForTimeout(1600);
+}
+
 /** Every money row the drawer renders, as numbers. */
 async function readDrawer(page) {
+  await declineShippingProtection(page);
   const text = async (testid) => {
     const el = page.locator(`[data-testid="${testid}"]`);
     return (await el.count()) ? (await el.first().innerText()).trim() : null;
@@ -178,6 +197,7 @@ async function fillCheckoutForm(page, { email, state = "CA" }) {
 }
 
 async function readCheckout(page) {
+  await declineShippingProtection(page);
   // ":visible" throughout, deliberately. Both summaries are in the DOM at all
   // times; only the one for this viewport is shown, and a test that reads both
   // counts every gift twice and reads the phone's total on a desktop.

@@ -135,6 +135,18 @@ vi.mock("@/lib/supabase-server", () => {
       in(c: string, v: unknown[]) { filters.push((r) => v.includes(r[c])); return b; },
       gt(c: string, v: unknown) { filters.push((r) => String(r[c] ?? "") > String(v)); return b; },
       gte(c: string, v: unknown) { filters.push((r) => String(r[c] ?? "") >= String(v)); return b; },
+      or(clauses: string) {
+        filters.push((r) => clauses.split(",").some((clause) => {
+          const [c, o, ...rest] = clause.split(".");
+          const v = rest.join(".");
+          if (o === "gte") return String(r[c] ?? "") >= v;
+          if (o === "lte") return String(r[c] ?? "") <= v;
+          if (o === "is" && v === "null") return r[c] === null || r[c] === undefined;
+          if (o === "eq") return String(r[c]) === v;
+          return false;
+        }));
+        return b;
+      },
       lte(c: string, v: unknown) { filters.push((r) => String(r[c] ?? "") <= String(v)); return b; },
       order(c: string, o?: { ascending?: boolean }) { sorts.push({ col: c, asc: o?.ascending !== false }); return b; },
       limit(n: number) { take = n; return b; },

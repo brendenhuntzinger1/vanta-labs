@@ -158,10 +158,24 @@ function HeroVial({ className, src, poster }: { className?: string; src: string;
  * away by any viewport shape. The burnt-in vignette goes back to being what it
  * was always meant to be — a guard for the raw file, not the composition.
  *
- * 0.55 keeps the middle of the section at full strength and spends the outer
- * 45% dissolving into the page.
+ * 0.72 keeps the middle of the section at full strength and spends the outer
+ * 28% dissolving into the page.
+ *
+ * IT WAS 0.55, AND THAT SPENT NEARLY HALF THE PICTURE. The guarantee this
+ * number carries is about the EDGES: reach fully transparent by 1.0 on both
+ * axes so no viewport shape can leave a bright band on screen. Where the ramp
+ * BEGINS is a separate question, and 0.55 answered it far more conservatively
+ * than the guarantee needs — the shot was already dissolving from just past
+ * the centre, so the vial's shoulder and most of its lit halo were painted at
+ * partial alpha over the hero's own near-black gradient. Together with a flat
+ * 0.9 opacity and a scrim that started four rem above the copy, that is what
+ * made the owner report the hero as black.
+ *
+ * 0.72 keeps the falloff — every edge still reaches zero at 1.0, so the white
+ * studio backdrop still cannot appear at any viewport shape — and gives the
+ * middle of the frame, which is the vial, back its brightness.
  */
-const FADE_START = 0.55;
+const FADE_START = 0.72;
 
 /**
  * Where the shot sits along the hero when there is room to choose, as a
@@ -177,6 +191,41 @@ const FADE_START = 0.55;
  * correct — the shot is meant to fill a phone screen.
  */
 const LANDSCAPE_BIAS = 0.76;
+
+/**
+ * HOW FAR THE FALLOFF REACHES DOWN THE VERTICAL AXIS, and why it is not 1.
+ *
+ * The falloff exists for ONE measured reason: this asset is a vial lit on a
+ * white studio backdrop, and a portrait crop of a square frame cuts straight
+ * through that backdrop. Drawn at framing 1 into a 390x726 phone hero with no
+ * falloff at all, the left and right edges measure 241/255 down the middle of
+ * the screen — near-white bands running the height of the page. That is the
+ * "vial on a white background" report, and it is real.
+ *
+ * THE TOP AND BOTTOM ARE NOT THAT, AND THE ELLIPSE TREATED THEM AS IF THEY
+ * WERE. Measured on the same crop: top edge 0, bottom edge 0. The vignette
+ * burnt into the file already finishes those two, so fading them costs picture
+ * and buys nothing — and it is what put a black band across the top and bottom
+ * of the phone hero on top of the scrim's own. The owner's report was that the
+ * hero was "black all around"; two of those four sides were being blacked out
+ * for a problem they do not have.
+ *
+ * So the falloff keeps its horizontal half and gives up most of its vertical
+ * one. Pushing the vertical axis out to a multiple of the half-height leaves a
+ * gradient that is essentially horizontal across the middle of the screen and
+ * still rounds the corners off — which matches how the asset's own vignette
+ * falls, rather than fighting it.
+ *
+ * THE GUARANTEE IS UNCHANGED WHERE IT IS LOAD-BEARING. Left and right still
+ * reach fully transparent inside the box, so no viewport shape can put a white
+ * band on screen. Top and bottom now cut where the picture is already black,
+ * against a hero background that is also black: a hard edge nobody can see.
+ *
+ * Published from CSS beside the framing, for the same reason: a laptop's crop
+ * has black on all four edges (measured: 0 on every side) and needs none of
+ * this, so the value belongs at the breakpoint, not in the script.
+ */
+const FADE_REACH_PROPERTY = "--hero-fade-reach";
 
 function HeroVialCanvas({
   className,
@@ -203,12 +252,42 @@ function HeroVialCanvas({
     let raf = 0;
     let stopped = false;
     let fade: CanvasGradient | null = null;
+    /**
+     * How much of the frame's height this screen shows — see
+     * PORTRAIT_FRAMING_PROPERTY. Re-read on every resize, so rotating a phone
+     * or crossing the breakpoint picks up the other value without a reload.
+     *
+     * Clamped, and defaulting to 1: a stylesheet that has not arrived, a value
+     * that does not parse, or a browser that ignores custom properties all end
+     * at "show the whole frame", which is the composition every screen had
+     * before this existed. It cannot fail into a magnified crop.
+     */
+    /**
+     * How far the falloff's VERTICAL axis reaches, as a multiple of the box's
+     * half-height. 1 is an ellipse inscribed in the box — the shape this
+     * started as. Larger pushes the vertical fade outside the box, leaving a
+     * falloff that is horizontal across the middle and only rounds the corners.
+     *
+     * See FADE_REACH_PROPERTY. Defaults to 1, so a stylesheet that never
+     * arrives lands on the inscribed ellipse rather than on no falloff at all.
+     */
+    let fadeReach = 1;
 
     // Match the canvas's backing store to the box it actually occupies, so the
     // vial is sharp on a 3x phone screen without painting more pixels than the
     // display can show.
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
+      const reachDeclared = Number.parseFloat(
+        getComputedStyle(canvas).getPropertyValue(FADE_REACH_PROPERTY),
+      );
+      const nextReach = Number.isFinite(reachDeclared)
+        ? Math.min(6, Math.max(1, reachDeclared))
+        : 1;
+      if (nextReach !== fadeReach) {
+        fadeReach = nextReach;
+        fade = null;
+      }
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const w = Math.max(1, Math.round(rect.width * dpr));
       const h = Math.max(1, Math.round(rect.height * dpr));
@@ -278,7 +357,7 @@ function HeroVialCanvas({
         // are the element's own half-width and half-height.
         context.save();
         context.translate(cw / 2, ch / 2);
-        context.scale(cw / 2, ch / 2);
+        context.scale(cw / 2, (ch / 2) * fadeReach);
         context.fillStyle = fade;
         context.fillRect(-1, -1, 2, 2);
         context.restore();
@@ -307,6 +386,16 @@ function HeroVialCanvas({
      * Both cases are the same sentence — match the height — so there is no
      * branch here, and there should not be one: a fit rule that reads
      * differently for phones and laptops is how the two got different bugs.
+     *
+     * A PHONE-ONLY CROP WAS TRIED HERE AND TAKEN BACK OUT. Showing the top 0.7
+     * of the frame did move the vial's printed label clear of the headline,
+     * which is what it was for. It also magnified the frame by 43%, cropped the
+     * vial down to its cap and shoulder, and put the frame's own black vignette
+     * band across the top of the screen. The owner's words were "huge", "so
+     * zoomed in" and "black all around", and the measurements agreed: the
+     * section's mean luminance fell from 34/255 to 25. The label is a real
+     * problem and this was not the way to solve it — see the note in
+     * globals.css for what is left of it.
      */
     const cover = (source: CanvasImageSource, sw: number, sh: number) => {
       if (!pictureContext) return;

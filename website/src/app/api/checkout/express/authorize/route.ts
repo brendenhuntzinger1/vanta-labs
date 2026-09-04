@@ -20,6 +20,7 @@ import {
 } from "@/lib/express-checkout-service";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { isCheckoutOpen } from "@/lib/payment-provider";
+import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
 import { buildOrderRow, insertOrderItems, insertOrderRow, quoteOrder } from "@/lib/quote-order";
 import { CLAIM_HOLD_SECONDS, claimPromotionRedemption, releasePromotionRedemption } from "@/lib/bxgy-promotions";
 import { describeTenderShortfall, releaseOrderTender, reserveOrderTender } from "@/lib/tender-reservation";
@@ -89,6 +90,14 @@ function refuse(message: string, status = 200) {
 export async function POST(request: Request) {
   if (!isCheckoutOpen()) {
     return refuse("Checkout is temporarily unavailable. No charge was made.", 503);
+  }
+
+  // THE MONEY-MOVING ENDPOINT CHECKS THE FLAG ITSELF. Only the session route
+  // did, so an intent minted by a previous deploy could still be authorised
+  // after wallets were switched off — and until the express lane carries the
+  // card lane's gift and attribution wiring (EXPRESS_OFFER_PARITY), it is off.
+  if (!EXPRESS_CHECKOUT_ENABLED) {
+    return refuse("Express checkout is not enabled. No charge was made.", 503);
   }
 
   let body: AuthorizeBody;
@@ -286,7 +295,11 @@ export async function POST(request: Request) {
     amountPaid: expectedCents / 100,
     referralCode: quoteA.referral?.code ?? null,
     ambassadorId: quoteA.referral?.ambassadorId ?? null,
-    couponCode: quoteA.couponCode,
+    // From the quote priced with the REAL address, not the address-less one:
+    // a free-shipping code's waiver only counts when this order would have
+    // paid shipping, which an address-less quote cannot know. Written from
+    // quoteA it recorded — and later redeemed — a code that waived nothing.
+    couponCode: quoteFull.couponCode,
     customerUserId: claimed.customer_user_id,
     pointsRedeemed: 0,
     storeCreditRedeemedCents: quoteA.storeCreditRedeemedCents,
