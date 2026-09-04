@@ -654,10 +654,32 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           setItems([]);
           return;
         }
-        const parsed = JSON.parse(event.newValue) as { items?: unknown; referralCode?: string | null };
+        const parsed = JSON.parse(event.newValue) as {
+          items?: unknown;
+          referralCode?: string | null;
+          shippingProtectionEnabled?: boolean;
+          shippingProtectionChoiceMade?: boolean;
+        };
         setItems(sanitizeCartItems(parsed.items));
         if (typeof parsed.referralCode === "string" || parsed.referralCode === null) {
           setReferralCode(parsed.referralCode ?? null);
+        }
+        // The protection flags are part of "the other tab's changes" this
+        // handler exists to stop us clobbering. Syncing only items left the
+        // race wide open for them: the setItems above moves a dependency of
+        // the persist effect below, so THIS tab immediately writes its own
+        // stale flags back over the other tab's write. A shopper who unticked
+        // protection in one tab had the paid add-on silently restored by
+        // another, and the reset of choiceMade also downgraded a deliberate
+        // keep to "merely default-on", which the wallet gate reads.
+        //
+        // Booleans, not truthiness, for the same reason as hydration: the
+        // value that most needs to survive the trip is `false`.
+        if (typeof parsed.shippingProtectionEnabled === "boolean") {
+          setShippingProtectionEnabled(parsed.shippingProtectionEnabled);
+        }
+        if (typeof parsed.shippingProtectionChoiceMade === "boolean") {
+          setShippingProtectionChoiceMade(parsed.shippingProtectionChoiceMade);
         }
       } catch {
         // Ignore a malformed cross-tab write; our own state stays intact.

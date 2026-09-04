@@ -74,6 +74,44 @@ describe("the shipping-protection choice survives a page load", () => {
     );
   });
 
+
+  // -------------------------------------------------------------------------
+  // CROSS-TAB SYNC. Reported by the Vercel agent review on PR #147, verified
+  // against the code, and real.
+  //
+  // cart-context listens for `storage` events so a second tab mirrors the
+  // first. The handler synced `items` and `referralCode` only, and the comment
+  // above it already names the hazard it exists to prevent: a stale tab can
+  // "clobber the other tab's changes on its next save (last-writer-wins)".
+  // The protection flags were exactly such a change.
+  //
+  //   1. two tabs open on the cart, protection default-on and untouched
+  //   2. tab A unticks it -> localStorage {enabled:false, choiceMade:true}
+  //   3. tab B's handler fires, syncs items, keeps its stale enabled:true
+  //   4. that setItems moves a dependency of tab B's persist effect, which
+  //      writes {enabled:true, choiceMade:false} straight back
+  //
+  // The shopper's explicit removal is erased and the paid add-on returns —
+  // and choiceMade being reset ALSO downgrades a deliberate keep back to
+  // "merely default-on", which the wallet gate reads. Before this change the
+  // default was false, so a clobber could only ever remove a fee the shopper
+  // had chosen; pre-selecting it is what turns the same race into a charge.
+  // -------------------------------------------------------------------------
+  it("the cross-tab storage handler syncs the protection flags too", () => {
+    const source = code(CART_CONTEXT);
+    const handler = /const handleStorage = \(event: StorageEvent\) => \{[\s\S]*?\n    \};/.exec(source);
+    expect(handler, "no handleStorage function found").toBeTruthy();
+    const body = handler![0];
+
+    expect(body, "the cross-tab handler ignores shippingProtectionEnabled, so a stale tab re-adds the fee")
+      .toMatch(/setShippingProtectionEnabled\(/);
+    expect(body, "the cross-tab handler ignores shippingProtectionChoiceMade, so a stale tab downgrades a deliberate keep")
+      .toMatch(/setShippingProtectionChoiceMade\(/);
+    // Booleans, not truthiness: the value that has to survive is `false`.
+    expect(body, "the cross-tab handler does not read the flags as booleans")
+      .toMatch(/typeof parsed\.shippingProtectionEnabled === "boolean"/);
+  });
+
   it("still defaults to on for a shopper with no stored choice", () => {
     // The restore must not accidentally turn the default off for a first-time
     // visitor whose localStorage has no protection keys at all.
