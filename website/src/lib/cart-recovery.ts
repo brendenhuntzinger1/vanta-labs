@@ -168,6 +168,8 @@ export interface RecoveryCoupon {
   id: string | null;
   code: string;
   expiresAt: string;
+  /** The percentage the coupon row actually carries — never the current setting. */
+  percent: number;
 }
 
 export async function mintCartRecoveryCoupon(email: string, discountPercent: number, expiresInHours: number): Promise<RecoveryCoupon | null> {
@@ -196,7 +198,7 @@ export async function mintCartRecoveryCoupon(email: string, discountPercent: num
   // so a later stage can re-offer the SAME code instead of minting another one,
   // and so the t72h stage can load THIS coupon rather than describing one from
   // memory (see resolveLastChanceCoupon).
-  return { id: (insertedCoupon as { id?: string } | null)?.id ?? null, code, expiresAt };
+  return { id: (insertedCoupon as { id?: string } | null)?.id ?? null, code, expiresAt, percent: discountPercent };
 }
 
 /**
@@ -242,15 +244,40 @@ async function findLiveCouponForCart(cartId: string): Promise<RecoveryCoupon | n
   for (const priorCouponId of priorCouponIds) {
     const { data: existing } = await supabaseAdmin
       .from("coupons")
-      .select("id, code, ends_at, active")
+      .select("id, code, ends_at, active, discount_type, discount_value")
       .eq("id", priorCouponId)
       .maybeSingle();
 
-    const row = existing as { id: string; code: string; ends_at: string | null; active: boolean } | null;
+    const row = existing as { id: string; code: string; ends_at: string | null; active: boolean; discount_type?: string | null; discount_value?: number | string | null } | null;
     const stillLive = Boolean(row && row.active && row.ends_at && new Date(row.ends_at).getTime() > Date.now());
-    if (stillLive && row) return { id: row.id, code: row.code, expiresAt: row.ends_at as string };
+    if (stillLive && row) {
+      // The percentage is READ BACK, not remembered: a code minted at 8% is
+      // described as 8% even if the setting has since been changed to 5%.
+      const percent = String(row.discount_type ?? "percent") === "percent" ? Math.max(0, Math.round(Number(row.discount_value ?? 0))) : 0;
+      return { id: row.id, code: row.code, expiresAt: row.ends_at as string, percent };
+    }
   }
   return null;
+}
+
+/**
+ * The live recovery code a cart's OWN emails promised, for the restore link.
+ *
+ * Looked up by the cart id the link already carries — never a code taken from
+ * the URL — and returned only while the coupon is live. It is bound to the
+ * cart's address and single-use, and the checkout validates it again with the
+ * address the shopper enters, so arming it here gives away nothing the email
+ * had not already given: it only saves the shopper retyping it.
+ */
+export async function liveRecoveryCouponForCart(cartId: string): Promise<{
+  code: string;
+  discountType: "percent";
+  discountValue: number;
+  expiresAt: string;
+} | null> {
+  const coupon = await findLiveCouponForCart(cartId);
+  if (!coupon || coupon.percent <= 0) return null;
+  return { code: coupon.code, discountType: "percent", discountValue: coupon.percent, expiresAt: coupon.expiresAt };
 }
 
 /**
@@ -494,8 +521,31 @@ const STAGE_ENABLED: Record<RecoveryStage, (config: CartRecoveryConfig) => boole
  * sequences and four discount codes. A sequence already under way for a cart
  * continues; a NEW one waits until a week has passed since the last recovery
  * message to that address.
+ *
+ * THE COOLDOWN HOLDS THE SEQUENCE, NOT THE CART. A new cart started inside the
+ * week used to be skipped tick after tick until it had aged out of the sweep,
+ * and was then never mailed at all. Now its clock simply starts when the week
+ * is up: the first reminder goes an hour after that, and the rest follow in
+ * their windows. See sequenceStartFor.
  */
 export const RECOVERY_SEQUENCE_COOLDOWN_MS = 7 * 24 * HOUR_MS;
+
+/**
+ * When a NEW sequence's clock starts for this cart: the shopper's last
+ * activity, or the end of the address's cooldown if that is later. Pure.
+ * Returns null while the cooldown is still running.
+ */
+export function sequenceStartFor(input: {
+  lastActivityAt: number;
+  /** The newest recovery send to this address about ANOTHER cart, if any. */
+  lastRecoverySendAt: number | null;
+  now: number;
+}): number | null {
+  if (input.lastRecoverySendAt === null) return input.lastActivityAt;
+  const cooldownEnds = input.lastRecoverySendAt + RECOVERY_SEQUENCE_COOLDOWN_MS;
+  if (cooldownEnds > input.now) return null;
+  return Math.max(input.lastActivityAt, cooldownEnds);
+}
 
 /**
  * WHEN A DISCOUNT MAY BE OFFERED.
@@ -543,12 +593,16 @@ export function selectDueStage(
   return null;
 }
 
-/** Time since the shopper last touched the cart, falling back to first sight for old rows. */
-function elapsedFor(row: DueCartRow, now: number): number {
+/** When the shopper last touched the cart, falling back to first sight for old rows. */
+function lastActivityFor(row: DueCartRow): number {
   const last = row.last_updated_at ? new Date(row.last_updated_at).getTime() : NaN;
   const first = new Date(row.first_seen_at).getTime();
-  const anchor = Number.isFinite(last) ? Math.max(last, Number.isFinite(first) ? first : last) : first;
-  return now - anchor;
+  return Number.isFinite(last) ? Math.max(last, Number.isFinite(first) ? first : last) : first;
+}
+
+/** Time since the shopper last touched the cart. */
+function elapsedFor(row: DueCartRow, now: number): number {
+  return now - lastActivityFor(row);
 }
 
 /**
@@ -646,11 +700,14 @@ async function loadRecoveryContext(emails: string[], now: number): Promise<Recov
       emailByCart.set(String(row.id), String(row.email ?? "").trim().toLowerCase());
     }
     if (emailByCart.size > 0) {
+      // Far enough back to place a sequence whose cooldown ended up to four
+      // days ago: the last send that started the week is what its clock runs
+      // from (sequenceStartFor), so it must still be visible then.
       const { data: stages } = await supabaseAdmin
         .from("abandoned_cart_emails")
         .select("abandoned_cart_id, sent_at")
         .in("abandoned_cart_id", [...emailByCart.keys()])
-        .gte("sent_at", new Date(now - RECOVERY_SEQUENCE_COOLDOWN_MS).toISOString());
+        .gte("sent_at", new Date(now - RECOVERY_SEQUENCE_COOLDOWN_MS - STAGE_WINDOWS.t72h.closesAfterMs).toISOString());
       for (const row of (stages ?? []) as Array<Record<string, unknown>>) {
         const cartId = String(row.abandoned_cart_id);
         const email = emailByCart.get(cartId);
@@ -713,22 +770,28 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     t30mSent: 0, t12hSent: 0, t24hSent: 0, t72hSent: 0, scanned: 0, eligible: 0, recoveredLate: 0, heldForCooldown: 0,
   };
 
-  // Only sweep carts new enough to still have a pending stage. The last stage
-  // closes at 96h, so a still-"active" cart older than that would just be
-  // re-scanned every tick forever. Bounding by first_seen_at keeps per-tick
-  // work flat as active carts accumulate. (A cart kept alive by edits for more
-  // than four days simply ages out of recovery; that shopper is browsing, not
-  // abandoning.)
+  // Only sweep carts new enough to still have a pending stage. The stage clock
+  // runs from the shopper's LAST activity (elapsedFor), so the age-out must
+  // too: bounding the scan by first_seen_at dropped a cart edited on day two
+  // before its 72-hour message — the one with the discount — could ever go.
+  // A new sequence may also be waiting out the address's week-long cooldown
+  // (sequenceStartFor), so a cart is scanned for the cooldown plus the last
+  // window; a cart with nothing outstanding is dropped for free by the bulk
+  // claim read below and never costs a candidate slot.
   const RECOVERY_MAX_AGE_MS = STAGE_WINDOWS.t72h.closesAfterMs;
-  const oldestFirstSeenIso = new Date(now - RECOVERY_MAX_AGE_MS).toISOString();
+  const oldestActivityIso = new Date(now - RECOVERY_MAX_AGE_MS - RECOVERY_SEQUENCE_COOLDOWN_MS).toISOString();
 
-  const candidates: Array<{ row: DueCartRow; stage: RecoveryStage; claimed: Set<string> }> = [];
+  // A candidate with a stage has a sequence under way and its next message
+  // due. A candidate WITHOUT one has no sequence yet: whether it starts now,
+  // waits, or has aged out depends on the address's last recovery send,
+  // which is only known once the context is loaded.
+  const candidates: Array<{ row: DueCartRow; stage: RecoveryStage | null; claimed: Set<string> }> = [];
   for (let offset = 0; offset < CART_MAX_SCAN && candidates.length < CART_SWEEP_BUDGET; offset += CART_SCAN_PAGE) {
     const { data, error } = await supabaseAdmin
       .from("abandoned_carts")
       .select("id, email, customer_name, items, cart_value_cents, first_seen_at, last_updated_at")
       .eq("status", "active")
-      .gte("first_seen_at", oldestFirstSeenIso)
+      .or(`last_updated_at.gte.${oldestActivityIso},first_seen_at.gte.${oldestActivityIso}`)
       // Oldest first: the cart closest to ageing out of the window is the one
       // with the least time left to be recovered.
       .order("first_seen_at", { ascending: true })
@@ -744,16 +807,23 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
 
     for (const row of page) {
       const claimed = claimedByCart.get(String(row.id)) ?? new Set<string>();
-      const stage = selectDueStage(elapsedFor(row, now), config, claimed);
-      if (!stage) continue;
-      candidates.push({ row, stage, claimed });
+      if (claimed.size > 0) {
+        const stage = selectDueStage(elapsedFor(row, now), config, claimed);
+        if (!stage) continue;
+        candidates.push({ row, stage, claimed });
+      } else {
+        // No sequence yet. If nothing held it, its first window is the same
+        // test as above; if something did, the context decides. Either way a
+        // cart already past every window on its own clock has aged out.
+        if (elapsedFor(row, now) >= RECOVERY_MAX_AGE_MS + RECOVERY_SEQUENCE_COOLDOWN_MS) continue;
+        candidates.push({ row, stage: null, claimed });
+      }
       if (candidates.length >= CART_SWEEP_BUDGET) break;
     }
 
     if (page.length < CART_SCAN_PAGE) break;
   }
 
-  result.eligible = candidates.length;
   if (candidates.length === 0) return result;
 
   const context = await loadRecoveryContext(
@@ -761,11 +831,31 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     now,
   );
 
-  for (const { row, stage, claimed } of candidates) {
+  for (const candidate of candidates) {
+    const { row, claimed } = candidate;
     const items = Array.isArray(row.items) ? row.items : [];
     if (items.length === 0) continue;
     const email = String(row.email ?? "").trim().toLowerCase();
     if (!email) continue;
+
+    // A NEW sequence's clock starts when the address's cooldown is over, or
+    // at the cart's last activity if there was no cooldown to wait out.
+    let stage = candidate.stage;
+    if (!stage) {
+      const recent = context.lastRecoverySendAt.get(email);
+      const start = sequenceStartFor({
+        lastActivityAt: lastActivityFor(row),
+        lastRecoverySendAt: recent && recent.cartId !== String(row.id) ? recent.at : null,
+        now,
+      });
+      if (start === null) {
+        result.heldForCooldown++;
+        continue;
+      }
+      stage = selectDueStage(now - start, config, claimed);
+      if (!stage) continue;
+    }
+    result.eligible++;
 
     // UNSUBSCRIBED SHOPPERS ARE SKIPPED BEFORE ANYTHING IS WRITTEN.
     //
@@ -793,15 +883,6 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       await markRecoveredLate(String(row.id), paidSince.orderId);
       result.recoveredLate++;
       continue;
-    }
-
-    // A NEW sequence waits out the cooldown; one already under way continues.
-    if (claimed.size === 0) {
-      const recent = context.lastRecoverySendAt.get(email);
-      if (recent && recent.cartId !== String(row.id) && now - recent.at < RECOVERY_SEQUENCE_COOLDOWN_MS) {
-        result.heldForCooldown++;
-        continue;
-      }
     }
 
     const name = row.customer_name ?? "";
@@ -863,7 +944,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
           ...base,
           restoreUrl: url,
           couponCode: coupon?.code ?? "",
-          discountPercent: coupon ? config.discountPercent : 0,
+          discountPercent: coupon ? coupon.percent : 0,
           // K-01. Vercel runs UTC, so a bare toLocaleString told a Pacific
           // customer 10 PM for a code that died at 3 PM their time.
           expiresAt: coupon?.expiresAt ? formatDisplayDate(coupon.expiresAt, "datetime") ?? "" : "",

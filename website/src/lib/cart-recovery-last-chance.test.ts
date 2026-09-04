@@ -98,6 +98,18 @@ vi.mock("@/lib/supabase-server", () => {
       const cell = row[col];
       if (op === "eq") return String(cell) === String(val);
       if (op === "gte") return String(cell) >= String(val);
+      if (op === "or") {
+        return String(val).split(",").some((clause) => {
+          const [c, o, ...rest] = clause.split(".");
+          const v = rest.join(".");
+          const a = row[c];
+          if (o === "gte") return String(a ?? "") >= v;
+          if (o === "lte") return String(a ?? "") <= v;
+          if (o === "is" && v === "null") return a === null || a === undefined;
+          if (o === "eq") return String(a) === v;
+          return false;
+        });
+      }
       if (op === "is") return cell === val;
       if (op === "in") return (val as unknown[]).map(String).includes(String(cell));
       return true;
@@ -115,6 +127,7 @@ vi.mock("@/lib/supabase-server", () => {
       const b: Record<string, unknown> = {
         eq(c: string, v: unknown) { filters.push(["eq", c, v]); return b; },
         gte(c: string, v: unknown) { filters.push(["gte", c, v]); return b; },
+        or(clauses: string) { filters.push(["or", "", clauses]); return b; },
         is(c: string, v: unknown) { filters.push(["is", c, v]); return b; },
         in(c: string, v: unknown[]) { filters.push(["in", c, v]); return b; },
         limit() { return b; },
@@ -286,6 +299,25 @@ describe("the 72h last-chance email", () => {
     expect(state.coupons).toHaveLength(1);
     expect(t24()).toBeUndefined();
     expect(t72()!.text).toContain("SAVE-LIVE0001");
+  });
+
+  it("describes the percentage the re-offered code actually carries, not whatever the setting is today", async () => {
+    // The code was minted at 8% (an operator changed the setting since, to 5%).
+    // K-05: never describe a coupon that was not read back from the database
+    // — and that includes its percentage.
+    const cart = seedCart(73);
+    state.stages.push({ id: "stg-old", abandoned_cart_id: cart.id, stage: "t24h", coupon_id: "cpn-eight", sent_at: new Date(Date.now() - 48 * HOUR_MS).toISOString() });
+    state.coupons.push({
+      id: "cpn-eight", code: "SAVE-EIGHT001", discount_type: "percent", discount_value: 8,
+      ends_at: new Date(Date.now() + 12 * HOUR_MS).toISOString(),
+      assigned_email: cart.email, active: true, source: "cart_recovery",
+      created_at: new Date(Date.now() - 48 * HOUR_MS).toISOString(),
+    });
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    await runAbandonedCartSweep();
+    expect(t72()!.subject).toBe("One last note on your cart, with 8% off");
+    expect(t72()!.text).toContain("8% off");
+    expect(t72()!.text).not.toContain("5% off");
   });
 
   it("the 24-hour message carries no code at all", async () => {

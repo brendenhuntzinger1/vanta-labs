@@ -333,6 +333,53 @@ describe("a free-shipping gift", () => {
   });
 });
 
+describe("a typed code that loses to another discount is not recorded — the same rule as the gift", () => {
+  it("a 5% code beaten by 20% member pricing is not recorded on the order", async () => {
+    state.member = { percent: 20, freeShipping: false };
+    const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SAVE5", member: true });
+    expect(q.discountAmount).toBe(16);
+    expect(q.discountLabel).toBe("Membership pricing");
+    expect(q.couponCode).toBeNull();
+  });
+
+  it("a 5% code beaten by a 10% two-unit bundle tier is not recorded on the order", async () => {
+    state.bundle = { twoUnitPercent: 0.1, threePlusPercent: 0, fiveUnitPercent: 0, tenUnitPercent: 0 };
+    const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SAVE5" });
+    // Bundle pricing is applied to the unit price, so the coupon's 5% has
+    // nothing to beat and nothing to add: the code is not in the price.
+    expect(q.couponCode).toBeNull();
+  });
+
+  it("a 50% code that BEATS member pricing is recorded, exactly as before", async () => {
+    state.member = { percent: 20, freeShipping: false };
+    const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SAVE50", member: true });
+    expect(q.discountAmount).toBe(40);
+    expect(q.couponCode).toBe("SAVE50");
+  });
+
+  it("when stacking is allowed the code is in the price, so it is recorded even though member pricing is larger", async () => {
+    state.couponStacking = true;
+    state.member = { percent: 20, freeShipping: false };
+    const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SAVE5", member: true });
+    expect(q.discountAmount).toBeGreaterThan(16);
+    expect(q.couponCode).toBe("SAVE5");
+  });
+
+  it("a free-shipping code beaten on the percentage still counts when it waived shipping this order would have paid", async () => {
+    state.member = { percent: 20, freeShipping: false };
+    const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SHIPFREE", member: true });
+    expect(q.shipping).toBe(0);
+    expect(q.couponCode).toBe("SHIPFREE");
+  });
+
+  it("a free-shipping code on a plan that already ships free, beaten on the percentage, gave nothing and is not recorded", async () => {
+    state.member = { percent: 20, freeShipping: true };
+    const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SHIPFREE", member: true });
+    expect(q.shipping).toBe(0);
+    expect(q.couponCode).toBeNull();
+  });
+});
+
 describe("the qualifying subtotal: what the customer actually pays for merchandise", () => {
   it("a $40 basket with a 50% coupon pays $20 of goods and does not reach a $35 gift", async () => {
     state.offer = freeShipping();

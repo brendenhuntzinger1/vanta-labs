@@ -368,6 +368,7 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
   let couponId: string | null = null;
   let couponCode: string | null = null;
   let couponExpiresAt: string | null = null;
+  let couponPercent = 0;
   // Only the final stage carries a code now; the 24-hour message answers
   // questions instead. A manual resend is an explicit admin action, so it
   // mints without the sweep's per-address cooldown.
@@ -376,6 +377,7 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
     if (coupon) {
       couponCode = coupon.code;
       couponExpiresAt = coupon.expiresAt;
+      couponPercent = coupon.percent;
       const { data: couponRow } = await supabaseAdmin.from("coupons").select("id").eq("code", coupon.code).maybeSingle();
       couponId = couponRow?.id ?? null;
     }
@@ -465,7 +467,7 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
       cartValueCents: cart.cart_value_cents,
       restoreUrl: trackedRestoreUrl,
       couponCode: couponCode ?? "",
-      discountPercent: couponCode ? config.discountPercent : 0,
+      discountPercent: couponCode ? couponPercent : 0,
       expiresAt: couponExpiresAt ? formatDisplayDate(couponExpiresAt, "datetime") ?? "" : "",
     }),
   });

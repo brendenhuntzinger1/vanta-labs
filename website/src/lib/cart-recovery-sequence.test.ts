@@ -72,6 +72,18 @@ vi.mock("@/lib/supabase-server", () => {
       gt(c: string, v: unknown) { filters.push((r) => String(r[c] ?? "") > String(v)); return b; },
       in(c: string, v: unknown[]) { filters.push((r) => v.map(String).includes(String(r[c]))); return b; },
       is(c: string, v: unknown) { filters.push((r) => (r[c] ?? null) === v); return b; },
+      or(clauses: string) {
+        filters.push((r) => clauses.split(",").some((clause) => {
+          const [c, o, ...rest] = clause.split(".");
+          const v = rest.join(".");
+          if (o === "gte") return String(r[c] ?? "") >= v;
+          if (o === "lte") return String(r[c] ?? "") <= v;
+          if (o === "is" && v === "null") return r[c] === null || r[c] === undefined;
+          if (o === "eq") return String(r[c]) === v;
+          return false;
+        }));
+        return b;
+      },
       order() { return b; },
       limit(n: number) { take = n; return b; },
       range(from: number, to: number) { return Promise.resolve({ data: hits().slice(from, to + 1), error: null }); },
@@ -177,6 +189,32 @@ describe("the sweep", () => {
     expect(sent).toHaveLength(0);
     expect(cart.status).toBe("recovered");
     expect(cart.recovered_order_id).toBe("o-1");
+  });
+
+  it("a cart edited late still gets its 72-hour message: the clock AND the age-out both run from the last activity", async () => {
+    // First seen five days ago, last touched 73 hours ago. Bounding the scan by
+    // first_seen_at dropped this cart at 96 hours from first sight, so the
+    // most engaged carts were exactly the ones that never received the last
+    // note — the only one that carries the discount.
+    seedCart({ firstSeenHoursAgo: 122, lastUpdatedHoursAgo: 73 });
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    await runAbandonedCartSweep();
+    expect(sent.map((s) => s.campaignType)).toEqual(["cart_recovery_t72h"]);
+  });
+
+  it("a second cart inside the week starts its sequence when the cooldown ends, instead of never", async () => {
+    // The last recovery email to this address went 7 days and 2 hours ago,
+    // about another cart. The new cart was started an hour before that
+    // cooldown expired. Holding the CART meant it aged out unmailed; holding
+    // the SEQUENCE means its first reminder is due now, two hours into a
+    // clock that started when the week was up.
+    const earlier = seedCart({ id: "cart-old", firstSeenHoursAgo: 12 * 24 });
+    db.stages.push({ id: "stg-old", abandoned_cart_id: earlier.id, stage: "t72h", coupon_id: null, sent_at: new Date(Date.now() - 7 * DAY_MS - 2 * HOUR_MS).toISOString() });
+    seedCart({ id: "cart-new", firstSeenHoursAgo: 7 * 24 + 1 });
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    const result = await runAbandonedCartSweep();
+    expect(sent.map((s) => s.campaignType)).toEqual(["cart_recovery_t30m"]);
+    expect(result.heldForCooldown).toBe(0);
   });
 
   it("does not start a second sequence for an address mailed about another cart in the last seven days", async () => {

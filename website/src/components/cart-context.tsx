@@ -195,6 +195,12 @@ type CartContextValue = {
   clearReferralCode: () => void;
   clearReferralMessage: () => void;
   applyCouponCode: (code: string) => void;
+  /**
+   * Arm a code the server has already validated for a known address — the
+   * recovery code a restore link carries. Primes the address so the preview
+   * prices the code the way the checkout will.
+   */
+  restoreCoupon: (input: { code: string; discountType: "percent" | "fixed"; discountValue: number; email: string }) => void;
   clearCouponCode: () => void;
   clearCouponMessage: () => void;
   setKnownEmail: (email: string) => void;
@@ -1654,6 +1660,27 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setCouponSuccess("Coupon removed.");
   };
 
+  const restoreCoupon = (input: { code: string; discountType: "percent" | "fixed"; discountValue: number; email: string }) => {
+    const code = input.code.trim().toUpperCase();
+    const email = input.email.trim().toLowerCase();
+    if (!code || !email) return;
+    // The code is bound to this address; without it the preview and the
+    // validator would refuse the code the server just handed over.
+    setKnownEmail(email);
+    setCouponDetails({ code, discountType: input.discountType, discountValue: Number(input.discountValue ?? 0) });
+    setCouponCode(code);
+    setCouponError(null);
+    setCouponSuccess("Coupon applied.");
+    // One code slot, exactly as applyCouponCode: a coupon replaces a referral.
+    setReferralDetails(null);
+    setReferralCode(null);
+    setReferralError(null);
+    setReferralSuccess(null);
+    if (typeof document !== "undefined") {
+      document.cookie = `${REFERRAL_COOKIE_KEY}=; path=/; max-age=0; samesite=lax`;
+    }
+  };
+
   const clearCouponMessage = () => {
     setCouponError(null);
     setCouponSuccess(null);
@@ -1732,6 +1759,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     clearReferralCode,
     clearReferralMessage,
     applyCouponCode,
+    restoreCoupon,
     clearCouponCode,
     clearCouponMessage,
     setKnownEmail,

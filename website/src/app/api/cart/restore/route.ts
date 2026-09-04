@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAbandonedCartById } from "@/lib/cart-recovery";
+import { getAbandonedCartById, liveRecoveryCouponForCart } from "@/lib/cart-recovery";
 
 export const dynamic = "force-dynamic";
 
@@ -20,5 +20,15 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ success: false, error: "This cart link is no longer valid" }, { status: 404 });
   }
 
-  return NextResponse.json({ success: true, items: cart.items });
+  // The code the cart's own emails promised, armed for the shopper so it is
+  // not retyped from the email. Looked up by the cart id only; a code in the
+  // URL is never read. Best-effort: a coupon read that fails still restores
+  // the cart.
+  const coupon = await liveRecoveryCouponForCart(cart.id).catch(() => null);
+  return NextResponse.json({
+    success: true,
+    items: cart.items,
+    email: cart.email,
+    ...(coupon ? { coupon: { code: coupon.code, discountType: coupon.discountType, discountValue: coupon.discountValue } } : {}),
+  });
 }

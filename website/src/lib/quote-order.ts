@@ -1106,17 +1106,21 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       : null;
   }
 
-  // A typed code that lost the slot to the gift and waived no shipping gave
-  // the customer nothing. It is not recorded on the order, so the paid path
-  // does not redeem it for a discount it never provided. Its shipping waiver
-  // only counts if this order would otherwise have paid shipping: over the
-  // store's threshold, on a plan that ships free, or on a bulk tier, the
-  // waiver changes nothing either. (A code beaten by membership, referral or
-  // bulk pricing is recorded exactly as before.)
+  // A TYPED CODE IS RECORDED ONLY WHEN IT IS IN THE PRICE — the same rule the
+  // gift follows. One customer discount wins (or, with stacking on, the code
+  // is added to the winner); a code beaten by the gift's percentage, by
+  // membership pricing, by a bundle tier, by a referral or by bulk savings
+  // took nothing off, so it is not written to the order and the paid path does
+  // not redeem it for a discount it never provided. The cart already tells the
+  // shopper the code did not lower the total; this makes the order say the
+  // same. A code's shipping waiver counts on its own, but only if this order
+  // would otherwise have paid shipping: over the store's threshold, on a plan
+  // that ships free, or on a bulk tier, the waiver changes nothing either.
+  const couponDiscountApplied = Boolean(coupon) && couponAmount > 0 && couponSlotWon && !giftPercentFillsSlot;
   const couponWaivedShipping = Boolean(coupon?.freeShipping)
     && !(bulkSavingsResult.tier || memberPerks.freeShipping)
     && (destinationKnown ? shippingAtListTerms > 0 : true);
-  const couponCodeForOrder = coupon && (!offerPercentApplied || couponWaivedShipping) ? coupon.code : null;
+  const couponCodeForOrder = coupon && (couponDiscountApplied || couponWaivedShipping) ? coupon.code : null;
   // IS THE SHOPPER ACTUALLY GETTING A REFERRAL DISCOUNT?
   //
   // Read off the resolved winner rather than re-derived, because every
