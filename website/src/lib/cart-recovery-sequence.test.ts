@@ -217,6 +217,59 @@ describe("the sweep", () => {
     expect(result.heldForCooldown).toBe(0);
   });
 
+  it("a cooldown-started sequence keeps its clock for the later stages, not only the first", async () => {
+    // Cooldown ended 26 hours ago; the new cart's first reminder went an hour
+    // after that. On the deferred clock it is now 26 hours in: the details
+    // message is due. On the raw activity clock it would be eight days in and
+    // nothing would ever go.
+    const earlier = seedCart({ id: "cart-old", firstSeenHoursAgo: 12 * 24 });
+    db.stages.push({ id: "stg-old", abandoned_cart_id: earlier.id, stage: "t72h", coupon_id: null, sent_at: new Date(Date.now() - 7 * DAY_MS - 26 * HOUR_MS).toISOString() });
+    const cart = seedCart({ id: "cart-new", firstSeenHoursAgo: 7 * 24 + 25 });
+    db.stages.push({ id: "stg-new-1", abandoned_cart_id: cart.id, stage: "t30m", coupon_id: null, sent_at: new Date(Date.now() - 25 * HOUR_MS).toISOString() });
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    await runAbandonedCartSweep();
+    expect(sent.map((s) => s.campaignType)).toEqual(["cart_recovery_t24h"]);
+  });
+
+  it("a cooldown-started sequence does not fire its second stage thirty minutes after the first", async () => {
+    // Cooldown ended 2 hours ago; the first reminder went an hour ago. On the
+    // deferred clock the cart is two hours in, so nothing else is due yet —
+    // the raw activity clock (eight days) would have handed it the details
+    // message on the very next tick.
+    const earlier = seedCart({ id: "cart-old", firstSeenHoursAgo: 12 * 24 });
+    db.stages.push({ id: "stg-old", abandoned_cart_id: earlier.id, stage: "t72h", coupon_id: null, sent_at: new Date(Date.now() - 7 * DAY_MS - 2 * HOUR_MS).toISOString() });
+    const cart = seedCart({ id: "cart-new", firstSeenHoursAgo: 7 * 24 + 25 });
+    db.stages.push({ id: "stg-new-1", abandoned_cart_id: cart.id, stage: "t30m", coupon_id: null, sent_at: new Date(Date.now() - 1 * HOUR_MS).toISOString() });
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    await runAbandonedCartSweep();
+    expect(sent).toHaveLength(0);
+  });
+
+  it("an old cart with no sequence and nothing holding it is not a candidate, so it never spends the budget", async () => {
+    seedCart({ firstSeenHoursAgo: 5 * 24 });
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    const result = await runAbandonedCartSweep();
+    expect(sent).toHaveLength(0);
+    expect(result.eligible).toBe(0);
+    expect(result.heldForCooldown).toBe(0);
+  });
+
+  it("a held cart whose shopper has since paid is closed, not reported as held", async () => {
+    const earlier = seedCart({ id: "cart-old", firstSeenHoursAgo: 80 });
+    db.stages.push({ id: "stg-old", abandoned_cart_id: earlier.id, stage: "t72h", coupon_id: null, sent_at: new Date(Date.now() - 2 * DAY_MS).toISOString() });
+    const cart = seedCart({ id: "cart-new", firstSeenHoursAgo: 2 });
+    db.orders.push({ order_id: "ord-late", customer_email: "shopper@example.com", payment_status: "paid", created_at: new Date(Date.now() - 1 * HOUR_MS).toISOString() });
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    const result = await runAbandonedCartSweep();
+    expect(sent).toHaveLength(0);
+    // Both of the address's open carts are closed by the purchase, exactly as
+    // the payment webhook would have closed them; neither is "held".
+    expect(result.recoveredLate).toBe(2);
+    expect(result.heldForCooldown).toBe(0);
+    expect(cart.status).toBe("recovered");
+    expect(earlier.status).toBe("recovered");
+  });
+
   it("does not start a second sequence for an address mailed about another cart in the last seven days", async () => {
     const earlier = seedCart({ id: "cart-old", firstSeenHoursAgo: 80 });
     db.stages.push({ id: "stg-old", abandoned_cart_id: earlier.id, stage: "t72h", coupon_id: null, sent_at: new Date(Date.now() - 2 * DAY_MS).toISOString() });

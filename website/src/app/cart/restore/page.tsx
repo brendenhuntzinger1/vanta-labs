@@ -24,6 +24,7 @@ function CartRestoreInner() {
         const result = await response.json() as {
           success: boolean;
           items?: Array<{ slug: string; variantId?: string; name: string; quantity: number; unitPrice: number; image?: string }>;
+          sessionId?: string | null;
           email?: string;
           coupon?: { code: string; discountType: "percent" | "fixed"; discountValue: number };
           error?: string;
@@ -34,9 +35,11 @@ function CartRestoreInner() {
           return;
         }
 
-        restoreItems(result.items);
+        // Continue the cart's own session, so the tracker updates this cart
+        // rather than opening a second one for the same shopper.
+        restoreItems(result.items, { sessionId: result.sessionId ?? null });
         // The recovery code the email promised, already validated server-side
-        // against this cart's address; the checkout validates it again.
+        // against the address it is bound to; the checkout validates it again.
         if (result.coupon && result.email) restoreCoupon({ ...result.coupon, email: result.email });
         router.push("/cart");
       } catch {

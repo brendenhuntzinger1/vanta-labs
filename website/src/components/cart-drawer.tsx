@@ -9,6 +9,7 @@ import { bundleDiscountRate, getBundleDiscountedLineTotal, getNextBundleTier } f
 import { bestPaidTier, computeCartMembershipValue } from "@/lib/member-pricing";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { useOfferQuote } from "@/lib/offer-quote";
+import { couponOutcomeAgainstQuote } from "@/lib/discount-resolution";
 import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
 import { ExpressApplePayButton } from "@/components/express-apple-pay-button";
 import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
@@ -193,6 +194,13 @@ export function CartDrawer() {
   // a promo code for a figure that is actually the gift's, or a code the
   // order will not even record.
   const shownDiscountLabel = offerQuote?.discountLabel ?? appliedDiscountLabel ?? offerQuote?.offer?.description ?? "Discount";
+  // And the quote outranks the client's guess about a typed code — see
+  // couponOutcomeAgainstQuote.
+  const shownCouponOutcome = couponOutcomeAgainstQuote({
+    outcome: couponOutcome,
+    couponCode: couponDetails?.code ?? null,
+    quote: offerQuote ? { couponCode: offerQuote.couponCode, discountLabel: offerQuote.discountLabel ?? null } : null,
+  });
   const giftLines = offerQuote?.giftLines ?? [];
 
   // Smart membership upsell: only for non-members, and only when joining
@@ -640,16 +648,16 @@ export function CartDrawer() {
                             {isApplyingCoupon ? "…" : "Apply"}
                           </button>
                         </div>
-                        {couponOutcome ? (
-                          <p className={`mt-1.5 text-xs ${couponOutcome.controlsPrice ? "text-emerald-400" : "text-amber-300/90"}`}>
-                            {couponOutcome.message}
+                        {shownCouponOutcome ? (
+                          <p className={`mt-1.5 text-xs ${shownCouponOutcome.controlsPrice ? "text-emerald-400" : "text-amber-300/90"}`}>
+                            {shownCouponOutcome.message}
                           </p>
                         ) : null}
                         {couponError ? <p className="mt-1.5 text-xs text-rose-400">{couponError}</p> : null}
                         {couponDetails ? (
                           <p className="mt-1.5 flex items-center justify-between text-xs text-zinc-400">
                             {/* Offer size shown only while the coupon controls the price. */}
-                            <span>{couponOutcome?.controlsPrice ? `${couponDetails.code} · ${couponDetails.discountType === "fixed" ? formatCartCurrency(couponDetails.discountValue) : `${couponDetails.discountValue}%`} off` : couponDetails.code}</span>
+                            <span>{shownCouponOutcome?.controlsPrice ? `${couponDetails.code} · ${couponDetails.discountType === "fixed" ? formatCartCurrency(couponDetails.discountValue) : `${couponDetails.discountValue}%`} off` : couponDetails.code}</span>
                             <button type="button" onClick={clearCouponCode} className="text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
                           </p>
                         ) : null}

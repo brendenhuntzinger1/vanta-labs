@@ -54,6 +54,8 @@ interface CouponRow {
   active: boolean;
   source: string;
   created_at: string;
+  redemptions_count?: number;
+  max_redemptions?: number | null;
 }
 
 interface StageRow { id: string; abandoned_cart_id: string; stage: string; coupon_id: string | null; sent_at: string }
@@ -318,6 +320,24 @@ describe("the 72h last-chance email", () => {
     expect(t72()!.subject).toBe("One last note on your cart, with 8% off");
     expect(t72()!.text).toContain("8% off");
     expect(t72()!.text).not.toContain("5% off");
+  });
+
+  it("a code that has already been redeemed is not re-offered, even though it is active and unexpired", async () => {
+    const cart = seedCart(73);
+    state.stages.push({ id: "stg-old", abandoned_cart_id: cart.id, stage: "t24h", coupon_id: "cpn-spent", sent_at: new Date(Date.now() - 48 * HOUR_MS).toISOString() });
+    state.coupons.push({
+      id: "cpn-spent", code: "SAVE-SPENT0001", discount_type: "percent", discount_value: 5,
+      ends_at: new Date(Date.now() + 12 * HOUR_MS).toISOString(),
+      assigned_email: cart.email, active: true, source: "cart_recovery",
+      created_at: new Date(Date.now() - 48 * HOUR_MS).toISOString(),
+      redemptions_count: 1, max_redemptions: 1,
+    });
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    await runAbandonedCartSweep();
+    expect(t72()).toBeDefined();
+    expect(t72()!.text).not.toContain("SAVE-SPENT0001");
+    // Inside the discount cooldown, so no fresh code either: the note goes without one.
+    expect(state.coupons).toHaveLength(1);
   });
 
   it("the 24-hour message carries no code at all", async () => {

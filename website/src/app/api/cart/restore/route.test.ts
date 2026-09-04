@@ -19,8 +19,8 @@ import { NextRequest } from "next/server";
 vi.mock("server-only", () => ({}));
 
 const state = vi.hoisted(() => ({
-  cart: null as null | { id: string; items: Array<Record<string, unknown>>; email: string; customerName: string | null },
-  coupon: null as null | { code: string; discountType: "percent" | "fixed"; discountValue: number; expiresAt: string },
+  cart: null as null | { id: string; items: Array<Record<string, unknown>>; email: string; customerName: string | null; sessionId?: string | null; status?: string },
+  coupon: null as null | { code: string; discountType: "percent" | "fixed"; discountValue: number; expiresAt: string; email: string },
   lookups: [] as string[],
 }));
 
@@ -35,21 +35,23 @@ const request = (id: string | null) =>
   new NextRequest(`https://www.vantalabsresearch.com/api/cart/restore${id === null ? "" : `?id=${encodeURIComponent(id)}`}`);
 
 beforeEach(() => {
-  state.cart = { id: "cart-1", items: [{ slug: "bpc-157-10mg", name: "BPC-157", quantity: 1, unitPrice: 69 }], email: "shopper@example.test", customerName: "Sam" };
+  state.cart = { id: "cart-1", items: [{ slug: "bpc-157-10mg", name: "BPC-157", quantity: 1, unitPrice: 69 }], email: "shopper@example.test", customerName: "Sam", sessionId: "sess-desktop", status: "active" };
   state.coupon = null;
   state.lookups = [];
 });
 
 describe("GET /api/cart/restore", () => {
   it("returns the items and, when the cart holds a live recovery code, the code and the address it is bound to", async () => {
-    state.coupon = { code: "SAVE-ABCDEF1234", discountType: "percent", discountValue: 5, expiresAt: new Date(Date.now() + 3_600_000).toISOString() };
+    state.coupon = { code: "SAVE-ABCDEF1234", discountType: "percent", discountValue: 5, expiresAt: new Date(Date.now() + 3_600_000).toISOString(), email: "bound@example.test" };
     const response = await GET(request("cart-1"));
     const body = await response.json();
     expect(response.status).toBe(200);
     expect(body.success).toBe(true);
     expect(body.items).toHaveLength(1);
     expect(body.coupon).toEqual({ code: "SAVE-ABCDEF1234", discountType: "percent", discountValue: 5 });
-    expect(body.email).toBe("shopper@example.test");
+    // The address the CODE is bound to — not the row's current address, which
+    // the tracking beacon may since have overwritten.
+    expect(body.email).toBe("bound@example.test");
     expect(state.lookups).toEqual(["cart-1"]);
   });
 
@@ -60,8 +62,30 @@ describe("GET /api/cart/restore", () => {
     expect(body.coupon).toBeUndefined();
   });
 
+  it("hands over the address only alongside a code: a link with no code discloses nothing new", async () => {
+    const response = await GET(request("cart-1"));
+    const body = await response.json();
+    expect(body.email).toBeUndefined();
+  });
+
+  it("returns the cart's session id, so a restore on another device continues THIS cart rather than starting a second one", async () => {
+    const response = await GET(request("cart-1"));
+    const body = await response.json();
+    expect(body.sessionId).toBe("sess-desktop");
+  });
+
+  it("does not arm a code for a cart that is no longer active", async () => {
+    state.cart = { ...state.cart!, status: "recovered" };
+    state.coupon = { code: "SAVE-ABCDEF1234", discountType: "percent", discountValue: 5, expiresAt: new Date(Date.now() + 3_600_000).toISOString(), email: "shopper@example.test" };
+    const response = await GET(request("cart-1"));
+    const body = await response.json();
+    expect(body.success).toBe(true);
+    expect(body.coupon).toBeUndefined();
+    expect(state.lookups).toEqual([]);
+  });
+
   it("looks the code up by the cart id only: a code in the URL is ignored", async () => {
-    state.coupon = { code: "SAVE-REAL000000", discountType: "percent", discountValue: 5, expiresAt: new Date(Date.now() + 3_600_000).toISOString() };
+    state.coupon = { code: "SAVE-REAL000000", discountType: "percent", discountValue: 5, expiresAt: new Date(Date.now() + 3_600_000).toISOString(), email: "shopper@example.test" };
     const response = await GET(new NextRequest("https://www.vantalabsresearch.com/api/cart/restore?id=cart-1&coupon=SAVE-FORGED0000"));
     const body = await response.json();
     expect(body.coupon.code).toBe("SAVE-REAL000000");
@@ -89,8 +113,29 @@ describe("the restore page applies what the endpoint armed", () => {
   it("the cart context exposes restoreCoupon, which primes the address the code is bound to", () => {
     const context = source("components/cart-context.tsx");
     expect(context).toContain("restoreCoupon");
-    const at = context.indexOf("const restoreCoupon =");
-    expect(at).toBeGreaterThan(0);
-    expect(context.slice(at, at + 1200)).toContain("setKnownEmail(");
+    expect(context).toContain("setKnownEmail(");
+  });
+
+  it("the cart context arms a restored code only once it knows who is signed in and which promotion is live", () => {
+    const context = source("components/cart-context.tsx");
+    // Parked, then applied by an effect that can see the account and the
+    // promotion: a code bound to another address, or one a non-stacking
+    // promotion would refuse, is reported rather than armed.
+    expect(context).toContain("pendingRestoredCoupon");
+    expect(context).toContain("accountChecked");
+  });
+
+  it("the page continues the cart's own session so the tracker does not open a second cart", () => {
+    const page = source("app/cart/restore/page.tsx");
+    expect(page).toMatch(/restoreItems\(result\.items, \{ sessionId: result\.sessionId/);
+    const context = source("components/cart-context.tsx");
+    const at = context.indexOf("const restoreItems =");
+    expect(context.slice(at, at + 1500)).toContain("setCartSessionId(");
+  });
+
+  it("the checkout always lets the shopper remove a code, promotion or not", () => {
+    const checkout = source("app/checkout/page.tsx");
+    expect(checkout).not.toContain("couponCode && (!isBuy3Get1FreeActive || activePromotionAllowsCoupon) ?");
+    expect(checkout).toMatch(/\{couponCode \? \([\s\S]{0,400}Remove code/);
   });
 });

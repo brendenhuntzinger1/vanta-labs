@@ -295,7 +295,11 @@ export async function POST(request: Request) {
     amountPaid: expectedCents / 100,
     referralCode: quoteA.referral?.code ?? null,
     ambassadorId: quoteA.referral?.ambassadorId ?? null,
-    couponCode: quoteA.couponCode,
+    // From the quote priced with the REAL address, not the address-less one:
+    // a free-shipping code's waiver only counts when this order would have
+    // paid shipping, which an address-less quote cannot know. Written from
+    // quoteA it recorded — and later redeemed — a code that waived nothing.
+    couponCode: quoteFull.couponCode,
     customerUserId: claimed.customer_user_id,
     pointsRedeemed: 0,
     storeCreditRedeemedCents: quoteA.storeCreditRedeemedCents,
