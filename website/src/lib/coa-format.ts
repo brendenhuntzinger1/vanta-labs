@@ -224,3 +224,82 @@ export function compareCoaDocuments(
   if (!a.testDate && b.testDate) return 1;
   return a.batchNumber.localeCompare(b.batchNumber);
 }
+
+// ---------------------------------------------------------------------------
+// Dose ordering. One product accumulates a certificate per dose per production
+// run (GLP-3 5mg, 10mg, 15mg…), and a reader who opened the viewer to compare
+// doses needs them in dose order, not upload order.
+// ---------------------------------------------------------------------------
+
+/**
+ * A dose label reduced to something two spellings of the same dose agree on:
+ * "5 mg", "5mg" and "5MG" are one dose. Empty for a record with no dose.
+ */
+export function coaStrengthKey(label: string | null | undefined): string {
+  return String(label ?? "").toLowerCase().replace(/\s+/g, "");
+}
+
+/**
+ * The numeric part of a dose label, in milligrams, or null when the label
+ * carries none. Micrograms and grams are scaled so a catalogue that mixes units
+ * still orders by dose; a unit this doesn't know keeps its bare number, which
+ * is right as long as one product sticks to one unit — and it does.
+ */
+export function parseCoaStrengthValue(label: string | null | undefined): number | null {
+  const match = coaStrengthKey(label).match(/(\d+(?:\.\d+)?)\s*([a-zµ]*)/);
+  if (!match) return null;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value)) return null;
+  const unit = match[2];
+  if (unit === "mcg" || unit === "µg" || unit === "ug") return value / 1000;
+  if (unit === "g" || unit === "gram" || unit === "grams") return value * 1000;
+  return value;
+}
+
+/**
+ * Lowest dose first, records with no dose last, newest batch first within a
+ * dose. Two labels that mean the same dose sort together whatever their
+ * spelling; two labels with no readable number fall back to text order so the
+ * result is still stable.
+ */
+export function compareCoaDocumentsByStrength(
+  a: Pick<PublicCoaDocument, "strength" | "testDate" | "batchNumber">,
+  b: Pick<PublicCoaDocument, "strength" | "testDate" | "batchNumber">,
+): number {
+  const keyA = coaStrengthKey(a.strength);
+  const keyB = coaStrengthKey(b.strength);
+  if (keyA !== keyB) {
+    if (!keyA) return 1;
+    if (!keyB) return -1;
+    const valueA = parseCoaStrengthValue(keyA);
+    const valueB = parseCoaStrengthValue(keyB);
+    if (valueA !== null && valueB !== null && valueA !== valueB) {
+      return valueA - valueB;
+    }
+    if (valueA !== null && valueB === null) return -1;
+    if (valueA === null && valueB !== null) return 1;
+    if (valueA === null && valueB === null) return keyA.localeCompare(keyB);
+    // Same value, different spelling ("5mg" / "5 mg"): fall through and order
+    // by date so the two read as one dose.
+  }
+  return compareCoaDocuments(a, b);
+}
+
+/**
+ * Every dose that has at least one record, once each, lowest first, spelled
+ * the way its first record spells it. Records with no dose are left out — they
+ * have nothing to label a pill with.
+ */
+export function listCoaStrengths(
+  documents: Array<Pick<PublicCoaDocument, "strength" | "testDate" | "batchNumber">>,
+): string[] {
+  const seen = new Set<string>();
+  const strengths: string[] = [];
+  for (const doc of [...documents].sort(compareCoaDocumentsByStrength)) {
+    const key = coaStrengthKey(doc.strength);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    strengths.push(String(doc.strength).trim());
+  }
+  return strengths;
+}

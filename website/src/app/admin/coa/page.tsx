@@ -200,6 +200,37 @@ export default function AdminCoaPage() {
     );
   }, []);
 
+  // "Add by dose": one row per strength of the chosen product, each already
+  // knowing which dose it is for. What is left for the operator is a picture
+  // and a batch number per row — the two things only they know.
+  const addDraftsForProduct = useCallback(
+    (productId: string) => {
+      const product = productsById.get(productId);
+      if (!product) return;
+      const rows =
+        product.strengths.length > 0
+          ? product.strengths.map((dose) => ({ ...emptyDraft(), productId, productDoseId: dose.id, strength: dose.label }))
+          : [{ ...emptyDraft(), productId }];
+      setDrafts((current) => [...(current ?? []), ...rows]);
+    },
+    [productsById],
+  );
+
+  // A picture chosen for a row that already exists — the by-dose flow, or a
+  // link-only draft the operator has since photographed. Same downscale as a
+  // drop, so a phone photo never trips the request-size limit.
+  const attachDraftFile = useCallback(
+    async (key: string, file: File) => {
+      const result = await prepareCoaFile(file);
+      if ("error" in result) {
+        flash(result.error);
+        return;
+      }
+      updateDraft(key, { file: result.file });
+    },
+    [flash, updateDraft],
+  );
+
   const saveDrafts = useCallback(async () => {
     const queue = drafts ?? [];
     const pending = queue.filter((draft) => draft.state !== "saved");
@@ -380,9 +411,16 @@ export default function AdminCoaPage() {
               <button
                 type="button"
                 onClick={() => setDrafts([emptyDraft()])}
-                className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-cyan-200"
+                className="rounded-lg border border-cyan-300/50 px-4 py-2 text-sm font-semibold text-cyan-200 hover:border-cyan-200"
               >
                 + Add COA
+              </button>
+              <button
+                type="button"
+                onClick={() => setDrafts([])}
+                className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-cyan-200"
+              >
+                + Add by dose
               </button>
             </div>
           </div>
@@ -594,6 +632,8 @@ export default function AdminCoaPage() {
           productsById={productsById}
           onAddFiles={addFiles}
           onUpdate={updateDraft}
+          onAddProduct={addDraftsForProduct}
+          onAttachFile={(key, file) => void attachDraftFile(key, file)}
           onRemove={(key) =>
             setDrafts((current) => {
               const remaining = (current ?? []).filter((row) => row.key !== key);
@@ -652,6 +692,8 @@ function DraftPanel({
   productsById,
   onAddFiles,
   onUpdate,
+  onAddProduct,
+  onAttachFile,
   onRemove,
   onApplyToAll,
   onClose,
@@ -662,6 +704,8 @@ function DraftPanel({
   productsById: Map<string, CoaProductOption>;
   onAddFiles: (files: FileList | File[]) => void;
   onUpdate: (key: string, patch: Partial<DraftRow>) => void;
+  onAddProduct: (productId: string) => void;
+  onAttachFile: (key: string, file: File) => void;
   onRemove: (key: string) => void;
   onApplyToAll: (patch: Partial<DraftRow>) => void;
   onClose: () => void;
@@ -679,13 +723,46 @@ function DraftPanel({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-xl font-semibold text-white">
-              {drafts.length === 1 ? "Add COA" : `Add ${drafts.length} COAs`}
+              {drafts.length === 0 ? "Add COAs by dose" : drafts.length === 1 ? "Add COA" : `Add ${drafts.length} COAs`}
             </h2>
-            <p className="mt-1 text-sm text-zinc-400">Pick the product, enter the batch, save. No code, no deploy.</p>
+            <p className="mt-1 text-sm text-zinc-400">
+              {drafts.length === 0
+                ? "Choose a product and you get one row per dose. Add a picture and a batch number to each, then save."
+                : "Pick the product, enter the batch, save. No code, no deploy."}
+            </p>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg border border-zinc-700 px-3 py-2 text-sm text-zinc-300">
             Close
           </button>
+        </div>
+
+        {/* The product first, then its doses, is how the certificates arrive:
+            a lab tests GLP-3 5mg, 10mg and 15mg in one go. This turns that
+            envelope into one row per dose, each already labelled. */}
+        <div className="mt-4 flex flex-wrap items-end gap-3 rounded-xl border border-cyan-300/25 bg-cyan-300/[0.06] p-4">
+          <label className="min-w-[16rem] flex-1 text-sm text-zinc-300">
+            <FieldLabel>Add a row for every dose of a product</FieldLabel>
+            <select
+              value=""
+              onChange={(event) => {
+                if (event.target.value) onAddProduct(event.target.value);
+              }}
+              className="vl-input w-full px-3 py-2"
+            >
+              <option value="">Choose a product…</option>
+              {products.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name}
+                  {option.strengths.length > 0 ? ` — ${option.strengths.map((item) => item.label).join(" / ")}` : ""}
+                  {option.isPublished ? "" : " (draft product)"}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="max-w-sm text-xs text-zinc-500">
+            One picture or PDF per dose — a phone photo of the certificate is fine. Laboratory and test date
+            can be filled in once for every row.
+          </p>
         </div>
 
         {drafts.length > 1 ? (
@@ -721,15 +798,37 @@ function DraftPanel({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-white">
-                      {draft.file ? draft.file.name : `COA ${index + 1}`}
+                      {product
+                        ? `${product.name}${draft.strength ? ` · ${draft.strength}` : ""}`
+                        : draft.file
+                          ? draft.file.name
+                          : `COA ${index + 1}`}
                     </p>
                     <p className="text-xs text-zinc-500">
-                      {draft.file ? formatCoaFileSize(draft.file.size) : "No file attached — paste a link below instead."}
+                      {draft.file
+                        ? `${draft.file.name} · ${formatCoaFileSize(draft.file.size)}`
+                        : "No picture yet — add one, or paste a link below."}
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
                     {draft.state === "saved" ? <span className="text-xs text-emerald-400">Saved</span> : null}
                     {draft.state === "saving" ? <span className="text-xs text-zinc-400">Saving…</span> : null}
+                    {/* Attach or swap the document on THIS row. A file used to
+                        arrive only by drop, before the row existed, so a row
+                        started from a product had no way to take one. */}
+                    <label className="cursor-pointer rounded-md border border-cyan-300/50 px-2 py-1 text-xs font-semibold text-cyan-200 hover:border-cyan-200">
+                      {draft.file ? "Replace picture" : "Add picture or PDF"}
+                      <input
+                        type="file"
+                        accept={ACCEPTED}
+                        className="hidden"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          if (file) onAttachFile(draft.key, file);
+                          event.target.value = "";
+                        }}
+                      />
+                    </label>
                     <button type="button" onClick={() => onRemove(draft.key)} className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300">
                       Remove
                     </button>
@@ -887,7 +986,7 @@ function DraftPanel({
             </button>
             <button
               type="button"
-              disabled={saving || incomplete}
+              disabled={saving || incomplete || drafts.length === 0}
               onClick={async () => {
                 setSaving(true);
                 try {
