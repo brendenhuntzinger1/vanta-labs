@@ -137,7 +137,7 @@ Domestic shipping is free over the current threshold; otherwise, a flat fee appl
 Delivery times are estimates and are not guaranteed. Once shipped, you'll receive tracking by email.
 
 ## Shipping Protection (optional)
-Shipping Protection is an optional, store-backed service — not third-party insurance — that you may add at checkout for a small fee based on your order total. It is off by default and never pre-selected.
+Shipping Protection is an optional, store-backed service — not third-party insurance — added to your order by default for a small fee based on your order total. It is shown as a separate line item in your cart and at checkout, and you can remove it with one click at any time before you pay. Express wallet checkouts (Apple Pay, Google Pay) never add it on your behalf — there, protection is included only if you chose to keep it before starting the express payment.
 
 **What it covers:** with protection added, if your order is lost in transit, stolen after delivery, or arrives damaged, we will replace the affected items or refund them, at our discretion.
 

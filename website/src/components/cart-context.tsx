@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { Product } from "@/lib/catalog-types";
 import type { ReferralCode } from "@/lib/referral-codes";
 import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
@@ -15,7 +15,7 @@ import {
   type BxgyPromotion,
 } from "@/lib/bxgy-engine";
 import { normalizeBxgyPromotion } from "@/lib/bxgy-config";
-import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
+import { calculateShippingProtectionFee, SHIPPING_PROTECTION_PERCENT } from "@/lib/shipping-protection";
 import { calculateShipping, DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from "@/lib/shipping";
 import { DEFAULT_SALES_TAX_CONFIG, type SalesTaxConfig } from "@/lib/sales-tax";
 import type { MembershipTierSummary } from "@/lib/member-pricing";
@@ -134,7 +134,16 @@ type CartContextValue = {
   bundleConfig: BundleConfig;
   shippingProtectionEnabled: boolean;
   setShippingProtectionEnabled: (enabled: boolean) => void;
+  /**
+   * True only when the shopper THEMSELVES chose to have protection on, as
+   * opposed to it merely being on by default. Express/wallet checkout reads
+   * this rather than `shippingProtectionEnabled`, so a one-tap Apple Pay /
+   * Google Pay purchase can never carry a fee the shopper was not shown.
+   */
+  shippingProtectionChosen: boolean;
   shippingProtectionFee: number;
+  /** Admin-configured protection rate (Control Center -> Shipping). */
+  shippingProtectionPercent: number;
   discountAmount: number;
   /** Customer-facing name of the applied discount (null when none). */
   appliedDiscountLabel: string | null;
@@ -346,6 +355,43 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // why that distinction is a decision about money rather than a nicety.
   const [referralProgramEnabled, setReferralProgramEnabled] = useState<boolean | null>(null);
   const [shippingConfig, setShippingConfig] = useState<ShippingConfig>(DEFAULT_SHIPPING_CONFIG);
+
+  // Shipping-protection add-on (loss/theft/damage). Fee is a percentage of the
+  // merchandise subtotal (shipping-protection.ts), mirrored exactly by the
+  // server (quote-order.ts) so preview == charge. The percentage itself is
+  // admin-adjustable (Control Center -> Shipping -> protection_percent) and
+  // arrives on shippingConfig, so both sides read one number.
+  //
+  // PRE-SELECTED BY DEFAULT on the surfaces that render a visible, one-click
+  // checkbox next to the fee: the cart drawer, /cart and /checkout. The
+  // published Shipping Policy states this in the store's own words — added by
+  // default, shown as a separate line item, removable before payment — so the
+  // code and the policy agree. Changing this default means editing
+  // legal-content.ts in the same commit; neither half is correct alone.
+  // See shipping-protection-default.test.ts.
+  const [shippingProtectionEnabled, setShippingProtectionEnabled] = useState(true);
+
+  // Has the shopper actually TOUCHED this control?
+  //
+  // A default-on checkbox and a shopper who deliberately kept protection are
+  // the same boolean but not the same consent, and one surface cannot tell
+  // them apart on its own. Express/wallet checkout (Apple Pay, Google Pay)
+  // can take a payment in one tap without ever rendering our checkbox, so
+  // inheriting a merely-default-on `true` there would charge for an add-on the
+  // shopper was never shown — the exact silent charge the visible checkbox
+  // exists to prevent.
+  //
+  // So wallets read `shippingProtectionChosen` below instead: false until the
+  // shopper moves the control themselves, which is only possible on a surface
+  // that was showing them the fee at the time. Ticking it back on after
+  // unticking counts as a choice, because by then they have seen the price.
+  // See shipping-protection-wallet.test.ts.
+  const [shippingProtectionChoiceMade, setShippingProtectionChoiceMade] = useState(false);
+  const chooseShippingProtection = useCallback((enabled: boolean) => {
+    setShippingProtectionChoiceMade(true);
+    setShippingProtectionEnabled(enabled);
+  }, []);
+
   const [isEligibleForBulkSavings, setIsEligibleForBulkSavings] = useState(false);
   const [bulkSavingsConfig, setBulkSavingsConfig] = useState<BulkSavingsConfig>(DEFAULT_BULK_SAVINGS_CONFIG);
   const [knownEmail, setKnownEmail] = useState("");
@@ -526,6 +572,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           const parsed = JSON.parse(stored) as {
             items?: CartItem[];
             referralCode?: string | null;
+            shippingProtectionEnabled?: boolean;
+            shippingProtectionChoiceMade?: boolean;
           };
 
           if (Array.isArray(parsed.items)) {
@@ -534,6 +582,28 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
           if (typeof parsed.referralCode === "string") {
             setReferralCode(parsed.referralCode);
+          }
+
+          // The shipping-protection choice, restored with the cart it belongs
+          // to. Without this the flag reset to its `true` default on every
+          // navigation, so a shopper who unticked protection on /cart was
+          // silently charged for it again at /checkout — a removal that only
+          // lasted until the next page load. Browser-reproduced; see
+          // shipping-protection-persistence.test.ts.
+          //
+          // Checked with `typeof === "boolean"` rather than for truthiness,
+          // because the value that matters most here is `false`: an explicit
+          // "no thanks" has to beat the default, while a record written before
+          // these keys existed must leave the default alone.
+          if (typeof parsed.shippingProtectionEnabled === "boolean") {
+            setShippingProtectionEnabled(parsed.shippingProtectionEnabled);
+          }
+          // Persisted alongside it so the choice stays a CHOICE across loads.
+          // The wallet gate reads this flag, so dropping it would quietly
+          // downgrade a shopper who deliberately kept protection back to
+          // "merely default-on" and lose it at Apple Pay.
+          if (typeof parsed.shippingProtectionChoiceMade === "boolean") {
+            setShippingProtectionChoiceMade(parsed.shippingProtectionChoiceMade);
           }
         }
 
@@ -683,12 +753,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     try {
       window.localStorage.setItem(
         CART_STORAGE_KEY,
-        JSON.stringify({ items, referralCode }),
+        JSON.stringify({ items, referralCode, shippingProtectionEnabled, shippingProtectionChoiceMade }),
       );
     } catch (error) {
       console.error("Unable to save cart state", error);
     }
-  }, [items, referralCode, isHydrated]);
+  }, [items, referralCode, shippingProtectionEnabled, shippingProtectionChoiceMade, isHydrated]);
 
   useEffect(() => {
     if (!isHydrated || !referralCode || referralDetails) {
@@ -1211,20 +1281,15 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [referralDiscountApplied, pointsToRedeem, totalAfterCredit],
   );
 
-  // Shipping-protection add-on (loss/theft/damage). Fee is a percentage of the
-  // merchandise subtotal (shipping-protection.ts), mirrored exactly by the
-  // server (payment-service) so preview == charge.
-  // OFF BY DEFAULT, because the published Shipping Policy says so in the store's
-  // own words: Shipping Protection "is off by default and never pre-selected".
-  // This was useState(true), so a paid add-on was pre-ticked on every cart and
-  // added shipping_protection_fee to the total unless the shopper noticed and
-  // unticked it - a specific negative promise contradicted by the code, on a
-  // control that takes the customer's money.
-  //
-  // If the business wants it pre-selected, that is a product decision AND an edit
-  // to legal-content.ts's shipping policy, made together. Not one without the other.
-  const [shippingProtectionEnabled, setShippingProtectionEnabled] = useState(false);
-  const shippingProtectionFee = shippingProtectionEnabled ? calculateShippingProtectionFee(subtotal) : 0;
+  // Derived halves of the shipping-protection add-on. These live here rather
+  // than with the state above because they need `subtotal`, which is not
+  // computed until this point.
+  const shippingProtectionChosen = shippingProtectionEnabled && shippingProtectionChoiceMade;
+
+  const shippingProtectionPercent = shippingConfig.protectionPercent ?? SHIPPING_PROTECTION_PERCENT;
+  const shippingProtectionFee = shippingProtectionEnabled
+    ? calculateShippingProtectionFee(subtotal, shippingProtectionPercent)
+    : 0;
 
   const total = Math.max(0, totalAfterCredit - pointsRedeemedDiscount) + shippingProtectionFee;
 
@@ -1694,8 +1759,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     shippingConfig,
     bundleConfig,
     shippingProtectionEnabled,
-    setShippingProtectionEnabled,
+    // Deliberately the choice-recording setter, under the original name: every
+    // existing call site is a real shopper interaction with a visible control,
+    // so each one marks the choice as made without needing to be touched.
+    setShippingProtectionEnabled: chooseShippingProtection,
+    shippingProtectionChosen,
     shippingProtectionFee,
+    shippingProtectionPercent,
     discountAmount,
     appliedDiscountLabel,
     autoBestDiscountApplied,
