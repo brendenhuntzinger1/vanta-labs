@@ -13,6 +13,7 @@ import { CONSENT_COOKIE_NAME } from "@/lib/cookie-consent-server";
 import { EntryDiagnostics } from "@/components/entry-diagnostics";
 import { RecoveryLinkCatcher } from "@/components/recovery-link-catcher";
 import { StorefrontOffersBar } from "@/components/storefront-offers-bar";
+import { StorefrontOfferModal } from "@/components/storefront-offer-modal";
 import { cookies } from "next/headers";
 import {
   OFFERS_DISMISSED_COOKIE,
@@ -274,6 +275,19 @@ export default async function RootLayout({
                 truth. welcome-offer.tsx and its endpoint are left untouched and
                 simply no longer mounted. */}
             <StorefrontOffersBar offers={offers} />
+            {/* THE SAME ARRAY, NOT A SECOND LOOKUP OF THE SAME IDEA.
+                The card announces the promotion once, centred, when a shopper
+                first reaches the catalogue; the band above carries it from then
+                on. Handing both the one resolved list is what makes it
+                impossible for them to disagree with each other — or with the
+                till, since resolveStorefrontOffers builds this list from the
+                promotions checkout prices from.
+
+                Rendered here rather than inside the catalogue page for the same
+                reason the bar is: this is where the offers are already
+                resolved, on the server, once. The card decides for itself which
+                routes it belongs on. */}
+            <StorefrontOfferModal offers={offers} />
             {children}
             <SiteFooter />
             {/* vl-bottom-bar lifts this out of the consent banner's way while

@@ -4172,18 +4172,39 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
    or covers the page. In flow it pushes content down by exactly its own height,
    covers nothing, and scrolls away.
    --------------------------------------------------------------------------- */
+/* THE GROUND AND THE INK, SHARED BY THE BAND AND THE CARD.
+   ---------------------------------------------------------------------------
+   The offer modal is the same promotion said once, centred, on arrival at the
+   catalogue. It has to look like the band above it, and the way to guarantee
+   that is not to copy sixteen values into a second rule — it is to declare them
+   once for both selectors. The bar's own comment below already learned this
+   lesson at nine values and one theme; at two surfaces and two themes the copy
+   would be thirty-two edits waiting to drift.
+
+   THE BAR'S SELECTOR IS LAST IN THE LIST ON PURPOSE, here and in the theme and
+   focus-ring rules below. offers-bar-is-noticeable.test.ts locates each of
+   these blocks by searching for the bar's selector followed by an opening
+   brace — it is how every contrast measurement in that file finds the ground it
+   measures against. Last in the list, the selector is still followed by that
+   brace and the tests read exactly the blocks they always did. First, they
+   would not, and a dozen of them would fail reporting that the band had been
+   deleted.
+
+   The card overrides the few declarations that are about being a strip in flow
+   rather than a card — see .vl-offer-modal below. */
+.vl-offer-modal,
 .vl-offer-bar {
   position: relative;
   z-index: 1;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.4);
+  box-shadow:
+    inset 0 -1px 0 rgba(255, 255, 255, 0.22),
+    0 14px 34px -26px rgba(199, 174, 94, 0.85);
   /* Not a flat fill. The off-axis gradient reads as light moving across leaf
      rather than a printed block of yellow, which is the difference between a
      luxury band and a clearance sticker — and it is static, so it costs one
      paint and never repaints. */
   background: linear-gradient(101deg, #bd9d52 0%, #e6d296 20%, #cdb264 46%, #b3974a 72%, #e0cb8e 100%);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.4);
-  box-shadow:
-    inset 0 -1px 0 rgba(255, 255, 255, 0.22),
-    0 14px 34px -26px rgba(199, 174, 94, 0.85);
   /* THE GUTTER IS THE HEADER'S GUTTER, not a number of its own. `.vl2-nav`
      runs `mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-12`; this bar ran
      max-width: 80rem with 1.5rem of padding, which put its first glyph at
@@ -4227,6 +4248,8 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
    3:1 floor for a focus indicator (WCAG 2.2 AA 1.4.11). Dark ink is 8.5:1 on
    the same band. Scoped to the bar, so every other surface keeps the white
    ring it needs. */
+.vl-offer-modal .vl-focus-ring:focus-visible,
+.vl-offer-modal.vl-focus-ring:focus-visible,
 .vl-offer-bar .vl-focus-ring:focus-visible {
   outline-color: var(--offer-focus);
 }
@@ -4527,6 +4550,7 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
    right of the base gradient) is 9.6:1, and on the navy ground 14.8:1. The
    stripes themselves are capped at 0.14 alpha so they never darken or lighten
    the ground enough to put the headline near the 4.5:1 floor. */
+.vl-offer-modal--americana,
 .vl-offer-bar--americana {
   /* The ground: ink-navy, very slightly lighter to the right so the band has
      depth rather than reading as a flat rectangle of blue. */
@@ -4566,7 +4590,8 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
 /* The pill's shadow assumed a dark fill on a light band. Inverted, the white
    top-highlight sits on ivory and does nothing; a soft drop is what gives it
    its lift instead. */
-.vl-offer-bar--americana .vl-offer-code {
+.vl-offer-bar--americana .vl-offer-code,
+.vl-offer-modal--americana .vl-offer-modal-code {
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.5), 0 10px 22px -14px rgba(0, 0, 0, 0.85);
 }
 
@@ -4682,6 +4707,225 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
        reason the keyframe uses them: a percentage here would park the layer
        somewhere different on every screen width. */
     transform: translate3d(-81.5px, 0, 0);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   THE OFFER MODAL: the same promotion, centred, once, on arrival at the shop.
+
+   It carries no paint of its own — the ground and all sixteen ink tokens come
+   from the shared block above, and the seasonal dress from the shared theme
+   block below, so the card and the band cannot drift. What is here is only
+   what it means to be a card rather than a strip: where it sits, how big it is,
+   and the type scale that goes with being read once rather than glanced at.
+
+   MOBILE FIRST, because that is where it will mostly be met. The card is a
+   fluid width with a hard ceiling, so it fills a phone with a comfortable
+   margin and stops growing well before it becomes a billboard on a desktop.
+   --------------------------------------------------------------------------- */
+.vl-offer-modal-scrim {
+  position: fixed;
+  inset: 0;
+  /* ABOVE THE HEADER, BENEATH THE AGE GATE. The nav is z-50 and the app's fixed
+     bottom bars are z-40/50, so this has to clear them or it opens underneath
+     the furniture. The gate is z-[100] and must stay on top of everything: a
+     promotion may never be the thing between a visitor and the attestation. */
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(1rem + env(safe-area-inset-top, 0px)) 1rem calc(1rem + env(safe-area-inset-bottom, 0px));
+  /* The page behind stays visible and legibly dimmed rather than blacked out:
+     the card is an announcement, not a gate, and it should be obvious that the
+     catalogue is still there. */
+  background: rgba(6, 6, 6, 0.72);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  animation: vl-offer-modal-in var(--duration-base, 240ms) var(--ease-out-premium, ease-out) both;
+}
+
+/* Tap-outside-to-close, as a real button so it is reachable and announced.
+   Sits under the card and fills the scrim. */
+.vl-offer-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.vl-offer-modal {
+  /* Inherited from the shared block above, and wrong for a card: the band's
+     safe-area padding (the card's own padding lives on .vl-offer-modal-inner),
+     the hairline under a strip, and the band's drop shadow, which is replaced
+     below by one cast by a floating card. */
+  padding: 0;
+  border-bottom: 0;
+  width: 100%;
+  max-width: 27rem;
+  overflow: hidden;
+  border-radius: 1.25rem;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  box-shadow: 0 36px 80px -32px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  color: var(--offer-ink);
+  animation: vl-offer-modal-rise var(--duration-base, 240ms) var(--ease-out-premium, ease-out) both;
+}
+
+.vl-offer-modal-inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 2.25rem 1.5rem 1.6rem;
+  text-align: center;
+}
+
+.vl-offer-modal-eyebrow {
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.19em;
+  text-transform: uppercase;
+  color: var(--offer-ink-soft);
+}
+
+.vl-offer-modal-headline {
+  margin: 0;
+  /* The band's own display face, named exactly as .vl-offer-headline names it.
+     This asked for a `--font-display` variable for one commit, and that name is
+     declared nowhere in this file — so the card's headline rendered in the
+     Georgia fallback while the band two lines above it was in Fraunces. It is
+     the same trap the layout's own note records about the font variable that
+     was renamed: a fallback chain makes a missing variable look like a
+     deliberate choice, and nothing reports it. */
+  font-family: var(--font-fraunces), Georgia, serif;
+  font-size: clamp(1.6rem, 7vw, 2.1rem);
+  line-height: 1.12;
+  font-weight: 600;
+  color: var(--offer-ink-strong);
+}
+
+/* The code control. Same pill tokens as the bar's CLAIM button, so a customer
+   who saw one recognises the other. */
+.vl-offer-modal-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 3rem;
+  margin-top: 0.25rem;
+  padding: 0.5rem 1.35rem;
+  border-radius: 999px;
+  border: 1px solid var(--offer-pill-border);
+  background: var(--offer-pill);
+  cursor: pointer;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.16), 0 10px 22px -14px rgba(0, 0, 0, 0.85);
+  transition: background-color var(--duration-fast, 150ms) ease;
+}
+
+.vl-offer-modal-code:hover { background: var(--offer-pill-hover); }
+
+.vl-offer-modal-code-label {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--offer-pill-claim);
+}
+
+.vl-offer-modal-code-text {
+  /* The same mono the band's code pill uses. */
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--offer-pill-code);
+}
+
+.vl-offer-modal-copy {
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--offer-pill-copy);
+}
+
+/* An automatic promotion says so, in words, with nothing to press. */
+.vl-offer-modal-auto {
+  margin: 0.25rem 0 0;
+  padding: 0.55rem 1.1rem;
+  border-radius: 999px;
+  border: 1px solid var(--offer-rule);
+  background: var(--offer-wash);
+  font-size: 0.86rem;
+  font-weight: 500;
+  color: var(--offer-auto-ink);
+}
+
+.vl-offer-modal-continue {
+  margin-top: 0.35rem;
+  padding: 0.5rem 0.75rem;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--offer-ink-faint);
+  transition: color var(--duration-fast, 150ms) ease;
+}
+
+.vl-offer-modal-continue:hover { color: var(--offer-ink-hover); }
+
+/* 44px of target, which is the floor for a control someone has to find in a
+   hurry on a phone. */
+.vl-offer-modal-close {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--offer-ink-faint);
+  transition: background-color var(--duration-fast, 150ms) ease, color var(--duration-fast, 150ms) ease;
+}
+
+.vl-offer-modal-close:hover {
+  background: var(--offer-wash);
+  color: var(--offer-ink-hover);
+}
+
+.vl-offer-modal-x { width: 1.15rem; height: 1.15rem; }
+
+@keyframes vl-offer-modal-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes vl-offer-modal-rise {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+/* NOTHING MOVES FOR ANYONE WHO ASKED FOR LESS MOTION — including the flag,
+   which the theme block already stills, and the card's own entrance. The card
+   still appears; it simply arrives rather than travels. */
+@media (prefers-reduced-motion: reduce) {
+  .vl-offer-modal-scrim,
+  .vl-offer-modal {
+    animation: none;
   }
 }
 
