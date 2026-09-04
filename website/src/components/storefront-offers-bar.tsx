@@ -71,7 +71,16 @@ export function isSuppressedRoute(pathname: string | null): boolean {
     pathname === "/"
     // Money in progress. Nothing new goes on the screen during payment, and
     // nothing in this component is allowed anywhere near that flow.
+    //
+    // /pay IS THE SAME FLOW UNDER A DIFFERENT PREFIX, and it was missed. The
+    // hosted payment page lives at BOTH /checkout/pay/[orderId] and
+    // /pay/[orderId] (plus /pay/mock/[orderId] in the harness); only the first
+    // was caught here, by the /checkout prefix. So a customer who reached the
+    // second — an order already written, card details on screen — was shown a
+    // promotion for something else, which is the one moment this rule exists to
+    // prevent. Prefix-matched so both the real page and the mock are covered.
     || pathname.startsWith("/checkout")
+    || pathname.startsWith("/pay")
     || pathname.startsWith("/order")
     // Operator surfaces, not shopping surfaces.
     || pathname.startsWith("/admin")
