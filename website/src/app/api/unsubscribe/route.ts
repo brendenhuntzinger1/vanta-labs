@@ -42,10 +42,31 @@ function htmlResponse(title: string, message: string, status: number) {
  * Record the opt-out. Shared verbatim by the footer link (GET) and Gmail's
  * one-click button (POST), so all three entry points are the same decision.
  */
-async function suppress(email: string): Promise<{ ok: boolean }> {
-  const { error } = await supabaseAdmin
+/**
+ * Which send carried the link — `campaign:<uuid>`, `automation:winback_60`,
+ * `cart_recovery_t72h`. Reporting only; it never affects whether the opt-out
+ * is honoured. Restricted to a short, plain identifier so nothing typed into
+ * the URL can end up in a report verbatim.
+ */
+function unsubscribeSource(raw: string | null): string | null {
+  const value = String(raw ?? "").trim().slice(0, 120);
+  return /^[a-z0-9_:-]+$/i.test(value) ? value : null;
+}
+
+async function suppress(email: string, source: string | null): Promise<{ ok: boolean }> {
+  const row = { email, reason: "unsubscribed", created_at: new Date().toISOString() };
+  let { error } = await supabaseAdmin
     .from("email_suppressions")
-    .upsert({ email, reason: "unsubscribed", created_at: new Date().toISOString() }, { onConflict: "email" });
+    .upsert({ ...row, source }, { onConflict: "email" });
+
+  // The `source` column arrived with email-lifecycle-2026-09-04.sql. A database
+  // that has not run it yet must still honour the opt-out — that is the one
+  // thing this route exists for — so the write is retried without the column.
+  if (error && /source/i.test(String(error.message ?? ""))) {
+    ({ error } = await supabaseAdmin
+      .from("email_suppressions")
+      .upsert(row, { onConflict: "email" }));
+  }
 
   if (error) return { ok: false };
 
@@ -76,7 +97,7 @@ export async function GET(request: NextRequest) {
     return htmlResponse("Link invalid", "This unsubscribe link is invalid or has expired.", 400);
   }
 
-  const { ok } = await suppress(email);
+  const { ok } = await suppress(email, unsubscribeSource(request.nextUrl.searchParams.get("s")));
   if (!ok) {
     return htmlResponse("Something went wrong", "Unable to process this request right now. Please try again shortly.", 500);
   }
@@ -110,7 +131,7 @@ export async function POST(request: NextRequest) {
     return new NextResponse("Invalid unsubscribe link", { status: 400 });
   }
 
-  const { ok } = await suppress(email);
+  const { ok } = await suppress(email, unsubscribeSource(request.nextUrl.searchParams.get("s")));
   // A 5xx makes the client retry, which is right: the customer asked to stop.
   return new NextResponse(ok ? "Unsubscribed" : "Unable to process", { status: ok ? 200 : 500 });
 }

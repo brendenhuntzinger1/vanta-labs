@@ -70,15 +70,19 @@ vi.mock("@/lib/admin-control", () => ({
     enabled: true,
     t30mEnabled: false,
     t12hEnabled: false,
-    t24hEnabled: true,
-    t72hEnabled: false,
+    t24hEnabled: false,
+    t72hEnabled: true,
     discountPercent: 5,
     couponExpirationHours: 48,
   }),
 }));
 
-/** Age of the seeded cart, in hours. */
-let cartAgeHours = 25;
+/**
+ * Age of the seeded cart, in hours. 73: the discount lives on the FINAL stage
+ * since 2026-09-04 (the 24-hour message answers questions instead), so the
+ * whole matrix now exercises t72h — the stage that actually mints.
+ */
+let cartAgeHours = 73;
 
 vi.mock("@/lib/supabase-server", () => {
   const from = (table: string) => {
@@ -218,7 +222,7 @@ beforeEach(() => {
   db.suppressed = new Set();
   db.reservationDeletes = 0;
   attempted.length = 0;
-  cartAgeHours = 25;
+  cartAgeHours = 73;
   sendMode = "fail";
   vi.clearAllMocks();
 });

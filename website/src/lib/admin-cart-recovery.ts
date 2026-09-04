@@ -11,6 +11,7 @@ import {
 import { sendMarketingEmail } from "@/lib/email/marketing";
 import { mintCartRecoveryCoupon, type AbandonedCartItemSnapshot } from "@/lib/cart-recovery";
 import { getSiteUrl } from "@/lib/env";
+import { formatDisplayDate } from "@/lib/format-date";
 import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 
@@ -103,6 +104,8 @@ export interface CartRecoveryStats {
   clickRatePercent: number;
   couponRedemptionRatePercent: number;
   averageRecoveryTimeHours: number | null;
+  /** Per stage: how many went out, and how many of those were opened and clicked. */
+  stages: Array<{ stage: string; sent: number; opened: number; clicked: number }>;
 }
 
 export async function getCartRecoveryStats(): Promise<CartRecoveryStats> {
@@ -181,6 +184,7 @@ export async function getCartRecoveryStats(): Promise<CartRecoveryStats> {
   // ratios over the WHOLE of this table, and a capped read makes them the rates
   // of one arbitrary page.
   const { rows: sentEmails } = await readAllRowsBounded<{
+    stage: string;
     sent_at: string | null;
     opened_at: string | null;
     clicked_at: string | null;
@@ -188,14 +192,29 @@ export async function getCartRecoveryStats(): Promise<CartRecoveryStats> {
   }>(
     (from, to) => supabaseAdmin
       .from("abandoned_cart_emails")
-      .select("sent_at, opened_at, clicked_at, coupon_id")
+      .select("stage, sent_at, opened_at, clicked_at, coupon_id")
       .order("id", { ascending: true })
       .range(from, to) as unknown as PromiseLike<{
-        data: { sent_at: string | null; opened_at: string | null; clicked_at: string | null; coupon_id: string | null }[] | null;
+        data: { stage: string; sent_at: string | null; opened_at: string | null; clicked_at: string | null; coupon_id: string | null }[] | null;
         error: unknown;
       }>,
     { maxRows: MAX_RECOVERY_ROWS, label: "cart recovery email read" },
   );
+
+  // Per stage, in sequence order, so the funnel reads top to bottom.
+  const stageOrder = ["t30m", "t12h", "t24h", "t72h"];
+  const stageTallies = new Map<string, { sent: number; opened: number; clicked: number }>();
+  for (const row of sentEmails) {
+    const stage = String(row.stage ?? "");
+    const tally = stageTallies.get(stage) ?? { sent: 0, opened: 0, clicked: 0 };
+    tally.sent += 1;
+    if (row.opened_at) tally.opened += 1;
+    if (row.clicked_at) tally.clicked += 1;
+    stageTallies.set(stage, tally);
+  }
+  const stages = stageOrder
+    .filter((stage) => stageTallies.has(stage))
+    .map((stage) => ({ stage, ...(stageTallies.get(stage) as { sent: number; opened: number; clicked: number }) }));
 
   const openRatePercent = sentEmails.length > 0 ? Math.round((sentEmails.filter((row) => row.opened_at).length / sentEmails.length) * 1000) / 10 : 0;
   const clickRatePercent = sentEmails.length > 0 ? Math.round((sentEmails.filter((row) => row.clicked_at).length / sentEmails.length) * 1000) / 10 : 0;
@@ -250,6 +269,7 @@ export async function getCartRecoveryStats(): Promise<CartRecoveryStats> {
     clickRatePercent,
     couponRedemptionRatePercent,
     averageRecoveryTimeHours,
+    stages,
   };
 }
 
@@ -312,7 +332,10 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
   let couponId: string | null = null;
   let couponCode: string | null = null;
   let couponExpiresAt: string | null = null;
-  if (stage === "t24h" || stage === "t72h") {
+  // Only the final stage carries a code now; the 24-hour message answers
+  // questions instead. A manual resend is an explicit admin action, so it
+  // mints without the sweep's per-address cooldown.
+  if (stage === "t72h") {
     const coupon = await mintCartRecoveryCoupon(cart.email, config.discountPercent, config.couponExpirationHours);
     if (coupon) {
       couponCode = coupon.code;
@@ -375,22 +398,31 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
     });
   }
 
-  const couponForEmail = couponCode ? { code: couponCode, expiresAt: couponExpiresAt ?? new Date().toISOString() } : { code: "CONTACT-SUPPORT", expiresAt: new Date().toISOString() };
-  const template = stage === "t24h" ? cartRecoveryT24hTemplate : cartRecoveryT72hTemplate;
+  if (stage === "t24h") {
+    return sendMarketingEmail({
+      to: cart.email,
+      campaignType: "cart_recovery_t24h",
+      referenceId: cart.id,
+      templateKey: "cartRecoveryT24hTemplate",
+      openTrackingPixelUrl,
+      ...cartRecoveryT24hTemplate({ name, items, cartValueCents: cart.cart_value_cents, restoreUrl: trackedRestoreUrl }),
+    });
+  }
 
   return sendMarketingEmail({
     to: cart.email,
-    campaignType: `cart_recovery_${stage}`,
+    campaignType: "cart_recovery_t72h",
     referenceId: cart.id,
-    templateKey: stage === "t24h" ? "cartRecoveryT24hTemplate" : "cartRecoveryT72hTemplate",
+    templateKey: "cartRecoveryT72hTemplate",
     openTrackingPixelUrl,
-    ...template({
+    ...cartRecoveryT72hTemplate({
       name,
       items,
       cartValueCents: cart.cart_value_cents,
       restoreUrl: trackedRestoreUrl,
-      couponCode: couponForEmail.code,
-      expiresAt: new Date(couponForEmail.expiresAt).toLocaleString("en-US"),
+      couponCode: couponCode ?? "",
+      discountPercent: couponCode ? config.discountPercent : 0,
+      expiresAt: couponExpiresAt ? formatDisplayDate(couponExpiresAt, "datetime") ?? "" : "",
     }),
   });
 }

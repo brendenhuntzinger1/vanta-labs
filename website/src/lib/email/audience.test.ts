@@ -136,3 +136,42 @@ describe("isCampaignSegment", () => {
     expect(isCampaignSegment(null)).toBe(false);
   });
 });
+
+
+describe("customer-value segments (2026-09-04)", () => {
+  const consented = audience({ subscribers: ["one@example.com", "two@example.com", "big@example.com", "never@example.com"] });
+  const lastPaidAt = new Map([
+    ["one@example.com", NOW - 5 * DAY],
+    ["two@example.com", NOW - 5 * DAY],
+    ["big@example.com", NOW - 5 * DAY],
+  ]);
+  const orderCount = new Map([["one@example.com", 1], ["two@example.com", 3], ["big@example.com", 2]]);
+  const spendCents = new Map([["one@example.com", 4_299], ["two@example.com", 12_000], ["big@example.com", 45_000]]);
+
+  it("first_time is exactly one paid order", () => {
+    expect(applySegment({ segment: "first_time", audience: consented, lastPaidAt, orderCount, spendCents, now: NOW }))
+      .toEqual(["one@example.com"]);
+  });
+
+  it("repeat is two or more", () => {
+    expect(applySegment({ segment: "repeat", audience: consented, lastPaidAt, orderCount, spendCents, now: NOW }).sort())
+      .toEqual(["big@example.com", "two@example.com"]);
+  });
+
+  it("high_value is net spend at or above the threshold", () => {
+    expect(applySegment({ segment: "high_value", audience: consented, lastPaidAt, orderCount, spendCents, now: NOW }))
+      .toEqual(["big@example.com"]);
+  });
+
+  it("still never reaches someone who did not consent", () => {
+    const result = applySegment({
+      segment: "repeat",
+      audience: audience({ subscribers: ["two@example.com"] }),
+      lastPaidAt,
+      orderCount: new Map([["two@example.com", 3], ["stranger@example.com", 9]]),
+      spendCents,
+      now: NOW,
+    });
+    expect(result).toEqual(["two@example.com"]);
+  });
+});

@@ -12,6 +12,7 @@ import { brandedConfirmUrl } from "@/lib/auth-confirm-link";
 import { verifyTurnstileToken } from "@/lib/turnstile";
 import { SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-signup-outcome";
 import { looksLikeEmail } from "@/lib/email-shape";
+import { recordMarketingOptIn } from "@/lib/marketing-broadcast";
 import { claimAuthEmailSend, recordAuthEmailAttempt } from "@/lib/auth-email-audit";
 
 export const dynamic = "force-dynamic";
@@ -99,6 +100,7 @@ export async function POST(request: Request) {
     const referredByCode = read("referredByCode").slice(0, 32);
     const captchaToken = read("captchaToken");
     const nextPath = read("nextPath") || "/account";
+    const marketingOptIn = (body as { marketingOptIn?: unknown })?.marketingOptIn === true;
 
     // Shape checks only, and each one answers the same way a real attempt does
     // where it can. A password that is too short is the one exception: it is
@@ -148,6 +150,7 @@ export async function POST(request: Request) {
       fullName,
       businessType,
       referredByCode,
+      marketingOptIn,
       redirectTo: confirmationRedirect(nextPath),
     });
 
@@ -168,6 +171,19 @@ export async function POST(request: Request) {
     // ("that address made the server work harder"). Full detail server-side.
     console.error("[auth/signup]", error);
     return NextResponse.json(GENERIC_RESPONSE);
+  }
+}
+
+async function recordSignupMarketingConsent(userId: string | null, email: string): Promise<void> {
+  try {
+    if (userId) {
+      await supabaseAdmin
+        .from("customer_preferences")
+        .upsert({ user_id: userId, marketing_emails: true, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+    }
+    await recordMarketingOptIn(email, "signup");
+  } catch (error) {
+    console.error("[auth/signup] could not record marketing consent", error);
   }
 }
 
@@ -195,6 +211,7 @@ async function createAccountAndSend(input: {
   fullName: string;
   businessType: string;
   referredByCode: string;
+  marketingOptIn: boolean;
   redirectTo: string;
 }): Promise<SignupOutcome> {
   const { data, error } = await supabaseAdmin.auth.admin.generateLink({
@@ -259,6 +276,18 @@ async function createAccountAndSend(input: {
     }).catch(() => {});
 
     return "mint_failed";
+  }
+
+  // CONSENT, RECORDED WHERE EVERY MARKETING AUDIENCE LOOKS.
+  //
+  // Only for an account this call actually created (the branch above handles
+  // an existing one), and only when the box was ticked. Two stores on purpose:
+  // customer_preferences is what the account settings toggle reads and
+  // writes; marketing_subscribers carries the opt-in TIME, which is what the
+  // welcome flows are timed from. Best-effort — a consent write must never
+  // stop the confirmation email that follows.
+  if (input.marketingOptIn) {
+    await recordSignupMarketingConsent(data.user?.id ?? null, input.email);
   }
 
   const template = accountConfirmationTemplate({

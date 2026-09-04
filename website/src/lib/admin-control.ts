@@ -276,7 +276,11 @@ export interface CartRecoveryConfig {
 
 export const DEFAULT_CART_RECOVERY_CONFIG: CartRecoveryConfig = {
   t30mEnabled: true,
-  t12hEnabled: true,
+  // OFF by default since 2026-09-04. Four messages in three days was one more
+  // than the sequence needed (Klaviyo and Shopify both default to three), and
+  // the 12-hour reminder said nothing the 1-hour one had not. An operator can
+  // still switch it on; it simply no longer starts on.
+  t12hEnabled: false,
   t24hEnabled: true,
   t72hEnabled: true,
   discountPercent: 5,
@@ -289,7 +293,7 @@ export async function getCartRecoveryControlConfig(): Promise<CartRecoveryConfig
     const config = snapshot.cart_recovery ?? {};
     return {
       t30mEnabled: config.t30m_enabled !== false,
-      t12hEnabled: config.t12h_enabled !== false,
+      t12hEnabled: config.t12h_enabled === true,
       t24hEnabled: config.t24h_enabled !== false,
       t72hEnabled: config.t72h_enabled !== false,
       discountPercent: Number(config.discount_percent ?? DEFAULT_CART_RECOVERY_CONFIG.discountPercent),

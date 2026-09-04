@@ -19,9 +19,19 @@ export async function POST(request: Request) {
       return res;
     }
 
-    const body = await request.json() as { code?: string; subtotal?: number };
+    const body = await request.json() as { code?: string; subtotal?: number; email?: string };
     const code = String(body.code ?? "").slice(0, 40);
     const subtotal = Number(body.subtotal ?? 0);
+    // A GUEST'S TYPED ADDRESS, for assigned-email codes only.
+    //
+    // Cart-recovery codes are bound to the address they were mailed to, and
+    // since 2026-09-04 guests receive them. The cart previews a code through
+    // this route with no session, so it compared the assignment against
+    // nothing and told the guest their own code was invalid — while the
+    // checkout, which validates against the typed email, would have taken it.
+    // The typed address grants nothing here that checkout does not re-check
+    // with the same function against the same address.
+    const typedEmail = String(body.email ?? "").trim().toLowerCase().slice(0, 320);
 
     if (!code.trim()) {
       return NextResponse.json({ success: false, error: "Enter a coupon code." }, { status: 400 });
@@ -40,7 +50,12 @@ export async function POST(request: Request) {
         // Treated as non-member for the preview; payment re-checks authoritatively.
       }
     }
-    const coupon = await validateCoupon(code, Number.isFinite(subtotal) ? subtotal : 0, user?.email ?? undefined, { isActiveMember });
+    const coupon = await validateCoupon(
+      code,
+      Number.isFinite(subtotal) ? subtotal : 0,
+      user?.email ?? (typedEmail.includes("@") ? typedEmail : undefined),
+      { isActiveMember },
+    );
 
     if (!coupon) {
       // validateCoupon returns null only for a normalized-empty code here (a
