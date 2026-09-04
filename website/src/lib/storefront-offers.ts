@@ -38,6 +38,7 @@ import {
 import { activeSeasonalCampaign, brandOffersForSeason } from "@/lib/labor-day-campaign";
 import { advertisableBxgyPromotions, promotionHeadline, storefrontDescription, type BxgyPromotion } from "@/lib/bxgy-engine";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
+import { getAuthenticatedUser } from "@/lib/auth-session";
 
 // Re-exported so existing importers of this module keep working unchanged.
 export * from "@/lib/storefront-offer-format";
@@ -215,6 +216,56 @@ function couponOffer(row: CouponRow): StorefrontOffer {
 
 export interface ResolveOffersDeps {
   now?: Date;
+  /**
+   * Who is looking, when the store can say so — used ONLY to stop advertising a
+   * promotion this customer has already used up. See viewerEmailForLimits().
+   *
+   * Injectable so the rule can be tested without a session; omitted in
+   * production, where it is resolved from the signed-in account.
+   */
+  viewerEmail?: string | null;
+}
+
+/**
+ * THE EMAIL A PER-CUSTOMER LIMIT SHOULD BE COUNTED AGAINST, OR NULL.
+ *
+ * A promotion may carry `perCustomerLimit`. The till already honours it:
+ * quote-order.ts passes the order's email into getApplicableBxgyPromotions, and
+ * getPromotionUsage counts that customer's redemptions. The DISPLAY side passed
+ * `{}` — no email — so a one-per-customer promotion went on being advertised to
+ * someone who had already spent it, and they found out at checkout.
+ *
+ * This closes that, and it deliberately reuses the SAME function rather than
+ * inventing a display-side rule that could disagree with the till.
+ *
+ * WHY THE SIGNED-IN ACCOUNT'S EMAIL IS THE RIGHT ONE, AND WHY IT IS EXACT
+ * RATHER THAN A GUESS. Checkout locks the email field to the account for any
+ * signed-in customer who has one — it renders read-only and says "Using your
+ * account email" (checkout/page.tsx). So the address this counts against is the
+ * address the order will carry. There is no case where we hide an offer the
+ * till would then have honoured.
+ *
+ * WHEN IT CANNOT SAY, IT SHOWS THE OFFER. A guest, a phone-only account, an
+ * auth backend having a bad minute: all return null, the count is skipped, and
+ * the promotion is advertised. That is the safe direction — the till still
+ * refuses it, so the cost of being wrong is a customer who reads about an offer
+ * they cannot use, never a customer who is denied one they can. Guessing an
+ * identity from anything weaker than a verified session would be the fragile
+ * rule this is written to avoid.
+ *
+ * IT COSTS NOTHING ON AN ORDINARY DAY. This is called only when a promotion
+ * carrying a per-customer limit is actually configured, so the store pays for a
+ * session read on the days it is running one and not otherwise.
+ */
+async function viewerEmailForLimits(): Promise<string | null> {
+  try {
+    const user = await getAuthenticatedUser();
+    const email = user?.email?.trim().toLowerCase();
+    return email || null;
+  } catch {
+    // Never let an auth blip cost the bar. Unknown means "advertise it".
+    return null;
+  }
 }
 
 /**
@@ -245,8 +296,30 @@ export async function resolveStorefrontOffers(deps: ResolveOffersDeps = {}): Pro
   // resolved, still scheduled, still counted against its redemption cap — it
   // simply does not reach the words. Exactly what `is_private` does one
   // function down for a coupon code.
+  // WHO IS LOOKING, BUT ONLY WHEN IT CHANGES THE ANSWER.
+  //
+  // A GLOBAL cap (maxRedemptions) is already honoured here without knowing
+  // anyone: getPromotionUsage counts it whatever the context. It is the
+  // PER-CUSTOMER limit that needs a name, and resolving one means a session
+  // read — so it is done only when a promotion carrying such a limit is
+  // actually configured. On every other day this is a comparison over a list
+  // already in memory and the layout costs exactly what it did before.
+  const needsViewer = (control?.bxgyPromotions ?? []).some((p) => p.perCustomerLimit !== null);
+  const viewerEmail = needsViewer
+    ? (deps.viewerEmail !== undefined ? deps.viewerEmail : await viewerEmailForLimits())
+    : null;
+
+  // Guarded on its own, like every other source here: a failed promotion read
+  // costs the promotion offers, never the bar.
+  //
+  // advertisableBxgyPromotions is the LAST step, applied to the list the
+  // checkout prices from rather than to the config. That ordering is what
+  // makes "hidden" mean unadvertised and nothing else: the promotion is still
+  // resolved, still scheduled, still counted against its redemption cap — it
+  // simply does not reach the words. Exactly what `is_private` does one
+  // function down for a coupon code.
   const promotions: BxgyPromotion[] = await getApplicableBxgyPromotions(
-    {},
+    viewerEmail ? { customerEmail: viewerEmail } : {},
     { promotions: control?.bxgyPromotions, now },
   ).then(advertisableBxgyPromotions).catch(() => []);
 

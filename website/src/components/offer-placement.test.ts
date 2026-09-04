@@ -75,6 +75,21 @@ describe("the home page carries no promotion, ever", () => {
     }
   });
 
+  it("says nothing while a customer is paying, on either payment path", () => {
+    // The hosted payment page lives at BOTH /checkout/pay/[orderId] and
+    // /pay/[orderId], plus /pay/mock/[orderId] in the harness. Only the first
+    // was caught, by the /checkout prefix — so a customer with an order already
+    // written and card details on screen was shown a promotion for something
+    // else, which is the one moment this rule exists to prevent.
+    const fn = code(bar).slice(code(bar).indexOf("export function isSuppressedRoute"));
+    const body = fn.slice(0, fn.indexOf("\n}"));
+    expect(body).toMatch(/startsWith\("\/checkout"\)/);
+    expect(body, "/pay/[orderId] is the same flow under a different prefix")
+      .toMatch(/startsWith\("\/pay"\)/);
+    // And the card is an allow-list of the shopping routes, so it was never on
+    // either payment page to begin with — asserted in the test above.
+  });
+
   it("leaves nothing behind above the navigation", () => {
     // THE OWNER ASKED FOR THIS SPECIFICALLY: with cookies already answered the
     // band was the only thing above the header, so removing it must let the
