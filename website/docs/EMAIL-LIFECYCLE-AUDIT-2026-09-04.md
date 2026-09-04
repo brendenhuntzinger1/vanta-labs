@@ -228,9 +228,9 @@ send from this deploy onward on Resend; nothing on SMTP.
 
 ## REMAINING RISKS
 
-- The migration is not applied. Until it is, production runs the old copy,
-  the two new flows do not exist, and win-back 1 keeps 15 % + free shipping at
-  30 days. Applying it is one paste in the SQL editor.
+- The migration and the recommended flow settings are applied in production
+  (see next steps, item 1). The two new flows go live the moment this branch
+  deploys; until then the current deploy ignores their rows.
 - The four existing automations are live with the owner's delays and offers.
   This branch changes their exclusion logic (quiet period, grace, first-order
   rule) the moment it deploys, which is intended; the recommended delay
@@ -246,9 +246,11 @@ send from this deploy onward on Resend; nothing on SMTP.
 
 ## RECOMMENDED NEXT STEPS
 
-1. Apply `email-lifecycle-2026-09-04.sql`; enable welcome introduction and
-   reorder reminder; set win-back delays to 45 and 75 days and change
-   win-back 1's gift to free shipping only.
+1. DONE 2026-09-04, on the owner's instruction: `email-lifecycle-2026-09-04.sql`
+   applied to production (migration `email_lifecycle_2026_09_04`); welcome
+   introduction and reorder reminder enabled; win-back 1 at 45 days with free
+   shipping only; win-back 2 at 75 days. The first-order follow-up stays at
+   its existing 14-day delay (5 recommended) — change it in Admin → Email.
 2. Rotate the webhook secret and finish the DMARC items (deliverability is
    the ceiling on everything else).
 3. Seed-test across Gmail / Outlook / Yahoo with the new templates.

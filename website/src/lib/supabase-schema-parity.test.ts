@@ -83,10 +83,8 @@ const schema = PRODUCTION_SCHEMA as Record<string, string[]>;
  *      so the reviewer knows to look.
  */
 const PENDING_MIGRATION_COLUMNS: Array<{ table: string; column: string; migration: string }> = [
-  // /api/unsubscribe retries the write without `source`; admin-email catches
-  // the read. Both are written to run against a database that has not run
-  // the migration.
-  { table: "email_suppressions", column: "source", migration: "email-lifecycle-2026-09-04.sql" },
+  // email_suppressions.source lived here until email-lifecycle-2026-09-04.sql
+  // was applied to production on 2026-09-04 and the snapshot refreshed.
 ];
 
 function pendingColumnAllowed(table: string, column: string): boolean {
