@@ -264,29 +264,51 @@ describe("the 72h last-chance email", () => {
     expect(mail.text).toContain(truthful);
   });
 
-  it("reuses the t24h coupon rather than minting a second one for the same cart", async () => {
-    // One cart, one code: the t24h mint is deliberately guarded, and the fix
-    // must not undo that by minting on every stage.
-    seedCart(73);
+  it("reuses a still-live code minted earlier for the same cart rather than minting a second one", async () => {
+    // One cart, one code. A row written by the pre-2026-09-04 sequence (which
+    // minted on the 24-hour stage) is re-offered while it is still live, so a
+    // cart mid-sequence across the deploy never sees two codes.
+    const cart = seedCart(73);
+    state.stages.push({ id: "stg-old", abandoned_cart_id: cart.id, stage: "t24h", coupon_id: "cpn-live", sent_at: new Date(Date.now() - 48 * HOUR_MS).toISOString() });
+    state.coupons.push({
+      id: "cpn-live", code: "SAVE-LIVE0001", discount_type: "percent", discount_value: 5,
+      ends_at: new Date(Date.now() + 12 * HOUR_MS).toISOString(),
+      assigned_email: cart.email, active: true, source: "cart_recovery",
+      // Minted more than a month ago as far as the discount cooldown is
+      // concerned? No — 48h, which is inside the 30-day window. The cooldown is
+      // about NEW codes; re-offering the one this cart already holds is not a
+      // new code, so the sweep must still send with it.
+      created_at: new Date(Date.now() - 48 * HOUR_MS).toISOString(),
+    });
     const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
     await runAbandonedCartSweep();
 
     expect(state.coupons).toHaveLength(1);
-    const code = state.coupons[0].code;
-    expect(t24()!.text).toContain(code);
-    expect(t72()!.text).toContain(code);
+    expect(t24()).toBeUndefined();
+    expect(t72()!.text).toContain("SAVE-LIVE0001");
   });
 
-  it("mints a fresh code when the t24h coupon has already expired", async () => {
-    // The default configuration guarantees this case: mint + 48h lands on the
-    // t72h tick. A dead code must be replaced, not advertised.
+  it("the 24-hour message carries no code at all", async () => {
+    seedCart(25);
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    await runAbandonedCartSweep();
+    expect(t72()).toBeUndefined();
+    expect(t24()).toBeTruthy();
+    expect(t24()!.text).not.toMatch(/SAVE-/);
+    expect(state.coupons).toHaveLength(0);
+  });
+
+  it("mints a fresh code when the cart's earlier coupon has expired and the address is outside the discount cooldown", async () => {
+    // A dead code must be replaced, not advertised. The earlier code here was
+    // minted 31 days ago, so the per-address cooldown (30 days) has passed and
+    // a new one may be issued.
     const cart = seedCart(73);
     state.stages.push({ id: "stg-old", abandoned_cart_id: cart.id, stage: "t24h", coupon_id: "cpn-old", sent_at: new Date().toISOString() });
     state.coupons.push({
       id: "cpn-old", code: "SAVE-DEAD0001", discount_type: "percent", discount_value: 5,
       ends_at: new Date(Date.now() - HOUR_MS).toISOString(),   // died an hour ago
       assigned_email: cart.email, active: true, source: "cart_recovery",
-      created_at: new Date(Date.now() - 49 * HOUR_MS).toISOString(),
+      created_at: new Date(Date.now() - 31 * 24 * HOUR_MS).toISOString(),
     });
 
     const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
@@ -297,6 +319,28 @@ describe("the 72h last-chance email", () => {
     const code = mail.text.match(/SAVE-[A-Z0-9]+/)![0];
     const coupon = state.coupons.find((c) => c.code === code)!;
     expect(new Date(coupon.ends_at).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("does not replace an expired code issued inside the discount cooldown — the mail goes without one", async () => {
+    // Same shape, but the dead code is two days old. A second code inside a
+    // month is exactly what taught one July shopper to abandon for discounts,
+    // so the last note is sent without an offer instead.
+    const cart = seedCart(73);
+    state.stages.push({ id: "stg-old", abandoned_cart_id: cart.id, stage: "t24h", coupon_id: "cpn-old", sent_at: new Date().toISOString() });
+    state.coupons.push({
+      id: "cpn-old", code: "SAVE-DEAD0001", discount_type: "percent", discount_value: 5,
+      ends_at: new Date(Date.now() - HOUR_MS).toISOString(),
+      assigned_email: cart.email, active: true, source: "cart_recovery",
+      created_at: new Date(Date.now() - 49 * HOUR_MS).toISOString(),
+    });
+
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    await runAbandonedCartSweep();
+
+    const mail = t72()!;
+    expect(mail).toBeTruthy();
+    expect(mail.text).not.toMatch(/SAVE-/);
+    expect(state.coupons).toHaveLength(1);
   });
 
   it("still sends the stage when no coupon can be resolved, without inventing one", async () => {

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { isPaidOrderStatus } from "@/lib/ledger";
+import { isPaidOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 import { isNonMailableAddress } from "@/lib/email/non-mailable";
 
@@ -47,15 +47,29 @@ const AUDIENCE_TRUNCATED =
 export type CampaignSegment =
   | "all"
   | "purchasers"
+  | "first_time"
+  | "repeat"
+  | "high_value"
   | "dormant_30"
   | "dormant_60"
   | "dormant_90"
   | "account_no_order"
   | "category";
 
+/**
+ * A "high-value" customer has spent at least this much, net, across paid
+ * orders. About three full-price vials. Stated here rather than buried so the
+ * threshold can be argued about in one place; it is a segment boundary, not a
+ * fact about customers.
+ */
+export const HIGH_VALUE_SPEND_CENTS = 30_000;
+
 export const CAMPAIGN_SEGMENTS: Array<{ value: CampaignSegment; label: string; needsParam?: boolean; hint: string }> = [
   { value: "all", label: "All marketing subscribers", hint: "Everyone who opted in and hasn't unsubscribed." },
   { value: "purchasers", label: "Customers who purchased before", hint: "At least one paid order." },
+  { value: "first_time", label: "First-time customers", hint: "Exactly one paid order. Good for a second-order nudge; skip the discount for these." },
+  { value: "repeat", label: "Repeat customers", hint: "Two or more paid orders. Announcements and new products land best here." },
+  { value: "high_value", label: "High-value customers", hint: `Net spend of $${(HIGH_VALUE_SPEND_CENTS / 100).toFixed(0)} or more. Early access and gifts, not percentage discounts.` },
   { value: "dormant_30", label: "No order in 30+ days", hint: "Bought before, but not recently." },
   { value: "dormant_60", label: "No order in 60+ days", hint: "Bought before, but not recently." },
   { value: "dormant_90", label: "No order in 90+ days", hint: "Bought before, but not recently." },
@@ -197,6 +211,10 @@ export async function loadConsentedAudience(): Promise<ConsentedAudience> {
 type PurchaseHistory = {
   /** email → most recent paid order time (ms). */
   lastPaidAt: Map<string, number>;
+  /** email → number of paid orders. */
+  orderCount: Map<string, number>;
+  /** email → net spend in cents across paid orders (amount paid less refunds). */
+  spendCents: Map<string, number>;
 };
 
 /**
@@ -208,28 +226,38 @@ type PurchaseHistory = {
  */
 async function loadPurchaseHistory(): Promise<PurchaseHistory> {
   const lastPaidAt = new Map<string, number>();
+  const orderCount = new Map<string, number>();
+  const spendCents = new Map<string, number>();
   const PAGE = 1000;
 
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabaseAdmin
       .from("orders")
-      .select("customer_email, payment_status, created_at")
+      .select("customer_email, payment_status, created_at, order_type, amount_paid, refund_amount")
       .range(from, from + PAGE - 1);
     if (error) throw error;
     const rows = data ?? [];
     for (const row of rows) {
       if (!isPaidOrderStatus(row.payment_status as string | null)) continue;
+      // Replacement reships and membership charges are not purchases of
+      // product; they must not make someone a "repeat customer".
+      if (!isSaleOrder((row as { order_type?: string | null }).order_type)) continue;
       const email = normalize(row.customer_email);
       if (!email) continue;
       const at = new Date(String(row.created_at)).getTime();
       if (!Number.isFinite(at)) continue;
       const existing = lastPaidAt.get(email);
       if (existing === undefined || at > existing) lastPaidAt.set(email, at);
+      orderCount.set(email, (orderCount.get(email) ?? 0) + 1);
+      spendCents.set(
+        email,
+        (spendCents.get(email) ?? 0) + Math.round(netOrderRevenue(row as { amount_paid?: number | null; refund_amount?: number | null }) * 100),
+      );
     }
     if (rows.length < PAGE) break;
   }
 
-  return { lastPaidAt };
+  return { lastPaidAt, orderCount, spendCents };
 }
 
 /** Emails that have a paid order containing any product in `category`. */
@@ -302,11 +330,15 @@ export function applySegment(input: {
   segment: CampaignSegment;
   audience: ConsentedAudience;
   lastPaidAt: Map<string, number>;
+  orderCount?: Map<string, number>;
+  spendCents?: Map<string, number>;
   categoryBuyers?: Set<string>;
   now: number;
 }): string[] {
   const { segment, audience, lastPaidAt, now } = input;
   const candidates = Array.from(audience.all);
+  const orderCount = input.orderCount ?? new Map<string, number>();
+  const spendCents = input.spendCents ?? new Map<string, number>();
 
   switch (segment) {
     case "all":
@@ -314,6 +346,15 @@ export function applySegment(input: {
 
     case "purchasers":
       return candidates.filter((email) => lastPaidAt.has(email));
+
+    case "first_time":
+      return candidates.filter((email) => (orderCount.get(email) ?? 0) === 1);
+
+    case "repeat":
+      return candidates.filter((email) => (orderCount.get(email) ?? 0) >= 2);
+
+    case "high_value":
+      return candidates.filter((email) => (spendCents.get(email) ?? 0) >= HIGH_VALUE_SPEND_CENTS);
 
     case "dormant_30":
     case "dormant_60":
@@ -355,7 +396,9 @@ export async function resolveAudience(input: {
   // Skip the work each segment doesn't need — "all" is the common case and
   // shouldn't page the entire orders table to answer.
   const needsHistory = input.segment !== "all" && input.segment !== "category";
-  const { lastPaidAt } = needsHistory ? await loadPurchaseHistory() : { lastPaidAt: new Map<string, number>() };
+  const history = needsHistory
+    ? await loadPurchaseHistory()
+    : { lastPaidAt: new Map<string, number>(), orderCount: new Map<string, number>(), spendCents: new Map<string, number>() };
   const categoryBuyers = input.segment === "category"
     ? await loadCategoryBuyers(String(input.segmentParam ?? ""))
     : undefined;
@@ -363,7 +406,9 @@ export async function resolveAudience(input: {
   return applySegment({
     segment: input.segment,
     audience,
-    lastPaidAt,
+    lastPaidAt: history.lastPaidAt,
+    orderCount: history.orderCount,
+    spendCents: history.spendCents,
     categoryBuyers,
     now: input.now ?? Date.now(),
   });

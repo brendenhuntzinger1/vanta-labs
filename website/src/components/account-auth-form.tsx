@@ -81,6 +81,10 @@ export function AccountAuthForm() {
   const [businessType, setBusinessType] = useState<string>("Other");
   const [ageConfirmed, setAgeConfirmed] = useState(false);
   const [researchUseAgreed, setResearchUseAgreed] = useState(false);
+  // Starts ticked, with the same "optional, unsubscribe anytime" wording the
+  // checkout box uses. Before 2026-09-04 there was no box at all here, so no
+  // account ever opted in and the welcome flow had never had a recipient.
+  const [marketingOptIn, setMarketingOptIn] = useState(true);
   const [rememberMe, setRememberMe] = useState(true);
   // Purely presentational: toggles the password field between text and
   // password. Never touches what is submitted.
@@ -294,6 +298,7 @@ export function AccountAuthForm() {
           referredByCode: referralCodeFromUrl || "",
           captchaToken: captchaToken ?? "",
           nextPath,
+          marketingOptIn,
         }),
       });
       const signupJson = await signupResponse.json().catch(() => null);
@@ -709,6 +714,16 @@ export function AccountAuthForm() {
               className="vl-auth-check mt-0.5"
             />
             <span>I agree and understand that the products on this site are intended strictly for laboratory research use only, and not for human or animal consumption.</span>
+          </label>
+          <label className="flex cursor-pointer items-start gap-3 rounded-[14px] border border-white/[0.07] bg-white/[0.02] px-4 py-3.5 text-[0.875rem] leading-6 text-white/75 transition-colors duration-200 hover:border-white/[0.12]">
+            <input
+              type="checkbox"
+              checked={marketingOptIn}
+              onChange={(event) => setMarketingOptIn(event.target.checked)}
+              className="vl-auth-check mt-0.5"
+              data-testid="signup-marketing-opt-in"
+            />
+            <span>Email me product news, restocks and offers. <span className="text-white/40">Optional — unsubscribe anytime.</span></span>
           </label>
         </div>
       ) : null}

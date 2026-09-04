@@ -10,6 +10,7 @@ import { buildAutomationClickUrl, buildAutomationOpenUrl } from "@/lib/email/aut
 import { resolveSitePath } from "@/lib/email/cta-path";
 import { describeOfferTerms, isOfferKey, issueCustomerOffer } from "@/lib/offers/customer-offers";
 import { getSiteUrl } from "@/lib/env";
+import { AUTOMATION_QUIET_MS, isInQuietPeriod, loadLastMarketingSendAt } from "@/lib/email/frequency";
 
 /**
  * Automated retention sequences.
@@ -39,12 +40,14 @@ import { getSiteUrl } from "@/lib/env";
  * reach someone who has not opted in.
  */
 
-export const AUTOMATION_KEYS = ["welcome_no_purchase", "post_purchase", "winback_30", "winback_60"] as const;
-export type AutomationKey = (typeof AUTOMATION_KEYS)[number];
-
-export function isAutomationKey(value: unknown): value is AutomationKey {
-  return AUTOMATION_KEYS.includes(value as AutomationKey);
-}
+export {
+  AUTOMATION_KEYS,
+  AUTOMATION_LABELS,
+  EVENT_GRACE_DAYS,
+  isAutomationKey,
+  type AutomationKey,
+} from "@/lib/email/automation-catalog";
+import { AUTOMATION_KEYS, EVENT_GRACE_DAYS, isAutomationKey, type AutomationKey } from "@/lib/email/automation-catalog";
 
 export type AutomationRow = {
   key: AutomationKey;
@@ -220,6 +223,8 @@ async function loadPaidOrders(): Promise<PaidOrder[]> {
 
 export type AutomationTarget = { email: string; referenceId: string };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /**
  * Pure eligibility rules, exported so each automation's boundary can be
  * asserted without a database. `now` is injected for the same reason it is in
@@ -232,34 +237,75 @@ export function selectAutomationTargets(input: {
   consented: Set<string>;
   accounts: Set<string>;
   accountCreatedAt: Map<string, number>;
+  /** When a guest opted in (marketing_subscribers.opted_in_at), keyed by email. */
+  subscribedAt?: Map<string, number>;
   paidOrders: PaidOrder[];
   alreadySent: Set<string>;
+  /** Most recent marketing send per address — see frequency.ts. */
+  lastMarketingSentAt?: Map<string, number>;
+  quietMs?: number;
   now: number;
   limit?: number;
 }): AutomationTarget[] {
-  const cutoff = input.now - input.delayDays * 24 * 60 * 60 * 1000;
+  const cutoff = input.now - input.delayDays * DAY_MS;
+  // Event-keyed flows only look this far back; see EVENT_GRACE_DAYS.
+  const oldest = cutoff - EVENT_GRACE_DAYS * DAY_MS;
   const targets: AutomationTarget[] = [];
 
   const lastPaidAt = new Map<string, number>();
+  const firstPaidAt = new Map<string, number>();
   for (const order of input.paidOrders) {
-    const existing = lastPaidAt.get(order.email);
-    if (existing === undefined || order.at > existing) lastPaidAt.set(order.email, order.at);
+    const last = lastPaidAt.get(order.email);
+    if (last === undefined || order.at > last) lastPaidAt.set(order.email, order.at);
+    const first = firstPaidAt.get(order.email);
+    if (first === undefined || order.at < first) firstPaidAt.set(order.email, order.at);
   }
 
-  if (input.key === "welcome_no_purchase") {
+  // THE QUIET PERIOD, applied once here for every flow. A recipient mailed by
+  // anything marketing-shaped inside the window is skipped THIS SWEEP and
+  // reconsidered next time; nothing is consumed and no slot is claimed.
+  const quiet = (email: string) => isInQuietPeriod({
+    lastMarketingSentAt: input.lastMarketingSentAt?.get(email),
+    now: input.now,
+    quietMs: input.quietMs,
+  });
+
+  if (input.key === "welcome_intro" || input.key === "welcome_no_purchase") {
+    // "Consented at" is the account's creation for an account holder and the
+    // opt-in time for a guest subscriber. Either way it is when the person
+    // first said yes, which is what a welcome is timed from.
     for (const email of input.consented) {
-      if (!input.accounts.has(email)) continue;
       if (lastPaidAt.has(email)) continue;
-      const created = input.accountCreatedAt.get(email);
-      if (created === undefined || created > cutoff) continue;
+      const consentedAt = input.accounts.has(email)
+        ? input.accountCreatedAt.get(email)
+        : input.subscribedAt?.get(email);
+      if (consentedAt === undefined || consentedAt > cutoff || consentedAt < oldest) continue;
       if (input.alreadySent.has(email)) continue;
+      if (quiet(email)) continue;
       targets.push({ email, referenceId: email });
     }
   } else if (input.key === "post_purchase") {
+    // The FIRST order only. The message explains the COA, storage and support
+    // — things a second-time buyer already knows. Repeat orders are the
+    // reorder reminder's job.
     for (const order of input.paidOrders) {
       if (!input.consented.has(order.email)) continue;
-      if (order.at > cutoff) continue;
+      if (firstPaidAt.get(order.email) !== order.at) continue;
+      if (order.at > cutoff || order.at < oldest) continue;
       if (input.alreadySent.has(order.orderId)) continue;
+      if (quiet(order.email)) continue;
+      targets.push({ email: order.email, referenceId: order.orderId });
+    }
+  } else if (input.key === "replenishment") {
+    // Keyed on the ORDER, and only while it is still the customer's latest:
+    // someone who has ordered again since does not need reminding about the
+    // order before.
+    for (const order of input.paidOrders) {
+      if (!input.consented.has(order.email)) continue;
+      if (lastPaidAt.get(order.email) !== order.at) continue;
+      if (order.at > cutoff || order.at < oldest) continue;
+      if (input.alreadySent.has(order.orderId)) continue;
+      if (quiet(order.email)) continue;
       targets.push({ email: order.email, referenceId: order.orderId });
     }
   } else {
@@ -273,12 +319,36 @@ export function selectAutomationTargets(input: {
       // the customer becomes eligible again after they lapse a second time.
       const reference = `${email}:${at}`;
       if (input.alreadySent.has(reference)) continue;
+      if (quiet(email)) continue;
       targets.push({ email, referenceId: reference });
     }
   }
 
   const limit = input.limit ?? AUTOMATION_BATCH_LIMIT;
   return targets.slice(0, limit);
+}
+
+/** Guest opt-in times from marketing_subscribers, keyed by lowercase email. */
+async function loadSubscribedAt(): Promise<Map<string, number>> {
+  const subscribed = new Map<string, number>();
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabaseAdmin
+      .from("marketing_subscribers")
+      .select("email, opted_in_at")
+      .is("unsubscribed_at", null)
+      .order("email", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const rows = data ?? [];
+    for (const row of rows) {
+      const email = String(row.email ?? "").trim().toLowerCase();
+      const at = new Date(String(row.opted_in_at)).getTime();
+      if (email && Number.isFinite(at)) subscribed.set(email, at);
+    }
+    if (rows.length < PAGE) break;
+  }
+  return subscribed;
 }
 
 /** Account creation times, keyed by lowercase email. */
@@ -360,7 +430,10 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
 
   let automations: AutomationRow[];
   try {
-    automations = (await loadAutomations()).filter((row) => row.enabled);
+    // Priority order, whatever order the database returned them in.
+    automations = (await loadAutomations())
+      .filter((row) => row.enabled)
+      .sort((a, b) => AUTOMATION_KEYS.indexOf(a.key) - AUTOMATION_KEYS.indexOf(b.key));
   } catch (error) {
     result.errors.push(`load: ${error instanceof Error ? error.message : String(error)}`);
     return result;
@@ -373,8 +446,22 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
   const paidOrders = await loadPaidOrders();
   // Only loaded when an automation actually needs it — paging the auth list is
   // the most expensive thing in this sweep.
-  const needsAccounts = automations.some((row) => row.key === "welcome_no_purchase");
-  const accountCreatedAt = needsAccounts ? await loadAccountCreatedAt() : new Map<string, number>();
+  const needsWelcome = automations.some((row) => row.key === "welcome_no_purchase" || row.key === "welcome_intro");
+  const accountCreatedAt = needsWelcome ? await loadAccountCreatedAt() : new Map<string, number>();
+  const subscribedAt = needsWelcome ? await loadSubscribedAt() : new Map<string, number>();
+
+  // THE QUIET PERIOD IS READ ONCE AND KEPT CURRENT. Each successful send below
+  // stamps the map, so an automation later in the priority order sees what an
+  // earlier one just did — the whole reason they run in order.
+  let lastMarketingSentAt: Map<string, number>;
+  try {
+    lastMarketingSentAt = await loadLastMarketingSendAt({ now, lookbackMs: AUTOMATION_QUIET_MS });
+  } catch (error) {
+    // Fail CLOSED for this sweep: with no picture of recent sends, every
+    // automation waits half an hour rather than risking three offers in a day.
+    result.errors.push(`quiet-period read failed; automations deferred this sweep: ${error instanceof Error ? error.message : String(error)}`);
+    return result;
+  }
 
   for (const automation of automations) {
     try {
@@ -385,8 +472,10 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
         consented: audience.all,
         accounts: audience.accounts,
         accountCreatedAt,
+        subscribedAt,
         paidOrders,
         alreadySent,
+        lastMarketingSentAt,
         now,
       });
 
@@ -489,6 +578,7 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
 
         if (sendResult.success) {
           await closeAutomationSend(campaignType, target.referenceId, "sent", sendResult.providerMessageId);
+          lastMarketingSentAt.set(target.email, Date.now());
           result.sent++;
           result.byKey[automation.key] = (result.byKey[automation.key] ?? 0) + 1;
         } else if (sendResult.suppressed) {

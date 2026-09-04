@@ -153,7 +153,7 @@ echo "==> post-parity migrations"
 for f in referral-orders-commission-lifecycle referral-orders-manual-review-status \
          refund-exactly-once-indexes pending-emails-order-link automation-send-once auth-email-debounce \
          affiliate-email-system email-automation-tracking customer-offers coupon-free-shipping \
-         payment-failure-detail; do
+         email-delivery-event-log email-lifecycle-2026-09-04 payment-failure-detail; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
 done
 

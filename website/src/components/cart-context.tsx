@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { Product } from "@/lib/catalog-types";
 import type { ReferralCode } from "@/lib/referral-codes";
 import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
@@ -817,22 +817,42 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const quantityBundleSavings = bundleStacking ? 0 : Math.round(Math.max(0, fullSubtotal - subtotal) * 100) / 100;
   const discountBase = bundleStacking ? subtotal : fullSubtotal;
 
-  // Abandoned-cart-recovery tracking: fires a debounced snapshot only for a
-  // SIGNED-IN shopper. /api/cart/track is auth-gated and always sources the
-  // email from the session, so posting a guest's typed email did nothing but
-  // ship their PII + full cart to the server pointlessly — we no longer send
-  // the email at all, and skip the effect entirely for guests. Fire-and-forget.
+  // Abandoned-cart-recovery tracking: a debounced snapshot whenever the cart
+  // changes and an address is known — the session's for a signed-in shopper,
+  // the checkout email field's for a guest (setKnownEmail, called by the
+  // checkout page once the field holds something that looks like an address).
+  // The server ignores the body email for a signed-in session and rate-limits
+  // guests; see /api/cart/track for what bounds the guest path.
+  //
+  // AN EMPTY CART IS SENT TOO, ONCE, so the server can retire the active row.
+  // Without that the last non-empty snapshot kept mailing a shopper who had
+  // already decided against every item in it.
+  const trackedEmail = isSignedIn ? "" : knownEmail.trim().toLowerCase();
+  const hasTrackableIdentity = isSignedIn || /^\S+@\S+\.\S+$/.test(trackedEmail);
+  const wasTrackingRef = useRef(false);
   useEffect(() => {
-    if (!isSignedIn || !cartSessionId || items.length === 0) {
+    if (!cartSessionId) return;
+    if (items.length === 0) {
+      // Only worth a request if a snapshot may exist to clear.
+      if (!wasTrackingRef.current) return;
+      wasTrackingRef.current = false;
+      fetch("/api/cart/track", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: cartSessionId, items: [] }),
+      }).catch(() => {});
       return;
     }
+    if (!hasTrackableIdentity) return;
 
     const timeout = setTimeout(() => {
+      wasTrackingRef.current = true;
       fetch("/api/cart/track", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId: cartSessionId,
+          ...(trackedEmail ? { email: trackedEmail } : {}),
           customerName: customerName || undefined,
           items: items.map((item) => ({
             slug: item.slug,
@@ -850,7 +870,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     }, 1500);
 
     return () => clearTimeout(timeout);
-  }, [isSignedIn, cartSessionId, items, customerName, subtotal]);
+  }, [isSignedIn, hasTrackableIdentity, trackedEmail, cartSessionId, items, customerName, subtotal]);
 
   const totalQuantity = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
   // The promotions this cart may actually earn: the store-wide live list, minus
@@ -1580,7 +1600,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       const response = await fetch("/api/coupons/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: normalized, subtotal }),
+        // The address a guest typed at checkout, so a recovery code bound to
+        // it previews the way the checkout will price it. Ignored server-side
+        // for a signed-in shopper, whose session email is used instead.
+        body: JSON.stringify({ code: normalized, subtotal, ...(knownEmail.trim() ? { email: knownEmail.trim().toLowerCase() } : {}) }),
       });
       const result = await response.json() as {
         success: boolean;

@@ -543,7 +543,8 @@
   "email_suppressions": [
     "email",
     "reason",
-    "created_at"
+    "created_at",
+    "source"
   ],
   "express_checkout_intents": [
     "id",
