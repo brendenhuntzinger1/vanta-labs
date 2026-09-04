@@ -5,7 +5,14 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { CoaTestingDisclosure } from "@/components/coa-testing-disclosure";
-import { coaSearchHaystack, formatCoaTestDate, matchesCoaSearch } from "@/lib/coa-format";
+import {
+  coaSearchHaystack,
+  coaStrengthKey,
+  compareCoaDocumentsByStrength,
+  formatCoaTestDate,
+  listCoaStrengths,
+  matchesCoaSearch,
+} from "@/lib/coa-format";
 import { COA_TESTING_PENDING_SHORT, isCoaTestingPending } from "@/lib/coa-pending";
 import type { CoaLibraryProduct, CoaLibrarySnapshot, PublicCoaDocument } from "@/lib/coa-types";
 import { PLACEHOLDER_IMAGE_PATHS } from "@/lib/product-image";
@@ -137,6 +144,10 @@ function ProductCoaCard({
   const verified = documents.length > 0;
   const awaitingTesting = !verified && isCoaTestingPending(product.slug);
   const latest = documents[0];
+  // Every dose that has a certificate, lowest first. The title's own strength
+  // is the product's DEFAULT dose, which would label a card holding 5mg, 10mg
+  // and 15mg records as "10mg"; once the records name doses, they speak.
+  const strengths = listCoaStrengths(documents);
   const showPhoto = isRealProductPhoto(product.imageUrl);
 
   const specs: Array<[string, string | null]> = verified
@@ -178,8 +189,20 @@ function ProductCoaCard({
         <p className="text-[11px] uppercase tracking-[0.18em] text-white/32">{product.category}</p>
         <h3 className="mt-2 flex flex-wrap items-baseline gap-x-2 text-[1.15rem] leading-snug text-white sm:text-xl">
           {product.name}
-          {product.strength ? <span className="text-sm text-white/40">{product.strength}</span> : null}
+          {product.strength && strengths.length === 0 ? <span className="text-sm text-white/40">{product.strength}</span> : null}
         </h3>
+        {strengths.length > 0 ? (
+          <ul className="mt-2.5 flex flex-wrap gap-1.5" aria-label="Documented doses">
+            {strengths.map((strength) => (
+              <li
+                key={strength}
+                className="rounded-full border border-white/[0.09] bg-white/[0.03] px-2 py-0.5 text-[11px] font-medium tracking-[0.04em] text-white/60"
+              >
+                {strength}
+              </li>
+            ))}
+          </ul>
+        ) : null}
 
         {verified ? (
           <dl className="mt-5 grid grid-cols-2 gap-x-4 gap-y-3.5">
@@ -239,12 +262,26 @@ function CoaViewer({
   product: CoaLibraryProduct;
   onClose: () => void;
 }) {
-  const [activeId, setActiveId] = useState(product.documents[0]?.id ?? "");
+  // Dose order, lowest first, so stepping "next" walks 5mg → 10mg → 15mg the
+  // way the product's own dose selector does; within a dose the newest batch
+  // leads. The snapshot arrives newest-first, which is right for the card's
+  // headline specs and wrong for a reader who opened this to compare doses.
+  const documents = useMemo(() => [...product.documents].sort(compareCoaDocumentsByStrength), [product.documents]);
+  const strengths = useMemo(() => listCoaStrengths(documents), [documents]);
+  const [activeId, setActiveId] = useState(documents[0]?.id ?? "");
   const [zoomIndex, setZoomIndex] = useState(0);
   const [expanded, setExpanded] = useState(false);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
-  const activeDocument = product.documents.find((doc) => doc.id === activeId) ?? product.documents[0];
+  const activeIndex = Math.max(
+    0,
+    documents.findIndex((doc) => doc.id === activeId),
+  );
+  const activeDocument = documents[activeIndex];
+  const activeStrengthKey = coaStrengthKey(activeDocument?.strength);
+  const batchesInDose = documents.filter((doc) => coaStrengthKey(doc.strength) === activeStrengthKey);
+  const previousDocument = documents[activeIndex - 1];
+  const nextDocument = documents[activeIndex + 1];
 
   useEffect(() => {
     closeButtonRef.current?.focus();
@@ -279,7 +316,30 @@ function CoaViewer({
     setZoomIndex(0);
   };
 
+  // ← and → leaf through the whole set — every dose, every batch — so a reader
+  // can compare certificates without hunting for the pills each time.
+  useEffect(() => {
+    if (documents.length < 2) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      const target = event.target as HTMLElement | null;
+      if (target && /^(input|textarea|select)$/i.test(target.tagName)) return;
+      const next = documents[activeIndex + (event.key === "ArrowRight" ? 1 : -1)];
+      if (!next) return;
+      event.preventDefault();
+      setActiveId(next.id);
+      setZoomIndex(0);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activeIndex, documents]);
+
   if (!activeDocument) return null;
+
+  // The dose this certificate covers. Falls back to the product's default dose
+  // only for a record that never named one, so a 5mg report is never headed
+  // with the 10mg the product defaults to.
+  const activeStrength = activeDocument.strength ?? product.strength;
 
   const fileUrl = `/api/coa/${activeDocument.id}/file`;
   const zoom = ZOOM_STEPS[zoomIndex];
@@ -318,7 +378,7 @@ function CoaViewer({
             <p className="vl2-eyebrow">Certificate of Analysis</p>
             <h2 id="coa-viewer-title" className="vl2-serif mt-1.5 truncate text-2xl text-white sm:text-3xl">
               {product.name}
-              {product.strength ? <span className="ml-2 text-base text-white/40">{product.strength}</span> : null}
+              {activeStrength ? <span className="ml-2 text-base text-white/40">{activeStrength}</span> : null}
             </h2>
           </div>
           <button
@@ -336,21 +396,86 @@ function CoaViewer({
 
         <div className="vl-coa-seam" />
 
-        {product.documents.length > 1 ? (
+        {documents.length > 1 ? (
           <>
-            <div className="flex gap-2 overflow-x-auto px-5 py-3 sm:px-7">
-              {product.documents.map((doc) => (
+            {/* Stacked on a phone: beside the stepper the dose row had ~240px
+                and three doses already scrolled. Side by side from sm up. */}
+            <div className="flex flex-col gap-3 px-5 py-3 sm:flex-row sm:items-center sm:px-7">
+              <div className="min-w-0 flex-1 space-y-2">
+                {/* One pill per dose; picking one opens its newest batch. */}
+                {strengths.length > 1 ? (
+                  <div role="group" aria-label="Dose" className="flex gap-2 overflow-x-auto">
+                    {strengths.map((strength) => {
+                      const key = coaStrengthKey(strength);
+                      const first = documents.find((doc) => coaStrengthKey(doc.strength) === key);
+                      if (!first) return null;
+                      const active = key === activeStrengthKey;
+                      return (
+                        <button
+                          key={strength}
+                          type="button"
+                          onClick={() => selectDocument(first.id)}
+                          data-active={active}
+                          aria-pressed={active}
+                          className="vl-coa-pill vl-focus-ring min-h-[38px] flex-shrink-0 px-4 text-[11px] font-semibold uppercase tracking-[0.12em]"
+                        >
+                          {strength}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {/* The batches within the chosen dose, when there is more than
+                    one. Quiet under a dose row so the page keeps one champagne
+                    "current" signal; the plain treatment when batches are the
+                    only choice there is. */}
+                {batchesInDose.length > 1 ? (
+                  <div role="group" aria-label="Batch" className="flex gap-2 overflow-x-auto">
+                    {batchesInDose.map((doc) => (
+                      <button
+                        key={doc.id}
+                        type="button"
+                        onClick={() => selectDocument(doc.id)}
+                        data-active={doc.id === activeDocument.id}
+                        data-tone={strengths.length > 1 ? "quiet" : undefined}
+                        aria-pressed={doc.id === activeDocument.id}
+                        className="vl-coa-pill vl-focus-ring min-h-[38px] flex-shrink-0 px-4 font-mono text-xs"
+                      >
+                        {doc.batchNumber}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
+              {/* Previous / next across everything, in dose order. */}
+              <div className="flex flex-shrink-0 items-center gap-1 self-end sm:self-auto">
                 <button
-                  key={doc.id}
                   type="button"
-                  onClick={() => selectDocument(doc.id)}
-                  data-active={doc.id === activeDocument.id}
-                  aria-pressed={doc.id === activeDocument.id}
-                  className="vl-coa-pill vl-focus-ring min-h-[38px] flex-shrink-0 px-4 font-mono text-xs"
+                  onClick={() => previousDocument && selectDocument(previousDocument.id)}
+                  disabled={!previousDocument}
+                  aria-label="Previous certificate"
+                  className="vl-coa-tool vl-focus-ring h-9 w-9"
                 >
-                  {doc.batchNumber}
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden>
+                    <path d="M15 6l-6 6 6 6" />
+                  </svg>
                 </button>
-              ))}
+                <span className="min-w-[3.5rem] text-center font-mono text-xs text-white/45" aria-live="polite">
+                  {activeIndex + 1} / {documents.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => nextDocument && selectDocument(nextDocument.id)}
+                  disabled={!nextDocument}
+                  aria-label="Next certificate"
+                  className="vl-coa-tool vl-focus-ring h-9 w-9"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden>
+                    <path d="M9 6l6 6-6 6" />
+                  </svg>
+                </button>
+              </div>
             </div>
             <div className="vl-coa-seam" />
           </>
