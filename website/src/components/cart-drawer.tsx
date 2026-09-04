@@ -155,7 +155,7 @@ export function CartDrawer() {
   // met; below that the shopper genuinely still has the store threshold to
   // chase and the bar is the honest thing to show.
   const offerCoversShipping = Boolean(pendingOffer)
-    && pendingOffer!.rewardKind !== "free_product"
+    && pendingOffer!.rewardKind.startsWith("free_shipping")
     && offerShortfall <= 0;
 
   // WHAT THIS CART ACTUALLY COSTS, ACCORDING TO THE THING THAT CHARGES FOR IT.
