@@ -662,77 +662,94 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // still gets free shipping".
   let offerPercentDiscount = 0;
 
-  if (offer && input.offerToken
-      && (offer.reward_kind === "free_shipping" || offer.reward_kind === "free_shipping_percent" || offer.reward_kind === "percent")) {
-    if (offerMinimumMet(offer, Math.round(subtotal * 100))) {
-      // A plain percentage waives nothing; the two shipping kinds waive the fee.
-      const waivesShipping = offer.reward_kind !== "percent";
-      if (waivesShipping) offerGrantsFreeShipping = true;
-      const percent = offer.reward_kind === "free_shipping" ? 0 : Number(offer.percent_off ?? 0);
-      // Priced off discountBase, the same base every other percentage uses, so
-      // a combined gift and a coupon of the same size are worth the same.
-      if (percent > 0) offerPercentDiscount = calculateCouponDiscount(discountBase, "percent", percent);
-      appliedOffer = {
-        token: input.offerToken,
-        offerKey: offer.offer_key,
-        rewardKind: offer.reward_kind,
-        description: !waivesShipping
-          ? `${percent}% off`
-          : percent > 0 ? `Free shipping + ${percent}% off` : "Free shipping",
-      };
+  // ONE BLOCK FOR EVERY KIND. A reward is up to three grants — a $0 product
+  // line, a waived shipping fee, a percentage — and each kind is a subset:
+  //   free_product          line
+  //   free_shipping                shipping
+  //   free_shipping_percent        shipping + percent
+  //   percent                                 percent
+  //   free_product_percent  line            + percent
+  // Each grant is decided once, below, from the stored row; the kind only says
+  // which of the three to attempt. Nothing applies under the minimum.
+  if (offer && input.offerToken && offerMinimumMet(offer, Math.round(subtotal * 100))) {
+    const kind = String(offer.reward_kind);
+    const wantsProduct = kind === "free_product" || kind === "free_product_percent";
+    const wantsShipping = kind === "free_shipping" || kind === "free_shipping_percent";
+    const percent = kind === "free_shipping_percent" || kind === "percent" || kind === "free_product_percent"
+      ? Number(offer.percent_off ?? 0)
+      : 0;
+
+    let productDescription: string | null = null;
+    if (wantsProduct) {
+      const offerProduct = catalogProducts.find((candidate) => candidate.slug === offer.product_slug);
+      const offerDose = offerProduct
+        ? (offer.variant_id
+            ? offerProduct.doses?.find((dose) => dose.id === offer.variant_id)
+            : offerProduct.doses?.find((dose) => dose.isDefault) ?? offerProduct.doses?.[0])
+        : undefined;
+      const offerStock = offerProduct
+        ? (offerDose ? stockLevels.get(offerDose.id) : stockLevels.get(offerProduct.slug))
+        : undefined;
+      const offerStockStatus = offerDose?.stockStatus ?? offerProduct?.stockStatus;
+
+      // A gift we cannot ship is worse than no gift: it would be promised in
+      // the email, shown in the cart, and then oversold. Out of stock means the
+      // product half simply does not apply to this order and the token stays
+      // spendable for later.
+      //
+      // stockLevels carries only TRACKED rows (getStockLevelsBySlugs), so a
+      // number here is a real count and 0 means "tracked, and there are none".
+      // This used to test `offerStock > 0 && offerStock < 1`, which no integer
+      // count can satisfy, so a tracked-but-empty gift whose catalogue status
+      // had not caught up was added anyway — and reserve_inventory then refused
+      // the whole order over a unit the shopper never asked for.
+      const shippable = Boolean(offerProduct)
+        && offerStockStatus !== "Out of Stock"
+        && offerStockStatus !== "Reserved"
+        && !(typeof offerStock === "number" && Number.isFinite(offerStock) && offerStock <= 0);
+
+      if (offerProduct && shippable) {
+        lineItems.push({
+          product: {
+            ...offerProduct,
+            id: offerDose ? `${offerProduct.slug}::${offerDose.id}` : offerProduct.slug,
+            // The only place in this function a price is forced rather than
+            // resolved. It is not a discount on a real price — it is the price.
+            price: 0,
+            stockStatus: offerDose?.stockStatus ?? offerProduct.stockStatus,
+            variantId: offerDose?.id,
+            variantLabel: offerDose?.label,
+            variantSku: offerDose?.sku,
+          },
+          quantity: 1,
+          // Zero here too, so fullSubtotal-style reads stay honest if this line
+          // is ever included in one: the customer was never charged for it and
+          // was never "discounted" from anything.
+          baseUnitPrice: 0,
+          gift: true,
+        });
+        productDescription = offerDose?.label ? `${offerProduct.name} (${offerDose.label})` : offerProduct.name;
+      }
     }
-  } else if (offer && input.offerToken) {
-    const offerProduct = catalogProducts.find((candidate) => candidate.slug === offer.product_slug);
-    const offerDose = offerProduct
-      ? (offer.variant_id
-          ? offerProduct.doses?.find((dose) => dose.id === offer.variant_id)
-          : offerProduct.doses?.find((dose) => dose.isDefault) ?? offerProduct.doses?.[0])
-      : undefined;
-    const offerStock = offerProduct
-      ? (offerDose ? stockLevels.get(offerDose.id) : stockLevels.get(offerProduct.slug))
-      : undefined;
-    const offerStockStatus = offerDose?.stockStatus ?? offerProduct?.stockStatus;
 
-    // A gift we cannot ship is worse than no gift: it would be promised in the
-    // email, shown in the cart, and then oversold. Out of stock means the
-    // offer simply does not apply to this order and stays spendable for later.
-    //
-    // stockLevels carries only TRACKED rows (getStockLevelsBySlugs), so a
-    // number here is a real count and 0 means "tracked, and there are none".
-    // This used to test `offerStock > 0 && offerStock < 1`, which no integer
-    // count can satisfy, so a tracked-but-empty gift whose catalogue status
-    // had not caught up was added anyway — and reserve_inventory then refused
-    // the whole order over a unit the shopper never asked for.
-    const shippable = Boolean(offerProduct)
-      && offerStockStatus !== "Out of Stock"
-      && offerStockStatus !== "Reserved"
-      && !(typeof offerStock === "number" && Number.isFinite(offerStock) && offerStock <= 0);
+    if (wantsShipping) offerGrantsFreeShipping = true;
+    // Priced off discountBase, the same base every other percentage uses, so
+    // a gift's percentage and a coupon of the same size are worth the same.
+    if (percent > 0) offerPercentDiscount = calculateCouponDiscount(discountBase, "percent", percent);
 
-    if (offerProduct && shippable && offerMinimumMet(offer, Math.round(subtotal * 100))) {
-      lineItems.push({
-        product: {
-          ...offerProduct,
-          id: offerDose ? `${offerProduct.slug}::${offerDose.id}` : offerProduct.slug,
-          // The only place in this function a price is forced rather than
-          // resolved. It is not a discount on a real price — it is the price.
-          price: 0,
-          stockStatus: offerDose?.stockStatus ?? offerProduct.stockStatus,
-          variantId: offerDose?.id,
-          variantLabel: offerDose?.label,
-          variantSku: offerDose?.sku,
-        },
-        quantity: 1,
-        // Zero here too, so fullSubtotal-style reads stay honest if this line
-        // is ever included in one: the customer was never charged for it and
-        // was never "discounted" from anything.
-        baseUnitPrice: 0,
-        gift: true,
-      });
+    // The description names what was actually granted, in the order the
+    // customer reads it: product, then shipping, then the percentage.
+    const parts = [
+      productDescription,
+      wantsShipping ? "Free shipping" : null,
+      percent > 0 ? `${percent}% off` : null,
+    ].filter((part): part is string => Boolean(part));
+    if (parts.length > 0) {
       appliedOffer = {
         token: input.offerToken,
         offerKey: offer.offer_key,
-        rewardKind: "free_product",
-        description: offerDose?.label ? `${offerProduct.name} (${offerDose.label})` : offerProduct.name,
+        rewardKind: kind,
+        description: parts.join(" + "),
       };
     }
   }

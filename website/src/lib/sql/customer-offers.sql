@@ -368,3 +368,19 @@ alter table public.customer_offers
     or (reward_kind in ('free_shipping_percent', 'percent') and product_slug is null
         and percent_off is not null and percent_off > 0 and percent_off <= 100)
   );
+
+-- ---------------------------------------------------------------------------
+-- A PRODUCT AND A PERCENTAGE TOGETHER. reward_kind = 'free_product_percent':
+-- product_slug set, percent_off set. Idempotent; safe to re-run.
+-- ---------------------------------------------------------------------------
+alter table public.customer_offers
+  drop constraint if exists customer_offers_reward_shape;
+alter table public.customer_offers
+  add constraint customer_offers_reward_shape check (
+    (reward_kind = 'free_product' and product_slug is not null and percent_off is null)
+    or (reward_kind = 'free_shipping' and product_slug is null and percent_off is null)
+    or (reward_kind in ('free_shipping_percent', 'percent') and product_slug is null
+        and percent_off is not null and percent_off > 0 and percent_off <= 100)
+    or (reward_kind = 'free_product_percent' and product_slug is not null
+        and percent_off is not null and percent_off > 0 and percent_off <= 100)
+  );
