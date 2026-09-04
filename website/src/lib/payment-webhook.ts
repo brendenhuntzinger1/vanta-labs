@@ -18,7 +18,7 @@ import { enqueueFailedEmail } from "@/lib/email/retry-queue";
 import { commissionEarnedTemplate, orderConfirmationTemplate, refundConfirmationTemplate } from "@/lib/email/templates";
 import { scheduleOrderPushNotification } from "@/lib/order-push-notification";
 import { getSiteUrl } from "@/lib/env";
-import { redeemCustomerOffer } from "@/lib/offers/customer-offers";
+import { closeCustomerOfferCycle, redeemCustomerOffer } from "@/lib/offers/customer-offers";
 import { redeemCoupon } from "@/lib/coupons";
 import { normalizeCouponCode } from "@/lib/coupon-code";
 import { readAllRowsBounded } from "@/lib/supabase-page";
@@ -1522,6 +1522,11 @@ export async function finalizeManualPayment(
       // Idempotent (it only writes while redeemed_at is null) and non-throwing,
       // so a replayed webhook and an un-migrated database both cost nothing.
       await redeemCustomerOffer(orderId);
+      // A PAID ORDER CLOSES THE RETENTION CYCLE: every other unredeemed gift
+      // this address holds is revoked, so the day-30 / day-40 / day-50 gifts
+      // cannot each be spent on a separate later order. Non-throwing, idempotent,
+      // and scoped to this one address — see closeCustomerOfferCycle.
+      await closeCustomerOfferCycle({ orderId, email: String(order.customer_email) });
       // Send-once + audited. Returns without sending if a confirmation for this
       // order is already recorded, which is what makes a replayed manual
       // approval safe independently of the caller's own guards.
@@ -2506,6 +2511,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           // Idempotent (it only writes while redeemed_at is null) and non-throwing,
           // so a replayed webhook and an un-migrated database both cost nothing.
           await redeemCustomerOffer(orderId);
+          // A PAID ORDER CLOSES THE RETENTION CYCLE — see the manual-approval
+          // lane above. buyerEmail is the same address markAbandonedCartsRecovered
+          // used, so a processor callback that omits the email is covered by the
+          // order row exactly as the cart recovery stop is.
+          await closeCustomerOfferCycle({ orderId, email: buyerEmail });
           // Send-once + audited. The paid_side_effects_at claim above already
           // stops a duplicate delivery reaching this line; this is the second,
           // independent guarantee, enforced by a unique index rather than by

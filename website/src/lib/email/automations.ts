@@ -539,7 +539,14 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
         let offerToken: string | undefined;
         let offerTerms: string | undefined;
         if (isOfferKey(automation.offer_key)) {
-          const issued = await issueCustomerOffer({ offerKey: automation.offer_key, email: target.email });
+          const issued = await issueCustomerOffer({
+            offerKey: automation.offer_key,
+            email: target.email,
+            // Provenance: which send minted this gift, so a redemption can credit
+            // the automation even when the customer never clicked the tracked link.
+            automationKey: automation.key,
+            referenceId: target.referenceId,
+          });
           if (!issued) {
             await closeAutomationSend(campaignType, target.referenceId, "failed");
             result.failed++;

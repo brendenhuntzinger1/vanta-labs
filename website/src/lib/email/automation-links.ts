@@ -142,6 +142,49 @@ export function safeAutomationDestination(ctaPath: string | null | undefined): s
   return resolveSitePath(String(ctaPath ?? "").trim(), getSiteUrl());
 }
 
+/**
+ * The account pages a signed-out visitor may land on. Everything else under
+ * /account sits behind the (dashboard) layout's session check and redirects to
+ * the login page.
+ */
+const PUBLIC_ACCOUNT_PATHS = new Set(["/account/login", "/account/forgot-password", "/account/reset-password"]);
+
+function isGatedAccountPath(pathname: string): boolean {
+  const path = pathname.replace(/\/+$/, "") || "/";
+  if (path !== "/account" && !path.startsWith("/account/")) return false;
+  return !PUBLIC_ACCOUNT_PATHS.has(path);
+}
+
+/**
+ * Where a click actually lands, given whether the visitor is signed in.
+ *
+ * A GUEST IS NEVER SENT FROM AN EMAIL INTO A LOGIN WALL. The reorder reminder
+ * points at /account/orders, which is the right place for an account holder
+ * and a dead end for a guest buyer — and half the buyers on the marketing list
+ * are guests. By the time this runs the click is recorded and the offer cookie
+ * is armed, so only the landing page is at stake: a signed-out visitor bound
+ * for a gated account page goes to the catalogue, where the gift they were
+ * promised is waiting in the cart. Nothing about authentication changes; the
+ * account pages still require a session exactly as before.
+ *
+ * `destination` is the already-resolved, same-origin URL from
+ * safeAutomationDestination. An unparseable value is returned untouched
+ * rather than thrown on — a tracking route must always redirect somewhere.
+ */
+export function destinationForVisitor(destination: string, signedIn: boolean): string {
+  if (signedIn) return destination;
+  try {
+    const url = new URL(destination);
+    if (!isGatedAccountPath(url.pathname)) return destination;
+    url.pathname = "/products";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return destination;
+  }
+}
+
 /** Encode the automation attribution cookie value. */
 export function encodeAutomationCookie(automationKey: string, clickedAtMs: number): string {
   return `${automationKey}.${clickedAtMs}`;

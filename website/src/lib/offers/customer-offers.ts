@@ -203,6 +203,14 @@ export function hashOfferToken(token: string): string {
 export async function issueCustomerOffer(input: {
   offerKey: OfferKey;
   email: string;
+  /**
+   * Which automation send is minting this gift. Written onto the row so a
+   * redemption can credit that automation without a click cookie (see
+   * marketing-attribution.ts). Optional: a hand-minted or legacy row carries
+   * null and simply cannot be attributed that way.
+   */
+  automationKey?: string;
+  referenceId?: string;
   now?: number;
 }): Promise<{ token: string; expiresAt: string } | null> {
   const config = OFFER_CATALOG[input.offerKey];
@@ -214,7 +222,7 @@ export async function issueCustomerOffer(input: {
 
   const mint = async (): Promise<{ token: string; expiresAt: string } | { code: string; message: string }> => {
     const token = crypto.randomBytes(TOKEN_BYTES).toString("base64url");
-    const { error } = await supabaseAdmin.from("customer_offers").insert({
+    const row = {
       offer_key: input.offerKey,
       token_hash: hashOfferToken(token),
       email,
@@ -226,7 +234,19 @@ export async function issueCustomerOffer(input: {
       percent_off: config.reward.kind === "free_shipping_percent" || config.reward.kind === "percent" || config.reward.kind === "free_product_percent" ? config.reward.percent : null,
       min_subtotal_cents: config.minSubtotalCents,
       expires_at: expiresAt,
-    });
+    };
+    const provenance = input.automationKey
+      ? { automation_key: input.automationKey, reference_id: input.referenceId ?? null }
+      : {};
+    let { error } = await supabaseAdmin.from("customer_offers").insert({ ...row, ...provenance });
+    // A database that has not run the 2026-09-04 section of customer-offers.sql
+    // has no automation_key column (42703). The gift still has to go out; it is
+    // only the redemption-attribution breadcrumb that is lost, and that is
+    // logged rather than silently dropped.
+    if (error && String(error.code ?? "") === "42703" && input.automationKey) {
+      console.error("[offers] customer_offers has no provenance columns yet; minting without them", error.message);
+      ({ error } = await supabaseAdmin.from("customer_offers").insert(row));
+    }
     if (error) return { code: String(error.code ?? ""), message: String(error.message ?? "") };
     return { token, expiresAt };
   };
@@ -320,7 +340,7 @@ async function retireStaleOffer(offerKey: OfferKey, email: string, now: number):
 
   const { error: revokeError } = await supabaseAdmin
     .from("customer_offers")
-    .update({ revoked_at: new Date(now).toISOString() })
+    .update({ revoked_at: new Date(now).toISOString(), revoke_reason: "reissued" })
     .eq("id", row.id)
     .is("revoked_at", null)
     .is("redeemed_at", null);
@@ -420,6 +440,44 @@ export async function redeemCustomerOffer(orderId: string): Promise<boolean> {
   } catch (error) {
     console.error("[offers] redeem unavailable", orderId, error);
     return false;
+  }
+}
+
+/**
+ * A PAID ORDER CLOSES THE RETENTION CYCLE.
+ *
+ * Every unredeemed gift this address holds dies, except the one the order is
+ * spending (redeem has already marked it, and the SQL skips this order's own
+ * reservation regardless). Runs beside redeemCustomerOffer in the paid
+ * side-effects path, and for the same reason: a retention offer exists to
+ * recover ONE purchase, and once that purchase is paid the day-30, day-40 and
+ * day-50 gifts must not stay collectable for three separate later orders. A
+ * customer who reorders without clicking the email is covered too — nothing
+ * was reserved, so everything they held is closed.
+ *
+ * Idempotent, scoped to one address and to customer_offers only, and
+ * non-throwing: an un-migrated database costs the closure, never the order.
+ * Returns how many gifts were closed, for the log.
+ */
+export async function closeCustomerOfferCycle(input: { orderId: string; email: string | null | undefined }): Promise<number> {
+  const orderId = String(input.orderId ?? "").trim();
+  const email = String(input.email ?? "").trim().toLowerCase();
+  if (!orderId || !email) return 0;
+  try {
+    const { data, error } = await supabaseAdmin.rpc("customer_offer_close_cycle", {
+      p_order_id: orderId,
+      p_email: email,
+    });
+    if (error) {
+      console.error("[offers] close-cycle failed", orderId, error.message);
+      return 0;
+    }
+    const closed = Number(data ?? 0);
+    if (closed > 0) console.log(`[offers] order ${orderId} closed ${closed} unused gift(s) for ${email}`);
+    return Number.isFinite(closed) ? closed : 0;
+  } catch (error) {
+    console.error("[offers] close-cycle unavailable", orderId, error);
+    return 0;
   }
 }
 
