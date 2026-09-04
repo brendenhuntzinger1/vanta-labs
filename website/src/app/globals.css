@@ -1648,7 +1648,16 @@ html[data-age-verified="false"] video {
      The base value is the PHONE's, exactly like the scrim below it — the two
      have to agree about where the copy is, so they read the same breakpoint
      and are stated next to each other. */
-  --hero-framing: 0.7;
+  /* See FADE_REACH_PROPERTY in hero-video.tsx. A phone's crop has near-white
+     LEFT AND RIGHT edges (measured 241/255 down the middle of the screen) and
+     black top and bottom (0 on both). The falloff was being spent on two axes
+     for a problem that only exists on one, and the axis it did not need was
+     costing the picture: at 3 the vertical fade lands entirely outside the box,
+     so the vial reaches the top and bottom of the hero and only the corners
+     round off. Measured at 390x844 with the copy hidden — the section's mean
+     luminance goes 34 -> 43 and the band above the copy 49 -> 73, with the left
+     and right edges still at 10/255, so the white bands stay dead. */
+  --hero-fade-reach: 3;
   /* FULL STRENGTH, AND IT WAS 0.9.
      The shot is the page. Dimming it by a tenth before the scrim has spent a
      single stop is brightness given away for nothing: the scrim is what holds
@@ -1689,7 +1698,11 @@ html[data-age-verified="false"] video {
    needs the crop, and both are left exactly as they were. */
 @media (min-width: 641px) {
   .vl2-hero-video {
-    --hero-framing: 1;
+    /* A laptop's crop is black on all four edges — measured 0 on every one, at
+       1440x900 — because a landscape hero keeps the whole frame height and the
+       asset's own vignette finishes it. Nothing here needs changing, and the
+       inscribed ellipse it has always had is left exactly as it was. */
+    --hero-fade-reach: 1;
   }
 }
 

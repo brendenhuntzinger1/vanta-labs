@@ -684,82 +684,71 @@ describe("the hero fills the screen, and cannot show a white one", () => {
   });
 
   // -------------------------------------------------------------------------
-  // AND THE HEADLINE MUST NOT LAND ON THE VIAL'S PRINTED LABEL.
+  // THE FALLOFF IS NEEDED ON ONE AXIS, AND WAS BEING SPENT ON TWO.
   //
-  // This is the last thing full bleed owed, and no scrim ever paid it. A scrim
-  // multiplies the label's white AND its black by the same factor, so the ratio
-  // the eye reads type by survives whatever alpha is put over it. Measured on
-  // the harness at 390x844: with the copy band at 0.82 the ground behind the
-  // headline was 43/255, well inside the 118 that white type needs for 4.5:1,
-  // and "GHK-Cu" still read straight across the headline. Value cannot fix two
-  // pieces of type competing at the same size. Only position can.
+  // It exists for one measured reason: the asset is a vial lit on a WHITE
+  // studio backdrop, and a portrait crop of a square frame cuts through that
+  // backdrop. Drawn into a 390x726 phone hero with no falloff at all, the left
+  // and right edges measure 241/255 down the middle of the screen — white bands
+  // running the height of the page. That is the "vial on a white background"
+  // report and it is real.
   //
-  // So a phone shows the TOP of the frame instead of all of it. Measured on the
-  // asset by edge energy, the printed type occupies 0.451 to 0.746 of the frame
-  // height; above it there is none. Showing 0.7 of the height puts that
-  // type-free band where the copy is.
+  // The top and bottom are not that, and the inscribed ellipse treated them as
+  // if they were. Same crop, same method: top edge 0, bottom edge 0. The
+  // vignette burnt into the file already finishes those two, so fading them
+  // cost picture and bought nothing — and it is half of why the owner reported
+  // the hero as "black all around".
   //
-  // Verified in the browser on the shipped build, headline bottom against the
-  // first printed line: 375x667 clears by 104px, 390x844 by 51px, 430x932 by
-  // 24px. Every one still inside the contrast budget: 36, 41, 42.
+  // Pushing the fade's vertical axis outside the box leaves a falloff that is
+  // horizontal across the middle and only rounds the corners. Measured at
+  // 390x844 with the copy hidden: mean luminance 34 -> 43, the band above the
+  // copy 49 -> 73, and the left and right edges still 10/255.
   //
-  // The number is set by the LARGEST phone. The copy is a fixed height in rem,
-  // so a taller hero pushes the headline down while the type scales with the
-  // frame — the margin shrinks as the screen grows. A looser 0.76 clears the
-  // 390 and puts the label through the 430's headline.
+  // A laptop needs none of it — its crop measures 0 on all four edges — so the
+  // value is published per breakpoint from CSS rather than fixed in the script.
   // -------------------------------------------------------------------------
-  describe("a phone is framed so the label falls below the headline", () => {
-    /** The printed type's band in the source frame, measured on the asset. */
-    const TYPE_TOP = 0.451;
-
-    it("publishes the framing from CSS, so one breakpoint serves both", () => {
-      // The scrim and the fit have to agree about where the copy is. A media
-      // query copied into the script is how they would come to disagree.
-      expect(source).toContain('const PORTRAIT_FRAMING_PROPERTY = "--hero-framing";');
-      expect(source).toContain("getPropertyValue(PORTRAIT_FRAMING_PROPERTY)");
-      expect(css).toMatch(/--hero-framing:\s*[0-9.]+;/);
+  describe("the falloff spends itself on the axis that needs it", () => {
+    it("publishes the reach from CSS, per breakpoint", () => {
+      expect(source).toContain('const FADE_REACH_PROPERTY = "--hero-fade-reach";');
+      expect(source).toContain("getPropertyValue(FADE_REACH_PROPERTY)");
+      expect(source).toContain("context.scale(cw / 2, (ch / 2) * fadeReach);");
     });
 
-    it("crops hard enough for the largest phone the copy has to clear", () => {
-      const declared = /--hero-framing:\s*([0-9.]+);/.exec(css);
-      expect(declared).not.toBeNull();
-      const framing = Number(declared![1]);
-      // 430x932 is the binding case: hero 802, headline ending at 492, and the
-      // type band starting at TYPE_TOP of a frame scaled to 802 / framing.
-      const typeTopAt430 = (TYPE_TOP * 802) / framing;
-      expect(typeTopAt430, "the label must start below the headline on a 430x932 phone")
-        .toBeGreaterThan(492);
-      // And not so hard that the vial stops being a vial. At 0.6 the frame is
-      // magnified two thirds and the label with it.
-      expect(framing).toBeGreaterThanOrEqual(0.65);
+    it("reaches past the box on a phone, and leaves a laptop untouched", () => {
+      const rule = css.slice(css.indexOf(".vl2-hero-video {"), css.indexOf(".vl2-hero-scrim"));
+      const phone = /--hero-fade-reach:\s*([0-9.]+);/.exec(rule);
+      expect(phone, "the phone value is the base rule, beside the scrim's").not.toBeNull();
+      // At 1 the ellipse is inscribed in the box and the top and bottom of the
+      // picture are faded for a problem they do not have. Past 2 the vertical
+      // fade lands outside the box entirely.
+      expect(Number(phone![1])).toBeGreaterThanOrEqual(2);
+      // A laptop keeps the inscribed ellipse it has always had.
+      expect(css).toMatch(/@media \(min-width: 641px\) \{\s*\.vl2-hero-video \{[\s\S]{0,600}?--hero-fade-reach: 1;/);
     });
 
-    it("leaves every screen above a phone on exactly the old fit", () => {
-      // Not "similar" — arithmetically identical. At framing 1 the scale is
-      // ch / sh as it always was, dh equals ch, and the top anchor is the same
-      // zero the centred formula produced. A tablet has its copy in the bottom
-      // 40% of a 1024-tall hero and a laptop has it in a column beside the
-      // shot, so neither ever had this problem to fix.
-      expect(css).toMatch(/@media \(min-width: 641px\) \{\s*\.vl2-hero-video \{\s*--hero-framing: 1;/);
-      expect(source).toContain("const scale = ch / (sh * framing);");
-      expect(source).toContain("pictureContext.drawImage(source, x, 0, dw, dh);");
+    it("still reaches transparent on the axis that carries the white", () => {
+      // Left and right must still fade to nothing inside the box, whatever the
+      // vertical reach is: that is the guarantee, and it is horizontal.
+      expect(source).toContain("createRadialGradient(0, 0, FADE_START, 0, 0, 1)");
+      expect(source).toMatch(/context\.scale\(cw \/ 2, \(ch \/ 2\) \* fadeReach\);[\s\S]{0,160}fillRect\(-1, -1, 2, 2\)/);
     });
 
-    it("cannot fail into a magnified crop", () => {
-      // A stylesheet that has not arrived, a value that does not parse, a
-      // browser that ignores custom properties: all of them have to land on
-      // "show the whole frame", which is what every screen had before this.
-      expect(source).toContain("let framing = 1;");
-      expect(source).toMatch(/Number\.isFinite\(declared\) \? Math\.min\(1, Math\.max\(0\.4, declared\)\) : 1/);
+    it("cannot fail into no falloff at all", () => {
+      // An absent stylesheet or an unparseable value lands on the inscribed
+      // ellipse — more fade than needed, never less. The failure mode is a
+      // slightly darker hero, never a white band.
+      expect(source).toContain("let fadeReach = 1;");
+      expect(source).toMatch(/Number\.isFinite\(reachDeclared\)\s*\?\s*Math\.min\(6, Math\.max\(1, reachDeclared\)\)\s*:\s*1/);
     });
 
-    it("still leaves the copy's own ground inside the contrast budget", () => {
-      // The crop moves the label; it must not be paid for by darkening. The
-      // scrim's copy band is unchanged by this, and these are the stops.
-      const scrim = css.slice(css.indexOf(".vl2-hero-scrim {"), css.indexOf(".vl2-hero-content {"));
-      const phone = scrim.slice(0, scrim.indexOf("@media"));
-      expect(phone).toContain("rgba(0, 0, 0, 0.82) calc(100% - 28rem)");
-      expect(phone).toContain("rgba(0, 0, 0, 0.06) calc(100% - 31.5rem)");
+    it("keeps the fit rule branchless, the crop having been taken back out", () => {
+      // A phone-only crop lived here briefly. It cleared the label off the
+      // headline and cost the composition: 43% magnification, the vial reduced
+      // to its cap, and the frame's own black vignette across the top. Mean
+      // luminance 34 -> 25.
+      expect(source).toContain("const scale = ch / sh;");
+      expect(source).not.toContain("--hero-framing");
+      expect(css).not.toContain("--hero-framing");
     });
   });
 
@@ -930,13 +919,27 @@ describe("the canvas falloff is bounded by the element it paints", () => {
   // the middle of the section.
   //
   // Building the gradient in unit space and stretching it to the box gives an
-  // ellipse inscribed in whatever shape the element is, so the guarantee holds
-  // for every box: 1.0 is an edge midpoint on BOTH axes, the ramp is complete
-  // there, and the corners are further out still.
-  it("fades out at every edge of the box, whatever shape the box is", () => {
+  // ellipse matching whatever shape the element is, so the guarantee holds for
+  // every box: 1.0 is an edge midpoint, the ramp is complete there, and the
+  // corners are further out still.
+  //
+  // IT USED TO SAY "ON BOTH AXES", AND THAT WAS THE BUG THIS PARAGRAPH IS NOW
+  // ABOUT. The guarantee is only load-bearing where the crop cuts through the
+  // white studio backdrop, and on a phone that is the LEFT AND RIGHT edges
+  // alone — measured on the frame with no falloff, they sit at 241/255 down the
+  // middle of the screen while the top and bottom are 0, because the vignette
+  // burnt into the file already finishes those. Fading all four spent picture
+  // on two edges that had nothing to hide, which is half of why the hero was
+  // reported as "black all around".
+  //
+  // So the vertical axis is scaled out past the box (see fadeReach). The
+  // horizontal ramp still completes inside it, which is the half that matters.
+  it("fades out at the edges that can carry white, whatever shape the box is", () => {
     expect(source).toContain("createRadialGradient(0, 0, FADE_START, 0, 0, 1)");
-    expect(source).toMatch(/context\.scale\(cw \/ 2, ch \/ 2\);[\s\S]{0,160}fillRect\(-1, -1, 2, 2\)/);
+    expect(source).toMatch(/context\.scale\(cw \/ 2, \(ch \/ 2\) \* fadeReach\);[\s\S]{0,160}fillRect\(-1, -1, 2, 2\)/);
     expect(source).not.toContain("Math.min(cx, cy)");
+    // The horizontal axis is never scaled out — it is the one doing the work.
+    expect(source).not.toMatch(/context\.scale\(\(cw \/ 2\) \*/);
     const start = /^const FADE_START = ([0-9.]+);$/m.exec(source);
     expect(start).not.toBeNull();
     expect(Number(start![1])).toBeGreaterThan(0);
@@ -980,7 +983,7 @@ describe("the canvas falloff is bounded by the element it paints", () => {
     // phone, where the scale is `ch / sh` exactly as it always was. What a
     // phone does with it is pinned in "a phone is framed so the label falls
     // below the headline" above.
-    expect(source).toContain("const scale = ch / (sh * framing);");
+    expect(source).toContain("const scale = ch / sh;");
     expect(source, "the fit must never key on the width").not.toContain("const scale = cw /");
     const bias = /^const LANDSCAPE_BIAS = ([0-9.]+);$/m.exec(source);
     expect(bias).not.toBeNull();
