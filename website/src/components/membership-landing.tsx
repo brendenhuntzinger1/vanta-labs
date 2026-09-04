@@ -70,6 +70,22 @@ export function buildFaqItems(tiers: MembershipTier[]) {
   ];
 }
 
+/**
+ * THE ANSWERS ARE ALWAYS IN THE DOCUMENT. THEY USED TO BE MOUNTED ON CLICK.
+ *
+ * `{isOpen ? <p>{item.a}</p> : null}` meant five of the six answers did not
+ * exist in the HTML at all — and Googlebot does not click. Measured against
+ * production: 204 words, a fifth of this page's own prose, describing
+ * cancellation, discount stacking, store credit, reward points and billing
+ * status. The only answer a crawler received was the one that happens to open
+ * by default.
+ *
+ * Same defect and same fix as the product page's tabs and FAQ
+ * (components/product-detail-client.tsx): render every answer, hide the closed
+ * ones with the `hidden` attribute. `hidden` deliberately — it is display:none,
+ * so a closed answer leaves the tab order and the accessibility tree instead of
+ * becoming text a keyboard user can reach but not see.
+ */
 function FaqAccordion({ items }: { items: ReturnType<typeof buildFaqItems> }) {
   const [openIndex, setOpenIndex] = useState<number | null>(0);
 
@@ -77,20 +93,32 @@ function FaqAccordion({ items }: { items: ReturnType<typeof buildFaqItems> }) {
     <div className="space-y-3">
       {items.map((item, index) => {
         const isOpen = openIndex === index;
+        const questionId = `membership-faq-q${index}`;
+        const answerId = `membership-faq-a${index}`;
         return (
           <div key={item.q} className="border border-white/10 bg-black/30">
             <button
               type="button"
+              id={questionId}
               onClick={() => setOpenIndex(isOpen ? null : index)}
               className="vl-focus-ring flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
               aria-expanded={isOpen}
+              aria-controls={answerId}
             >
               <span className="text-sm text-white">{item.q}</span>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`h-4 w-4 flex-shrink-0 text-white/70 transition-transform ${isOpen ? "rotate-180" : ""}`}>
                 <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </button>
-            {isOpen ? <p className="px-5 pb-4 text-sm leading-6 text-white/55">{item.a}</p> : null}
+            <p
+              id={answerId}
+              role="region"
+              aria-labelledby={questionId}
+              hidden={!isOpen}
+              className="px-5 pb-4 text-sm leading-6 text-white/55"
+            >
+              {item.a}
+            </p>
           </div>
         );
       })}

@@ -9,7 +9,7 @@ import { advertisableBxgyPromotions, isSlugEligible, storefrontDescription } fro
 import { getPublishedCoaDocumentsForProduct } from "@/lib/coa";
 import { getStorefrontCoupon } from "@/lib/coupons";
 import { isBacWater, resolveBacWaterProduct } from "@/lib/bac-water";
-import { BRAND_SHORT_NAME, organizationId, siteUrl } from "@/lib/site-identity";
+import { BRAND_LEGAL_NAME, BRAND_SHORT_NAME, indexableImageUrl, organizationId, siteUrl } from "@/lib/site-identity";
 import { getShippingConfig } from "@/lib/admin-control";
 import { DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
 import { breadcrumbList, buildOffers, priceToNumber } from "@/lib/product-structured-data";
@@ -43,6 +43,12 @@ export async function generateMetadata({
     description,
     alternates: { canonical },
     openGraph: {
+      // Metadata objects merge SHALLOWLY, so this object REPLACES the root
+      // layout's rather than extending it — and the root layout is where
+      // siteName lives. Every other route gets it back via pageMetadata();
+      // this one builds its object by hand, so all 36 product pages were the
+      // only URLs on the site shipping a share card with no attribution.
+      siteName: BRAND_LEGAL_NAME,
       title: socialTitle,
       description,
       type: "website",
@@ -124,7 +130,9 @@ export default async function ProductDetailPage({
     "@context": "https://schema.org/",
     "@type": "Product",
     name: product.name,
-    image: product.image ? [product.image] : undefined,
+    // The one REQUIRED property of a merchant listing, and it pointed at a
+    // Supabase URL served with `X-Robots-Tag: none`. See indexableImageUrl.
+    image: indexableImageUrl(product.image) ? [indexableImageUrl(product.image)] : undefined,
     description: product.shortDescription ?? product.description ?? undefined,
     category: product.category,
     // BRAND POINTS AT THE ONE ORGANIZATION NODE, RATHER THAN NAMING A STRING.
