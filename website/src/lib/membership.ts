@@ -793,6 +793,7 @@ export async function runBirthdayBonusSweep(): Promise<{ granted: number; emaile
       const result = await sendMarketingEmail({
         to: email,
         campaignType: "membership_birthday",
+        onDeferred: "queue",
         templateKey: "membership_birthday",
         ...membershipBirthdayTemplate({
           name: fullName.trim().split(/\s+/)[0] ?? "",

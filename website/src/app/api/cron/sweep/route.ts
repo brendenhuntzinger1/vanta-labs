@@ -13,6 +13,7 @@ import { expireStaleExpressIntents, reconcileVeyraPendingPayments } from "@/lib/
 import { sweepMissingShipments, sweepUnsyncedOrders } from "@/lib/shippo/order-sync";
 import { runCampaignSweep } from "@/lib/email/campaign-sender";
 import { runAutomationSweep } from "@/lib/email/automations";
+import { drainMarketingSendQueue } from "@/lib/email/marketing-queue";
 import { repairMissingShippingCosts } from "@/lib/shipping-cost-repair";
 import { repairIncompleteRefunds } from "@/lib/refund-effect-repair";
 import { runOrderPushHealthCheck } from "@/lib/order-push-notification";
@@ -99,6 +100,11 @@ const JOBS = {
   emailCampaigns: { label: "email_campaigns", run: runCampaignSweep },
   // Marketing: retention sequences (welcome, post-purchase, win-back).
   emailAutomations: { label: "email_automations", run: runAutomationSweep },
+  // Marketing: deliver event mail (restock alerts, coupon announcements,
+  // membership welcome / win-back / birthday) that the frequency guard held
+  // back, once each recipient's quiet window has passed. Same guard on the
+  // way out, so a queued message can be deferred again but never skips it.
+  marketingQueue: { label: "marketing_queue", run: drainMarketingSendQueue },
   // Watch for signups stuck unconfirmed. The confirmation email is sent by
   // Supabase Auth rather than this app, so it appears in NONE of the email
   // machinery above -- no retry row, no bounce event, no send log. An

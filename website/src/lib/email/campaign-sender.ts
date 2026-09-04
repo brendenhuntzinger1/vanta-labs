@@ -292,6 +292,9 @@ async function claimBatch(campaignId: string, limit: number, now: number): Promi
     .select("id")
     .eq("campaign_id", campaignId)
     .eq("status", "pending")
+    // A recipient the frequency guard sent back waits until its window opens;
+    // without this filter the loop below would re-claim it immediately.
+    .or(`deferred_until.is.null,deferred_until.lte.${new Date(now).toISOString()}`)
     .limit(limit);
   if (selectError) throw selectError;
   const ids = (candidates ?? []).map((row) => String(row.id));
@@ -321,6 +324,8 @@ export type BatchResult = {
   sent: number;
   suppressed: number;
   failed: number;
+  /** Held back by the marketing frequency guard; retried once each window opens. */
+  deferred: number;
   remaining: number;
   finished: boolean;
   /**
@@ -370,6 +375,7 @@ export async function sendCampaignBatch(input: {
   let sent = 0;
   let suppressed = 0;
   let failed = 0;
+  let deferred = 0;
   // Consecutive THROWN sends. Reset by any recipient that resolves normally —
   // delivered, suppressed or a returned failure. See CONSECUTIVE_THROW_ABORT.
   let consecutiveThrows = 0;
@@ -494,6 +500,21 @@ export async function sendCampaignBatch(input: {
           .from("email_campaign_recipients")
           .update({ status: "suppressed", attempts, error: result.error ?? null })
           .eq("id", recipient.id);
+      } else if (result.deferred) {
+        // THE FREQUENCY GUARD SAID NOT TODAY. Back to pending with a
+        // deferred_until the batch claim honours, and no attempt counted: a
+        // recipient who was mailed by something else this morning has not
+        // failed anything. The campaign stays 'sending' until they are reached.
+        deferred++;
+        await supabaseAdmin
+          .from("email_campaign_recipients")
+          .update({
+            status: "pending",
+            claimed_at: null,
+            deferred_until: new Date(result.retryAt ?? Date.now() + 60 * 60 * 1000).toISOString(),
+            error: "deferred: a marketing email reached this address inside the last 24 hours",
+          })
+          .eq("id", recipient.id);
       } else {
         failed++;
         // Back to pending while attempts remain: a provider hiccup on one
@@ -585,7 +606,7 @@ export async function sendCampaignBatch(input: {
       .eq("status", "sending");
   }
 
-  return { sent, suppressed, failed, remaining, finished, status: terminalStatus };
+  return { sent, suppressed, failed, deferred, remaining, finished, status: terminalStatus };
 }
 
 export type CampaignSweepResult = {

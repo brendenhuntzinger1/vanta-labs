@@ -6,6 +6,7 @@ import { getCartRecoveryControlConfig, type CartRecoveryConfig } from "@/lib/adm
 import { getSiteUrl } from "@/lib/env";
 import { formatDisplayDate } from "@/lib/format-date";
 import { isMarketingSuppressed, sendMarketingEmail } from "@/lib/email/marketing";
+import { claimMarketingSend } from "@/lib/email/frequency";
 import { isPaidOrderStatus } from "@/lib/ledger";
 import {
   cartRecoveryT30mTemplate,
@@ -327,6 +328,40 @@ async function reserveAndSendStage(input: {
   couponRequired?: boolean;
   buildTemplate: (restoreUrlForEmail: string, coupon: RecoveryCoupon | null) => { subject: string; html: string; text: string };
 }): Promise<boolean> {
+  // THE FREQUENCY GUARD COMES BEFORE THE STAGE CLAIM AND THE MINT. If another
+  // marketing email reached this inbox inside the window the stage is simply
+  // not attempted this sweep: nothing is reserved, no coupon exists, and the
+  // next sweep tries again while the stage's window is open. Doing it in this
+  // order is what keeps "at most one coupon per cart per stage" true — a
+  // deferral after the mint would have to either burn the stage or re-mint.
+  // A cart's own earlier reminders do not defer its later ones (see
+  // quietFamilyFor); anybody else's mail does.
+  const guard = await claimMarketingSend({
+    email: input.email,
+    campaignType: input.campaignType,
+    referenceId: input.cartId,
+    templateKey: input.templateKey,
+  });
+  if (guard.outcome === "deferred") {
+    console.log("[cart-recovery] stage deferred by the frequency guard", input.cartId, input.stage, new Date(guard.retryAt).toISOString());
+    return false;
+  }
+  if (guard.outcome === "duplicate" || guard.outcome === "refused") return false;
+  const claimedLogId = guard.outcome === "claimed" ? guard.logId : null;
+  if (guard.outcome === "unavailable") {
+    console.error("[cart-recovery] frequency guard unavailable; sending without it", guard.error);
+  }
+  // A claim that ends up unused (the stage was already taken, the mint failed)
+  // is closed 'failed' so it neither blocks this inbox nor reads as a send.
+  const releaseClaim = async () => {
+    if (!claimedLogId) return;
+    try {
+      await supabaseAdmin.from("email_send_log").update({ status: "failed" }).eq("id", claimedLogId);
+    } catch {
+      // Best-effort: a stranded claim ages out of the guard's window on its own.
+    }
+  };
+
   const { data: inserted, error: insertError } = await supabaseAdmin
     .from("abandoned_cart_emails")
     .insert({ abandoned_cart_id: input.cartId, stage: input.stage, sent_at: new Date().toISOString(), coupon_id: null })
@@ -334,6 +369,7 @@ async function reserveAndSendStage(input: {
     .single();
 
   if (insertError) {
+    await releaseClaim();
     // 23505 — another sweep, or an earlier pass, already holds this stage.
     // Nothing to mint, nothing to send.
     if (insertError.code === "23505") {
@@ -351,6 +387,7 @@ async function reserveAndSendStage(input: {
       // No coupon exists, so releasing the slot cannot accumulate one. Let a
       // later sweep try again rather than silently dropping the stage.
       await supabaseAdmin.from("abandoned_cart_emails").delete().eq("id", reservationId);
+      await releaseClaim();
       return false;
     }
     // Link the claim to the coupon so a later stage re-offers this code.
@@ -371,6 +408,8 @@ async function reserveAndSendStage(input: {
     referenceId: input.cartId,
     templateKey: input.templateKey,
     openTrackingPixelUrl,
+    // The guard's row already exists for this send; close it, don't claim twice.
+    claimedLogId,
     ...input.buildTemplate(trackedRestoreUrl, coupon),
   });
 

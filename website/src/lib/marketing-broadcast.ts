@@ -116,6 +116,8 @@ export interface BroadcastResult {
   sent: number;
   skipped: number;
   failed: number;
+  /** Held by the frequency guard and queued for the cron sweep. */
+  queued: number;
 }
 
 // Sends a one-off coupon/promo announcement to every opted-in customer.
@@ -134,6 +136,7 @@ export async function broadcastCouponAnnouncement(input: {
   let sent = 0;
   let skipped = 0;
   let failed = 0;
+  let queued = 0;
 
   // Load everyone who already received THIS coupon announcement in ONE paged
   // read, instead of a per-recipient lookup inside the loop (was O(N)
@@ -186,6 +189,7 @@ export async function broadcastCouponAnnouncement(input: {
     const result = await sendMarketingEmail({
       to: email,
       campaignType: "coupon_announcement",
+        onDeferred: "queue",
       referenceId: input.coupon.id,
       templateKey: "coupon_announcement",
       ...template,
@@ -195,10 +199,14 @@ export async function broadcastCouponAnnouncement(input: {
       sent++;
     } else if (result.suppressed) {
       skipped++;
+    } else if (result.queued) {
+      // Held by the frequency guard and parked for the cron sweep: it will go
+      // out once the recipient's quiet window opens, so it is not a failure.
+      queued++;
     } else {
       failed++;
     }
   }
 
-  return { recipients: emails.length, sent, skipped, failed };
+  return { recipients: emails.length, sent, skipped, failed, queued };
 }
