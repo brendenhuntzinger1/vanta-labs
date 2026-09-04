@@ -1642,6 +1642,13 @@ html[data-age-verified="false"] video {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  /* HOW MUCH OF THE FRAME'S HEIGHT THIS SCREEN SHOWS. 1 is the whole thing.
+     Read by hero-video.tsx's cover(); see PORTRAIT_FRAMING there for what it
+     buys and why the number lives in CSS rather than in the script.
+     The base value is the PHONE's, exactly like the scrim below it — the two
+     have to agree about where the copy is, so they read the same breakpoint
+     and are stated next to each other. */
+  --hero-framing: 0.7;
   /* FULL STRENGTH, AND IT WAS 0.9.
      The shot is the page. Dimming it by a tenth before the scrim has spent a
      single stop is brightness given away for nothing: the scrim is what holds
@@ -1673,6 +1680,17 @@ html[data-age-verified="false"] video {
      reaches a <video> can hand the visitor to the native fullscreen player,
      which is a dead end with no way back to the store. */
   pointer-events: none;
+}
+
+/* EVERYTHING ABOVE A PHONE SHOWS THE WHOLE FRAME.
+   A portrait tablet and a laptop both have room for the copy beside or below
+   the label — the tablet because its hero is 1024 tall with the copy in the
+   bottom 40%, the laptop because the copy is a column on the left — so neither
+   needs the crop, and both are left exactly as they were. */
+@media (min-width: 641px) {
+  .vl2-hero-video {
+    --hero-framing: 1;
+  }
 }
 
 .vl2-hero-scrim {

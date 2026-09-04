@@ -683,6 +683,86 @@ describe("the hero fills the screen, and cannot show a white one", () => {
     }
   });
 
+  // -------------------------------------------------------------------------
+  // AND THE HEADLINE MUST NOT LAND ON THE VIAL'S PRINTED LABEL.
+  //
+  // This is the last thing full bleed owed, and no scrim ever paid it. A scrim
+  // multiplies the label's white AND its black by the same factor, so the ratio
+  // the eye reads type by survives whatever alpha is put over it. Measured on
+  // the harness at 390x844: with the copy band at 0.82 the ground behind the
+  // headline was 43/255, well inside the 118 that white type needs for 4.5:1,
+  // and "GHK-Cu" still read straight across the headline. Value cannot fix two
+  // pieces of type competing at the same size. Only position can.
+  //
+  // So a phone shows the TOP of the frame instead of all of it. Measured on the
+  // asset by edge energy, the printed type occupies 0.451 to 0.746 of the frame
+  // height; above it there is none. Showing 0.7 of the height puts that
+  // type-free band where the copy is.
+  //
+  // Verified in the browser on the shipped build, headline bottom against the
+  // first printed line: 375x667 clears by 104px, 390x844 by 51px, 430x932 by
+  // 24px. Every one still inside the contrast budget: 36, 41, 42.
+  //
+  // The number is set by the LARGEST phone. The copy is a fixed height in rem,
+  // so a taller hero pushes the headline down while the type scales with the
+  // frame — the margin shrinks as the screen grows. A looser 0.76 clears the
+  // 390 and puts the label through the 430's headline.
+  // -------------------------------------------------------------------------
+  describe("a phone is framed so the label falls below the headline", () => {
+    /** The printed type's band in the source frame, measured on the asset. */
+    const TYPE_TOP = 0.451;
+
+    it("publishes the framing from CSS, so one breakpoint serves both", () => {
+      // The scrim and the fit have to agree about where the copy is. A media
+      // query copied into the script is how they would come to disagree.
+      expect(source).toContain('const PORTRAIT_FRAMING_PROPERTY = "--hero-framing";');
+      expect(source).toContain("getPropertyValue(PORTRAIT_FRAMING_PROPERTY)");
+      expect(css).toMatch(/--hero-framing:\s*[0-9.]+;/);
+    });
+
+    it("crops hard enough for the largest phone the copy has to clear", () => {
+      const declared = /--hero-framing:\s*([0-9.]+);/.exec(css);
+      expect(declared).not.toBeNull();
+      const framing = Number(declared![1]);
+      // 430x932 is the binding case: hero 802, headline ending at 492, and the
+      // type band starting at TYPE_TOP of a frame scaled to 802 / framing.
+      const typeTopAt430 = (TYPE_TOP * 802) / framing;
+      expect(typeTopAt430, "the label must start below the headline on a 430x932 phone")
+        .toBeGreaterThan(492);
+      // And not so hard that the vial stops being a vial. At 0.6 the frame is
+      // magnified two thirds and the label with it.
+      expect(framing).toBeGreaterThanOrEqual(0.65);
+    });
+
+    it("leaves every screen above a phone on exactly the old fit", () => {
+      // Not "similar" — arithmetically identical. At framing 1 the scale is
+      // ch / sh as it always was, dh equals ch, and the top anchor is the same
+      // zero the centred formula produced. A tablet has its copy in the bottom
+      // 40% of a 1024-tall hero and a laptop has it in a column beside the
+      // shot, so neither ever had this problem to fix.
+      expect(css).toMatch(/@media \(min-width: 641px\) \{\s*\.vl2-hero-video \{\s*--hero-framing: 1;/);
+      expect(source).toContain("const scale = ch / (sh * framing);");
+      expect(source).toContain("pictureContext.drawImage(source, x, 0, dw, dh);");
+    });
+
+    it("cannot fail into a magnified crop", () => {
+      // A stylesheet that has not arrived, a value that does not parse, a
+      // browser that ignores custom properties: all of them have to land on
+      // "show the whole frame", which is what every screen had before this.
+      expect(source).toContain("let framing = 1;");
+      expect(source).toMatch(/Number\.isFinite\(declared\) \? Math\.min\(1, Math\.max\(0\.4, declared\)\) : 1/);
+    });
+
+    it("still leaves the copy's own ground inside the contrast budget", () => {
+      // The crop moves the label; it must not be paid for by darkening. The
+      // scrim's copy band is unchanged by this, and these are the stops.
+      const scrim = css.slice(css.indexOf(".vl2-hero-scrim {"), css.indexOf(".vl2-hero-content {"));
+      const phone = scrim.slice(0, scrim.indexOf("@media"));
+      expect(phone).toContain("rgba(0, 0, 0, 0.82) calc(100% - 28rem)");
+      expect(phone).toContain("rgba(0, 0, 0, 0.06) calc(100% - 31.5rem)");
+    });
+  });
+
   it("keeps the falloff a falloff, not a hole punched in the middle", () => {
     // FADE_START only has to guarantee the EDGES reach zero, so that no
     // viewport shape can leave the white studio backdrop on screen. Where the
@@ -893,7 +973,15 @@ describe("the canvas falloff is bounded by the element it paints", () => {
   // behind the headline: a square source in a box WIDER than it is tall fills
   // the width unless you say otherwise, magnifying a 720px frame to 1440.
   it("fills the hero by matching its height, on every shape of screen", () => {
-    expect(source).toContain("const scale = ch / sh;");
+    // Still the height, never the width — that is the half of this rule that
+    // stopped a square frame being magnified to 2x on a landscape hero and
+    // printing the label across the copy. `framing` is only HOW MUCH of the
+    // height is asked to do the matching, and it is 1 on every screen above a
+    // phone, where the scale is `ch / sh` exactly as it always was. What a
+    // phone does with it is pinned in "a phone is framed so the label falls
+    // below the headline" above.
+    expect(source).toContain("const scale = ch / (sh * framing);");
+    expect(source, "the fit must never key on the width").not.toContain("const scale = cw /");
     const bias = /^const LANDSCAPE_BIAS = ([0-9.]+);$/m.exec(source);
     expect(bias).not.toBeNull();
     expect(Number(bias![1])).toBeGreaterThan(0.5);
