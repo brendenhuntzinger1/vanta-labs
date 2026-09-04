@@ -3,10 +3,12 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import {
   AUTOMATION_COOKIE,
   AUTOMATION_COOKIE_MAX_AGE_SECONDS,
+  destinationForVisitor,
   encodeAutomationCookie,
   safeAutomationDestination,
   verifyAutomationLink,
 } from "@/lib/email/automation-links";
+import { getAuthenticatedUser } from "@/lib/auth-session";
 import { isAutomationKey } from "@/lib/email/automations";
 import { hashIpAddress } from "@/lib/ip-hash";
 import { OFFER_COOKIE, OFFER_COOKIE_MAX_AGE_SECONDS } from "@/lib/offers/customer-offers";
@@ -72,6 +74,18 @@ export async function GET(request: NextRequest) {
   } catch {
     return NextResponse.redirect(fallback, { status: 302 });
   }
+
+  // A guest bound for a gated account page lands on the catalogue instead of
+  // the login wall (destinationForVisitor). The session read is best-effort:
+  // if it cannot be determined, the visitor is treated as signed out, which is
+  // the direction that never strands anyone.
+  let signedIn = false;
+  try {
+    signedIn = Boolean(await getAuthenticatedUser());
+  } catch {
+    signedIn = false;
+  }
+  destination = destinationForVisitor(destination, signedIn);
 
   const clickedAt = new Date();
 

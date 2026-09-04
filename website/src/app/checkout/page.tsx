@@ -10,6 +10,7 @@ import { calculateShipping, isDomesticCountry } from "@/lib/shipping";
 import { resolveSalesTax } from "@/lib/sales-tax";
 import { useApplePayOffered } from "@/components/use-apple-pay-offered";
 import { useOfferQuote } from "@/lib/offer-quote";
+import { couponOutcomeAgainstQuote } from "@/lib/discount-resolution";
 import { CHECKOUT_SHORT, COA_SHORT, FULFILMENT_SHORT, TESTING_SHORT, trustPoints } from "@/lib/trust-claims";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { pointsToDollars } from "@/lib/points-math";
@@ -460,9 +461,18 @@ export default function CheckoutPage() {
   // never a mix.
   const shownStoreCredit = offerQuote ? offerQuote.storeCreditRedeemedCents / 100 : storeCreditApplied;
   const shownPointsDiscount = offerQuote ? offerQuote.pointsDiscountAmount : pointsRedeemedDiscount;
+  // The quote outranks the client's guess about the code: a code the quote
+  // did not record (the armed gift beat it) is not "applied", whatever the
+  // client's own arithmetic concluded.
+  const shownCouponOutcome = couponOutcomeAgainstQuote({
+    outcome: couponOutcome,
+    couponCode: couponDetails?.code ?? null,
+    quote: offerQuote ? { couponCode: offerQuote.couponCode, discountLabel: offerQuote.discountLabel ?? null } : null,
+  });
+  // The server's label travels with the server's amount — see cart-drawer.
   const shownDiscountLabel = ambassadorDiscountApplied
     ? `Ambassador ${ambassadorDiscountPercent}% off`
-    : (appliedDiscountLabel ?? offerQuote?.offer?.description ?? "Discount");
+    : (offerQuote?.discountLabel ?? appliedDiscountLabel ?? offerQuote?.offer?.description ?? "Discount");
   const giftLines = offerQuote?.giftLines ?? [];
 
   // WHAT IS POSTED MUST BE WHAT WAS SHOWN.
@@ -1301,9 +1311,9 @@ export default function CheckoutPage() {
                         </button>
                       </div>
                     )}
-                    {couponOutcome ? (
-                      <p className={`mt-2 text-xs ${couponOutcome.controlsPrice ? "text-emerald-300" : "text-amber-300/90"}`}>
-                        {couponOutcome.message}
+                    {shownCouponOutcome ? (
+                      <p className={`mt-2 text-xs ${shownCouponOutcome.controlsPrice ? "text-emerald-300" : "text-amber-300/90"}`}>
+                        {shownCouponOutcome.message}
                       </p>
                     ) : null}
                     {couponError ? <p className="mt-2 text-xs text-rose-300">{couponError}</p> : null}
@@ -1311,10 +1321,13 @@ export default function CheckoutPage() {
                         discount actually controlling the price. Quoting "10% off"
                         beside a total the code did not move is what made the old
                         copy misleading. */}
-                    {couponDetails && couponOutcome?.controlsPrice ? (
+                    {couponDetails && shownCouponOutcome?.controlsPrice ? (
                       <p className="mt-2 text-xs text-white/45">{couponDetails.code} · {couponDetails.discountType === "fixed" ? formatCartCurrency(couponDetails.discountValue) : `${couponDetails.discountValue}%`} off</p>
                     ) : null}
-                    {couponCode && (!isBuy3Get1FreeActive || activePromotionAllowsCoupon) ? (
+                    {/* Always removable. A code that arrived from a restore link, or
+                        was typed before a promotion loaded, must never leave the
+                        shopper stuck behind a code the order cannot carry. */}
+                    {couponCode ? (
                       <button type="button" onClick={() => { clearCouponCode(); setCouponInput(""); }} className="vl-focus-ring mt-2 text-xs text-white/35 transition hover:text-white">Remove code</button>
                     ) : null}
                   </div>

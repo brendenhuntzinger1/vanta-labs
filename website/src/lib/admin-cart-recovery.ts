@@ -9,6 +9,7 @@ import {
   cartRecoveryT72hTemplate,
 } from "@/lib/email/templates";
 import { sendMarketingEmail } from "@/lib/email/marketing";
+import { claimMarketingSend } from "@/lib/email/frequency";
 import { mintCartRecoveryCoupon, type AbandonedCartItemSnapshot } from "@/lib/cart-recovery";
 import { getSiteUrl } from "@/lib/env";
 import { formatDisplayDate } from "@/lib/format-date";
@@ -171,12 +172,20 @@ export async function getCartRecoveryStats(): Promise<CartRecoveryStats> {
     for (let i = 0; i < recoveredOrderIds.length; i += IN_CHUNK) {
       const { data } = await supabaseAdmin
         .from("orders")
-        .select("amount_paid, refund_amount, payment_status, order_type")
+        .select("amount_paid, refund_amount, payment_status, order_type, marketing_source_kind")
         .in("order_id", recoveredOrderIds.slice(i, i + IN_CHUNK));
       orders.push(...((data ?? []) as Array<Record<string, unknown>>));
     }
+    // ONE CHANNEL PER ORDER. An order whose primary marketing source is an
+    // automation, a campaign, an ambassador or an ad is that channel's revenue
+    // and is not "recovered" money as well — the cart count above still
+    // records that the cart closed. A recovery-coupon order, an organic
+    // order, and an order from before the source existed all count here.
+    const creditedElsewhere = (kind: unknown) =>
+      typeof kind === "string" && kind !== "" && kind !== "cart_recovery" && kind !== "organic";
     revenueRecoveredCents = orders
       .filter((row) => isRevenueOrderStatus(row.payment_status as string | null) && isSaleOrder(row.order_type as string | null))
+      .filter((row) => !creditedElsewhere(row.marketing_source_kind))
       .reduce((sum, row) => sum + Math.round(netOrderRevenue(row as { amount_paid?: number | null; refund_amount?: number | null }) * 100), 0);
   }
 
@@ -329,9 +338,37 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
   const items = Array.isArray(cart.items) ? (cart.items as AbandonedCartItemSnapshot[]) : [];
   const name = cart.customer_name ?? "";
 
+  // THE GUARD FIRST, before anything is minted or reset. A manual resend is
+  // an explicit admin action and skips the sweep's per-stage and 30-day
+  // cooldowns — but it is still one marketing email to one inbox, and the
+  // one-a-day rule is the same rule for everyone. Asked here so a deferral
+  // costs nothing: no coupon minted for a mail that did not go, no tracking
+  // row saying "sent just now", no seven-day cooldown armed by a non-send.
+  const campaignType = `cart_recovery_${stage}`;
+  const guard = await claimMarketingSend({
+    email: cart.email,
+    campaignType,
+    referenceId: cart.id,
+    templateKey: campaignType,
+  });
+  if (guard.outcome === "deferred") {
+    return {
+      success: false,
+      deferred: true,
+      retryAt: guard.retryAt,
+      error: `Held by the marketing frequency guard: this customer received a marketing email at ${new Date(guard.lastMarketingAt).toLocaleString("en-US", { timeZone: "UTC" })} UTC. The resend can go after ${new Date(guard.retryAt).toLocaleString("en-US", { timeZone: "UTC" })} UTC.`,
+    };
+  }
+  if (guard.outcome === "duplicate" || guard.outcome === "refused") {
+    return { success: false, error: "This message could not be claimed for sending." };
+  }
+  const claimedLogId = guard.outcome === "claimed" ? guard.logId : null;
+  const guardUnavailable = guard.outcome === "unavailable";
+
   let couponId: string | null = null;
   let couponCode: string | null = null;
   let couponExpiresAt: string | null = null;
+  let couponPercent = 0;
   // Only the final stage carries a code now; the 24-hour message answers
   // questions instead. A manual resend is an explicit admin action, so it
   // mints without the sweep's per-address cooldown.
@@ -340,6 +377,7 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
     if (coupon) {
       couponCode = coupon.code;
       couponExpiresAt = coupon.expiresAt;
+      couponPercent = coupon.percent;
       const { data: couponRow } = await supabaseAdmin.from("coupons").select("id").eq("code", coupon.code).maybeSingle();
       couponId = couponRow?.id ?? null;
     }
@@ -383,6 +421,8 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
       referenceId: cart.id,
       templateKey: "cartRecoveryT30mTemplate",
       openTrackingPixelUrl,
+      claimedLogId,
+      guardUnavailable,
       ...cartRecoveryT30mTemplate({ name, items, cartValueCents: cart.cart_value_cents, restoreUrl: trackedRestoreUrl }),
     });
   }
@@ -394,6 +434,8 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
       referenceId: cart.id,
       templateKey: "cartRecoveryT12hTemplate",
       openTrackingPixelUrl,
+      claimedLogId,
+      guardUnavailable,
       ...cartRecoveryT12hTemplate({ name, items, cartValueCents: cart.cart_value_cents, restoreUrl: trackedRestoreUrl }),
     });
   }
@@ -405,6 +447,8 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
       referenceId: cart.id,
       templateKey: "cartRecoveryT24hTemplate",
       openTrackingPixelUrl,
+      claimedLogId,
+      guardUnavailable,
       ...cartRecoveryT24hTemplate({ name, items, cartValueCents: cart.cart_value_cents, restoreUrl: trackedRestoreUrl }),
     });
   }
@@ -415,13 +459,15 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
     referenceId: cart.id,
     templateKey: "cartRecoveryT72hTemplate",
     openTrackingPixelUrl,
+    claimedLogId,
+    guardUnavailable,
     ...cartRecoveryT72hTemplate({
       name,
       items,
       cartValueCents: cart.cart_value_cents,
       restoreUrl: trackedRestoreUrl,
       couponCode: couponCode ?? "",
-      discountPercent: couponCode ? config.discountPercent : 0,
+      discountPercent: couponCode ? couponPercent : 0,
       expiresAt: couponExpiresAt ? formatDisplayDate(couponExpiresAt, "datetime") ?? "" : "",
     }),
   });

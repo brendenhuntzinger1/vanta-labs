@@ -104,6 +104,7 @@ vi.mock("@/lib/supabase-server", () => {
         select: () => b,
         eq: () => b,
         gte: () => b,
+        or: () => b,
         order: () => b,
         async range(from: number) {
           // One cart in this fixture: the first page has it, later pages do not.

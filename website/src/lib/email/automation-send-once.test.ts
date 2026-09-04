@@ -148,7 +148,7 @@ beforeEach(() => {
 
 /** One sweep's worth of work for a single target, exactly as runAutomations does it. */
 async function sweep() {
-  if (!(await claimAutomationSendForTest(CAMPAIGN, REFERENCE, EMAIL, "automation_post_purchase"))) {
+  if ((await claimAutomationSendForTest(CAMPAIGN, REFERENCE, EMAIL, "automation_post_purchase")).outcome !== "claimed") {
     return "skipped";
   }
   const { sendMarketingEmail } = await import("@/lib/email/marketing");

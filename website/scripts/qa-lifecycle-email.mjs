@@ -373,6 +373,30 @@ async function main() {
     return `${code} (${coupon.rows[0].discount_value}% off), validate → ${validate.status} ${vbody?.success ?? vbody?.valid ?? ""}`;
   });
 
+  await step("the restore link in the last note arms the code, so the shopper does not retype it", async () => {
+    assert(lastNote, "no last note to click");
+    const tracked = linksIn(lastNote).find((l) => /\/api\/email\/track\/click/.test(l));
+    assert(tracked, "no tracked restore link in the last note");
+    const code = textOf(lastNote).match(/SAVE-[A-Z0-9]+/)?.[0];
+    assert(code, "no code in the last note");
+    // The endpoint arms the cart's OWN live code, looked up by the cart id.
+    const restore = await fetch(`${BASE}/api/cart/restore?id=${cartId}`);
+    const body = await restore.json();
+    assert(body.success && body.coupon?.code === code, `restore armed ${JSON.stringify(body.coupon)} rather than ${code}`);
+    assert(body.email === guest, "restore did not name the address the code is bound to");
+    // And the page applies it: the cart lands with the code already in the price.
+    const shopper = await context.newPage();
+    await passAgeGate(shopper);
+    await shopper.goto(tracked, { waitUntil: "domcontentloaded" });
+    await shopper.waitForURL(/\/cart(\?|$)/, { timeout: 20000 });
+    await shopper.waitForTimeout(1200);
+    const text = (await shopper.locator("body").innerText()).replace(/\s+/g, " ");
+    assert(text.includes(code) || /Promo code/i.test(text), `the cart page did not show the armed code: ${text.slice(0, 240)}`);
+    await shopper.screenshot({ path: `${SHOTS}/cart-restored-with-code.png`, fullPage: true });
+    await shopper.close();
+    return `${code} armed by /api/cart/restore and shown on /cart`;
+  });
+
   await step("a purchase ends a live sequence even when the payment webhook's own mark is missed", async () => {
     const buyer = `cartbuyer.${stamp}@example.test`;
     const cart = await q(`insert into abandoned_carts (session_id, email, customer_name, items, cart_value_cents, first_seen_at, last_updated_at, status)

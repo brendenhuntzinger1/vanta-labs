@@ -118,6 +118,13 @@ export interface OrderInputs {
   personalDiscountPercent?: number;
   /** Admin: may a coupon combine with a referral/bundle? */
   allowCouponStacking: boolean;
+  /**
+   * What to call the coupon-slot value when it wins. Defaults to "Coupon". The
+   * checkout fills that slot with a one-time gift's percentage when it is
+   * worth more than any typed code, and a receipt must not call a gift a
+   * coupon. Labelling only; the arithmetic is unchanged.
+   */
+  couponLabel?: string;
   /** Ambassador commission percent (admin-set). */
   commissionPercent: number;
   /** Payment-processor fee assumption (percent of amount charged). */
@@ -198,6 +205,9 @@ export function resolveCustomerDiscount(
   const personalAmount = Math.max(0, inputs.personalDiscountAmount ?? 0);
 
   const couponEnabled = enabled.has("coupon") && inputs.couponDiscount > 0;
+  const couponLabel = inputs.couponLabel ?? "Coupon";
+  // Lower-case only for the stock label, so "Bundle + coupon" reads as it always has.
+  const couponSuffix = inputs.couponLabel ?? "coupon";
 
   // The single best discount among every competing candidate, ranked by what
   // each is actually worth beyond any bundle pricing already granted.
@@ -207,7 +217,7 @@ export function resolveCustomerDiscount(
   if (membershipAmount > 0) candidates.push({ amount: membershipAmount, components: ["membership"], label: "Membership pricing" });
   if (bulkAmount > 0) candidates.push({ amount: bulkAmount, components: [], label: "Bulk savings" });
   if (personalAmount > 0) candidates.push({ amount: personalAmount, components: [], label: inputs.personalDiscountPercent ? `Ambassador ${inputs.personalDiscountPercent}% off` : "Ambassador discount" });
-  if (couponEnabled && !inputs.allowCouponStacking) candidates.push({ amount: inputs.couponDiscount, components: ["coupon"], label: "Coupon" });
+  if (couponEnabled && !inputs.allowCouponStacking) candidates.push({ amount: inputs.couponDiscount, components: ["coupon"], label: couponLabel });
 
   let best: DiscountBreakdown = { amount: 0, components: [], label: "None" };
   let bestEffective = 0;
@@ -224,7 +234,7 @@ export function resolveCustomerDiscount(
     return {
       amount: round(Math.min(subtotal, compete(best.amount + inputs.couponDiscount))),
       components: [...best.components, "coupon"],
-      label: best.amount > 0 ? `${best.label} + coupon` : "Coupon",
+      label: best.amount > 0 ? `${best.label} + ${couponSuffix}` : couponLabel,
     };
   }
 

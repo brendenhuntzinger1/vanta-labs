@@ -100,13 +100,16 @@ export async function notifyBackInStock(productSlug: string, productName: string
       const result = await sendMarketingEmail({
         to: String(row.email),
         campaignType: "back_in_stock",
+        onDeferred: "queue",
         referenceId: productSlug,
         templateKey: "back_in_stock",
         ...template,
       });
       // A suppressed recipient (unsubscribed) still counts as handled — mark
       // them notified so we don't keep re-querying and retrying them forever.
-      if (result.success || result.suppressed) {
+      // A queued deferral is handled too: the cron sweep delivers it once the
+      // frequency window opens, and re-querying would only queue it twice.
+      if (result.success || result.suppressed || result.queued) {
         await supabaseAdmin
           .from("back_in_stock_requests")
           .update({ notified: true, notified_at: new Date().toISOString() })

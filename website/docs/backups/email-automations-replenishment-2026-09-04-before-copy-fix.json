@@ -1,0 +1,22 @@
+{
+  "taken_at": "2026-09-04T19:05:00Z",
+  "reason": "Backup of the replenishment automation row before the owner-approved copy correction: the subject read as same-day DELIVERY and the button label assumed an account. Restore by writing these values back through Admin → Email or an UPDATE on email_automations.",
+  "row": {
+    "key": "replenishment",
+    "enabled": true,
+    "delay_days": 30,
+    "offer_key": "winback_60_free_shipping",
+    "subject": "Ready to restock? Same-Day FREE Shipping is on us",
+    "headline": "RESTOCK TODAY. SHIPPING’S ON US 📦",
+    "body": "It’s been about a month since your last order, so we wanted to make your next one a little easier.\n\nYour next qualifying order ships FREE.\n\nYour offer is already tied to this email — no code needed. View your previous order, check the latest batch COAs, and restock in just a few clicks.",
+    "promo_code": null,
+    "cta_label": "REORDER FROM MY ACCOUNT",
+    "cta_path": "/account/orders",
+    "updated_at": "2026-09-04T16:15:32.312+00:00"
+  },
+  "applied_instead": {
+    "subject": "Ready to restock? FREE Shipping + Same-Day Dispatch",
+    "body": "It’s been about a month since your last order, so we wanted to make your next one a little easier.\n\nYour next qualifying order ships FREE — and if you order by 2PM ET on a weekday, it ships the same day.\n\nYour offer is already tied to this email — no code needed. View your previous order, check the latest batch COAs, and restock in just a few clicks.",
+    "cta_label": "REORDER NOW"
+  }
+}
