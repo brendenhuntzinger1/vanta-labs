@@ -1304,7 +1304,15 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // Optional shipping-protection add-on: server recomputes the tiered fee from
   // the server-side subtotal (never trusts a client amount) and adds it on top,
   // mirroring the client preview so the totals match the anti-tamper guard.
-  const shippingProtectionFee = input.shippingProtection ? calculateShippingProtectionFee(subtotal) : 0;
+  // The rate comes from the SAME shippingConfig object the client cart was
+  // handed by /api/catalog/promotions, so an admin rate change moves the
+  // preview and this authoritative total together. Passing the default here
+  // instead would silently re-price every protected order at 4% the moment an
+  // admin set anything else, and the mismatch would surface to the shopper as
+  // "Altered total detected" rather than as a wrong fee.
+  const shippingProtectionFee = input.shippingProtection
+    ? calculateShippingProtectionFee(subtotal, shippingConfig.protectionPercent)
+    : 0;
   const expectedTotal = roundMoney(Math.max(0, totalAfterCredit - pointsDiscountAmount) + shippingProtectionFee);
 
   // The guard only blocks UNDERpayment (a client trying to pay less than the
@@ -1375,10 +1383,14 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   if (pointsDiscountAmount > 0) {
     displayLineItems.push({ label: "Rewards points", amountCents: -Math.round(pointsDiscountAmount * 100) });
   }
-  // Shipping protection is an OPT-IN paid add-on, off by default and never
-  // pre-selected (see shipping-protection.ts:12-19). It gets its own labelled
-  // row so a one-tap shopper sees what they are paying for at the moment of
-  // authorization, not only in the drawer they may have scrolled past.
+  // Shipping protection is a paid add-on. It is pre-selected in the cart
+  // drawer, /cart and /checkout — surfaces that show a removable checkbox next
+  // to its price — but on THIS express/wallet lane it is only ever present
+  // because the shopper explicitly chose it before starting the payment
+  // (see express-apple-pay-button.tsx, which sends shippingProtectionChosen).
+  // The labelled row below is the second half of that guarantee: a one-tap
+  // shopper sees what they are paying for at the moment of authorization,
+  // not only in the drawer they may have scrolled past.
   if (shippingProtectionFee > 0) {
     displayLineItems.push({ label: "Shipping Protection", amountCents: Math.round(shippingProtectionFee * 100) });
   }

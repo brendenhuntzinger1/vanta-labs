@@ -6,9 +6,12 @@ import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 // ---------------------------------------------------------------------------
 // THE PRICE NEXT TO AN OPT-IN MUST BE WHAT TICKING IT COSTS.
 //
-// Shipping protection is a paid add-on, off by default (see
-// shipping-protection-default.test.ts — the Shipping Policy promises it is
-// "never pre-selected"). The row that offers it carries a price.
+// Shipping protection is a paid add-on that is now PRE-SELECTED on these
+// surfaces (see shipping-protection-default.test.ts). The row that offers it
+// carries a price, and that price still has to be the real one: a shopper who
+// unticks protection is looking at the same row, now deciding whether to put
+// it back. Rendering the APPLIED fee there would tell them re-adding it is
+// free.
 //
 // /cart rendered that price from `shippingProtectionFee`, the fee CURRENTLY
 // APPLIED — which is 0 while the box is unticked, and the box is unticked for
@@ -65,8 +68,15 @@ describe("the shipping-protection offer shows what the add-on costs", () => {
   it("every surface prices the offer from the subtotal, not from the current selection", () => {
     for (const path of OFFER_SURFACES) {
       const source = read(path);
-      expect(source, `${path} must offer protection at its real price`).toContain(
-        "calculateShippingProtectionFee(subtotal)",
+      // Matched as a CALL ON `subtotal` rather than as a fixed string, because
+      // the helper now also takes the admin-configured rate:
+      // calculateShippingProtectionFee(subtotal, shippingProtectionPercent).
+      // Pinning the old zero-argument spelling would fail on a surface that is
+      // in fact correct, and — worse — would push someone to "fix" it by
+      // dropping the rate argument, which is what makes the offer price track
+      // the admin setting.
+      expect(source, `${path} must offer protection at its real price`).toMatch(
+        /calculateShippingProtectionFee\(\s*subtotal\b/,
       );
     }
   });

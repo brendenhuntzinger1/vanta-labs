@@ -745,6 +745,18 @@ export async function getShippingConfig(): Promise<ShippingConfig> {
       return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
     };
 
+    const percent = (value: unknown, fallback: number): number => {
+      // Trimmed before the blank check, unlike num() above: Number("   ") is 0,
+      // which is finite and inside the range, so a field an owner "cleared" by
+      // leaving a space would read as a deliberate 0% and make protection free
+      // on every cart. Caught by admin-control-settings.test.ts.
+      if (value == null) return fallback;
+      if (typeof value === "string" && value.trim() === "") return fallback;
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) return fallback;
+      return parsed;
+    };
+
     return {
       domesticFee: num(shipping.flat_rate, DEFAULT_SHIPPING_CONFIG.domesticFee),
       freeShippingThreshold: num(shipping.free_shipping_threshold, DEFAULT_SHIPPING_CONFIG.freeShippingThreshold),
@@ -752,6 +764,12 @@ export async function getShippingConfig(): Promise<ShippingConfig> {
       northAmericaFreeShippingThreshold: num(shipping.north_america_free_shipping_threshold, DEFAULT_SHIPPING_CONFIG.northAmericaFreeShippingThreshold),
       internationalFee: num(shipping.international_flat_rate, DEFAULT_SHIPPING_CONFIG.internationalFee),
       internationalFreeShippingThreshold: num(shipping.international_free_shipping_threshold, DEFAULT_SHIPPING_CONFIG.internationalFreeShippingThreshold),
+      // Shipping Protection rate. Same blank-means-default rule as the fees
+      // above, but clamped to 0-100 as well: this one is a PERCENT of the
+      // subtotal, so a stray "400" would not merely misprice the add-on, it
+      // would quintuple the order total. An explicit 0 is honored and simply
+      // makes protection free.
+      protectionPercent: percent(shipping.protection_percent, DEFAULT_SHIPPING_CONFIG.protectionPercent ?? 0),
     };
   } catch {
     return DEFAULT_SHIPPING_CONFIG;

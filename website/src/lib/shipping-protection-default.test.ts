@@ -4,70 +4,83 @@ import { readFileSync } from "node:fs";
 // ---------------------------------------------------------------------------
 // THE PUBLISHED SHIPPING POLICY AND THE CART MUST AGREE ABOUT SHIPPING PROTECTION.
 //
-// src/lib/legal-content.ts, the `shipping` policy body, says this in the store's
-// own words:
+// That is the invariant this file has always guarded, and it still is. What
+// changed is the direction, not the rule.
 //
-//   "Shipping Protection is an optional, store-backed service — not third-party
-//    insurance — that you may add at checkout for a small fee based on your order
-//    total. It is off by default and NEVER PRE-SELECTED."
+// Shipping Protection is now PRE-SELECTED on the three surfaces that render a
+// visible checkbox with the fee beside it — the cart drawer, /cart and
+// /checkout — and src/lib/legal-content.ts says so in the store's own words:
 //
-// src/components/cart-context.tsx initialised it to `useState(true)`, so it was
-// on by default and pre-selected on every cart, adding
-// orders.shipping_protection_fee to the total unless the shopper noticed and
-// unticked it.
+//   "...added to your order by default for a small fee based on your order
+//    total. It is shown as a separate line item in your cart and at checkout,
+//    and you can remove it with one click at any time before you pay."
 //
-// That is a specific, negative, published promise contradicted by the code, on a
-// control that takes the customer's money. Pre-ticking a paid add-on while
-// telling customers in writing that it is never pre-ticked is the shape
-// regulators call negative-option billing, and the policy is the artefact a
-// customer or a card network would read.
+// The reason to keep testing this after the flip is that pre-selection is only
+// defensible while the disclosure holds. A cart that pre-ticks a paid add-on is
+// ordinary retail; a cart that pre-ticks one while its own published policy
+// says it never does that is negative-option billing, and the policy is the
+// artefact a customer or a card network would read. Either half can be edited
+// alone by someone who does not know about the other, so both halves are
+// pinned here, together, and moving one without the other fails.
 //
-// Of the two sides, the code is the one to move: the published promise is the
-// conservative position and needs no owner decision to be safe. If the business
-// wants it pre-selected, that is a product decision AND a policy edit, together.
+// The wallet half of the promise lives in shipping-protection-wallet.test.ts:
+// express checkout must NOT inherit this default, because it can take a
+// payment without ever showing the checkbox.
 // ---------------------------------------------------------------------------
 
 const read = (path: string) => readFileSync(path, "utf8");
 
-describe("shipping protection is off by default, as the Shipping Policy promises", () => {
-  it("the cart does not pre-select it", () => {
-    // THIS USED TO BE `expect(source).toContain("useState(false)")`, which
-    // cart-context.tsx satisfies ten times over — nine of them nothing to do
-    // with shipping protection. The assertion passed on any boolean in the file
-    // starting false, so deleting the shipping-protection state entirely, or
-    // moving its default behind a variable, left it green.
-    //
-    // The negative guard beside it was real but narrow: it only ever caught the
-    // single literal spelling `useState(true)`.
-    //
-    // So this now matches the ONE declaration, and reads its initial value out
-    // of the match rather than searching the file for a string.
+describe("shipping protection is pre-selected, and the Shipping Policy says so", () => {
+  it("the cart pre-selects it", () => {
+    // Matches the ONE declaration and reads its initial value out of the match,
+    // rather than searching the file for a string. An earlier version of this
+    // test asserted `source.toContain("useState(false)")`, which cart-context
+    // satisfies ten times over — nine of them nothing to do with shipping
+    // protection — so it passed even if the protection state was deleted
+    // outright. Keep it anchored to the declaration.
     const source = read("src/components/cart-context.tsx");
     const declaration = /const \[shippingProtectionEnabled, setShippingProtectionEnabled\] = useState\(([^)]*)\)/
       .exec(source);
 
     expect(declaration, "no shippingProtectionEnabled useState declaration found at all").toBeTruthy();
-    expect(declaration![1].trim(), "shipping protection is pre-selected, which the Shipping Policy says it is not")
-      .toBe("false");
+    expect(
+      declaration![1].trim(),
+      "shipping protection is no longer pre-selected, but the Shipping Policy still tells customers it is",
+    ).toBe("true");
   });
 
-  it("the policy still makes the promise the cart is now keeping", () => {
-    // If someone edits the policy to drop the promise, this test should be the
-    // thing that makes them notice the cart default is the other half of it.
+  it("the policy makes the promise the cart is keeping", () => {
+    // The exact claims the pre-selected default depends on. If someone edits
+    // the policy back to an opt-in description, this fails and points them at
+    // the cart default as the other half of the change.
     const policy = read("src/lib/legal-content.ts");
-    expect(policy).toContain("never pre-selected");
+    expect(policy).toContain("added to your order by default");
+    expect(policy).toContain("remove it with one click");
   });
 
-  it("no other surface re-enables it by default", () => {
+  it("the policy no longer carries the opt-in promise it used to", () => {
+    // The old wording — "off by default and never pre-selected" — is now false
+    // of the cart. Leaving it behind anywhere in the legal copy would be worse
+    // than never having flipped the default, so it is banned outright.
+    const policy = read("src/lib/legal-content.ts");
+    expect(policy).not.toMatch(/never pre-selected/i);
+    expect(policy).not.toMatch(/protection[^.]{0,80}off by default/i);
+  });
+
+  it("every surface that pre-selects it also shows a way to remove it", () => {
+    // Pre-selection is only honest where the shopper can see and undo it. Each
+    // of these surfaces must render the protection control, and it must be
+    // bound to the cart state (so it reflects, and can clear, the default).
     for (const path of [
       "src/components/cart-drawer.tsx",
-      "src/components/cart-client.tsx",
+      "src/app/cart/cart-client.tsx",
       "src/app/checkout/page.tsx",
     ]) {
-      let source: string;
-      try { source = read(path); } catch { continue; }
-      expect(source, path).not.toMatch(/shippingProtection\w*\s*=\s*true/);
-      expect(source, path).not.toMatch(/defaultChecked/);
+      const source = read(path);
+      expect(source, `${path} no longer renders a protection control`)
+        .toMatch(/checked=\{shippingProtectionEnabled\}/);
+      expect(source, `${path} renders no way to switch protection off`)
+        .toMatch(/setShippingProtectionEnabled/);
     }
   });
 });

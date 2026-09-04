@@ -73,6 +73,7 @@ export function CartPageClient() {
     shippingProtectionEnabled,
     setShippingProtectionEnabled,
     shippingProtectionFee,
+    shippingProtectionPercent,
     couponCode,
   } = useCart();
 
@@ -406,7 +407,7 @@ export function CartPageClient() {
                     still deciding — so this row offered a paid add-on at +$0.00 and
                     only revealed the price after they had agreed to it. The drawer
                     and checkout already priced it this way. */}
-                <span className="whitespace-nowrap text-white/80">+{formatCartCurrency(calculateShippingProtectionFee(subtotal))}</span>
+                <span className="whitespace-nowrap text-white/80">+{formatCartCurrency(calculateShippingProtectionFee(subtotal, shippingProtectionPercent))}</span>
               </label>
             ) : null}
 

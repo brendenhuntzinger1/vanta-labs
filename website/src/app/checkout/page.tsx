@@ -265,6 +265,7 @@ export default function CheckoutPage() {
     shippingProtectionEnabled,
     setShippingProtectionEnabled,
     shippingProtectionFee,
+    shippingProtectionPercent,
   } = useCart();
 
   // Whether Apple Pay may be advertised at all — the same predicate the express
@@ -1179,7 +1180,7 @@ export default function CheckoutPage() {
                       <span className="block text-sm font-medium text-white">Shipping protection</span>
                       <span className="block text-xs text-white/40">Protect against loss, theft, or damage.</span>
                     </span>
-                    <span className="flex-shrink-0 text-sm text-white/70 tabular-nums">+{formatCartCurrency(calculateShippingProtectionFee(subtotal))}</span>
+                    <span className="flex-shrink-0 text-sm text-white/70 tabular-nums">+{formatCartCurrency(calculateShippingProtectionFee(subtotal, shippingProtectionPercent))}</span>
                   </label>
                   <button
                     type="button"
