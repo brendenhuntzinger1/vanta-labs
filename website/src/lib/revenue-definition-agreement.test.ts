@@ -69,6 +69,12 @@ const BASKET = [
   paid_at: row.payment_status === "pending_payment" ? null : "2026-08-26T00:00:00.000Z",
   created_at: "2026-08-26T00:00:00.000Z",
   attributed_campaign_id: "campaign-1",
+  // The campaign report now reads the PRIMARY source (marketing-source.ts),
+  // which the migration backfills from attributed_campaign_id for orders
+  // stamped before it existed — so this fixture carries both, as production does.
+  marketing_source_kind: "campaign",
+  marketing_source_ref: "campaign-1",
+  marketing_source_basis: "click",
 }));
 
 /** What the ledger says the basket is worth. Not a hand-typed constant. */

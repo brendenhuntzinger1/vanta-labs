@@ -104,12 +104,18 @@ export async function getEmailDashboard(): Promise<EmailDashboard> {
         .range(from, to),
       { maxRows: 500_000, label: "campaign recipient read" },
     ).then((r) => r.rows),
-    readAllRowsBounded<{ attributed_campaign_id: string; payment_status: string; order_type: string | null; amount_paid: number | null; refund_amount: number | null }>(
+    // PRIMARY CREDIT ONLY. An order is credited to a campaign here when the
+    // one-source rule (marketing-source.ts) chose that campaign — not merely
+    // because its link was clicked at some point. Before this, an order that
+    // followed a campaign click AND an automation click, or that redeemed an
+    // automation's gift, was full revenue on this page and on the automations
+    // panel at once.
+    readAllRowsBounded<{ marketing_source_ref: string | null; payment_status: string; order_type: string | null; amount_paid: number | null; refund_amount: number | null }>(
       (from, to) => supabaseAdmin
         .from("orders")
-        .select("attributed_campaign_id, payment_status, order_type, amount_paid, refund_amount")
-        .not("attributed_campaign_id", "is", null)
-        .order("attributed_campaign_id", { ascending: true })
+        .select("marketing_source_ref, payment_status, order_type, amount_paid, refund_amount")
+        .eq("marketing_source_kind", "campaign")
+        .order("marketing_source_ref", { ascending: true })
         .range(from, to),
       { maxRows: 500_000, label: "campaign attribution read" },
     ).then((r) => r.rows),
@@ -148,7 +154,7 @@ export async function getEmailDashboard(): Promise<EmailDashboard> {
     // any revenue-per-order figure read off this dashboard.
     if (!isRevenueOrderStatus(row.payment_status as string | null)) continue;
     if (!isSaleOrder((row as { order_type?: string | null }).order_type)) continue;
-    const id = String(row.attributed_campaign_id ?? "");
+    const id = String(row.marketing_source_ref ?? "");
     if (!id) continue;
     const entry = revenueByCampaign.get(id) ?? { orders: 0, revenue: 0 };
     entry.orders++;

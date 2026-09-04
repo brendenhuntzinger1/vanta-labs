@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { CampaignSummary, EmailDashboard } from "@/lib/admin-email";
 import type { AutomationRow } from "@/lib/email/automations";
 import { AUTOMATION_KEYS, AUTOMATION_LABELS, type AutomationKey } from "@/lib/email/automation-catalog";
-import type { AutomationStats } from "@/lib/email/automation-stats";
+import type { AutomationStatsReport } from "@/lib/email/automation-stats";
 import { checkCampaignDeliverability } from "@/lib/email/deliverability-check";
 import { describeSubscriberSource, type SubscriberDirectory, type SubscriberStatus } from "@/lib/email/subscriber-directory";
 
@@ -56,7 +56,7 @@ export function AdminEmailClient({
 }: {
   dashboard: EmailDashboard;
   automations: AutomationRow[];
-  automationStats: Record<string, AutomationStats>;
+  automationStats: AutomationStatsReport;
   offerChoices: Array<{ key: string; label: string }>;
   segments: Segment[];
   categories: string[];
@@ -870,11 +870,41 @@ export function AdminEmailClient({
           any given sequence once; a win-back can fire again only after they buy and lapse a second time.
         </p>
         <p className="mt-2 max-w-3xl text-[12px] text-zinc-500">
-          They run in the order shown. Nobody receives more than one marketing email a day from these: an
-          automation that finds the person was mailed in the last 24 hours (a cart reminder, a campaign, another
-          automation) waits for the next sweep. Switching a flow on does not backfill old events — a reorder
-          reminder never goes to an order older than its delay plus two weeks.
+          They run in the order shown. Nobody receives more than one marketing email a day, from any sender:
+          a campaign, a cart reminder, a restock alert or another automation inside the last 24 hours makes an
+          automation wait for the next sweep, and the same rule holds those senders back after an automation.
+          Switching a flow on does not backfill old events — a reorder reminder never goes to an order older
+          than its delay plus two weeks.
         </p>
+
+        {/* THE REPORTING WINDOW. One window for sends, clicks, orders and gifts,
+            so "last 30 days" means the same thing on every tile. Plain links:
+            the page is server-rendered and re-reads the range from the URL. */}
+        <div className="mt-3 flex flex-wrap items-center gap-2" data-testid="automation-stats-range">
+          <span className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">Showing</span>
+          {([["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"], ["all", "All time"]] as const).map(([key, label]) => (
+            <a
+              key={key}
+              href={`/admin/email?range=${key}`}
+              className={`rounded-full border px-3 py-1 text-xs ${automationStats.range.key === key ? "border-cyan-400/60 bg-cyan-400/10 text-white" : "border-white/10 text-zinc-400 hover:text-white"}`}
+            >
+              {label}
+            </a>
+          ))}
+        </div>
+        {!automationStats.ok ? (
+          <p
+            className="mt-3 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-amber-200"
+            data-testid="automation-stats-error"
+          >
+            Statistics unavailable: {automationStats.error ?? "a reporting query failed."} The numbers below are
+            not zero — they could not be read. Editing still works.
+          </p>
+        ) : automationStats.truncated ? (
+          <p className="mt-3 text-[11px] text-amber-200/80">
+            One of the reporting reads hit its row ceiling, so the numbers below understate.
+          </p>
+        ) : null}
 
         {automationDrafts.length === 0 ? (
           <p className="mt-3 text-sm text-zinc-500">Run the email-campaigns migration to enable automations.</p>
@@ -909,28 +939,50 @@ export function AdminEmailClient({
                     conversion or dollar was recorded for any of them. Unique
                     clicks sits next to sends deliberately — total clicks over
                     sends is not a rate. */}
-                <dl
-                  data-testid={`automation-${row.key}-stats`}
-                  className="mt-3 grid grid-cols-3 gap-2 rounded-lg border border-white/5 bg-black/20 p-2 text-center sm:grid-cols-6"
-                >
-                  {([
-                    ["Sent", String(automationStats[row.key]?.sends ?? 0)],
-                    ["Delivered", String(automationStats[row.key]?.delivered ?? 0)],
-                    ["Opened", String(automationStats[row.key]?.opened ?? 0)],
-                    ["Clicks", String(automationStats[row.key]?.clicks ?? 0)],
-                    ["Unique", String(automationStats[row.key]?.uniqueClicks ?? 0)],
-                    ["Revenue", `${(automationStats[row.key]?.revenue ?? 0).toFixed(2)}`],
-                  ] as const).map(([label, value]) => (
-                    <div key={label}>
-                      <dt className="text-[10px] uppercase tracking-[0.14em] text-zinc-500">{label}</dt>
-                      <dd className="text-sm font-semibold text-white">{value}</dd>
-                    </div>
-                  ))}
-                </dl>
-                <p className="mt-1 text-[11px] text-zinc-600">
-                  {automationStats[row.key]?.orders ?? 0} attributed order{(automationStats[row.key]?.orders ?? 0) === 1 ? "" : "s"}
-                  {(automationStats[row.key]?.failed ?? 0) > 0 ? ` · ${automationStats[row.key]?.failed} failed send(s), retried next sweep` : ""}
-                </p>
+                {(() => {
+                  const stats = automationStats.byKey[row.key];
+                  const unavailable = !automationStats.ok;
+                  const num = (value: number | undefined) => (unavailable ? "—" : String(value ?? 0));
+                  const money = (value: number | undefined) => (unavailable ? "—" : `$${(value ?? 0).toFixed(2)}`);
+                  const pct = (value: number | null | undefined) =>
+                    unavailable ? "—" : value === null || value === undefined ? "n/a" : `${(value * 100).toFixed(1)}%`;
+                  return (
+                    <>
+                      <dl
+                        data-testid={`automation-${row.key}-stats`}
+                        className="mt-3 grid grid-cols-3 gap-2 rounded-lg border border-white/5 bg-black/20 p-2 text-center sm:grid-cols-6"
+                      >
+                        {([
+                          ["Sent", num(stats?.sends)],
+                          ["Delivered", num(stats?.delivered)],
+                          ["Opened", num(stats?.opened)],
+                          ["Clicks", num(stats?.clicks)],
+                          ["Unique", num(stats?.uniqueClicks)],
+                          ["Orders", num(stats?.orders)],
+                          ["Revenue", money(stats?.revenue)],
+                          ["Per recipient", money(stats?.revenuePerRecipient ?? 0)],
+                          ["Conversion", pct(stats?.conversionRate)],
+                          ["Gifts issued", num(stats?.offersIssued)],
+                          ["Gifts redeemed", num(stats?.offersRedeemed)],
+                          ["Redemption", pct(stats?.redemptionRate)],
+                        ] as const).map(([label, value]) => (
+                          <div key={label}>
+                            <dt className="text-[10px] uppercase tracking-[0.14em] text-zinc-500">{label}</dt>
+                            <dd className="text-sm font-semibold text-white">{value}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                      <p className="mt-1 text-[11px] text-zinc-600">
+                        {unavailable
+                          ? "Statistics unavailable for this window."
+                          : `${stats?.orders ?? 0} order${(stats?.orders ?? 0) === 1 ? "" : "s"} credited to this automation`
+                            + ((stats?.assistedOrders ?? 0) > 0 ? ` · ${stats?.assistedOrders} assisted (clicked here, credited elsewhere)` : "")
+                            + ((stats?.offersClosed ?? 0) > 0 ? ` · ${stats?.offersClosed} gift(s) closed by a purchase that did not use them` : "")
+                            + ((stats?.failed ?? 0) > 0 ? ` · ${stats?.failed} failed send(s), retried next sweep` : "")}
+                      </p>
+                    </>
+                  );
+                })()}
 
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <label className="block">

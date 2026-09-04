@@ -19,6 +19,7 @@ import { commissionEarnedTemplate, orderConfirmationTemplate, refundConfirmation
 import { scheduleOrderPushNotification } from "@/lib/order-push-notification";
 import { getSiteUrl } from "@/lib/env";
 import { closeCustomerOfferCycle, redeemCustomerOffer } from "@/lib/offers/customer-offers";
+import { finalizeMarketingSource } from "@/lib/marketing-source";
 import { redeemCoupon } from "@/lib/coupons";
 import { normalizeCouponCode } from "@/lib/coupon-code";
 import { readAllRowsBounded } from "@/lib/supabase-page";
@@ -1527,6 +1528,10 @@ export async function finalizeManualPayment(
       // cannot each be spent on a separate later order. Non-throwing, idempotent,
       // and scoped to this one address — see closeCustomerOfferCycle.
       await closeCustomerOfferCycle({ orderId, email: String(order.customer_email) });
+      // THE PRIMARY MARKETING SOURCE, decided now that the gift redemption and
+      // the coupon are known. Write-once with one upgrade (click → redeemed
+      // gift); a replayed approval decides the same thing again. Never throws.
+      await finalizeMarketingSource({ orderId });
       // Send-once + audited. Returns without sending if a confirmation for this
       // order is already recorded, which is what makes a replayed manual
       // approval safe independently of the caller's own guards.
@@ -2516,6 +2521,8 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           // used, so a processor callback that omits the email is covered by the
           // order row exactly as the cart recovery stop is.
           await closeCustomerOfferCycle({ orderId, email: buyerEmail });
+          // THE PRIMARY MARKETING SOURCE — see the manual-approval lane above.
+          await finalizeMarketingSource({ orderId });
           // Send-once + audited. The paid_side_effects_at claim above already
           // stops a duplicate delivery reaching this line; this is the second,
           // independent guarantee, enforced by a unique index rather than by

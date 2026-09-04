@@ -26,16 +26,20 @@ const ROUTES = {
 };
 
 const REQUIRED_FOR_PARITY: Array<{ route: keyof typeof ROUTES; symbol: string; why: string }> = [
-  { route: "session", symbol: "readOfferCookie", why: "the wallet sheet's total must include the gift the email promised" },
-  { route: "session", symbol: "offerToken", why: "the express quote must be priced with the offer token" },
-  { route: "authorize", symbol: "offerToken", why: "the authorised order must be priced with the offer token" },
-  { route: "authorize", symbol: "reserveCustomerOffer", why: "the gift must be reserved before the order exists, as the card lane does" },
-  { route: "authorize", symbol: "attributeOrderToAutomation", why: "wallet orders must credit the automation that produced them" },
-  { route: "authorize", symbol: "attributeOrderToCampaign", why: "wallet orders must credit the campaign that produced them" },
+  { route: "session", symbol: "readOfferCookie(", why: "the wallet sheet's total must include the gift the email promised" },
+  { route: "session", symbol: "offerToken:", why: "the express quote must be priced with the offer token" },
+  { route: "authorize", symbol: "offerToken:", why: "the authorised order must be priced with the offer token" },
+  { route: "authorize", symbol: "reserveCustomerOffer(", why: "the gift must be reserved before the order exists, as the card lane does" },
+  { route: "authorize", symbol: "attributeOrderToAutomation({", why: "wallet orders must credit the automation that produced them" },
+  { route: "authorize", symbol: "attributeOrderToCampaign({", why: "wallet orders must credit the campaign that produced them" },
+  { route: "authorize", symbol: "stampMarketingSourceAtCreation({", why: "wallet orders must carry the one primary marketing source" },
 ];
 
+/** The route's CODE, with comments removed — a comment that names a symbol is not wiring. */
 function source(route: keyof typeof ROUTES): string {
-  return readFileSync(ROUTES[route], "utf8");
+  return readFileSync(ROUTES[route], "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
 describe("express checkout parity guard", () => {
@@ -74,6 +78,11 @@ describe("express checkout parity guard", () => {
       // visible in the test output rather than only in a comment.
       expect(missing.length, "if nothing is missing any more, declare parity and let wallets be enabled").toBeGreaterThan(0);
     }
+  });
+
+  it("the money-moving authorize route checks the flag itself, not only the session route", () => {
+    expect(source("authorize")).toContain("if (!EXPRESS_CHECKOUT_ENABLED)");
+    expect(source("session")).toContain("if (!EXPRESS_CHECKOUT_ENABLED)");
   });
 
   it("names the exact env var an operator would reach for, so the guard is discoverable", () => {

@@ -3,6 +3,7 @@ import { reportRepeatedCheckoutFailure } from "@/lib/checkout-failure-alert";
 import { recordOrderAttribution } from "@/lib/order-attribution";
 import { attributeOrderToCampaign } from "@/lib/email/campaign-attribution";
 import { attributeOrderToAutomation } from "@/lib/email/automation-attribution";
+import { stampMarketingSourceAtCreation } from "@/lib/marketing-source";
 import { readAutomationCookie } from "@/lib/email/automation-links";
 import { readOfferCookie } from "@/lib/offers/customer-offers";
 import { readCampaignCookie } from "@/lib/email/campaign-links";
@@ -153,6 +154,16 @@ export async function POST(request: Request) {
     await attributeOrderToAutomation({
       orderId: result.orderId,
       cookieValue: readAutomationCookie(request),
+    });
+
+    // ONE PRIMARY SOURCE, decided from the two clicks above by recency, so the
+    // campaign report and the automations panel never both claim this order.
+    // Finalised again at payment, when a redeemed gift token or a recovery
+    // coupon can outrank a click. Non-throwing, like its two siblings.
+    await stampMarketingSourceAtCreation({
+      orderId: result.orderId,
+      automationCookie: readAutomationCookie(request),
+      campaignCookie: readCampaignCookie(request),
     });
 
     // Notice a shopper who keeps starting checkout and never finishing. On
