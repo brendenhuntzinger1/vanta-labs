@@ -6,6 +6,7 @@ import { loadConsentedAudience } from "@/lib/email/audience";
 import { isSafeSitePath } from "@/lib/email/cta-path";
 import { getSiteUrl } from "@/lib/env";
 import { readAllRowsBounded } from "@/lib/supabase-page";
+import { mergeSubscriberDirectory, type SubscriberDirectory } from "@/lib/email/subscriber-directory";
 
 /**
  * Reporting for the admin Email tab.
@@ -326,4 +327,72 @@ export function validateCampaignInput(input: Record<string, unknown>): { ok: tru
       segmentParam: text(input.segmentParam, 80) || null,
     },
   };
+}
+
+/**
+ * Every address that has ever consented or been suppressed, for the
+ * Subscribers panel on Admin → Email. Reads the same three stores the audience
+ * resolver reads, merged by subscriber-directory.ts. Bounded and non-fatal:
+ * a short read shows a shorter list with `truncated` set, and a failed read
+ * shows an empty panel rather than breaking the composer.
+ */
+const MAX_DIRECTORY_ROWS = 20_000;
+
+export async function loadSubscriberDirectory(): Promise<SubscriberDirectory> {
+  try {
+    const [prefs, subs, suppressions] = await Promise.all([
+      readAllRowsBounded<{ user_id: string }>(
+        (from, to) => supabaseAdmin
+          .from("customer_preferences")
+          .select("user_id")
+          .eq("marketing_emails", true)
+          .order("user_id", { ascending: true })
+          .range(from, to),
+        { maxRows: MAX_DIRECTORY_ROWS, label: "subscriber directory prefs" },
+      ),
+      readAllRowsBounded<{ email: string; source: string | null; opted_in_at: string | null; unsubscribed_at: string | null }>(
+        (from, to) => supabaseAdmin
+          .from("marketing_subscribers")
+          .select("email, source, opted_in_at, unsubscribed_at")
+          .order("email", { ascending: true })
+          .range(from, to),
+        { maxRows: MAX_DIRECTORY_ROWS, label: "subscriber directory guests" },
+      ),
+      readAllRowsBounded<{ email: string; reason: string | null; source: string | null; created_at: string | null }>(
+        (from, to) => supabaseAdmin
+          .from("email_suppressions")
+          .select("email, reason, source, created_at")
+          .order("email", { ascending: true })
+          .range(from, to),
+        { maxRows: MAX_DIRECTORY_ROWS, label: "subscriber directory suppressions" },
+      ),
+    ]);
+
+    // Opted-in account ids → addresses, paging the auth list once, exactly
+    // as loadConsentedAudience does.
+    const optedIn = new Set(prefs.rows.map((row) => String(row.user_id)));
+    const accounts: Array<{ email: string; createdAt: string | null }> = [];
+    if (optedIn.size > 0) {
+      const PER_PAGE = 1000;
+      for (let page = 1; page <= 100; page++) {
+        const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: PER_PAGE });
+        if (error) throw error;
+        const users = data?.users ?? [];
+        for (const user of users) {
+          if (optedIn.has(user.id) && user.email) accounts.push({ email: user.email, createdAt: user.created_at ?? null });
+        }
+        if (users.length < PER_PAGE) break;
+      }
+    }
+
+    return mergeSubscriberDirectory({
+      accounts,
+      subscribers: subs.rows.map((row) => ({ email: row.email, source: row.source, optedInAt: row.opted_in_at, unsubscribedAt: row.unsubscribed_at })),
+      suppressions: suppressions.rows.map((row) => ({ email: row.email, reason: row.reason, source: row.source, createdAt: row.created_at })),
+      truncated: prefs.truncated || subs.truncated || suppressions.truncated,
+    });
+  } catch (error) {
+    console.error("[admin-email] subscriber directory unavailable", error);
+    return { rows: [], counts: { subscribed: 0, unsubscribed: 0, bounced: 0, complained: 0 }, truncated: true };
+  }
 }

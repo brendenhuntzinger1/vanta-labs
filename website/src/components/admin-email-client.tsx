@@ -6,6 +6,7 @@ import type { AutomationRow } from "@/lib/email/automations";
 import { AUTOMATION_KEYS, AUTOMATION_LABELS, type AutomationKey } from "@/lib/email/automation-catalog";
 import type { AutomationStats } from "@/lib/email/automation-stats";
 import { checkCampaignDeliverability } from "@/lib/email/deliverability-check";
+import { describeSubscriberSource, type SubscriberDirectory, type SubscriberStatus } from "@/lib/email/subscriber-directory";
 
 type Segment = { value: string; label: string; needsParam?: boolean; hint: string };
 
@@ -51,6 +52,7 @@ export function AdminEmailClient({
   postalAddressSet,
   emailReady,
   emailEnabled,
+  subscriberDirectory,
 }: {
   dashboard: EmailDashboard;
   automations: AutomationRow[];
@@ -64,6 +66,7 @@ export function AdminEmailClient({
   postalAddressSet: boolean;
   emailReady: boolean;
   emailEnabled: boolean;
+  subscriberDirectory: SubscriberDirectory;
 }) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -78,6 +81,36 @@ export function AdminEmailClient({
   );
   const [automationPreview, setAutomationPreview] = useState<{ key: string; subject: string; html: string } | null>(null);
   const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile">("desktop");
+  const [subscriberQuery, setSubscriberQuery] = useState("");
+  const [subscriberFilter, setSubscriberFilter] = useState<"all" | SubscriberStatus>("all");
+
+  // Filtered client-side: the whole directory is already on the page, and a
+  // list this size (thousands at most) is faster to search in memory than
+  // through a round trip per keystroke.
+  const visibleSubscribers = useMemo(() => {
+    const needle = subscriberQuery.trim().toLowerCase();
+    return subscriberDirectory.rows.filter((row) =>
+      (subscriberFilter === "all" || row.status === subscriberFilter)
+      && (!needle || row.email.includes(needle) || describeSubscriberSource(row.source).toLowerCase().includes(needle)),
+    );
+  }, [subscriberDirectory, subscriberQuery, subscriberFilter]);
+
+  function downloadSubscribersCsv() {
+    const escape = (value: string) => `"${value.replace(/"/g, '""')}"`;
+    const lines = [
+      ["email", "status", "source", "since", "left_at", "unsubscribed_from"].join(","),
+      ...visibleSubscribers.map((row) =>
+        [row.email, row.status, describeSubscriberSource(row.source), row.since ?? "", row.leftAt ?? "", row.unsubscribedFrom ?? ""].map(escape).join(","),
+      ),
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `vanta-subscribers-${new Date().toISOString().slice(0, 10)}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
   const [campaignPreview, setCampaignPreview] = useState<{ subject: string; html: string } | null>(null);
   const [campaignPreviewDevice, setCampaignPreviewDevice] = useState<"desktop" | "mobile">("desktop");
 
@@ -1094,6 +1127,117 @@ export function AdminEmailClient({
             ))}
           </div>
         )}
+      </section>
+      {/* Subscribers -------------------------------------------------- */}
+      <section className="vl-panel rounded-[1.8rem] p-5 sm:p-6">
+        <details data-testid="subscriber-directory" className="group">
+          <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
+            <div>
+              <h2 className="text-lg font-semibold text-white">
+                Subscribers
+                <span className="ml-2 text-sm font-normal text-zinc-500">
+                  {subscriberDirectory.counts.subscribed} subscribed · {subscriberDirectory.counts.unsubscribed + subscriberDirectory.counts.bounced + subscriberDirectory.counts.complained} not receiving
+                </span>
+              </h2>
+              <p className="mt-1 text-[12px] text-zinc-500">Everyone who has opted in, and everyone who has left, bounced or complained. Click to open.</p>
+            </div>
+            <span className="rounded-full border border-white/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-300 transition group-open:rotate-180">▾</span>
+          </summary>
+
+          <div className="mt-5 space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="search"
+                value={subscriberQuery}
+                onChange={(event) => setSubscriberQuery(event.target.value)}
+                placeholder="Search by email or source"
+                data-testid="subscriber-search"
+                className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white sm:w-72"
+              />
+              <div className="flex flex-wrap gap-1.5">
+                {([
+                  ["all", "All", subscriberDirectory.rows.length],
+                  ["subscribed", "Subscribed", subscriberDirectory.counts.subscribed],
+                  ["unsubscribed", "Unsubscribed", subscriberDirectory.counts.unsubscribed],
+                  ["bounced", "Bounced", subscriberDirectory.counts.bounced],
+                  ["complained", "Complained", subscriberDirectory.counts.complained],
+                ] as const).map(([value, label, count]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setSubscriberFilter(value)}
+                    className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
+                      subscriberFilter === value ? "bg-zinc-100 text-zinc-950" : "border border-zinc-800 text-zinc-400"
+                    }`}
+                  >
+                    {label} {count}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={downloadSubscribersCsv}
+                disabled={visibleSubscribers.length === 0}
+                className="ml-auto rounded-lg border border-white/15 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-300 disabled:opacity-40"
+              >
+                Download CSV
+              </button>
+            </div>
+
+            {subscriberDirectory.truncated ? (
+              <p className="text-[11px] text-amber-300/80">The list could not be read in full, so some addresses may be missing here. Sending is unaffected.</p>
+            ) : null}
+
+            {visibleSubscribers.length === 0 ? (
+              <p className="text-sm text-zinc-500">
+                {subscriberDirectory.rows.length === 0 ? "Nobody has subscribed yet." : "No addresses match."}
+              </p>
+            ) : (
+              <div className="max-h-[480px] overflow-auto rounded-xl border border-white/10">
+                <table className="w-full min-w-[640px] text-left text-sm">
+                  <thead className="sticky top-0 bg-[#0b1120]">
+                    <tr className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">
+                      <th className="px-3 py-2">Email</th>
+                      <th className="px-3 py-2">Status</th>
+                      <th className="px-3 py-2">Source</th>
+                      <th className="px-3 py-2">Since</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-zinc-300">
+                    {visibleSubscribers.map((row) => (
+                      <tr key={row.email} className="border-t border-white/5">
+                        <td className="px-3 py-2 font-medium text-white">{row.email}</td>
+                        <td className="px-3 py-2">
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                              row.status === "subscribed"
+                                ? "bg-emerald-400/15 text-emerald-200"
+                                : row.status === "complained"
+                                  ? "bg-rose-400/15 text-rose-200"
+                                  : "bg-zinc-500/15 text-zinc-300"
+                            }`}
+                          >
+                            {row.status}
+                          </span>
+                          {row.status !== "subscribed" && (row.leftAt || row.unsubscribedFrom) ? (
+                            <span className="ml-2 text-[11px] text-zinc-500">
+                              {row.leftAt ? new Date(row.leftAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : ""}
+                              {row.unsubscribedFrom ? ` · from ${row.unsubscribedFrom.replace(/^automation:/, "").replace(/^campaign:.*/, "a campaign").replace(/_/g, " ")}` : ""}
+                            </span>
+                          ) : null}
+                        </td>
+                        <td className="px-3 py-2 text-zinc-400">{describeSubscriberSource(row.source)}</td>
+                        <td className="px-3 py-2 text-zinc-400">
+                          {row.since ? new Date(row.since).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </details>
       </section>
     </div>
   );

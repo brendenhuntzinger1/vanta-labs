@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { canManageEmailCampaigns } from "@/lib/admin-roles";
-import { getEmailDashboard } from "@/lib/admin-email";
+import { getEmailDashboard, loadSubscriberDirectory } from "@/lib/admin-email";
 import { loadAutomations } from "@/lib/email/automations";
 import { loadAutomationStats } from "@/lib/email/automation-stats";
 import { OFFER_CATALOG } from "@/lib/offers/customer-offers";
@@ -32,7 +32,8 @@ export default async function AdminEmailPage() {
 
   // Every load is independently fault-tolerant: a campaign system that can't
   // render because one query failed is worse than one showing partial data.
-  const [dashboard, automations, automationStats, emailSettings, categories] = canManage
+  const emptyDirectory = { rows: [], counts: { subscribed: 0, unsubscribed: 0, bounced: 0, complained: 0 }, truncated: false };
+  const [dashboard, automations, automationStats, emailSettings, categories, subscriberDirectory] = canManage
     ? await Promise.all([
         getEmailDashboard().catch(() => ({ subscribers: 0, campaigns: [], totals: { sent: 0, opened: 0, clicked: 0, orders: 0, revenue: 0 } })),
         loadAutomations().catch(() => []),
@@ -43,8 +44,9 @@ export default async function AdminEmailPage() {
         loadAutomationStats().catch(() => ({})),
         getEmailAdminSettings().catch(() => null),
         loadCategories(),
+        loadSubscriberDirectory(),
       ])
-    : [{ subscribers: 0, campaigns: [], totals: { sent: 0, opened: 0, clicked: 0, orders: 0, revenue: 0 } }, [], {}, null, []];
+    : [{ subscribers: 0, campaigns: [], totals: { sent: 0, opened: 0, clicked: 0, orders: 0, revenue: 0 } }, [], {}, null, [], emptyDirectory];
 
   return (
     <div className="vl-page-shell min-h-screen bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.1),transparent_52%),linear-gradient(145deg,#04060f_0%,#0b1324_50%,#060911_100%)] px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
@@ -70,6 +72,7 @@ export default async function AdminEmailPage() {
             postalAddressSet={Boolean(emailSettings?.marketingPostalAddress)}
             emailReady={emailSettings?.ready ?? false}
             emailEnabled={emailSettings?.enabled ?? false}
+            subscriberDirectory={subscriberDirectory}
           />
         ) : (
           <section className="vl-panel rounded-[1.8rem] p-6">
