@@ -724,7 +724,21 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
 
     if (!response.ok) {
       const detail = `webhook answered ${response.status}`;
-      await safeAlert("order_push_failed", `Order ${orderId} notification not delivered: ${detail}`);
+      // SAY WHICH DESTINATION, AND WHERE. The 2026-09-01 alert read "webhook
+      // answered 404" and nothing else; that the URL was a Zapier catch hook
+      // that no longer existed had to be inferred. The host is safe to name —
+      // the path is the credential, and it stays out.
+      const where = destination.kind === "pushover" ? "Pushover" : `webhook at ${hostOf(destination.url)}`;
+      const hint = destination.kind === "webhook" && (response.status === 404 || response.status === 410)
+        ? " A 404/410 from a webhook usually means the automation behind the URL was deleted or turned off. "
+          + "Switch to Pushover, or paste a live URL, in Admin -> Control Center -> Order Notifications."
+        : "";
+      await safeAlert(
+        "order_push_failed",
+        `Order ${orderId} notification not delivered: the ${where} answered ${response.status}.${hint}`,
+        undefined,
+        { kind: destination.kind, host: destinationHost(destination), status: response.status },
+      );
       await announceMissedOrder(detail);
       return { sent: false, reason: "delivery_failed", detail };
     }
@@ -732,10 +746,29 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
     return { sent: true };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    await safeAlert("order_push_failed", `Order ${orderId} notification not delivered: ${detail}`);
+    const where = destination.kind === "pushover" ? "Pushover" : `webhook at ${hostOf(destination.url)}`;
+    await safeAlert(
+      "order_push_failed",
+      `Order ${orderId} notification not delivered: could not reach the ${where} (${detail}).`,
+      undefined,
+      { kind: destination.kind, host: destinationHost(destination), error: detail },
+    );
     await announceMissedOrder(detail);
     return { sent: false, reason: "delivery_failed", detail };
   }
+}
+
+/** The hostname alone — never the path, which is the webhook's credential. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname || "unknown host";
+  } catch {
+    return "unknown host";
+  }
+}
+
+function destinationHost(destination: PushDestination): string {
+  return destination.kind === "webhook" ? hostOf(destination.url) : destination.kind === "pushover" ? hostOf(PUSHOVER_API_URL) : "none";
 }
 
 /**
@@ -744,7 +777,7 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
  * to go wrong. This lands on the admin status page, which is where a pattern of
  * failures is worth noticing.
  */
-async function safeAlert(type: string, message: string, dedupeWindowMs?: number): Promise<void> {
+async function safeAlert(type: string, message: string, dedupeWindowMs?: number, context?: Record<string, unknown>): Promise<void> {
   try {
     // `order_notification_missed` is the one critical here, because it is the
     // only one that carries an order the operator has not been told about.
@@ -753,7 +786,7 @@ async function safeAlert(type: string, message: string, dedupeWindowMs?: number)
     const severity = type === "order_notification_missed" || type === "order_push_destination_unhealthy"
       ? "critical"
       : "warning";
-    await recordSystemAlert({ type, severity, message, dedupeWindowMs });
+    await recordSystemAlert({ type, severity, message, dedupeWindowMs, ...(context ? { context } : {}) });
   } catch {
     // recordSystemAlert already swallows its own failures; this is belt and
     // braces so the alerting path can never be what breaks the alert.

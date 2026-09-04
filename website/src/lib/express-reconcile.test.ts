@@ -126,6 +126,11 @@ function providerSays(status: string | null) {
   );
 }
 
+/** The processor answers with a whole session object, reason fields included. */
+function providerSaysSession(session: Record<string, unknown>) {
+  fetchSession.mockImplementation(async () => ({ ok: true, json: async () => session }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   selectFilters = {};
@@ -217,6 +222,43 @@ describe("a definitively dead session is retired, carefully", () => {
       expect(captured.eq_order_id).toBe("order-1");
     });
   }
+
+  // WHY it was retired is recorded beside the status, so the admin can tell a
+  // shopper who walked away from a bank that said no. Until 2026-09-04 both
+  // read as the bare word payment_failed.
+  it("records an expired session as an abandoned checkout, not a decline", async () => {
+    providerSays("expired");
+    await reconcileVeyraPendingPayments();
+    const payload = (orderUpdate.mock.calls[0][0] as { payload: Record<string, unknown> }).payload;
+    expect(payload.payment_failure_kind).toBe("checkout_expired");
+    expect(payload.payment_failure_code).toBe("expired");
+    expect(String(payload.payment_failure_reason)).toMatch(/expired/i);
+    expect(typeof payload.payment_failed_at).toBe("string");
+  });
+
+  it("records a cancelled session as an abandoned checkout", async () => {
+    providerSays("canceled");
+    await reconcileVeyraPendingPayments();
+    const payload = (orderUpdate.mock.calls[0][0] as { payload: Record<string, unknown> }).payload;
+    expect(payload.payment_failure_kind).toBe("checkout_expired");
+    expect(payload.payment_failure_code).toBe("canceled");
+  });
+
+  it("records a failed session as a processor decline, keeping the processor's own reason", async () => {
+    providerSaysSession({ status: "failed", last_error: { code: "do_not_honor", message: "Do not honor" } });
+    await reconcileVeyraPendingPayments();
+    const payload = (orderUpdate.mock.calls[0][0] as { payload: Record<string, unknown> }).payload;
+    expect(payload.payment_status).toBe("payment_failed");
+    expect(payload.payment_failure_kind).toBe("processor_declined");
+    expect(payload.payment_failure_code).toBe("do_not_honor");
+    expect(payload.payment_failure_reason).toBe("Do not honor");
+  });
+
+  it("never writes failure detail onto a session that is merely still open", async () => {
+    providerSays("open");
+    await reconcileVeyraPendingPayments();
+    expect(orderUpdate).not.toHaveBeenCalled();
+  });
 });
 
 describe("the query only ever considers orders that can be reconciled", () => {

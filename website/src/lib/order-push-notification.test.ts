@@ -395,6 +395,39 @@ describe("what happens when things break", () => {
     expect(alerts[0]).toMatchObject({ type: "order_push_failed", severity: "warning" });
   });
 
+  // 2026-09-01: the alert for the missed $94.96 order said "webhook answered
+  // 404" and nothing else — not which destination, not where it pointed. The
+  // dead Zapier hook had to be inferred. The alert now names the host and the
+  // status, and says what a 404/410 from a webhook usually means.
+  it("says WHICH destination failed, so a dead hook is diagnosed rather than guessed", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 404 });
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    const alert = alerts.find((a) => a.type === "order_push_failed") as
+      | ((typeof alerts)[number] & { context?: Record<string, unknown> })
+      | undefined;
+    expect(alert).toBeTruthy();
+    expect(alert?.message).toContain("hooks.example.com");
+    expect(alert?.message).toContain("404");
+    expect(alert?.message).toMatch(/deleted or turned off/i);
+    expect(alert?.context).toMatchObject({ kind: "webhook", host: "hooks.example.com", status: 404 });
+    // The URL is the webhook's only credential: the host may be named, the
+    // path never.
+    expect(alert?.message).not.toContain("/catch/1/abc");
+    expect(JSON.stringify(alert?.context)).not.toContain("/catch/1/abc");
+  });
+
+  it("names Pushover when Pushover is the destination that refused", async () => {
+    vi.stubEnv("PUSHOVER_API_TOKEN", "tok");
+    vi.stubEnv("PUSHOVER_USER_KEY", "usr");
+    fetchMock.mockResolvedValue({ ok: false, status: 400 });
+    await sendOrderPushNotification("ord_a1b2c3d4");
+    const alert = alerts.find((a) => a.type === "order_push_failed") as
+      | ((typeof alerts)[number] & { context?: Record<string, unknown> })
+      | undefined;
+    expect(alert?.message).toContain("Pushover");
+    expect(alert?.context).toMatchObject({ kind: "pushover", host: "api.pushover.net", status: 400 });
+  });
+
   it("survives a webhook that never answers", async () => {
     fetchMock.mockRejectedValue(Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }));
     const result = await sendOrderPushNotification("ord_a1b2c3d4");

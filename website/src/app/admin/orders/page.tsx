@@ -29,7 +29,7 @@ const PAYMENT_STATUS_LABELS: Record<AdminOrderPaymentStatusFilter, string> = {
   pending_payment: "Pending / abandoned",
   partially_refunded: "Partially refunded",
   refunded: "Refunded",
-  payment_failed: "Payment failed",
+  payment_failed: "Declined / expired / failed",
   canceled: "Canceled",
   all: "All (incl. abandoned)",
 };

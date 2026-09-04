@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { FULLY_TERMINAL_ORDER_STATES } from "@/lib/payment-types";
+import { extractProcessorFailure, type PaymentFailureDetail } from "@/lib/payment-failure";
 import type { OrderStatus } from "@/lib/payment-types";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
@@ -562,6 +563,12 @@ async function upsertOrderRecord(input: {
   fulfillmentStatus?: string;
   paidAt?: string | null;
   providerEventId?: string;
+  /**
+   * WHY the payment failed, in the processor's words — written only when this
+   * upsert is recording a payment_failed status. Absent on every other event so
+   * a later refund or cancel never blanks a reason already on the row.
+   */
+  paymentFailure?: PaymentFailureDetail | null;
   items?: Array<{
     productId?: string;
     productName?: string;
@@ -607,6 +614,17 @@ async function upsertOrderRecord(input: {
     fulfillment_status: input.fulfillmentStatus ?? "pending",
     provider_event_id: input.providerEventId ?? null,
     paid_at: input.paidAt ?? null,
+    // A decline says why (payment-failure.ts). Spread conditionally rather than
+    // written as null: the keys are only present when there is a failure to
+    // describe, so this upsert can never erase a reason on a refund or cancel.
+    ...(input.paymentFailure
+      ? {
+          payment_failure_kind: input.paymentFailure.kind,
+          payment_failure_code: input.paymentFailure.code,
+          payment_failure_reason: input.paymentFailure.reason,
+          payment_failed_at: new Date().toISOString(),
+        }
+      : {}),
     updated_at: new Date().toISOString(),
   };
 
@@ -2167,6 +2185,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       fulfillmentStatus: nextStatus === "paid" ? "awaiting_fulfillment" : orderRecord?.fulfillment_status ?? "pending",
       paidAt: nextStatus === "paid" ? new Date().toISOString() : orderRecord?.paid_at ?? null,
       providerEventId: eventId,
+      // The processor's own account of a decline, read from the same envelope
+      // that named the order. Every guard above has already run: a decline
+      // arriving for a PAID order returned before this point, so a reason can
+      // only ever land on a row that is genuinely being marked failed.
+      paymentFailure: nextStatus === "payment_failed" ? extractProcessorFailure(eventPayload) : null,
       items: eventPayload.items,
     });
     await upsertOrderItems(orderId, eventPayload.items);

@@ -1,5 +1,10 @@
+import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
+import { findPaidRetryForOrder } from "@/lib/admin-orders";
+import { formatDisplayDate } from "@/lib/format-date";
+import { describePaymentStatus, describeRetryDelay } from "@/lib/payment-failure";
+import { PaymentOutcome } from "@/components/payment-status-badge";
 import { canManageRefunds, canViewProfit } from "@/lib/admin-roles";
 import { hasCapturedPayment } from "@/lib/ledger";
 import { supabaseAdmin } from "@/lib/supabase-server";
@@ -56,6 +61,24 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
   if (error || !data) {
     notFound();
   }
+
+  // Did this shopper come back and pay? Read-time, best-effort, and only asked
+  // for an order that is not itself paid. See findPaidRetries in admin-orders.
+  const paymentStatus = String(data.payment_status ?? "pending_payment");
+  const failureKind = data.payment_failure_kind ? String(data.payment_failure_kind) : null;
+  const failureReason = data.payment_failure_reason ? String(data.payment_failure_reason) : null;
+  const failureCode = data.payment_failure_code ? String(data.payment_failure_code) : null;
+  const failedAt = data.payment_failed_at ? String(data.payment_failed_at) : null;
+  const paidRetry = paymentStatus.toLowerCase() === "paid"
+    ? null
+    : await findPaidRetryForOrder({
+        order_id: String(data.order_id),
+        customer_email: data.customer_email ? String(data.customer_email) : null,
+        created_at: String(data.created_at),
+        amount_paid: Number(data.amount_paid ?? 0),
+        payment_status: paymentStatus,
+      });
+  const isFailed = paymentStatus.toLowerCase() === "payment_failed";
 
   // COGS/margin is manager+ only — the lowest-privilege staff role must not see
   // internal per-order profit. (The panel below already renders only when non-null.)
@@ -151,11 +174,41 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
           {String(data.order_number ?? data.order_id)}
         </h1>
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <span className="inline-flex items-center rounded-full border border-white/15 bg-white/[0.05] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-zinc-200">
-            {String(data.payment_status ?? "pending_payment").replace(/_/g, " ")}
-          </span>
+          <PaymentOutcome status={paymentStatus} failureKind={failureKind} paidRetry={paidRetry} />
           <span className="text-xs text-zinc-500">{data.order_id}</span>
         </div>
+
+        {/* WHY, in the processor's words. Until 2026-09-04 this page said only
+            "payment failed", and a bank decline, an abandoned checkout and a
+            hand-retired test order all read the same. */}
+        {isFailed ? (
+          <section data-payment-attempt className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+            <p className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">Why this payment failed</p>
+            <p className="mt-2 text-sm font-semibold text-zinc-100">{describePaymentStatus(paymentStatus, failureKind).label}</p>
+            {failureReason ? (
+              <p className="mt-1 text-sm text-zinc-300">{failureReason}</p>
+            ) : (
+              <p className="mt-1 text-sm text-zinc-500">The processor did not say why, and no reason was recorded.</p>
+            )}
+            <p className="mt-2 text-xs text-zinc-500">
+              {failureCode ? <>Processor code <span className="font-mono text-zinc-400">{failureCode}</span></> : null}
+              {failureCode && failedAt ? " · " : null}
+              {failedAt ? <>Recorded {formatDisplayDate(failedAt, "datetime")} ET</> : null}
+            </p>
+            {paidRetry ? (
+              <p className="mt-3 text-sm text-cyan-200">
+                This customer retried and paid on{" "}
+                <Link href={`/admin/orders/${paidRetry.orderId}`} className="font-mono underline underline-offset-4 hover:text-white">
+                  {paidRetry.orderNumber ?? paidRetry.orderId}
+                </Link>{" "}
+                {describeRetryDelay(paidRetry.minutesAfter)}
+                {paidRetry.sameAmount ? " for the same total" : " for a different total"}. No sale was lost.
+              </p>
+            ) : (
+              <p className="mt-3 text-sm text-zinc-500">No later paid order from this customer was found within 24 hours.</p>
+            )}
+          </section>
+        ) : null}
 
         {/* Customer and address live on the page now. They used to sit inside
             the fulfillment panel, which meant reading an address required

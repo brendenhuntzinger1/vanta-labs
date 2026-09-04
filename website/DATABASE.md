@@ -127,6 +127,17 @@ plus the shipping/label columns in Section 5.
 - **`payment_status`:** `pending_payment` → (`awaiting_verification` for manual)
   → `paid` / `payment_rejected` / `payment_failed` / `refunded` /
   `partially_refunded` / `canceled`.
+- **Why a `payment_failed` row failed** (`payment-failure-detail.sql`,
+  2026-09-04): `payment_failure_kind` (`processor_declined` — the bank or
+  processor said no; `checkout_expired` — the session expired or was cancelled
+  with no charge attempt, i.e. an abandoned cart; `other`), plus
+  `payment_failure_code` (the processor's decline code / session status),
+  `payment_failure_reason` (its message, shown verbatim in the admin) and
+  `payment_failed_at`. Written only by the three paths that already write
+  `payment_failed` — `payment-webhook.ts`, the express Apple Pay lane and
+  `express-reconcile.ts` — never by anything that touches a paid order. The
+  vocabulary lives in `src/lib/payment-failure.ts`; `payment_status` itself is
+  unchanged and no new status value exists.
 - **`fulfillment_status`:** `awaiting_payment` → `paid` → `ready_to_fulfill` →
   `packed` → `label_purchased` → `shipped` → `in_transit` →
   `out_for_delivery` → `delivered`, plus the terminals `cancelled` /
@@ -428,6 +439,12 @@ Apply these SQL files in order (each is idempotent):
     reads it — deployed first, the label purchase would run without its claim
     column, which is exactly the case that buys two labels. Ends with a
     verification query that must return all `t`.
+19. **`payment-failure-detail.sql`** (2026-09-04 — `orders.payment_failure_kind`
+    / `_code` / `_reason` / `payment_failed_at`: why a `payment_failed` row
+    failed, so a bank decline, an expired checkout session and a hand-retired
+    test order no longer read as the same word in the admin. Additive and
+    nullable; its backfill touches only rows already `payment_failed`. Applied
+    to production the same day — see `migrations-applied/`.)
 
 The former `fulfillment-3pl.sql` (3PL orders/events/payouts) is **retired** and
 is no longer in `src/lib/sql/`. Its tables (`fulfillment_orders`,

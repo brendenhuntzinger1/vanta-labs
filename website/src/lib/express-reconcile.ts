@@ -4,6 +4,7 @@ import { getRequiredEnv } from "@/lib/env";
 import { releaseInventoryForOrder } from "@/lib/inventory-reservation";
 import { veyraApiBase, veyraSecretKey } from "@/lib/express-checkout-service";
 import { recordSystemAlert } from "@/lib/monitoring";
+import { classifyDeadSession } from "@/lib/payment-failure";
 import { signWebhookPayload } from "@/lib/payment-provider";
 import { processPaymentWebhook } from "@/lib/payment-webhook";
 import { supabaseAdmin } from "@/lib/supabase-server";
@@ -116,6 +117,8 @@ const DEAD_SESSION_STATUSES = new Set(["failed", "expired", "canceled", "cancell
 
 interface VeyraSessionStatus {
   status?: string;
+  /** Whatever else Veyra sends: a failed session may carry its decline reason. */
+  [key: string]: unknown;
 }
 
 interface PendingOrderRow {
@@ -274,9 +277,24 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
       // order can be retired: no money to chase, and the stock it is holding is
       // not sold. Guarded on payment_status so a webhook that flipped it to
       // paid a moment ago is never overwritten.
+      //
+      // WHY it is retired is recorded beside the status. An `expired` or
+      // `canceled` session is a shopper who walked away — an abandoned
+      // checkout, no charge ever attempted. Only `failed` is the processor
+      // saying no. Until 2026-09-04 both were written as the bare word
+      // payment_failed and the admin could not tell them apart.
+      const failure = classifyDeadSession(status, session);
+      const retiredAt = new Date().toISOString();
       const { error: failError } = await supabaseAdmin
         .from("orders")
-        .update({ payment_status: "payment_failed", updated_at: new Date().toISOString() })
+        .update({
+          payment_status: "payment_failed",
+          payment_failure_kind: failure.kind,
+          payment_failure_code: failure.code,
+          payment_failure_reason: failure.reason,
+          payment_failed_at: retiredAt,
+          updated_at: retiredAt,
+        })
         .eq("order_id", order.order_id)
         .eq("payment_status", "pending_payment");
       if (!failError) {
