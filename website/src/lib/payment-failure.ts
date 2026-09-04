@@ -169,21 +169,38 @@ export function classifyDeadSession(status: string, session?: unknown): PaymentF
  * `decline_code` and `message`, and an `error` slug on plain 4xx refusals.
  * "blocked" is Veyra's own fraud/velocity guard, not the bank — worth saying,
  * because the fix for each is different.
+ *
+ * Only `failed` and `blocked` are the processor saying no to the CHARGE. The
+ * authorize route also lands in answered_no on any other 4xx — a 409 because
+ * the selected shipping method disagreed with the locked one, a 400 for a bad
+ * token intent — and those never reached the bank. They are filed as `other`
+ * with a reason that says so, rather than wearing the "Declined by bank"
+ * badge (2026-09-04 pre-merge review).
  */
 export function describeExpressDecline(payload: unknown, httpStatus: number): PaymentFailureDetail {
   const body = isRecord(payload) ? payload : {};
-  const publicStatus = text(body.public_status, MAX_CODE_CHARS);
+  const publicStatus = text(body.public_status, MAX_CODE_CHARS)?.toLowerCase() ?? null;
   const code =
     firstText([body], [["decline_code"], ["declineCode"], ["error_code"], ["code"]], MAX_CODE_CHARS)
     ?? text(body.error, MAX_CODE_CHARS)
     ?? publicStatus
     ?? `http_${Number.isFinite(httpStatus) ? httpStatus : 0}`;
-  const reason =
-    firstText([body], [["message"], ["error_message"], ["decline_message"], ["detail"]], MAX_REASON_CHARS)
-    ?? (publicStatus === "blocked"
-      ? "The processor blocked this payment before it reached the bank (fraud or velocity rule)."
-      : "The processor declined this payment.");
-  return { kind: "processor_declined", code, reason };
+  const message = firstText([body], [["message"], ["error_message"], ["decline_message"], ["detail"]], MAX_REASON_CHARS);
+
+  if (publicStatus === "failed" || publicStatus === "blocked") {
+    const reason =
+      message
+      ?? (publicStatus === "blocked"
+        ? "The processor blocked this payment before it reached the bank (fraud or velocity rule)."
+        : "The processor declined this payment.");
+    return { kind: "processor_declined", code, reason };
+  }
+
+  return {
+    kind: "other",
+    code,
+    reason: message ?? `The processor refused the charge request before it reached the bank (${code}). No charge was attempted.`,
+  };
 }
 
 // ---------------------------------------------------------------------------

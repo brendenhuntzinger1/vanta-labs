@@ -80,8 +80,29 @@ describe("a declined charge records the processor's reason", () => {
     const row = read("order-silent");
     expect(row.payment_status).toBe("payment_failed");
     expect(row.payment_failure_kind).toBe("processor_declined");
-    expect(row.payment_failure_code).toBeNull();
-    expect(row.payment_failure_reason).toBeNull();
+    // Not written at all, rather than written as null — see the next test.
+    expect(row.payment_failure_code).toBeUndefined();
+    expect(row.payment_failure_reason).toBeUndefined();
+  });
+
+  it("a later, sparser decline event keeps the richer reason already on the row", async () => {
+    // The express lane records Veyra's decline code at authorisation; Veyra then
+    // delivers payment.failed for the same session with a bare charge object.
+    // The second event must not replace "insufficient_funds" with nothing.
+    seedOrder("order-twice", {
+      payment_status: "payment_failed",
+      payment_failure_kind: "processor_declined",
+      payment_failure_code: "insufficient_funds",
+      payment_failure_reason: "Insufficient funds",
+    });
+    const payload = veyraFailure("order-twice", {});
+    await processPaymentWebhook(payload, sign(payload), SECRET, "evt-twice-1");
+
+    const row = read("order-twice");
+    expect(row.payment_status).toBe("payment_failed");
+    expect(row.payment_failure_kind).toBe("processor_declined");
+    expect(row.payment_failure_code).toBe("insufficient_funds");
+    expect(row.payment_failure_reason).toBe("Insufficient funds");
   });
 
   it("accepts the flat shape the internal mock gateway sends", async () => {
@@ -108,6 +129,42 @@ describe("recording a reason never changes what a decline is allowed to do", () 
     expect(row.payment_status).toBe("paid");
     expect(row.payment_failure_kind).toBeUndefined();
     expect(row.payment_failure_reason).toBeUndefined();
+  });
+
+  // partially_refunded is a captured state too — the shopper's money was taken
+  // and only some of it returned. It is deliberately NOT in
+  // FULLY_TERMINAL_ORDER_STATES (a later full refund must still reach it), so
+  // before the 2026-09-04 pre-merge review a late decline fell through both
+  // guards and rewrote such an order as payment_failed.
+  it("a late decline on a PARTIALLY REFUNDED order leaves it alone and writes no failure detail", async () => {
+    seedOrder("order-partial", {
+      payment_status: "partially_refunded",
+      paid_at: "2026-09-04T11:00:00.000Z",
+      refund_amount: 30,
+    });
+    const payload = veyraFailure("order-partial", { failure_code: "card_declined", failure_message: "Nope." });
+    const result = await processPaymentWebhook(payload, sign(payload), SECRET, "evt-late-partial");
+
+    expect(result.status).toBe("partially_refunded");
+    const row = read("order-partial");
+    expect(row.payment_status).toBe("partially_refunded");
+    expect(row.payment_failure_kind).toBeUndefined();
+    expect(row.payment_failure_reason).toBeUndefined();
+  });
+
+  it("a FULL refund on a partially refunded order still goes through", async () => {
+    // The guard above must not over-reach: refunded is the one legitimate way
+    // out of a captured state, and the two-step refund (goods, then shipping)
+    // is ordinary practice.
+    seedOrder("order-partial-then-full", {
+      payment_status: "partially_refunded",
+      paid_at: "2026-09-04T11:00:00.000Z",
+      refund_amount: 30,
+    });
+    const payload = JSON.stringify({ orderId: "order-partial-then-full", type: "refund.completed", amount: 64.96 });
+    await processPaymentWebhook(payload, sign(payload), SECRET, "evt-full-after-partial");
+
+    expect(read("order-partial-then-full").payment_status).toBe("refunded");
   });
 
   it("a successful retry on the same order still lands on paid", async () => {

@@ -132,14 +132,27 @@ describe("describeExpressDecline — Veyra's answer to an Apple Pay charge", () 
     expect(detail.reason).toMatch(/blocked/i);
   });
 
-  it("falls back to the error field and a plain sentence", () => {
-    const detail = describeExpressDecline({ error: "invalid_token" }, 400);
-    expect(detail.code).toBe("invalid_token");
+  it("keeps the bank label for a failed verdict with no message", () => {
+    const detail = describeExpressDecline({ public_status: "failed" }, 402);
+    expect(detail.kind).toBe("processor_declined");
+    expect(detail.code).toBe("failed");
     expect(detail.reason).toMatch(/declined/i);
   });
 
-  it("records the HTTP status when the body said nothing usable", () => {
+  // The authorize route lands in answered_no on ANY 4xx, including refusals
+  // that never reached the bank (a 409 shipping-method mismatch, a 400 for a
+  // bad token). Those must not wear the "Declined by bank" badge.
+  it("files a plain 4xx refusal under 'other', saying the bank was never asked", () => {
+    const detail = describeExpressDecline({ error: "invalid_token" }, 400);
+    expect(detail.kind).toBe("other");
+    expect(detail.code).toBe("invalid_token");
+    expect(detail.reason).toMatch(/before it reached the bank/i);
+    expect(detail.reason).not.toMatch(/declined/i);
+  });
+
+  it("records the HTTP status when the body said nothing usable, still as 'other'", () => {
     const detail = describeExpressDecline(null, 400);
+    expect(detail.kind).toBe("other");
     expect(detail.code).toBe("http_400");
     expect(detail.reason).toBeTruthy();
   });
