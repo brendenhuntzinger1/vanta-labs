@@ -165,6 +165,33 @@ beforeEach(() => {
   stockState.levels = new Map();
 });
 
+describe("a free product plus a percentage", () => {
+  it("adds the $0 line AND takes the percentage off the rest", async () => {
+    offerState.offer = { ...freeGhkOffer(), offer_key: "winback_60_bac_water_10", reward_kind: "free_product_percent", product_slug: "ghk-cu", percent_off: 10, min_subtotal_cents: 3500 };
+
+    // 2 x $40 = $80: the gift line rides along at $0 and 10% comes off the $80.
+    const quoted = await quote([{ id: "peptide-b", quantity: 2 }], "token");
+
+    expect(quoted.appliedOffer?.rewardKind).toBe("free_product_percent");
+    expect(quoted.appliedOffer?.description).toBe("GHK-Cu + 10% off");
+    expect(quoted.lineItems.find((line) => line.gift)?.product.price).toBe(0);
+    expect(quoted.subtotal).toBe(80);
+    expect(quoted.discountAmount).toBe(8);
+    expect(quoted.expectedTotal).toBe(72);
+  });
+
+  it("still grants the percentage when the product half is out of stock", async () => {
+    offerState.offer = { ...freeGhkOffer(), offer_key: "winback_60_bac_water_10", reward_kind: "free_product_percent", product_slug: "ghk-cu", percent_off: 10, min_subtotal_cents: 3500 };
+    stockState.levels = new Map([["ghk-cu", 0]]);
+
+    const quoted = await quote([{ id: "peptide-b", quantity: 2 }], "token");
+
+    expect(quoted.lineItems.some((line) => line.gift)).toBe(false);
+    expect(quoted.appliedOffer?.description).toBe("10% off");
+    expect(quoted.discountAmount).toBe(8);
+  });
+});
+
 describe("a percentage-only gift", () => {
   it("takes the percentage off and charges shipping as usual", async () => {
     offerState.offer = { ...freeGhkOffer(), offer_key: "winback_60_percent_15", reward_kind: "percent", product_slug: null, percent_off: 15, min_subtotal_cents: 3500 };
