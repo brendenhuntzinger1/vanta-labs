@@ -158,10 +158,24 @@ function HeroVial({ className, src, poster }: { className?: string; src: string;
  * away by any viewport shape. The burnt-in vignette goes back to being what it
  * was always meant to be — a guard for the raw file, not the composition.
  *
- * 0.55 keeps the middle of the section at full strength and spends the outer
- * 45% dissolving into the page.
+ * 0.72 keeps the middle of the section at full strength and spends the outer
+ * 28% dissolving into the page.
+ *
+ * IT WAS 0.55, AND THAT SPENT NEARLY HALF THE PICTURE. The guarantee this
+ * number carries is about the EDGES: reach fully transparent by 1.0 on both
+ * axes so no viewport shape can leave a bright band on screen. Where the ramp
+ * BEGINS is a separate question, and 0.55 answered it far more conservatively
+ * than the guarantee needs — the shot was already dissolving from just past
+ * the centre, so the vial's shoulder and most of its lit halo were painted at
+ * partial alpha over the hero's own near-black gradient. Together with a flat
+ * 0.9 opacity and a scrim that started four rem above the copy, that is what
+ * made the owner report the hero as black.
+ *
+ * 0.72 keeps the falloff — every edge still reaches zero at 1.0, so the white
+ * studio backdrop still cannot appear at any viewport shape — and gives the
+ * middle of the frame, which is the vial, back its brightness.
  */
-const FADE_START = 0.55;
+const FADE_START = 0.72;
 
 /**
  * Where the shot sits along the hero when there is room to choose, as a
@@ -177,6 +191,54 @@ const FADE_START = 0.55;
  * correct — the shot is meant to fill a phone screen.
  */
 const LANDSCAPE_BIAS = 0.76;
+
+/**
+ * ON A PHONE, THE HEADLINE MUST NOT LAND ON THE VIAL'S PRINTED LABEL.
+ *
+ * This is the last piece of the full-bleed hero, and no amount of scrim ever
+ * settled it. The label is "VANTA LABS / GHK-Cu / 50 mg / Lyophilized Powder",
+ * black on white, and darkening it does not make it stop reading: a scrim
+ * multiplies the white AND the black by the same factor, so their ratio — which
+ * is what the eye reads type by — survives intact. Measured on the harness: at
+ * a scrim alpha of 0.82 the ground behind the headline was 43/255, comfortably
+ * inside the 118 that white type needs for 4.5:1, and "GHK-Cu" was still
+ * plainly legible straight across the headline. Two pieces of type competing at
+ * the same size is the defect, and value cannot fix it. Only position can.
+ *
+ * So a phone shows the TOP of the frame rather than all of it. Measured on the
+ * source by edge energy, the printed type occupies 0.451 to 0.746 of the frame
+ * height; above it, from the cap through the shoulder to the top of the label,
+ * there is no type at all. Showing 0.7 of the height puts that type-free band
+ * exactly where the copy is and pushes every printed line below the headline.
+ *
+ * 0.7 IS SET BY THE LARGEST PHONE, NOT THE COMMONEST ONE. The copy is a fixed
+ * height in rem, so a taller hero pushes the headline further down while the
+ * type moves down with the scale — the margin shrinks as the screen grows.
+ * Measured, headline bottom against the first printed line: 375x667 leaves
+ * 103px, 390x844 leaves 51px, and 430x932 leaves 23px. A looser 0.76 still
+ * clears the 390 by 14px and puts the label straight through the 430's
+ * headline, which is why the number is not tuned to the phone in the mock.
+ *
+ * IT ALSO MAKES THE VIAL BIGGER, which is the point and not a side effect. The
+ * frame is scaled up to fill the hero from a shorter slice of itself, so the
+ * vial gains about a third of its width — it now spans most of a phone screen
+ * instead of two thirds of it. The owner asked for the vial large, bright and
+ * dominant; this is the same request as "keep the label off the headline",
+ * answered once.
+ *
+ * ANCHORED TO THE TOP, not centred. Centring the overflow would split the crop
+ * evenly and take the cap off — and the cap is the half that has to stay. It is
+ * the dark, type-free end of the vial, and it is what the headline sits on.
+ *
+ * PHONES ONLY, AND THE BREAKPOINT IS NOT REPEATED HERE. The value is published
+ * by globals.css as `--hero-framing`, beside the scrim: the two have to agree
+ * about where the copy is, and a media query copied into a script is exactly
+ * how they would come to disagree. Everything from 641px up publishes 1, which
+ * is the old fit rule to the pixel — a portrait tablet has its copy in the
+ * bottom 40% of a 1024-tall hero and a laptop has it in a column on the left,
+ * so neither ever had this problem.
+ */
+const PORTRAIT_FRAMING_PROPERTY = "--hero-framing";
 
 function HeroVialCanvas({
   className,
@@ -203,12 +265,34 @@ function HeroVialCanvas({
     let raf = 0;
     let stopped = false;
     let fade: CanvasGradient | null = null;
+    /**
+     * How much of the frame's height this screen shows — see
+     * PORTRAIT_FRAMING_PROPERTY. Re-read on every resize, so rotating a phone
+     * or crossing the breakpoint picks up the other value without a reload.
+     *
+     * Clamped, and defaulting to 1: a stylesheet that has not arrived, a value
+     * that does not parse, or a browser that ignores custom properties all end
+     * at "show the whole frame", which is the composition every screen had
+     * before this existed. It cannot fail into a magnified crop.
+     */
+    let framing = 1;
 
     // Match the canvas's backing store to the box it actually occupies, so the
     // vial is sharp on a 3x phone screen without painting more pixels than the
     // display can show.
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
+      const declared = Number.parseFloat(
+        getComputedStyle(canvas).getPropertyValue(PORTRAIT_FRAMING_PROPERTY),
+      );
+      const next = Number.isFinite(declared) ? Math.min(1, Math.max(0.4, declared)) : 1;
+      if (next !== framing) {
+        framing = next;
+        // The buffer holds a frame drawn at the old framing, so it has to be
+        // redrawn rather than re-presented. Crossing the breakpoint is the only
+        // way to get here, and it costs one repaint.
+        hasPicture = false;
+      }
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const w = Math.max(1, Math.round(rect.width * dpr));
       const h = Math.max(1, Math.round(rect.height * dpr));
@@ -304,22 +388,29 @@ function HeroVialCanvas({
      *     too, which fills the section top to bottom and leaves spare width for
      *     the copy to live in.
      *
-     * Both cases are the same sentence — match the height — so there is no
-     * branch here, and there should not be one: a fit rule that reads
-     * differently for phones and laptops is how the two got different bugs.
+     * Both cases are the same sentence — match the height — so there is still
+     * no branch here. `framing` is how much of the frame's height is being
+     * asked to do the matching: 1 everywhere except a phone, where it is a
+     * fraction and the sentence becomes "match the height with the TOP of the
+     * frame". See PORTRAIT_FRAMING_PROPERTY for why a phone needs that.
      */
     const cover = (source: CanvasImageSource, sw: number, sh: number) => {
       if (!pictureContext) return;
       const cw = picture.width;
       const ch = picture.height;
-      const scale = ch / sh;
+      const scale = ch / (sh * framing);
       const dw = sw * scale;
       const dh = sh * scale;
       // Zero on a phone, where the frame overflows the box, so the bias is
       // inert there and the crop stays centred.
       const spare = Math.max(0, cw - dw);
       const x = (cw - dw) / 2 + spare * (LANDSCAPE_BIAS - 0.5);
-      pictureContext.drawImage(source, x, (ch - dh) / 2, dw, dh);
+      // TOP, not centre. At framing 1 the frame is exactly as tall as the hero
+      // and this is the same zero the centred formula produced, so nothing
+      // above a phone moves by a pixel. Below it, centring would split the
+      // overflow and crop the cap — the type-free end of the vial, and the part
+      // the headline has to sit on.
+      pictureContext.drawImage(source, x, 0, dw, dh);
       hasPicture = true;
       present();
     };
