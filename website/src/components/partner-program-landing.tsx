@@ -446,7 +446,10 @@ export function PartnerProgramLanding({ initialStats, terms }: { initialStats: P
             {[
               `${formatPercent(terms.personalDiscountPercent)} discount on all of your own purchases — active the whole time you're approved.`,
               `A personal referral code that gives your audience ${formatPercent(terms.customerDiscountPercent)} off.`,
-              `A ${formatPercent(terms.commissionPercent)} commission on every completed order placed with your code.`,
+              // The minimum is stated here because the checkout enforces it:
+              // below it the order is attributed to you but earns nothing, and
+              // "every completed order" was a promise the ledger did not keep.
+              `A ${formatPercent(terms.commissionPercent)} commission on every completed order of $${Math.round(terms.minimumQualifyingOrder)} or more placed with your code.`,
               "A real-time dashboard: pending, approved, and paid commissions, referral orders, and total earnings.",
               "Payouts every two weeks.",
               "Opportunities for performance bonuses and a higher commission rate.",

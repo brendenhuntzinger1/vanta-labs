@@ -375,6 +375,7 @@ async function sendPartnerStatusEmail(input: {
       personalDiscountPercent: referralProgram?.personalDiscountPercent,
       referralDiscountPercent: referralProgram?.discountPercent,
       holdDays: ambassadorSettings?.commissionHoldDays,
+      minimumQualifyingOrder: ambassadorSettings?.minimumQualifyingOrder,
     });
   } else {
     template = ambassadorDeniedTemplate({ name: input.name });

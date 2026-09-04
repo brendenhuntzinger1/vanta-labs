@@ -158,6 +158,34 @@ describeDb("customer_offers", () => {
     await expect(issue("buyer@example.test")).resolves.toBeTruthy();
   });
 
+  it("A REDEEMED OFFER DOES NOT BLOCK THE NEXT LAPSE'S GIFT", async () => {
+    // The customer took the free vial, bought again, and went quiet for another
+    // sixty days. The next win-back promises a gift; the index must let it be
+    // minted. Before the predicate excluded redeemed rows, this insert failed
+    // and the customer was mailed the promise with no token behind it.
+    const token = await issue("buyer@example.test");
+    await order("order-1", "pending_payment");
+    expect(await reserve(token, "order-1", "buyer@example.test")).toHaveLength(1);
+    expect(await redeem("order-1")).toBe(true);
+
+    await expect(issue("buyer@example.test")).resolves.toBeTruthy();
+    // And the redeemed one is still on record as redeemed — history, not a live offer.
+    const { rows } = await client.query(
+      "select count(*)::int as n from public.customer_offers where email = 'buyer@example.test' and redeemed_at is not null",
+    );
+    expect(rows[0].n).toBe(1);
+  });
+
+  it("an EXPIRED offer still occupies the slot until it is retired", async () => {
+    // The TS side (issueCustomerOffer) retires an expired row before it retries
+    // the insert. The index itself cannot see a clock, so it must refuse here;
+    // the retire-then-retry is what makes the reissue work.
+    await issue("buyer@example.test", { expiresInHours: -1 });
+    await expect(issue("buyer@example.test")).rejects.toThrow(/duplicate key|unique/i);
+    await client.query("update public.customer_offers set revoked_at = now() where expires_at <= now()");
+    await expect(issue("buyer@example.test")).resolves.toBeTruthy();
+  });
+
   describe("double spend", () => {
     it("holds the offer against a second, concurrent checkout", async () => {
       const token = await issue("buyer@example.test");

@@ -630,8 +630,14 @@ export function ProductDetailClient({
                   {selectedCoaUrl ? (
                     <p className="text-sm leading-relaxed text-[#a3a3a3]">
                       This lot is linked to a third-party Certificate of Analysis covering purity, testing
-                      methodology, batch traceability, and lab information. Download the report for your
-                      selected dose below.
+                      methodology, batch traceability, and lab information.{" "}
+                      {/* selectedCoaUrl falls back to the product's default-dose
+                          certificate when the chosen dose has none of its own
+                          (catalog.ts). Saying "for your selected dose" over that
+                          fallback labelled a 5mg report as the 10mg one. */}
+                      {selectedDose?.coaUrl
+                        ? "Download the report for your selected dose below."
+                        : "The report below covers this product's verified lot and is not specific to the dose you selected."}
                     </p>
                   ) : null}
                   <div className="mt-5 grid gap-3 sm:grid-cols-2">

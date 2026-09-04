@@ -337,3 +337,20 @@ alter table public.customer_offers
     or (reward_kind = 'free_shipping_percent' and product_slug is null
         and percent_off is not null and percent_off > 0 and percent_off <= 100)
   );
+
+-- ---------------------------------------------------------------------------
+-- A REDEEMED OFFER MUST NOT BLOCK THE NEXT ONE.
+--
+-- The one-live-per-address index above was keyed on `revoked_at is null`
+-- only, so a customer who redeemed their free GHK-Cu, bought again, and lapsed
+-- a second time hit the index when the next 60-day win-back tried to mint —
+-- and received the operator's "here is your free GHK-Cu" copy with no token
+-- behind it. A redeemed row is history, not a live offer: it is excluded here,
+-- and customer-offers.ts retires an EXPIRED (or lost-in-a-failed-send) row
+-- before reissuing, so the invariant "at most one spendable token per address
+-- per campaign" still holds. Idempotent; safe to re-run.
+-- ---------------------------------------------------------------------------
+drop index if exists public.customer_offers_one_live_per_email;
+create unique index if not exists customer_offers_one_live_per_email
+  on public.customer_offers (offer_key, email)
+  where revoked_at is null and redeemed_at is null;

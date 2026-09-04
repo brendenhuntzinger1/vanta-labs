@@ -189,33 +189,148 @@ export async function issueCustomerOffer(input: {
 
   const now = input.now ?? Date.now();
   const expiresAt = new Date(now + config.ttlDays * 24 * 60 * 60 * 1000).toISOString();
-  const token = crypto.randomBytes(TOKEN_BYTES).toString("base64url");
 
-  const { error } = await supabaseAdmin.from("customer_offers").insert({
-    offer_key: input.offerKey,
-    token_hash: hashOfferToken(token),
-    email,
-    // The row records what was promised, so a token minted today still redeems
-    // as this even if the catalogue entry is edited or retired inside its
-    // thirty-day life.
-    reward_kind: config.reward.kind,
-    product_slug: config.reward.kind === "free_product" ? config.reward.productSlug : null,
-    percent_off: config.reward.kind === "free_shipping_percent" ? config.reward.percent : null,
-    min_subtotal_cents: config.minSubtotalCents,
-    expires_at: expiresAt,
-  });
+  const mint = async (): Promise<{ token: string; expiresAt: string } | { code: string; message: string }> => {
+    const token = crypto.randomBytes(TOKEN_BYTES).toString("base64url");
+    const { error } = await supabaseAdmin.from("customer_offers").insert({
+      offer_key: input.offerKey,
+      token_hash: hashOfferToken(token),
+      email,
+      // The row records what was promised, so a token minted today still redeems
+      // as this even if the catalogue entry is edited or retired inside its
+      // thirty-day life.
+      reward_kind: config.reward.kind,
+      product_slug: config.reward.kind === "free_product" ? config.reward.productSlug : null,
+      percent_off: config.reward.kind === "free_shipping_percent" ? config.reward.percent : null,
+      min_subtotal_cents: config.minSubtotalCents,
+      expires_at: expiresAt,
+    });
+    if (error) return { code: String(error.code ?? ""), message: String(error.message ?? "") };
+    return { token, expiresAt };
+  };
 
-  if (error) {
-    // 23505 is the one-live-offer-per-address index doing its job. Anything
-    // else is a real failure and the caller must not mail a token that does not
-    // exist, so both return null and only the unexpected one is logged.
-    if (error.code !== "23505") {
-      console.error("[offers] unable to issue", input.offerKey, email, error.message);
-    }
+  const first = await mint();
+  if ("token" in first) return first;
+
+  // Anything but the one-live-offer index is a real failure. The caller must
+  // not mail a token that does not exist, so it gets null, and this is logged.
+  if (first.code !== "23505") {
+    console.error("[offers] unable to issue", input.offerKey, email, first.message);
     return null;
   }
 
-  return { token, expiresAt };
+  // THE INDEX FIRED: this address already holds an unredeemed row. That row is
+  // one of three things, and only one of them is a reason to hand out nothing.
+  //
+  //   * EXPIRED. The last win-back's token ran out unused. The customer has
+  //     lapsed again and is being written to again; a dead row must not stand
+  //     in the way of the gift the new email promises.
+  //   * LIVE BUT LOST. The last sweep minted it, then its send failed (the
+  //     token exists only in that dead process — it is never stored). The
+  //     retry is this call, and it needs a token it can actually deliver.
+  //   * LIVE AND HELD BY A CHECKOUT IN FLIGHT. The customer is spending it at
+  //     this moment. Retiring it now would race their order, so this send
+  //     waits for the next sweep, when the hold has settled either way.
+  //
+  // Retiring the old row and minting a fresh one keeps the invariant the
+  // index exists for — at most one spendable token per address per campaign —
+  // while making the email honest: the link in the NEWEST message always works,
+  // and only that one. A previous message's link stops working, which is what
+  // "one live offer" means.
+  if (!(await retireStaleOffer(input.offerKey, email, now))) return null;
+
+  const second = await mint();
+  if ("token" in second) return second;
+  // A concurrent sweep re-minted between the retire and the insert. It holds
+  // the token; this caller has none, and says so.
+  if (second.code !== "23505") {
+    console.error("[offers] unable to reissue", input.offerKey, email, second.message);
+  }
+  return null;
+}
+
+/** How long a checkout's hold on an offer is respected before it is presumed abandoned. */
+const OFFER_HOLD_SECONDS = 1800;
+
+/**
+ * Retire the unredeemed row blocking a reissue, unless a checkout is holding it.
+ * Returns true when the way is clear for a fresh insert.
+ */
+async function retireStaleOffer(offerKey: OfferKey, email: string, now: number): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
+    .from("customer_offers")
+    .select("id, expires_at, reserved_order_id, reserved_at")
+    .eq("offer_key", offerKey)
+    .eq("email", email)
+    .is("revoked_at", null)
+    .is("redeemed_at", null)
+    .maybeSingle();
+  if (error) {
+    console.error("[offers] unable to read the blocking offer", offerKey, email, error.message);
+    return false;
+  }
+  // No unredeemed row. Either something else retired it between the two calls,
+  // or the database still carries the ORIGINAL index — `where revoked_at is
+  // null` — under which a REDEEMED row blocks the insert too. The migration
+  // that narrows it may land after this code does, so retire a redeemed row
+  // here as well: every reader refuses a redeemed row before it looks at
+  // revoked_at, so the flag changes nothing about that row's meaning.
+  if (!data) {
+    const { error: redeemedError } = await supabaseAdmin
+      .from("customer_offers")
+      .update({ revoked_at: new Date(now).toISOString() })
+      .eq("offer_key", offerKey)
+      .eq("email", email)
+      .is("revoked_at", null)
+      .not("redeemed_at", "is", null);
+    if (redeemedError) {
+      console.error("[offers] unable to retire the redeemed offer", offerKey, email, redeemedError.message);
+      return false;
+    }
+    return true;
+  }
+
+  const row = data as { id: string; expires_at: string; reserved_order_id: string | null; reserved_at: string | null };
+  const expired = new Date(row.expires_at).getTime() <= now;
+  const heldAt = row.reserved_at ? new Date(row.reserved_at).getTime() : 0;
+  const heldByLiveCheckout = Boolean(row.reserved_order_id) && heldAt > now - OFFER_HOLD_SECONDS * 1000;
+  if (!expired && heldByLiveCheckout) return false;
+
+  const { error: revokeError } = await supabaseAdmin
+    .from("customer_offers")
+    .update({ revoked_at: new Date(now).toISOString() })
+    .eq("id", row.id)
+    .is("revoked_at", null)
+    .is("redeemed_at", null);
+  if (revokeError) {
+    console.error("[offers] unable to retire the stale offer", offerKey, email, revokeError.message);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * The gift's terms, in the customer's words, for the email that carries it.
+ *
+ * Rendered by the sweep beneath the operator's copy, from the same catalogue
+ * entry the checkout enforces — so whatever the operator writes, the message
+ * also states the minimum, the deadline and the one-per-customer rule that
+ * quoteOrder and customer_offer_reserve will actually apply. Copy that promises
+ * more than the till honours is the failure this line exists to prevent.
+ */
+export function describeOfferTerms(offerKey: OfferKey, expiresAt: string): string {
+  const config = OFFER_CATALOG[offerKey];
+  const minimum = `$${(config.minSubtotalCents / 100).toFixed(config.minSubtotalCents % 100 === 0 ? 0 : 2)}`;
+  const deadline = new Date(expiresAt).toLocaleDateString("en-US", {
+    month: "long", day: "numeric", year: "numeric", timeZone: "America/New_York",
+  });
+  const gift = config.reward.kind === "free_product"
+    ? `a free ${config.label.replace(/^free\s+/i, "")} is added to your order`
+    : config.reward.kind === "free_shipping_percent"
+      ? `${config.reward.percent}% off plus free shipping`
+      : "free shipping";
+  return `Your gift: ${gift} on any order of ${minimum} or more, through ${deadline}. `
+    + "One per customer, for this email address only. It is applied automatically when you shop through the button below — no code needed.";
 }
 
 /**

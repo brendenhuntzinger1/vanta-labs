@@ -12,6 +12,7 @@ import { CHECKOUT_SHORT, DESTINATIONS_SENTENCE, FULFILMENT_SENTENCE, FULFILMENT_
 import { cartTotalLabel, pendingChargeNotice } from "@/lib/cart-total-disclosure";
 import type { CardProcessingFeeConfig } from "@/lib/payment-methods";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
+import { useOfferQuote } from "@/lib/offer-quote";
 
 /**
  * The body of the empty-cart panel.
@@ -72,7 +73,40 @@ export function CartPageClient() {
     shippingProtectionEnabled,
     setShippingProtectionEnabled,
     shippingProtectionFee,
+    couponCode,
   } = useCart();
+
+  // A ONE-TIME GIFT, IF THIS BROWSER IS HOLDING ONE.
+  //
+  // The drawer and the checkout summary already price an armed offer through
+  // /api/checkout/quote, so a shopper who clicked the win-back link sees the
+  // $0 vial and the waived shipping wherever they look — except here. This page
+  // computed its own figures and knew nothing about the token (it lives in an
+  // httpOnly cookie the page cannot read), so /cart showed a total the till
+  // would not charge. Same hook, same server answer, same fallback rule.
+  const [pendingOffer, setPendingOffer] = useState<{ rewardKind: string; rewardName: string; minSubtotalCents: number } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/offer/status", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => { if (!cancelled && data?.offer) setPendingOffer(data.offer); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  const offerQuote = useOfferQuote({
+    active: Boolean(pendingOffer) && items.length > 0,
+    items,
+    couponCode,
+    referralCode,
+    shippingProtection: shippingProtectionEnabled,
+  });
+  const shownSubtotal = offerQuote ? offerQuote.subtotal : subtotal;
+  const shownShipping = offerQuote ? offerQuote.shipping : shipping;
+  const shownDiscount = offerQuote ? offerQuote.discountAmount : discountAmount;
+  const shownTotal = offerQuote ? offerQuote.expectedTotal : total;
+  const shownDiscountLabel = appliedDiscountLabel ?? offerQuote?.offer?.description ?? "Discount";
+  const giftLines = offerQuote?.giftLines ?? [];
+  const offerShortfall = pendingOffer ? Math.max(0, pendingOffer.minSubtotalCents / 100 - subtotal) : 0;
 
   /**
    * Re-check the cart against live inventory.
@@ -292,6 +326,19 @@ export function CartPageClient() {
               })
             )}
 
+            {giftLines.map((line) => (
+              <div key={`gift-${line.name}-${line.variantLabel ?? ""}`} className="border border-emerald-400/30 bg-emerald-400/5 p-4 sm:p-6" data-testid="cart-gift-line">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-emerald-300">Your gift</p>
+                    <h2 className="mt-1 text-lg text-white sm:text-xl">{line.name}</h2>
+                    <p className="mt-2 text-sm text-white/50">{line.variantLabel ? `${line.variantLabel} · ` : ""}× {line.quantity} · added at checkout</p>
+                  </div>
+                  <p className="text-base text-emerald-300 sm:text-lg">$0.00</p>
+                </div>
+              </div>
+            ))}
+
             {isHydrated && items.length > 0 ? <BacWaterCartCheckboxes /> : null}
           </div>
 
@@ -365,16 +412,16 @@ export function CartPageClient() {
             <div className="mt-6 space-y-3 text-sm text-white/70">
               <div className="flex justify-between">
                 <span>Subtotal</span>
-                <span>{formatCartCurrency(subtotal)}</span>
+                <span>{formatCartCurrency(shownSubtotal)}</span>
               </div>
               <div className="flex justify-between">
                 <span>Estimated shipping</span>
-                <span>{formatCartCurrency(shipping)}</span>
+                <span>{formatCartCurrency(shownShipping)}</span>
               </div>
-              {discountAmount > 0 ? (
+              {shownDiscount > 0 ? (
                 <div className="flex justify-between text-emerald-300">
-                  <span>{appliedDiscountLabel ?? "Discount"}</span>
-                  <span>-{formatCartCurrency(discountAmount)}</span>
+                  <span>{shownDiscountLabel}</span>
+                  <span>-{formatCartCurrency(shownDiscount)}</span>
                 </div>
               ) : null}
               {shippingProtectionFee > 0 ? (
@@ -393,8 +440,13 @@ export function CartPageClient() {
                     so is the service fee — this said "Final total" and then
                     grew by 3% at checkout. */}
                 <span>{cartTotalLabel({ taxPending: true, cardFeeApplies: Boolean(cardFee?.enabled && cardFee.percentage > 0) })}</span>
-                <span>{formatCartCurrency(total)}</span>
+                <span>{formatCartCurrency(shownTotal)}</span>
               </div>
+              {pendingOffer && offerShortfall > 0 ? (
+                <p className="text-xs text-white/50">
+                  Add {formatCartCurrency(offerShortfall)} more to unlock your {pendingOffer.rewardKind === "free_product" ? `free ${pendingOffer.rewardName}` : pendingOffer.rewardName.toLowerCase()}.
+                </p>
+              ) : null}
               {pendingChargeNotice({ cardFee, taxPending: false }) ? (
                 <p className="text-xs text-white/40">{pendingChargeNotice({ cardFee, taxPending: false })}</p>
               ) : null}

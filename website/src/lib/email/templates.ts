@@ -903,9 +903,16 @@ export function ambassadorApprovedTemplate(input: {
   personalDiscountPercent?: number;
   referralDiscountPercent?: number;
   holdDays?: number;
+  minimumQualifyingOrder?: number;
 }): EmailTemplate {
+  // minimumQualifyingOrder: orders below this subtotal are attributed but earn
+  // nothing, so the email says so beside the rate. (Kept out of the signature
+  // braces for the same parser reason as campaignTemplate.)
   const name = escapeHtml(input.name);
   const code = input.referralCode ? escapeHtml(input.referralCode) : null;
+  const minimumQualifying = typeof input.minimumQualifyingOrder === "number" && Number.isFinite(input.minimumQualifyingOrder) && input.minimumQualifyingOrder > 0
+    ? ` of $${Math.round(input.minimumQualifyingOrder)} or more`
+    : "";
   // Derived from dashboardUrl when no siteUrl is given: the dashboard already
   // IS an absolute URL on this origin, so its origin is the one the link must
   // share. Falls back to null rather than a relative href — a bare "/r/CODE"
@@ -973,7 +980,7 @@ export function ambassadorApprovedTemplate(input: {
     <p style="margin-top:10px;font-size:12px;color:#71717a;">Your own discount applies at the cart automatically while you are signed in — no code needed.</p>
 
     <p style="margin-top:20px"><strong>How you get paid</strong></p>
-    <p>You earn ${commissionPct}% of the merchandise total on each completed order placed with your code. A commission is held for ${holdDays} days after the order completes, which covers refunds and chargebacks, then is included in the next payout. Payouts run every two weeks by PayPal, Venmo, or Cash App.</p>
+    <p>You earn ${commissionPct}% of the merchandise total on each completed order${minimumQualifying} placed with your code. A commission is held for ${holdDays} days after the order completes, which covers refunds and chargebacks, then is included in the next payout. Payouts run every two weeks by PayPal, Venmo, or Cash App.</p>
     <p>Open your dashboard to choose your payout method, copy your link, and track pending, approved, and paid commissions. Full program terms, requirements, and current incentives live there too.</p>
 
     <p style="margin-top:16px;font-size:13px;color:#a1a1aa;">Questions about the program or your account? Reply to this email and our team will help.</p>
@@ -1957,14 +1964,25 @@ export function campaignTemplate(input: {
   promoCode?: string | null;
   ctaLabel: string;
   ctaUrl: string;
+  offerTerms?: string | null;
   postalAddress: string;
 }): EmailTemplate {
+  // offerTerms: the terms of a one-time gift riding on this message — minimum,
+  // deadline, one per customer — written by the sweep from the offer catalogue,
+  // never by the operator. Rendered under the copy so the email states exactly
+  // what the checkout will honour, whatever the copy above it says. (Documented
+  // here rather than in the signature: templates-sweep.test.ts parses the
+  // signature text and a comment inside the braces hides the fields after it.)
   // Coerced rather than trusted. Every other template here is called from one
   // known site with a typed object; this one is driven by a database row an
   // operator edits, so a null that slipped past a migration default should
   // render an empty line, not throw partway through a send.
   const bodyText = String(input.body ?? "");
   const postalAddress = String(input.postalAddress ?? "");
+  const offerTerms = String(input.offerTerms ?? "").trim();
+  const offerTermsHtml = offerTerms
+    ? `<p style="margin:16px 0 0;padding:12px 14px;border:1px solid rgba(255,255,255,0.14);border-radius:12px;font-size:13px;line-height:1.5;color:#d4d4d8;">${escapeHtml(offerTerms)}</p>`
+    : "";
 
   const paragraphs = bodyText
     .split(/\n\s*\n/)
@@ -1989,7 +2007,7 @@ export function campaignTemplate(input: {
   const html = renderLayout({
     preheader,
     titleHtml: escapeHtml(input.headline),
-    bodyHtml: `${paragraphs}${codeBlock}`,
+    bodyHtml: `${paragraphs}${codeBlock}${offerTermsHtml}`,
     ctaLabel: input.ctaLabel,
     ctaUrl: input.ctaUrl,
     ctaVariant: "primary",
@@ -2002,6 +2020,8 @@ export function campaignTemplate(input: {
     bodyText.trim(),
     code ? "" : null,
     code ? `Code: ${code}` : null,
+    offerTerms ? "" : null,
+    offerTerms || null,
     "",
     `${input.ctaLabel}: ${input.ctaUrl}`,
     "",
