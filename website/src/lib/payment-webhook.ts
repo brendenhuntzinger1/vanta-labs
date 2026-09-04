@@ -1,6 +1,15 @@
 import { randomUUID } from "crypto";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { FULLY_TERMINAL_ORDER_STATES } from "@/lib/payment-types";
+import { extractProcessorFailure, type PaymentFailureDetail } from "@/lib/payment-failure";
+
+/**
+ * Statuses in which the shopper's money has been captured and the order must
+ * never be demoted to unpaid by a late or unrelated event. A full refund
+ * (nextStatus "refunded") is the one legitimate way out of either, and the
+ * guard that uses this set deliberately lets it through.
+ */
+const CAPTURED_PAYMENT_STATES: ReadonlySet<string> = new Set(["paid", "partially_refunded"]);
 import type { OrderStatus } from "@/lib/payment-types";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
@@ -529,7 +538,7 @@ async function releaseEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, order_number, order_type, membership_tier_id, membership_cycle, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, shipping_address, city, postal_code, points_redeemed, store_credit_redeemed_cents, inventory_committed_at")
+    .select("id, order_id, order_number, order_type, membership_tier_id, membership_cycle, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, shipping_address, city, postal_code, points_redeemed, store_credit_redeemed_cents, inventory_committed_at, payment_failure_kind")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -562,6 +571,20 @@ async function upsertOrderRecord(input: {
   fulfillmentStatus?: string;
   paidAt?: string | null;
   providerEventId?: string;
+  /**
+   * WHY the payment failed, in the processor's words — written only when this
+   * upsert is recording a payment_failed status. Absent on every other event so
+   * a later refund or cancel never blanks a reason already on the row.
+   */
+  paymentFailure?: (PaymentFailureDetail & {
+    /**
+     * The row's recorded kind differs from this one (a decline landing on a
+     * row the sweep retired as expired), so the code and reason are replaced
+     * even when this event carries none: an "expired ... no charge was
+     * attempted" sentence must not sit under a "Declined by bank" badge.
+     */
+    replaceDetail?: boolean;
+  }) | null;
   items?: Array<{
     productId?: string;
     productName?: string;
@@ -607,6 +630,25 @@ async function upsertOrderRecord(input: {
     fulfillment_status: input.fulfillmentStatus ?? "pending",
     provider_event_id: input.providerEventId ?? null,
     paid_at: input.paidAt ?? null,
+    // A decline says why (payment-failure.ts). Spread conditionally rather than
+    // written as null: the keys are only present when there is a failure to
+    // describe, so this upsert can never erase a reason on a refund or cancel.
+    // The code and reason are likewise only written when the event CARRIED
+    // them: Veyra can deliver a second, sparser payment.failed for a decline
+    // the express lane already recorded with its decline code, and a null here
+    // would replace "insufficient_funds" with "the processor did not say why".
+    ...(input.paymentFailure
+      ? {
+          payment_failure_kind: input.paymentFailure.kind,
+          ...(input.paymentFailure.code || input.paymentFailure.replaceDetail
+            ? { payment_failure_code: input.paymentFailure.code }
+            : {}),
+          ...(input.paymentFailure.reason || input.paymentFailure.replaceDetail
+            ? { payment_failure_reason: input.paymentFailure.reason }
+            : {}),
+          payment_failed_at: new Date().toISOString(),
+        }
+      : {}),
     updated_at: new Date().toISOString(),
   };
 
@@ -1961,24 +2003,34 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   }
 
   // A late/out-of-order payment.failed or payment.canceled must NOT demote an
-  // order that is already PAID — that would void the ambassador's earned
+  // order whose money has been CAPTURED — that would void the ambassador's earned
   // commission and restock sold inventory. Only a genuine refund/chargeback
-  // (nextStatus "refunded") may leave the paid state. Record against paid + stop.
+  // (nextStatus "refunded") may leave the paid state. Record against the prior
+  // status + stop.
   // "pending_payment" is included because it is what getOrderStatusForEventType
   // returns for ANY event it does not recognise — and a '*' subscription delivers
   // plenty of those (payout.paid, dispute.evidence_required, anything added later).
   // Without it, an unrelated notification demotes a paid order to unpaid: the money
   // is taken and the order says otherwise.
+  //
+  // partially_refunded IS a captured state and used to be missing here: it is
+  // not in FULLY_TERMINAL_ORDER_STATES either (a later FULL refund must still
+  // reach it), so a late decline fell through both guards and rewrote a
+  // partly-refunded order — money taken, some returned — as payment_failed,
+  // reversed the whole commission and restocked the lot. Found by the 2026-09-04
+  // pre-merge review of the failure-reason work, which would otherwise have
+  // labelled that row "Declined by bank / processor".
   if (
-    priorPaymentStatus === "paid" &&
+    priorPaymentStatus &&
+    CAPTURED_PAYMENT_STATES.has(priorPaymentStatus) &&
     (nextStatus === "payment_failed" || nextStatus === "canceled" || nextStatus === "pending_payment")
   ) {
-    await markEventProcessed(eventId, orderId, "paid");
+    await markEventProcessed(eventId, orderId, priorPaymentStatus as OrderStatus);
     return {
       duplicate: false,
       eventId,
       orderId,
-      status: "paid",
+      status: priorPaymentStatus as OrderStatus,
       providerStatus: eventPayload.status ?? eventPayload.type ?? "unknown",
     } satisfies WebhookEventState;
   }
@@ -2167,6 +2219,18 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       fulfillmentStatus: nextStatus === "paid" ? "awaiting_fulfillment" : orderRecord?.fulfillment_status ?? "pending",
       paidAt: nextStatus === "paid" ? new Date().toISOString() : orderRecord?.paid_at ?? null,
       providerEventId: eventId,
+      // The processor's own account of a decline, read from the same envelope
+      // that named the order. Every guard above has already run: a decline
+      // arriving for an order in a CAPTURED_PAYMENT_STATES state, or a fully
+      // terminal one, returned before this point, so a reason can only land on
+      // a row that is genuinely being marked failed.
+      paymentFailure: nextStatus === "payment_failed"
+        ? (() => {
+            const failure = extractProcessorFailure(eventPayload);
+            const recordedKind = orderRecord?.payment_failure_kind ? String(orderRecord.payment_failure_kind) : null;
+            return { ...failure, replaceDetail: recordedKind !== null && recordedKind !== failure.kind };
+          })()
+        : null,
       items: eventPayload.items,
     });
     await upsertOrderItems(orderId, eventPayload.items);

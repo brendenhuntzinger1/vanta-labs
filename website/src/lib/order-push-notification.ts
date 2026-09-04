@@ -204,11 +204,13 @@ export async function sendTestPushNotification(): Promise<TestPushResult> {
     }
     return { sent: true, kind: destination.kind };
   } catch (error) {
-    return {
-      sent: false,
-      kind: destination.kind,
-      detail: `Could not reach the destination: ${error instanceof Error ? error.message : String(error)}`,
-    };
+    // Same redaction as the order path: the message is shown verbatim in the
+    // admin, and undici's parse failures quote the whole URL.
+    const detail = redactUrls(
+      error instanceof Error ? error.message : String(error),
+      destination.kind === "webhook" ? destination.url : undefined,
+    );
+    return { sent: false, kind: destination.kind, detail: `Could not reach the destination: ${detail}` };
   }
 }
 
@@ -724,18 +726,88 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
 
     if (!response.ok) {
       const detail = `webhook answered ${response.status}`;
-      await safeAlert("order_push_failed", `Order ${orderId} notification not delivered: ${detail}`);
+      // SAY WHICH DESTINATION, AND WHERE. The 2026-09-01 alert read "webhook
+      // answered 404" and nothing else; that the URL was a Zapier catch hook
+      // that no longer existed had to be inferred. The host is safe to name —
+      // the path is the credential, and it stays out.
+      const where = destination.kind === "pushover" ? "Pushover" : `webhook at ${hostOf(destination.url)}`;
+      const hint = destination.kind === "webhook" && (response.status === 404 || response.status === 410)
+        ? " A 404/410 from a webhook usually means the automation behind the URL was deleted or turned off. "
+          + "Switch to Pushover, or paste a live URL, in Admin -> Control Center -> Order Notifications."
+        : "";
+      await safeAlert(
+        "order_push_failed",
+        `Order ${orderId} notification not delivered: the ${where} answered ${response.status}.${hint}`,
+        undefined,
+        { kind: destination.kind, host: destinationHost(destination), status: response.status },
+      );
       await announceMissedOrder(detail);
       return { sent: false, reason: "delivery_failed", detail };
     }
 
     return { sent: true };
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    await safeAlert("order_push_failed", `Order ${orderId} notification not delivered: ${detail}`);
+    // THE ERROR MESSAGE CAN CARRY THE URL. undici (Node 22, which is what
+    // Vercel runs) rejects a URL it cannot parse with "Failed to parse URL from
+    // <the whole URL>", and one with embedded credentials with the whole URL
+    // as well — and both get past the only guard in front of fetch, which is
+    // startsWith("https://"). The path of a webhook URL is its credential, so
+    // every URL is redacted from the detail before it reaches an alert row,
+    // Sentry, the emailed order_notification_missed critical, or the caller.
+    const detail = redactUrls(
+      error instanceof Error ? error.message : String(error),
+      destination.kind === "webhook" ? destination.url : undefined,
+    );
+    const where = destination.kind === "pushover" ? "Pushover" : `webhook at ${hostOf(destination.url)}`;
+    await safeAlert(
+      "order_push_failed",
+      `Order ${orderId} notification not delivered: could not reach the ${where} (${detail}).`,
+      undefined,
+      { kind: destination.kind, host: destinationHost(destination), error: detail },
+    );
     await announceMissedOrder(detail);
     return { sent: false, reason: "delivery_failed", detail };
   }
+}
+
+/**
+ * Every URL in a message replaced by a placeholder, and — when the configured
+ * webhook URL is known — its path removed wherever it appears, however it got
+ * there. The regex alone stops at whitespace or a quote, and a URL undici
+ * refuses to parse is malformed precisely because it may contain one of those
+ * inside the authority, which would leave the path (the credential) behind.
+ * The path is cut out of the configured URL with string ops, not URL parsing,
+ * for the same reason.
+ */
+function redactUrls(message: string, configuredUrl?: string): string {
+  let redacted = message.replace(/https?:\/\/[^\s)'"<>]+/gi, "<webhook url>");
+  if (configuredUrl) {
+    const path = configuredUrl.trim().replace(/^https?:\/\/[^/]*/i, "");
+    if (path.length > 1) redacted = redacted.split(path).join("<webhook path>");
+    redacted = redacted.split(configuredUrl.trim()).join("<webhook url>");
+  }
+  return redacted;
+}
+
+/**
+ * The hostname alone — never the path, which is the webhook's credential.
+ *
+ * This assumes the hostname itself is NOT the secret, which holds for the
+ * destinations this store uses (Zapier, Make, Pushover: fixed hostnames, the
+ * secret is in the path). A provider that mints a random per-endpoint
+ * subdomain would be different; if one is ever configured, print only the
+ * provider's registrable domain here.
+ */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname || "unknown host";
+  } catch {
+    return "unknown host";
+  }
+}
+
+function destinationHost(destination: PushDestination): string {
+  return destination.kind === "webhook" ? hostOf(destination.url) : destination.kind === "pushover" ? hostOf(PUSHOVER_API_URL) : "none";
 }
 
 /**
@@ -744,7 +816,7 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
  * to go wrong. This lands on the admin status page, which is where a pattern of
  * failures is worth noticing.
  */
-async function safeAlert(type: string, message: string, dedupeWindowMs?: number): Promise<void> {
+async function safeAlert(type: string, message: string, dedupeWindowMs?: number, context?: Record<string, unknown>): Promise<void> {
   try {
     // `order_notification_missed` is the one critical here, because it is the
     // only one that carries an order the operator has not been told about.
@@ -753,7 +825,7 @@ async function safeAlert(type: string, message: string, dedupeWindowMs?: number)
     const severity = type === "order_notification_missed" || type === "order_push_destination_unhealthy"
       ? "critical"
       : "warning";
-    await recordSystemAlert({ type, severity, message, dedupeWindowMs });
+    await recordSystemAlert({ type, severity, message, dedupeWindowMs, ...(context ? { context } : {}) });
   } catch {
     // recordSystemAlert already swallows its own failures; this is belt and
     // braces so the alerting path can never be what breaks the alert.

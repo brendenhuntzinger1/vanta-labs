@@ -29,7 +29,7 @@ const PAYMENT_STATUS_LABELS: Record<AdminOrderPaymentStatusFilter, string> = {
   pending_payment: "Pending / abandoned",
   partially_refunded: "Partially refunded",
   refunded: "Refunded",
-  payment_failed: "Payment failed",
+  payment_failed: "Declined / expired / failed",
   canceled: "Canceled",
   all: "All (incl. abandoned)",
 };
@@ -83,7 +83,7 @@ export default async function AdminOrdersPage({
             <p className="mt-2 text-sm text-zinc-400">
               {result.total} {paymentStatus === "active" ? "active order" : "order record"}{result.total === 1 ? "" : "s"}
               {paymentStatus === "active"
-                ? " — abandoned / unpaid checkouts are hidden. Switch the payment filter to “All” to see them."
+                ? " — abandoned / unpaid checkouts, including expired checkout sessions, are hidden. Switch the payment filter to “All” to see them."
                 : ""}
             </p>
           </div>

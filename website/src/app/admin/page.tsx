@@ -335,7 +335,7 @@ export default async function AdminHomePage() {
             <div>
               <p className="text-xs uppercase tracking-[0.28em] text-zinc-400">Orders Snapshot</p>
               <h2 className="mt-2 text-2xl font-semibold text-white">Recent Orders</h2>
-              <p className="mt-2 text-sm text-zinc-400">Latest active orders — abandoned and unpaid checkouts are hidden, the same filter /admin/orders opens on.</p>
+              <p className="mt-2 text-sm text-zinc-400">Latest active orders — abandoned and unpaid checkouts (including expired checkout sessions) are hidden, the same filter /admin/orders opens on.</p>
             </div>
             <Link href="/admin/orders" className="vl-btn-secondary px-4 py-2 text-xs">Open Full Orders</Link>
           </div>

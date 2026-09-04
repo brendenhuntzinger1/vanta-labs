@@ -926,7 +926,11 @@
     "inventory_restocked_at",
     "inventory_committed_at",
     "attributed_automation_key",
-    "attributed_automation_at"
+    "attributed_automation_at",
+    "payment_failure_kind",
+    "payment_failure_code",
+    "payment_failure_reason",
+    "payment_failed_at"
   ],
   "partner_clicks": [
     "id",

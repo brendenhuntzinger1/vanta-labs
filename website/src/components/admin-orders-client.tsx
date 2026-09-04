@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { AdminOrderRow } from "@/lib/admin-orders";
+import { PaymentOutcome } from "@/components/payment-status-badge";
 
 // "Mark Delivered" is gone on purpose. Delivery is what the CARRIER reports —
 // order-pipeline.ts permits only the "shippo" source to write `delivered` — and
@@ -174,7 +175,15 @@ export function AdminOrdersClient({ orders }: { orders: AdminOrderRow[] }) {
               <p><span className="text-zinc-500">Amount:</span> {money(order.amount_paid)}</p>
               <p><span className="text-zinc-500">Sales tax:</span> {order.tax_amount > 0 ? money(order.tax_amount) : "—"}</p>
               <p><span className="text-zinc-500">Referral / Coupon:</span> {order.referral_code ?? order.coupon_code ?? "-"}</p>
-              <p><span className="text-zinc-500">Payment:</span> {order.payment_status}</p>
+              <div className="flex items-start gap-2">
+                <span className="text-zinc-500">Payment:</span>
+                <PaymentOutcome
+                  status={order.payment_status}
+                  failureKind={order.payment_failure_kind}
+                  failureReason={order.payment_failure_reason}
+                  paidRetry={order.paid_retry}
+                />
+              </div>
               <p><span className="text-zinc-500">Fulfillment:</span> {order.fulfillment_status}</p>
             </div>
             <Link href={`/admin/orders/${order.order_id}`} className="mt-3 inline-flex text-xs text-zinc-200 underline-offset-4 hover:underline">
@@ -224,7 +233,14 @@ export function AdminOrdersClient({ orders }: { orders: AdminOrderRow[] }) {
                 <td className="px-4 py-3">{money(order.amount_paid)}</td>
                 <td className="px-4 py-3">{order.tax_amount > 0 ? money(order.tax_amount) : "—"}</td>
                 <td className="px-4 py-3">{order.referral_code ?? order.coupon_code ?? "—"}</td>
-                <td className="px-4 py-3">{order.payment_status}</td>
+                <td className="px-4 py-3">
+                  <PaymentOutcome
+                    status={order.payment_status}
+                    failureKind={order.payment_failure_kind}
+                    failureReason={order.payment_failure_reason}
+                    paidRetry={order.paid_retry}
+                  />
+                </td>
                 <td className="px-4 py-3">{order.fulfillment_status}</td>
               </tr>
             ))}

@@ -2,6 +2,7 @@ import { FULFILLMENT_STATUS_LABELS } from "@/lib/order-pipeline";
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { findPaidRetry, PAID_RETRY_WINDOW_MS, type PaidOrderCandidate, type PaidRetryLink } from "@/lib/payment-failure";
 import { sendEmail } from "@/lib/email/send";
 import { shippingUpdateTemplate } from "@/lib/email/templates";
 import { setOrderFulfillmentStatus } from "@/lib/shippo/service";
@@ -19,6 +20,24 @@ export interface AdminOrderRow {
   referral_code: string | null;
   coupon_code: string | null;
   payment_status: string;
+  /**
+   * WHY a payment_failed row failed — processor_declined | checkout_expired |
+   * other — with the processor's own words when it sent any. Null on rows that
+   * are not failed and on failures recorded before 2026-09-04. See
+   * payment-failure.ts for the vocabulary and sql/payment-failure-detail.sql
+   * for the columns.
+   */
+  payment_failure_kind: string | null;
+  payment_failure_code: string | null;
+  payment_failure_reason: string | null;
+  payment_failed_at: string | null;
+  /**
+   * The paid order the same shopper placed shortly after this unpaid one, when
+   * there is one. Computed at read time — nothing is written — so the list can
+   * say "they retried and paid" instead of leaving a failed row to look like a
+   * lost sale.
+   */
+  paid_retry: PaidRetryLink | null;
   fulfillment_status: string;
   refund_amount: number;
   created_at: string;
@@ -64,7 +83,7 @@ export async function getAdminOrderRows(filters: AdminOrderFilters = {}): Promis
   let query = supabaseAdmin
     .from("orders")
     .select(
-      "id, order_id, order_number, customer_email, customer_name, amount_paid, tax_amount, referral_code, coupon_code, payment_status, fulfillment_status, refund_amount, created_at",
+      "id, order_id, order_number, customer_email, customer_name, amount_paid, tax_amount, referral_code, coupon_code, payment_status, payment_failure_kind, payment_failure_code, payment_failure_reason, payment_failed_at, fulfillment_status, refund_amount, order_type, created_at",
       { count: "exact" },
     )
     .order("created_at", { ascending: false });
@@ -80,6 +99,21 @@ export async function getAdminOrderRows(filters: AdminOrderFilters = {}): Promis
     // Default view: exclude abandoned/unpaid checkouts and expired/canceled
     // ones — those are abandoned carts, not orders.
     query = query.not("payment_status", "in", "(pending_payment,canceled,cancelled)");
+    // A checkout session the processor expired or the shopper cancelled is an
+    // abandoned cart too: payment_failed by status, but no charge was ever
+    // attempted (payment-failure.ts, checkout_expired). Until 2026-09-04 these
+    // were indistinguishable from declines, so they sat in the active view
+    // under a subtitle promising abandoned checkouts were hidden. Declines and
+    // failures with no recorded kind stay visible; NULL kinds must pass, which
+    // is why this is an .or() and not a plain .neq().
+    //
+    // SCOPED TO ROWS THAT ARE STILL FAILED. The paid flip never clears the
+    // failure columns (a paid row keeps "first attempt declined" as history),
+    // and payment_failed -> paid is an allowed transition — a session the
+    // sweep retired as expired can still settle late. Keyed on the kind alone,
+    // that order would have vanished from the default list the moment it was
+    // paid. Caught by the round-two pre-merge review.
+    query = query.or("payment_status.neq.payment_failed,payment_failure_kind.is.null,payment_failure_kind.neq.checkout_expired");
   } else if (filters.paymentStatus && filters.paymentStatus !== "all") {
     query = query.eq("payment_status", filters.paymentStatus);
   }
@@ -114,6 +148,8 @@ export async function getAdminOrderRows(filters: AdminOrderFilters = {}): Promis
     }
   }
 
+  const paidRetries = await findPaidRetries(orders);
+
   const total = count ?? 0;
 
   return {
@@ -128,6 +164,11 @@ export async function getAdminOrderRows(filters: AdminOrderFilters = {}): Promis
       referral_code: order.referral_code,
       coupon_code: order.coupon_code,
       payment_status: order.payment_status,
+      payment_failure_kind: order.payment_failure_kind ?? null,
+      payment_failure_code: order.payment_failure_code ?? null,
+      payment_failure_reason: order.payment_failure_reason ?? null,
+      payment_failed_at: order.payment_failed_at ?? null,
+      paid_retry: paidRetries.get(order.order_id) ?? null,
       fulfillment_status: order.fulfillment_status,
       refund_amount: Number(order.refund_amount ?? 0),
       created_at: order.created_at,
@@ -138,6 +179,110 @@ export async function getAdminOrderRows(filters: AdminOrderFilters = {}): Promis
     pageSize,
     pageCount: Math.max(1, Math.ceil(total / pageSize)),
   };
+}
+
+/** Rows that can, in principle, have been retried: every kind of not-paid. */
+const RETRY_CANDIDATE_STATUSES = new Set(["payment_failed", "pending_payment", "canceled", "cancelled"]);
+
+interface RetryCandidateRow {
+  order_id: string;
+  customer_email: string | null;
+  created_at: string;
+  amount_paid: number | string | null;
+  payment_status: string | null;
+  order_type?: string | null;
+}
+
+/**
+ * For every unpaid row on the page, the paid order the same shopper placed
+ * within PAID_RETRY_WINDOW_MS afterwards — one query for the whole page.
+ *
+ * READ-TIME AND BEST-EFFORT. Nothing is written, so a wrong match can mislabel
+ * a badge and nothing else; and a failed read returns no links rather than
+ * failing the page, because this is a convenience over the order list, not
+ * part of it. The matching itself lives in payment-failure.ts, where it is
+ * tested.
+ */
+async function findPaidRetries(rows: readonly RetryCandidateRow[]): Promise<Map<string, PaidRetryLink>> {
+  const links = new Map<string, PaidRetryLink>();
+  const candidates = rows.filter(
+    (row) => RETRY_CANDIDATE_STATUSES.has(String(row.payment_status ?? "").toLowerCase()) && String(row.customer_email ?? "").trim(),
+  );
+  if (candidates.length === 0) return links;
+
+  // The stored spelling and its lower-case form both go in the IN list, so a
+  // retry typed with different capitalisation is still found. The comparison
+  // that decides a match is case-insensitive (findPaidRetry); this only makes
+  // sure the row is fetched at all.
+  const emails = new Set<string>();
+  let earliest = Number.POSITIVE_INFINITY;
+  let latest = Number.NEGATIVE_INFINITY;
+  for (const row of candidates) {
+    const email = String(row.customer_email).trim();
+    emails.add(email);
+    emails.add(email.toLowerCase());
+    const at = Date.parse(row.created_at);
+    if (Number.isFinite(at)) {
+      earliest = Math.min(earliest, at);
+      latest = Math.max(latest, at);
+    }
+  }
+  if (!Number.isFinite(earliest)) return links;
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("orders")
+      .select("order_id, order_number, customer_email, created_at, amount_paid, order_type")
+      .eq("payment_status", "paid")
+      // A $0 replacement shipment is not a sale (ledger.ts); the same-kind rule
+      // in findPaidRetry also drops it, this just keeps it out of the read.
+      .neq("order_type", "replacement")
+      .in("customer_email", Array.from(emails))
+      .gt("created_at", new Date(earliest).toISOString())
+      .lte("created_at", new Date(latest + PAID_RETRY_WINDOW_MS).toISOString())
+      .order("created_at", { ascending: true })
+      .limit(500);
+    if (error || !data) {
+      // Non-fatal by design, but never silent: one email with an unescapable
+      // character in it makes this single IN-list read fail and every unpaid
+      // row on the page loses its link, which would otherwise look exactly like
+      // "nobody retried".
+      console.warn("[admin-orders] paid-retry lookup failed", { message: error?.message, code: error?.code });
+      return links;
+    }
+
+    const paid: PaidOrderCandidate[] = data.map((row) => ({
+      order_id: String(row.order_id),
+      order_number: row.order_number ? String(row.order_number) : null,
+      customer_email: row.customer_email ? String(row.customer_email) : null,
+      created_at: String(row.created_at),
+      amount_paid: Number(row.amount_paid ?? 0),
+      order_type: row.order_type ? String(row.order_type) : null,
+    }));
+
+    for (const row of candidates) {
+      const link = findPaidRetry(
+        {
+          customer_email: row.customer_email,
+          created_at: row.created_at,
+          amount_paid: Number(row.amount_paid ?? 0),
+          order_type: row.order_type ?? null,
+        },
+        paid,
+      );
+      if (link) links.set(row.order_id, link);
+    }
+  } catch (error) {
+    // A badge is never worth a failed page — but see above: say so.
+    console.warn("[admin-orders] paid-retry lookup threw", { message: error instanceof Error ? error.message : String(error) });
+  }
+  return links;
+}
+
+/** The order page's version of the same question, for one order. */
+export async function findPaidRetryForOrder(row: RetryCandidateRow): Promise<PaidRetryLink | null> {
+  const links = await findPaidRetries([row]);
+  return links.get(row.order_id) ?? null;
 }
 
 /**

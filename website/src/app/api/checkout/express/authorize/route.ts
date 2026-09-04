@@ -24,6 +24,7 @@ import { buildOrderRow, insertOrderItems, insertOrderRow, quoteOrder } from "@/l
 import { CLAIM_HOLD_SECONDS, claimPromotionRedemption, releasePromotionRedemption } from "@/lib/bxgy-promotions";
 import { describeTenderShortfall, releaseOrderTender, reserveOrderTender } from "@/lib/tender-reservation";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { describeExpressDecline, type PaymentFailureDetail } from "@/lib/payment-failure";
 import type { CustomerInput } from "@/lib/payment-types";
 import { recordOrderAttribution } from "@/lib/order-attribution";
 import { customerSafeMessage } from "@/lib/safe-error";
@@ -385,7 +386,7 @@ export async function POST(request: Request) {
   }
 
   // ---- 5.8 Charge ---------------------------------------------------------
-  const { outcome, redirectUrl } = await chargeViaVeyra({
+  const { outcome, redirectUrl, failure } = await chargeViaVeyra({
     sessionId,
     tokenIntentId,
     orderId: claimed.order_id,
@@ -407,10 +408,27 @@ export async function POST(request: Request) {
     // releases inventory: on any other failure the charge may have landed, and
     // releasing stock we may have already sold produces an oversell on top of a
     // mis-signalled decline.
+    //
+    // WHY Veyra said no is recorded beside the status (payment-failure.ts), so
+    // the admin reads "Declined by bank / processor — insufficient funds" and
+    // not the bare word payment_failed. The update is guarded on the status the
+    // row was inserted with: a row a webhook has already moved is not this
+    // lane's to rewrite. (The row was created pending_payment moments ago in
+    // this same request, so the guard costs nothing on the normal path.)
+    const declined = failure ?? describeExpressDecline(null, 0);
+    const declinedAt = new Date().toISOString();
     await supabaseAdmin
       .from("orders")
-      .update({ payment_status: "payment_failed", updated_at: new Date().toISOString() })
-      .eq("order_id", claimed.order_id);
+      .update({
+        payment_status: "payment_failed",
+        payment_failure_kind: declined.kind,
+        payment_failure_code: declined.code,
+        payment_failure_reason: declined.reason,
+        payment_failed_at: declinedAt,
+        updated_at: declinedAt,
+      })
+      .eq("order_id", claimed.order_id)
+      .eq("payment_status", "pending_payment");
     await releaseInventoryForOrder(claimed.order_id);
     // Veyra said no, so this order will never settle: the credit it is holding
     // has to go back to the shopper with the stock.
@@ -511,6 +529,15 @@ async function cancelOrder(orderId: string) {
     .eq("order_id", orderId);
 }
 
+/** The body of Veyra's pay-bt answer, as far as this lane reads it. */
+type VeyraPayResponse = {
+  public_status?: string;
+  error?: string;
+  redirect_url?: unknown;
+  decline_code?: string;
+  message?: string;
+};
+
 async function chargeViaVeyra(input: {
   sessionId: string;
   tokenIntentId: string;
@@ -522,7 +549,7 @@ async function chargeViaVeyra(input: {
   lockedTaxCents: number;
   ip: string | null;
   userAgent: string | null;
-}): Promise<{ outcome: PayOutcome; redirectUrl: string | null }> {
+}): Promise<{ outcome: PayOutcome; redirectUrl: string | null; failure?: PaymentFailureDetail }> {
   let response: Response;
   try {
     response = await fetch(`${veyraApiBase()}/api/checkout/${encodeURIComponent(input.sessionId)}/pay-bt`, {
@@ -575,9 +602,13 @@ async function chargeViaVeyra(input: {
     return { outcome: "never_heard_back", redirectUrl: null };
   }
 
-  let payload: { public_status?: string; error?: string; redirect_url?: unknown } | null = null;
+  // `decline_code` and `message` are read only to be RECORDED on the order for
+  // the admin (payment-failure.ts); nothing here branches on them. The shopper
+  // still gets the same generic sentence — a fraud "blocked" verdict must not
+  // be echoed to the person it blocked.
+  let payload: VeyraPayResponse | null = null;
   try {
-    payload = (await response.json()) as { public_status?: string; error?: string; redirect_url?: unknown };
+    payload = (await response.json()) as VeyraPayResponse;
   } catch {
     payload = null;
   }
@@ -611,7 +642,7 @@ async function chargeViaVeyra(input: {
     // reconciled against the processor instead of guessed at.
     (response.status >= 400 && response.status < 500)
   ) {
-    return { outcome: "answered_no", redirectUrl: null };
+    return { outcome: "answered_no", redirectUrl: null, failure: describeExpressDecline(payload, response.status) };
   }
   // Anything else — a 5xx, or a 2xx/3xx whose body we could parse but can't
   // interpret: unresolved, not declined.
