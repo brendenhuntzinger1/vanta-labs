@@ -53,6 +53,35 @@ export function homeUrl(): string {
 }
 
 /** Stable node id, so WebSite and Organization resolve to ONE entity. */
+/**
+ * An image URL a crawler is actually allowed to index.
+ *
+ * PRODUCT IMAGES ARE STORED IN SUPABASE STORAGE, AND SUPABASE SERVES THEM WITH
+ * `X-Robots-Tag: none`. Google's own documentation defines that as "equivalent
+ * to noindex, nofollow" — so the URL in a Product's `image` property, which is
+ * the one REQUIRED property of a merchant listing, pointed at an asset the
+ * crawler had been told to ignore. Measured on 2026-09-04, all 36 product
+ * images: the Supabase URL carries the header, and the identical bytes served
+ * through this site's own optimiser do not.
+ *
+ * Nothing on screen changes: the visible <img> already goes through
+ * `/_next/image`. This routes the STRUCTURED DATA down the same path, so the
+ * schema names the copy of the picture that is allowed to be indexed.
+ *
+ * A path that is already ours is only made absolute — structured data needs an
+ * absolute URL, and there is no reason to send our own file through the
+ * optimiser twice.
+ */
+export function indexableImageUrl(url: string | null | undefined): string | undefined {
+  if (!url) return undefined;
+  const base = siteUrl();
+  if (url.startsWith("/")) return `${base}${url}`;
+  if (url.startsWith(base)) return url;
+  // 1200 is already in the page's own srcSet, so this is a cache hit rather
+  // than a new render.
+  return `${base}/_next/image?url=${encodeURIComponent(url)}&w=1200&q=75`;
+}
+
 export function organizationId(): string {
   return `${siteUrl()}/#organization`;
 }
