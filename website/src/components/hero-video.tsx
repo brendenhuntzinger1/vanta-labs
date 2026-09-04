@@ -193,52 +193,39 @@ const FADE_START = 0.72;
 const LANDSCAPE_BIAS = 0.76;
 
 /**
- * ON A PHONE, THE HEADLINE MUST NOT LAND ON THE VIAL'S PRINTED LABEL.
+ * HOW FAR THE FALLOFF REACHES DOWN THE VERTICAL AXIS, and why it is not 1.
  *
- * This is the last piece of the full-bleed hero, and no amount of scrim ever
- * settled it. The label is "VANTA LABS / GHK-Cu / 50 mg / Lyophilized Powder",
- * black on white, and darkening it does not make it stop reading: a scrim
- * multiplies the white AND the black by the same factor, so their ratio — which
- * is what the eye reads type by — survives intact. Measured on the harness: at
- * a scrim alpha of 0.82 the ground behind the headline was 43/255, comfortably
- * inside the 118 that white type needs for 4.5:1, and "GHK-Cu" was still
- * plainly legible straight across the headline. Two pieces of type competing at
- * the same size is the defect, and value cannot fix it. Only position can.
+ * The falloff exists for ONE measured reason: this asset is a vial lit on a
+ * white studio backdrop, and a portrait crop of a square frame cuts straight
+ * through that backdrop. Drawn at framing 1 into a 390x726 phone hero with no
+ * falloff at all, the left and right edges measure 241/255 down the middle of
+ * the screen — near-white bands running the height of the page. That is the
+ * "vial on a white background" report, and it is real.
  *
- * So a phone shows the TOP of the frame rather than all of it. Measured on the
- * source by edge energy, the printed type occupies 0.451 to 0.746 of the frame
- * height; above it, from the cap through the shoulder to the top of the label,
- * there is no type at all. Showing 0.7 of the height puts that type-free band
- * exactly where the copy is and pushes every printed line below the headline.
+ * THE TOP AND BOTTOM ARE NOT THAT, AND THE ELLIPSE TREATED THEM AS IF THEY
+ * WERE. Measured on the same crop: top edge 0, bottom edge 0. The vignette
+ * burnt into the file already finishes those two, so fading them costs picture
+ * and buys nothing — and it is what put a black band across the top and bottom
+ * of the phone hero on top of the scrim's own. The owner's report was that the
+ * hero was "black all around"; two of those four sides were being blacked out
+ * for a problem they do not have.
  *
- * 0.7 IS SET BY THE LARGEST PHONE, NOT THE COMMONEST ONE. The copy is a fixed
- * height in rem, so a taller hero pushes the headline further down while the
- * type moves down with the scale — the margin shrinks as the screen grows.
- * Measured, headline bottom against the first printed line: 375x667 leaves
- * 103px, 390x844 leaves 51px, and 430x932 leaves 23px. A looser 0.76 still
- * clears the 390 by 14px and puts the label straight through the 430's
- * headline, which is why the number is not tuned to the phone in the mock.
+ * So the falloff keeps its horizontal half and gives up most of its vertical
+ * one. Pushing the vertical axis out to a multiple of the half-height leaves a
+ * gradient that is essentially horizontal across the middle of the screen and
+ * still rounds the corners off — which matches how the asset's own vignette
+ * falls, rather than fighting it.
  *
- * IT ALSO MAKES THE VIAL BIGGER, which is the point and not a side effect. The
- * frame is scaled up to fill the hero from a shorter slice of itself, so the
- * vial gains about a third of its width — it now spans most of a phone screen
- * instead of two thirds of it. The owner asked for the vial large, bright and
- * dominant; this is the same request as "keep the label off the headline",
- * answered once.
+ * THE GUARANTEE IS UNCHANGED WHERE IT IS LOAD-BEARING. Left and right still
+ * reach fully transparent inside the box, so no viewport shape can put a white
+ * band on screen. Top and bottom now cut where the picture is already black,
+ * against a hero background that is also black: a hard edge nobody can see.
  *
- * ANCHORED TO THE TOP, not centred. Centring the overflow would split the crop
- * evenly and take the cap off — and the cap is the half that has to stay. It is
- * the dark, type-free end of the vial, and it is what the headline sits on.
- *
- * PHONES ONLY, AND THE BREAKPOINT IS NOT REPEATED HERE. The value is published
- * by globals.css as `--hero-framing`, beside the scrim: the two have to agree
- * about where the copy is, and a media query copied into a script is exactly
- * how they would come to disagree. Everything from 641px up publishes 1, which
- * is the old fit rule to the pixel — a portrait tablet has its copy in the
- * bottom 40% of a 1024-tall hero and a laptop has it in a column on the left,
- * so neither ever had this problem.
+ * Published from CSS beside the framing, for the same reason: a laptop's crop
+ * has black on all four edges (measured: 0 on every side) and needs none of
+ * this, so the value belongs at the breakpoint, not in the script.
  */
-const PORTRAIT_FRAMING_PROPERTY = "--hero-framing";
+const FADE_REACH_PROPERTY = "--hero-fade-reach";
 
 function HeroVialCanvas({
   className,
@@ -275,23 +262,31 @@ function HeroVialCanvas({
      * at "show the whole frame", which is the composition every screen had
      * before this existed. It cannot fail into a magnified crop.
      */
-    let framing = 1;
+    /**
+     * How far the falloff's VERTICAL axis reaches, as a multiple of the box's
+     * half-height. 1 is an ellipse inscribed in the box — the shape this
+     * started as. Larger pushes the vertical fade outside the box, leaving a
+     * falloff that is horizontal across the middle and only rounds the corners.
+     *
+     * See FADE_REACH_PROPERTY. Defaults to 1, so a stylesheet that never
+     * arrives lands on the inscribed ellipse rather than on no falloff at all.
+     */
+    let fadeReach = 1;
 
     // Match the canvas's backing store to the box it actually occupies, so the
     // vial is sharp on a 3x phone screen without painting more pixels than the
     // display can show.
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
-      const declared = Number.parseFloat(
-        getComputedStyle(canvas).getPropertyValue(PORTRAIT_FRAMING_PROPERTY),
+      const reachDeclared = Number.parseFloat(
+        getComputedStyle(canvas).getPropertyValue(FADE_REACH_PROPERTY),
       );
-      const next = Number.isFinite(declared) ? Math.min(1, Math.max(0.4, declared)) : 1;
-      if (next !== framing) {
-        framing = next;
-        // The buffer holds a frame drawn at the old framing, so it has to be
-        // redrawn rather than re-presented. Crossing the breakpoint is the only
-        // way to get here, and it costs one repaint.
-        hasPicture = false;
+      const nextReach = Number.isFinite(reachDeclared)
+        ? Math.min(6, Math.max(1, reachDeclared))
+        : 1;
+      if (nextReach !== fadeReach) {
+        fadeReach = nextReach;
+        fade = null;
       }
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const w = Math.max(1, Math.round(rect.width * dpr));
@@ -362,7 +357,7 @@ function HeroVialCanvas({
         // are the element's own half-width and half-height.
         context.save();
         context.translate(cw / 2, ch / 2);
-        context.scale(cw / 2, ch / 2);
+        context.scale(cw / 2, (ch / 2) * fadeReach);
         context.fillStyle = fade;
         context.fillRect(-1, -1, 2, 2);
         context.restore();
@@ -388,29 +383,32 @@ function HeroVialCanvas({
      *     too, which fills the section top to bottom and leaves spare width for
      *     the copy to live in.
      *
-     * Both cases are the same sentence — match the height — so there is still
-     * no branch here. `framing` is how much of the frame's height is being
-     * asked to do the matching: 1 everywhere except a phone, where it is a
-     * fraction and the sentence becomes "match the height with the TOP of the
-     * frame". See PORTRAIT_FRAMING_PROPERTY for why a phone needs that.
+     * Both cases are the same sentence — match the height — so there is no
+     * branch here, and there should not be one: a fit rule that reads
+     * differently for phones and laptops is how the two got different bugs.
+     *
+     * A PHONE-ONLY CROP WAS TRIED HERE AND TAKEN BACK OUT. Showing the top 0.7
+     * of the frame did move the vial's printed label clear of the headline,
+     * which is what it was for. It also magnified the frame by 43%, cropped the
+     * vial down to its cap and shoulder, and put the frame's own black vignette
+     * band across the top of the screen. The owner's words were "huge", "so
+     * zoomed in" and "black all around", and the measurements agreed: the
+     * section's mean luminance fell from 34/255 to 25. The label is a real
+     * problem and this was not the way to solve it — see the note in
+     * globals.css for what is left of it.
      */
     const cover = (source: CanvasImageSource, sw: number, sh: number) => {
       if (!pictureContext) return;
       const cw = picture.width;
       const ch = picture.height;
-      const scale = ch / (sh * framing);
+      const scale = ch / sh;
       const dw = sw * scale;
       const dh = sh * scale;
       // Zero on a phone, where the frame overflows the box, so the bias is
       // inert there and the crop stays centred.
       const spare = Math.max(0, cw - dw);
       const x = (cw - dw) / 2 + spare * (LANDSCAPE_BIAS - 0.5);
-      // TOP, not centre. At framing 1 the frame is exactly as tall as the hero
-      // and this is the same zero the centred formula produced, so nothing
-      // above a phone moves by a pixel. Below it, centring would split the
-      // overflow and crop the cap — the type-free end of the vial, and the part
-      // the headline has to sit on.
-      pictureContext.drawImage(source, x, 0, dw, dh);
+      pictureContext.drawImage(source, x, (ch - dh) / 2, dw, dh);
       hasPicture = true;
       present();
     };
