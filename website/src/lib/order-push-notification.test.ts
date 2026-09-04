@@ -416,6 +416,25 @@ describe("what happens when things break", () => {
     expect(JSON.stringify(alert?.context)).not.toContain("/catch/1/abc");
   });
 
+  // undici puts the WHOLE URL into the message when it cannot parse one, and
+  // a webhook URL's path is its credential. That message used to be copied
+  // verbatim into the alert, its context, and the emailed critical.
+  it("redacts the webhook URL from a fetch error before it reaches any alert", async () => {
+    vi.stubEnv("ORDER_PUSH_WEBHOOK_URL", "https://hooks.example.com/catch/1/abc");
+    fetchMock.mockRejectedValue(new TypeError("Failed to parse URL from https://hooks.example.com/catch/1/abc"));
+    const result = await sendOrderPushNotification("ord_a1b2c3d4");
+
+    expect(result).toMatchObject({ sent: false, reason: "delivery_failed" });
+    expect(JSON.stringify(result)).not.toContain("/catch/1/abc");
+    const relevant = alerts.filter((a) => a.type === "order_push_failed" || a.type === "order_notification_missed");
+    expect(relevant.length).toBeGreaterThanOrEqual(2);
+    for (const alert of relevant) {
+      expect(JSON.stringify(alert)).not.toContain("/catch/1/abc");
+    }
+    // The host may still be named, so the operator knows which destination died.
+    expect(relevant.find((a) => a.type === "order_push_failed")?.message).toContain("hooks.example.com");
+  });
+
   it("names Pushover when Pushover is the destination that refused", async () => {
     vi.stubEnv("PUSHOVER_API_TOKEN", "tok");
     vi.stubEnv("PUSHOVER_USER_KEY", "usr");

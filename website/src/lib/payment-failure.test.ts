@@ -188,7 +188,7 @@ describe("describePaymentStatus — what the operator reads in the Payment colum
 
 describe("findPaidRetry — did this shopper come back and pay?", () => {
   const attempt = { customer_email: "Shopper@Example.com", created_at: "2026-09-03T17:48:57.700Z", amount_paid: 194.98 };
-  const paid = (over: Partial<{ order_id: string; order_number: string | null; customer_email: string | null; created_at: string; amount_paid: number }> = {}) => ({
+  const paid = (over: Partial<{ order_id: string; order_number: string | null; customer_email: string | null; created_at: string; amount_paid: number; order_type: string | null | undefined }> = {}) => ({
     order_id: "order-paid",
     order_number: "VL-A068413C",
     customer_email: "shopper@example.com",
@@ -238,6 +238,29 @@ describe("findPaidRetry — did this shopper come back and pay?", () => {
     // was recalculated. Requiring an exact amount match would hide it.
     const link = findPaidRetry({ ...attempt, amount_paid: 18.8 }, [paid({ amount_paid: 18.95 })]);
     expect(link?.sameAmount).toBe(false);
+  });
+
+  // Two other writers create paid rows carrying the shopper's own email: the
+  // membership renewal (order_type membership) and the free replacement
+  // shipment (order_type replacement, amount 0). Neither is the shopper coming
+  // back for the basket that failed.
+  it("does not mistake a membership renewal for a retry of a product checkout", () => {
+    expect(findPaidRetry(attempt, [paid({ order_type: "membership", amount_paid: 29 })])).toBeNull();
+  });
+
+  it("never treats a $0 replacement shipment as a retry", () => {
+    expect(findPaidRetry(attempt, [paid({ order_type: "replacement", amount_paid: 0 })])).toBeNull();
+    expect(findPaidRetry({ ...attempt, order_type: "replacement" }, [paid()])).toBeNull();
+  });
+
+  it("matches a membership retry only against membership orders", () => {
+    const membershipAttempt = { ...attempt, order_type: "membership", amount_paid: 29 };
+    expect(findPaidRetry(membershipAttempt, [paid()])).toBeNull();
+    expect(findPaidRetry(membershipAttempt, [paid({ order_type: "membership", amount_paid: 29 })])?.sameAmount).toBe(true);
+  });
+
+  it("reads a missing order_type as a product order", () => {
+    expect(findPaidRetry({ ...attempt, order_type: null }, [paid({ order_type: undefined })])).not.toBeNull();
   });
 
   it("copes with an attempt that has no email or an unreadable timestamp", () => {

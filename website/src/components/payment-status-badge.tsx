@@ -116,6 +116,10 @@ export function PaymentOutcome({
           Retried and paid
           <span className="font-mono font-normal text-cyan-200/90">{paidRetry.orderNumber ?? paidRetry.orderId}</span>
           <span className="font-normal text-cyan-200/70">· {describeRetryDelay(paidRetry.minutesAfter)}</span>
+          {/* Visible, not a tooltip: a title attribute is unreachable on a
+              phone, and a different total is the one thing that says this may
+              not be the same purchase. */}
+          <span className="font-normal text-cyan-200/70">· {paidRetry.sameAmount ? "same total" : "different total"}</span>
         </Link>
       ) : null}
     </div>

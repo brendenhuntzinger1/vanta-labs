@@ -83,7 +83,7 @@ export default async function AdminOrdersPage({
             <p className="mt-2 text-sm text-zinc-400">
               {result.total} {paymentStatus === "active" ? "active order" : "order record"}{result.total === 1 ? "" : "s"}
               {paymentStatus === "active"
-                ? " — abandoned / unpaid checkouts are hidden. Switch the payment filter to “All” to see them."
+                ? " — abandoned / unpaid checkouts, including expired checkout sessions, are hidden. Switch the payment filter to “All” to see them."
                 : ""}
             </p>
           </div>

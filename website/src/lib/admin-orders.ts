@@ -83,7 +83,7 @@ export async function getAdminOrderRows(filters: AdminOrderFilters = {}): Promis
   let query = supabaseAdmin
     .from("orders")
     .select(
-      "id, order_id, order_number, customer_email, customer_name, amount_paid, tax_amount, referral_code, coupon_code, payment_status, payment_failure_kind, payment_failure_code, payment_failure_reason, payment_failed_at, fulfillment_status, refund_amount, created_at",
+      "id, order_id, order_number, customer_email, customer_name, amount_paid, tax_amount, referral_code, coupon_code, payment_status, payment_failure_kind, payment_failure_code, payment_failure_reason, payment_failed_at, fulfillment_status, refund_amount, order_type, created_at",
       { count: "exact" },
     )
     .order("created_at", { ascending: false });
@@ -99,6 +99,14 @@ export async function getAdminOrderRows(filters: AdminOrderFilters = {}): Promis
     // Default view: exclude abandoned/unpaid checkouts and expired/canceled
     // ones — those are abandoned carts, not orders.
     query = query.not("payment_status", "in", "(pending_payment,canceled,cancelled)");
+    // A checkout session the processor expired or the shopper cancelled is an
+    // abandoned cart too: payment_failed by status, but no charge was ever
+    // attempted (payment-failure.ts, checkout_expired). Until 2026-09-04 these
+    // were indistinguishable from declines, so they sat in the active view
+    // under a subtitle promising abandoned checkouts were hidden. Declines and
+    // failures with no recorded kind stay visible; NULL kinds must pass, which
+    // is why this is an .or() and not a plain .neq().
+    query = query.or("payment_failure_kind.is.null,payment_failure_kind.neq.checkout_expired");
   } else if (filters.paymentStatus && filters.paymentStatus !== "all") {
     query = query.eq("payment_status", filters.paymentStatus);
   }
@@ -175,6 +183,7 @@ interface RetryCandidateRow {
   created_at: string;
   amount_paid: number | string | null;
   payment_status: string | null;
+  order_type?: string | null;
 }
 
 /**
@@ -216,14 +225,24 @@ async function findPaidRetries(rows: readonly RetryCandidateRow[]): Promise<Map<
   try {
     const { data, error } = await supabaseAdmin
       .from("orders")
-      .select("order_id, order_number, customer_email, created_at, amount_paid")
+      .select("order_id, order_number, customer_email, created_at, amount_paid, order_type")
       .eq("payment_status", "paid")
+      // A $0 replacement shipment is not a sale (ledger.ts); the same-kind rule
+      // in findPaidRetry also drops it, this just keeps it out of the read.
+      .neq("order_type", "replacement")
       .in("customer_email", Array.from(emails))
       .gt("created_at", new Date(earliest).toISOString())
       .lte("created_at", new Date(latest + PAID_RETRY_WINDOW_MS).toISOString())
       .order("created_at", { ascending: true })
       .limit(500);
-    if (error || !data) return links;
+    if (error || !data) {
+      // Non-fatal by design, but never silent: one email with an unescapable
+      // character in it makes this single IN-list read fail and every unpaid
+      // row on the page loses its link, which would otherwise look exactly like
+      // "nobody retried".
+      console.warn("[admin-orders] paid-retry lookup failed", { message: error?.message, code: error?.code });
+      return links;
+    }
 
     const paid: PaidOrderCandidate[] = data.map((row) => ({
       order_id: String(row.order_id),
@@ -231,17 +250,24 @@ async function findPaidRetries(rows: readonly RetryCandidateRow[]): Promise<Map<
       customer_email: row.customer_email ? String(row.customer_email) : null,
       created_at: String(row.created_at),
       amount_paid: Number(row.amount_paid ?? 0),
+      order_type: row.order_type ? String(row.order_type) : null,
     }));
 
     for (const row of candidates) {
       const link = findPaidRetry(
-        { customer_email: row.customer_email, created_at: row.created_at, amount_paid: Number(row.amount_paid ?? 0) },
+        {
+          customer_email: row.customer_email,
+          created_at: row.created_at,
+          amount_paid: Number(row.amount_paid ?? 0),
+          order_type: row.order_type ?? null,
+        },
         paid,
       );
       if (link) links.set(row.order_id, link);
     }
-  } catch {
-    // A badge is never worth a failed page.
+  } catch (error) {
+    // A badge is never worth a failed page — but see above: say so.
+    console.warn("[admin-orders] paid-retry lookup threw", { message: error instanceof Error ? error.message : String(error) });
   }
   return links;
 }

@@ -77,6 +77,7 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
         created_at: String(data.created_at),
         amount_paid: Number(data.amount_paid ?? 0),
         payment_status: paymentStatus,
+        order_type: data.order_type ? String(data.order_type) : null,
       });
   const isFailed = paymentStatus.toLowerCase() === "payment_failed";
 
@@ -202,7 +203,9 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
                   {paidRetry.orderNumber ?? paidRetry.orderId}
                 </Link>{" "}
                 {describeRetryDelay(paidRetry.minutesAfter)}
-                {paidRetry.sameAmount ? " for the same total" : " for a different total"}. No sale was lost.
+                {paidRetry.sameAmount
+                  ? " for the same total. No sale was lost."
+                  : " for a different total, so it may not be the same purchase."}
               </p>
             ) : (
               <p className="mt-3 text-sm text-zinc-500">No later paid order from this customer was found within 24 hours.</p>

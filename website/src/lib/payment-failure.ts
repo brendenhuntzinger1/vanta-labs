@@ -269,6 +269,21 @@ export interface PaidOrderCandidate {
   customer_email: string | null;
   created_at: string;
   amount_paid: number;
+  /** orders.order_type: product | membership | replacement. Null reads as product. */
+  order_type?: string | null;
+}
+
+/**
+ * A retry is the same KIND of order. A membership renewal that bills the same
+ * email the evening after a product checkout was declined is not the shopper
+ * coming back for their basket, and a $0 replacement shipment is not a sale at
+ * all (ledger.ts NON_SALE_ORDER_TYPES). Both carry the customer's email and a
+ * later created_at, so without this rule both wore the "Retried and paid"
+ * chip (2026-09-04 pre-merge review).
+ */
+function retryOrderType(value: unknown): string | null {
+  const type = String(value ?? "product").trim().toLowerCase() || "product";
+  return type === "replacement" ? null : type;
 }
 
 export interface PaidRetryLink {
@@ -291,17 +306,19 @@ function normalizeEmail(value: unknown): string {
  * here can mislabel a badge and nothing else.
  */
 export function findPaidRetry(
-  attempt: { customer_email: string | null; created_at: string; amount_paid: number },
+  attempt: { customer_email: string | null; created_at: string; amount_paid: number; order_type?: string | null },
   paidOrders: readonly PaidOrderCandidate[],
 ): PaidRetryLink | null {
   const email = normalizeEmail(attempt.customer_email);
   const attemptedAt = Date.parse(attempt.created_at);
-  if (!email || !Number.isFinite(attemptedAt)) return null;
+  const attemptType = retryOrderType(attempt.order_type);
+  if (!email || !Number.isFinite(attemptedAt) || !attemptType) return null;
 
   let best: PaidOrderCandidate | null = null;
   let bestAt = Number.POSITIVE_INFINITY;
   for (const paid of paidOrders) {
     if (normalizeEmail(paid.customer_email) !== email) continue;
+    if (retryOrderType(paid.order_type) !== attemptType) continue;
     const paidAt = Date.parse(paid.created_at);
     if (!Number.isFinite(paidAt)) continue;
     const gap = paidAt - attemptedAt;

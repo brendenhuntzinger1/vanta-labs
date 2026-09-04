@@ -745,7 +745,14 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
 
     return { sent: true };
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    // THE ERROR MESSAGE CAN CARRY THE URL. undici (Node 22, which is what
+    // Vercel runs) rejects a URL it cannot parse with "Failed to parse URL from
+    // <the whole URL>", and one with embedded credentials with the whole URL
+    // as well — and both get past the only guard in front of fetch, which is
+    // startsWith("https://"). The path of a webhook URL is its credential, so
+    // every URL is redacted from the detail before it reaches an alert row,
+    // Sentry, the emailed order_notification_missed critical, or the caller.
+    const detail = redactUrls(error instanceof Error ? error.message : String(error));
     const where = destination.kind === "pushover" ? "Pushover" : `webhook at ${hostOf(destination.url)}`;
     await safeAlert(
       "order_push_failed",
@@ -758,7 +765,20 @@ export async function sendOrderPushNotification(orderId: string): Promise<OrderP
   }
 }
 
-/** The hostname alone — never the path, which is the webhook's credential. */
+/** Every URL in a message replaced by a placeholder. Belt and braces for text that came from a library, not from us. */
+function redactUrls(message: string): string {
+  return message.replace(/https?:\/\/[^\s)'"<>]+/gi, "<webhook url>");
+}
+
+/**
+ * The hostname alone — never the path, which is the webhook's credential.
+ *
+ * This assumes the hostname itself is NOT the secret, which holds for the
+ * destinations this store uses (Zapier, Make, Pushover: fixed hostnames, the
+ * secret is in the path). A provider that mints a random per-endpoint
+ * subdomain would be different; if one is ever configured, print only the
+ * provider's registrable domain here.
+ */
 function hostOf(url: string): string {
   try {
     return new URL(url).hostname || "unknown host";
