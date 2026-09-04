@@ -325,6 +325,26 @@ describeDb("customer_offers", () => {
       expect(Number(rows[0].percent_off)).toBe(15);
     });
 
+    it("stores a product-plus-percentage gift, and refuses it without either half", async () => {
+      await client.query(
+        `insert into public.customer_offers (offer_key, token_hash, email, reward_kind, product_slug, percent_off, min_subtotal_cents, expires_at)
+         values ('winback_60_bac_water_10', $1, 'combo@example.test', 'free_product_percent', 'bacteriostatic-water', 10, 3500, now() + interval '1 day')`,
+        [hash("combo-token")],
+      );
+      const { rows } = await client.query("select reward_kind, product_slug, percent_off from public.customer_offers where email = 'combo@example.test'");
+      expect(rows[0]).toMatchObject({ reward_kind: "free_product_percent", product_slug: "bacteriostatic-water" });
+      await expect(client.query(
+        `insert into public.customer_offers (offer_key, token_hash, email, reward_kind, product_slug, percent_off, min_subtotal_cents, expires_at)
+         values ('winback_60_bac_water_10', $1, 'combo2@example.test', 'free_product_percent', null, 10, 3500, now() + interval '1 day')`,
+        [hash("combo-bad-1")],
+      )).rejects.toThrow(/check constraint/i);
+      await expect(client.query(
+        `insert into public.customer_offers (offer_key, token_hash, email, reward_kind, product_slug, percent_off, min_subtotal_cents, expires_at)
+         values ('winback_60_bac_water_10', $1, 'combo3@example.test', 'free_product_percent', 'bacteriostatic-water', null, 3500, now() + interval '1 day')`,
+        [hash("combo-bad-2")],
+      )).rejects.toThrow(/check constraint/i);
+    });
+
     it("refuses a percentage-only gift that names a product or has no rate", async () => {
       await expect(client.query(
         `insert into public.customer_offers (offer_key, token_hash, email, reward_kind, product_slug, percent_off, min_subtotal_cents, expires_at)

@@ -33,10 +33,16 @@ export async function GET(request: Request) {
   // token was minted. A shipping gift has no product to name, so it falls back
   // to the catalogue entry's own label.
   let rewardName: string = OFFER_CATALOG[status.offerKey].label;
-  if (status.rewardKind === "free_product" && status.productSlug) {
+  if (status.productSlug) {
     try {
       const [product] = await getCatalogProductsBySlugs([status.productSlug]);
-      if (product?.name) rewardName = product.name;
+      if (product?.name) {
+        // free_product renders as "free <name>" at the call sites; the combined
+        // kind carries its own full wording, since those sites print it as-is.
+        rewardName = status.rewardKind === "free_product"
+          ? product.name
+          : `Free ${product.name} + ${status.percentOff ?? 0}% off`;
+      }
     } catch {
       // The catalogue being unavailable is not a reason to hide the offer.
     }

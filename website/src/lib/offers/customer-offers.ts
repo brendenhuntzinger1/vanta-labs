@@ -86,7 +86,9 @@ export type OfferReward =
   | { kind: "free_shipping_percent"; percent: number }
   /** A percentage off and nothing else. Competes in the coupon slot exactly
    *  as the combined gift's percentage does; shipping is charged as usual. */
-  | { kind: "percent"; percent: number };
+  | { kind: "percent"; percent: number }
+  /** A $0 product line AND a percentage off the rest. */
+  | { kind: "free_product_percent"; productSlug: string; percent: number };
 
 /** The offers this store knows how to grant. */
 export const OFFER_CATALOG = {
@@ -136,6 +138,14 @@ export const OFFER_CATALOG = {
     // gets both halves, above it the shipping half is already theirs and only
     // the percentage bites. That degrades gracefully, so the floor is the only
     // number that needs choosing.
+    minSubtotalCents: 3500,
+    ttlDays: 30,
+  },
+  winback_60_bac_water_10: {
+    label: "10% off + free BAC water",
+    reward: { kind: "free_product_percent", productSlug: "bacteriostatic-water", percent: 10 } as OfferReward,
+    // The vial is cheap, so the percentage is the real gift here; the floor
+    // is the same half-a-vial the other discount gifts use.
     minSubtotalCents: 3500,
     ttlDays: 30,
   },
@@ -212,8 +222,8 @@ export async function issueCustomerOffer(input: {
       // as this even if the catalogue entry is edited or retired inside its
       // thirty-day life.
       reward_kind: config.reward.kind,
-      product_slug: config.reward.kind === "free_product" ? config.reward.productSlug : null,
-      percent_off: config.reward.kind === "free_shipping_percent" || config.reward.kind === "percent" ? config.reward.percent : null,
+      product_slug: config.reward.kind === "free_product" || config.reward.kind === "free_product_percent" ? config.reward.productSlug : null,
+      percent_off: config.reward.kind === "free_shipping_percent" || config.reward.kind === "percent" || config.reward.kind === "free_product_percent" ? config.reward.percent : null,
       min_subtotal_cents: config.minSubtotalCents,
       expires_at: expiresAt,
     });
@@ -338,6 +348,8 @@ export function describeOfferTerms(offerKey: OfferKey, expiresAt: string): strin
   });
   const gift = config.reward.kind === "free_product"
     ? `a free ${config.label.replace(/^free\s+/i, "")} is added to your order`
+    : config.reward.kind === "free_product_percent"
+      ? `${config.reward.percent}% off, and a free ${config.label.replace(/^.*free\s+/i, "")} is added to your order`
     : config.reward.kind === "free_shipping_percent"
       ? `${config.reward.percent}% off plus free shipping`
       : config.reward.kind === "percent"
