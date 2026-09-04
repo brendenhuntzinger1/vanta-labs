@@ -386,6 +386,7 @@ async function main() {
     assert(body.email === guest, "restore did not name the address the code is bound to");
     // And the page applies it: the cart lands with the code already in the price.
     const shopper = await context.newPage();
+    await passAgeGate(shopper);
     await shopper.goto(tracked, { waitUntil: "domcontentloaded" });
     await shopper.waitForURL(/\/cart(\?|$)/, { timeout: 20000 });
     await shopper.waitForTimeout(1200);
