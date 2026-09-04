@@ -161,6 +161,31 @@ export interface CouponOutcome {
   message: string;
 }
 
+/**
+ * THE SERVER'S QUOTE OUTRANKS THE CLIENT'S GUESS. The client derives the
+ * coupon's fate from the discounts it can model, and it cannot model an armed
+ * gift; the quote can. When a quote is present and did NOT record the code,
+ * the code was not applied — whatever the client worked out — and the message
+ * names what the quote says won instead.
+ */
+export function couponOutcomeAgainstQuote(input: {
+  outcome: CouponOutcome | null;
+  couponCode: string | null;
+  quote: { couponCode: string | null; discountLabel: string | null } | null;
+}): CouponOutcome | null {
+  const code = input.couponCode?.trim().toUpperCase() ?? "";
+  if (!code) return null;
+  if (!input.quote) return input.outcome;
+  if ((input.quote.couponCode ?? "").trim().toUpperCase() === code) return input.outcome;
+  const winner = input.quote.discountLabel?.trim() ?? "";
+  return describeCouponOutcome({
+    code,
+    offerLabel: null,
+    winnerType: null,
+    winnerLabel: winner && !/^(none|discount|coupon)$/i.test(winner) ? winner : null,
+  });
+}
+
 export function describeCouponOutcome(input: {
   code: string;
   /** Headline offer, e.g. "10% off". Shown ONLY when the coupon actually wins. */

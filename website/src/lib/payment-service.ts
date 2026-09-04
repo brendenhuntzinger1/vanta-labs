@@ -332,6 +332,10 @@ export async function createCheckoutSession(
      token: quote.appliedOffer.token,
      orderId,
      email: payload.customer.email,
+     // Held exactly as long as the stock and the promotion slot for this
+     // order, so a pending manual payment cannot lose its gift to a second
+     // checkout by the same customer.
+     holdSeconds: isManual ? MANUAL_CLAIM_HOLD_SECONDS : CLAIM_HOLD_SECONDS,
    });
    if (!reserved) {
      throw new Error(

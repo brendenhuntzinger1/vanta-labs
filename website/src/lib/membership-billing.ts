@@ -241,6 +241,7 @@ export async function activateAnnualMembership(userId: string, tierId: string) {
     await sendMarketingEmail({
       to: contact.email,
       campaignType: "membership_welcome",
+        onDeferred: "queue",
       referenceId: userId,
       templateKey: "membershipWelcomeTemplate",
       ...membershipWelcomeTemplate({ name: contact.name, tierName: tier.name }),
@@ -307,6 +308,7 @@ export async function activateMonthlyMembership(userId: string, tierId: string) 
     await sendMarketingEmail({
       to: contact.email,
       campaignType: "membership_welcome",
+        onDeferred: "queue",
       referenceId: userId,
       templateKey: "membershipWelcomeTemplate",
       ...membershipWelcomeTemplate({ name: contact.name, tierName: tier.name }),
@@ -861,6 +863,7 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
         await sendMarketingEmail({
           to: contact.email,
           campaignType: "membership_welcome",
+        onDeferred: "queue",
           referenceId: input.userId,
           templateKey: "membershipWelcomeTemplate",
           ...membershipWelcomeTemplate({ name: contact.name, tierName: tier.name }),
@@ -1763,6 +1766,7 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
         await sendMarketingEmail({
           to: contact.email,
           campaignType: "membership_winback",
+        onDeferred: "queue",
           referenceId: row.user_id,
           templateKey: "membershipWinBackTemplate",
           ...membershipWinBackTemplate({

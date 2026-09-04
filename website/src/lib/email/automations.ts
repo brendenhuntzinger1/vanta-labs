@@ -10,7 +10,7 @@ import { buildAutomationClickUrl, buildAutomationOpenUrl } from "@/lib/email/aut
 import { resolveSitePath } from "@/lib/email/cta-path";
 import { describeOfferTerms, isOfferKey, issueCustomerOffer } from "@/lib/offers/customer-offers";
 import { getSiteUrl } from "@/lib/env";
-import { AUTOMATION_QUIET_MS, isInQuietPeriod, loadLastMarketingSendAt } from "@/lib/email/frequency";
+import { AUTOMATION_QUIET_MS, claimMarketingSend, isInQuietPeriod, loadLastMarketingSendAt } from "@/lib/email/frequency";
 
 /**
  * Automated retention sequences.
@@ -106,12 +106,33 @@ export async function loadAutomations(): Promise<AutomationRow[]> {
  * marketing email costs nothing next to a duplicate one, and that is exactly
  * the complaint this store already had.
  */
+type AutomationClaim =
+  | { outcome: "claimed"; logId: string | null }
+  | { outcome: "duplicate" }
+  | { outcome: "deferred"; retryAt: number };
+
 async function claimAutomationSend(
   campaignType: string,
   referenceId: string,
   email: string,
   templateKey: string,
-): Promise<boolean> {
+): Promise<AutomationClaim> {
+  // THE SHARED FREQUENCY GUARD DECIDES FIRST. marketing_send_claim takes the
+  // lock on the address, refuses if anything marketing-shaped reached it
+  // inside the window (a campaign in the same cron tick included), and
+  // otherwise writes this very row at 'sending' — the same send-once slot,
+  // under the same unique index, that this function used to insert directly.
+  const claim = await claimMarketingSend({ email, campaignType, referenceId, templateKey });
+  if (claim.outcome === "claimed") return { outcome: "claimed", logId: claim.logId };
+  if (claim.outcome === "deferred") return { outcome: "deferred", retryAt: claim.retryAt };
+  if (claim.outcome === "duplicate") return { outcome: "duplicate" };
+  if (claim.outcome === "refused") return { outcome: "duplicate" };
+
+  // The guard could not answer (an un-migrated database, a transport blip).
+  // Fall back to the direct claim this sweep always made, so retention mail
+  // keeps going out with the send-once guarantee intact — only the cross-sender
+  // frequency rule is lost this tick, and the console says so.
+  console.error("[automations] frequency guard unavailable; claiming the send-once slot directly", claim.error);
   const { error } = await supabaseAdmin.from("email_send_log").insert({
     campaign_type: campaignType,
     reference_id: referenceId,
@@ -120,12 +141,11 @@ async function claimAutomationSend(
     sent_at: new Date().toISOString(),
     status: "sending",
   });
-  if (!error) return true;
-  if (error.code === "23505") return false;   // already claimed — not an error
-  // Anything else (the index missing on an un-migrated database, a transport
-  // failure) must NOT silently become a send. Refusing here means the sweep
-  // skips a recipient it cannot prove is unsent, which is the direction that
-  // does not mail somebody twice.
+  if (!error) return { outcome: "claimed", logId: null };
+  if (error.code === "23505") return { outcome: "duplicate" };   // already claimed — not an error
+  // Anything else must NOT silently become a send. Refusing here means the
+  // sweep skips a recipient it cannot prove is unsent, which is the direction
+  // that does not mail somebody twice.
   throw error;
 }
 
@@ -244,6 +264,12 @@ export function selectAutomationTargets(input: {
   /** Most recent marketing send per address — see frequency.ts. */
   lastMarketingSentAt?: Map<string, number>;
   quietMs?: number;
+  /**
+   * Called for every target that is DUE but held by the quiet period. Nothing
+   * is consumed for it and the next sweep reconsiders it; the caller counts
+   * these as deferred so the sweep's numbers say what actually happened.
+   */
+  onDeferred?: (target: AutomationTarget) => void;
   now: number;
   limit?: number;
 }): AutomationTarget[] {
@@ -262,13 +288,20 @@ export function selectAutomationTargets(input: {
   }
 
   // THE QUIET PERIOD, applied once here for every flow. A recipient mailed by
-  // anything marketing-shaped inside the window is skipped THIS SWEEP and
-  // reconsidered next time; nothing is consumed and no slot is claimed.
-  const quiet = (email: string) => isInQuietPeriod({
-    lastMarketingSentAt: input.lastMarketingSentAt?.get(email),
-    now: input.now,
-    quietMs: input.quietMs,
-  });
+  // anything marketing-shaped inside the window is DEFERRED this sweep and
+  // reconsidered next time; nothing is consumed and no slot is claimed. The
+  // database claim in the sweep is the check that holds under concurrency —
+  // this one is the cheap pre-read that keeps the sweep from minting a gift
+  // for a message it will not send.
+  const quiet = (target: AutomationTarget) => {
+    const held = isInQuietPeriod({
+      lastMarketingSentAt: input.lastMarketingSentAt?.get(target.email),
+      now: input.now,
+      quietMs: input.quietMs,
+    });
+    if (held) input.onDeferred?.(target);
+    return held;
+  };
 
   if (input.key === "welcome_intro" || input.key === "welcome_no_purchase") {
     // "Consented at" is the account's creation for an account holder and the
@@ -281,7 +314,7 @@ export function selectAutomationTargets(input: {
         : input.subscribedAt?.get(email);
       if (consentedAt === undefined || consentedAt > cutoff || consentedAt < oldest) continue;
       if (input.alreadySent.has(email)) continue;
-      if (quiet(email)) continue;
+      if (quiet({ email, referenceId: email })) continue;
       targets.push({ email, referenceId: email });
     }
   } else if (input.key === "post_purchase") {
@@ -293,7 +326,7 @@ export function selectAutomationTargets(input: {
       if (firstPaidAt.get(order.email) !== order.at) continue;
       if (order.at > cutoff || order.at < oldest) continue;
       if (input.alreadySent.has(order.orderId)) continue;
-      if (quiet(order.email)) continue;
+      if (quiet({ email: order.email, referenceId: order.orderId })) continue;
       targets.push({ email: order.email, referenceId: order.orderId });
     }
   } else if (input.key === "replenishment") {
@@ -305,7 +338,7 @@ export function selectAutomationTargets(input: {
       if (lastPaidAt.get(order.email) !== order.at) continue;
       if (order.at > cutoff || order.at < oldest) continue;
       if (input.alreadySent.has(order.orderId)) continue;
-      if (quiet(order.email)) continue;
+      if (quiet({ email: order.email, referenceId: order.orderId })) continue;
       targets.push({ email: order.email, referenceId: order.orderId });
     }
   } else {
@@ -319,7 +352,7 @@ export function selectAutomationTargets(input: {
       // the customer becomes eligible again after they lapse a second time.
       const reference = `${email}:${at}`;
       if (input.alreadySent.has(reference)) continue;
-      if (quiet(email)) continue;
+      if (quiet({ email, referenceId: reference })) continue;
       targets.push({ email, referenceId: reference });
     }
   }
@@ -374,6 +407,8 @@ export type AutomationSweepResult = {
   sent: number;
   skipped: number;
   failed: number;
+  /** Held back by the marketing frequency guard this sweep; retried next sweep. */
+  deferred: number;
   byKey: Record<string, number>;
   errors: string[];
 };
@@ -419,7 +454,7 @@ function trackedOpenUrl(key: AutomationKey, email: string, referenceId: string):
 
 export async function runAutomationSweep(input?: { now?: number }): Promise<AutomationSweepResult> {
   const now = input?.now ?? Date.now();
-  const result: AutomationSweepResult = { sent: 0, skipped: 0, failed: 0, byKey: {}, errors: [] };
+  const result: AutomationSweepResult = { sent: 0, skipped: 0, failed: 0, deferred: 0, byKey: {}, errors: [] };
 
   const config = await getEmailRuntimeConfig();
   const blocked = marketingBlockedReason(config);
@@ -476,6 +511,7 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
         paidOrders,
         alreadySent,
         lastMarketingSentAt,
+        onDeferred: () => { result.deferred++; },
         now,
       });
 
@@ -516,7 +552,14 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
         // would find the index already taken and mail the gift copy with no
         // token behind it. Only the claim winner mints, so the only token in
         // existence is the one in the email that actually goes out.
-        if (!(await claimAutomationSend(campaignType, target.referenceId, target.email, templateKey))) {
+        const claim = await claimAutomationSend(campaignType, target.referenceId, target.email, templateKey);
+        if (claim.outcome === "deferred") {
+          // Held by the frequency guard: something else reached this inbox
+          // inside the window. Nothing is consumed; the next sweep reconsiders.
+          result.deferred++;
+          continue;
+        }
+        if (claim.outcome === "duplicate") {
           result.skipped++;
           continue;
         }
@@ -539,7 +582,14 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
         let offerToken: string | undefined;
         let offerTerms: string | undefined;
         if (isOfferKey(automation.offer_key)) {
-          const issued = await issueCustomerOffer({ offerKey: automation.offer_key, email: target.email });
+          const issued = await issueCustomerOffer({
+            offerKey: automation.offer_key,
+            email: target.email,
+            // Provenance: which send minted this gift, so a redemption can credit
+            // the automation even when the customer never clicked the tracked link.
+            automationKey: automation.key,
+            referenceId: target.referenceId,
+          });
           if (!issued) {
             await closeAutomationSend(campaignType, target.referenceId, "failed");
             result.failed++;
@@ -572,6 +622,8 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
           openTrackingPixelUrl: trackedOpenUrl(automation.key, target.email, target.referenceId),
           // The claim row IS the log row now, so the sender must not write a
           // second one — that is what the unique index would reject anyway.
+          // The sweep closes it itself (closeAutomationSend), whichever way the
+          // claim was taken.
           alreadyLogged: true,
           ...template,
         });

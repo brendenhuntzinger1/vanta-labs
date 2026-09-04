@@ -176,10 +176,21 @@ export async function POST(request: Request) {
         finalTotal: quote.finalTotal,
         couponCode: quote.couponCode,
         giftLines,
-        // Described, never granted: the kind and the wording, no token.
+        // Described, never granted: the kind and the wording, no token. Only
+        // the halves that actually changed this order are named — a gift
+        // beaten outright by a better discount comes back as null.
         offer: quote.appliedOffer
-          ? { rewardKind: quote.appliedOffer.rewardKind, description: quote.appliedOffer.description }
+          ? {
+              rewardKind: quote.appliedOffer.rewardKind,
+              description: quote.appliedOffer.description,
+              productApplied: quote.appliedOffer.productApplied,
+              shippingApplied: quote.appliedOffer.shippingApplied,
+              percentApplied: quote.appliedOffer.percentApplied,
+            }
           : null,
+        // What the discount line should be called: "15% gift" when the gift's
+        // percentage won, "Coupon" when a code did, the perk's name otherwise.
+        discountLabel: quote.discountLabel,
         assumedBoundEmail,
       },
     });

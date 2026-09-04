@@ -144,6 +144,13 @@ describe("one fulfilment promise, everywhere", () => {
     }
   });
 
+  it("the homepage FAQ makes the canonical promise, not the retired 'one business day' one", () => {
+    const page = read("src/app/page.tsx");
+    expect(page).not.toContain("within one business day");
+    // The answer is built from the module's constants, so it cannot drift again.
+    expect(page).toMatch(/FULFILMENT_(CUTOFF|SENTENCE)/);
+  });
+
   it("the canonical promise names its cutoff and its weekday qualifier", () => {
     // An unqualified "same-day fulfilment" promises same-day shipping to someone
     // ordering at 11pm on a Sunday, which is a dispute waiting to happen.

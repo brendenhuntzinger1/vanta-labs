@@ -195,7 +195,10 @@ type CartContextValue = {
   ) => void;
   updateQuantity: (slug: string, quantity: number) => void;
   removeFromCart: (slug: string) => void;
-  restoreItems: (items: Array<{ slug: string; variantId?: string; name: string; quantity: number; unitPrice: number; image?: string }>) => void;
+  restoreItems: (
+    items: Array<{ slug: string; variantId?: string; name: string; quantity: number; unitPrice: number; image?: string }>,
+    options?: { sessionId?: string | null },
+  ) => void;
   clearCart: () => void;
   openCart: () => void;
   closeCart: () => void;
@@ -204,6 +207,12 @@ type CartContextValue = {
   clearReferralCode: () => void;
   clearReferralMessage: () => void;
   applyCouponCode: (code: string) => void;
+  /**
+   * Arm a code the server has already validated for a known address — the
+   * recovery code a restore link carries. Primes the address so the preview
+   * prices the code the way the checkout will.
+   */
+  restoreCoupon: (input: { code: string; discountType: "percent" | "fixed"; discountValue: number; email: string }) => void;
   clearCouponCode: () => void;
   clearCouponMessage: () => void;
   setKnownEmail: (email: string) => void;
@@ -212,6 +221,7 @@ type CartContextValue = {
 const CartContext = createContext<CartContextValue | undefined>(undefined);
 
 const CART_STORAGE_KEY = "vanta-labs-cart";
+const CART_SESSION_KEY = "vanta-labs-cart-session-id";
 const REFERRAL_COOKIE_KEY = "vl_referral_code";
 // Hard per-line quantity ceiling for the cart. Prevents absurd quantities
 // (999+) that would only fail at order submit, or on untracked inventory be
@@ -311,6 +321,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [couponError, setCouponError] = useState<string | null>(null);
   const [couponSuccess, setCouponSuccess] = useState<string | null>(null);
   const [isSignedIn, setIsSignedIn] = useState(false);
+  /** The /api/account/me answer has arrived (signed in or not). */
+  const [accountChecked, setAccountChecked] = useState(false);
+  /** The promotions / stacking configuration has arrived (or failed). */
+  const [storeConfigLoaded, setStoreConfigLoaded] = useState(false);
   const [pointsBalance, setPointsBalance] = useState(0);
   const [pointsPerDollar, setPointsPerDollar] = useState(0);
   const [pointsMultiplier, setPointsMultiplier] = useState(1);
@@ -438,6 +452,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         if (result.fullName) setCustomerName(result.fullName);
       } catch {
         // Guest shoppers simply see no points UI.
+      } finally {
+        setAccountChecked(true);
       }
     })();
   }, []);
@@ -540,6 +556,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         }
       } catch {
         // Defaults to disabled (matches the server's default) if this fails.
+      } finally {
+        setStoreConfigLoaded(true);
       }
     })();
   }, []);
@@ -627,7 +645,6 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
           window.history.replaceState({}, "", nextUrl);
         }
-        const CART_SESSION_KEY = "vanta-labs-cart-session-id";
         let sessionId = window.localStorage.getItem(CART_SESSION_KEY);
         if (!sessionId) {
           sessionId = crypto.randomUUID();
@@ -1496,7 +1513,18 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // abandoned-cart snapshot. Checkout always re-resolves real price/stock
   // from the DB server-side, so a stale display price here never affects
   // what's actually charged.
-  const restoreItems = (restoredItems: Array<{ slug: string; variantId?: string; name: string; quantity: number; unitPrice: number; image?: string }>) => {
+  const restoreItems = (
+    restoredItems: Array<{ slug: string; variantId?: string; name: string; quantity: number; unitPrice: number; image?: string }>,
+    options?: { sessionId?: string | null },
+  ) => {
+    // A restore link continues the cart's OWN session: the tracker then
+    // updates that abandoned_carts row rather than opening a second one on this
+    // device and starting a second recovery sequence for the same shopper.
+    const sessionId = options?.sessionId?.trim();
+    if (sessionId) {
+      try { window.localStorage.setItem(CART_SESSION_KEY, sessionId); } catch { /* storage unavailable: in-memory only */ }
+      setCartSessionId(sessionId);
+    }
     setItems(
       restoredItems.map((item) => ({
         key: item.variantId ? `${item.slug}::${item.variantId}` : item.slug,
@@ -1741,6 +1769,55 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setCouponSuccess("Coupon removed.");
   };
 
+  // A restored code is PARKED, then armed by the effect below once the cart
+  // knows who is signed in and which promotion is live. Armed on the spot it
+  // could contradict both: a code bound to another address than the account's,
+  // or one a non-stacking promotion refuses — which applyCouponCode would have
+  // turned away, and which the checkout cannot then submit.
+  const [pendingRestoredCoupon, setPendingRestoredCoupon] = useState<{ code: string; discountType: "percent" | "fixed"; discountValue: number; email: string } | null>(null);
+  const restoreCoupon = (input: { code: string; discountType: "percent" | "fixed"; discountValue: number; email: string }) => {
+    const code = input.code.trim().toUpperCase();
+    const email = input.email.trim().toLowerCase();
+    if (!code || !email) return;
+    setPendingRestoredCoupon({ code, discountType: input.discountType, discountValue: Number(input.discountValue ?? 0), email });
+  };
+  useEffect(() => {
+    if (!pendingRestoredCoupon || !accountChecked || !storeConfigLoaded) return;
+    const pending = pendingRestoredCoupon;
+    setPendingRestoredCoupon(null);
+    const sessionEmail = knownEmail.trim().toLowerCase();
+    if (isSignedIn && sessionEmail && sessionEmail !== pending.email) {
+      // The checkout will price this account's email, not the code's.
+      setCouponDetails(null);
+      setCouponCode(null);
+      setCouponError("This coupon code is tied to a different email address.");
+      setCouponSuccess(null);
+      return;
+    }
+    if (buy3Get1FreeDiscount > 0 && !activePromotionAllowsCoupon) {
+      setCouponDetails(null);
+      setCouponCode(null);
+      setCouponError(`Coupon codes cannot be combined with the ${activePromotionName ?? "current"} promotion.`);
+      setCouponSuccess(null);
+      return;
+    }
+    // The code is bound to this address; without it the preview and the
+    // validator would refuse the code the server just handed over.
+    if (!isSignedIn) setKnownEmail(pending.email);
+    setCouponDetails({ code: pending.code, discountType: pending.discountType, discountValue: pending.discountValue });
+    setCouponCode(pending.code);
+    setCouponError(null);
+    setCouponSuccess("Coupon applied.");
+    // One code slot, exactly as applyCouponCode: a coupon replaces a referral.
+    setReferralDetails(null);
+    setReferralCode(null);
+    setReferralError(null);
+    setReferralSuccess(null);
+    if (typeof document !== "undefined") {
+      document.cookie = `${REFERRAL_COOKIE_KEY}=; path=/; max-age=0; samesite=lax`;
+    }
+  }, [pendingRestoredCoupon, accountChecked, storeConfigLoaded, isSignedIn, knownEmail, buy3Get1FreeDiscount, activePromotionAllowsCoupon, activePromotionName]);
+
   const clearCouponMessage = () => {
     setCouponError(null);
     setCouponSuccess(null);
@@ -1824,6 +1901,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     clearReferralCode,
     clearReferralMessage,
     applyCouponCode,
+    restoreCoupon,
     clearCouponCode,
     clearCouponMessage,
     setKnownEmail,

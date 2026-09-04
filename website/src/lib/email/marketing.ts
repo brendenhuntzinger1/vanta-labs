@@ -7,6 +7,7 @@ import { getEmailRuntimeConfig, resolveMarketingFrom, resolveMarketingReplyTo } 
 import type { EmailSendResult, EmailTemplate } from "@/lib/email/types";
 import { escapeHtml } from "@/lib/email/templates";
 import { isNonMailableAddress } from "@/lib/email/non-mailable";
+import { claimMarketingSend, enqueueDeferredMarketingEmail } from "@/lib/email/frequency";
 
 // Compliance wrapper for every promotional/marketing send (welcome,
 // monthly benefits, birthday, win-back, launch, back-in-stock, cart
@@ -53,21 +54,72 @@ export function extractEmailAddress(from: string): string {
   return candidate.includes("@") ? candidate : "";
 }
 
+/** A marketing message after the wrapper has added its footer, address and pixel. */
+export type RenderedMarketingEmail = { to: string; subject: string; html: string; text: string };
+
+export type MarketingSendResult = EmailSendResult & {
+  /** Unsubscribed, or a sink address: never retry. */
+  suppressed?: boolean;
+  /** Held back by the frequency guard; retryAt says when the window opens. */
+  deferred?: boolean;
+  retryAt?: number;
+  /** Deferred AND parked in marketing_send_queue for the cron sweep to deliver. */
+  queued?: boolean;
+  /** The send-once index already holds this reference: somebody else sent it. */
+  duplicate?: boolean;
+};
+
+export type MarketingSendOptions = {
+  campaignType: string;
+  referenceId?: string | null;
+  templateKey: string;
+  /**
+   * The caller already claimed this send through the frequency guard and holds
+   * the email_send_log row at 'sending'; close THAT row rather than claiming
+   * again. Cart recovery does this so the claim precedes its coupon mint.
+   */
+  claimedLogId?: string | null;
+  /**
+   * Legacy: the caller owns the email_send_log row entirely (it wrote it before
+   * calling and closes it after). No claim, no logging here.
+   */
+  alreadyLogged?: boolean;
+  /**
+   * What to do when the frequency guard defers this message. "report" (the
+   * default) returns { deferred: true } and lets the caller's own sweep retry;
+   * "queue" parks the rendered message in marketing_send_queue for the cron
+   * sweep to deliver once the window opens — for event mail with no sweep.
+   */
+  onDeferred?: "report" | "queue";
+  /**
+   * The caller already asked the guard and found it UNAVAILABLE (un-migrated
+   * database, transient error). Do not ask again — a second answer of
+   * "deferred" after the caller has minted a coupon and taken its stage claim
+   * would strand both. Send, and log after the fact, exactly as the legacy path.
+   */
+  guardUnavailable?: boolean;
+};
+
+/**
+ * A caller-held claim row must not stay at 'sending' when this wrapper refuses
+ * the address before the wire: the row would count as pressure for fifteen
+ * minutes and read as a stranded send for ever. Best-effort, never throws.
+ */
+async function releaseHeldClaim(logId: string | null | undefined): Promise<void> {
+  if (!logId) return;
+  try {
+    await supabaseAdmin.from("email_send_log").update({ status: "failed" }).eq("id", logId);
+  } catch {
+    // The row stays 'sending'; the guard ignores it after fifteen minutes.
+  }
+}
+
 export async function sendMarketingEmail(
   input: {
     to: string;
-    campaignType: string;
-    referenceId?: string;
-    templateKey: string;
     openTrackingPixelUrl?: string;
-    /**
-     * The caller already wrote the email_send_log row (it claimed the
-     * send-once slot before calling). Writing a second one here would be a
-     * duplicate the automation unique index rejects anyway.
-     */
-    alreadyLogged?: boolean;
-  } & EmailTemplate,
-): Promise<EmailSendResult & { suppressed?: boolean }> {
+  } & MarketingSendOptions & EmailTemplate,
+): Promise<MarketingSendResult> {
   const email = input.to.trim().toLowerCase();
 
   // THE SINK-ADDRESS GUARD BELONGS HERE, NOT ONLY IN THE AUDIENCE RESOLVERS.
@@ -81,6 +133,7 @@ export async function sendMarketingEmail(
   // time. One check at the choke point covers every marketing path there is,
   // including the ones added after this comment.
   if (isNonMailableAddress(email)) {
+    await releaseHeldClaim(input.claimedLogId);
     return { success: false, suppressed: true, error: "Address cannot receive mail (provider test domain)" };
   }
 
@@ -91,6 +144,7 @@ export async function sendMarketingEmail(
     .maybeSingle();
 
   if (suppressed) {
+    await releaseHeldClaim(input.claimedLogId);
     return { success: false, suppressed: true, error: "Recipient has unsubscribed from marketing emails" };
   }
 
@@ -229,6 +283,134 @@ export async function sendMarketingEmail(
   // reputation stays split, and REPLY-TO an address that receives. A
   // cross-domain Reply-To is ordinary and costs nothing. A From nobody can
   // answer costs a customer.
+  // Rendering is done. From here the message is data, and delivery — the
+  // guard's claim, the wire, the log — is one function, shared with the
+  // deferred queue so a parked message is delivered by exactly the same path.
+  return sendRenderedMarketingEmail({
+    rendered: { to: input.to, subject: input.subject, html, text },
+    campaignType: input.campaignType,
+    referenceId: input.referenceId ?? null,
+    templateKey: input.templateKey,
+    claimedLogId: input.claimedLogId ?? null,
+    alreadyLogged: input.alreadyLogged,
+    onDeferred: input.onDeferred ?? "report",
+    guardUnavailable: input.guardUnavailable,
+    unsubscribeUrl,
+    emailConfig,
+  });
+}
+
+/**
+ * Deliver an already-rendered marketing message: claim the inbox through the
+ * frequency guard, send, and record the outcome.
+ *
+ * THE CLAIM COMES FIRST. marketing_send_claim (sql/marketing-frequency-guard.sql)
+ * writes the email_send_log row at 'sending' under a lock on the address, so
+ * two senders in the same instant cannot both go, and every marketing sender —
+ * campaigns, automations, cart recovery, restock alerts, membership mail —
+ * meets the same rule here. A deferral is reported (or queued) and NOTHING is
+ * sent; a claim is closed to 'sent' or 'failed' after the wire answers, with
+ * the provider's message id for the delivery join.
+ *
+ * If the database cannot answer the claim at all — the migration has not run,
+ * or a transport blip — delivery proceeds and the row is written after the
+ * send, exactly as it was before the guard existed. That is fail-OPEN on the
+ * frequency rule and fail-CLOSED on nothing: a missed marketing email costs
+ * nothing next to a lost one, and the console says which happened.
+ */
+export async function sendRenderedMarketingEmail(input: {
+  rendered: RenderedMarketingEmail;
+  unsubscribeUrl?: string;
+  emailConfig?: Awaited<ReturnType<typeof getEmailRuntimeConfig>>;
+} & MarketingSendOptions): Promise<MarketingSendResult> {
+  const email = input.rendered.to.trim().toLowerCase();
+
+  // The queue's drain path arrives here directly, so the two gates the wrapper
+  // applies before rendering are applied again: a person may have
+  // unsubscribed since the message was parked.
+  if (isNonMailableAddress(email)) {
+    await releaseHeldClaim(input.claimedLogId);
+    return { success: false, suppressed: true, error: "Address cannot receive mail (provider test domain)" };
+  }
+  if (!input.unsubscribeUrl) {
+    const { data: suppressed } = await supabaseAdmin
+      .from("email_suppressions")
+      .select("email")
+      .eq("email", email)
+      .maybeSingle();
+    if (suppressed) {
+      await releaseHeldClaim(input.claimedLogId);
+      return { success: false, suppressed: true, error: "Recipient has unsubscribed from marketing emails" };
+    }
+  }
+
+  const emailConfig = input.emailConfig ?? await getEmailRuntimeConfig();
+  const unsubscribeUrl = input.unsubscribeUrl
+    ?? `${getSiteUrl()}/api/unsubscribe?email=${encodeURIComponent(email)}&token=${generateUnsubscribeToken(email)}`;
+
+  // WHO HOLDS THE SEND-LOG ROW.
+  //
+  //   claimedLogId   the caller claimed already; close its row.
+  //   alreadyLogged  the caller owns its row entirely (legacy automations path).
+  //   otherwise      claim here, and let the guard decide.
+  let logId: string | null = input.claimedLogId ?? null;
+  let legacyLogAfterSend = false;
+  if (!logId && !input.alreadyLogged && input.guardUnavailable) {
+    legacyLogAfterSend = true;
+  } else if (!logId && !input.alreadyLogged) {
+    const claim = await claimMarketingSend({
+      email,
+      campaignType: input.campaignType,
+      referenceId: input.referenceId ?? null,
+      templateKey: input.templateKey,
+    });
+    switch (claim.outcome) {
+      case "claimed":
+        logId = claim.logId;
+        break;
+      case "deferred": {
+        if (input.onDeferred === "queue") {
+          const queued = await enqueueDeferredMarketingEmail({
+            rendered: { ...input.rendered, to: email },
+            campaignType: input.campaignType,
+            referenceId: input.referenceId ?? null,
+            templateKey: input.templateKey,
+            notBefore: claim.retryAt,
+          });
+          return {
+            success: false,
+            deferred: true,
+            queued,
+            retryAt: claim.retryAt,
+            error: queued
+              ? "Deferred by the marketing frequency guard; queued for delivery once the window opens."
+              : "Deferred by the marketing frequency guard, and the queue was unavailable.",
+          };
+        }
+        return {
+          success: false,
+          deferred: true,
+          retryAt: claim.retryAt,
+          error: "Deferred: this address received a marketing email inside the last 24 hours.",
+        };
+      }
+      case "duplicate":
+        return { success: false, duplicate: true, error: "Already sent: the send-once slot for this message is taken." };
+      case "refused":
+        return { success: false, error: "Refused: no recipient or campaign type." };
+      case "unavailable":
+        console.error("[marketing] frequency guard unavailable; sending and logging after the fact", input.campaignType, claim.error);
+        legacyLogAfterSend = true;
+        break;
+    }
+  }
+
+  // Marketing sends from its OWN address when one is configured, so a campaign
+  // that draws complaints damages only that domain's reputation — not the one
+  // carrying receipts and password resets. Unset, this resolves to the
+  // transactional From and nothing changes. FROM the subdomain, REPLY-TO an
+  // address that receives: a sending domain is not a mailbox, and the
+  // List-Unsubscribe mailto has to reach one.
   const marketingFrom = resolveMarketingFrom(emailConfig);
   const marketingReplyTo = resolveMarketingReplyTo(emailConfig);
   const unsubscribeMailbox = extractEmailAddress(marketingReplyTo);
@@ -239,34 +421,38 @@ export async function sendMarketingEmail(
 
   const result = await sendEmail({
     headers: listHeaders,
-    to: input.to,
-    subject: input.subject,
-    html,
-    text,
+    to: input.rendered.to,
+    subject: input.rendered.subject,
+    html: input.rendered.html,
+    text: input.rendered.text,
     from: marketingFrom,
     replyTo: marketingReplyTo,
   });
 
-  // Logged best-effort - a logging failure must never fail the send itself.
-  //
   // The OUTCOME is recorded, not just the attempt. Callers dedupe against this
   // log ("has this already gone to this address?"), and a row that doesn't say
   // whether the send succeeded turns a transient provider failure into a
-  // permanent one: the recipient looks done and is never retried.
+  // permanent one: the recipient looks done and is never retried. Best-effort:
+  // a logging failure must never fail the send itself.
   try {
     if (input.alreadyLogged) return result;
-    await supabaseAdmin.from("email_send_log").insert({
-      campaign_type: input.campaignType,
-      reference_id: input.referenceId ?? null,
-      recipient_email: email,
-      template_key: input.templateKey,
-      sent_at: new Date().toISOString(),
+    const outcome = {
       status: result.success ? "sent" : "failed",
-      // The join to the provider's delivery events. Automations already kept
-      // it; campaigns and cart recovery did not, so their delivered and
-      // bounced counts could only be guessed at. Nullable for SMTP.
+      sent_at: new Date().toISOString(),
+      // The join to the provider's delivery events. Nullable for SMTP.
       ...(result.providerMessageId ? { provider_message_id: result.providerMessageId } : {}),
-    });
+    };
+    if (logId && !legacyLogAfterSend) {
+      await supabaseAdmin.from("email_send_log").update(outcome).eq("id", logId);
+    } else {
+      await supabaseAdmin.from("email_send_log").insert({
+        campaign_type: input.campaignType,
+        reference_id: input.referenceId ?? null,
+        recipient_email: email,
+        template_key: input.templateKey,
+        ...outcome,
+      });
+    }
   } catch {
     // Non-fatal.
   }

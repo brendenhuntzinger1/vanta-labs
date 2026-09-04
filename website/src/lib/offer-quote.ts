@@ -38,7 +38,15 @@ export interface OfferQuote {
   finalTotal: number;
   couponCode: string | null;
   giftLines: OfferQuoteLine[];
-  offer: { rewardKind: string; description: string } | null;
+  offer: {
+    rewardKind: string;
+    description: string;
+    productApplied?: boolean;
+    shippingApplied?: boolean;
+    percentApplied?: boolean;
+  } | null;
+  /** The resolved discount's label, e.g. "15% gift" or "Coupon". */
+  discountLabel?: string;
   /** True when priced for the address the offer was mailed to, because the
    *  shopper has not typed one yet. The caller words the banner accordingly. */
   assumedBoundEmail: boolean;

@@ -3,7 +3,7 @@ import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { canManageEmailCampaigns } from "@/lib/admin-roles";
 import { getEmailDashboard, loadSubscriberDirectory } from "@/lib/admin-email";
 import { loadAutomations } from "@/lib/email/automations";
-import { loadAutomationStats } from "@/lib/email/automation-stats";
+import { loadAutomationStats, parseStatsRange, emptyAutomationStatsReport } from "@/lib/email/automation-stats";
 import { OFFER_CATALOG } from "@/lib/offers/customer-offers";
 import { getEmailAdminSettings } from "@/lib/email/settings";
 import { CAMPAIGN_SEGMENTS } from "@/lib/email/audience";
@@ -22,13 +22,21 @@ async function loadCategories(): Promise<string[]> {
   }
 }
 
-export default async function AdminEmailPage() {
+export default async function AdminEmailPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
   const session = await verifyAdminSessionFromCookie();
   if (!session) {
     redirect("/vault");
   }
 
   const canManage = canManageEmailCampaigns(session.role);
+  // The automations panel's reporting window (?range=7d|30d|90d|all). Sends,
+  // clicks, orders and gifts are all measured inside the same window.
+  const params = await searchParams;
+  const statsRange = parseStatsRange(Array.isArray(params.range) ? params.range[0] : params.range);
 
   // Every load is independently fault-tolerant: a campaign system that can't
   // render because one query failed is worse than one showing partial data.
@@ -39,14 +47,16 @@ export default async function AdminEmailPage() {
         loadAutomations().catch(() => []),
         // loadAutomationStats never rejects — an operator locked out of editing
         // their copy because a reporting query failed is a worse outcome than
-        // one looking at zeroes — but the catch stays for symmetry with the
-        // rest of this list.
-        loadAutomationStats().catch(() => ({})),
+        // one looking at zeroes — and it never hides a failure either: a read
+        // that fails comes back ok:false and the panel says so instead of
+        // showing zeroes. The catch stays for symmetry with the rest of this list.
+        loadAutomationStats(statsRange).catch((error: unknown) =>
+          emptyAutomationStatsReport(statsRange, error instanceof Error ? error.message : String(error))),
         getEmailAdminSettings().catch(() => null),
         loadCategories(),
         loadSubscriberDirectory(),
       ])
-    : [{ subscribers: 0, campaigns: [], totals: { sent: 0, opened: 0, clicked: 0, orders: 0, revenue: 0 } }, [], {}, null, [], emptyDirectory];
+    : [{ subscribers: 0, campaigns: [], totals: { sent: 0, opened: 0, clicked: 0, orders: 0, revenue: 0 } }, [], emptyAutomationStatsReport(statsRange), null, [], emptyDirectory];
 
   return (
     <div className="vl-page-shell min-h-screen bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.1),transparent_52%),linear-gradient(145deg,#04060f_0%,#0b1324_50%,#060911_100%)] px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">

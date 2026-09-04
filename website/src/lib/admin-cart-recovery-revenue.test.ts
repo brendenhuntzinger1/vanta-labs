@@ -145,6 +145,18 @@ describe("recovered revenue", () => {
     expect(stats.revenueRecoveredCents).toBe(0);
   });
 
+  it("an order the primary marketing source credits to another channel is a recovered CART, not recovered REVENUE", async () => {
+    recoveredBy("automation", { payment_status: "paid", amount_paid: 200, refund_amount: 0, marketing_source_kind: "automation" });
+    recoveredBy("campaign", { payment_status: "paid", amount_paid: 200, refund_amount: 0, marketing_source_kind: "campaign" });
+    recoveredBy("ambassador", { payment_status: "paid", amount_paid: 200, refund_amount: 0, marketing_source_kind: "ambassador" });
+    recoveredBy("coupon", { payment_status: "paid", amount_paid: 100, refund_amount: 0, marketing_source_kind: "cart_recovery" });
+    recoveredBy("organic", { payment_status: "paid", amount_paid: 50, refund_amount: 0, marketing_source_kind: "organic" });
+    recoveredBy("legacy", { payment_status: "paid", amount_paid: 25, refund_amount: 0, marketing_source_kind: null });
+    const stats = await getCartRecoveryStats();
+    expect(stats.totalRecovered).toBe(6);
+    expect(stats.revenueRecoveredCents).toBe((100 + 50 + 25) * 100);
+  });
+
   it("agrees with ledger.netOrderRevenue across the whole basket", async () => {
     // The property, not five examples: whatever the basket, this tile and the
     // canonical revenue definition land on the same number.
