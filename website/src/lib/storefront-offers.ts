@@ -35,6 +35,7 @@ import {
   offerId,
   type StorefrontOffer,
 } from "@/lib/storefront-offer-format";
+import { activeSeasonalCampaign, brandOffersForSeason } from "@/lib/labor-day-campaign";
 import { advertisableBxgyPromotions, promotionHeadline, storefrontDescription, type BxgyPromotion } from "@/lib/bxgy-engine";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
 
@@ -357,9 +358,22 @@ export async function resolveStorefrontOffers(deps: ResolveOffersDeps = {}): Pro
   }
 
   // Drop anything whose end date passed between the query and here, then order.
-  return offers
+  const live = offers
     .filter((o) => !o.endsAt || new Date(o.endsAt).getTime() > now.getTime())
     .sort((a, b) => a.priority - b.priority || a.headline.localeCompare(b.headline));
+
+  // SEASONAL DRESS, LAST, AND ONLY EVER DRESS.
+  //
+  // Everything above resolved WHAT the store is honouring. This one step
+  // decides how the leading offer is worded and painted during a campaign
+  // window, and it is deliberately the final thing that happens: it reads the
+  // sorted list, so the offer it brands is by construction the offer the bar
+  // leads with, and it can only change an eyebrow, an id and a theme.
+  //
+  // It cannot invent an offer. Out of season, and on a store running no
+  // promotion at all, it is a pass-through — which is what makes the flag
+  // disappear on 9 September with nobody touching a setting.
+  return brandOffersForSeason(live, activeSeasonalCampaign(now));
 }
 
 /**

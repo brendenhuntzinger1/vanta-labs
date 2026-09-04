@@ -13,6 +13,17 @@ import { formatDisplayDate } from "@/lib/format-date";
 
 export type OfferKind = "coupon" | "welcome" | "buy3get1" | "free_shipping" | "bundle";
 
+/**
+ * A seasonal treatment for the bar. Absent on almost every offer, almost always.
+ *
+ * PAINT AND AN EYEBROW, NEVER A PRICE. A theme is stamped onto an offer AFTER
+ * it has been resolved from the system that enforces it (see
+ * labor-day-campaign.ts), and it may not alter the headline, the code, the end
+ * date or the terms — so a themed bar advertises exactly what an unthemed one
+ * would have, in different clothes.
+ */
+export type OfferTheme = "americana";
+
 export interface StorefrontOffer {
   /**
    * Stable identity, and deliberately CONTENT-DERIVED rather than a row id.
@@ -53,6 +64,15 @@ export interface StorefrontOffer {
    * but they never open the bar by themselves.
    */
   standing: boolean;
+  /**
+   * Seasonal dress, applied on top of a fully resolved offer. Absent = the
+   * ordinary bar.
+   *
+   * Optional rather than required so that every place an offer is BUILT stays
+   * free of seasonal concerns — the campaign is stamped on afterwards, in one
+   * place, and nothing that reads a promotion has to know a holiday exists.
+   */
+  theme?: OfferTheme;
 }
 
 // ---------------------------------------------------------------------------

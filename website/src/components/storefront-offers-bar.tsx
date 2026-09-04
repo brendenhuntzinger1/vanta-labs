@@ -36,6 +36,14 @@ import {
 // after it has arrived. It is loud in the one way that costs nothing to read —
 // colour and size — and quiet in every way that reads as a discount store.
 //
+// ONE THING MOVES NOW, AND ONLY IN ONE DRESS. A seasonal theme (see
+// labor-day-campaign.ts) may drift its own background — the Americana banner's
+// stripes cross the band over 40 seconds. That is a deliberate exception to the
+// paragraph above and it is fenced accordingly: the moving layer is decorative,
+// aria-hidden, sits BEHIND the words, and never moves the text, the code or the
+// buttons, which is what the rule was protecting. It is also off entirely under
+// prefers-reduced-motion. The default gold bar is unchanged and still static.
+//
 // WHY IT IS IN NORMAL FLOW. Same reason the consent bar is (see
 // cookie-consent.tsx): the site header is `position: fixed`, and anything
 // pinned near it either hides under it or covers the page. In flow, at the top,
@@ -215,7 +223,20 @@ export function StorefrontOffersBar({ offers }: { offers: StorefrontOffer[] }) {
 
   return (
     <>
-      <section className="vl-offer-bar" aria-label="Current offers">
+      {/* THE THEME IS THE CURRENT OFFER'S, not the store's and not the date's.
+          The bar is dressed by whichever offer it is showing, so switching the
+          live promotion in admin switches the banner with it, and an offer
+          carrying no theme renders the ordinary bar with no branch to take. */}
+      <section
+        className={`vl-offer-bar${current.theme ? ` vl-offer-bar--${current.theme}` : ""}`}
+        aria-label="Current offers"
+      >
+        {/* The flag. PURELY DECORATIVE and therefore aria-hidden: everything it
+            conveys is already in the words beside it, and a screen reader
+            announcing "star field" mid-offer is noise. It is a sibling rather
+            than a background on .vl-offer-bar so the moving layer can be
+            composited on its own, without the text above it repainting. */}
+        {current.theme === "americana" ? <span className="vl-offer-flag" aria-hidden="true" /> : null}
         <div className="vl-offer-inner">
           {current.href ? (
             <Link href={current.href} className="vl-offer-main vl-focus-ring" aria-label={`${current.headline}. Shop the offer.`}>
