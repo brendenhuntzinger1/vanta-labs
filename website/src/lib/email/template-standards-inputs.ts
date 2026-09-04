@@ -19,7 +19,7 @@ export const INPUTS: Record<string, unknown> = {
   deliveryConfirmationTemplate: { customerName: "Zain", orderId: "VL-1001", shopUrl: URL_ },
   ambassadorInviteTemplate: { name: "Zain", inviteUrl: URL_, commissionPercent: 20 },
   ambassadorApplicationReceivedTemplate: { name: "Zain" },
-  ambassadorApprovedTemplate: { name: "Zain", referralCode: "ZAIN", dashboardUrl: URL_, commissionPercent: 20, personalDiscountPercent: 20, referralDiscountPercent: 10 },
+  ambassadorApprovedTemplate: { name: "Zain", referralCode: "ZAIN", dashboardUrl: URL_, commissionPercent: 20, personalDiscountPercent: 20, referralDiscountPercent: 10, minimumQualifyingOrder: 100 },
   ambassadorPayoutSentTemplate: { name: "Zain", amount: 250, method: "PayPal", handle: "z@example.test", orderCount: 5, dashboardUrl: URL_ },
   orderCancelledTemplate: { customerName: "Zain", orderId: "VL-1001", reason: "Out of stock", refundNote: "Refunded in full.", supportEmail: "support@vantalabsresearch.com" },
   emailChangeConfirmationTemplate: { name: "Zain", newEmail: "new@example.com", confirmUrl: URL_ },
@@ -49,5 +49,5 @@ export const INPUTS: Record<string, unknown> = {
   contactFormAutoReplyTemplate: { firstName: "Zain", subject: "Question", message: "Hello" },
   wholesaleInquiryNotificationTemplate: { firstName: "Zain", lastName: "M", email: "z@example.test", phone: "+1", organization: "Lab", volume: "100", products: "BPC", message: "Hello" },
   wholesaleInquiryAutoReplyTemplate: { firstName: "Zain" },
-  campaignTemplate: { subject: "News", previewText: "News", headline: "News", body: "<p>Hi</p>", promoCode: "SAVE10", ctaLabel: "Shop", ctaUrl: URL_ },
+  campaignTemplate: { subject: "News", previewText: "News", headline: "News", body: "<p>Hi</p>", promoCode: "SAVE10", ctaLabel: "Shop", ctaUrl: URL_, offerTerms: "Your gift: a free GHK-Cu on any order of $60 or more, through October 4, 2026. One per customer." },
 };

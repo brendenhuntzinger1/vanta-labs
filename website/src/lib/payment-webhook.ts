@@ -529,7 +529,7 @@ async function releaseEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, order_number, order_type, membership_tier_id, membership_cycle, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, shipping_address, city, postal_code, points_redeemed, store_credit_redeemed_cents")
+    .select("id, order_id, order_number, order_type, membership_tier_id, membership_cycle, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, shipping_address, city, postal_code, points_redeemed, store_credit_redeemed_cents, inventory_committed_at")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -2662,10 +2662,21 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     // "partially_refunded" is a paid-derived state (a partial refund was already
     // issued on a paid order), so a later full refund/cancel must still restock.
     const wasPaid = priorPaymentStatus === "paid" || priorPaymentStatus === "partially_refunded";
+    // "PAID" IS A PROXY; THE RECEIPT IS `inventory_committed_at`. An order can
+    // reach paid while its decrement failed (alerted, latch left null — see the
+    // paid branch below). Restocking THAT order on a refund would add units
+    // that never left the shelf, which is the exact fault the cancel path
+    // (order-cancellation-inventory.ts) was rewritten to stop. So the latch
+    // decides here too: nothing committed means nothing to return, and only a
+    // still-active hold, if any, is released.
+    const stockCommitted = Boolean(orderRecord?.inventory_committed_at);
+    if (wasPaid && refundOutcome.shouldRestock && !stockCommitted && (nextStatus === "refunded" || nextStatus === "canceled")) {
+      await releaseInventoryForOrder(orderId).catch(() => {});
+    }
     // Restock ONLY on a full reversal — a partial refund must not return the
     // whole order's stock. A later full refund/cancel still restocks (its own
     // atomic claim), because a partial leaves status "partially_refunded".
-    if (wasPaid && refundOutcome.shouldRestock && (nextStatus === "refunded" || nextStatus === "canceled")) {
+    if (wasPaid && stockCommitted && refundOutcome.shouldRestock && (nextStatus === "refunded" || nextStatus === "canceled")) {
       const isMembershipOrder = String(orderRecord?.order_type ?? "product") === "membership";
       // Atomic exactly-once claim: only the FIRST refund/cancel event for this
       // order restocks; a concurrent chargeback or replayed event loses the

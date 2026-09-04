@@ -122,6 +122,13 @@ export interface QuoteOrderLine {
   product: ServerProduct;
   quantity: number;
   baseUnitPrice: number;
+  /**
+   * True for the free unit a one-time customer offer added. The customer did
+   * not buy it, so it must never count as a bought unit anywhere that counts
+   * units — see toPromotionCartLines. Inventory, order_items and COGS still
+   * see it, because it ships.
+   */
+  gift?: true;
 }
 
 export interface ValidatedReferral {
@@ -283,9 +290,15 @@ export function validateCustomer(customer: CustomerInput) {
 // Buy 3 Get 1 is one of those configurations and prices exactly as it always
 // did: floor(n / 4) cheapest units free, across mixed products and quantities.
 function toPromotionCartLines(
-  lineItems: Array<{ product: ServerProduct; quantity: number; baseUnitPrice: number }>,
+  lineItems: QuoteOrderLine[],
 ): BxgyCartLine[] {
-  return lineItems.map((line) => ({
+  // THE GIFT IS NOT A BOUGHT UNIT. The engine expands every line into units,
+  // keeps anything priced >= 0 and rewards the cheapest, so a $0 gift line was
+  // the first unit it picked — a basket that had earned Buy 3 Get 1 lost the
+  // whole reward to a unit the store was giving away anyway. It is filtered
+  // here, at the one door into the engine, rather than by price: a genuinely
+  // free catalogue item is still a unit the customer chose.
+  return lineItems.filter((line) => !line.gift).map((line) => ({
     // `product.id` is `slug` or `slug::doseId`; eligibility is per product.
     slug: line.product.id.split("::")[0],
     listUnitPrice: line.baseUnitPrice,
@@ -679,10 +692,17 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     // A gift we cannot ship is worse than no gift: it would be promised in the
     // email, shown in the cart, and then oversold. Out of stock means the
     // offer simply does not apply to this order and stays spendable for later.
+    //
+    // stockLevels carries only TRACKED rows (getStockLevelsBySlugs), so a
+    // number here is a real count and 0 means "tracked, and there are none".
+    // This used to test `offerStock > 0 && offerStock < 1`, which no integer
+    // count can satisfy, so a tracked-but-empty gift whose catalogue status
+    // had not caught up was added anyway — and reserve_inventory then refused
+    // the whole order over a unit the shopper never asked for.
     const shippable = Boolean(offerProduct)
       && offerStockStatus !== "Out of Stock"
       && offerStockStatus !== "Reserved"
-      && !(typeof offerStock === "number" && Number.isFinite(offerStock) && offerStock > 0 && offerStock < 1);
+      && !(typeof offerStock === "number" && Number.isFinite(offerStock) && offerStock <= 0);
 
     if (offerProduct && shippable && offerMinimumMet(offer, Math.round(subtotal * 100))) {
       lineItems.push({
@@ -702,6 +722,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
         // is ever included in one: the customer was never charged for it and
         // was never "discounted" from anything.
         baseUnitPrice: 0,
+        gift: true,
       });
       appliedOffer = {
         token: input.offerToken,

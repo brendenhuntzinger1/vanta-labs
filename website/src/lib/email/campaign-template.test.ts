@@ -26,6 +26,23 @@ function render(overrides: Partial<Parameters<typeof campaignTemplate>[0]> = {})
   });
 }
 
+describe("a gift's terms travel with the message", () => {
+  const TERMS = "Your gift: a free GHK-Cu is added to your order on any order of $60 or more, through October 4, 2026. One per customer, for this email address only.";
+
+  it("renders the terms in both parts, so the promise and its conditions cannot be separated", () => {
+    const { html, text } = render({ offerTerms: TERMS });
+    expect(html).toContain("any order of $60 or more");
+    expect(html).toContain("One per customer");
+    expect(text).toContain(TERMS);
+  });
+
+  it("escapes the terms like everything else, and renders nothing when there is no gift", () => {
+    expect(render({ offerTerms: "<b>free</b>" }).html).toContain("&lt;b&gt;free&lt;/b&gt;");
+    expect(render({ offerTerms: null }).html).not.toContain("One per customer");
+    expect(render({}).text).not.toContain("Your gift");
+  });
+});
+
 describe("body copy is text, never markup", () => {
   it("escapes HTML an operator pastes in", () => {
     const email = render({ body: "<script>alert(1)</script>" });

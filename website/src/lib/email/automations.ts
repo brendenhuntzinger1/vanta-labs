@@ -8,7 +8,7 @@ import { loadConsentedAudience } from "@/lib/email/audience";
 import { isPaidOrderStatus } from "@/lib/ledger";
 import { buildAutomationClickUrl, buildAutomationOpenUrl } from "@/lib/email/automation-links";
 import { resolveSitePath } from "@/lib/email/cta-path";
-import { isOfferKey, issueCustomerOffer } from "@/lib/offers/customer-offers";
+import { describeOfferTerms, isOfferKey, issueCustomerOffer } from "@/lib/offers/customer-offers";
 import { getSiteUrl } from "@/lib/env";
 
 /**
@@ -416,21 +416,50 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
         // The reference id is inside the signature, so each SEND is its own
         // cohort — a customer won back twice produces two references and two
         // separately measurable episodes.
+        // CLAIM BEFORE MINTING OR SENDING. alreadySent above is a snapshot
+        // taken once per automation; this is the check that holds across two
+        // sweeps running at the same time. If another one already has this
+        // reference, stop here.
+        //
+        // The claim comes BEFORE the offer is minted, and the order matters:
+        // the token is never stored, so a sweep that minted first and then
+        // lost the claim would throw its token away — and the sweep that won
+        // would find the index already taken and mail the gift copy with no
+        // token behind it. Only the claim winner mints, so the only token in
+        // existence is the one in the email that actually goes out.
+        if (!(await claimAutomationSend(campaignType, target.referenceId, target.email, templateKey))) {
+          result.skipped++;
+          continue;
+        }
+
         // MINT THE ONE-TIME OFFER, IF THIS AUTOMATION CARRIES ONE.
         //
         // Per recipient, and only for the message about to go out. The token
         // exists in exactly two places from here: this variable, and the email
         // the customer receives — customer_offers stores only its hash.
         //
-        // A null means no offer applies to this send, and there are three
-        // ordinary ways to get one: the automation has no offer configured,
-        // the recipient already holds a live token (the unique index refusing
-        // a second, which is the whole point of it), or the insert failed. In
-        // every case the message still goes, with its ordinary CTA. A gift is
-        // not worth failing a retention email over.
-        const offerToken = isOfferKey(automation.offer_key)
-          ? (await issueCustomerOffer({ offerKey: automation.offer_key, email: target.email }))?.token
-          : undefined;
+        // AN AUTOMATION THAT CARRIES A GIFT DOES NOT SEND WITHOUT ONE. The
+        // operator's copy says "here is your free GHK-Cu"; a message that says
+        // so with no token behind it is a promise the checkout cannot keep,
+        // and the customer finds out at the till. So a missing token closes the
+        // slot as 'failed' — which falls outside the send-once index, exactly
+        // as a provider failure does — and the next sweep tries again, by which
+        // time the usual cause (a checkout holding the previous token) has
+        // settled. The automation's error list says why, so it is visible in
+        // the cron report rather than silent.
+        let offerToken: string | undefined;
+        let offerTerms: string | undefined;
+        if (isOfferKey(automation.offer_key)) {
+          const issued = await issueCustomerOffer({ offerKey: automation.offer_key, email: target.email });
+          if (!issued) {
+            await closeAutomationSend(campaignType, target.referenceId, "failed");
+            result.failed++;
+            result.errors.push(`${automation.key}: no ${automation.offer_key} token could be issued for ${target.email}; send deferred to the next sweep`);
+            continue;
+          }
+          offerToken = issued.token;
+          offerTerms = describeOfferTerms(automation.offer_key, issued.expiresAt);
+        }
 
         const template = campaignTemplate({
           subject: automation.subject,
@@ -440,16 +469,9 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
           promoCode: automation.promo_code,
           ctaLabel: hasCta ? ctaLabel : "",
           ctaUrl: hasCta ? trackedCtaUrl(automation.key, target.email, target.referenceId, ctaPath, offerToken) : "",
+          offerTerms,
           postalAddress: config.marketingPostalAddress,
         });
-
-        // CLAIM BEFORE SENDING. alreadySent above is a snapshot taken once per
-        // automation; this is the check that holds across two sweeps running at
-        // the same time. If another one already has this reference, stop here.
-        if (!(await claimAutomationSend(campaignType, target.referenceId, target.email, templateKey))) {
-          result.skipped++;
-          continue;
-        }
 
         const sendResult = await sendMarketingEmail({
           to: target.email,

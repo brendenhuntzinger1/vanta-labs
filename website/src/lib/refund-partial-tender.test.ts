@@ -38,6 +38,7 @@ const state: {
   orderUpdates: Array<Record<string, unknown>>;
   commissionReversalThrows: boolean;
   restockClaimThrows: boolean;
+  inventoryCommittedAt: string | null;
 } = {
   paymentStatus: "paid",
   orderType: "membership",
@@ -48,6 +49,8 @@ const state: {
   orderUpdates: [],
   commissionReversalThrows: false,
   restockClaimThrows: false,
+  /** orders.inventory_committed_at — the paid transition's receipt that stock was decremented. */
+  inventoryCommittedAt: "2026-08-01T00:00:00.000Z",
 };
 
 const effects = {
@@ -123,6 +126,10 @@ vi.mock("@/lib/supabase-server", () => {
     order_id: ORDER_ID,
     order_number: "VL-REF0001",
     payment_status: state.paymentStatus,
+    // The receipt that the paid transition wrote when the stock actually left
+    // the shelf. The refund branch restocks only behind it (null would mean
+    // "paid, but the decrement failed" — nothing to return).
+    inventory_committed_at: state.inventoryCommittedAt,
     fulfillment_status: "awaiting_fulfillment",
     payment_method: "card",
     // A MEMBERSHIP order that also spent points and store credit, so all four
@@ -276,6 +283,30 @@ beforeEach(() => {
   state.orderUpdates = [];
   state.commissionReversalThrows = false;
   state.restockClaimThrows = false;
+  state.inventoryCommittedAt = "2026-08-01T00:00:00.000Z";
+});
+
+describe("a paid order whose stock was never decremented (latch null)", () => {
+  // The paid transition alerted and left inventory_committed_at null because
+  // the decrement failed. A later full refund must not "return" units that
+  // never left the shelf: no restock claim, no restock, and any hold released.
+  it("is NOT restocked on a full refund, and its hold is released instead", async () => {
+    state.orderType = "product";
+    state.inventoryCommittedAt = null;
+    const result = await deliverRefund("evt-uncommitted-refund", 200);
+    expect(result.status).toBe("refunded");
+    expect(effects.claimRestock).not.toHaveBeenCalled();
+    expect(effects.restock).not.toHaveBeenCalled();
+    expect(effects.releaseHold).toHaveBeenCalledWith(ORDER_ID);
+  });
+
+  it("IS restocked when the latch says the stock left the shelf", async () => {
+    state.orderType = "product"; // a membership carries no stock
+    const result = await deliverRefund("evt-committed-refund", 200);
+    expect(result.status).toBe("refunded");
+    expect(effects.claimRestock).toHaveBeenCalled();
+    expect(effects.restock).toHaveBeenCalled();
+  });
 });
 
 describe("a PARTIAL refund (VL-20 / REF-01)", () => {
