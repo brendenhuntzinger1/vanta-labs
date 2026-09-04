@@ -375,17 +375,31 @@ export async function readOfferStatus(token: string | null | undefined, now = Da
   percentOff: number | null;
   minSubtotalCents: number;
   expiresAt: string;
+  /**
+   * The address this offer is bound to. SERVER-SIDE ONLY — do not put it in a
+   * response body.
+   *
+   * /api/checkout/quote needs it: a preview asked before the shopper has typed
+   * their email would otherwise resolve no offer at all (peekCustomerOffer
+   * matches on the address, correctly), and the cart would quote the gift away
+   * in the one place the shopper is deciding what to buy. Previewing against
+   * the bound address answers the question the banner already poses — "what do
+   * I get if I check out with the address this was sent to" — and grants
+   * nothing: reserveCustomerOffer re-checks the binding under a lock, so an
+   * order placed under a different address still gets no free unit.
+   */
+  email: string;
 } | null> {
   const value = String(token ?? "").trim();
   if (!value) return null;
   try {
     const { data } = await supabaseAdmin
       .from("customer_offers")
-      .select("offer_key, reward_kind, product_slug, percent_off, min_subtotal_cents, expires_at, redeemed_at, revoked_at")
+      .select("offer_key, reward_kind, product_slug, percent_off, min_subtotal_cents, expires_at, redeemed_at, revoked_at, email")
       .eq("token_hash", hashOfferToken(value))
       .maybeSingle();
     if (!data) return null;
-    const row = data as { offer_key: string; reward_kind: string; product_slug: string | null; percent_off: number | null; min_subtotal_cents: number; expires_at: string; redeemed_at: string | null; revoked_at: string | null };
+    const row = data as { offer_key: string; reward_kind: string; product_slug: string | null; percent_off: number | null; min_subtotal_cents: number; expires_at: string; redeemed_at: string | null; revoked_at: string | null; email: string };
     if (row.redeemed_at || row.revoked_at) return null;
     if (new Date(row.expires_at).getTime() <= now) return null;
     return {
@@ -395,6 +409,7 @@ export async function readOfferStatus(token: string | null | undefined, now = Da
       percentOff: row.percent_off === null ? null : Number(row.percent_off),
       minSubtotalCents: Number(row.min_subtotal_cents ?? 0),
       expiresAt: row.expires_at,
+      email: String(row.email ?? ""),
     };
   } catch {
     return null;

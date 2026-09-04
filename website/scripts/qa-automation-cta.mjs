@@ -351,6 +351,12 @@ async function main() {
   // --- click tracking ------------------------------------------------------
   section("9. Click tracking records the click and lands correctly");
   await step("a signed tracked link redirects to the automation's destination", async () => {
+    // CLEAR THE WHOLE AUTOMATION, not just this address. The stats strip asserted
+    // on further down counts every click on winback_60 from every recipient, so
+    // clearing one email left the counts carrying whatever earlier runs and
+    // neighbouring suites had recorded — "CLICKS 21" against an expected 1. Same
+    // shape of defect as the campaign fixture above: passes once per database.
+    await q("delete from email_automation_clicks where automation_key = $1", ["winback_60"]);
     await q("delete from email_automation_clicks where email = $1", ["qa-click@example.test"]);
     await q("delete from email_send_log where campaign_type = $1", ["automation:winback_60"]);
     await q(
@@ -599,6 +605,12 @@ async function main() {
     // The composer is the other writer of cta_label/cta_path and shares the
     // validator the automations route uses, so a change there could break it
     // silently. This drives the real form rather than the API.
+    //
+    // Clear the fixture first. Without this the step asserts "exactly one row
+    // with this name" against a draft a PREVIOUS run left behind, so the suite
+    // passes once per database and fails on every run after — which reads as a
+    // regression in the composer and is nothing of the sort.
+    await q("delete from email_campaigns where name = $1", ["QA shared-CTA check"]);
     await page.locator('[data-testid="field-campaign-name"]').fill("QA shared-CTA check");
     await page.locator('[data-testid="field-subject"]').fill("QA subject line");
     await page.locator('[data-testid="field-headline"]').fill("QA headline");

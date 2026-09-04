@@ -155,7 +155,7 @@ async function passAgeGate(page) {
   return true;
 }
 
-/** Place an order through the real checkout API, as the page. *//** Place an order through the real checkout API, as the page. */
+/** Place an order through the real checkout API, as the page. */
 async function checkout(page, { email, items, expectFailure = false }) {
   await clearRateLimit();
   const result = await page.evaluate(async ([payload]) => {

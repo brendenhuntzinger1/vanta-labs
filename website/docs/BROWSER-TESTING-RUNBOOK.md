@@ -386,6 +386,41 @@ node scripts/veyra-stub.mjs      # mints session ids only; never marks anything 
 > (`claude/vanta-labs-live-inspection-h1eh4f`). If it is not on your branch yet,
 > take it from there rather than writing a second one.
 
+### Marketing email: `scripts/smtp-sink.mjs`
+
+Transactional mail is observable with email switched **off**: the app falls back
+to `NoopEmailProvider`, which writes every rendered message to
+`EMAIL_CAPTURE_DIR` as JSONL. Campaigns and automations are not, and cannot be —
+`marketingBlockedReason` refuses to send while email is disabled, which is
+correct and also means a win-back can never be watched leaving the building.
+
+So the harness gets a real provider that goes nowhere:
+
+```bash
+node scripts/smtp-sink.mjs --port 2525 --capture /tmp/vanta-qa
+```
+
+```
+EMAIL_ENABLED=true
+EMAIL_PROVIDER=smtp
+SMTP_HOST=127.0.0.1
+SMTP_PORT=2525
+SMTP_SECURE=false
+SMTP_USER=harness
+SMTP_PASSWORD=harness
+MARKETING_POSTAL_ADDRESS=1 Harness Way, Testville CA 90000   # CAN-SPAM; required
+EMAIL_CAPTURE_DIR=/tmp/vanta-qa
+```
+
+It speaks enough SMTP for nodemailer, accepts any credentials, delivers nothing,
+and appends each message to the **same** `captured-emails.jsonl` the noop
+provider writes — so a test reads the marketing message the same way it reads a
+receipt. Loopback only.
+
+This is what makes `scripts/qa-gift-wiring.mjs` possible: it never mints an
+offer token itself, it runs the real `/api/cron/sweep`, reads the token out of
+the delivered email body, and spends it in a browser.
+
 Then drive the outcome with a signed webhook through the real handler:
 
 ```bash

@@ -41,6 +41,29 @@ values ('44444444-4444-4444-4444-444444444444','cjc-1295-2mg','CJC-1295 2mg','Re
 insert into product_images (id, product_id, image_url, position)
 values ('cccccccc-0000-4000-8000-000000000001','44444444-4444-4444-4444-444444444444','/img/g1.png',1);
 
+-- THE GIFT PRODUCT. The 60-day win-back can attach a free GHK-Cu, and
+-- qa-customer-offer.mjs tops up its stock and asserts on its COGS — but nothing
+-- created it, so on a fresh harness that suite was pricing a gift for a product
+-- the catalogue did not have. Priced and costed as production does (see
+-- scripts/pricing-reprice.mjs) so the $0 line's recorded COGS is a real number.
+insert into products (id, slug, name, category, price_cents, product_cost_cents, stock_status,
+  inventory_quantity, is_active, is_published, is_enabled, track_inventory, short_description,
+  image_url, position)
+values ('55555555-5555-5555-5555-555555555555','ghk-cu','GHK-Cu 50mg','Research Peptides',
+  4799,2288,'In Stock',60,true,true,true,true,'Synthetic harness product (the win-back gift).','/img/p5.png',5);
+
+-- BAC WATER. The cart drawer's accessory upsell fetches /api/catalog/bac-water
+-- on every page that renders the site chrome — including /admin — so without
+-- this row every harness run logs a 404 that exists nowhere in production, and
+-- any test watching for network errors has to learn to ignore a real one.
+-- The slug must be one of BAC_WATER_SLUG_CANDIDATES (src/lib/bac-water.ts);
+-- the endpoint's path is not the slug it looks up.
+insert into products (id, slug, name, category, price_cents, product_cost_cents, stock_status,
+  inventory_quantity, is_active, is_published, is_enabled, track_inventory, short_description,
+  image_url, position)
+values ('66666666-6666-6666-6666-666666666666','bacteriostatic-water','Bacteriostatic Water 30ml','Accessories',
+  1499,300,'In Stock',200,true,true,true,true,'Synthetic harness product (the reconstitution upsell).','/img/p6.png',6);
+
 -- Ambassadors: all three discount resolutions.
 insert into ambassadors (id, name, email, referral_code, commission_percent, customer_discount_percent, status, approved_at)
 values ('dddddddd-0000-4000-8000-000000000001','Explicit Fifteen','explicit@harness.invalid','EXPLICIT15',15.00,15.00,'approved',now()),

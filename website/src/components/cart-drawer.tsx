@@ -8,6 +8,7 @@ import { formatCartCurrency, useCart, getShippingProgress } from "@/components/c
 import { bundleDiscountRate, getBundleDiscountedLineTotal, getNextBundleTier } from "@/lib/bundle-pricing";
 import { bestPaidTier, computeCartMembershipValue } from "@/lib/member-pricing";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
+import { useOfferQuote } from "@/lib/offer-quote";
 import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
 import { ExpressApplePayButton } from "@/components/express-apple-pay-button";
 import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
@@ -156,6 +157,35 @@ export function CartDrawer() {
   const offerCoversShipping = Boolean(pendingOffer)
     && pendingOffer!.rewardKind !== "free_product"
     && offerShortfall <= 0;
+
+  // WHAT THIS CART ACTUALLY COSTS, ACCORDING TO THE THING THAT CHARGES FOR IT.
+  //
+  // The drawer prices itself, and cannot price an offer: the token sits in an
+  // httpOnly cookie precisely so the page cannot read it. So it showed the
+  // banner above — "free shipping + 15% off, applied at checkout" — directly
+  // over a total with full shipping in it and no discount, and the shopper had
+  // to take the banner on faith against the evidence of the number beside it.
+  // The figures now come from quoteOrder, the same pass that will charge them.
+  //
+  // Only when an offer is armed: without one this hook issues no request and
+  // every figure below is exactly what it was.
+  const offerQuote = useOfferQuote({
+    active: Boolean(pendingOffer) && items.length > 0,
+    items,
+    couponCode,
+    referralCode,
+    shippingProtection: shippingProtectionEnabled,
+  });
+
+  // The server's answer wins wherever it has one. Falling back rather than
+  // blanking matters: a preview one request behind should show the previous
+  // number, never no number.
+  const shownSubtotal = offerQuote ? offerQuote.subtotal : subtotal;
+  const shownShipping = offerQuote ? offerQuote.shipping : shipping;
+  const shownDiscount = offerQuote ? offerQuote.discountAmount : discountAmount;
+  const shownTotal = offerQuote ? offerQuote.expectedTotal : total;
+  const shownDiscountLabel = appliedDiscountLabel ?? offerQuote?.offer?.description ?? "Discount";
+  const giftLines = offerQuote?.giftLines ?? [];
 
   // Smart membership upsell: only for non-members, and only when joining
   // would genuinely put money in their pocket TODAY (cart savings + credit
@@ -729,16 +759,38 @@ export function CartDrawer() {
                 <dl className="space-y-2.5 text-sm">
                   <div className="flex justify-between">
                     <dt className="text-zinc-400">Subtotal</dt>
-                    <dd className="text-zinc-200 tabular-nums">{formatCartCurrency(subtotal)}</dd>
+                    <dd className="text-zinc-200 tabular-nums">{formatCartCurrency(shownSubtotal)}</dd>
                   </div>
+                  {/* THE GIFT, AS A LINE RATHER THAN A PROMISE. The banner said
+                      a free vial was coming; this is the vial, priced. It comes
+                      from the server's own line items — the client never
+                      invents a product. */}
+                  {giftLines.map((line) => (
+                    <div key={`${line.name}-${line.variantLabel ?? ""}`} className="flex justify-between text-[color:var(--accent-gold)]" data-testid="offer-gift-line">
+                      <dt>
+                        {line.name}{line.variantLabel ? ` · ${line.variantLabel}` : ""}
+                        {line.quantity > 1 ? ` × ${line.quantity}` : ""}{" "}
+                        <span className="text-zinc-500">(gift)</span>
+                      </dt>
+                      <dd className="tabular-nums">Free</dd>
+                    </div>
+                  ))}
                   <div className="flex justify-between">
                     <dt className="text-zinc-400">Shipping</dt>
-                    <dd className="text-zinc-200 tabular-nums">{shipping > 0 ? formatCartCurrency(shipping) : "Calculated at payment"}</dd>
+                    {/* "Calculated at payment" is the honest answer when nothing
+                        has priced it. Once the server HAS, say what it said. */}
+                    <dd className="text-zinc-200 tabular-nums" data-testid="cart-shipping">
+                      {shownShipping > 0
+                        ? formatCartCurrency(shownShipping)
+                        : offerQuote
+                          ? "Free"
+                          : "Calculated at payment"}
+                    </dd>
                   </div>
-                  {discountAmount > 0 ? (
-                    <div className="flex justify-between text-emerald-400">
-                      <dt>{appliedDiscountLabel ?? "Discount"}</dt>
-                      <dd className="tabular-nums">−{formatCartCurrency(discountAmount)}</dd>
+                  {shownDiscount > 0 ? (
+                    <div className="flex justify-between text-emerald-400" data-testid="cart-discount">
+                      <dt>{shownDiscountLabel}</dt>
+                      <dd className="tabular-nums">−{formatCartCurrency(shownDiscount)}</dd>
                     </div>
                   ) : null}
                   {shippingProtectionFee > 0 ? (
@@ -754,7 +806,7 @@ export function CartDrawer() {
                 <div className="my-4 h-px bg-white/[0.06]" />
                 <div className="flex items-end justify-between">
                   <span className="text-xs uppercase tracking-[0.24em] text-zinc-500">Total</span>
-                  <span className="text-[2rem] font-semibold leading-none tracking-tight text-white tabular-nums">{formatCartCurrency(total)}</span>
+                  <span className="text-[2rem] font-semibold leading-none tracking-tight text-white tabular-nums" data-testid="cart-total">{formatCartCurrency(shownTotal)}</span>
                 </div>
                 <p className="mt-3 text-[11px] leading-relaxed text-zinc-600">
                   Shipping &amp; sales tax are calculated from your address at payment. Free shipping over {formatCartCurrency(freeShipThreshold)}.
@@ -773,7 +825,7 @@ export function CartDrawer() {
                   "Total" there would read as a bait-and-switch when Apple Pay
                   shows a higher number. */}
               <span className="text-xs uppercase tracking-[0.24em] text-zinc-500">{showExpressSlot ? "Subtotal" : "Total"}</span>
-              <span className="text-xl font-semibold text-white tabular-nums">{formatCartCurrency(total)}</span>
+              <span className="text-xl font-semibold text-white tabular-nums" data-testid="cart-sticky-total">{formatCartCurrency(shownTotal)}</span>
             </div>
 
             {showExpressSlot ? (
