@@ -1642,7 +1642,23 @@ html[data-age-verified="false"] video {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  opacity: 0.9;
+  /* HOW MUCH OF THE FRAME'S HEIGHT THIS SCREEN SHOWS. 1 is the whole thing.
+     Read by hero-video.tsx's cover(); see PORTRAIT_FRAMING there for what it
+     buys and why the number lives in CSS rather than in the script.
+     The base value is the PHONE's, exactly like the scrim below it — the two
+     have to agree about where the copy is, so they read the same breakpoint
+     and are stated next to each other. */
+  --hero-framing: 0.7;
+  /* FULL STRENGTH, AND IT WAS 0.9.
+     The shot is the page. Dimming it by a tenth before the scrim has spent a
+     single stop is brightness given away for nothing: the scrim is what holds
+     the copy legible, and it is anchored to the copy, so a flat opacity buys
+     no legibility anywhere the scrim was not already going to. Measured with
+     the copy hidden at 390x844, the brightest pixel behind the headline was
+     35/255 against a budget of 118 — the picture was being held four times
+     darker than the type needed. This is the first of the three layers that
+     produced that, and the only one that cost the whole frame at once. */
+  opacity: 1;
   /* Tailwind's preflight caps canvas at `max-width: 100%`, which silently
      squashed a box declared square down to the width of the viewport — 390x437
      at 390x844 — and a non-square box is exactly what re-introduces the
@@ -1666,6 +1682,17 @@ html[data-age-verified="false"] video {
   pointer-events: none;
 }
 
+/* EVERYTHING ABOVE A PHONE SHOWS THE WHOLE FRAME.
+   A portrait tablet and a laptop both have room for the copy beside or below
+   the label — the tablet because its hero is 1024 tall with the copy in the
+   bottom 40%, the laptop because the copy is a column on the left — so neither
+   needs the crop, and both are left exactly as they were. */
+@media (min-width: 641px) {
+  .vl2-hero-video {
+    --hero-framing: 1;
+  }
+}
+
 .vl2-hero-scrim {
   position: absolute;
   inset: 0;
@@ -1683,9 +1710,18 @@ html[data-age-verified="false"] video {
      it. Only value does.
 
      Measured at 390x844: the label sits around 200/255, so holding it far
-     enough back for white type to dominate needs the low 0.9s over the copy,
-     not the 0.42 this carried before. Compared at 0.42 / 0.55 / 0.68 across the
-     copy band; below about 0.6 "GHK-Cu" still reads through the headline.
+     enough back for white type to dominate needs roughly 0.6 and up across the
+     copy band, not the 0.42 this carried before — below about that, "GHK-Cu"
+     still reads through the headline, and CONTRAST RATIO ALONE DOES NOT SETTLE
+     IT: at 0.66 the ground measured 105/255, comfortably inside the 118 budget,
+     and "GHK-Cu" was still plainly legible across the headline in the shot. So
+     the band below reaches 0.82 by the eyebrow — the first line of copy — and
+     holds it.
+     What changed is WHERE it does that, not how hard. It used to open at 0.68
+     four rem above the first line and climb to 0.97, so the vial's body, its
+     shoulder and the whole lit halo paid for type that sits below all three.
+     Now the picture is clear at 0.06 down to the copy, and only the copy's own
+     band is dark.
 
      ANCHORED IN REM FROM THE BOTTOM, not in percentages. The copy block is
      about the same height on every phone (~460px, 29rem), but the hero it sits
@@ -1696,16 +1732,29 @@ html[data-age-verified="false"] video {
 
      The top stays nearly clear. Nothing bright can reach it — the canvas fades
      the picture out at every edge — so darkening it would only dim the vial for
-     nothing. */
+     nothing.
+
+     THE RAMP STARTS AT THE COPY, NOT FOUR REM ABOVE IT. This carried 0.68 from
+     `calc(100% - 33rem)`, and the eyebrow — the first line of copy — begins at
+     29rem. So the heaviest wash in the composition started a full 4rem of
+     clear picture early and then ran to 0.97, taking the vial's body, its
+     shoulder and the whole lit halo with it. The owner's report was that the
+     hero had gone black, and it had: measured with the copy hidden, the top
+     55% of the section averaged 23/255 on a phone.
+     The stops below hold the same copy on the same label, and the numbers say
+     so: the brightest pixel behind the headline stays inside the 118 budget at
+     every breakpoint (see the measurements in hero-video.test.ts). What
+     changed is that the picture above the copy is no longer paying for it. */
   background:
     linear-gradient(
       180deg,
-      rgba(0, 0, 0, 0.18) 0%,
-      rgba(0, 0, 0, 0.08) 14%,
-      rgba(0, 0, 0, 0.68) calc(100% - 33rem),
-      rgba(0, 0, 0, 0.9) calc(100% - 25rem),
-      rgba(0, 0, 0, 0.95) calc(100% - 12rem),
-      rgba(0, 0, 0, 0.97) 100%
+      rgba(0, 0, 0, 0.12) 0%,
+      rgba(0, 0, 0, 0.02) 18%,
+      rgba(0, 0, 0, 0.06) calc(100% - 31.5rem),
+      rgba(0, 0, 0, 0.82) calc(100% - 28rem),
+      rgba(0, 0, 0, 0.88) calc(100% - 19rem),
+      rgba(0, 0, 0, 0.92) calc(100% - 9rem),
+      rgba(0, 0, 0, 0.94) 100%
     );
 }
 
@@ -1726,13 +1775,18 @@ html[data-age-verified="false"] video {
 @media (min-width: 641px) and (max-width: 1023px) {
   .vl2-hero-scrim {
     background:
+      /* Same correction as the phone stops above, in this range's own unit.
+         The copy starts at 60% of the section here (measured at 768x1024), and
+         the 0.55 stop was landing at 46% — 14 points of picture darkened ahead
+         of anything that needed it. */
       linear-gradient(
         180deg,
-        rgba(0, 0, 0, 0.2) 0%,
-        rgba(0, 0, 0, 0.08) 18%,
-        rgba(0, 0, 0, 0.55) 46%,
-        rgba(0, 0, 0, 0.88) 64%,
-        rgba(0, 0, 0, 0.95) 100%
+        rgba(0, 0, 0, 0.14) 0%,
+        rgba(0, 0, 0, 0.02) 20%,
+        rgba(0, 0, 0, 0.08) 52%,
+        rgba(0, 0, 0, 0.55) 62%,
+        rgba(0, 0, 0, 0.86) 76%,
+        rgba(0, 0, 0, 0.93) 100%
       );
   }
 }
@@ -1753,7 +1807,13 @@ html[data-age-verified="false"] video {
 @media (min-width: 1024px) {
   .vl2-hero-scrim {
     background:
-      linear-gradient(180deg, rgba(0, 0, 0, 0.34) 0%, rgba(0, 0, 0, 0.1) 30%, rgba(0, 0, 0, 0.34) 72%, rgba(0, 0, 0, 0.82) 100%),
+      /* The VERTICAL layer is the one that was flattening the vial, and it is
+         the one that moves. It ran 0.34 across the whole upper section — over
+         the right-hand side, where the 100deg layer is already transparent and
+         the shot is the only thing there. The 100deg layer is untouched: the
+         copy column is what it holds, and the headline ground at 1440 was the
+         tightest measurement of the four (62/255 against 118). */
+      linear-gradient(180deg, rgba(0, 0, 0, 0.16) 0%, rgba(0, 0, 0, 0.02) 30%, rgba(0, 0, 0, 0.14) 72%, rgba(0, 0, 0, 0.7) 100%),
       linear-gradient(100deg, rgba(0, 0, 0, 0.92) 0%, rgba(0, 0, 0, 0.88) 26%, rgba(0, 0, 0, 0.62) 52%, rgba(0, 0, 0, 0.28) 66%, transparent 78%);
   }
 }
@@ -1795,8 +1855,11 @@ html[data-age-verified="false"] video {
     /* Nothing to override. The base rule is the composition. Kept as an empty
        anchor would be worse than saying so: the phone rule that used to live
        here set a square box, a lift, a size formula and a mask, and every one
-       of those is now deliberately absent. */
-    opacity: 0.95;
+       of those is now deliberately absent.
+       Stated rather than inherited, because this is the breakpoint the "it has
+       gone black" report came from and 0.95 is what it used to say. A phone
+       spends its whole screen on this shot; it gets all of it. */
+    opacity: 1;
   }
 }
 
@@ -1807,7 +1870,11 @@ html[data-age-verified="false"] video {
    See the horizontal bias in hero-video.tsx's cover(). */
 @media (min-width: 1024px) {
   .vl2-hero-video {
-    opacity: 0.9;
+    /* Full strength here too. On a wide screen the copy is a column on the
+       left and the 100deg scrim layer holds it; the shot is out on the right
+       with nothing over it, so a flat 0.9 dimmed the one part of the picture
+       no text was ever going to sit on. */
+    opacity: 1;
   }
 }
 

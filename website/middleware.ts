@@ -7,6 +7,7 @@ import {
   decodeAuthCookie,
   encodeAuthCookie,
 } from "@/lib/auth-cookie";
+import { isInAppBrowser } from "@/lib/in-app-browser";
 
 const ADMIN_SESSION_COOKIE = "vl_admin_session";
 const MAINTENANCE_CACHE_TTL_MS = 15_000;
@@ -323,6 +324,65 @@ function isTopLevelNavigation(request: NextRequest) {
 }
 
 // ---------------------------------------------------------------------------
+// THE HOME PAGE IS NOT SENT TO AN APP'S EMBEDDED BROWSER AT ALL.
+//
+// The home page IS the spinning vial — a full-bleed hero that fills a phone
+// screen and moves. In TikTok, Snapchat, Instagram and the rest it cannot move:
+// five rounds of iOS video work ended with the clip taken over or refused, so
+// hero-video.tsx serves those browsers a still. What is left is a motionless,
+// magnified product shot with the headline printed across the vial's own label,
+// spending a whole screen before the visitor has seen a single product. It is
+// the one page in the store that is worse in these browsers than no page.
+//
+// So they are sent to the catalog, which is what they came for.
+//
+// THIS DECISION USED TO LIVE IN THE AGE GATE, AND THAT PLACE COULD NOT HOLD IT.
+// Clearing the gate on "/" ran a client-side router.push to the catalog. It
+// fixed one arrival and left two holes, both reproduced on the harness at
+// 390x844 with a TikTok user-agent, 4x CPU throttle and 1.6 Mbps:
+//
+//   * THE HOME PAGE FLASHED. The gate closes on the tap — revealing the page
+//     behind it — and only then does the router fetch the catalog. Measured:
+//     ungated home page on screen for ~430ms before the catalog arrived.
+//
+//   * EVERY OTHER ROUTE TO "/" STILL LANDED THERE. The push ran only from the
+//     gate's enter handler, and the gate appears once per visit. The header
+//     wordmark, a product page's "Home" breadcrumb, the 404 and error pages'
+//     buttons, the media correction above and any later link into "/" all left
+//     the visitor on the home page with nothing to move them off it.
+//
+// A server decision has neither problem: the User-Agent is on the request, so
+// the answer is known before a byte of HTML is written, and it holds however
+// "/" was reached. The age gate keeps its copy of the check as a fallback for
+// any path where middleware does not run.
+//
+// THE CLASSIFIER IS THE BROWSER AND NOTHING ELSE — the same rule the age gate
+// was corrected to, for the same reason. A ttclid, an fbclid or a utm_medium
+// says where a visitor came FROM, not what their browser can render; keying on
+// those once cost a desktop Chrome visitor, arriving from a Google Ads click, a
+// hero it renders perfectly. They are attacker-supplied besides, and nothing
+// attacker-supplied may choose a destination here.
+//
+// Sniffing a user-agent is normally the wrong answer and is the right one here,
+// for the reason set out in lib/in-app-browser.ts: there is no feature query
+// for "this browser will take your video away". The cost of a false positive is
+// a visitor landing on the catalog instead of the home page — a page they can
+// leave with one tap — against a false negative's dead full-screen still.
+// ---------------------------------------------------------------------------
+const IN_APP_HOME_REPLACEMENT = "/products";
+
+/**
+ * Where this request should go instead of the home page, or null to keep it.
+ *
+ * Also answers for the media correction above, so an ad link resolving to the
+ * hero file makes ONE hop rather than bouncing through a home page the same
+ * visitor is not supposed to be sent.
+ */
+function homePageReplacement(request: NextRequest): string | null {
+  return isInAppBrowser(request.headers.get("user-agent")) ? IN_APP_HOME_REPLACEMENT : null;
+}
+
+// ---------------------------------------------------------------------------
 // KEEPING "KEEP ME SIGNED IN" TRUE.
 //
 // The session cookie lives 30 days; the access JWT inside it lives an hour.
@@ -410,14 +470,74 @@ export async function middleware(request: NextRequest) {
     return applySecurityHeaders(response);
   };
 
+  // A REDIRECT THIS FILE INVENTS FROM THE USER-AGENT MUST NOT BE REPLAYED TO A
+  // DIFFERENT BROWSER.
+  //
+  // Only the redirects need this, and only these. The page response does not:
+  // middleware runs BEFORE the CDN cache (Next's own CDN guide is explicit that
+  // it "should run before the CDN cache so it remains the source of truth for
+  // auth, redirects, and rewrites"), so a cache is only ever consulted for
+  // requests this file has already decided to let through. It therefore only
+  // ever holds one variant of "/" — the home page — and the audience that must
+  // not receive it is diverted before the cache is reached.
+  //
+  // Setting Vary on the page response is not an option anyway, and the attempt
+  // is worth recording: `headers()` in next.config.ts does reach the wire (a
+  // probe key came back on the response), but Next writes its own `Vary` for
+  // the RSC router afterwards and replaces the value. Measured against the
+  // harness build — the 200 carried only `rsc, next-router-state-tree, …`.
+  const varyOnBrowser = (response: NextResponse) => {
+    response.headers.set("Vary", "User-Agent");
+    // Belt and braces for an intermediary that caches redirects regardless.
+    response.headers.set("Cache-Control", "no-store");
+    return response;
+  };
+
   if (MEDIA_EXTENSIONS.test(pathname) && isTopLevelNavigation(request)) {
-    const home = request.nextUrl.clone();
-    home.pathname = "/";
-    home.search = "";
+    const landing = request.nextUrl.clone();
+    // Normally the home page. For a browser that is not sent the home page at
+    // all, straight to that visitor's destination instead — this correction was
+    // written for TikTok ad links, so it is largely THEIR redirect, and sending
+    // them via "/" would spend a whole extra round trip on a phone to arrive
+    // somewhere they are then moved off again.
+    landing.pathname = homePageReplacement(request) ?? "/";
+    landing.search = "";
     // 307, not 308: this is a routing correction, not a permanent statement
     // about the asset's address, and it must not be cached by intermediaries
     // in a way that would follow the file itself around.
-    return finish(NextResponse.redirect(home, 307));
+    return finish(varyOnBrowser(NextResponse.redirect(landing, 307)));
+  }
+
+  // The home page, for a browser that cannot show it. Judged before any of the
+  // work below — there is no state to read and no network call to make, and
+  // doing it first is the plainest statement of the rule: this browser is never
+  // handed this page, by any later branch.
+  //
+  // NOT gated on isTopLevelNavigation, deliberately, and that is the whole
+  // difference between this and the client-side version it replaces. Tapping
+  // the header wordmark is an RSC fetch, which never carries
+  // `sec-fetch-dest: document`; a rule that only caught real page loads would
+  // leave the wordmark, the breadcrumb and the 404 button all landing on the
+  // page this exists to skip. Next follows a middleware redirect on a client
+  // navigation the same way it follows one on a page load.
+  //
+  // 307, never 308 or 301: the answer depends on WHO is asking. A permanent
+  // redirect is cached against the URL itself and would outlive the browser
+  // that asked for it, so the same link opened later in Safari would still
+  // bounce past the hero.
+  if (pathname === "/" && request.method === "GET") {
+    const replacement = homePageReplacement(request);
+    if (replacement) {
+      const destination = request.nextUrl.clone();
+      destination.pathname = replacement;
+      // THE QUERY IS CARRIED, NEVER CONSULTED. Nearly all of this traffic is
+      // paid: ttclid, fbclid, utm_* and a referral code all have to survive, or
+      // attribution silently breaks for exactly the visitors this rule serves
+      // and nobody finds out until a report comes back empty. It decides
+      // nothing — the destination above is a constant — so a forged parameter
+      // still cannot choose where anyone lands.
+      return finish(varyOnBrowser(NextResponse.redirect(destination, 307)));
+    }
   }
 
   // CSRF defense-in-depth: reject cross-site state-changing requests to the

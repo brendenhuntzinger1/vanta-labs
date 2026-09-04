@@ -160,6 +160,20 @@ const NEVER_A_DESTINATION = ["/legal"];
 // visitors go to the catalog, and hero-video.tsx independently serves them a
 // still — the same decision, made twice, on the same signal.
 //
+// THIS IS NO LONGER WHERE THAT DECISION IS MADE, AND IT IS KEPT ANYWAY.
+// Middleware now answers it on the server, before any home page HTML exists
+// (see IN_APP_HOME_REPLACEMENT in middleware.ts). It had to move: the push
+// below could only run after the gate closed and the page behind it was on
+// screen — measured at ~430ms of ungated home page on a throttled phone — and
+// it only ran from the enter handler, so the wordmark, the "Home" breadcrumb
+// and every later link into "/" landed on the page this exists to skip.
+//
+// With middleware in front, an in-app visitor can no longer be standing on "/"
+// when they clear the gate, so the branch below is unreachable in practice. It
+// stays as the fallback for any path where middleware does not run, and it
+// costs one comparison to keep. Both halves read the same constant; the test
+// alongside pins them to the same destination so they cannot drift apart.
+//
 // THIS USED TO ASK "did they come from social", WHICH IS A MUCH WIDER NET THAN
 // THE ONE PLATFORM THAT BREAKS. It matched ttclid, fbclid, igshid, sccid,
 // twclid, a utm_* value containing "paid", and a social referrer — so mobile

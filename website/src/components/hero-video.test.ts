@@ -362,10 +362,16 @@ describe("the entry gate and the hero video are separate systems", () => {
 describe("an ad link cannot land someone inside a media file", () => {
   const mw = read("middleware.ts");
 
-  it("redirects a top-level navigation to a media file to the home page", () => {
+  it("redirects a top-level navigation to a media file back into the store", () => {
     expect(mw).toMatch(/const MEDIA_EXTENSIONS = \/\\\.\(mp4\|webm\|mov/);
     expect(mw).toMatch(/if \(MEDIA_EXTENSIONS\.test\(pathname\) && isTopLevelNavigation\(request\)\)/);
-    expect(mw).toMatch(/home\.pathname = "\/";/);
+    // The home page, unless the browser asking is one that is not sent the home
+    // page at all — this correction was written for TikTok ad links, so it is
+    // largely their redirect, and routing them via "/" would spend an extra
+    // round trip arriving somewhere they are immediately moved off again. Both
+    // destinations are exercised for real in src/lib/in-app-home-skip.test.ts;
+    // what matters here is only that neither of them is the media file.
+    expect(mw).toMatch(/landing\.pathname = homePageReplacement\(request\) \?\? "\/";/);
   });
 
   it("only redirects real page loads, never the hero fetching its source", () => {
@@ -598,9 +604,10 @@ describe("the hero fills the screen, and cannot show a white one", () => {
   it("keeps the copy readable on the picture it now sits on", () => {
     // Full bleed means the copy is ON the photograph, and the part it lands on
     // is the vial's printed label — black on white, at roughly the size of the
-    // headline. Measured with the copy hidden, the brightest pixel behind the
-    // headline is 34/255 on a phone and 56 at 1440; white type needs 118 or
-    // below for 4.5:1. The stops that buy that are these.
+    // headline. Measured with the copy hidden: the brightest pixel behind the
+    // headline is 43/255 on a phone, 41 on an SE, 107 on a portrait tablet and
+    // 82 at 1440; white type needs 118 or below for 4.5:1. The stops that buy
+    // that are these.
     const scrim = css.slice(css.indexOf(".vl2-hero-scrim {"), css.indexOf(".vl2-hero-content {"));
     const phone = scrim.slice(0, scrim.indexOf("@media"));
     const alphas = [...phone.matchAll(/rgba\(0,\s*0,\s*0,\s*([0-9.]+)\)/g)].map((m) => Number(m[1]));
@@ -613,6 +620,160 @@ describe("the hero fills the screen, and cannot show a white one", () => {
     // use the phone's rem stops, and a wide screen lifts from the side instead.
     expect(scrim).toContain("@media (min-width: 641px) and (max-width: 1023px)");
     expect(scrim).toContain("@media (min-width: 1024px)");
+  });
+
+  // -------------------------------------------------------------------------
+  // AND THE PICTURE ABOVE THE COPY MUST NOT PAY FOR IT.
+  //
+  // The rule above only says the copy end is dark enough, and on its own that
+  // is exactly half a requirement — every stop could be 0.9 and it would still
+  // pass. It nearly was: the phone scrim reached 0.68 four rem ABOVE the first
+  // line of copy and ran to 0.97, the media carried a flat 0.9 opacity, and the
+  // canvas began dissolving the shot at 0.55 of the way out. Three layers, none
+  // of them wrong on its own, and together they took the vial's body, shoulder
+  // and whole lit halo down with the label.
+  //
+  // What the owner saw was a black hero, and the numbers agreed: with the copy
+  // hidden, the top 55% of the section averaged 23/255 on a phone and 14 on an
+  // SE. The store's front page is a lit product shot; that is not one.
+  //
+  // Measured after, same method, same viewports: 54 and 27, with every headline
+  // ground still inside the 118 budget above. The picture roughly doubled and
+  // the copy did not move.
+  //
+  // These pin the three layers so none of them can quietly take it back.
+  // -------------------------------------------------------------------------
+  it("gives the shot its full strength, at every breakpoint", () => {
+    // A flat opacity dims the WHOLE frame, including everything no type will
+    // ever sit on, so it can never be the right tool for legibility — that is
+    // the scrim's job, and the scrim is anchored to the copy.
+    for (const [start, end] of [
+      [".vl2-hero-video {", ".vl2-hero-scrim"],
+      ["@media (max-width: 1023px)", ".vl2-hero-content"],
+      ["@media (min-width: 1024px)", ".vl2-hero-content"],
+    ]) {
+      const from = css.indexOf(start);
+      if (from === -1) continue;
+      const block = css.slice(from, css.indexOf(end, from)).replace(/\/\*[\s\S]*?\*\//g, "");
+      for (const [, value] of block.matchAll(/opacity:\s*([0-9.]+)/g)) {
+        expect(Number(value), `the hero media is dimmed to ${value} in "${start}"`).toBe(1);
+      }
+    }
+  });
+
+  it("leaves the picture above the copy essentially clear", () => {
+    const scrim = css.slice(css.indexOf(".vl2-hero-scrim {"), css.indexOf(".vl2-hero-content {"));
+    const phone = scrim.slice(0, scrim.indexOf("@media"));
+    // The copy block is ~29rem tall, bottom-anchored, on every phone. Any stop
+    // anchored FURTHER from the bottom than that is above the first line of
+    // copy, and nothing up there is holding any type legible.
+    const aboveCopy = [...phone.matchAll(/rgba\(0,\s*0,\s*0,\s*([0-9.]+)\)\s+calc\(100% - ([0-9.]+)rem\)/g)]
+      .map((m) => ({ alpha: Number(m[1]), rem: Number(m[2]) }))
+      .filter((stop) => stop.rem > 30);
+    expect(aboveCopy.length, "the phone scrim must stay clear above the copy").toBeGreaterThan(0);
+    for (const stop of aboveCopy) {
+      expect(stop.alpha, `${stop.rem}rem from the bottom is above the copy`).toBeLessThanOrEqual(0.15);
+    }
+    // The very top too, which is stated as a percentage rather than in rem.
+    const top = [...phone.matchAll(/rgba\(0,\s*0,\s*0,\s*([0-9.]+)\)\s+([0-9.]+)%/g)]
+      .map((m) => ({ alpha: Number(m[1]), at: Number(m[2]) }))
+      .filter((stop) => stop.at <= 20);
+    for (const stop of top) {
+      expect(stop.alpha, `${stop.at}% down is nowhere near the copy`).toBeLessThanOrEqual(0.15);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // AND THE HEADLINE MUST NOT LAND ON THE VIAL'S PRINTED LABEL.
+  //
+  // This is the last thing full bleed owed, and no scrim ever paid it. A scrim
+  // multiplies the label's white AND its black by the same factor, so the ratio
+  // the eye reads type by survives whatever alpha is put over it. Measured on
+  // the harness at 390x844: with the copy band at 0.82 the ground behind the
+  // headline was 43/255, well inside the 118 that white type needs for 4.5:1,
+  // and "GHK-Cu" still read straight across the headline. Value cannot fix two
+  // pieces of type competing at the same size. Only position can.
+  //
+  // So a phone shows the TOP of the frame instead of all of it. Measured on the
+  // asset by edge energy, the printed type occupies 0.451 to 0.746 of the frame
+  // height; above it there is none. Showing 0.7 of the height puts that
+  // type-free band where the copy is.
+  //
+  // Verified in the browser on the shipped build, headline bottom against the
+  // first printed line: 375x667 clears by 104px, 390x844 by 51px, 430x932 by
+  // 24px. Every one still inside the contrast budget: 36, 41, 42.
+  //
+  // The number is set by the LARGEST phone. The copy is a fixed height in rem,
+  // so a taller hero pushes the headline down while the type scales with the
+  // frame — the margin shrinks as the screen grows. A looser 0.76 clears the
+  // 390 and puts the label through the 430's headline.
+  // -------------------------------------------------------------------------
+  describe("a phone is framed so the label falls below the headline", () => {
+    /** The printed type's band in the source frame, measured on the asset. */
+    const TYPE_TOP = 0.451;
+
+    it("publishes the framing from CSS, so one breakpoint serves both", () => {
+      // The scrim and the fit have to agree about where the copy is. A media
+      // query copied into the script is how they would come to disagree.
+      expect(source).toContain('const PORTRAIT_FRAMING_PROPERTY = "--hero-framing";');
+      expect(source).toContain("getPropertyValue(PORTRAIT_FRAMING_PROPERTY)");
+      expect(css).toMatch(/--hero-framing:\s*[0-9.]+;/);
+    });
+
+    it("crops hard enough for the largest phone the copy has to clear", () => {
+      const declared = /--hero-framing:\s*([0-9.]+);/.exec(css);
+      expect(declared).not.toBeNull();
+      const framing = Number(declared![1]);
+      // 430x932 is the binding case: hero 802, headline ending at 492, and the
+      // type band starting at TYPE_TOP of a frame scaled to 802 / framing.
+      const typeTopAt430 = (TYPE_TOP * 802) / framing;
+      expect(typeTopAt430, "the label must start below the headline on a 430x932 phone")
+        .toBeGreaterThan(492);
+      // And not so hard that the vial stops being a vial. At 0.6 the frame is
+      // magnified two thirds and the label with it.
+      expect(framing).toBeGreaterThanOrEqual(0.65);
+    });
+
+    it("leaves every screen above a phone on exactly the old fit", () => {
+      // Not "similar" — arithmetically identical. At framing 1 the scale is
+      // ch / sh as it always was, dh equals ch, and the top anchor is the same
+      // zero the centred formula produced. A tablet has its copy in the bottom
+      // 40% of a 1024-tall hero and a laptop has it in a column beside the
+      // shot, so neither ever had this problem to fix.
+      expect(css).toMatch(/@media \(min-width: 641px\) \{\s*\.vl2-hero-video \{\s*--hero-framing: 1;/);
+      expect(source).toContain("const scale = ch / (sh * framing);");
+      expect(source).toContain("pictureContext.drawImage(source, x, 0, dw, dh);");
+    });
+
+    it("cannot fail into a magnified crop", () => {
+      // A stylesheet that has not arrived, a value that does not parse, a
+      // browser that ignores custom properties: all of them have to land on
+      // "show the whole frame", which is what every screen had before this.
+      expect(source).toContain("let framing = 1;");
+      expect(source).toMatch(/Number\.isFinite\(declared\) \? Math\.min\(1, Math\.max\(0\.4, declared\)\) : 1/);
+    });
+
+    it("still leaves the copy's own ground inside the contrast budget", () => {
+      // The crop moves the label; it must not be paid for by darkening. The
+      // scrim's copy band is unchanged by this, and these are the stops.
+      const scrim = css.slice(css.indexOf(".vl2-hero-scrim {"), css.indexOf(".vl2-hero-content {"));
+      const phone = scrim.slice(0, scrim.indexOf("@media"));
+      expect(phone).toContain("rgba(0, 0, 0, 0.82) calc(100% - 28rem)");
+      expect(phone).toContain("rgba(0, 0, 0, 0.06) calc(100% - 31.5rem)");
+    });
+  });
+
+  it("keeps the falloff a falloff, not a hole punched in the middle", () => {
+    // FADE_START only has to guarantee the EDGES reach zero, so that no
+    // viewport shape can leave the white studio backdrop on screen. Where the
+    // ramp BEGINS is a separate question, and 0.55 answered it so
+    // conservatively that the shot was dissolving from just past the centre —
+    // the vial's shoulder painted at partial alpha over a near-black ground.
+    const start = /^const FADE_START = ([0-9.]+);$/m.exec(source);
+    expect(start).not.toBeNull();
+    expect(Number(start![1]), "the vial is the middle of the frame").toBeGreaterThanOrEqual(0.65);
+    // Still short of the edge, or there is no falloff left to speak of.
+    expect(Number(start![1])).toBeLessThanOrEqual(0.85);
   });
 
   it("still cannot put a bright edge on screen", () => {
@@ -812,7 +973,15 @@ describe("the canvas falloff is bounded by the element it paints", () => {
   // behind the headline: a square source in a box WIDER than it is tall fills
   // the width unless you say otherwise, magnifying a 720px frame to 1440.
   it("fills the hero by matching its height, on every shape of screen", () => {
-    expect(source).toContain("const scale = ch / sh;");
+    // Still the height, never the width — that is the half of this rule that
+    // stopped a square frame being magnified to 2x on a landscape hero and
+    // printing the label across the copy. `framing` is only HOW MUCH of the
+    // height is asked to do the matching, and it is 1 on every screen above a
+    // phone, where the scale is `ch / sh` exactly as it always was. What a
+    // phone does with it is pinned in "a phone is framed so the label falls
+    // below the headline" above.
+    expect(source).toContain("const scale = ch / (sh * framing);");
+    expect(source, "the fit must never key on the width").not.toContain("const scale = cw /");
     const bias = /^const LANDSCAPE_BIAS = ([0-9.]+);$/m.exec(source);
     expect(bias).not.toBeNull();
     expect(Number(bias![1])).toBeGreaterThan(0.5);
