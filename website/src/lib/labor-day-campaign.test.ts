@@ -26,6 +26,9 @@ function offer(over: Partial<StorefrontOffer> = {}): StorefrontOffer {
 /** Inside the window: Labor Day itself, Monday 7 September 2026, midday Eastern. */
 const DURING = new Date("2026-09-07T16:00:00Z");
 
+/** The wording on the band. One constant, so a copy change is one edit. */
+const EYEBROW = "Labor Day Sale";
+
 describe("the campaign window is anchored to the store's business day", () => {
   it("is open on the first morning, 4 September, Eastern", () => {
     // 00:30 EDT on the 4th. In UTC that is already 04:30 the same day; the
@@ -39,14 +42,22 @@ describe("the campaign window is anchored to the store's business day", () => {
     expect(activeSeasonalCampaign(new Date("2026-09-04T03:59:00Z"))).toBeNull();
   });
 
-  it("is open late on the last night, 8 September, Eastern", () => {
-    // 23:30 EDT on the 8th — still the 8th for a shopper, already the 9th in UTC.
-    expect(activeSeasonalCampaign(new Date("2026-09-09T03:30:00Z"))).toEqual(LABOR_DAY_2026);
+  it("is open late on the last night, 13 September, Eastern", () => {
+    // 23:30 EDT on the 13th — still the 13th for a shopper, already the 14th in
+    // UTC. This is the boundary the store owner set: "midnight the 13th",
+    // meaning the banner survives all of Sunday and goes at midnight after it.
+    expect(activeSeasonalCampaign(new Date("2026-09-14T03:30:00Z"))).toEqual(LABOR_DAY_2026);
   });
 
-  it("is shut once the 8th is over", () => {
-    // 00:30 EDT on 9 September.
-    expect(activeSeasonalCampaign(new Date("2026-09-09T04:30:00Z"))).toBeNull();
+  it("is still open through the middle of the run, 10 September", () => {
+    // The window used to close on the 9th. Nothing about that date is special
+    // any more, and this is the case that would have caught it silently.
+    expect(activeSeasonalCampaign(new Date("2026-09-10T16:00:00Z"))).toEqual(LABOR_DAY_2026);
+  });
+
+  it("is shut once the 13th is over", () => {
+    // 00:30 EDT on 14 September.
+    expect(activeSeasonalCampaign(new Date("2026-09-14T04:30:00Z"))).toBeNull();
   });
 
   it("is shut a year later, so the banner cannot come back on its own", () => {
@@ -79,7 +90,7 @@ describe("exactly one offer wears the campaign", () => {
     // The headline is the discount. It comes from the system that enforces it,
     // and a seasonal theme has no business rewriting it.
     const [branded] = brandOffersForSeason([offer()], LABOR_DAY_2026);
-    expect(branded.eyebrow).toBe("Labor Day Weekend");
+    expect(branded.eyebrow).toBe(EYEBROW);
     expect(branded.headline).toBe("Buy 2 Get 1 Free");
   });
 
@@ -175,7 +186,7 @@ describe("the banner advertises whichever sale is actually switched on", () => {
   it("says Buy 2 Get 1 Free when that is the promotion that is live", () => {
     const [banner] = brandOffersForSeason([BUY_2_GET_1], activeSeasonalCampaign(DURING));
     expect(banner.theme).toBe("americana");
-    expect(banner.eyebrow).toBe("Labor Day Weekend");
+    expect(banner.eyebrow).toBe(EYEBROW);
     expect(banner.headline).toBe("Buy 2 Get 1 Free");
     expect(banner.automaticNote).toBe("Applied automatically at checkout");
     expect(banner.code).toBeNull();
@@ -186,7 +197,7 @@ describe("the banner advertises whichever sale is actually switched on", () => {
     // thing that changed is which offer reached it.
     const [banner] = brandOffersForSeason([TWENTY_OFF], activeSeasonalCampaign(DURING));
     expect(banner.theme).toBe("americana");
-    expect(banner.eyebrow).toBe("Labor Day Weekend");
+    expect(banner.eyebrow).toBe(EYEBROW);
     expect(banner.headline).toBe("20% OFF sitewide");
     expect(banner.code).toBe("LABORDAY");
   });
@@ -201,7 +212,7 @@ describe("the banner advertises whichever sale is actually switched on", () => {
     ];
     const branded = brandOffersForSeason(standing, activeSeasonalCampaign(DURING));
     expect(branded.every((o) => o.theme === undefined)).toBe(true);
-    expect(branded.every((o) => o.eyebrow !== "Labor Day Weekend")).toBe(true);
+    expect(branded.every((o) => o.eyebrow !== EYEBROW)).toBe(true);
   });
 
   it("dresses only the leading sale if both are somehow left on at once", () => {

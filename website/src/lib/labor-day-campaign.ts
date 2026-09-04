@@ -42,25 +42,32 @@ export interface SeasonalCampaign {
 }
 
 /**
- * Labor Day weekend 2026: 4–8 September, in the store's business zone.
+ * Labor Day 2026: 4–13 September inclusive, in the store's business zone.
  *
  * THE OFFSETS ARE WRITTEN OUT ON PURPOSE. The store displays dates in
  * America/New_York (DISPLAY_TIME_ZONE in format-date.ts) and a shopper's "the
- * sale runs the 4th through the 8th" means Eastern days, not UTC ones. Anchored
- * in UTC instead, the banner would arrive four hours late on the first morning
- * and vanish at 8pm on the last night — the two busiest hours of a holiday
- * sale. September is EDT (UTC-4) every year, so the offset is a constant here
- * rather than something to compute.
+ * sale runs the 4th through the 13th" means Eastern days, not UTC ones.
+ * Anchored in UTC instead, the banner would arrive four hours late on the first
+ * morning and vanish at 8pm on the last night — the two busiest hours of a
+ * holiday sale. September is EDT (UTC-4) every year, so the offset is a
+ * constant here rather than something to compute.
  *
- * The end is EXCLUSIVE and set to midnight on the 9th, which is how "through
- * the end of the 8th" is written without an off-by-one-second.
+ * The end is EXCLUSIVE and set to midnight on the 14th, which is how "runs to
+ * midnight on Sunday the 13th" is written without an off-by-one-second.
+ *
+ * IT RAN TO THE 8TH FIRST, AND THE COPY HAD TO MOVE WITH THE DATE. The eyebrow
+ * said "Labor Day Weekend", which was true of a five-day window ending the
+ * Tuesday after the holiday and is plainly false by the second Friday. A
+ * seasonal banner is the one place where stretching a date quietly makes the
+ * words lie, so the window and the wording are set together, here, in one
+ * object.
  */
 export const LABOR_DAY_2026: SeasonalCampaign = {
   id: "labor-day-2026",
-  eyebrow: "Labor Day Weekend",
+  eyebrow: "Labor Day Sale",
   theme: "americana",
   startsAt: "2026-09-04T00:00:00-04:00",
-  endsAt: "2026-09-09T00:00:00-04:00",
+  endsAt: "2026-09-14T00:00:00-04:00",
 };
 
 /** Every campaign the store knows about. One, today. */
