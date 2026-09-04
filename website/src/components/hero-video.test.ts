@@ -362,10 +362,16 @@ describe("the entry gate and the hero video are separate systems", () => {
 describe("an ad link cannot land someone inside a media file", () => {
   const mw = read("middleware.ts");
 
-  it("redirects a top-level navigation to a media file to the home page", () => {
+  it("redirects a top-level navigation to a media file back into the store", () => {
     expect(mw).toMatch(/const MEDIA_EXTENSIONS = \/\\\.\(mp4\|webm\|mov/);
     expect(mw).toMatch(/if \(MEDIA_EXTENSIONS\.test\(pathname\) && isTopLevelNavigation\(request\)\)/);
-    expect(mw).toMatch(/home\.pathname = "\/";/);
+    // The home page, unless the browser asking is one that is not sent the home
+    // page at all — this correction was written for TikTok ad links, so it is
+    // largely their redirect, and routing them via "/" would spend an extra
+    // round trip arriving somewhere they are immediately moved off again. Both
+    // destinations are exercised for real in src/lib/in-app-home-skip.test.ts;
+    // what matters here is only that neither of them is the media file.
+    expect(mw).toMatch(/landing\.pathname = homePageReplacement\(request\) \?\? "\/";/);
   });
 
   it("only redirects real page loads, never the hero fetching its source", () => {
