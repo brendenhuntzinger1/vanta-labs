@@ -40,6 +40,7 @@ create table public.orders (
   payment_method text,
   customer_user_id uuid,
   shipping_address text,
+  shipping_address_2 text,
   city text,
   postal_code text,
   country text,

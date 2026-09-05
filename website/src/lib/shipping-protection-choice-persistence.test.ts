@@ -46,7 +46,7 @@ describe("the shipping-protection choice survives a page load", () => {
     // the protection flags have to ride along or they are forgotten on every
     // navigation.
     expect(source, "the persisted cart record does not include the protection flags").toMatch(
-      /JSON\.stringify\(\{\s*items,\s*referralCode,\s*shippingProtectionEnabled,\s*shippingProtectionChoiceMade,?\s*\}\)/,
+      /JSON\.stringify\(\{\s*items,\s*referralCode,\s*couponCode,\s*shippingProtectionEnabled,\s*shippingProtectionChoiceMade,?\s*\}\)/,
     );
   });
 
@@ -57,7 +57,7 @@ describe("the shipping-protection choice survives a page load", () => {
     // straight to checkout would still be forgotten.
     const source = code(CART_CONTEXT);
     expect(source, "the persist effect does not re-run when the protection choice changes").toMatch(
-      /\}, \[items, referralCode, shippingProtectionEnabled, shippingProtectionChoiceMade, isHydrated\]\)/,
+      /\}, \[items, referralCode, couponCode, shippingProtectionEnabled, shippingProtectionChoiceMade, isHydrated\]\)/,
     );
   });
 

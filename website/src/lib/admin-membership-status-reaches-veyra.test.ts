@@ -15,8 +15,8 @@ const state = {
   updates: [] as Array<Record<string, unknown>>,
 };
 const veyra = vi.hoisted(() => ({
-  cancel: vi.fn(async () => ({ ok: true as const })),
-  skip: vi.fn(async () => ({ ok: true as const, nextRenewalAt: "2026-10-05T00:00:00.000Z" })),
+  cancel: vi.fn<(id: string, atPeriodEnd?: boolean) => Promise<{ ok: boolean; message?: string }>>(async () => ({ ok: true })),
+  skip: vi.fn<(id: string, reason?: string) => Promise<{ ok: boolean; message?: string; nextRenewalAt?: string | null }>>(async () => ({ ok: true, nextRenewalAt: "2026-10-05T00:00:00.000Z" })),
 }));
 
 vi.mock("server-only", () => ({}));
@@ -69,13 +69,13 @@ describe("admin setMembershipStatus on a Veyra-billed member", () => {
   });
 
   it("changes nothing locally when Veyra refuses the cancel", async () => {
-    veyra.cancel.mockResolvedValue({ ok: false, message: "provider unavailable" } as never);
+    veyra.cancel.mockResolvedValue({ ok: false, message: "provider unavailable" });
     await expect(setStatus("cancelled")).rejects.toThrow(/provider/i);
     expect(state.updates).toHaveLength(0);
   });
 
   it("changes nothing locally when Veyra refuses the pause", async () => {
-    veyra.skip.mockResolvedValue({ ok: false, message: "provider unavailable" } as never);
+    veyra.skip.mockResolvedValue({ ok: false, message: "provider unavailable" });
     await expect(setStatus("paused")).rejects.toThrow(/provider/i);
     expect(state.updates).toHaveLength(0);
   });
