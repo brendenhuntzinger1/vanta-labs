@@ -8,6 +8,11 @@ import { TurnstileWidget } from "@/components/turnstile-widget";
 import { resolveSignupOutcome, SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-signup-outcome";
 import { classifyAuthReturn, deadAuthLinkMessage, type AuthReturn } from "@/lib/auth-link-fragment";
 import { safeInternalPath } from "@/lib/internal-path";
+import {
+  hasAnyOAuthProvider,
+  isAppleSignInEnabled,
+  isGoogleSignInEnabled,
+} from "@/lib/oauth-providers";
 
 // When a Turnstile site key is configured, every auth call carries a CAPTCHA
 // token that Supabase verifies — blocking bots from draining email + SMS spend.
@@ -725,42 +730,54 @@ export function AccountAuthForm() {
           <p role="alert" className="mt-5 rounded-[12px] border border-rose-400/25 bg-rose-500/[0.08] px-4 py-3 text-[0.875rem] leading-6 text-rose-200">{error}</p>
         ) : null}
 
-        <div className="mt-6 h-px bg-white/[0.08]" aria-hidden="true" />
+        {hasAnyOAuthProvider() ? (
+          <>
+            <div className="mt-6 h-px bg-white/[0.08]" aria-hidden="true" />
 
-        <div className="mt-6 space-y-3">
-          <button
-            type="button"
-            onClick={() => void startOAuth("google")}
-            disabled={oauthPending !== null || !canEnter}
-            className="vl-oauth-btn vl-oauth-btn-lg vl-focus-ring"
-          >
-            <svg viewBox="0 0 24 24" className="h-5 w-5 shrink-0" aria-hidden="true">
-              <path fill="#4285F4" d="M23.06 12.25c0-.85-.08-1.67-.22-2.45H12v4.63h6.2a5.3 5.3 0 0 1-2.3 3.48v2.89h3.72c2.18-2 3.44-4.96 3.44-8.55z" />
-              <path fill="#34A853" d="M12 23.5c3.11 0 5.72-1.03 7.62-2.79l-3.72-2.89c-1.03.69-2.35 1.1-3.9 1.1-3 0-5.54-2.02-6.45-4.74H1.7v2.98A11.5 11.5 0 0 0 12 23.5z" />
-              <path fill="#FBBC05" d="M5.55 14.18a6.9 6.9 0 0 1 0-4.36V6.84H1.7a11.5 11.5 0 0 0 0 10.32l3.85-2.98z" />
-              <path fill="#EA4335" d="M12 4.75c1.69 0 3.21.58 4.4 1.72l3.3-3.3C17.72 1.28 15.11.25 12 .25A11.5 11.5 0 0 0 1.7 6.84l3.85 2.98C6.46 7.1 9 4.75 12 4.75z" />
-            </svg>
-            <span>{oauthPending === "google" ? "Opening Google…" : "Continue with Google"}</span>
-          </button>
+            <div className="mt-6 space-y-3">
+              {isGoogleSignInEnabled() ? (
+                <button
+                  type="button"
+                  onClick={() => void startOAuth("google")}
+                  disabled={oauthPending !== null || !canEnter}
+                  className="vl-oauth-btn vl-oauth-btn-lg vl-focus-ring"
+                >
+                  <svg viewBox="0 0 24 24" className="h-5 w-5 shrink-0" aria-hidden="true">
+                    <path fill="#4285F4" d="M23.06 12.25c0-.85-.08-1.67-.22-2.45H12v4.63h6.2a5.3 5.3 0 0 1-2.3 3.48v2.89h3.72c2.18-2 3.44-4.96 3.44-8.55z" />
+                    <path fill="#34A853" d="M12 23.5c3.11 0 5.72-1.03 7.62-2.79l-3.72-2.89c-1.03.69-2.35 1.1-3.9 1.1-3 0-5.54-2.02-6.45-4.74H1.7v2.98A11.5 11.5 0 0 0 12 23.5z" />
+                    <path fill="#FBBC05" d="M5.55 14.18a6.9 6.9 0 0 1 0-4.36V6.84H1.7a11.5 11.5 0 0 0 0 10.32l3.85-2.98z" />
+                    <path fill="#EA4335" d="M12 4.75c1.69 0 3.21.58 4.4 1.72l3.3-3.3C17.72 1.28 15.11.25 12 .25A11.5 11.5 0 0 0 1.7 6.84l3.85 2.98C6.46 7.1 9 4.75 12 4.75z" />
+                  </svg>
+                  <span>{oauthPending === "google" ? "Opening Google…" : "Continue with Google"}</span>
+                </button>
+              ) : null}
 
-          <button
-            type="button"
-            onClick={() => void startOAuth("apple")}
-            disabled={oauthPending !== null || !canEnter}
-            className="vl-oauth-btn vl-oauth-btn-lg vl-focus-ring"
-          >
-            <svg viewBox="0 0 24 24" className="h-[21px] w-[21px] shrink-0" aria-hidden="true" fill="currentColor">
-              <path d="M17.05 12.54c-.02-2.2 1.8-3.26 1.88-3.31-1.02-1.5-2.62-1.7-3.19-1.72-1.36-.14-2.65.8-3.34.8-.69 0-1.75-.78-2.87-.76-1.48.02-2.84.86-3.6 2.18-1.53 2.66-.39 6.6 1.1 8.76.73 1.06 1.6 2.25 2.74 2.2 1.1-.04 1.52-.71 2.85-.71 1.33 0 1.7.71 2.87.69 1.18-.02 1.93-1.08 2.65-2.14.83-1.22 1.18-2.4 1.2-2.46-.03-.01-2.3-.88-2.32-3.5zM14.9 5.1c.6-.74 1.01-1.75.9-2.77-.87.04-1.94.59-2.57 1.31-.56.64-1.05 1.68-.92 2.67.98.08 1.98-.5 2.59-1.21z" />
-            </svg>
-            <span>{oauthPending === "apple" ? "Opening Apple…" : "Continue with Apple"}</span>
-          </button>
-        </div>
+              {isAppleSignInEnabled() ? (
+                <button
+                  type="button"
+                  onClick={() => void startOAuth("apple")}
+                  disabled={oauthPending !== null || !canEnter}
+                  className="vl-oauth-btn vl-oauth-btn-lg vl-focus-ring"
+                >
+                  <svg viewBox="0 0 24 24" className="h-[21px] w-[21px] shrink-0" aria-hidden="true" fill="currentColor">
+                    <path d="M17.05 12.54c-.02-2.2 1.8-3.26 1.88-3.31-1.02-1.5-2.62-1.7-3.19-1.72-1.36-.14-2.65.8-3.34.8-.69 0-1.75-.78-2.87-.76-1.48.02-2.84.86-3.6 2.18-1.53 2.66-.39 6.6 1.1 8.76.73 1.06 1.6 2.25 2.74 2.2 1.1-.04 1.52-.71 2.85-.71 1.33 0 1.7.71 2.87.69 1.18-.02 1.93-1.08 2.65-2.14.83-1.22 1.18-2.4 1.2-2.46-.03-.01-2.3-.88-2.32-3.5zM14.9 5.1c.6-.74 1.01-1.75.9-2.77-.87.04-1.94.59-2.57 1.31-.56.64-1.05 1.68-.92 2.67.98.08 1.98-.5 2.59-1.21z" />
+                  </svg>
+                  <span>{oauthPending === "apple" ? "Opening Apple…" : "Continue with Apple"}</span>
+                </button>
+              ) : null}
+            </div>
 
-        <div className="my-6 flex items-center gap-3" aria-hidden="true">
-          <span className="h-px flex-1 bg-white/[0.06]" />
-          <span className="text-[0.6875rem] uppercase tracking-[0.2em] text-white/30">or</span>
-          <span className="h-px flex-1 bg-white/[0.06]" />
-        </div>
+            <div className="my-6 flex items-center gap-3" aria-hidden="true">
+              <span className="h-px flex-1 bg-white/[0.06]" />
+              <span className="text-[0.6875rem] uppercase tracking-[0.2em] text-white/30">or</span>
+              <span className="h-px flex-1 bg-white/[0.06]" />
+            </div>
+          </>
+        ) : (
+          // No provider to offer: "Create an account" becomes the only door, so
+          // it needs the breathing room the divider was providing.
+          <div className="mt-7" />
+        )}
 
         <button
           type="button"
@@ -1099,39 +1116,63 @@ export function AccountAuthForm() {
           </div>
         ) : null}
 
-        <div className="mt-5 grid gap-3 sm:grid-cols-2">
-          <button
-            type="button"
-            onClick={() => void startOAuth("google")}
-            disabled={oauthPending !== null || !ageConfirmed || !researchUseAgreed}
-            className="vl-oauth-btn vl-focus-ring"
-          >
-            <svg viewBox="0 0 24 24" className="h-[18px] w-[18px] shrink-0" aria-hidden="true">
-              <path fill="#4285F4" d="M23.06 12.25c0-.85-.08-1.67-.22-2.45H12v4.63h6.2a5.3 5.3 0 0 1-2.3 3.48v2.89h3.72c2.18-2 3.44-4.960 3.44-8.55z" />
-              <path fill="#34A853" d="M12 23.5c3.11 0 5.72-1.03 7.62-2.79l-3.72-2.89c-1.03.69-2.35 1.1-3.9 1.1-3 0-5.54-2.02-6.45-4.74H1.7v2.98A11.5 11.5 0 0 0 12 23.5z" />
-              <path fill="#FBBC05" d="M5.55 14.18a6.9 6.9 0 0 1 0-4.36V6.84H1.7a11.5 11.5 0 0 0 0 10.32l3.85-2.98z" />
-              <path fill="#EA4335" d="M12 4.75c1.69 0 3.21.58 4.4 1.72l3.3-3.3C17.72 1.28 15.11.25 12 .25A11.5 11.5 0 0 0 1.7 6.84l3.85 2.98C6.46 7.1 9 4.75 12 4.75z" />
-            </svg>
-            <span>{oauthPending === "google" ? "Opening Google…" : "Continue with Google"}</span>
-          </button>
+        {hasAnyOAuthProvider() ? (
+          <>
+            {/* Two-up only when there are two. A lone button in a two-column
+                grid sits at half width against a full-width form above it,
+                which reads as a rendering fault rather than a choice. */}
+            <div
+              className={`mt-5 grid gap-3 ${
+                isGoogleSignInEnabled() && isAppleSignInEnabled() ? "sm:grid-cols-2" : "grid-cols-1"
+              }`}
+            >
+              {isGoogleSignInEnabled() ? (
+                <button
+                  type="button"
+                  onClick={() => void startOAuth("google")}
+                  disabled={oauthPending !== null || !ageConfirmed || !researchUseAgreed}
+                  className="vl-oauth-btn vl-focus-ring"
+                >
+                  <svg viewBox="0 0 24 24" className="h-[18px] w-[18px] shrink-0" aria-hidden="true">
+                    <path fill="#4285F4" d="M23.06 12.25c0-.85-.08-1.67-.22-2.45H12v4.63h6.2a5.3 5.3 0 0 1-2.3 3.48v2.89h3.72c2.18-2 3.44-4.960 3.44-8.55z" />
+                    <path fill="#34A853" d="M12 23.5c3.11 0 5.72-1.03 7.62-2.79l-3.72-2.89c-1.03.69-2.35 1.1-3.9 1.1-3 0-5.54-2.02-6.45-4.74H1.7v2.98A11.5 11.5 0 0 0 12 23.5z" />
+                    <path fill="#FBBC05" d="M5.55 14.18a6.9 6.9 0 0 1 0-4.36V6.84H1.7a11.5 11.5 0 0 0 0 10.32l3.85-2.98z" />
+                    <path fill="#EA4335" d="M12 4.75c1.69 0 3.21.58 4.4 1.72l3.3-3.3C17.72 1.28 15.11.25 12 .25A11.5 11.5 0 0 0 1.7 6.84l3.85 2.98C6.46 7.1 9 4.75 12 4.75z" />
+                  </svg>
+                  <span>{oauthPending === "google" ? "Opening Google…" : "Continue with Google"}</span>
+                </button>
+              ) : null}
 
-          <button
-            type="button"
-            onClick={() => void startOAuth("apple")}
-            disabled={oauthPending !== null || !ageConfirmed || !researchUseAgreed}
-            className="vl-oauth-btn vl-focus-ring"
-          >
-            <svg viewBox="0 0 24 24" className="h-[19px] w-[19px] shrink-0" aria-hidden="true" fill="currentColor">
-              <path d="M17.05 12.54c-.02-2.2 1.8-3.26 1.88-3.31-1.02-1.5-2.62-1.7-3.19-1.72-1.36-.14-2.65.8-3.34.8-.69 0-1.75-.78-2.87-.76-1.48.02-2.84.86-3.6 2.18-1.53 2.66-.39 6.6 1.1 8.76.73 1.06 1.6 2.25 2.74 2.2 1.1-.04 1.52-.71 2.85-.71 1.33 0 1.7.71 2.87.69 1.18-.02 1.93-1.08 2.65-2.14.83-1.22 1.18-2.4 1.2-2.46-.03-.01-2.3-.88-2.32-3.5zM14.9 5.1c.6-.74 1.01-1.75.9-2.77-.87.04-1.94.59-2.57 1.31-.56.64-1.05 1.68-.92 2.67.98.08 1.98-.5 2.59-1.21z" />
-            </svg>
-            <span>{oauthPending === "apple" ? "Opening Apple…" : "Continue with Apple"}</span>
-          </button>
-        </div>
+              {isAppleSignInEnabled() ? (
+                <button
+                  type="button"
+                  onClick={() => void startOAuth("apple")}
+                  disabled={oauthPending !== null || !ageConfirmed || !researchUseAgreed}
+                  className="vl-oauth-btn vl-focus-ring"
+                >
+                  <svg viewBox="0 0 24 24" className="h-[19px] w-[19px] shrink-0" aria-hidden="true" fill="currentColor">
+                    <path d="M17.05 12.54c-.02-2.2 1.8-3.26 1.88-3.31-1.02-1.5-2.62-1.7-3.19-1.72-1.36-.14-2.65.8-3.34.8-.69 0-1.75-.78-2.87-.76-1.48.02-2.84.86-3.6 2.18-1.53 2.66-.39 6.6 1.1 8.76.73 1.06 1.6 2.25 2.74 2.2 1.1-.04 1.52-.71 2.85-.71 1.33 0 1.7.71 2.87.69 1.18-.02 1.93-1.08 2.65-2.14.83-1.22 1.18-2.4 1.2-2.46-.03-.01-2.3-.88-2.32-3.5zM14.9 5.1c.6-.74 1.01-1.75.9-2.77-.87.04-1.94.59-2.57 1.31-.56.64-1.05 1.68-.92 2.67.98.08 1.98-.5 2.59-1.21z" />
+                  </svg>
+                  <span>{oauthPending === "apple" ? "Opening Apple…" : "Continue with Apple"}</span>
+                </button>
+              ) : null}
+            </div>
 
-        <p className="mt-4 text-[0.75rem] leading-5 text-white/40">
-          Signing in with Google or Apple shares your name and email address with Vanta Labs. It
-          does not subscribe you to marketing email.
-        </p>
+            {/* Names only the providers actually on offer. Telling someone what
+                "Google or Apple" does with their data, on a screen showing one
+                button, describes a choice they were never given. */}
+            <p className="mt-4 text-[0.75rem] leading-5 text-white/40">
+              Signing in with{" "}
+              {isGoogleSignInEnabled() && isAppleSignInEnabled()
+                ? "Google or Apple"
+                : isGoogleSignInEnabled()
+                  ? "Google"
+                  : "Apple"}{" "}
+              shares your name and email address with Vanta Labs. It does not subscribe you to
+              marketing email.
+            </p>
+          </>
+        ) : null}
       </div>
 
       <div className="mt-7 space-y-4 border-t border-white/[0.06] pt-6 text-center">

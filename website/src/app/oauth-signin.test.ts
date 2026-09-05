@@ -113,7 +113,14 @@ describe("a provider identity is not consent to send marketing", () => {
   });
 
   it("tells the visitor what a provider sign-in does and does not do", () => {
-    expect(form).toContain("does not subscribe you to marketing email");
+    // Whitespace-normalised, because the sentence is JSX prose that reflows
+    // whenever the surrounding markup is re-indented. Pinning the line breaks
+    // makes this fail for a formatting change while the statement it is
+    // actually guarding — that handing over a Google address is not consent to
+    // be mailed — is still right there on the screen.
+    const prose = form.replace(/\s+/g, " ");
+    expect(prose).toContain("shares your name and email address with Vanta Labs");
+    expect(prose).toContain("does not subscribe you to marketing email");
   });
 });
 
