@@ -234,3 +234,64 @@ describe("when the retry budget is spent", () => {
     expect(pushes).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Item 12. The manual retry (and the communications panel it sits on) matched
+// queue rows by `subject ilike '%orderNumber%'`. Order-linked rows now carry
+// order_id, which is the identity: a queued notice that does not quote the
+// number in its subject is still this order's, and another order's row that
+// happens to contain the number is not. The subject match remains for LEGACY
+// rows only — those with no order link.
+// ---------------------------------------------------------------------------
+describe("the manual retry finds an order's rows by their order link", () => {
+  it("retries a linked row whose subject does not quote the order number", async () => {
+    const { retryPendingEmailsForOrder } = await import("@/lib/email/retry-queue");
+    db.pending_emails.push(queued({ subject: "Your parcel 1Z999 is on its way", order_id: "order-3001", email_kind: "order_shipped" }));
+
+    const result = await retryPendingEmailsForOrder("VL-3001", "order-3001");
+
+    expect(result.found).toBe(1);
+    expect(result.sent).toBe(1);
+    expect(sends[0].idempotencyKey).toBe("order_shipped:order-3001");
+  });
+
+  it("still retries a legacy row (no order link) by its subject", async () => {
+    const { retryPendingEmailsForOrder } = await import("@/lib/email/retry-queue");
+    db.pending_emails.push(queued({ subject: "Shipping Update - VL-3001", order_id: null, email_kind: null }));
+
+    const result = await retryPendingEmailsForOrder("VL-3001", "order-3001");
+
+    expect(result.found).toBe(1);
+    expect(result.sent).toBe(1);
+  });
+
+  it("does NOT touch a row linked to a different order whose subject merely contains the number", async () => {
+    const { retryPendingEmailsForOrder } = await import("@/lib/email/retry-queue");
+    // VL-30011's row quotes a subject that contains "VL-3001" as a substring.
+    db.pending_emails.push(queued({ subject: "Order Confirmed - VL-30011", order_id: "order-30011", email_kind: "order_confirmation" }));
+
+    const result = await retryPendingEmailsForOrder("VL-3001", "order-3001");
+
+    expect(result.found).toBe(0);
+    expect(sends).toHaveLength(0);
+    expect(db.pending_emails[0].status).toBe("pending");
+  });
+
+  it("counts a row once when it is both linked and subject-matched", async () => {
+    const { retryPendingEmailsForOrder } = await import("@/lib/email/retry-queue");
+    db.pending_emails.push(queued({ subject: "Shipping Update - VL-3001", order_id: "order-3001", email_kind: "order_shipped" }));
+
+    const result = await retryPendingEmailsForOrder("VL-3001", "order-3001");
+
+    expect(result.found).toBe(1);
+    expect(sends).toHaveLength(1);
+  });
+
+  it("the communications panel reads the same way and hands the order id to the retry", async () => {
+    const { readFileSync } = await import("node:fs");
+    const route = readFileSync(`${process.cwd()}/src/app/api/admin/orders/[orderId]/communications/route.ts`, "utf8");
+    expect(route).toContain('.eq("order_id", order.order_id as string)');
+    expect(route).toContain("if (row.order_id && row.order_id !== order.order_id) continue;");
+    expect(route).toContain("retryPendingEmailsForOrder(orderNumber, order.order_id as string)");
+  });
+});

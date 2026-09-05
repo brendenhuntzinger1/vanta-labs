@@ -94,6 +94,32 @@ export function isSaleOrder(orderType: string | null | undefined): boolean {
   return !NON_SALE_ORDER_TYPES.has(String(orderType ?? "product").toLowerCase());
 }
 
+/**
+ * Did the customer BUY PRODUCT with this order? The predicate every
+ * behaviour-driven email flow must use before treating an order as a purchase.
+ *
+ * `isSaleOrder` answers a REVENUE question — a membership charge is real
+ * revenue, so it is a sale. It is not a purchase of product: nothing arrives in
+ * a box, there is no COA to read, nothing to restock in thirty days, and a
+ * monthly renewal is not the customer "coming back". A replacement reship is
+ * neither revenue nor a purchase. The post-purchase, replenishment and win-back
+ * automations, and the abandoned-cart "recovered" mark, all keyed on
+ * payment_status alone and so fired — or silenced — on membership charges and
+ * $0 reships (EMAIL-02 / EMAIL-03).
+ *
+ * `replacement_of` is honoured when the row carries it (a `select *` read); a
+ * reship also carries order_type 'replacement', which is the column every list
+ * read selects, so the column's presence is never required.
+ */
+export function isProductPurchaseOrder(order: {
+  order_type?: string | null;
+  replacement_of?: string | null;
+}): boolean {
+  if (String(order.order_type ?? "product").toLowerCase() !== "product") return false;
+  if (order.replacement_of) return false;
+  return true;
+}
+
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }

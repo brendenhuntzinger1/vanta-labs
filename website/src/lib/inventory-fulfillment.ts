@@ -150,10 +150,17 @@ export async function readQuantityAfter(adjustment: InventoryAdjustment): Promis
  *    BAC Water a SECOND time — the automatic decrement had already run. An
  *    invisible movement is how a correct system produces a wrong count.
  */
+/** Who moved the stock, for the ledger. The webhook is the default because it
+ *  is the only caller that never passes one. */
+export const INVENTORY_ACTOR_PAYMENT_WEBHOOK = "payment_webhook";
+/** Every admin-initiated cancel reaches the restock through
+ *  returnInventoryForCancelledOrder, which passes this. */
+export const INVENTORY_ACTOR_ADMIN_CANCELLATION = "admin_cancellation";
+
 async function applyInventoryDelta(
   adjustment: InventoryAdjustment,
   signedQty: number,
-  context: { orderId?: string | null; type: InventoryTransactionType; reason: string },
+  context: { orderId?: string | null; type: InventoryTransactionType; reason: string; actor?: string },
 ): Promise<void> {
   const { data, error } = await supabaseAdmin.rpc("adjust_inventory_on_sale", {
     p_slug: adjustment.slug,
@@ -191,7 +198,10 @@ async function applyInventoryDelta(
     quantityBefore: after === null ? null : after - signedQty,
     quantityAfter: after,
     reason: context.reason,
-    actor: "payment_webhook",
+    // Was a hard-coded "payment_webhook" for every movement, so an admin's
+    // cancel of a paid order was booked to the webhook and the ledger could
+    // not tell the two apart.
+    actor: context.actor ?? INVENTORY_ACTOR_PAYMENT_WEBHOOK,
     orderId: context.orderId ?? null,
   });
 }
@@ -389,13 +399,18 @@ export async function claimInventoryRestock(orderId: string): Promise<InventoryR
 // Return stock when a paid order is fully refunded or canceled — the exact
 // inverse of the decrement above, so tracked stock nets back to where it began.
 // Gate every call with claimInventoryRestock(orderId) so it runs at most once.
-export async function restockInventoryForOrder(items: OrderItemRef[], orderId?: string | null): Promise<void> {
+export async function restockInventoryForOrder(
+  items: OrderItemRef[],
+  orderId?: string | null,
+  actor: string = INVENTORY_ACTOR_PAYMENT_WEBHOOK,
+): Promise<void> {
   for (const adjustment of planInventoryAdjustments(items)) {
     try {
       await applyInventoryDelta(adjustment, adjustment.quantity, {
         orderId,
         type: "order_canceled",
         reason: orderId ? `Returned to stock from ${orderId}` : "Returned to stock",
+        actor,
       });
     } catch (error) {
       console.error("Unable to restock inventory for", adjustment, error);

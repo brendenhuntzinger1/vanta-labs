@@ -21,8 +21,11 @@ vi.mock("@/lib/admin-control", () => ({
 }));
 
 const sends: Array<{ to: string; subject: string; html: string; text: string }> = [];
+/** Flipped by the SF-5 block below to make the provider refuse the notification. */
+let providerUp = true;
 vi.mock("@/lib/email/send", () => ({
   sendEmail: async (message: { to: string; subject: string; html: string; text: string }) => {
+    if (!providerUp) return { success: false, error: "Resend API error (503): unavailable" };
     sends.push({ to: message.to, subject: message.subject, html: message.html, text: message.text });
     return { success: true };
   },
@@ -96,5 +99,57 @@ describe("the contact-form auto-reply", () => {
   it("greets 'there' when nothing name-shaped survives", async () => {
     await submit({ firstName: "1234567890" });
     expect(sends[1].text).toContain("Hi there,");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SF-5. The support-inbox email was the ONLY sink for a contact-form message.
+// When the provider refused it, the form told the customer it failed — honestly
+// — and nothing anywhere held what they had written. The message is now
+// preserved on the status page (a warning alert carrying the sender and the
+// text) before the error is returned.
+// ---------------------------------------------------------------------------
+const alerts: Array<{ type: string; severity: string; message: string; context?: Record<string, unknown> }> = [];
+vi.mock("@/lib/monitoring", () => ({
+  recordSystemAlert: async (alert: { type: string; severity: string; message: string; context?: Record<string, unknown> }) => {
+    alerts.push(alert);
+  },
+}));
+
+describe("when the support notification cannot be sent", () => {
+  it("preserves the sender and the message in a warning alert, then still reports the failure", async () => {
+    alerts.length = 0;
+    providerUp = false;
+    try {
+      const response = await submit({ email: "customer@example.test", orderNumber: "VL-4242" });
+      expect(response.status).toBe(500);
+      const body = await response.json() as { success: boolean; error: string };
+      expect(body.success).toBe(false);
+      expect(body.error).toContain("couldn't send your message");
+
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0].type).toBe("contact_form_undelivered");
+      expect(alerts[0].severity).toBe("warning");
+      expect(alerts[0].message).toContain("customer@example.test");
+      expect(alerts[0].context).toMatchObject({
+        from_email: "customer@example.test",
+        first_name: "Ada",
+        last_name: "L",
+        order_number: "VL-4242",
+        subject: HOSTILE_SUBJECT,
+        message: HOSTILE_MESSAGE,
+      });
+      // No auto-reply went out for a message the team never received.
+      expect(sends).toHaveLength(0);
+    } finally {
+      providerUp = true;
+    }
+  });
+
+  it("records nothing when the notification is delivered", async () => {
+    alerts.length = 0;
+    const response = await submit();
+    expect(response.status).toBe(200);
+    expect(alerts).toHaveLength(0);
   });
 });

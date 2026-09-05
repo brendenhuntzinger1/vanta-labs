@@ -1,3 +1,4 @@
+import { redactEmailForLog } from "@/lib/log-redaction";
 import "server-only";
 import { sendEmail } from "@/lib/email/send";
 import { supabaseAdmin } from "@/lib/supabase-server";
@@ -149,7 +150,7 @@ export async function sendMarketingEmail(
   // next tick; a send that cannot verify consent does not go.
   if (suppressionError) {
     await releaseHeldClaim(input.claimedLogId);
-    console.error("[marketing] suppression check unavailable; refusing to send", email, suppressionError);
+    console.error("[marketing] suppression check unavailable; refusing to send", redactEmailForLog(email), suppressionError);
     return { success: false, suppressed: false, error: "Suppression list unavailable; consent could not be verified" };
   }
 

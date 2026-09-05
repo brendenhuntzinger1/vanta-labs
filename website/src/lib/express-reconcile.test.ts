@@ -261,6 +261,66 @@ describe("a definitively dead session is retired, carefully", () => {
   });
 });
 
+describe("a checkout the processor never resolves is retired after a week", () => {
+  // Older than RECONCILE_ABANDON_MS (7 days).
+  const LAST_MONTH = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString();
+
+  for (const status of ["open", "processing", "requires_action", null]) {
+    it(`retires a week-old "${status ?? "unreadable"}" session as an abandoned checkout and returns its stock`, async () => {
+      pendingRows = [{ order_id: "order-old", payment_id: "cs_live_old", created_at: LAST_MONTH }];
+      providerSays(status);
+      const result = await reconcileVeyraPendingPayments();
+      expect(result.failedOut).toBe(1);
+      expect(result.unresolved).toBe(0);
+      expect(orderUpdate).toHaveBeenCalledTimes(1);
+      const call = orderUpdate.mock.calls[0][0] as { payload: Record<string, unknown>; eq_order_id: string; eq_payment_status: string };
+      expect(call.eq_order_id).toBe("order-old");
+      // Never over a row a webhook has since moved on.
+      expect(call.eq_payment_status).toBe("pending_payment");
+      expect(call.payload).toMatchObject({
+        payment_status: "payment_failed",
+        payment_failure_kind: "checkout_expired",
+        payment_failure_code: "abandoned",
+      });
+      expect(String(call.payload.payment_failure_reason)).toMatch(/no charge was attempted/i);
+      expect(releaseInventoryForOrder).toHaveBeenCalledWith("order-old");
+      expect(processPaymentWebhook).not.toHaveBeenCalled();
+    });
+  }
+
+  it("still settles a week-old session the processor says is PAID — money moved, order owed", async () => {
+    pendingRows = [{ order_id: "order-old", payment_id: "cs_live_old", created_at: LAST_MONTH }];
+    providerSays("paid");
+    const result = await reconcileVeyraPendingPayments();
+    expect(result.settled).toBe(1);
+    expect(result.failedOut).toBe(0);
+    expect(processPaymentWebhook).toHaveBeenCalledTimes(1);
+    expect(orderUpdate).not.toHaveBeenCalled();
+  });
+
+  it("leaves a session that is merely a few days old alone", async () => {
+    const THREE_DAYS = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    pendingRows = [{ order_id: "order-3d", payment_id: "cs_live_3d", created_at: THREE_DAYS }];
+    providerSays("open");
+    const result = await reconcileVeyraPendingPayments();
+    expect(result.unresolved).toBe(1);
+    expect(result.failedOut).toBe(0);
+    expect(orderUpdate).not.toHaveBeenCalled();
+  });
+
+  it("no longer counts retired checkouts toward the backlog warning", async () => {
+    pendingRows = [
+      { order_id: "order-old", payment_id: "cs_live_old", created_at: LAST_MONTH },
+      { order_id: "order-2d", payment_id: "cs_live_2d", created_at: ANCIENT },
+    ];
+    providerSays("open");
+    await reconcileVeyraPendingPayments();
+    const backlog = (recordSystemAlert.mock.calls as unknown as Array<[{ type: string; context: { stale: number } }]>).map((c) => c[0]).find((a) => a.type === "payment_reconcile_backlog");
+    expect(backlog).toBeDefined();
+    expect(backlog?.context.stale).toBe(1);
+  });
+});
+
 describe("the query only ever considers orders that can be reconciled", () => {
   it("selects unpaid orders that carry a session id, newest first", async () => {
     providerSays("open");

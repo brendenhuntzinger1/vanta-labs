@@ -627,7 +627,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
             </div>
             <ul className="mx-auto mt-8 max-w-2xl space-y-2 text-sm text-white/60">
               <li>• Discounts are automatically applied at checkout — no code needed.</li>
-              <li>• Exclusive to active, paying Elite and Black members (trial members qualify once they convert to a paying member).</li>
+              <li>• Exclusive to active, paying Elite and Black members.</li>
               <li>• One discount per order — bulk savings automatically applies if it beats any other discount you&apos;re eligible for.</li>
             </ul>
           </div>

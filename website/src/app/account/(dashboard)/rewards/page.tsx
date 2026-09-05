@@ -1,3 +1,4 @@
+import { formatDisplayDate } from "@/lib/format-date";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { detectRoleFromUser } from "@/lib/auth-role";
@@ -125,7 +126,7 @@ export default async function AccountRewardsPage() {
               <li key={entry.id} className="flex items-center justify-between py-2.5 text-sm">
                 <div className="min-w-0">
                   <p className="truncate text-zinc-200">{LEDGER_REASON_LABELS[entry.reason] ?? entry.reason}</p>
-                  <p className="text-xs text-zinc-500">{new Date(entry.createdAt).toLocaleString("en-US")}</p>
+                  <p className="text-xs text-zinc-500">{formatDisplayDate(entry.createdAt, "datetime") ?? ""}</p>
                 </div>
                 <span className={entry.amount >= 0 ? "font-semibold text-emerald-300" : "font-semibold text-rose-300"}>
                   {entry.amount >= 0 ? "+" : ""}{entry.amount.toLocaleString("en-US")}

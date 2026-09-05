@@ -337,7 +337,7 @@ describe("changing tier can never leave two subscriptions billing", () => {
 
     const result = await signup({ tierId: OTHER_TIER, tokenIntentId: "ti_change" });
 
-    expect(result).toEqual({ success: true, changed: true });
+    expect(result).toMatchObject({ success: true, changed: true });
     expect(veyra.changePlan).toHaveBeenCalledWith("veyra_sub", expect.objectContaining({ amountCents: 4900 }));
     expect(veyra.start).not.toHaveBeenCalled();
     expect(veyra.cancel).not.toHaveBeenCalled();
@@ -350,7 +350,7 @@ describe("changing tier can never leave two subscriptions billing", () => {
 
     const result = await signup({ tierId: OTHER_TIER, tokenIntentId: "ti_change" });
 
-    expect(result).toEqual({ success: true, changed: true });
+    expect(result).toMatchObject({ success: true, changed: true });
     expect(veyra.start).not.toHaveBeenCalled();
     expect(membership()?.veyra_membership_id).toBe("veyra_sub");
   });

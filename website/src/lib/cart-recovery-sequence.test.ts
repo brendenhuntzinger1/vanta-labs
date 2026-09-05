@@ -221,6 +221,40 @@ describe("the sweep", () => {
     expect(cart.recovered_order_id).toBe("o-1");
   });
 
+  it("a MEMBERSHIP charge after the cart was seen does not end the sequence — it is not a purchase of product (EMAIL-03)", async () => {
+    const cart = seedCart({ firstSeenHoursAgo: 2 });
+    db.orders.push({ order_id: "o-plan", customer_email: cart.email, payment_status: "paid", order_type: "membership", created_at: new Date(Date.now() - HOUR_MS).toISOString() });
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    await runAbandonedCartSweep();
+    // The sequence runs: the 30-minute note goes out and the cart stays active.
+    expect(sent.map((s) => s.campaignType)).toEqual(["cart_recovery_t30m"]);
+    expect(cart.status).toBe("active");
+    expect(cart.recovered_order_id).toBeUndefined();
+  });
+
+  it("a replacement reship after the cart was seen does not end the sequence either", async () => {
+    const cart = seedCart({ firstSeenHoursAgo: 2 });
+    db.orders.push({ order_id: "o-reship", customer_email: cart.email, payment_status: "paid", order_type: "replacement", created_at: new Date(Date.now() - HOUR_MS).toISOString() });
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    await runAbandonedCartSweep();
+    expect(cart.status).toBe("active");
+  });
+
+  it("the webhook's mark refuses a membership order and takes a product order (EMAIL-03)", async () => {
+    const cart = seedCart({ firstSeenHoursAgo: 2 });
+    const { markAbandonedCartsRecovered } = await import("@/lib/cart-recovery");
+
+    await markAbandonedCartsRecovered(cart.email as string, "o-plan", { order_type: "membership" });
+    expect(cart.status).toBe("active");
+
+    await markAbandonedCartsRecovered(cart.email as string, "o-reship", { order_type: "replacement" });
+    expect(cart.status).toBe("active");
+
+    await markAbandonedCartsRecovered(cart.email as string, "o-product", { order_type: "product" });
+    expect(cart.status).toBe("recovered");
+    expect(cart.recovered_order_id).toBe("o-product");
+  });
+
   it("a cart edited late still gets its 72-hour message: the clock AND the age-out both run from the last activity", async () => {
     // First seen five days ago, last touched 73 hours ago. Bounding the scan by
     // first_seen_at dropped this cart at 96 hours from first sight, so the

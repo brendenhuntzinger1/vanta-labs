@@ -32,6 +32,23 @@ import { safeInternalPath } from "@/lib/internal-path";
 /** Link types GoTrue can hand us that this hop knows how to forward. */
 const FORWARDABLE = new Set(["signup", "magiclink", "invite", "recovery", "email_change"]);
 
+/**
+ * The verify-endpoint type for a generateLink type.
+ *
+ * generateLink is asked for `email_change_new` (the link that goes to the
+ * address being adopted) or `email_change_current`, and its response echoes
+ * that request in `verification_type`. GoTrue's /verify endpoint knows neither
+ * name — it verifies both tokens under `type=email_change`. Passed through
+ * unmapped, the type was not FORWARDABLE, so every change-of-address email fell
+ * back to the raw supabase.co action_link: the off-domain button this module
+ * exists to remove, on the one auth email that had not lost it.
+ */
+export function normalizeLinkType(type: string | null | undefined): string {
+  const value = String(type ?? "").trim().toLowerCase();
+  if (value === "email_change_new" || value === "email_change_current") return "email_change";
+  return value;
+}
+
 export interface BrandedConfirmLinkInput {
   /** `properties.hashed_token` from generateLink. */
   hashedToken?: string | null;
@@ -52,7 +69,7 @@ export interface BrandedConfirmLinkInput {
  */
 export function brandedConfirmUrl(input: BrandedConfirmLinkInput): string {
   const token = String(input.hashedToken ?? "").trim();
-  const type = String(input.type ?? "").trim().toLowerCase();
+  const type = normalizeLinkType(input.type);
 
   if (!token || !FORWARDABLE.has(type)) {
     return input.fallbackActionLink;

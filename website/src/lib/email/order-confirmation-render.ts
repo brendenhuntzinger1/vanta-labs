@@ -3,6 +3,7 @@ import "server-only";
 import { orderConfirmationTemplate, refundConfirmationTemplate } from "@/lib/email/templates";
 import type { EmailTemplate } from "@/lib/email/types";
 import { getSiteUrl } from "@/lib/env";
+import { pointsToDollars } from "@/lib/points-math";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 /**
@@ -35,10 +36,33 @@ export interface OrderEmailSourceRow {
   amount_paid?: number | null;
   payment_status?: string | null;
   order_items?: OrderEmailItemRow[] | null;
+  store_credit_redeemed_cents?: number | null;
+  points_redeemed?: number | null;
+  shipping_protection_fee?: number | null;
 }
 
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+/**
+ * The receipt's explicit "Credits applied" and "Shipping protection" figures,
+ * read off the order row (EMAIL-02). Store credit is stored in cents and points
+ * as a count; both come back as dollars. Every caller of
+ * orderConfirmationTemplate — the two webhook lanes, the admin resends and the
+ * reaper — reads them through here so the four cannot disagree.
+ */
+export function receiptAdjustmentsFromOrder(order: {
+  store_credit_redeemed_cents?: number | null;
+  points_redeemed?: number | null;
+  shipping_protection_fee?: number | null;
+}): { creditsApplied: number; shippingProtectionFee: number } {
+  const storeCredit = Math.max(0, Number(order.store_credit_redeemed_cents ?? 0)) / 100;
+  const points = pointsToDollars(Math.max(0, Number(order.points_redeemed ?? 0)));
+  return {
+    creditsApplied: roundMoney(storeCredit + points),
+    shippingProtectionFee: roundMoney(Math.max(0, Number(order.shipping_protection_fee ?? 0))),
+  };
 }
 
 /** The receipt, exactly as the admin resend has always rendered it. */
@@ -59,6 +83,7 @@ export function renderOrderConfirmationFromRecord(order: OrderEmailSourceRow, or
     cardProcessingFee: roundMoney(Number(order.card_processing_fee ?? 0)),
     total: roundMoney(Number(order.amount_paid ?? 0)),
     orderUrl: `${getSiteUrl()}/order-confirmation/${orderId}`,
+    ...receiptAdjustmentsFromOrder(order),
   });
 }
 

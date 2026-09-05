@@ -373,18 +373,27 @@ async function reportUndeliverable(rows: Array<{ to: string; subject: string; er
  * order — behaves as it always did. There is no identity to dedupe on, and
  * refusing to retry it would take away the only recovery this panel offers.
  *
- * Matched on the order number in the subject, the same join the admin display
- * uses; the order link, where present, is what the send-once checks use.
+ * MATCHED ON THE ORDER LINK FIRST. Order-linked rows carry `order_id`
+ * (sql/pending-emails-order-link.sql), and that column is the identity: a
+ * queued email about this order whose subject happens not to quote the order
+ * number (a template change, a notice that names the tracking number instead)
+ * is found, and a row about ANOTHER order whose subject merely contains this
+ * number as a substring is not. `subject ilike '%number%'` — the join the panel
+ * used for everything — is kept only for LEGACY rows written before the column
+ * existed, which have no other identity. A row that carries an order_id is
+ * never matched by subject.
  */
 export async function retryPendingEmailsForOrder(
   orderNumber: string,
+  orderId?: string | null,
 ): Promise<{ found: number; sent: number; stillFailing: number; skippedAlreadySent: number }> {
   let found = 0;
   let sent = 0;
   let stillFailing = 0;
   let skippedAlreadySent = 0;
   const needle = String(orderNumber ?? "").trim();
-  if (!needle) return { found, sent, stillFailing, skippedAlreadySent };
+  const linkedId = String(orderId ?? "").trim();
+  if (!needle && !linkedId) return { found, sent, stillFailing, skippedAlreadySent };
 
   try {
     type ManualRow = {
@@ -401,20 +410,58 @@ export async function retryPendingEmailsForOrder(
       email_kind?: string | null;
     };
     const BASE_COLUMNS = "id, to_email, subject, html, text_body, reply_to, attempts, status, next_attempt_at";
-    const matching = (columns: string) => supabaseAdmin
+    type Page = PromiseLike<{ data: ManualRow[] | null; error: { code?: string; message?: string } | null }>;
+    const bySubject = (columns: string) => supabaseAdmin
       .from("pending_emails")
       .select(columns)
       .in("status", ["pending", "failed"])
       .ilike("subject", `%${needle}%`)
-      .limit(20) as unknown as PromiseLike<{ data: ManualRow[] | null; error: { code?: string; message?: string } | null }>;
+      .limit(20) as unknown as Page;
+    const byOrderId = () => supabaseAdmin
+      .from("pending_emails")
+      .select(`${BASE_COLUMNS}, order_id, email_kind`)
+      .in("status", ["pending", "failed"])
+      .eq("order_id", linkedId)
+      .limit(20) as unknown as Page;
 
-    let { data, error } = await matching(`${BASE_COLUMNS}, order_id, email_kind`);
-    if (error && isMissingSchema(error)) {
-      // The order link column is not migrated yet. Retry the way this always
-      // did — there is simply no identity to dedupe against.
-      ({ data, error } = await matching(BASE_COLUMNS));
+    const data: ManualRow[] = [];
+    const seen = new Set<string>();
+    const take = (rows: ManualRow[] | null | undefined) => {
+      for (const row of rows ?? []) {
+        if (seen.has(String(row.id))) continue;
+        seen.add(String(row.id));
+        data.push(row);
+      }
+    };
+
+    let linkColumnPresent = true;
+    if (linkedId) {
+      const linked = await byOrderId();
+      if (linked.error && isMissingSchema(linked.error)) {
+        // The order link column is not migrated yet: every row is a legacy
+        // row, and the subject is the only identity there is.
+        linkColumnPresent = false;
+      } else if (linked.error) {
+        return { found, sent, stillFailing, skippedAlreadySent };
+      } else {
+        take(linked.data);
+      }
     }
-    if (error || !data) return { found, sent, stillFailing, skippedAlreadySent };
+
+    if (needle) {
+      let legacy = await bySubject(linkColumnPresent ? `${BASE_COLUMNS}, order_id, email_kind` : BASE_COLUMNS);
+      if (legacy.error && isMissingSchema(legacy.error)) {
+        linkColumnPresent = false;
+        legacy = await bySubject(BASE_COLUMNS);
+      }
+      if (legacy.error) return { found, sent, stillFailing, skippedAlreadySent };
+      // With an order id in hand, only rows with NO order link are matched by
+      // subject: a linked row about this order was already taken above, and a
+      // linked row about a different order that quotes this number is somebody
+      // else's email. A caller that knows only the number (the legacy
+      // signature) still gets the subject match over every row, as it always did.
+      take(linkColumnPresent && linkedId ? (legacy.data ?? []).filter((row) => !row.order_id) : legacy.data);
+    }
 
     found = data.length;
     for (const row of data) {

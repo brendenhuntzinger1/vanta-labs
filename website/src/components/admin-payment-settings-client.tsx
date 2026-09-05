@@ -124,7 +124,7 @@ export function AdminPaymentSettingsClient({
             Charge a card fee
           </label>
           <label className="block text-xs text-zinc-400">Fee percentage (%)
-            <input type="number" min={0} step="0.1" value={fee.percentage} onChange={(e) => setFee({ ...fee, percentage: Number(e.target.value) })} className="vl-input mt-1 w-full px-3 py-2 text-sm" />
+            <input type="number" min={0} max={10} step="0.1" value={fee.percentage} onChange={(e) => setFee({ ...fee, percentage: Number(e.target.value) })} className="vl-input mt-1 w-full px-3 py-2 text-sm" />
           </label>
           <Field label="Fee label" value={fee.label} onChange={(v) => setFee({ ...fee, label: v })} placeholder="Card Processing Fee" />
           <label className="block text-xs text-zinc-400 sm:col-span-2">Notice text (leave blank to auto-generate from the percentage)

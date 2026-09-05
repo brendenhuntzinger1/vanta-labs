@@ -1,3 +1,4 @@
+import { formatDisplayDate } from "@/lib/format-date";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getBusinessSettings } from "@/lib/admin-control";
@@ -93,7 +94,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
     .join("");
 
   const totalUnits = items.reduce((sum, item) => sum + Number(item.quantity ?? 0), 0);
-  const createdAt = order.created_at ? new Date(String(order.created_at)).toLocaleString("en-US") : "";
+  const createdAt = formatDisplayDate(order.created_at ? String(order.created_at) : null, "datetime") ?? "";
 
   const html = `<!doctype html>
 <html lang="en">

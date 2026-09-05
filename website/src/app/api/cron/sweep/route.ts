@@ -22,6 +22,7 @@ import { describeError } from "@/lib/operator-error";
 import { runBirthdayBonusSweep } from "@/lib/membership";
 import { runCouponHygiene } from "@/lib/coupon-hygiene";
 import { resealPlaintextControlSecrets } from "@/lib/admin-control";
+import { repairUnredeemedPaidOffers } from "@/lib/offers/customer-offer-repair";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -115,6 +116,9 @@ const JOBS = {
   signupConfirmations: { label: "signup_confirmation_watch", run: alertOnStalledSignups },
   couponHygiene: { label: "coupon_hygiene", run: runCouponHygiene },
   controlSecretReseal: { label: "control_secret_reseal", run: resealPlaintextControlSecrets },
+  // A paid order that held a customer offer but whose redeem call died: mark
+  // it redeemed so the token can never be spent twice and reporting is true.
+  customerOfferRepair: { label: "customer_offer_repair", run: repairUnredeemedPaidOffers },
   // Watch for APPROVED ambassadors who have never signed in. The job above is
   // time-boxed on purpose -- past its lookback an unconfirmed signup is someone
   // who changed their mind -- and that is exactly wrong for an ambassador whose

@@ -85,12 +85,14 @@ interface LocalMembershipRow {
   // The end of the period already paid for, used when a cancel event carries
   // cancel_at_period_end but no date of its own.
   next_billing_at: string | null;
+  /** An upgrade waiting for the renewal that pays for it (membership-billing.ts). */
+  pending_tier_id?: string | null;
 }
 
 async function findLocalMembership(veyraMembershipId: string): Promise<LocalMembershipRow | null> {
   const { data, error } = await supabaseAdmin
     .from("customer_memberships")
-    .select("user_id, tier_id, status, billing_cycle, next_billing_at")
+    .select("user_id, tier_id, status, billing_cycle, next_billing_at, pending_tier_id")
     .eq("veyra_membership_id", veyraMembershipId)
     .maybeSingle();
   if (error) throw error;
@@ -174,6 +176,16 @@ export async function handleMembershipEvent(
       patch.cancel_at_period_end = data.cancel_at_period_end;
     }
 
+    // THE RENEWAL IS THE MOMENT AN UPGRADE IS PAID FOR. A monthly upgrade was
+    // repriced at Veyra and parked in pending_tier_id (membership-billing.ts);
+    // this charge is the first at the new price, so the member moves onto the
+    // tier now — never before.
+    const appliedTierId = local.pending_tier_id ?? local.tier_id;
+    if (local.pending_tier_id) {
+      patch.tier_id = local.pending_tier_id;
+      patch.pending_tier_id = null;
+      patch.pending_tier_effective_at = null;
+    }
     const { error } = await supabaseAdmin
       .from("customer_memberships")
       .update(patch)
@@ -182,7 +194,7 @@ export async function handleMembershipEvent(
 
     await recordEvent({
       userId: local.user_id,
-      tierId: local.tier_id,
+      tierId: appliedTierId,
       eventType: "renewal",
       amountCents: chargedCents,
       status: "succeeded",
@@ -213,7 +225,7 @@ export async function handleMembershipEvent(
       (data.next_renewal_at ?? data.current_period_end ?? nowIso.slice(0, 10)) || nowIso.slice(0, 10);
     const renewalOrder = await recordMembershipChargeOrder({
       userId: local.user_id,
-      tierId: local.tier_id,
+      tierId: appliedTierId,
       billingCycle: local.billing_cycle,
       amountCents: chargedCents,
       kind: "renewal",

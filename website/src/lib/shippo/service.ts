@@ -5,6 +5,7 @@ import { sendEmail } from "@/lib/email/send";
 import { enqueueFailedEmail } from "@/lib/email/retry-queue";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { deliveryConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
+import { orderEmailIdempotencyKey, type OrderEmailKind } from "@/lib/email/order-email-once";
 import { recordActualShippingCost } from "@/lib/admin-profit";
 import { resolveCarrier } from "@/lib/tracking-url";
 import { getSiteUrl } from "@/lib/env";
@@ -1729,10 +1730,14 @@ export function notificationFor(
 async function queueForRetry(
   to: string,
   template: { subject: string; html: string; text: string },
-  error?: string,
+  error: string | undefined,
+  identity: { orderId: string; kind: OrderEmailKind },
 ): Promise<void> {
   console.error("Shipping notification not sent; queued for retry", to, error);
-  await enqueueFailedEmail({ to, subject: template.subject, html: template.html, text: template.text }, error);
+  // The (order, kind) identity travels with the row, so the sweep re-sends
+  // under the SAME idempotency key the original went out with — a provider
+  // that accepted the first attempt but timed out answering collapses the two.
+  await enqueueFailedEmail({ to, subject: template.subject, html: template.html, text: template.text }, error, identity);
 }
 
 async function notifyCustomer(
@@ -1746,6 +1751,12 @@ async function notifyCustomer(
   if (!to || !kind) return false;
 
   const displayOrderId = text(order.order_number) ?? order.order_id;
+  // One stable key per (order, notice): "shipped" and "delivered" each happen
+  // once, so a timeout-after-accept plus the queued retry cannot put two
+  // copies in the inbox. Keyed on the internal order_id, never the display
+  // number, exactly as sendOrderEmailOnce keys the receipt.
+  const emailKind: OrderEmailKind = kind === "delivered" ? "order_delivered" : "order_shipped";
+  const idempotencyKey = orderEmailIdempotencyKey(order.order_id, emailKind);
 
   try {
     if (kind === "delivered") {
@@ -1753,8 +1764,8 @@ async function notifyCustomer(
         customerName: text(order.customer_name) ?? "",
         orderId: displayOrderId,
       });
-      const result = await sendEmail({ to, ...template });
-      if (!result.success) await queueForRetry(to, template, result.error);
+      const result = await sendEmail({ to, ...template, idempotencyKey });
+      if (!result.success) await queueForRetry(to, template, result.error, { orderId: order.order_id, kind: emailKind });
       return true;
     }
 
@@ -1771,8 +1782,8 @@ async function notifyCustomer(
       trackingNumber: trackingNumber ?? undefined,
       trackingUrl: resolved?.trackingUrl ?? `${getSiteUrl()}/account/orders`,
     });
-    const result = await sendEmail({ to, ...template });
-    if (!result.success) await queueForRetry(to, template, result.error);
+    const result = await sendEmail({ to, ...template, idempotencyKey });
+    if (!result.success) await queueForRetry(to, template, result.error, { orderId: order.order_id, kind: emailKind });
     return true;
   } catch (error) {
     // The status change already persisted; a failed notification must not undo

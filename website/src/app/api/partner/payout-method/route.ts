@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getApprovedPartnerByAuthUserId, updatePartnerPayoutMethod } from "@/lib/partner-portal";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 // Lets an APPROVED ambassador set/update their preferred payout method
 // (PayPal / Venmo / Cash App + handle). Scoped to the signed-in user's own
@@ -23,7 +24,10 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to save payout method";
+    // The payout validation messages are CustomerFacingError and pass through;
+    // anything else (a Postgres constraint, a vendor hostname) is replaced.
+    console.error("[partner/payout-method]", error);
+    const message = customerSafeMessage(error, "Unable to save payout method");
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }

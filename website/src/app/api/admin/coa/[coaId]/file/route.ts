@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
-import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageCoa } from "@/lib/admin-roles";
 import { replaceAdminCoaFile } from "@/lib/admin-coa";
 import { coaErrorResponse, coaForbiddenResponse, coaUnauthorizedResponse } from "@/lib/admin-coa-http";
 import { resolveCoaFileUrl } from "@/lib/coa";
+import { supabaseAdmin } from "@/lib/supabase-server";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +58,30 @@ export async function POST(request: Request, context: { params: Promise<{ coaId:
       bytes: await file.arrayBuffer(),
       declaredType: file.type ?? "",
     });
+
+    // ADM-11: the previous document is gone from storage once this succeeds;
+    // this row is what says who swapped it and for what. Best effort, like the
+    // sibling route — the write already happened.
+    try {
+      const { error } = await supabaseAdmin.from("admin_audit_logs").insert({
+        action: "coa_file_replace",
+        target_table: "coa_records",
+        target_id: coaId,
+        metadata: {
+          productId: record.productId,
+          batchNumber: record.batchNumber,
+          fileName: record.fileName,
+          fileSizeBytes: record.fileSizeBytes,
+          performedAt: new Date().toISOString(),
+          performedBy: session.username,
+          ipAddress: getRequestIpAddress(request),
+          userAgent: getRequestUserAgent(request),
+        },
+      });
+      if (error) console.error("COA audit row not written", "coa_file_replace", coaId, error);
+    } catch (auditError) {
+      console.error("COA audit row not written", "coa_file_replace", coaId, auditError);
+    }
 
     return NextResponse.json({ success: true, record });
   } catch (error) {

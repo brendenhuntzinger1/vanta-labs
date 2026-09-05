@@ -392,3 +392,98 @@ describe("an exact tie between two discounts", () => {
     expect(cartReferralWon(s)).toBe(serverReferralWon(s));
   });
 });
+
+// ---------------------------------------------------------------------------
+// AND THE THIRD THING BOTH SIDES HAVE TO AGREE ON: WHETHER SHIPPING IS FREE.
+//
+// PRICE-02. Shipping is not in the discount race at all — it has its own
+// expression, and that expression existed in THREE places: quote-order.ts
+// (what the card is charged), cart-context.tsx (the drawer and /cart) and
+// checkout/page.tsx. The server's knew about a coupon flagged `free_shipping`;
+// the two client copies did not, so a shopper below the free-shipping threshold
+// who applied a free-shipping code saw $15 of shipping still in the total and,
+// for a shipping-only code, was told it "doesn't lower the total" while the
+// server charged $0 for it. All three now call isShippingWaived (shipping.ts).
+// ---------------------------------------------------------------------------
+
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { calculateShipping, DEFAULT_SHIPPING_CONFIG, isShippingWaived } from "@/lib/shipping";
+import { describeCouponOutcome } from "@/lib/discount-resolution";
+
+const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
+
+describe("a free-shipping coupon zeroes shipping on both sides", () => {
+  const grants = [
+    { name: "nothing waives it", bulkSavingsTier: false, memberFreeShipping: false, couponFreeShipping: false, expected: false },
+    { name: "a free-shipping coupon alone", bulkSavingsTier: false, memberFreeShipping: false, couponFreeShipping: true, expected: true },
+    { name: "a bulk tier alone", bulkSavingsTier: true, memberFreeShipping: false, couponFreeShipping: false, expected: true },
+    { name: "a membership perk alone", bulkSavingsTier: false, memberFreeShipping: true, couponFreeShipping: false, expected: true },
+    { name: "a coupon on top of a perk that already ships free", bulkSavingsTier: false, memberFreeShipping: true, couponFreeShipping: true, expected: true },
+  ];
+
+  it.each(grants)("$name", ({ expected, ...waivers }) => {
+    expect(isShippingWaived(waivers)).toBe(expected);
+  });
+
+  it("a $120 domestic basket with a free-shipping code ships for $0, not the $15 the client used to show", () => {
+    const subtotal = 120;
+    const listTerms = calculateShipping(subtotal, undefined, DEFAULT_SHIPPING_CONFIG);
+    expect(listTerms).toBe(DEFAULT_SHIPPING_CONFIG.domesticFee);
+    const shown = isShippingWaived({ bulkSavingsTier: false, memberFreeShipping: false, couponFreeShipping: true }) ? 0 : listTerms;
+    expect(shown).toBe(0);
+  });
+
+  it("with no waiver the fee is untouched — the code changes nothing else about pricing", () => {
+    const listTerms = calculateShipping(120, undefined, DEFAULT_SHIPPING_CONFIG);
+    const shown = isShippingWaived({ bulkSavingsTier: false, memberFreeShipping: false, couponFreeShipping: false }) ? 0 : listTerms;
+    expect(shown).toBe(listTerms);
+  });
+
+  // The helper only proves parity if BOTH sides actually call it. These pin
+  // the wiring, the same way the discount half of this file pins that
+  // cart-context calls resolveCartDiscount rather than restating it.
+  it("the server, the cart and the checkout all decide the waiver through isShippingWaived", () => {
+    const server = read("src/lib/quote-order.ts");
+    const cart = read("src/components/cart-context.tsx");
+    const checkout = read("src/app/checkout/page.tsx");
+    for (const [name, src] of [["quote-order", server], ["cart-context", cart], ["checkout", checkout]] as const) {
+      expect(src, `${name} should call isShippingWaived`).toContain("isShippingWaived({");
+      expect(src, `${name} should feed the coupon's waiver in`).toMatch(/isShippingWaived\(\{[^}]*couponFreeShipping/);
+    }
+    // The old hand-rolled client expressions are gone.
+    expect(cart).not.toContain("(bulkSavingsTierReached || memberFreeShipping) ? 0 : calculateShipping(");
+    expect(checkout).not.toContain("(bulkSavingsTierReached || memberFreeShipping) ? 0 : calculateShipping(");
+  });
+
+  it("the drawer's shipping row reads 'Free', not 'Calculated at payment', when the coupon waived it", () => {
+    // cartShippingLineLabel only says "Free" for a zero something decided; a
+    // coupon-waived zero used to fall through to the not-priced-yet placeholder.
+    const drawer = read("src/components/cart-drawer.tsx");
+    const call = drawer.slice(drawer.indexOf("cartShippingLineLabel({"), drawer.indexOf("format: formatCartCurrency"));
+    expect(call).toContain("Boolean(couponDetails?.freeShipping)");
+    expect(call).toContain("memberFreeShipping");
+    expect(call).toContain("bulkSavingsTierReached");
+  });
+
+  it("the validate route tells the client about the waiver, and the client carries it", () => {
+    const route = read("src/app/api/coupons/validate/route.ts");
+    expect(route).toContain("freeShipping: coupon.freeShipping");
+    const cart = read("src/components/cart-context.tsx");
+    expect(cart).toContain("freeShipping: result.freeShipping === true");
+  });
+
+  it("a shipping-only code is described as in the price, not as doing nothing", () => {
+    const outcome = describeCouponOutcome({
+      code: "SHIPFREE",
+      offerLabel: null,
+      winnerType: null,
+      winnerLabel: null,
+      waivesShipping: true,
+    });
+    expect(outcome.controlsPrice).toBe(true);
+    expect(outcome.message).toContain("Free shipping");
+    expect(outcome.message).not.toContain("doesn't lower the total");
+  });
+});

@@ -342,3 +342,31 @@ describe("editing a packed weight", () => {
     expect(row.shipping_weight_oz).toBe(2.5);
   });
 });
+
+// INV-05. The admin screen showed on-hand only, so "the site says 8, I count
+// 5, I type 5" while 16 were held produced an oversell on the next finalize.
+describe("held units are visible and cannot be undercut", () => {
+  beforeEach(() => {
+    harness.reset();
+    seedProduct({ id: "p1", name: "BPC-157", inventory_quantity: 24 });
+    seedDose({ id: "d1", product_id: "p1", label: "10mg", inventory_quantity: 24 });
+    harness.table("products")[0].reserved_quantity = 16;
+    harness.table("product_doses")[0].reserved_quantity = 16;
+  });
+
+  it("reports held and sellable units beside on-hand", async () => {
+    const rows = await getInventoryRows();
+    const dose = rows.find((row) => row.doseId === "d1");
+    expect(dose).toMatchObject({ inventoryQuantity: 24, reservedQuantity: 16, availableQuantity: 8 });
+  });
+
+  it("refuses a count below the units held, naming the number and the remedy", async () => {
+    await expect(adjustInventoryLine({ productId: "p1", doseId: "d1", quantity: 5 })).rejects.toThrow(/16 units are held by checkouts in progress.*cannot be set below 16/);
+    expect(harness.table("product_doses")[0].inventory_quantity).toBe(24);
+  });
+
+  it("accepts a count at or above the held units", async () => {
+    await adjustInventoryLine({ productId: "p1", doseId: "d1", quantity: 16 });
+    expect(harness.table("product_doses")[0].inventory_quantity).toBe(16);
+  });
+});

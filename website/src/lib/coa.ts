@@ -28,7 +28,13 @@ import { resolveProductImage } from "@/lib/product-image";
 // support question. The library is two small queries, and the expensive half
 // (the product catalog) is already cached under CATALOG_CACHE_TAG, so the
 // marginal cost of always-fresh COA data is one indexed read.
-const COA_SIGNED_URL_TTL_SECONDS = 60 * 60; // 1 hour
+// SHORT. The redirect at /api/coa/[coaId]/file re-checks publication and
+// mints a fresh URL on every click, so this only needs to outlive one page
+// load. At an hour, a document unpublished (or a product delisted) kept
+// answering from an already-open tab for up to 60 minutes; five minutes is
+// long enough for a slow mobile download and short enough that "unpublish"
+// means what the admin thinks it means.
+const COA_SIGNED_URL_TTL_SECONDS = 5 * 60;
 export const COA_BUCKET = "coa-documents";
 
 export const COA_SETTINGS_SECTION = "coa";

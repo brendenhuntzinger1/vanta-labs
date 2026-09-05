@@ -66,8 +66,9 @@ retained partial-refund revenue.
 The code default for `count_sales_tax_as_profit` is now `false`
 (`admin-control.ts`). **That default is only consulted when the key is absent.**
 The Control Center writes this key on every save of its Profit section
-(`admin-control-center-client.tsx:425`), and its client-side default is `true` —
-so if that page has ever been saved, the control store holds `true` and the code
+(`admin-control-center-client.tsx:431`), and its client-side default WAS `true`
+(ADM-02; it now initialises to `false`, matching the server) — so if that page
+was ever saved before that fix, the control store holds `true` and the code
 change does nothing at all.
 
 **Two ways to apply it, your choice:**

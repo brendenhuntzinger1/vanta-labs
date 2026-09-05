@@ -35,6 +35,22 @@ const RECONCILE_MAX_PAGES = 10;
 /** Past this a still-unknown charge needs a human, not another poll. */
 const RECONCILE_STALE_MS = 24 * 60 * 60 * 1000;
 /**
+ * When a still-unresolved checkout is retired as ABANDONED.
+ *
+ * The processor only calls a session dead (failed / expired / canceled) if it
+ * says so itself; Veyra leaves a walked-away checkout reading "open", or stops
+ * answering for it, indefinitely. Until 2026-09-05 those rows stayed
+ * pending_payment forever, were polled on every tick, and re-raised the
+ * 24-hour backlog warning every six hours — 30 open copies in production for
+ * four August checkouts nobody could ever clear. A week with no charge, no
+ * webhook and no processor confirmation is not a payment in flight. Retiring
+ * it is also reversible: a late payment.succeeded webhook still moves a
+ * payment_failed order to paid (payment-webhook.ts only refuses that for
+ * refunded/canceled money), so nothing charged can be lost here.
+ */
+const RECONCILE_ABANDON_DAYS = 7;
+const RECONCILE_ABANDON_MS = RECONCILE_ABANDON_DAYS * 24 * 60 * 60 * 1000;
+/**
  * Timeout on ONE poll of the processor.
  *
  * K-19 gave every outbound Veyra call in veyra-membership.ts a 15s timeout,
@@ -208,6 +224,7 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
 
   const secret = getRequiredEnv("PAYMENT_WEBHOOK_SECRET");
   const staleFloor = Date.now() - RECONCILE_STALE_MS;
+  const abandonFloor = Date.now() - RECONCILE_ABANDON_MS;
   let settled = 0;
   let failedOut = 0;
   let unresolved = 0;
@@ -305,7 +322,33 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
     }
 
     // Still pending at the processor (open / processing / requires_action), or
-    // unreadable. Leave it alone — it may yet charge.
+    // unreadable. Leave it alone — it may yet charge — unless it has now sat
+    // that way for RECONCILE_ABANDON_DAYS, at which point it is an abandoned
+    // checkout and is retired so it stops being polled and stops re-raising the
+    // backlog warning. Guarded on pending_payment for the same reason as the
+    // dead-session retirement above.
+    if (Date.parse(order.created_at) < abandonFloor) {
+      const retiredAt = new Date().toISOString();
+      const { error: abandonError } = await supabaseAdmin
+        .from("orders")
+        .update({
+          payment_status: "payment_failed",
+          payment_failure_kind: "checkout_expired",
+          payment_failure_code: "abandoned",
+          payment_failure_reason:
+            `No payment arrived in the ${RECONCILE_ABANDON_DAYS} days after checkout and the processor never `
+            + "reported a charge. Retired as an abandoned checkout; no charge was attempted.",
+          payment_failed_at: retiredAt,
+          updated_at: retiredAt,
+        })
+        .eq("order_id", order.order_id)
+        .eq("payment_status", "pending_payment");
+      if (!abandonError) {
+        await releaseInventoryForOrder(order.order_id);
+        failedOut += 1;
+      }
+      continue;
+    }
     unresolved += 1;
     if (Date.parse(order.created_at) < staleFloor) stale += 1;
   }

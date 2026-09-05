@@ -7,6 +7,18 @@ import { liveBxgyPromotions } from "@/lib/bxgy-engine";
 export const dynamic = "force-dynamic";
 
 /**
+ * AUTH-4. This endpoint takes an arbitrary email and answers whether that
+ * address has bought under a per-customer-limited promotion — which is to say
+ * whether it belongs to a customer of a research-peptide store. 30 probes a
+ * minute per IP made it a usable existence oracle. A real cart asks this a
+ * handful of times per session (once each time the shopper's email becomes
+ * known), so ten per ten minutes per IP costs a shopper nothing and cuts the
+ * probe rate by 30×. The response shape is unchanged: a throttled cart keeps
+ * its store-wide list, exactly as it does on any other non-OK answer.
+ */
+export const ELIGIBILITY_RATE_LIMIT = { limit: 10, windowSeconds: 10 * 60 } as const;
+
+/**
  * POST /api/catalog/promotions/eligibility
  *
  * WHY THIS EXISTS. A per-customer usage limit ("one per customer") is the one
@@ -27,7 +39,11 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(request: Request) {
   const ip = getRequestIpAddress(request);
-  const limit = await checkRateLimit(`promo-eligibility:${ip ?? "unknown"}`, 30, 60);
+  const limit = await checkRateLimit(
+    `promo-eligibility:${ip ?? "unknown"}`,
+    ELIGIBILITY_RATE_LIMIT.limit,
+    ELIGIBILITY_RATE_LIMIT.windowSeconds,
+  );
   if (!limit.allowed) {
     return NextResponse.json({ success: false, error: "Too many requests." }, { status: 429 });
   }

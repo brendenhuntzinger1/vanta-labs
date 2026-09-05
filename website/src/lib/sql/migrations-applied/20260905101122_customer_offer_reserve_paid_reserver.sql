@@ -1,0 +1,25 @@
+-- ============================================================================
+-- VANTA LABS — customer_offer_reserve refuses a token held by a PAID order
+--
+-- APPLIED TO PRODUCTION 2026-09-05 10:11:22 UTC as
+-- "customer_offer_reserve_paid_reserver_verbatim". Source of truth:
+-- ../customer-offers.sql (the customer_offer_reserve function body, verbatim).
+--
+-- What changed: one new clause before the hold-age check. If the reserving
+-- order has payment_status paid / partially_refunded / refunded, the token is
+-- refused to any other order regardless of how old the hold is. Before this,
+-- a paid gift order whose redeem RPC died left the token re-spendable once the
+-- 30-minute hold aged out (launch audit EMAIL-05). The sweep job
+-- customer_offer_repair (src/lib/offers/customer-offer-repair.ts) closes the
+-- same gap from the other side by redeeming such tokens.
+--
+-- Record of a mistake, for honesty: a first application at 10:10:22 UTC
+-- ("customer_offer_reserve_paid_reserver") was typed rather than copied and
+-- omitted the pg_advisory_xact_lock line. It stood for 60 seconds; the
+-- customer_offers table held 0 rows at the time, so nothing could have been
+-- affected. The 10:11:22 application is the exact file text and was verified
+-- with pg_get_functiondef (lock present, new clause present).
+-- ============================================================================
+
+-- Intentionally empty of DDL: see ../customer-offers.sql.
+select 1;

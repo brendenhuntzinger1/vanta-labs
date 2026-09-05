@@ -4,6 +4,8 @@ import { canManageInventory } from "@/lib/admin-roles";
 import { getInventoryRows } from "@/lib/admin-inventory";
 import { isInventoryTrackingActive } from "@/lib/inventory-settings";
 import { AdminInventoryClient } from "@/components/admin-inventory-client";
+import { failedReads, settleRead, UNKNOWN_FIGURE } from "@/lib/admin-read";
+import { AdminReadFailureNotice } from "@/components/admin-data-notices";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +15,11 @@ export default async function AdminInventoryPage() {
     redirect("/vault");
   }
 
-  const rows = await getInventoryRows().catch(() => []);
+  // A FAILED READ IS NOT AN EMPTY SHELF — see admin-read.ts. An empty table
+  // here reads as "nothing tracked" and "Everything is stocked above threshold";
+  // a database that did not answer must say so instead.
+  const rowsRead = await settleRead("Inventory", getInventoryRows);
+  const rows = rowsRead.ok ? rowsRead.value : [];
   // Stock is only enforced once inventory tracking is switched on. Until then
   // these numbers are a reference and never gate sales (see resolveStockStatus
   // in catalog.ts). Vanta Labs owns these counts now — nothing external feeds
@@ -30,13 +36,18 @@ export default async function AdminInventoryPage() {
           <p className="text-xs uppercase tracking-[0.28em] text-cyan-300/80">Admin Portal</p>
           <h1 className="mt-2 text-3xl font-semibold text-white sm:text-4xl">Inventory</h1>
           <p className="mt-3 max-w-3xl text-sm text-zinc-400 sm:text-base">
-            {inventoryTrackingActive
+            {!rowsRead.ok
+              ? `Stock counts could not be loaded (${UNKNOWN_FIGURE}). Nothing below is evidence that the shelf is stocked.`
+              : inventoryTrackingActive
               ? `Live stock counts from every product and variant, with per-line low-stock thresholds.${lowStockCount > 0 ? ` ${lowStockCount} line${lowStockCount === 1 ? "" : "s"} need attention.` : " Everything is stocked above threshold."}`
               : "Inventory tracking is off. The counts below are a reference only — they don't gate sales, and every product stays purchasable. Populate real quantities here, then turn tracking on in Settings to start enforcing them."}
           </p>
         </section>
 
-        <AdminInventoryClient initialRows={rows} canManage={canManageInventory(session.role)} inventoryTrackingActive={inventoryTrackingActive} />
+        <AdminReadFailureNotice failures={failedReads([rowsRead])} />
+        {rowsRead.ok ? (
+          <AdminInventoryClient initialRows={rows} canManage={canManageInventory(session.role)} inventoryTrackingActive={inventoryTrackingActive} />
+        ) : null}
       </div>
     </div>
   );

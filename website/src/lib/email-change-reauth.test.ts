@@ -47,6 +47,7 @@ const state = {
   /** THE SIDE EFFECT UNDER TEST — a non-empty list means the change started. */
   mintedLinks: [] as { type: string; email: string; newEmail: string }[],
   sentTo: [] as string[],
+  sentHtml: [] as string[],
   rateLimited: false,
 };
 
@@ -76,7 +77,8 @@ vi.mock("@/lib/supabase-server", () => ({
               properties: {
                 action_link: "https://example.test/confirm",
                 hashed_token: "hashed",
-                verification_type: "email_change",
+                // What GoTrue really echoes: the type generateLink was asked for.
+                verification_type: "email_change_new",
               },
             },
             error: null,
@@ -93,8 +95,9 @@ vi.mock("@/lib/rate-limit", () => ({
 }));
 
 vi.mock("@/lib/email/send", () => ({
-  sendEmail: async ({ to }: { to: string }) => {
+  sendEmail: async ({ to, html }: { to: string; html: string }) => {
     state.sentTo.push(to);
+    state.sentHtml.push(html);
     return { success: true };
   },
 }));
@@ -116,6 +119,7 @@ beforeEach(() => {
   state.reauthAttempts = [];
   state.mintedLinks = [];
   state.sentTo = [];
+  state.sentHtml = [];
   state.rateLimited = false;
 });
 
@@ -149,6 +153,19 @@ describe("a session alone cannot change the account's email address", () => {
       { type: "email_change_new", email: "owner@example.com", newEmail: "new@example.com" },
     ]);
     expect(state.sentTo).toEqual(["new@example.com"]);
+  });
+
+  it("the confirmation button stays on our own domain — GoTrue's email_change_new is forwarded as email_change (EMAIL-08)", async () => {
+    // The mint above echoes verification_type "email_change_new", which is what
+    // GoTrue really returns. That name was not forwardable, so this one email
+    // fell back to the raw supabase.co action_link.
+    process.env.NEXT_PUBLIC_SITE_URL = "https://www.vantalabsresearch.com";
+    const response = await post({ email: "new@example.com", currentPassword: state.correctPassword });
+    expect(response.status).toBe(200);
+    const html = state.sentHtml[0] ?? "";
+    expect(html).toContain("https://www.vantalabsresearch.com/auth/confirm?");
+    expect(html).toContain("type=email_change&");
+    expect(html).not.toContain("https://example.test/confirm");
   });
 
   it("re-authenticates as the SESSION's owner, never as an address the caller supplied", async () => {

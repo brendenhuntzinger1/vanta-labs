@@ -227,6 +227,8 @@ export function AdminInventoryClient({
       return {
         ...line,
         inventoryQuantity: quantity,
+        reservedQuantity: row.reservedQuantity,
+        availableQuantity: Math.max(0, quantity - row.reservedQuantity),
         lowStockThreshold: threshold,
         isOutOfStock: quantity <= 0,
         isLowStock: quantity > 0 && quantity <= threshold,
@@ -456,6 +458,11 @@ export function AdminInventoryClient({
                   ) : (
                     <p className="mt-1 text-sm text-zinc-200">{row.inventoryQuantity}</p>
                   )}
+                  {row.reservedQuantity > 0 ? (
+                    <span className="mt-1 block text-xs text-amber-300/80" title="Held by checkouts in progress; the storefront sells on hand minus held.">
+                      ({row.reservedQuantity} held · {row.availableQuantity} sellable)
+                    </span>
+                  ) : null}
                 </label>
                 <label className="text-[11px] uppercase tracking-wide text-zinc-500">
                   Low-stock at
@@ -543,6 +550,11 @@ export function AdminInventoryClient({
                         className="vl-input w-20 px-2 py-1 text-sm"
                       />
                     ) : row.inventoryQuantity}
+                    {row.reservedQuantity > 0 ? (
+                      <span className="mt-1 block text-xs text-amber-300/80" title="Held by checkouts in progress; the storefront sells on hand minus held.">
+                        ({row.reservedQuantity} held · {row.availableQuantity} sellable)
+                      </span>
+                    ) : null}
                   </td>
                   <td className="py-3 pr-4">
                     {row.incomingQuantity > 0 ? (

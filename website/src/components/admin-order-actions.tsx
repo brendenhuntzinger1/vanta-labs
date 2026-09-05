@@ -167,19 +167,29 @@ export function AdminOrderActions({
       payload.paymentStatus = paymentStatus;
     }
 
-    const res = await fetch(`/api/admin/orders/${orderId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    const json = await res.json() as {
+    type ActionReply = {
       success: boolean;
       error?: string;
       replacementOrderNumber?: string;
       customerNotified?: boolean;
       customerEmailQueued?: boolean;
     };
+    let res: Response;
+    let json: ActionReply;
+    try {
+      res = await fetch(`/api/admin/orders/${orderId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      json = (await res.json()) as ActionReply;
+    } catch {
+      // ADM-12. A thrown fetch used to leave `saving` true with no message, so
+      // the operator could neither retry nor tell whether the change landed.
+      setMessage("Network error — the change may not have been saved. Reload the order to check before trying again.");
+      setSaving(false);
+      return;
+    }
     if (!res.ok || !json.success) {
       setMessage(json.error ?? "Action failed");
       setSaving(false);
@@ -291,7 +301,9 @@ export function AdminOrderActions({
 
       <div className="mt-4 flex flex-wrap gap-2">
         <button type="button" disabled={saving} onClick={() => runAction("update_status", undefined, { carrier, estimatedDelivery: estimatedDelivery || undefined })} className="vl-btn-primary px-4 py-2 text-xs disabled:opacity-60">Save status</button>
-        <button type="button" disabled={saving} onClick={() => runAction("cancel", "Cancel this order?")} className="vl-btn-secondary px-4 py-2 text-xs disabled:opacity-60">Cancel</button>
+        {canRefund ? (
+          <button type="button" disabled={saving} onClick={() => runAction("cancel", "Cancel this order?")} className="vl-btn-secondary px-4 py-2 text-xs disabled:opacity-60">Cancel</button>
+        ) : null}
         <button type="button" disabled={saving} onClick={() => runAction("resend_confirmation")} className="vl-btn-secondary px-4 py-2 text-xs disabled:opacity-60">Resend confirmation</button>
         <button type="button" onClick={() => window.open(`/api/admin/orders/${orderId}/packing-slip`, "_blank", "noopener,noreferrer")} className="vl-btn-secondary px-4 py-2 text-xs">Print packing slip</button>
       </div>

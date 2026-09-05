@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { loginHrefWithReturn } from "@/lib/internal-path";
+
 function HeartIcon({ filled }: { filled: boolean }) {
   return (
     <svg
@@ -38,7 +40,10 @@ export function WishlistButton({ slug, initialInWishlist = false, className }: {
       });
 
       if (response.status === 401) {
-        router.push("/account/login");
+        // Bring them back to THIS page once signed in, like every other
+        // sign-in-first hop in the store.
+        const here = typeof window !== "undefined" ? `${window.location.pathname}${window.location.search}` : "";
+        router.push(loginHrefWithReturn(here));
         return;
       }
 

@@ -40,7 +40,7 @@
  * film is replaced.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -51,8 +51,21 @@ const PUBLIC = new URL("../public/", import.meta.url).pathname;
  * outputs are derived from it, so re-running this script is idempotent — it
  * never reads a file it has already written and the vignette can never be
  * applied twice.
+ *
+ * NOT UNDER public/. The master is 6.2 MB — 80% of everything the site shipped
+ * as static assets — and nothing on the site referenced it; only this script
+ * did. It is kept with the design sources instead. Pass its location with
+ * HERO_MASTER_VIDEO=/path/to/vanta-labs-hero.mp4 (or drop a copy at the old
+ * path locally; it is gitignored-by-absence, never committed).
  */
-const MASTER_VIDEO = join(PUBLIC, "videos/vanta-labs-hero.mp4");
+const MASTER_VIDEO = process.env.HERO_MASTER_VIDEO || join(PUBLIC, "videos/vanta-labs-hero.mp4");
+if (!existsSync(MASTER_VIDEO)) {
+  console.error(
+    `Master hero video not found at ${MASTER_VIDEO}.\n` +
+    "It is not committed (6.2 MB, referenced by nothing on the site). Point HERO_MASTER_VIDEO at the design-source copy.",
+  );
+  process.exit(1);
+}
 /** What the page actually loads: 720x720, Constrained Baseline, no audio. */
 const OUT_VIDEO = join(PUBLIC, "videos/vanta-labs-hero-opt.mp4");
 const OUT_POSTER = join(PUBLIC, "images/hero-vial-poster.jpg");

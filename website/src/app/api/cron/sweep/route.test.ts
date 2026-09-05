@@ -84,6 +84,7 @@ vi.mock("@/lib/order-push-notification", () => ({ runOrderPushHealthCheck: () =>
 // sweeps with nothing to observe here, so they succeed quietly.
 vi.mock("@/lib/coupon-hygiene", () => ({ runCouponHygiene: async () => ({ couponsDeactivated: 0, cartsExpired: 0 }) }));
 vi.mock("@/lib/admin-control", () => ({ resealPlaintextControlSecrets: async () => ({ sealed: 0, scrubbed: 0 }) }));
+vi.mock("@/lib/offers/customer-offer-repair", () => ({ repairUnredeemedPaidOffers: async () => ({ checked: 0, redeemed: 0, failed: 0 }) }));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: (alert: SystemAlert) => recordSystemAlert(alert) }));
 
 const SECRET = "test-cron-secret";

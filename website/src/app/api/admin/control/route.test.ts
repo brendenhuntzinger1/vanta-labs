@@ -28,6 +28,7 @@ const stored: Record<string, Record<string, unknown>> = {};
 const writes: Array<{ section: string; key: string; value: unknown }> = [];
 
 vi.mock("@/lib/admin-control", () => ({
+  MAX_CARD_FEE_PERCENT: 10,
   getControlSnapshot: async (section?: string) =>
     section ? { [section]: stored[section] ?? {} } : JSON.parse(JSON.stringify(stored)),
   getReferralProgramConfig: async () => ({
@@ -121,5 +122,30 @@ describe("saving the settings", () => {
   it("refuses a role that cannot manage settings", async () => {
     currentSession = { username: "staff", role: "support" };
     expect((await patch([{ section: "alerts", key: "email", value: "x@example.com" }])).status).toBe(403);
+  });
+});
+
+// ADM-08. A card fee of 50% is a typo, and until now it saved with "Changes are
+// live on checkout." and surcharged every card order by half.
+describe("the card processing fee has a ceiling", () => {
+  it("refuses a percentage above the ceiling before writing anything", async () => {
+    const before = writes.length;
+    const response = await patch([{ section: "payment_methods", key: "card_processing_fee", value: { enabled: true, percentage: 50, label: "Card fee", noticeText: "" } }]);
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toMatch(/between 0 and 10/);
+    expect(writes.length).toBe(before);
+  });
+
+  it("refuses a negative or unparseable percentage the same way", async () => {
+    for (const percentage of [-1, "abc"]) {
+      const response = await patch([{ section: "payment_methods", key: "card_processing_fee", value: { enabled: true, percentage } }]);
+      expect(response.status, String(percentage)).toBe(400);
+    }
+  });
+
+  it("accepts a sane percentage", async () => {
+    const response = await patch([{ section: "payment_methods", key: "card_processing_fee", value: { enabled: true, percentage: 3, label: "Card fee", noticeText: "" } }]);
+    expect(response.status).toBe(200);
+    expect(writes.at(-1)).toMatchObject({ section: "payment_methods", key: "card_processing_fee" });
   });
 });

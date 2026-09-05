@@ -111,18 +111,41 @@ export const MANUAL_CLAIM_HOLD_SECONDS = 24 * 60 * 60;
  */
 let atomicLayerMissing = false;
 
-function isMissingObjectError(error: { code?: string; message?: string } | null): boolean {
+/**
+ * Postgres itself says the object does not exist: 42883 undefined_function,
+ * 42P01 undefined_table. That is DEFINITIVE — the migration has not been run —
+ * and worth remembering for the life of the process.
+ */
+function isDefinitelyMissingObjectError(error: { code?: string; message?: string } | null): boolean {
   if (!error) return false;
-  // 42883 undefined_function / 42P01 undefined_table from Postgres; PGRST202
-  // is PostgREST's "no function matches" for an RPC it cannot find in the
-  // schema cache. The message check is a last resort only.
-  return error.code === "42883"
-    || error.code === "42P01"
+  return error.code === "42883" || error.code === "42P01";
+}
+
+/**
+ * Looks like the layer is missing, but from a source that also fails
+ * TRANSIENTLY. PGRST202 is PostgREST's "could not find the function", which it
+ * also answers while its schema cache is stale for a moment after any
+ * migration or reload; the message match is a last resort against unknown
+ * codes. Both used to latch `atomicLayerMissing` for good, so one stale-cache
+ * blip switched every limited promotion off — and claiming off — on that
+ * lambda until it was recycled. These are honoured for THIS call only.
+ */
+function looksLikeMissingObjectError(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  return isDefinitelyMissingObjectError(error)
     || error.code === "PGRST202"
     || Boolean(error.message && /bxgy_(claim|count|release)_redemption|promotion_redemption_claims/i.test(error.message));
 }
 
-function noteMissingAtomicLayer(where: string): void {
+function noteMissingAtomicLayer(where: string, error: { code?: string; message?: string } | null): void {
+  if (!isDefinitelyMissingObjectError(error)) {
+    // Per-call only. Say so once per call, not once per process.
+    console.warn(
+      `[bxgy] the atomic redemption layer did not answer (${where}: ${error?.code ?? "?"}). `
+      + "Limited promotions are withheld for this request; the next request re-checks.",
+    );
+    return;
+  }
   if (!atomicLayerMissing) {
     atomicLayerMissing = true;
     console.warn(
@@ -130,6 +153,13 @@ function noteMissingAtomicLayer(where: string): void {
       + "until src/lib/sql/bxgy-redemption-claims.sql is applied.",
     );
   }
+}
+
+/** One count: the number, or null with `missing` saying WHY it is null. */
+interface RedemptionCount {
+  count: number | null;
+  /** The atomic layer did not answer this call (missing for good, or for now). */
+  missing: boolean;
 }
 
 /**
@@ -143,8 +173,8 @@ async function countRedemptions(
   promotionId: string,
   customerEmail?: string,
   holdSeconds: number = CLAIM_HOLD_SECONDS,
-): Promise<number | null> {
-  if (atomicLayerMissing) return null;
+): Promise<RedemptionCount> {
+  if (atomicLayerMissing) return { count: null, missing: true };
 
   const { data, error } = await supabaseAdmin.rpc("bxgy_count_redemptions", {
     p_promotion_id: promotionId,
@@ -153,15 +183,15 @@ async function countRedemptions(
   });
 
   if (error) {
-    if (isMissingObjectError(error)) {
-      noteMissingAtomicLayer("bxgy_count_redemptions");
-      return null;
+    if (looksLikeMissingObjectError(error)) {
+      noteMissingAtomicLayer("bxgy_count_redemptions", error);
+      return { count: null, missing: true };
     }
     console.error(`Unable to count redemptions for promotion ${promotionId}`, error);
-    return null;
+    return { count: null, missing: false };
   }
   const count = Number(data);
-  return Number.isFinite(count) ? count : null;
+  return { count: Number.isFinite(count) ? count : null, missing: false };
 }
 
 export interface ClaimRedemptionInput {
@@ -198,8 +228,8 @@ export async function claimPromotionRedemption(input: ClaimRedemptionInput): Pro
   });
 
   if (error) {
-    if (isMissingObjectError(error)) {
-      noteMissingAtomicLayer("bxgy_claim_redemption");
+    if (looksLikeMissingObjectError(error)) {
+      noteMissingAtomicLayer("bxgy_claim_redemption", error);
       return true;
     }
     console.error(`Unable to claim a redemption for promotion ${input.promotionId}`, error);
@@ -219,7 +249,7 @@ export async function releasePromotionRedemption(orderId: string): Promise<void>
   if (atomicLayerMissing) return;
   try {
     const { error } = await supabaseAdmin.rpc("bxgy_release_redemption", { p_order_id: orderId });
-    if (error && !isMissingObjectError(error)) {
+    if (error && !looksLikeMissingObjectError(error)) {
       console.error(`Unable to release the redemption claim for order ${orderId}`, error);
     }
   } catch (error) {
@@ -312,24 +342,29 @@ export async function getPromotionUsage(
 ): Promise<PromotionUsageResult> {
   const email = context.customerEmail?.trim().toLowerCase();
   const exhaustedIds: string[] = [];
+  // Per call: a count the layer could not take THIS time withholds the limited
+  // promotions for this request without deciding anything about the next one.
+  let layerMissingThisCall = false;
 
   await Promise.all(promotions.map(async (promotion) => {
     if (promotion.maxRedemptions !== null) {
-      const used = await countRedemptions(promotion.id);
+      const { count: used, missing } = await countRedemptions(promotion.id);
+      if (missing) layerMissingThisCall = true;
       if (used !== null && used >= promotion.maxRedemptions) {
         exhaustedIds.push(promotion.id);
         return;
       }
     }
     if (promotion.perCustomerLimit !== null && email) {
-      const used = await countRedemptions(promotion.id, email);
+      const { count: used, missing } = await countRedemptions(promotion.id, email);
+      if (missing) layerMissingThisCall = true;
       if (used !== null && used >= promotion.perCustomerLimit) {
         exhaustedIds.push(promotion.id);
       }
     }
   }));
 
-  return { exhaustedIds, limitsEnforceable: !atomicLayerMissing };
+  return { exhaustedIds, limitsEnforceable: !atomicLayerMissing && !layerMissingThisCall };
 }
 
 /** Backwards-compatible view for callers that only need the exhausted ids. */
@@ -356,8 +391,8 @@ export function hasUsageLimit(promotion: BxgyPromotion): boolean {
  */
 export async function areUsageLimitsEnforceable(): Promise<boolean> {
   if (atomicLayerMissing) return false;
-  await countRedemptions("__migration_probe__");
-  return !atomicLayerMissing;
+  const probe = await countRedemptions("__migration_probe__");
+  return !atomicLayerMissing && !probe.missing;
 }
 
 /**

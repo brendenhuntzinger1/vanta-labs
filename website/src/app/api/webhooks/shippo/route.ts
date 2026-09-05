@@ -152,6 +152,46 @@ export async function POST(request: Request) {
     try {
       const outcome = await applyTransactionCreated(data);
 
+      // NOT A PURCHASED LABEL. Shippo delivers transaction_created for every
+      // transaction object, including ones whose purchase is still QUEUED or
+      // failed with ERROR. Nothing was bought, so there is no postage to
+      // attribute and the CRITICAL "label purchased but unattributed" alert
+      // below would be false — it used to fire (and email) for every failed
+      // purchase attempt. A QUEUED/WAITING purchase may still succeed, and
+      // Shippo can re-send the same object_id once it does, so its claim is
+      // released rather than kept; an ERROR is final and stays recorded.
+      if (!outcome.matched && outcome.reason === "transaction_not_successful") {
+        const status = String(data?.status ?? "").toUpperCase() || "UNKNOWN";
+        const stillPending = status === "QUEUED" || status === "WAITING";
+        console.warn(
+          `Shippo transaction_created ignored: status ${status} is not a purchased label`,
+          { shippo_transaction: objectId || null, tracking_number: String(data?.tracking_number ?? "") || null },
+        );
+        if (eventKey && stillPending) {
+          await supabaseAdmin
+            .from("shippo_webhook_events")
+            .delete()
+            .eq("event_key", eventKey)
+            .is("processed_at", null);
+        } else {
+          await supabaseAdmin
+            .from("shippo_webhook_events")
+            .upsert(
+              {
+                event_key: eventKey ?? `transaction_created:unknown:${new Date().toISOString()}`,
+                event_type: "transaction_created",
+                order_id: null,
+                shippo_object_id: objectId || null,
+                matched: false,
+                error: `transaction_not_successful:${status}`,
+                processed_at: new Date().toISOString(),
+              },
+              { onConflict: "event_key" },
+            );
+        }
+        return NextResponse.json({ received: true, matched: false, ignored: "transaction_not_successful", status });
+      }
+
       await supabaseAdmin
         .from("shippo_webhook_events")
         .upsert(

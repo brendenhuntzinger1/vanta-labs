@@ -2,6 +2,7 @@ import "server-only";
 
 import crypto from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { redactEmailForLog } from "@/lib/log-redaction";
 
 /**
  * One-time, per-customer offers.
@@ -257,7 +258,7 @@ export async function issueCustomerOffer(input: {
   // Anything but the one-live-offer index is a real failure. The caller must
   // not mail a token that does not exist, so it gets null, and this is logged.
   if (first.code !== "23505") {
-    console.error("[offers] unable to issue", input.offerKey, email, first.message);
+    console.error("[offers] unable to issue", input.offerKey, redactEmailForLog(email), first.message);
     return null;
   }
 
@@ -286,7 +287,7 @@ export async function issueCustomerOffer(input: {
   // A concurrent sweep re-minted between the retire and the insert. It holds
   // the token; this caller has none, and says so.
   if (second.code !== "23505") {
-    console.error("[offers] unable to reissue", input.offerKey, email, second.message);
+    console.error("[offers] unable to reissue", input.offerKey, redactEmailForLog(email), second.message);
   }
   return null;
 }
@@ -308,7 +309,7 @@ async function retireStaleOffer(offerKey: OfferKey, email: string, now: number):
     .is("redeemed_at", null)
     .maybeSingle();
   if (error) {
-    console.error("[offers] unable to read the blocking offer", offerKey, email, error.message);
+    console.error("[offers] unable to read the blocking offer", offerKey, redactEmailForLog(email), error.message);
     return false;
   }
   // No unredeemed row. Either something else retired it between the two calls,
@@ -326,7 +327,7 @@ async function retireStaleOffer(offerKey: OfferKey, email: string, now: number):
       .is("revoked_at", null)
       .not("redeemed_at", "is", null);
     if (redeemedError) {
-      console.error("[offers] unable to retire the redeemed offer", offerKey, email, redeemedError.message);
+      console.error("[offers] unable to retire the redeemed offer", offerKey, redactEmailForLog(email), redeemedError.message);
       return false;
     }
     return true;
@@ -345,7 +346,7 @@ async function retireStaleOffer(offerKey: OfferKey, email: string, now: number):
     .is("revoked_at", null)
     .is("redeemed_at", null);
   if (revokeError) {
-    console.error("[offers] unable to retire the stale offer", offerKey, email, revokeError.message);
+    console.error("[offers] unable to retire the stale offer", offerKey, redactEmailForLog(email), revokeError.message);
     return false;
   }
   return true;
@@ -483,7 +484,9 @@ export async function closeCustomerOfferCycle(input: { orderId: string; email: s
       return 0;
     }
     const closed = Number(data ?? 0);
-    if (closed > 0) console.log(`[offers] order ${orderId} closed ${closed} unused gift(s) for ${email}`);
+    // The order id is the join key an operator needs; the address is PII that
+    // would otherwise sit in the platform log store in clear (see log-redaction.ts).
+    if (closed > 0) console.log(`[offers] order ${orderId} closed ${closed} unused gift(s) for ${redactEmailForLog(email)}`);
     return Number.isFinite(closed) ? closed : 0;
   } catch (error) {
     console.error("[offers] close-cycle unavailable", orderId, error);

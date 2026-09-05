@@ -3,6 +3,8 @@ import Link from "next/link";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { getFulfillmentRows, type FulfillmentStatusFilter } from "@/lib/admin-fulfillment";
 import { AdminFulfillmentClient } from "@/components/admin-fulfillment-client";
+import { failedReads, settleRead } from "@/lib/admin-read";
+import { AdminReadFailureNotice } from "@/components/admin-data-notices";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +30,9 @@ export default async function AdminFulfillmentPage({
   const status = (typeof params.status === "string" ? params.status : "queue") as FulfillmentStatusFilter;
   const page = Math.max(1, Number(params.page) || 1);
 
-  const result = await getFulfillmentRows({ search, status, page, pageSize: 25 }).catch(() => ({ rows: [], total: 0, page: 1, pageSize: 25, pageCount: 1 }));
+  // A FAILED READ IS NOT AN EMPTY QUEUE — see admin-read.ts.
+  const rowsRead = await settleRead("Orders", () => getFulfillmentRows({ search, status, page, pageSize: 25 }));
+  const result = rowsRead.ok ? rowsRead.value : { rows: [], total: 0, page: 1, pageSize: 25, pageCount: 1 };
 
   const buildPageHref = (targetPage: number) => {
     const query = new URLSearchParams();
@@ -80,7 +84,10 @@ export default async function AdminFulfillmentPage({
           </div>
         </form>
 
-        <AdminFulfillmentClient rows={result.rows} />
+        <div className="mt-6">
+          <AdminReadFailureNotice failures={failedReads([rowsRead])} />
+        </div>
+        {rowsRead.ok ? <AdminFulfillmentClient rows={result.rows} /> : null}
 
         {result.pageCount > 1 ? (
           <div className="mt-6 flex flex-wrap items-center justify-center gap-2">

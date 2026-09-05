@@ -12,6 +12,8 @@ import { getAdminOperationsSummary, getAdminPartnerRows, getPayoutQueue } from "
 import { listCommissionTierRules } from "@/lib/ambassador-commission";
 import { getAmbassadorMarketingResources, getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getFraudReviewRows, getPayoutHistory } from "@/lib/admin-ambassadors";
+import { failedReads, settleRead, UNKNOWN_FIGURE } from "@/lib/admin-read";
+import { AdminReadFailureNotice } from "@/components/admin-data-notices";
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -65,7 +67,14 @@ export default async function AdminPartnersPage() {
     getReferralProgramConfig(),
   ]);
 
-  const payoutQueue = await getPayoutQueue().catch(() => ({ rows: [], readyCount: 0, totalOwed: 0, minimumPayoutThreshold: 0 }));
+  // A FAILED READ IS NOT "$0 owed" — see admin-read.ts. The empty fallback
+  // rendered "$0.00 owed" and "No commissions have cleared the hold period yet"
+  // over a database that did not answer, which is exactly the reading an owner
+  // acts on by paying nobody.
+  const payoutQueueRead = await settleRead("Payout queue", getPayoutQueue);
+  const payoutQueue = payoutQueueRead.ok
+    ? payoutQueueRead.value
+    : { rows: [], readyCount: 0, totalOwed: 0, minimumPayoutThreshold: 0 };
 
   function formatDate(value: string | null) {
     if (!value) return "—";
@@ -101,10 +110,16 @@ export default async function AdminPartnersPage() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-semibold text-white">Payout Queue</h2>
             <p className="text-xs text-zinc-400">
-              {currency(payoutQueue.totalOwed)} owed · min payout {currency(payoutQueue.minimumPayoutThreshold)}
+              {payoutQueueRead.ok
+                ? `${currency(payoutQueue.totalOwed)} owed · min payout ${currency(payoutQueue.minimumPayoutThreshold)}`
+                : `${UNKNOWN_FIGURE} owed (could not be loaded)`}
             </p>
           </div>
-          {payoutQueue.rows.length === 0 ? (
+          {!payoutQueueRead.ok ? (
+            <div className="mt-4">
+              <AdminReadFailureNotice failures={failedReads([payoutQueueRead])} />
+            </div>
+          ) : payoutQueue.rows.length === 0 ? (
             <p className="mt-4 text-sm text-zinc-500">No commissions have cleared the hold period yet. Approved commissions appear here, ready to pay.</p>
           ) : (
             <div className="mt-4 overflow-x-auto">

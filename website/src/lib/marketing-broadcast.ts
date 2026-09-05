@@ -157,6 +157,14 @@ export async function broadcastCouponAnnouncement(input: {
       .select("recipient_email")
       .eq("campaign_type", "coupon_announcement")
       .eq("reference_id", input.coupon.id)
+      // ONLY A DELIVERED ROW COUNTS AS "ALREADY GOT IT". The log also holds
+      // 'failed' rows (the provider refused that recipient) and stranded
+      // 'sending' claims (a process died mid-send). Reading them all treated
+      // every one of those as delivered, so a recipient the provider bounced
+      // once was skipped on every later click and never received the code.
+      // sendMarketingEmail's own send-once index still refuses a genuinely
+      // in-flight duplicate, so narrowing this read cannot double-send.
+      .eq("status", "sent")
       .order("id", { ascending: true })
       .range(from, to) as unknown as PromiseLike<{ data: Array<{ recipient_email: string | null }> | null; error: unknown }>,
     { maxRows: MAX_DEDUP_ROWS, label: "coupon broadcast dedup read" },

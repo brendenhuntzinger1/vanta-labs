@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { safeInternalPath } from "@/lib/internal-path";
+import { loginHrefWithReturn, safeInternalPath } from "@/lib/internal-path";
 
 // ---------------------------------------------------------------------------
 // A `next` PARAMETER IS ATTACKER-CONTROLLED, AND "STARTS WITH ONE SLASH" IS
@@ -52,5 +52,25 @@ describe("safeInternalPath", () => {
         expect(new URL(result, origin).origin).toBe(origin);
       }
     }
+  });
+});
+
+// SF-4: the guest wishlist click sent the shopper to /account/login with no way
+// back to the product. Every sign-in-first hop carries `next=`; this is the one
+// helper that builds it, through the same guard as the rest.
+describe("loginHrefWithReturn", () => {
+  it("carries the current path as an encoded next= parameter", () => {
+    expect(loginHrefWithReturn("/products/ghk-cu")).toBe("/account/login?next=%2Fproducts%2Fghk-cu");
+    expect(loginHrefWithReturn("/products/ghk-cu?dose=50mg")).toBe(
+      "/account/login?next=%2Fproducts%2Fghk-cu%3Fdose%3D50mg",
+    );
+  });
+
+  it("refuses anything that is not a same-origin path", () => {
+    expect(loginHrefWithReturn("https://evil.example/steal")).toBe("/account/login");
+    expect(loginHrefWithReturn("//evil.example/steal")).toBe("/account/login");
+    expect(loginHrefWithReturn("/\\evil.example/steal")).toBe("/account/login");
+    expect(loginHrefWithReturn("")).toBe("/account/login");
+    expect(loginHrefWithReturn(undefined)).toBe("/account/login");
   });
 });

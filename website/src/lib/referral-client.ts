@@ -24,7 +24,11 @@
  * pricing inside the subtotal beats it and the customer keeps the larger
  * saving.
  */
-export async function validateReferralCodeClient(code: string) {
+export async function validateReferralCodeClient(
+  code: string,
+  /** Called with WHY a refused code was refused, so the cart can word it truthfully. */
+  onRefused?: (reason: "unknown" | "inactive") => void,
+) {
   const normalizedCode = code.trim().toUpperCase();
 
   if (!normalizedCode) {
@@ -68,9 +72,11 @@ export async function validateReferralCodeClient(code: string) {
     ambassadorId?: string;
     ambassadorName?: string;
     customerDiscountPercent?: number | string | null;
+    reason?: string;
   };
 
   if (!data?.valid) {
+    onRefused?.(data?.reason === "unknown" ? "unknown" : "inactive");
     return null;
   }
 

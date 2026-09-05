@@ -169,3 +169,81 @@ describe("the line items themselves", () => {
     expect(email.text).toContain("VL-1001");
   });
 });
+
+// ---------------------------------------------------------------------------
+// EMAIL-02. Store credit / points AND shipping protection on the same order.
+//
+// The residual can only print the NET of the two. $20 of store credit against
+// $6.99 of protection nets to $13.01, so the receipt said "Credits applied
+// -$13.01" and showed no protection line: two false figures on the document a
+// customer reconciles against their card statement, still summing to Total.
+// Both are stored on the order row, so a caller that reads the row now passes
+// them and each prints as itself. The residual remains the fallback.
+// ---------------------------------------------------------------------------
+describe("an order with store credit AND shipping protection", () => {
+  const n = (v: string) => Number(v.replace(/[$,]/g, ""));
+  // Subtotal 177 + shipping 15 − $20 credit + $6.99 protection = 178.99.
+  const email = orderConfirmationTemplate({ ...base, discount: 0, total: 178.99, creditsApplied: 20, shippingProtectionFee: 6.99 });
+  const lines = moneyLines(email.html);
+
+  it("prints the credit the customer actually applied, not the net of credit and protection", () => {
+    expect(lines["Credits applied"]).toBe("-$20.00");
+  });
+
+  it("prints the protection the customer actually paid, instead of omitting it", () => {
+    expect(lines["Shipping protection"]).toBe("$6.99");
+  });
+
+  it("the lines still sum to the total", () => {
+    expect(n(lines.Subtotal) + n(lines.Shipping) - n(lines["Credits applied"].replace("-", "")) + n(lines["Shipping protection"]))
+      .toBeCloseTo(n(lines.Total), 2);
+  });
+
+  it("repeats both figures in the plain-text part", () => {
+    expect(email.text).toContain("Credits applied: -$20.00");
+    expect(email.text).toContain("Shipping protection: $6.99");
+  });
+
+  it("with a promo discount as well, all three print as themselves", () => {
+    // 177 + 15 − 17.70 discount − 20 credit + 6.99 protection = 161.29
+    const three = moneyLines(orderConfirmationTemplate({ ...base, discount: 17.7, total: 161.29, creditsApplied: 20, shippingProtectionFee: 6.99 }).html);
+    expect(three.Discount).toBe("-$17.70");
+    expect(three["Credits applied"]).toBe("-$20.00");
+    expect(three["Shipping protection"]).toBe("$6.99");
+    expect(n(three.Subtotal) + n(three.Shipping) - 17.7 - 20 + 6.99).toBeCloseTo(n(three.Total), 2);
+  });
+
+  it("a caller with neither figure gets the old inference — the fallback is unchanged", () => {
+    const inferred = moneyLines(orderConfirmationTemplate({ ...base, discount: 0, total: 178.99 }).html);
+    // Net of the two, exactly as before: the residual cannot know better.
+    expect(inferred["Credits applied"]).toBe("-$13.01");
+    expect(inferred).not.toHaveProperty("Shipping protection");
+  });
+
+  it("an inconsistent row still sums to Total: the leftover is folded rather than lost", () => {
+    // The row claims $20 credit and $6.99 protection but the total implies $5 more came off.
+    const folded = moneyLines(orderConfirmationTemplate({ ...base, discount: 0, total: 173.99, creditsApplied: 20, shippingProtectionFee: 6.99 }).html);
+    expect(folded["Shipping protection"]).toBe("$6.99");
+    expect(n(folded.Subtotal) + n(folded.Shipping) - n(folded["Credits applied"].replace("-", "")) + n(folded["Shipping protection"]))
+      .toBeCloseTo(n(folded.Total), 2);
+  });
+});
+
+describe("the figures every caller reads off the order row", () => {
+  it("converts store credit from cents and points from a count, and passes the protection fee through", async () => {
+    const { receiptAdjustmentsFromOrder } = await import("@/lib/email/order-confirmation-render");
+    expect(receiptAdjustmentsFromOrder({ store_credit_redeemed_cents: 1500, points_redeemed: 500, shipping_protection_fee: 6.99 }))
+      .toEqual({ creditsApplied: 20, shippingProtectionFee: 6.99 });
+    expect(receiptAdjustmentsFromOrder({})).toEqual({ creditsApplied: 0, shippingProtectionFee: 0 });
+  });
+
+  it("both webhook lanes, the admin resend and the from-record renderer all pass them", async () => {
+    const { readFileSync } = await import("node:fs");
+    const read = (p: string) => readFileSync(`${process.cwd()}/${p}`, "utf8");
+    const webhook = read("src/lib/payment-webhook.ts");
+    expect((webhook.match(/receiptAdjustmentsFromOrder\(/g) ?? []).length).toBe(2);
+    expect(webhook).toContain("shipping_protection_fee, amount_paid");
+    expect(read("src/app/api/admin/payments/[orderId]/route.ts")).toContain("...receiptAdjustmentsFromOrder(order)");
+    expect(read("src/lib/email/order-confirmation-render.ts")).toContain("...receiptAdjustmentsFromOrder(order)");
+  });
+});

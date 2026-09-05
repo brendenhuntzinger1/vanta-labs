@@ -149,6 +149,23 @@ begin
     return;
   end if;
 
+  -- SPENT BY A PAID ORDER whose redeem step never ran. The paid webhook
+  -- calls customer_offer_redeem after the money side-effects; if that call
+  -- died (function timeout, RPC error) the token stayed "reserved", and once
+  -- the hold aged out a second checkout by the same address could collect the
+  -- same gift again. Money moved for the first order, so the gift is spent:
+  -- refuse regardless of how old the hold is. The sweep's redeem repair marks
+  -- these rows redeemed; until it does, this clause is what holds the line.
+  if v_offer.reserved_order_id is not null
+     and v_offer.reserved_order_id <> p_order_id
+     and exists (
+       select 1 from public.orders o
+       where o.order_id = v_offer.reserved_order_id
+         and o.payment_status in ('paid', 'partially_refunded', 'refunded')
+     ) then
+    return;
+  end if;
+
   -- HELD BY A DIFFERENT CHECKOUT that has not aged out yet.
   if v_offer.reserved_order_id is not null
      and v_offer.reserved_order_id <> p_order_id

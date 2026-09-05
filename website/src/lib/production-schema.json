@@ -416,7 +416,9 @@
     "cancel_at_period_end",
     "first_month_reminder_sent_at",
     "renewal_reminder_sent_at",
-    "veyra_membership_id"
+    "veyra_membership_id",
+    "pending_tier_id",
+    "pending_tier_effective_at"
   ],
   "customer_offers": [
     "id",

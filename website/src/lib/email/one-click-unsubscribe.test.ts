@@ -89,25 +89,38 @@ describe("POST /api/unsubscribe", () => {
     expect(post).toContain("verifyUnsubscribeToken");
   });
 
-  it("shares one suppression path with the GET", () => {
-    // Two copies of "unsubscribe" is two chances for them to disagree.
+  it("is the ONLY path that suppresses — the GET renders a confirmation and changes nothing (EMAIL-07)", () => {
+    // Two copies of "unsubscribe" is two chances for them to disagree, so there
+    // is one suppress(); and a GET that suppressed on sight let every mail
+    // security link scanner unsubscribe recipients for them.
     expect(UNSUB_ROUTE).toContain("async function suppress(");
     const suppressCalls = (UNSUB_ROUTE.match(/await suppress\(/g) ?? []).length;
-    expect(suppressCalls).toBe(2);
+    expect(suppressCalls).toBe(1);
+    const get = UNSUB_ROUTE.slice(
+      UNSUB_ROUTE.indexOf("export async function GET"),
+      UNSUB_ROUTE.indexOf("async function confirmedFromPage"),
+    );
+    expect(get).not.toContain("await suppress(");
+    expect(get).toContain("confirmPage(");
   });
 
   it("answers a mail client plainly, not with a rendered page", () => {
+    // The rendered page is reserved for the confirmation form's own POST,
+    // which carries confirm=1 — a mail client's body never does.
     const post = UNSUB_ROUTE.slice(UNSUB_ROUTE.indexOf("export async function POST"));
-    expect(post).not.toContain("htmlResponse");
-    expect(post).toContain("status: ok ? 200 : 500");
+    expect(post).toContain('new NextResponse(ok ? "Unsubscribed" : "Unable to process", { status: ok ? 200 : 500 })');
+    expect(post).toContain('new NextResponse("Invalid unsubscribe link", { status: 400 })');
   });
 
   it("still serves the footer link as HTML", () => {
-    // Existing emails in inboxes carry the GET link and must keep working.
+    // Existing emails in inboxes carry the GET link and must keep working —
+    // they now land on the confirmation page rather than on a silent opt-out.
     const get = UNSUB_ROUTE.slice(
       UNSUB_ROUTE.indexOf("export async function GET"),
-      UNSUB_ROUTE.indexOf("export async function POST"),
+      UNSUB_ROUTE.indexOf("async function confirmedFromPage"),
     );
-    expect(get).toContain("htmlResponse");
+    expect(get).toContain("text/html");
+    expect(get).toContain("confirmPage(");
+    expect(UNSUB_ROUTE).toContain('<form method="post"');
   });
 });

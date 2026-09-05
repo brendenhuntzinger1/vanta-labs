@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { customerSafeFailureReason, customerSafeMessage, isCustomerSafeMessage } from "@/lib/safe-error";
+import { CustomerFacingError, customerSafeFailureReason, customerSafeMessage, isCustomerSafeMessage } from "@/lib/safe-error";
 
 // Vanta Labs must be the only brand a customer ever sees. Routes echoing
 // `error.message` leak vendor names exactly when something breaks — the moment
@@ -142,5 +142,26 @@ describe("customerSafeFailureReason — billing history must not leak", () => {
   it("does not let a vendor name through inside an envelope message", () => {
     const shown = customerSafeFailureReason('{"message":"Veyra rejected this card"}');
     expect(shown).toBe("The card was declined.");
+  });
+});
+
+// The deny-list is a heuristic and a few real validation messages trip it. An
+// error thrown as CustomerFacingError is the explicit "this was written for the
+// reader" signal and passes through untouched — which is what keeps the partner
+// payout hint ("like name@example.com") intact once the partner routes sanitise.
+describe("CustomerFacingError", () => {
+  it("passes through even when the heuristic would have blocked it", () => {
+    const message = "Enter the email address on your PayPal account (like name@example.com).";
+    expect(isCustomerSafeMessage(message)).toBe(false);
+    expect(customerSafeMessage(new CustomerFacingError(message), FALLBACK)).toBe(message);
+  });
+
+  it("does not turn a plain Error into a pass-through", () => {
+    const message = "Enter the email address on your PayPal account (like name@example.com).";
+    expect(customerSafeMessage(new Error(message), FALLBACK)).toBe(FALLBACK);
+  });
+
+  it("still falls back when the customer-facing message is blank", () => {
+    expect(customerSafeMessage(new CustomerFacingError("   "), FALLBACK)).toBe(FALLBACK);
   });
 });

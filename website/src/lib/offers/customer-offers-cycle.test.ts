@@ -109,3 +109,45 @@ describe("closeCustomerOfferCycle", () => {
     expect(await closeCustomerOfferCycle({ orderId: "order-1", email: "buyer@example.test" })).toBe(0);
   });
 });
+
+// PRICE-03. createCheckoutSession claims the promotion slot, then reserves the
+// one-time offer. When the reserve refused, it threw without handing the
+// promotion back — bxgy_count_redemptions counted the orphan claim as live for
+// the hold window (15 min on card, 24 h on a manual method), so the retry the
+// error message asks for found the promotion "exhausted" for that shopper.
+describe("a refused offer reserve hands the promotion slot back", () => {
+  it("releases the promotion claim before throwing, exactly as the insert-failure branch does", () => {
+    const code = source("payment-service.ts");
+    const reserveAt = code.indexOf("reserveCustomerOffer({");
+    const refusal = code.indexOf("if (!reserved) {", reserveAt);
+    expect(refusal).toBeGreaterThan(reserveAt);
+    const branch = code.slice(refusal, code.indexOf("throw new Error(", refusal));
+    expect(branch).toContain("await releasePromotionRedemption(orderId);");
+    // Guarded the same way the claim itself is, so an order with no limited
+    // promotion never touches the redemption table.
+    expect(branch).toContain("if (quote.appliedPromotionId && quote.appliedPromotionLimits)");
+  });
+});
+
+// PAY-09. The two failure branches AFTER the order row exists — item insert
+// refused, stock reservation refused — must both hand the promotion slot and
+// the gift token back and cancel the row, like the insert-failure branch above.
+describe("every post-insert failure branch releases the checkout's claims", () => {
+  it("item-insert failure and reservation refusal both release claims and cancel the order", () => {
+    const code = source("payment-service.ts");
+    for (const marker of ["if (itemInsertError) {", "if (!reservation.ok) {"]) {
+      const at = code.indexOf(marker);
+      expect(at, marker).toBeGreaterThan(0);
+      const branch = code.slice(at, code.indexOf("throw new Error(", at));
+      expect(branch, marker).toContain("await releaseAbandonedCheckoutClaims(orderId, quote);");
+      expect(branch, marker).toContain('payment_status: "canceled"');
+    }
+    // The helper itself releases both kinds of claim, each guarded like the claim.
+    const helperAt = code.indexOf("async function releaseAbandonedCheckoutClaims(");
+    const helper = code.slice(helperAt, code.indexOf("export async function createCheckoutSession(", helperAt));
+    expect(helper).toContain("if (quote.appliedPromotionId && quote.appliedPromotionLimits)");
+    expect(helper).toContain("releasePromotionRedemption(orderId)");
+    expect(helper).toContain("if (quote.appliedOffer)");
+    expect(helper).toContain("releaseCustomerOffer(orderId)");
+  });
+});

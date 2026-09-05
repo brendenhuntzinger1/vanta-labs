@@ -71,6 +71,10 @@ export async function POST(request: Request) {
       discountType: coupon.discountType,
       discountValue: coupon.discountValue,
       discountAmount: coupon.discountAmount,
+      // Whether the code waives shipping. The cart and the checkout zero the
+      // shipping line from this, the way quote-order.ts zeroes the charge;
+      // without it a free-shipping code showed the fee still in the total.
+      freeShipping: coupon.freeShipping,
     });
   } catch (error) {
     // Sanitised rather than echoed. safe-error.ts:5-16 is explicit that a raw

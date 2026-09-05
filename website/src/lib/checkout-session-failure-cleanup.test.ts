@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
 // G-03 — a checkout that dies at the payment provider must not leave an order
@@ -37,6 +37,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const releaseInventoryForOrder = vi.fn(async () => {});
 const providerCreateCheckoutSession = vi.fn();
+/** PAY-09: make the order_items insert fail, one branch after the order row is written. */
+let failItemInsert = false;
 
 const orders = new Map<string, Record<string, unknown>>();
 
@@ -79,7 +81,9 @@ vi.mock("@/lib/supabase-server", () => {
             orders.set(String(r.order_id), { ...r });
           }
         }
-        const result = { data: rows, error: null };
+        const result = name === "order_items" && failItemInsert
+          ? { data: null, error: { message: "order_items insert refused (test)" } }
+          : { data: rows, error: null };
         return {
           ...result,
           select: () => ({ ...result, single: async () => ({ data: rows[0], error: null }) }),
@@ -214,5 +218,22 @@ describe("a checkout that fails at the payment provider", () => {
     releaseInventoryForOrder.mockRejectedValueOnce(new Error("release also broken"));
 
     await expect(buy()).rejects.toThrow("gateway exploded");
+  });
+});
+
+// PAY-09. The item insert sits one branch after the order row is written.
+// It used to throw and leave the pending order behind — an order with no items
+// visible in admin, contradicting the "no order was placed" the customer saw.
+describe("a checkout whose items cannot be written", () => {
+  beforeEach(() => {
+    failItemInsert = true;
+  });
+  afterEach(() => {
+    failItemInsert = false;
+  });
+
+  it("cancels the half-written order instead of leaving it pending", async () => {
+    await expect(buy()).rejects.toThrow(/Unable to create order items/);
+    expect(theOrder()?.payment_status).toBe("canceled");
   });
 });

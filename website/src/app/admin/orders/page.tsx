@@ -7,6 +7,8 @@ import {
   type AdminOrderPaymentStatusFilter,
 } from "@/lib/admin-orders";
 import { AdminOrdersClient } from "@/components/admin-orders-client";
+import { failedReads, settleRead, UNKNOWN_FIGURE } from "@/lib/admin-read";
+import { AdminReadFailureNotice } from "@/components/admin-data-notices";
 
 export const dynamic = "force-dynamic";
 
@@ -63,7 +65,11 @@ export default async function AdminOrdersPage({
   const fulfillmentStatus = (typeof params.fulfillmentStatus === "string" ? params.fulfillmentStatus : "all") as AdminOrderFulfillmentStatusFilter;
   const page = Math.max(1, Number(params.page) || 1);
 
-  const result = await getAdminOrderRows({ search, paymentStatus, fulfillmentStatus, page, pageSize: 25 }).catch(() => ({ rows: [], total: 0, page: 1, pageSize: 25, pageCount: 1 }));
+  // A FAILED READ IS NOT AN EMPTY LIST — see admin-read.ts. "0 active orders"
+  // and "No orders match these filters" are what a quiet store looks like, so a
+  // database that did not answer must say so rather than look quiet.
+  const ordersRead = await settleRead("Orders", () => getAdminOrderRows({ search, paymentStatus, fulfillmentStatus, page, pageSize: 25 }));
+  const result = ordersRead.ok ? ordersRead.value : { rows: [], total: 0, page: 1, pageSize: 25, pageCount: 1 };
 
   const buildPageHref = (targetPage: number) => {
     const query = new URLSearchParams();
@@ -81,7 +87,9 @@ export default async function AdminOrdersPage({
           <div>
             <h1 className="text-2xl font-semibold sm:text-3xl">Admin Orders</h1>
             <p className="mt-2 text-sm text-zinc-400">
-              {result.total} {paymentStatus === "active" ? "active order" : "order record"}{result.total === 1 ? "" : "s"}
+              {ordersRead.ok
+                ? `${result.total} ${paymentStatus === "active" ? "active order" : "order record"}${result.total === 1 ? "" : "s"}`
+                : `${UNKNOWN_FIGURE} ${paymentStatus === "active" ? "active orders" : "order records"} (could not be loaded)`}
               {paymentStatus === "active"
                 ? " — abandoned / unpaid checkouts, including expired checkout sessions, are hidden. Switch the payment filter to “All” to see them."
                 : ""}
@@ -118,7 +126,10 @@ export default async function AdminOrdersPage({
           </div>
         </form>
 
-        <AdminOrdersClient orders={result.rows} />
+        <div className="mt-6">
+          <AdminReadFailureNotice failures={failedReads([ordersRead])} />
+        </div>
+        {ordersRead.ok ? <AdminOrdersClient orders={result.rows} /> : null}
 
         {result.pageCount > 1 ? (
           <div className="mt-6 flex flex-wrap items-center justify-center gap-2">

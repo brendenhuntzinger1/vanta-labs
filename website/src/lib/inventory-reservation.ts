@@ -54,15 +54,27 @@ async function readAvailable(
 ): Promise<{ available: number | null; name: string | null }> {
   try {
     if (variantId) {
+      // The product's name rides along with the dose. "5mg just sold out" left
+      // a shopper with two 5mg lines guessing which one to fix; "BPC-157 5mg"
+      // does not.
       const { data } = await supabaseAdmin
         .from("product_doses")
-        .select("inventory_quantity, reserved_quantity, label")
+        .select("inventory_quantity, reserved_quantity, label, products(name)")
         .eq("id", variantId)
-        .maybeSingle<{ inventory_quantity: number | null; reserved_quantity: number | null; label: string | null }>();
+        .maybeSingle<{
+          inventory_quantity: number | null;
+          reserved_quantity: number | null;
+          label: string | null;
+          products?: { name?: string | null } | Array<{ name?: string | null }> | null;
+        }>();
       if (!data) return { available: null, name: null };
+      const product = Array.isArray(data.products) ? data.products[0] : data.products;
+      const productName = String(product?.name ?? "").trim();
+      const label = String(data.label ?? "").trim();
+      const name = [productName, label].filter(Boolean).join(" ");
       return {
         available: Math.max(0, Number(data.inventory_quantity ?? 0) - Number(data.reserved_quantity ?? 0)),
-        name: data.label ?? null,
+        name: name || null,
       };
     }
     const { data } = await supabaseAdmin

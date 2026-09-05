@@ -232,6 +232,25 @@ describeDb("customer_offers", () => {
       await order("order-1", "cancelled");
       expect(await reserve(token, "order-2", "buyer@example.test")).toHaveLength(1);
     });
+
+    it("a token held by an order that PAID is spent even after the hold ages out", async () => {
+      // The redeem step after payment can die; the money still moved. Age the
+      // hold past the 30-minute window and try again from a second checkout.
+      const token = await issue("buyer@example.test");
+      expect(await reserve(token, "order-1", "buyer@example.test")).toHaveLength(1);
+      await order("order-1", "paid");
+      await client.query("update public.customer_offers set reserved_at = now() - interval '2 hours' where reserved_order_id = 'order-1'");
+      expect(await reserve(token, "order-2", "buyer@example.test")).toHaveLength(0);
+      // ...while the paying order itself may still replay.
+      expect(await reserve(token, "order-1", "buyer@example.test")).toHaveLength(1);
+    });
+
+    it("an aged-out hold by an order that never paid is released as before", async () => {
+      const token = await issue("buyer@example.test");
+      await reserve(token, "order-1", "buyer@example.test");
+      await client.query("update public.customer_offers set reserved_at = now() - interval '2 hours' where reserved_order_id = 'order-1'");
+      expect(await reserve(token, "order-2", "buyer@example.test")).toHaveLength(1);
+    });
   });
 
   describe("redemption is permanent", () => {

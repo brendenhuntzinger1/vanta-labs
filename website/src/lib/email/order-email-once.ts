@@ -64,7 +64,27 @@ export type OrderEmailKind =
   // Membership money emails ride the same once-per-order slot, keyed on the
   // membership order the charge booked (membership-billing.ts).
   | "membership_signup_receipt"
-  | "membership_renewal_receipt";
+  | "membership_renewal_receipt"
+  // SHIPPING NOTICES carry a provider idempotency key and a queue identity but
+  // take no order_email_log slot: the pipeline's own transition rules already
+  // decide whether one is due. The key is what lets a provider timeout-after-
+  // accept followed by the queued retry collapse into one email on the wire.
+  // "Shipped" and "delivered" happen once per order, so the bare kind is the
+  // identity; a tracking-number change is a different email each time the
+  // number changes, so the number rides in the kind (as a refund's amount does).
+  | "order_shipped"
+  | "order_out_for_delivery"
+  | "order_delivered"
+  | `order_tracking:${string}`;
+
+/**
+ * The provider idempotency key for an order email: the same `kind:orderId`
+ * sendOrderEmailOnce sends under and the retry queue re-sends under, so every
+ * path that emails about an order spells the identity one way.
+ */
+export function orderEmailIdempotencyKey(orderId: string, kind: OrderEmailKind): string {
+  return `${kind}:${orderId}`;
+}
 
 /**
  * The send-once identity of a DELIBERATE admin resend of the receipt.

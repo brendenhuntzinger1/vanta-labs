@@ -2,6 +2,7 @@ import { createHmac } from "crypto";
 import { describe, it, expect } from "vitest";
 import {
   resolveWebhookOrderId,
+  resolveWebhookPaidAmount,
   getOrderStatusForEventType,
   isRecognisedMoneyEvent,
 } from "@/lib/payment-webhook";
@@ -149,5 +150,38 @@ describe("isRecognisedMoneyEvent", () => {
     for (const t of ["payout.paid", "dispute.evidence_required", "something.new", ""]) {
       expect(isRecognisedMoneyEvent(t)).toBe(false);
     }
+  });
+});
+
+// PAY-02. The paid-amount assertion read only the flat `amount` the internal
+// gateway sends. A live VeyraGate envelope nests the charge under `data` /
+// `data.object` and states money in minor units, so the assertion saw 0 on every
+// real delivery, compared nothing, and the "held out of fulfilment on a
+// mismatch" path could never fire. A delivery with NO amount (the reconcile
+// sweep sends exactly that) must resolve to null — skipped, never a mismatch.
+describe("resolveWebhookPaidAmount", () => {
+  it("reads the flat dollar amount the internal gateway sends", () => {
+    expect(resolveWebhookPaidAmount({ amount: 30.89 })).toBe(30.89);
+  });
+
+  it("reads VeyraGate's nested minor-unit charge under data.object", () => {
+    expect(resolveWebhookPaidAmount({ data: { object: { amount_cents: 3089 } } })).toBe(30.89);
+  });
+
+  it("reads the un-nested variant where the charge IS data", () => {
+    expect(resolveWebhookPaidAmount({ data: { amount_cents: 3089 } })).toBe(30.89);
+  });
+
+  it("prefers what was actually captured over the list amount", () => {
+    expect(resolveWebhookPaidAmount({ data: { object: { amount_cents: 3089, amount_charged_cents: 2500 } } })).toBe(25);
+    expect(resolveWebhookPaidAmount({ data: { object: { amount_cents: 3089, amount_captured_cents: 1 } } })).toBe(0.01);
+  });
+
+  it("a delivery carrying no amount resolves to null, not to zero and not to a mismatch", () => {
+    expect(resolveWebhookPaidAmount({})).toBeNull();
+    expect(resolveWebhookPaidAmount({ data: {} })).toBeNull();
+    expect(resolveWebhookPaidAmount({ data: { metadata: { order_id: "x" } } as never })).toBeNull();
+    expect(resolveWebhookPaidAmount({ data: { object: { metadata: {} } } as never })).toBeNull();
+    expect(resolveWebhookPaidAmount({ amount: 0 })).toBeNull();
   });
 });

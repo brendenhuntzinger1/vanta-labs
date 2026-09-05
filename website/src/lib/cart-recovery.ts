@@ -9,7 +9,7 @@ import { isMarketingSuppressed, sendMarketingEmail } from "@/lib/email/marketing
 import { claimMarketingSend } from "@/lib/email/frequency";
 import { plainGreetingName } from "@/lib/email/greeting-name";
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
-import { isPaidOrderStatus } from "@/lib/ledger";
+import { isPaidOrderStatus, isProductPurchaseOrder } from "@/lib/ledger";
 import {
   cartRecoveryT30mTemplate,
   cartRecoveryT12hTemplate,
@@ -150,7 +150,19 @@ export async function getAbandonedCartById(id: string): Promise<AbandonedCartSna
 // Called from payment-webhook.ts's paid-status transition - stops every
 // future reminder immediately, since the sweep only ever looks at
 // status='active' rows.
-export async function markAbandonedCartsRecovered(email: string, orderId: string) {
+//
+// ONLY A PRODUCT PURCHASE RECOVERS A PRODUCT CART (EMAIL-03). The webhook
+// called this for every paid order, so a member's monthly renewal landing
+// inside the 96-hour window silently ended the sequence for the product cart
+// they had abandoned, pointed recovered_order_id at a membership order, and
+// counted a recovery on the dashboard. Callers that know the order pass it;
+// an order that is not a purchase of product leaves the cart exactly as it was.
+export async function markAbandonedCartsRecovered(
+  email: string,
+  orderId: string,
+  order?: { order_type?: string | null; replacement_of?: string | null },
+) {
+  if (order && !isProductPurchaseOrder(order)) return;
   const { error } = await supabaseAdmin
     .from("abandoned_carts")
     .update({ status: "recovered", recovered_order_id: orderId })
@@ -241,7 +253,7 @@ export async function mintCartRecoveryCoupon(email: string, discountPercent: num
  * code the checkout will still accept counts: same predicate validateCoupon
  * runs (active, and not past ends_at).
  */
-async function findLiveCouponForCart(cartId: string): Promise<RecoveryCoupon | null> {
+export async function findLiveCouponForCart(cartId: string): Promise<RecoveryCoupon | null> {
   const { data: priorStages } = await supabaseAdmin
     .from("abandoned_cart_emails")
     .select("coupon_id")
@@ -746,10 +758,14 @@ async function loadRecoveryContext(emails: string[], now: number): Promise<Recov
   try {
     const { data } = await supabaseAdmin
       .from("orders")
-      .select("order_id, customer_email, payment_status, created_at")
+      .select("order_id, customer_email, payment_status, created_at, order_type")
       .in("customer_email", emails);
     for (const row of (data ?? []) as Array<Record<string, unknown>>) {
       if (!isPaidOrderStatus(row.payment_status as string | null)) continue;
+      // Same rule as the webhook mark above: a membership charge or a reship is
+      // not "they already bought", and it does not make them a recent buyer for
+      // the discount rule either.
+      if (!isProductPurchaseOrder(row as { order_type?: string | null })) continue;
       const email = String(row.customer_email ?? "").trim().toLowerCase();
       const at = new Date(String(row.created_at)).getTime();
       if (!email || !Number.isFinite(at)) continue;

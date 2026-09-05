@@ -292,8 +292,87 @@ describe("deleteAdminCoaRecord", () => {
   });
 
   it("is a no-op for an id that is already gone", async () => {
-    await expect(deleteAdminCoaRecord("row-999")).resolves.toBeUndefined();
+    await expect(deleteAdminCoaRecord("row-999")).resolves.toBeNull();
     expect(removedPaths).toHaveLength(0);
+  });
+
+  // ADM-11: the route audits what was removed, so the delete must answer it.
+  it("answers what it deleted, for the audit row", async () => {
+    const created = await createAdminCoaRecord({ ...BASE_INPUT, upload: upload() });
+    const path = [...objects.keys()][0];
+
+    const deleted = await deleteAdminCoaRecord(created.id);
+
+    expect(deleted).toEqual({
+      id: created.id,
+      productId: "prod-1",
+      batchNumber: "VL-BPC-0826",
+      status: "published",
+      filePath: path,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// COA-2: the two failures that surfaced as a generic "Unable to save this COA."
+// An impossible test date failed at the Postgres date column; a dose id that is
+// not the product's failed at the foreign key. Both are the operator's to fix
+// and are now refused up front, by name, as CoaValidationError (-> HTTP 400 with
+// the message) rather than reaching the database at all.
+// ---------------------------------------------------------------------------
+describe("COA-2: specific reasons instead of a generic failure", () => {
+  it("refuses an impossible test date with a message naming the field, and writes nothing", async () => {
+    await expect(createAdminCoaRecord({ ...BASE_INPUT, testDate: "2026-13-45", upload: upload() }))
+      .rejects.toThrow(/test date.*YYYY-MM-DD/i);
+    await expect(createAdminCoaRecord({ ...BASE_INPUT, testDate: "2026-13-45", upload: upload() }))
+      .rejects.toBeInstanceOf(CoaValidationError);
+    expect(db.coa_records).toHaveLength(0);
+    expect(objects.size).toBe(0);
+  });
+
+  it("still treats a blank test date as 'no date'", async () => {
+    const record = await createAdminCoaRecord({ ...BASE_INPUT, testDate: "", upload: upload() });
+    expect(record.testDate).toBeNull();
+  });
+
+  it("refuses a dose id that belongs to a different product, by name", async () => {
+    db.products.push({ id: "prod-2", name: "GHK-Cu", slug: "ghk-cu", is_archived: false, is_published: true });
+    db.product_doses = [
+      { id: "dose-1", product_id: "prod-1", label: "5mg", position: 1 },
+      { id: "dose-9", product_id: "prod-2", label: "50mg", position: 1 },
+    ];
+
+    await expect(createAdminCoaRecord({ ...BASE_INPUT, productDoseId: "dose-9", upload: upload() }))
+      .rejects.toThrow(/belongs to a different product/i);
+    await expect(createAdminCoaRecord({ ...BASE_INPUT, productDoseId: "dose-9", upload: upload() }))
+      .rejects.toBeInstanceOf(CoaValidationError);
+    expect(db.coa_records).toHaveLength(0);
+  });
+
+  it("refuses a dose id that does not exist at all, by name", async () => {
+    await expect(createAdminCoaRecord({ ...BASE_INPUT, productDoseId: "dose-ghost", upload: upload() }))
+      .rejects.toThrow(/dose no longer exists/i);
+  });
+
+  it("accepts the product's own dose", async () => {
+    db.product_doses = [{ id: "dose-1", product_id: "prod-1", label: "5mg", position: 1 }];
+    const record = await createAdminCoaRecord({ ...BASE_INPUT, productDoseId: "dose-1", upload: upload() });
+    expect(record.productDoseId).toBe("dose-1");
+  });
+
+  it("checks the dose on update too, against the product the record ends up on", async () => {
+    db.products.push({ id: "prod-2", name: "GHK-Cu", slug: "ghk-cu", is_archived: false, is_published: true });
+    db.product_doses = [
+      { id: "dose-1", product_id: "prod-1", label: "5mg", position: 1 },
+      { id: "dose-9", product_id: "prod-2", label: "50mg", position: 1 },
+    ];
+    const created = await createAdminCoaRecord({ ...BASE_INPUT, productDoseId: "dose-1", upload: upload() });
+
+    await expect(updateAdminCoaRecord(created.id, { productDoseId: "dose-9" }))
+      .rejects.toThrow(/belongs to a different product/i);
+    // Moving the record to prod-2 WITH its dose is fine.
+    const moved = await updateAdminCoaRecord(created.id, { productId: "prod-2", productDoseId: "dose-9" });
+    expect(moved.productDoseId).toBe("dose-9");
   });
 });
 

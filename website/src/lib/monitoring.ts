@@ -170,31 +170,28 @@ export interface SystemAlertRow {
  * under forty-four repetitions of one warning, with nothing on any screen
  * saying they exist. A count is what makes them findable.
  *
- * Counts rows rather than fetching them, and answers 0 rather than throwing:
- * this runs in the admin layout on every page, and a monitoring read must
- * never be what takes the console down.
+ * Counts rows rather than fetching them. THROWS on a failed read.
+ *
+ * It used to answer 0 instead, so that a monitoring read could never take the
+ * console down. But 0 is also the healthy answer, so a database that would
+ * not respond rendered the same nav bar as a store with nothing wrong — on
+ * the exact screen an operator opens to find out whether anything is wrong.
+ * Both callers (the admin layout and the dashboard) already run this through
+ * settleRead(), which keeps the page up AND carries the failure to the pixel
+ * ("—" and an error badge rather than an all-clear). Failing soft belongs
+ * there, once, not here where it is indistinguishable from the real answer.
  */
 export async function getOpenCriticalAlertCount(): Promise<number> {
-  try {
-    const { count, error } = await supabaseAdmin
-      .from("system_alerts")
-      .select("id", { count: "exact", head: true })
-      .eq("severity", "critical")
-      .is("resolved_at", null);
-    // Still 0, still never throws — but no longer SILENT. A failed read here is
-    // indistinguishable on screen from "no criticals open", which is the exact
-    // reading an operator acts on by doing nothing. The badge cannot say so
-    // without widening this to `number | null` and changing both consumers, so
-    // at minimum the failure reaches the logs.
-    if (error) {
-      console.error("Critical-alert count read failed; badge may understate", error);
-      return 0;
-    }
-    return Math.max(0, count ?? 0);
-  } catch (err) {
-    console.error("Critical-alert count read threw; badge may understate", err);
-    return 0;
+  const { count, error } = await supabaseAdmin
+    .from("system_alerts")
+    .select("id", { count: "exact", head: true })
+    .eq("severity", "critical")
+    .is("resolved_at", null);
+  if (error) {
+    console.error("Critical-alert count read failed", error);
+    throw new Error(`system_alerts count failed: ${error.message ?? String(error)}`);
   }
+  return Math.max(0, count ?? 0);
 }
 
 // For an admin monitoring surface. Returns [] if the table isn't migrated.
@@ -223,26 +220,29 @@ export async function getRecentSystemAlerts(limit = 100): Promise<SystemAlertRow
  *
  * `severity` narrows the SAME query so the criticals can be fetched on their
  * own budget, which is what lets the page guarantee it shows every critical the
- * badge counted. Returns [] rather than throwing — this is a monitoring read.
+ * badge counted.
+ *
+ * THROWS on a failed read. It used to return [] — and [] is what /admin/status
+ * renders as "No unresolved system alerts 🎉", so an outage of the alerts table
+ * reported a celebration. The page runs this through settleRead() and says
+ * "alerts could not be loaded" instead.
  */
 export async function getOpenSystemAlerts(options?: {
   severity?: AlertSeverity;
   limit?: number;
 }): Promise<SystemAlertRow[]> {
-  try {
-    let query = supabaseAdmin
-      .from("system_alerts")
-      .select("id, type, severity, message, context, created_at, resolved_at")
-      .is("resolved_at", null);
-    if (options?.severity) query = query.eq("severity", options.severity);
-    const { data, error } = await query
-      .order("created_at", { ascending: false })
-      .limit(options?.limit ?? 100);
-    if (error || !data) return [];
-    return data as SystemAlertRow[];
-  } catch {
-    return [];
+  let query = supabaseAdmin
+    .from("system_alerts")
+    .select("id, type, severity, message, context, created_at, resolved_at")
+    .is("resolved_at", null);
+  if (options?.severity) query = query.eq("severity", options.severity);
+  const { data, error } = await query
+    .order("created_at", { ascending: false })
+    .limit(options?.limit ?? 100);
+  if (error) {
+    throw new Error(`system_alerts read failed: ${error.message ?? String(error)}`);
   }
+  return (data ?? []) as SystemAlertRow[];
 }
 
 /**

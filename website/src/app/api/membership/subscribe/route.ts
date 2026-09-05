@@ -60,7 +60,8 @@ export async function POST(request: Request) {
           { status: 402 },
         );
       }
-      return NextResponse.json({ success: true, recurring: true, chargeSucceeded: true });
+      const scheduledFor = (result as { scheduledFor?: string | null }).scheduledFor ?? null;
+      return NextResponse.json({ success: true, recurring: true, chargeSucceeded: !scheduledFor, scheduledFor });
     }
 
     // NO SILENT ONE-TIME FALLBACK.

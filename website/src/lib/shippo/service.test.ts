@@ -808,6 +808,31 @@ describe("applyTrackingUpdate — customer email", () => {
     });
   });
 
+  // A shipping notice used to reach the provider with NO idempotency key, so a
+  // provider that accepted the message but timed out answering, followed by the
+  // queued retry, put two "shipped" emails in the inbox. Each notice now goes
+  // out under one stable key per (order, kind), and the queue row carries the
+  // same identity so the sweep re-sends under that key.
+  it("sends the shipped and delivered notices under one stable idempotency key each", async () => {
+    await orderWithLabel();
+    await applyTrackingUpdate(trackingEvent("TRANSIT", "2026-08-02T10:00:00Z"));
+    await applyTrackingUpdate(trackingEvent("DELIVERED", "2026-08-03T15:00:00Z"));
+
+    const keys = sendEmail.mock.calls.map((call) => (call[0] as { idempotencyKey?: string }).idempotencyKey);
+    expect(keys).toEqual([`order_shipped:${ORDER_ID}`, `order_delivered:${ORDER_ID}`]);
+  });
+
+  it("a refused shipped notice is queued WITH its identity, so the retry reuses the key", async () => {
+    await orderWithLabel();
+    sendEmail.mockResolvedValueOnce({ success: false, error: "provider down" });
+
+    await applyTrackingUpdate(trackingEvent("TRANSIT", "2026-08-02T10:00:00Z"));
+
+    const queued = table("pending_emails");
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({ to_email: "dana@example.com", order_id: ORDER_ID, email_kind: "order_shipped", status: "pending" });
+  });
+
   it("ignores an event type it does not handle without claiming a key", async () => {
     await orderWithLabel();
     const result = await applyTrackingUpdate({

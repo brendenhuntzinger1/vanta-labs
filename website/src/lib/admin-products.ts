@@ -458,6 +458,30 @@ export function assertDosesWellFormed(doses: DoseInput[] | undefined): void {
     if (!Number.isFinite(Number(dose.priceCents))) {
       throw new Error(`Dose ${index + 1} (${label}) needs a price.`);
     }
+    assertSalePriceNotAboveRegular(dose.salePriceCents, dose.priceCents, `Dose ${index + 1} (${label})`);
+  }
+}
+
+/**
+ * A "sale" price above the regular price is not a sale; it is a typo that the
+ * storefront would render as a strikethrough discount pointing the wrong way,
+ * and charge. Nothing checked it on create or update. Zero / absent means "no
+ * sale price" and is always fine; an unpriced draft (regular price 0) is left
+ * alone — publishing is where a missing price is refused.
+ */
+export function assertSalePriceNotAboveRegular(
+  salePriceCents: unknown,
+  priceCents: unknown,
+  subject: string,
+): void {
+  const sale = Math.round(Number(salePriceCents ?? 0));
+  const regular = Math.round(Number(priceCents ?? 0));
+  if (!Number.isFinite(sale) || !Number.isFinite(regular)) return;
+  if (sale <= 0 || regular <= 0) return;
+  if (sale > regular) {
+    throw new Error(
+      `${subject}: the sale price ($${(sale / 100).toFixed(2)}) cannot be higher than the regular price ($${(regular / 100).toFixed(2)}). Lower the sale price or raise the regular price.`,
+    );
   }
 }
 
@@ -479,6 +503,7 @@ export async function createAdminProduct(input: ProductCreateInput) {
   if (input.isPublished) {
     assertPublishablePrice(priceCents, input.name);
   }
+  assertSalePriceNotAboveRegular(input.salePriceCents, priceCents, input.name?.trim() || "This product");
 
   const { error } = await supabaseAdmin
     .from("products")
@@ -596,6 +621,15 @@ export async function updateAdminProduct(productId: string, input: ProductUpdate
   if (input.priceCents !== undefined) payload.price_cents = Math.max(0, Math.round(input.priceCents));
   if (input.compareAtPriceCents !== undefined) payload.compare_at_price_cents = Math.max(0, Math.round(input.compareAtPriceCents));
   if (input.salePriceCents !== undefined) payload.sale_price_cents = Math.max(0, Math.round(input.salePriceCents));
+  // The pair that will be on the row after this save: this request's value, or
+  // the stored one when the request leaves a side alone.
+  if (input.salePriceCents !== undefined || input.priceCents !== undefined) {
+    assertSalePriceNotAboveRegular(
+      input.salePriceCents !== undefined ? input.salePriceCents : undefined,
+      input.priceCents !== undefined ? input.priceCents : beforeProduct?.price_cents,
+      (input.name ?? productName)?.trim() || "This product",
+    );
+  }
   if (nextInventory !== undefined) payload.inventory_quantity = nextInventory;
   if (input.stockStatus !== undefined || nextInventory !== undefined) {
     payload.stock_status = normalizeStockStatus(input.stockStatus, nextInventory ?? 1);

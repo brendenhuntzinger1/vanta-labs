@@ -142,3 +142,43 @@ describe("negative control: the old constant copy would fail these tests", () =>
     expect(won.controlsPrice).not.toBe(lost.controlsPrice);
   });
 });
+
+// ---------------------------------------------------------------------------
+// PRICE-02. Shipping is not part of the discount race. A code flagged
+// free_shipping can lose the percentage contest — or carry no percentage at
+// all — and still take $15 off the order. The copy used to know nothing about
+// that: a shipping-only code was reported as "doesn't lower the total on this
+// order" while the server charged $0 shipping for it.
+// ---------------------------------------------------------------------------
+describe("a coupon that waives shipping is in the price", () => {
+  it("a shipping-only code (no percentage) is confirmed, naming the waiver", () => {
+    const outcome = describeCouponOutcome({ code: "SHIPFREE", offerLabel: null, winnerType: null, winnerLabel: null, waivesShipping: true });
+    expect(outcome.controlsPrice).toBe(true);
+    expect(outcome.message).toBe("Coupon applied — SHIPFREE · Free shipping.");
+  });
+
+  it("a code that lost the percentage race but waives shipping is still confirmed — for the waiver only", () => {
+    const outcome = describeCouponOutcome({
+      code: "VIP10", offerLabel: "10% off", winnerType: "bulk_savings", winnerLabel: "Bulk savings", waivesShipping: true,
+    });
+    expect(outcome.controlsPrice).toBe(true);
+    expect(outcome.message).toContain("Free shipping");
+    // The percentage is NOT in effect, so it is not quoted.
+    expect(outcome.message).not.toContain("10% off");
+  });
+
+  it("a winning code that also waives shipping names both", () => {
+    const outcome = describeCouponOutcome({
+      code: "VIP10", offerLabel: "10% off", winnerType: "coupon", winnerLabel: "Promo code VIP10", waivesShipping: true,
+    });
+    expect(outcome.message).toBe("Coupon applied — VIP10 · 10% off + Free shipping.");
+  });
+
+  it("with no waiver the outcome is unchanged: a losing code still says it lost", () => {
+    const outcome = describeCouponOutcome({
+      code: "VIP10", offerLabel: "10% off", winnerType: "bulk_savings", winnerLabel: "Bulk savings", waivesShipping: false,
+    });
+    expect(outcome.controlsPrice).toBe(false);
+    expect(outcome.message).toContain("Bulk savings");
+  });
+});

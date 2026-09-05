@@ -729,6 +729,43 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
     const veyraMembershipId = (existingMembership as { veyra_membership_id?: string | null })
       .veyra_membership_id;
 
+    // NO UNPAID HIGHER TIER. Perks used to switch the moment a change was
+    // requested, with only the NEXT charge repriced — so a member could buy the
+    // cheapest tier and hold the dearest one's perks for the rest of the paid
+    // period for nothing; monthly, that loop repeats every cycle (upgrade after
+    // paying, downgrade before renewal). Veyra's `change` takes an amount and
+    // an interval and offers no supported proration or difference charge, so:
+    //
+    //   annual   The pass never renews (owner decision), so there is no paid
+    //            moment to attach the change to. Refused while paid up; the
+    //            member picks a tier when the pass ends and they rejoin.
+    //   monthly  An UPGRADE is repriced at Veyra now and parked in
+    //            pending_tier_id; membership.renewed — the first charge at the
+    //            new price — moves the member onto it. A downgrade (or an
+    //            equal price) still applies at once: the member gives perks up
+    //            and the next charge is already lower.
+    const currentTier = existingMembership.tier_id ? await getTierById(String(existingMembership.tier_id)) : null;
+    const priceFor = (row: TierRow | null) =>
+      changedCycle === "annual" ? Number(row?.annual_price_cents ?? 0) : Number(row?.monthly_price_cents ?? 0);
+    const isUpgrade = priceFor(tier) > priceFor(currentTier);
+
+    if (changedCycle === "annual" && veyraMembershipId && !isTrialing) {
+      const paidThroughIso =
+        (existingMembership as { next_billing_at?: string | null; renews_at?: string | null }).next_billing_at
+        ?? (existingMembership as { renews_at?: string | null }).renews_at
+        ?? null;
+      const stillPaid = paidThroughIso ? new Date(paidThroughIso).getTime() > now.getTime() : true;
+      if (stillPaid) {
+        await recordBillingEvent({ userId: input.userId, tierId: tier.id, eventType: "tier_change", amountCents: 0, status: "failed", failureReason: "annual_pass_active" });
+        const through = formatDisplayDate(paidThroughIso, "long");
+        return {
+          success: false,
+          changed: false,
+          error: `Your annual ${currentTier?.name ?? "membership"} pass runs through ${through ?? "the end of its term"}. Plan changes take effect when it ends — choose your new tier then.`,
+        };
+      }
+    }
+
     if (veyraMembershipId) {
       const repricedAtProcessor = await changeVeyraMembershipPlan(veyraMembershipId, {
         amountCents: repriced.nextBillingAmountCents,
@@ -755,10 +792,33 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
       }
     }
 
+    if (isUpgrade && veyraMembershipId && !isTrialing) {
+      // Repriced at Veyra above; the perks wait for the renewal that pays for them.
+      const effectiveAt =
+        (existingMembership as { next_billing_at?: string | null }).next_billing_at
+        ?? (existingMembership as { renews_at?: string | null }).renews_at
+        ?? null;
+      await supabaseAdmin
+        .from("customer_memberships")
+        .update({
+          pending_tier_id: tier.id,
+          pending_tier_effective_at: effectiveAt,
+          next_billing_amount_cents: repriced.nextBillingAmountCents,
+          renewal_reminder_sent_at: null,
+          updated_at: now.toISOString(),
+        })
+        .eq("user_id", input.userId);
+      await recordBillingEvent({ userId: input.userId, tierId: tier.id, eventType: "tier_change_scheduled", amountCents: 0, status: "succeeded" });
+      return { success: true, changed: true, scheduledFor: effectiveAt };
+    }
+
     await supabaseAdmin
       .from("customer_memberships")
       .update({
         tier_id: tier.id,
+        // A downgrade cancels any upgrade still waiting for its renewal.
+        pending_tier_id: null,
+        pending_tier_effective_at: null,
         next_billing_amount_cents: repriced.nextBillingAmountCents,
         ...(repriced.firstMonthRemainderCents !== null
           ? { first_month_remainder_cents: repriced.firstMonthRemainderCents }

@@ -8,9 +8,9 @@ import {
   cartRecoveryT24hTemplate,
   cartRecoveryT72hTemplate,
 } from "@/lib/email/templates";
-import { sendMarketingEmail } from "@/lib/email/marketing";
+import { isMarketingSuppressed, sendMarketingEmail } from "@/lib/email/marketing";
 import { claimMarketingSend } from "@/lib/email/frequency";
-import { mintCartRecoveryCoupon, type AbandonedCartItemSnapshot } from "@/lib/cart-recovery";
+import { findLiveCouponForCart, mintCartRecoveryCoupon, type AbandonedCartItemSnapshot } from "@/lib/cart-recovery";
 import { getSiteUrl } from "@/lib/env";
 import { formatDisplayDate } from "@/lib/format-date";
 import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
@@ -334,6 +334,13 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
   if (error) throw error;
   if (!cart) throw new Error("Cart not found");
 
+  // SUPPRESSED MEANS NOTHING HAPPENS. sendMarketingEmail would refuse this
+  // address anyway, but by then the t72h branch below had already minted a
+  // real discount code and reset the tracking row for a mail that never went.
+  if (await isMarketingSuppressed(cart.email)) {
+    return { success: false, suppressed: true, error: "This address is unsubscribed or suppressed. Nothing was sent and no code was minted." };
+  }
+
   const config = await getCartRecoveryControlConfig();
   const items = Array.isArray(cart.items) ? (cart.items as AbandonedCartItemSnapshot[]) : [];
   const name = cart.customer_name ?? "";
@@ -371,9 +378,13 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
   let couponPercent = 0;
   // Only the final stage carries a code now; the 24-hour message answers
   // questions instead. A manual resend is an explicit admin action, so it
-  // mints without the sweep's per-address cooldown.
+  // mints without the sweep's per-address cooldown — but it REUSES the cart's
+  // live code first, exactly as the sweep does (resolveLastChanceCoupon): a
+  // second click used to mint a second stackable-by-order code for the same
+  // cart, and every click after that another.
   if (stage === "t72h") {
-    const coupon = await mintCartRecoveryCoupon(cart.email, config.discountPercent, config.couponExpirationHours);
+    const coupon = (await findLiveCouponForCart(cart.id))
+      ?? (await mintCartRecoveryCoupon(cart.email, config.discountPercent, config.couponExpirationHours));
     if (coupon) {
       couponCode = coupon.code;
       couponExpiresAt = coupon.expiresAt;

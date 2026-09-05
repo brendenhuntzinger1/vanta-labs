@@ -435,6 +435,23 @@ export async function getPaymentMethodsConfig(): Promise<PaymentMethodConfig[]> 
   }
 }
 
+/**
+ * Ceiling on the card processing fee percentage. Card-network surcharge rules
+ * cap a surcharge at roughly 3–4%; nothing legitimate is anywhere near ten.
+ * Above this the number is a typo, and a typo here surcharges every card
+ * checkout. Read-side clamp plus write-side refusal (/api/admin/control).
+ */
+export const MAX_CARD_FEE_PERCENT = 10;
+
+/** 0–MAX_CARD_FEE_PERCENT, or the fallback for anything unparseable. */
+export function boundedCardFeePercent(raw: unknown, fallback: number): number {
+  const text = typeof raw === "number" ? String(raw) : String(raw ?? "").trim();
+  if (!text) return fallback;
+  const parsed = Number(text);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(MAX_CARD_FEE_PERCENT, Math.max(0, parsed));
+}
+
 export async function getCardProcessingFeeConfig(): Promise<CardProcessingFeeConfig> {
   try {
     const snapshot = await getControlSnapshot("payment_methods");
@@ -445,7 +462,9 @@ export async function getCardProcessingFeeConfig(): Promise<CardProcessingFeeCon
     const o = override as Record<string, unknown>;
     return {
       enabled: typeof o.enabled === "boolean" ? o.enabled : DEFAULT_CARD_PROCESSING_FEE.enabled,
-      percentage: o.percentage !== undefined ? Number(o.percentage) || 0 : DEFAULT_CARD_PROCESSING_FEE.percentage,
+      percentage: o.percentage !== undefined
+        ? boundedCardFeePercent(o.percentage, DEFAULT_CARD_PROCESSING_FEE.percentage)
+        : DEFAULT_CARD_PROCESSING_FEE.percentage,
       label: typeof o.label === "string" ? o.label : DEFAULT_CARD_PROCESSING_FEE.label,
       noticeText: typeof o.noticeText === "string" ? o.noticeText : DEFAULT_CARD_PROCESSING_FEE.noticeText,
     };
@@ -735,7 +754,7 @@ export const DEFAULT_PROFIT_CONFIG: ProfitSettingsConfig = {
   //
   // THIS DEFAULT ONLY APPLIES WHEN THE KEY IS ABSENT. The Control Center writes
   // `count_sales_tax_as_profit` on every save of its Profit section
-  // (admin-control-center-client.tsx:350), so a stored row very likely
+  // (admin-control-center-client.tsx, saveAll's Profit section), so a stored row very likely
   // already holds `true` — in which case this default is never consulted and the
   // stored value must be changed too. See docs/findings/BLOCK-F-PRODUCTION-CHANGES.md.
   countSalesTaxAsProfit: false,

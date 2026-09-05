@@ -3,6 +3,8 @@ import Link from "next/link";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { canViewAuditLog } from "@/lib/admin-roles";
 import { getAuditLogRows, getAuditLogTargetTables } from "@/lib/admin-audit-log";
+import { failedReads, settleRead, UNKNOWN_FIGURE } from "@/lib/admin-read";
+import { AdminReadFailureNotice } from "@/components/admin-data-notices";
 
 export const dynamic = "force-dynamic";
 
@@ -50,10 +52,13 @@ export default async function AdminAuditLogPage({
   const includeConfigSaves = params.includeConfigSaves === "1";
   const page = Math.max(1, Number(params.page) || 1);
 
-  const [result, targetTables] = await Promise.all([
-    getAuditLogRows({ action, targetTable, includeConfigSaves, page, pageSize: 30 }).catch(() => ({ rows: [], total: 0, page: 1, pageSize: 30, pageCount: 1 })),
+  // A FAILED READ IS NOT "0 events" — see admin-read.ts. An audit log that
+  // reads as empty during an outage is the one that gets trusted least usefully.
+  const [auditRead, targetTables] = await Promise.all([
+    settleRead("Audit log", () => getAuditLogRows({ action, targetTable, includeConfigSaves, page, pageSize: 30 })),
     getAuditLogTargetTables().catch(() => []),
   ]);
+  const result = auditRead.ok ? auditRead.value : { rows: [], total: 0, page: 1, pageSize: 30, pageCount: 1 };
 
   const buildPageHref = (targetPage: number) => {
     const query = new URLSearchParams();
@@ -69,7 +74,9 @@ export default async function AdminAuditLogPage({
       <div className="mx-auto max-w-6xl">
         <h1 className="text-2xl font-semibold sm:text-3xl">Audit Log</h1>
         <p className="mt-2 text-sm text-zinc-400">
-          {result.total} event{result.total === 1 ? "" : "s"} — every admin action recorded in Supabase.
+          {auditRead.ok
+            ? `${result.total} event${result.total === 1 ? "" : "s"}`
+            : `${UNKNOWN_FIGURE} events (could not be loaded)`} — every admin action recorded in Supabase.
         </p>
 
         <form method="GET" className="vl-panel mt-6 grid gap-3 rounded-2xl p-4 sm:grid-cols-4">
@@ -98,6 +105,10 @@ export default async function AdminAuditLogPage({
           </div>
         </form>
 
+        <div className="mt-6">
+          <AdminReadFailureNotice failures={failedReads([auditRead])} />
+        </div>
+        {auditRead.ok ? (
         <div className="vl-panel mt-6 overflow-x-auto rounded-2xl">
           <table className="min-w-full divide-y divide-zinc-800 text-sm">
             <thead className="bg-zinc-900/80">
@@ -129,6 +140,7 @@ export default async function AdminAuditLogPage({
             </tbody>
           </table>
         </div>
+        ) : null}
 
         {result.pageCount > 1 ? (
           <div className="mt-6 flex flex-wrap items-center justify-center gap-2">

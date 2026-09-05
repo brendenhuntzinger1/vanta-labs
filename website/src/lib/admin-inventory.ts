@@ -37,6 +37,10 @@ export interface InventoryLine {
   sku: string | null;
   category: string;
   inventoryQuantity: number;
+  /** Units held by checkouts in progress (product_doses/products.reserved_quantity). */
+  reservedQuantity: number;
+  /** What the storefront will actually sell right now: on hand minus held, floored at 0. */
+  availableQuantity: number;
   /** Units ordered from a supplier but NOT yet on the shelf. Never sellable. */
   incomingQuantity: number;
   lowStockThreshold: number;
@@ -92,6 +96,7 @@ function toLine(input: {
   sku: string | null;
   category: string;
   inventoryQuantity: number;
+  reservedQuantity?: number;
   incomingQuantity?: number;
   lowStockThreshold: number;
   stockStatus: string;
@@ -99,6 +104,7 @@ function toLine(input: {
   inheritedShippingWeightOz: number | null;
 }): InventoryLine {
   const inventoryQuantity = Math.max(0, Math.round(input.inventoryQuantity));
+  const reservedQuantity = Math.max(0, Math.round(Number(input.reservedQuantity ?? 0)));
   const lowStockThreshold = Math.max(0, Math.round(input.lowStockThreshold));
 
   const effectiveShippingWeightOz = lineWeightOz({
@@ -116,6 +122,8 @@ function toLine(input: {
     key: input.doseId ? `dose:${input.doseId}` : `product:${input.productId}`,
     ...input,
     inventoryQuantity,
+    reservedQuantity,
+    availableQuantity: Math.max(0, inventoryQuantity - reservedQuantity),
     incomingQuantity: Math.max(0, Math.round(Number(input.incomingQuantity ?? 0))),
     lowStockThreshold,
     isOutOfStock: inventoryQuantity <= 0,
@@ -134,7 +142,7 @@ export async function getInventoryRows(): Promise<InventoryLine[]> {
   // next to a dead "GLP-1 — 5 mg = 0".
   const { data: products, error: productError } = await supabaseAdmin
     .from("products")
-    .select("id, slug, name, category, inventory_quantity, incoming_quantity, low_stock_threshold, stock_status, shipping_weight_oz")
+    .select("id, slug, name, category, inventory_quantity, reserved_quantity, incoming_quantity, low_stock_threshold, stock_status, shipping_weight_oz")
     .eq("is_archived", false)
     .order("name", { ascending: true });
 
@@ -147,7 +155,7 @@ export async function getInventoryRows(): Promise<InventoryLine[]> {
   const { data: doses, error: doseError } = productIds.length > 0
     ? await supabaseAdmin
         .from("product_doses")
-        .select("id, product_id, label, sku, inventory_quantity, incoming_quantity, low_stock_threshold, stock_status, shipping_weight_oz")
+        .select("id, product_id, label, sku, inventory_quantity, reserved_quantity, incoming_quantity, low_stock_threshold, stock_status, shipping_weight_oz")
         .in("product_id", productIds)
         .order("position", { ascending: true })
     : { data: [], error: null };
@@ -180,6 +188,7 @@ export async function getInventoryRows(): Promise<InventoryLine[]> {
         sku: null,
         category: String(product.category ?? ""),
         inventoryQuantity: Number(product.inventory_quantity ?? 0),
+        reservedQuantity: Math.max(0, Number(product.reserved_quantity ?? 0)),
         incomingQuantity: Number(product.incoming_quantity ?? 0),
         lowStockThreshold: Number(product.low_stock_threshold ?? 5),
         stockStatus: String(product.stock_status ?? "In Stock"),
@@ -199,6 +208,7 @@ export async function getInventoryRows(): Promise<InventoryLine[]> {
         sku: dose.sku ? String(dose.sku) : null,
         category: String(product.category ?? ""),
         inventoryQuantity: Number(dose.inventory_quantity ?? 0),
+        reservedQuantity: Math.max(0, Number(dose.reserved_quantity ?? 0)),
         incomingQuantity: Number(dose.incoming_quantity ?? 0),
         lowStockThreshold: Number(dose.low_stock_threshold ?? 5),
         stockStatus: String(dose.stock_status ?? "In Stock"),
@@ -380,9 +390,23 @@ export async function adjustInventoryLine(input: InventoryLineAdjustment) {
     // uses intentionally and this quick-adjust flow shouldn't override.
     const { data: current } = await supabaseAdmin
       .from(table)
-      .select("stock_status, inventory_quantity")
+      .select("stock_status, inventory_quantity, reserved_quantity")
       .eq("id", matchValue)
       .maybeSingle();
+
+    // A COUNT BELOW THE UNITS ALREADY HELD IS AN OVERSELL, NOT A CORRECTION.
+    // Every active hold is a checkout that may pay in the next few minutes;
+    // finalize then clamps the shelf at zero and the order ships from stock
+    // that does not exist. The admin screen showed on-hand only, so this was
+    // easy to do by accident ("the site says 8, I count 5, I type 5" while 16
+    // were held). Refuse, and say what to do.
+    const held = Math.max(0, Number((current as { reserved_quantity?: unknown } | null)?.reserved_quantity ?? 0));
+    if (held > 0 && quantity < held) {
+      throw new Error(
+        `${held} unit${held === 1 ? " is" : "s are"} held by checkouts in progress, so the count cannot be set below ${held} `
+        + "without overselling. Wait for the holds to clear (they expire within 15 minutes) or set at least that many.",
+      );
+    }
 
     quantityBefore = current?.inventory_quantity == null ? null : Number(current.inventory_quantity);
     const currentStatus = String(current?.stock_status ?? "In Stock");

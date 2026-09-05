@@ -139,4 +139,34 @@ describe("/admin/status under an alert storm", () => {
 
     expect(html).toContain("System Status");
   });
+
+  // ADM-05: the read used to be `.catch(() => [])`, and [] rendered as
+  // "No unresolved system alerts 🎉" — a celebration on the one page whose job
+  // is to say something is wrong. A failed read must be unmistakable.
+  it("says the alerts could not be loaded when the read fails, and NEVER claims all-clear", async () => {
+    mocks.getOpenSystemAlerts.mockRejectedValue(new Error("system_alerts is not migrated"));
+    const html = await renderStatusPage();
+
+    expect(html).toContain("System alerts could not be loaded");
+    expect(html).toContain("NOT an all-clear");
+    expect(html).toContain('data-testid="alerts-read-failure"');
+    expect(html).not.toContain("No unresolved system alerts");
+    // The count is unknown, not zero.
+    expect(html).not.toContain("0 unresolved criticals");
+    expect(html).toContain("— unresolved criticals");
+  });
+
+  it("still shows the rows that DID load when only one of the two reads fails", async () => {
+    mocks.getOpenSystemAlerts.mockImplementation(async (options?: { severity?: string; limit?: number }) => {
+      if (options?.severity === "critical") throw new Error("timeout");
+      return ALL_NEWEST_FIRST.slice(0, options?.limit ?? 100);
+    });
+    const html = await renderStatusPage();
+
+    expect(html).toContain("System alerts could not be loaded");
+    expect(html).toContain("Did not load: Unresolved critical alerts");
+    // The storm rows are real and are still rendered beneath the notice.
+    expect(html).toContain("shipping_cost_manual_entry_required");
+    expect(html).not.toContain("No unresolved system alerts");
+  });
 });
