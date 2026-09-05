@@ -70,19 +70,41 @@ describe("all three sign-in methods end at one verified session", () => {
 });
 
 describe("a provider identity is not consent to send marketing", () => {
-  it("the callback never asks for a marketing opt-in", () => {
-    const body = code(callback);
-    expect(body).not.toContain("marketingOptIn");
-    expect(body).not.toContain("marketing_emails");
+  // THE CONTRACT CHANGED WITH THE PORTAL, AND THE NEW ONE IS STRICTER THAN
+  // "never". Consent is now collectable at the portal through an OPTIONAL third
+  // box, so what these pin is that it can only ever travel as an explicit yes.
+  it("reads consent as a strict true, so silence is never consent", () => {
+    // A missing key, a null, or any other value must mean no. This value
+    // crosses a network boundary and a browser-storage boundary, and both can
+    // return something that is merely truthy.
+    expect(code(callback)).toContain('getItem("vl-oauth-marketing") === "true"');
+    expect(code(sessionRoute)).toContain("body?.oauthMarketingOptIn === true");
   });
 
-  it("the session endpoint never writes a marketing flag", () => {
-    // Email signup records consent through /api/auth/signup, which the OAuth
-    // path does not touch. An OAuth account therefore has no marketing_emails
-    // row at all, which reads as opted out.
+  it("only ever writes an opt-IN, never an opt-out", () => {
+    // Writing false here would silently overwrite a real opt-in from an earlier
+    // signup the next time that person happened to sign in with Google.
     const body = code(sessionRoute);
-    expect(body).not.toContain("marketing_emails");
-    expect(body).not.toContain("recordMarketingOptIn");
+    expect(body).toMatch(/if \(oauthMarketingOptIn && data\.user\.email\)/);
+    expect(body).toContain("marketing_emails: true");
+    expect(body).not.toContain("marketing_emails: false");
+  });
+
+  it("records consent through the same two places email signup uses", () => {
+    // marketing_subscribers carries the opt-in TIME, which an unsubscribe
+    // request and an audit both need; customer_preferences is the per-account
+    // switch every send already reads. Using one and not the other produces a
+    // customer who is on the list but shows as unsubscribed, or the reverse.
+    const body = code(sessionRoute);
+    expect(body).toContain("recordMarketingOptIn");
+    expect(body).toContain("customer_preferences");
+    expect(code(signupRoute)).toContain("recordMarketingOptIn");
+  });
+
+  it("never fails a sign-in over a mailing list", () => {
+    const block = sessionRoute.slice(sessionRoute.indexOf("if (oauthMarketingOptIn"));
+    expect(block.slice(0, 1200)).toContain("catch");
+    expect(block.slice(0, 1200)).toContain("console.error");
   });
 
   it("email signup still records consent explicitly, so the two stay distinct", () => {
@@ -109,13 +131,21 @@ describe("an OAuth account still makes the two required representations", () => 
     expect(body).toContain("disabled={oauthPending !== null || !ageConfirmed || !researchUseAgreed}");
   });
 
-  it("shows those checkboxes in login mode too, beside the buttons that need them", () => {
-    // Signup mode already renders them above the submit button. Login mode had
-    // none, so the guard above would have cited controls that were not on screen.
-    const oauthBlock = form.slice(form.indexOf("or continue with") - 2000, form.indexOf('startOAuth("google")'));
-    expect(oauthBlock).toContain('mode === "login"');
-    expect(oauthBlock).toContain("setAgeConfirmed");
-    expect(oauthBlock).toContain("setResearchUseAgreed");
+  it("shows those checkboxes wherever a provider button is offered", () => {
+    // Three surfaces now carry provider buttons: the portal, and the login and
+    // signup forms behind it. Every one of them must render the two boxes
+    // startOAuth requires, or the guard cites controls that are not on screen.
+    const portalBlock = form.slice(form.indexOf('if (mode === "portal")'), form.indexOf("const isSendCodeAction"));
+    expect(portalBlock).toContain("setAgeConfirmed");
+    expect(portalBlock).toContain("setResearchUseAgreed");
+
+    // Anchored on the divider that opens the email forms' provider section,
+    // then forward — the block sits just after it, not before.
+    const dividerAt = form.indexOf("or continue with");
+    const loginBlock = form.slice(dividerAt, form.indexOf('startOAuth("google")', dividerAt));
+    expect(loginBlock).toContain('mode === "login"');
+    expect(loginBlock).toContain("setAgeConfirmed");
+    expect(loginBlock).toContain("setResearchUseAgreed");
   });
 
   it("records the attestation server-side, not on the client's say-so alone", () => {
@@ -195,4 +225,105 @@ describe("the provider handoff carries no crawler or client logic", () => {
       expect(body).not.toMatch(/googlebot|bytespider|crawler/i);
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// THE PORTAL. First screen, three questions, two doors.
+//
+// The load-bearing rule is that entry depends on the first two boxes and never
+// on the third. Consent that is the price of admission is not consent, and the
+// list it fills is worse than no list: people who had no way to decline are the
+// ones who report mail as spam, and that is charged against the sending domain.
+// ---------------------------------------------------------------------------
+describe("the portal gates on the attestations, never on the marketing box", () => {
+  const portal = form.slice(form.indexOf('if (mode === "portal")'), form.indexOf("const isSendCodeAction"));
+
+  it("computes entry from the two required boxes only", () => {
+    expect(code(form)).toContain("const canEnter = ageConfirmed && researchUseAgreed;");
+    expect(code(form)).not.toMatch(/canEnter\s*=\s*[^;]*marketingOptIn/);
+  });
+
+  it("gates both provider buttons and Create an account on canEnter", () => {
+    const body = code(portal);
+    expect(body).toContain("disabled={oauthPending !== null || !canEnter}");
+    expect(body).toContain("disabled={!canEnter}");
+  });
+
+  it("leaves Sign in reachable regardless of the boxes", () => {
+    // A returning customer made these representations when they created the
+    // account. Blocking them from their own orders over an unticked box would
+    // be absurd, and it is the kind of thing that reads as a broken site.
+    const signIn = portal.slice(portal.indexOf("Already have an account?"));
+    expect(signIn).not.toContain("disabled");
+  });
+
+  it("starts the marketing box unticked", () => {
+    expect(code(form)).toContain("const [marketingOptIn, setMarketingOptIn] = useState(false);");
+  });
+
+  it("labels the marketing box as optional, in the label itself", () => {
+    expect(portal).toContain("(optional)");
+    expect(portal).toContain("vl-portal-row-optional");
+  });
+
+  it("carries all three of the owner's statements verbatim", () => {
+    expect(portal).toContain("I confirm I am 21 years of age or older");
+    expect(portal).toContain("I understand products are offered exclusively for research use");
+    expect(portal).toContain("I agree to receive Vanta Labs emails, product updates and offers");
+  });
+
+  it("shows the title, the access line and the terms line", () => {
+    expect(portal).toContain("Research Access Portal");
+    expect(portal).toContain("Access is limited to verified account holders.");
+    expect(portal).toContain("By continuing, you agree to our");
+    expect(portal).toContain("/legal/terms");
+    expect(portal).toContain("/legal/privacy");
+  });
+
+  it("shows no email or password field on the first screen", () => {
+    // The whole point: eight fields in front of someone who is going to press
+    // "Continue with Google" is what made this read as paperwork.
+    expect(portal).not.toContain('type="email"');
+    expect(portal).not.toContain('type="password"');
+    expect(portal).not.toContain("setPassword");
+  });
+
+  it("makes the whole row a tap target, not just the box", () => {
+    // Each row is a <label> wrapping its input. A bare checkbox is a 16px
+    // target in a 300px row, and two of these are required to enter at all.
+    const rows = portal.match(/className="vl-portal-row/g) ?? [];
+    expect(rows.length).toBe(3);
+    const css = read("src/app/globals.css");
+    expect(css).toContain(".vl-portal-row {");
+    expect(css).toMatch(/\.vl-portal-row \{[^}]*min-height: 56px/);
+    expect(css).toMatch(/\.vl-portal-row \{[^}]*cursor: pointer/);
+  });
+
+  it("gives the provider buttons full width and equal weight", () => {
+    expect(portal).toContain("vl-oauth-btn-lg");
+    const css = read("src/app/globals.css");
+    expect(css).toMatch(/\.vl-oauth-btn-lg \{[^}]*width: 100%/);
+    expect(css).toMatch(/\.vl-oauth-btn-lg \{[^}]*min-height: 56px/);
+  });
+
+  it("keeps a keyboard-visible focus state on the rows", () => {
+    expect(read("src/app/globals.css")).toContain(".vl-portal-row:focus-within");
+  });
+});
+
+describe("the portal is not a one-way door", () => {
+  it("offers a route back from the email forms", () => {
+    expect(form).toContain("All sign-in options");
+    expect(code(form)).toMatch(/setMode\("portal"\)/);
+  });
+
+  it("steps aside for anyone returning from an emailed link", () => {
+    // A confirmation or recovery return carries a message the sign-in form is
+    // built to show. Parking that person behind an age gate buries it, and they
+    // already have an account, so the gate has nothing left to ask.
+    const init = code(form).slice(code(form).indexOf("const [mode, setMode]"));
+    expect(init.slice(0, 900)).toContain("fromEmailLink");
+    expect(init.slice(0, 900)).toContain('return "login"');
+    expect(init.slice(0, 900)).toContain('referralCodeFromUrl) return "signup"');
+  });
 });

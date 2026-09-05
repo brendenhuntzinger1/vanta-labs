@@ -3124,6 +3124,106 @@ select.vl-auth-field {
   .vl-oauth-btn:active:not(:disabled) { transform: none; }
 }
 
+/* ---------------------------------------------------------------------------
+   PORTAL: FULL-WIDTH PROVIDER BUTTONS
+   ---------------------------------------------------------------------------
+   On the portal these ARE the primary action, so they get the height and the
+   full width to say so — unlike the pair on the email forms, which are the
+   secondary route and are deliberately quieter. Same component, different job,
+   one modifier.
+
+   56px rather than the 52px used elsewhere: these are the first things a thumb
+   reaches for on a phone, and they sit directly under three checkboxes that
+   were just tapped. A little more separation between "confirming" and
+   "committing" is worth the extra four pixels. */
+.vl-oauth-btn-lg {
+  width: 100%;
+  min-height: 56px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  gap: 0.75rem;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.vl-oauth-btn-lg:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.085);
+  border-color: rgba(226, 214, 190, 0.34);
+}
+
+/* ---------------------------------------------------------------------------
+   PORTAL: CHECKBOX ROWS WHERE THE WHOLE ROW IS THE TARGET
+   ---------------------------------------------------------------------------
+   Each row is a <label> wrapping its own input, so every pixel of it toggles
+   the box. That is the entire point on a phone: a bare checkbox is a 16px
+   target sitting inside a 300px row, and two of these three are required to
+   enter the site at all. Missing one and having nothing happen is how a gate
+   starts feeling broken.
+
+   min-height 56px keeps every row at a comfortable target even when the label
+   is one short line. align-items: flex-start so the box stays level with the
+   first line of a label that wraps to three, rather than drifting to the
+   vertical middle of the paragraph. */
+.vl-portal-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.875rem;
+  min-height: 56px;
+  padding: 0.9375rem 1rem;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.02);
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: border-color 180ms ease, background-color 180ms ease;
+}
+
+.vl-portal-row:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+/* A ticked row lifts slightly, so three confirmations read as done at a glance
+   rather than requiring the reader to check three small boxes individually. */
+.vl-portal-row:has(input:checked) {
+  border-color: rgba(199, 174, 94, 0.30);
+  background: rgba(199, 174, 94, 0.05);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+/* The keyboard needs the same affordance the mouse gets. The input inside is
+   what actually receives focus, so the ring is drawn on the row around it. */
+.vl-portal-row:focus-within {
+  border-color: rgba(199, 174, 94, 0.5);
+  box-shadow: 0 0 0 3px rgba(199, 174, 94, 0.14);
+}
+
+/* The optional row is quieter at rest, so the difference between "required to
+   enter" and "yes please" is visible before either label is read. It gains the
+   same gold treatment once ticked — opting in should feel like a decision that
+   registered, not like a lesser class of agreement. */
+.vl-portal-row-optional {
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.06);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.vl-portal-row-optional:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.vl-portal-row-optional:has(input:checked) {
+  border-style: solid;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vl-portal-row { transition: none; }
+}
+
 .vl-auth-submit:disabled {
   opacity: 0.42;
   cursor: not-allowed;

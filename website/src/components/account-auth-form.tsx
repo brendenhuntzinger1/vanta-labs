@@ -24,7 +24,13 @@ const OTP_RESEND_COOLDOWN_SECONDS = 45;
 // real shoppers. Flip to true once Twilio approves the account, then redeploy.
 const PHONE_LOGIN_ENABLED = false;
 
-type AuthMode = "login" | "signup";
+// PORTAL IS THE FIRST SCREEN, AND THE ONLY ONE MOST VISITORS SEE.
+//
+// It asks the three questions the store has to ask and offers the two fastest
+// ways in. The email forms are one tap behind it rather than in front of it:
+// showing eight fields to someone who is going to press "Continue with Google"
+// is the single biggest thing that made this card feel like paperwork.
+type AuthMode = "portal" | "login" | "signup";
 
 // Business type shown on the account-creation screen, alongside the age +
 // research-use confirmations. "Other" is the default selection.
@@ -77,7 +83,28 @@ export function AccountAuthForm() {
   const searchParams = useSearchParams();
   const referralCodeFromUrl = searchParams.get("ref") ?? "";
   const nextPath = safeNextPath(searchParams.get("next"));
-  const [mode, setMode] = useState<AuthMode>(referralCodeFromUrl ? "signup" : "login");
+  // A referral link is an invitation to JOIN, so it opens the signup form
+  // directly. A verification return has an account already and must not be
+  // parked behind a gate. Everyone else starts at the portal.
+  const [mode, setMode] = useState<AuthMode>(() => {
+    // A referral link is an invitation to JOIN, so it opens the signup form.
+    if (referralCodeFromUrl) return "signup";
+    // ANYONE ARRIVING FROM AN EMAILED LINK SKIPS THE PORTAL.
+    //
+    // A confirmation or recovery return carries a message the sign-in form is
+    // built to show — "your address is confirmed", "that link has expired",
+    // "sign in to continue". Parking that person behind a gate asking them to
+    // confirm their age would bury the one sentence they came back for, and
+    // they have an account already, so the gate has nothing left to ask.
+    //
+    // Computed here rather than in an effect: both inputs are known at first
+    // render, and deciding later would paint the portal and then replace it.
+    if (typeof window !== "undefined") {
+      const fromEmailLink = searchParams.get("verified") === "1" || Boolean(window.location.hash);
+      if (fromEmailLink) return "login";
+    }
+    return "portal";
+  });
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -87,7 +114,18 @@ export function AccountAuthForm() {
   // Starts ticked, with the same "optional, unsubscribe anytime" wording the
   // checkout box uses. Before 2026-09-04 there was no box at all here, so no
   // account ever opted in and the welcome flow had never had a recipient.
-  const [marketingOptIn, setMarketingOptIn] = useState(true);
+  // UNCHECKED BY DEFAULT, AND THIS IS A DELIBERATE CHANGE.
+  //
+  // It used to arrive pre-ticked on the signup form. On the portal it sits
+  // beside two boxes that are genuinely required to enter, and a pre-ticked
+  // third box in that company reads as one more thing to get past rather than
+  // a choice. Consent collected that way is worth very little: it produces a
+  // list that opens badly and complains loudly, and it is the first thing an
+  // inbox provider holds against a sending domain.
+  //
+  // Ticking it is what puts someone in marketing_subscribers. Not ticking it
+  // costs them nothing — entry never depends on it, see canEnter below.
+  const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   // Purely presentational: toggles the password field between text and
   // password. Never touches what is submitted.
@@ -573,6 +611,10 @@ export function AccountAuthForm() {
       // to the tab, cleared once used.
       try {
         window.sessionStorage.setItem("vl-oauth-attested", "true");
+        // Recorded separately from the attestation because they are different
+        // kinds of thing: one is a representation the visitor must make to
+        // enter, the other is permission they may withhold and still enter.
+        window.sessionStorage.setItem("vl-oauth-marketing", marketingOptIn ? "true" : "false");
       } catch {
         /* private mode: the callback simply will not claim an attestation */
       }
@@ -602,6 +644,170 @@ export function AccountAuthForm() {
       );
     }
   };
+
+  // ---------------------------------------------------------------------
+  // THE PORTAL. Two required representations, one optional permission, and the
+  // two fastest doors.
+  //
+  // ENTRY DEPENDS ON THE FIRST TWO BOXES AND NEVER ON THE THIRD. That is not a
+  // style choice: consent that is the price of admission is not consent, it is
+  // a toll. It also poisons the list it fills — people who had no way to
+  // decline are the ones who mark mail as spam, and that is charged against the
+  // sending domain, not against the signup form. So the third box is genuinely
+  // optional and genuinely off until someone turns it on.
+  const canEnter = ageConfirmed && researchUseAgreed;
+
+  if (mode === "portal") {
+    return (
+      <div className="vl-auth-card vl-fade-up mx-auto w-full max-w-[26rem] rounded-[22px] p-6 sm:p-8">
+        <header className="text-center">
+          <p className="text-[11px] font-medium uppercase tracking-[0.28em] text-[color:var(--accent-gold)]">
+            Vanta Labs
+          </p>
+          <h1 className="mt-3 text-[1.75rem] font-semibold leading-[1.15] tracking-[-0.01em] text-white sm:text-[2rem]">
+            Research Access Portal
+          </h1>
+          <p className="mt-3 text-[0.9375rem] leading-6 text-white/55">
+            Access is limited to verified account holders.
+          </p>
+        </header>
+
+        <p className="mt-7 text-center text-[0.8125rem] uppercase tracking-[0.16em] text-white/40">
+          Please confirm the following to continue
+        </p>
+
+        {/* THE WHOLE ROW IS THE CONTROL.
+            Each row is a <label> wrapping its input, so the tap target is the
+            full width of the card rather than a 16px box. On a phone that is
+            the difference between three confident taps and three near-misses,
+            and it is why these are not bare checkboxes in a list. */}
+        <div className="mt-4 space-y-2.5">
+          <label className="vl-portal-row">
+            <input
+              type="checkbox"
+              checked={ageConfirmed}
+              onChange={(event) => setAgeConfirmed(event.target.checked)}
+              className="vl-auth-check mt-0.5"
+            />
+            <span>I confirm I am 21 years of age or older</span>
+          </label>
+
+          <label className="vl-portal-row">
+            <input
+              type="checkbox"
+              checked={researchUseAgreed}
+              onChange={(event) => setResearchUseAgreed(event.target.checked)}
+              className="vl-auth-check mt-0.5"
+            />
+            <span>I understand products are offered exclusively for research use</span>
+          </label>
+
+          {/* Visually set apart from the two above, because it is a different
+              kind of statement and the difference should be legible before it
+              is read. The two above are conditions of entry; this one is a
+              favour, and marking it optional in the label is the honest way to
+              ask for it. */}
+          <label className="vl-portal-row vl-portal-row-optional">
+            <input
+              type="checkbox"
+              checked={marketingOptIn}
+              onChange={(event) => setMarketingOptIn(event.target.checked)}
+              className="vl-auth-check mt-0.5"
+            />
+            <span>
+              I agree to receive Vanta Labs emails, product updates and offers
+              <span className="ml-1.5 text-white/35">(optional)</span>
+            </span>
+          </label>
+        </div>
+
+        {error ? (
+          <p role="alert" className="mt-5 rounded-[12px] border border-rose-400/25 bg-rose-500/[0.08] px-4 py-3 text-[0.875rem] leading-6 text-rose-200">{error}</p>
+        ) : null}
+
+        <div className="mt-6 h-px bg-white/[0.08]" aria-hidden="true" />
+
+        <div className="mt-6 space-y-3">
+          <button
+            type="button"
+            onClick={() => void startOAuth("google")}
+            disabled={oauthPending !== null || !canEnter}
+            className="vl-oauth-btn vl-oauth-btn-lg vl-focus-ring"
+          >
+            <svg viewBox="0 0 24 24" className="h-5 w-5 shrink-0" aria-hidden="true">
+              <path fill="#4285F4" d="M23.06 12.25c0-.85-.08-1.67-.22-2.45H12v4.63h6.2a5.3 5.3 0 0 1-2.3 3.48v2.89h3.72c2.18-2 3.44-4.96 3.44-8.55z" />
+              <path fill="#34A853" d="M12 23.5c3.11 0 5.72-1.03 7.62-2.79l-3.72-2.89c-1.03.69-2.35 1.1-3.9 1.1-3 0-5.54-2.02-6.45-4.74H1.7v2.98A11.5 11.5 0 0 0 12 23.5z" />
+              <path fill="#FBBC05" d="M5.55 14.18a6.9 6.9 0 0 1 0-4.36V6.84H1.7a11.5 11.5 0 0 0 0 10.32l3.85-2.98z" />
+              <path fill="#EA4335" d="M12 4.75c1.69 0 3.21.58 4.4 1.72l3.3-3.3C17.72 1.28 15.11.25 12 .25A11.5 11.5 0 0 0 1.7 6.84l3.85 2.98C6.46 7.1 9 4.75 12 4.75z" />
+            </svg>
+            <span>{oauthPending === "google" ? "Opening Google…" : "Continue with Google"}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void startOAuth("apple")}
+            disabled={oauthPending !== null || !canEnter}
+            className="vl-oauth-btn vl-oauth-btn-lg vl-focus-ring"
+          >
+            <svg viewBox="0 0 24 24" className="h-[21px] w-[21px] shrink-0" aria-hidden="true" fill="currentColor">
+              <path d="M17.05 12.54c-.02-2.2 1.8-3.26 1.88-3.31-1.02-1.5-2.62-1.7-3.19-1.72-1.36-.14-2.65.8-3.34.8-.69 0-1.75-.78-2.87-.76-1.48.02-2.84.86-3.6 2.18-1.53 2.66-.39 6.6 1.1 8.76.73 1.06 1.6 2.25 2.74 2.2 1.1-.04 1.52-.71 2.85-.71 1.33 0 1.7.71 2.87.69 1.18-.02 1.93-1.08 2.65-2.14.83-1.22 1.18-2.4 1.2-2.46-.03-.01-2.3-.88-2.32-3.5zM14.9 5.1c.6-.74 1.01-1.75.9-2.77-.87.04-1.94.59-2.57 1.31-.56.64-1.05 1.68-.92 2.67.98.08 1.98-.5 2.59-1.21z" />
+            </svg>
+            <span>{oauthPending === "apple" ? "Opening Apple…" : "Continue with Apple"}</span>
+          </button>
+        </div>
+
+        <div className="my-6 flex items-center gap-3" aria-hidden="true">
+          <span className="h-px flex-1 bg-white/[0.06]" />
+          <span className="text-[0.6875rem] uppercase tracking-[0.2em] text-white/30">or</span>
+          <span className="h-px flex-1 bg-white/[0.06]" />
+        </div>
+
+        <button
+          type="button"
+          onClick={() => {
+            if (!canEnter) {
+              setError("Please confirm the first two statements to continue.");
+              return;
+            }
+            setError(null);
+            setMode("signup");
+          }}
+          disabled={!canEnter}
+          className="vl-auth-submit vl-focus-ring w-full"
+        >
+          Create an account
+        </button>
+
+        {/* Sign in is a LINK, not a third button. A returning customer knows
+            exactly what they are looking for, and giving it button weight would
+            put three competing calls to action on a screen whose whole job is
+            to make one choice obvious. It also stays available whatever the
+            boxes say: someone who already has an account made these
+            representations when they created it, and blocking them from their
+            own orders over an unticked box would be absurd. */}
+        <p className="mt-6 text-center text-[0.875rem] text-white/45">
+          Already have an account?{" "}
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              setMode("login");
+            }}
+            className="vl-focus-ring inline-flex min-h-6 items-center rounded-[6px] font-medium text-white/85 underline underline-offset-4 decoration-white/25 transition-colors duration-200 hover:text-white hover:decoration-white/60"
+          >
+            Sign in
+          </button>
+        </p>
+
+        <p className="mt-6 text-center text-[0.75rem] leading-5 text-white/35">
+          By continuing, you agree to our{" "}
+          <Link href="/legal/terms" className="underline underline-offset-2 decoration-white/20 transition-colors hover:text-white/60">Terms</Link>
+          {" "}and{" "}
+          <Link href="/legal/privacy" className="underline underline-offset-2 decoration-white/20 transition-colors hover:text-white/60">Privacy Policy</Link>.
+        </p>
+      </div>
+    );
+  }
 
   const isSendCodeAction = mode === "login" && loginMethod === "phone" && !otpSent;
   const sendBlockedByCooldown = isSendCodeAction && otpCooldown > 0;
@@ -929,6 +1135,23 @@ export function AccountAuthForm() {
       </div>
 
       <div className="mt-7 space-y-4 border-t border-white/[0.06] pt-6 text-center">
+        {/* The way back out. Without it the email form is a one-way door: a
+            visitor who opened "Create an account" and then decided to use
+            Google has no route back to the buttons that offer it, short of
+            reloading the page. */}
+        <button
+          type="button"
+          onClick={() => {
+            setMode("portal");
+            resetTransientState();
+          }}
+          className="vl-focus-ring inline-flex min-h-6 items-center gap-1.5 rounded-[6px] text-[0.8125rem] text-white/40 transition-colors duration-200 hover:text-white/70"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-3.5 w-3.5" aria-hidden="true">
+            <path d="M19 12H5M11 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          All sign-in options
+        </button>
         <p className="text-[0.875rem] text-white/45">
           {mode === "signup" ? "Already have an account?" : "New to Vanta Labs?"}{" "}
           <button

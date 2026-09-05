@@ -69,9 +69,14 @@ export default function OAuthCallbackPage() {
       // belongs to, and leaving it behind would let a later sign-in in the same
       // tab claim an assertion the visitor never made on that occasion.
       let attested = false;
+      let marketingOptIn = false;
       try {
         attested = window.sessionStorage.getItem("vl-oauth-attested") === "true";
+        // Read as a strict "true", so a missing key or any other value means no.
+        // Silence must never be read as consent.
+        marketingOptIn = window.sessionStorage.getItem("vl-oauth-marketing") === "true";
         window.sessionStorage.removeItem("vl-oauth-attested");
+        window.sessionStorage.removeItem("vl-oauth-marketing");
       } catch {
         /* storage unavailable: the server simply records no attestation */
       }
@@ -128,6 +133,10 @@ export default function OAuthCallbackPage() {
             // not already carry it, so a returning customer's original
             // attestation timestamp is never overwritten by a later sign-in.
             oauthAttested: attested,
+            // Only ever true when the visitor ticked the optional third box on
+            // the portal. Entry never depended on it, so this is a real answer
+            // rather than the price of getting in.
+            oauthMarketingOptIn: marketingOptIn,
           }),
         });
 

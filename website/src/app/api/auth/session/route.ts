@@ -5,6 +5,7 @@ import { createServerClient, supabaseAdmin } from "@/lib/supabase-server";
 import { awardReferralSignupBonus, awardSignupBonusIfNeeded } from "@/lib/membership";
 import { getUserIdByReferralCode, setReferredByCode } from "@/lib/customer-account";
 import { customerSafeMessage } from "@/lib/safe-error";
+import { recordMarketingOptIn } from "@/lib/marketing-broadcast";
 
 export async function POST(request: Request) {
   try {
@@ -20,6 +21,9 @@ export async function POST(request: Request) {
     // Set by the OAuth callback, and only there. Email signup records the same
     // two representations through /api/auth/signup before the account exists.
     const oauthAttested = body?.oauthAttested === true;
+    // Strict true only. A missing field, a null, or anything else is "no" —
+    // silence is never consent, and this value crosses a network boundary.
+    const oauthMarketingOptIn = body?.oauthMarketingOptIn === true;
 
     if (!accessToken) {
       return NextResponse.json({ success: false, error: "Missing access token" }, { status: 400 });
@@ -81,6 +85,41 @@ export async function POST(request: Request) {
           // copy is worth logging, not worth locking someone out of their account.
           console.error("[auth/session] could not record OAuth attestation", attestationError);
         }
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // MARKETING CONSENT FROM THE PORTAL'S OPTIONAL THIRD BOX.
+    //
+    // Written through exactly the same two places /api/auth/signup uses, so a
+    // customer who arrived through Google is on the list on identical terms to
+    // one who typed their address: marketing_subscribers carries the opt-in
+    // TIME (what an unsubscribe request and an audit both need), and
+    // customer_preferences.marketing_emails is the per-account switch the
+    // account settings screen and every send already read.
+    //
+    // ONLY EVER TRUE, NEVER FALSE. This does not write an opt-OUT. A customer
+    // who declines simply has no row, which is already how the rest of the
+    // system reads "not subscribed" — and an explicit false written here would
+    // silently overwrite a real opt-in from an earlier signup the next time
+    // that person signed in with Google.
+    //
+    // A relayed Apple address is stored as given. It is a deliverable address
+    // that Apple forwards, so mail reaches the customer; if they turn the relay
+    // off later, the send simply stops, which is the same outcome as any dead
+    // address and needs no special case here.
+    if (oauthMarketingOptIn && data.user.email) {
+      try {
+        await recordMarketingOptIn(data.user.email, "oauth_portal");
+        await supabaseAdmin
+          .from("customer_preferences")
+          .upsert(
+            { user_id: data.user.id, marketing_emails: true, updated_at: new Date().toISOString() },
+            { onConflict: "user_id" },
+          );
+      } catch (consentError) {
+        // Never fail a sign-in over a mailing list.
+        console.error("[auth/session] could not record marketing consent", consentError);
       }
     }
 
