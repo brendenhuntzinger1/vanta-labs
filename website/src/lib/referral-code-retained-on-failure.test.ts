@@ -101,18 +101,27 @@ describe("a failed referral submission keeps the code that is already applied", 
   });
 });
 
-describe("the two branches that genuinely invalidate the applied code still clear it", () => {
+describe("the one branch that genuinely invalidates the applied code still clears it", () => {
   it.each([
     ["the referral programme is paused", "REFERRAL_PROGRAM_PAUSED_MESSAGE"],
-    // The message names whichever Buy X Get Y promotion is actually pricing
-    // the cart now (the store has six), so the marker is the part of the
-    // sentence that does not change with the promotion.
-    ["a Buy X Get Y promotion is running", "Referral codes cannot be combined with the"],
   ])("clears when %s", (_label, marker) => {
     const branch = branchReporting(marker);
     for (const setter of CLEARS_THE_APPLIED_CODE) {
       expect(branch, `${marker} branch no longer calls ${setter}`).toContain(setter);
     }
+  });
+
+  // THERE USED TO BE TWO. The second cleared the applied code whenever a Buy X
+  // Get Y promotion was running — "Referral codes cannot be combined with the
+  // <name> promotion." — and it was never a genuine invalidation: the server
+  // has never refused that combination, so the cart was turning away a code the
+  // checkout would have accepted. The cost landed on the ambassador, who was
+  // attributed nothing for any order placed during a promotion.
+  //
+  // A promotion and a referral now compete; the larger saving prices the order
+  // and the code stays attached for attribution whichever way it goes.
+  it("no longer refuses a referral code because a promotion is running", () => {
+    expect(applyReferralCodeBody()).not.toContain("Referral codes cannot be combined with the");
   });
 });
 

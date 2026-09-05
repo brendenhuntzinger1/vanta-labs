@@ -20,7 +20,7 @@ import { calculateShipping, DEFAULT_SHIPPING_CONFIG, isShippingWaived, type Ship
 import { DEFAULT_SALES_TAX_CONFIG, type SalesTaxConfig } from "@/lib/sales-tax";
 import type { MembershipTierSummary } from "@/lib/member-pricing";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
-import { describeCouponOutcome, resolveCartDiscount, type CouponOutcome, type PriceControllingDiscount } from "@/lib/discount-resolution";
+import { describeCouponOutcome, resolveCartDiscount, type CouponOutcome, type DiscountCandidate, type PriceControllingDiscount } from "@/lib/discount-resolution";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 import { referralAppliedMessage, referralCartStatus, referralQualifies, referralShortfall } from "@/lib/referral-qualification";
 import { REFERRAL_PROGRAM_PAUSED_MESSAGE, referralProgramAllowsCodes, referralProgramIsOff } from "@/lib/referral-program-gate";
@@ -1099,21 +1099,24 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     && !(bulkSavingsTierReached || memberFreeShipping)
     && shippingAtListTerms > 0;
 
+  // ALWAYS ITS REAL VALUE. NEVER ZEROED BY THE COMPANY IT KEEPS.
+  //
+  // This used to return 0 whenever a promotion or a referral was running
+  // without stacking, mirroring the two throws quote-order raised for exactly
+  // those combinations. Both throws are gone: a coupon now COMPETES with a
+  // promotion and with a referral, so its amount is what decides whether it
+  // wins. Zeroing it here would hand every contest to the other candidate and
+  // preview a total the server would not charge.
   const couponDiscountAmount = useMemo(
-    // Zeroed only when the server would refuse the coupon outright: a promotion
-    // or a referral is running AND nothing permits stacking. quote-order throws
-    // on exactly those two combinations (`!couponPolicy.allowStacking`), and
-    // adds the coupon on top in every other case.
-    () => (((buy3Get1FreeDiscount > 0 || referralDetails) && !activePromotionAllowsCoupon)
-      ? 0
-      : calculateCouponDiscountAmount(discountBase, couponDetails)),
-    [buy3Get1FreeDiscount, activePromotionAllowsCoupon, referralDetails, couponDetails, discountBase],
+    () => calculateCouponDiscountAmount(discountBase, couponDetails),
+    [couponDetails, discountBase],
   );
 
   // Whichever of buy3get1 / referral / coupon the customer is actually
   // eligible for under the existing (unchanged) mutual-exclusivity rules
   // between those three.
-  // BUNDLE OR REFERRAL — but the coupon is NOT part of this choice.
+  // BUNDLE **AND** REFERRAL — both compete; the coupon competes too, from its
+  // own candidate below.
   //
   // This used to end `return { type: "coupon", amount: couponDiscountAmount }`,
   // which made the coupon the third rung of a priority chain: a Buy-3-Get-1
@@ -1124,14 +1127,16 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // the cart and charged $50 off — the shopper paying less than the page said,
   // and the "best discount applied" line naming the wrong one.
   //
-  // Bundle-over-referral IS correct and stays: the server suppresses the
-  // referral bucket outright when a bundle is present
-  // (`!isBundle && hasReferral`), because the free item is the whole discount.
-  // Only the coupon was wrongly excluded, so only the coupon moves out — into
-  // its own candidate below, where it competes exactly as it does server-side.
-  const promoDiscount = useMemo(() => {
+  // The referral was the same mistake, one rung up: an early `return` on the
+  // bundle meant a referral never competed with a promotion here, mirroring the
+  // server's `!isBundle && hasReferral`. The server now ranks them against each
+  // other, so this returns a LIST — bundle first, because a strict `>` on both
+  // sides makes the first entry win an exact tie, and resolveCustomerDiscount
+  // pushes bundle before referral.
+  const promoDiscounts = useMemo(() => {
+    const candidates: DiscountCandidate[] = [];
     if (buy3Get1FreeDiscount > 0) {
-      return { type: "buy3get1" as const, amount: buy3Get1FreeDiscount };
+      candidates.push({ type: "buy3get1" as const, amount: buy3Get1FreeDiscount });
     }
     // Belt and braces against the single frame between the config landing
     // "off" and the clearing effect below running: the cart must never price a
@@ -1152,12 +1157,14 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       // qualifies. It no longer REFUSES the order — that hard block turned an
       // ambassador's link into a checkout blocker — which is why the cart must
       // now say what is actually true: see referralMeetsMinimum below.
-      if (!referralQualifies(subtotal, referralMinimumOrder)) {
-        return null;
+      if (referralQualifies(subtotal, referralMinimumOrder)) {
+        candidates.push({
+          type: "referral" as const,
+          amount: discountBase * (referralDetails.customerDiscountPercent / 100),
+        });
       }
-      return { type: "referral" as const, amount: discountBase * (referralDetails.customerDiscountPercent / 100) };
     }
-    return null;
+    return candidates;
   }, [buy3Get1FreeDiscount, referralDetails, discountBase, subtotal, referralMinimumOrder, referralProgramEnabled]);
 
 
@@ -1197,9 +1204,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       ambassadorPersonalAmount,
       couponDiscountAmount,
       allowCouponStacking: activePromotionAllowsCoupon,
-      promo: promoDiscount,
+      promos: promoDiscounts,
     }),
-    [subtotal, quantityBundleSavings, bulkSavingsResult.amount, memberPricingAmount, ambassadorPersonalAmount, couponDiscountAmount, activePromotionAllowsCoupon, promoDiscount],
+    [subtotal, quantityBundleSavings, bulkSavingsResult.amount, memberPricingAmount, ambassadorPersonalAmount, couponDiscountAmount, activePromotionAllowsCoupon, promoDiscounts],
   );
 
   const bestDiscount = cartDiscount.best;
@@ -1224,25 +1231,6 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // "is the basket over $100" instead announced a 15% discount on a five-vial
   // cart whose quantity-bundle pricing had already competed the referral to
   // $0.00 — and suppressed the shopper's store credit to pay for it.
-  const referralStatus = useMemo(
-    () => (referralDetails && referralProgramAllowsCodes(referralProgramEnabled)
-      ? referralCartStatus({
-        ambassadorName: referralDetails.ambassadorName,
-        discountPercent: referralDetails.customerDiscountPercent,
-        subtotal,
-        minimumQualifyingOrder: referralMinimumOrder,
-        referralDiscountApplied: bestDiscount?.type === "referral" && discountAmount > 0,
-        competingDiscountApplied: Boolean(bestDiscount) && bestDiscount?.type !== "referral" && discountAmount > 0,
-        formatCurrency: formatCartCurrency,
-      })
-      : null),
-    [referralDetails, subtotal, referralMinimumOrder, bestDiscount, discountAmount, referralProgramEnabled],
-  );
-  const referralStatusText = referralStatus?.line ?? null;
-  const referralNeedsMoreToQualify = Boolean(referralStatus?.needsMoreToQualify);
-  /** The referral is the discount actually coming off this basket. */
-  const referralDiscountApplied = Boolean(referralStatus?.referralDiscountApplied);
-
   // Customer-facing name for the applied discount, and the "we picked the
   // best one for you" note shown when an entered code lost to something
   // bigger (or the cart's bundle pricing beat every percentage discount).
@@ -1262,6 +1250,31 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     }
     return quantityBundleSavings > 0 ? "Bundle pricing" : null;
   }, [discountAmount, bestDiscount, couponDetails, referralDetails, quantityBundleSavings, activePromotionName]);
+
+  // MOVED ABOVE referralStatus, WHICH NOW NAMES THE WINNER. A referral that
+  // loses says which offer beat it, exactly as describeCouponOutcome does for a
+  // coupon, and that sentence needs this label. Nothing here depends on
+  // referralStatus, so the order is free to change.
+
+  const referralStatus = useMemo(
+    () => (referralDetails && referralProgramAllowsCodes(referralProgramEnabled)
+      ? referralCartStatus({
+        ambassadorName: referralDetails.ambassadorName,
+        discountPercent: referralDetails.customerDiscountPercent,
+        subtotal,
+        minimumQualifyingOrder: referralMinimumOrder,
+        referralDiscountApplied: bestDiscount?.type === "referral" && discountAmount > 0,
+        competingDiscountApplied: Boolean(bestDiscount) && bestDiscount?.type !== "referral" && discountAmount > 0,
+        competingDiscountLabel: appliedDiscountLabel,
+        formatCurrency: formatCartCurrency,
+      })
+      : null),
+    [referralDetails, subtotal, referralMinimumOrder, bestDiscount, discountAmount, referralProgramEnabled, appliedDiscountLabel],
+  );
+  const referralStatusText = referralStatus?.line ?? null;
+  const referralNeedsMoreToQualify = Boolean(referralStatus?.needsMoreToQualify);
+  /** The referral is the discount actually coming off this basket. */
+  const referralDiscountApplied = Boolean(referralStatus?.referralDiscountApplied);
 
   const autoBestDiscountApplied = useMemo(() => {
     const winner = discountAmount > 0 ? bestDiscount?.type : (quantityBundleSavings > 0 ? "bundle_pricing" : null);
@@ -1618,13 +1631,18 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    if (buy3Get1FreeDiscount > 0) {
-      setReferralDetails(null);
-      setReferralCode(null);
-      setReferralError(`Referral codes cannot be combined with the ${activePromotionName ?? "current"} promotion.`);
-      setReferralSuccess(null);
-      return;
-    }
+    // A LIVE PROMOTION NO LONGER TURNS A REFERRAL CODE AWAY.
+    //
+    // This branch refused the code outright and cleared it, which cost the
+    // ambassador the sale: the shopper could not attach the code at all while
+    // any promotion was running, so no attribution reached the order and no
+    // commission was ever accrued. It also disagreed with the server, which has
+    // never refused this combination.
+    //
+    // The code is accepted and competes. If the promotion is worth more the
+    // shopper keeps the promotion and the code takes nothing off — which is
+    // what referralStatusLine now says in words — and the ambassador is paid
+    // either way.
 
     // A FAILED SUBMISSION MUST NOT TAKE AWAY THE CODE THAT IS ALREADY WORKING.
     //
@@ -1701,13 +1719,16 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         minimumOrder: referralMinimumOrder,
         formatCurrency,
       }));
-      // One code slot. The coupon that was here is gone; say so, rather than
-      // letting its row vanish from the drawer without a word.
-      const displacedCoupon = couponCode;
-      setCouponCode(null);
-      setCouponDetails(null);
-      setCouponError(displacedCoupon ? `Promo code ${displacedCoupon} was removed — promo codes can't be combined with a referral code.` : null);
-      setCouponSuccess(null);
+      // TWO CODE SLOTS, ONE WINNING DISCOUNT. The coupon that was here STAYS.
+      //
+      // This used to silently delete the shopper's coupon, because the server
+      // threw on the pair. It no longer does — they compete, the better one
+      // prices the order, and the loser is reported as accepted-but-not-applied
+      // rather than removed behind the shopper's back.
+      //
+      // Points are still cleared: they are exclusive of a referral DISCOUNT and
+      // are re-offered by the effect that watches referralDiscountApplied once
+      // the contest resolves.
       setPointsToRedeemState(0);
       if (typeof document !== "undefined") {
         document.cookie = `${REFERRAL_COOKIE_KEY}=${encodeURIComponent(validatedReferral.referralCode)}; path=/; max-age=${60 * 60 * 24 * 30}; samesite=lax`;
@@ -1741,17 +1762,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     if (isApplyingCoupon) return; // ignore rapid re-clicks while validating
     const normalized = code.trim().toUpperCase();
 
-    // A promotion that permits coupon stacking lets the code through; the
-    // server applies both (quote-order passes stackWithCoupon into
-    // allowCouponStacking), so refusing it here would show a total below the
-    // one the card is charged.
-    if (buy3Get1FreeDiscount > 0 && !activePromotionAllowsCoupon) {
-      setCouponDetails(null);
-      setCouponCode(null);
-      setCouponError(`Coupon codes cannot be combined with the ${activePromotionName ?? "current"} promotion.`);
-      setCouponSuccess(null);
-      return;
-    }
+    // A LIVE PROMOTION NO LONGER TURNS A COUPON AWAY EITHER.
+    //
+    // With stacking ON the code is added on top; with stacking OFF it competes
+    // and the larger saving wins. Neither is a reason to refuse it, and the
+    // server (which used to throw here) now agrees. What the shopper is told
+    // comes from describeCouponOutcome, which names the winner when the code
+    // loses instead of pretending the code was rejected.
 
     if (!normalized) {
       setCouponDetails(null);
@@ -1797,14 +1814,19 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       setCouponCode(result.code);
       setCouponError(null);
       setCouponSuccess("Coupon applied.");
-      const displacedReferral = referralCode;
-      setReferralDetails(null);
-      setReferralCode(null);
-      setReferralError(displacedReferral ? `Referral code ${displacedReferral} was removed — it can't be combined with a promo code.` : null);
-      setReferralSuccess(null);
-      if (typeof document !== "undefined") {
-        document.cookie = `${REFERRAL_COOKIE_KEY}=; path=/; max-age=0; samesite=lax`;
-      }
+      // THE REFERRAL STAYS, AND SO DOES ITS COOKIE.
+      //
+      // This block used to clear referralDetails, referralCode and
+      // `vl_referral_code` — expiring the cookie outright. That is the single
+      // most expensive line this change removes: a shopper who arrived on an
+      // ambassador's link and then typed a public promo code destroyed the
+      // attribution for that order AND for the rest of the 30-day window, and
+      // the ambassador was paid nothing on a sale they had made. The shopper
+      // was given no choice in it and no way back other than re-clicking the
+      // link.
+      //
+      // The two codes now compete for the price and the referral is kept for
+      // attribution whichever one wins.
     } catch (error) {
       console.error("Unable to validate coupon code", error);
       setCouponDetails(null);
@@ -1857,13 +1879,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       setCouponSuccess(null);
       return;
     }
-    if (buy3Get1FreeDiscount > 0 && !activePromotionAllowsCoupon) {
-      setCouponDetails(null);
-      setCouponCode(null);
-      setCouponError(`Coupon codes cannot be combined with the ${activePromotionName ?? "current"} promotion.`);
-      setCouponSuccess(null);
-      return;
-    }
+    // No promotion check here either: a restored code competes exactly as a
+    // typed one does (see applyCouponCode).
+    //
     // The code is bound to this address; without it the preview and the
     // validator would refuse the code the server just handed over.
     if (!isSignedIn) setKnownEmail(pending.email);
@@ -1876,16 +1894,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setCouponCode(pending.code);
     setCouponError(null);
     setCouponSuccess("Coupon applied.");
-    // One code slot, exactly as applyCouponCode: a coupon replaces a referral.
-    const displacedReferral = referralCode;
-    setReferralDetails(null);
-    setReferralCode(null);
-    setReferralError(displacedReferral ? `Referral code ${displacedReferral} was removed — it can't be combined with a promo code.` : null);
-    setReferralSuccess(null);
-    if (typeof document !== "undefined") {
-      document.cookie = `${REFERRAL_COOKIE_KEY}=; path=/; max-age=0; samesite=lax`;
-    }
-  }, [knownEmail, isSignedIn, buy3Get1FreeDiscount, activePromotionAllowsCoupon, activePromotionName]);
+    // Two code slots, exactly as applyCouponCode: a restored coupon does not
+    // displace a referral or expire its cookie. They compete for the price.
+  }, [knownEmail, isSignedIn]);
   // Armed once the readiness flags are up. The state updates are scheduled as
   // a microtask, the same way the re-validate effect below defers to
   // applyCouponCode, so none of them run synchronously inside this effect.

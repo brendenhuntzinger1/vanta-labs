@@ -878,18 +878,27 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     }
   }
 
-  // Coupons never combine with a referral code or Buy 3 Get 1 unless the admin
-  // has explicitly enabled stacking.
-  if (!couponPolicy.allowStacking) {
-    if (referral && couponEntered) {
-      throw new Error("Coupon codes cannot be combined with a referral code. Remove one to continue.");
-    }
-    // A promotion may opt into coupon stacking on its own (stackWithCoupon),
-    // in which case the coupon is welcome and the two combine downstream.
-    if (isBuy3Get1Active && couponEntered && !promotionAllowsCouponStacking) {
-      throw new Error(`Coupon codes cannot be combined with ${appliedPromotionName ?? "this promotion"}. Remove the coupon code to continue.`);
-    }
-  }
+  // A SECOND CODE IS NOT AN ERROR. IT IS A COMPETITOR.
+  //
+  // This used to throw twice — once for a referral alongside a coupon, once for
+  // a coupon alongside a promotion — and both throws were a checkout blocker
+  // dressed up as a rule. The rule ("only one discount per order") was already
+  // enforced, correctly, by resolveCustomerDiscount picking a single winner.
+  // Refusing the combination on top of that did not enforce anything; it made
+  // the SHOPPER do the picking, from an error message, without being told which
+  // code was worth more.
+  //
+  // And when the code they removed was the referral, the ambassador who made
+  // the sale was paid nothing on it. The cart deleted the referral cookie at
+  // the same moment, so even a link-attributed order lost its attribution to a
+  // shopper typing a public promo code. That is the bug this whole change
+  // exists to close, and it could not be closed while these throws stood.
+  //
+  // So both codes come in, both compete, the larger saving wins, and the loser
+  // is reported as accepted-but-not-applied (couponCodeForOrder below, and
+  // describeCouponOutcome / referralStatusLine on the client). The referral
+  // rides along for attribution either way. Stacking is unchanged and is still
+  // the only way two discounts land at once.
 
   // BELOW THE PROGRAMME MINIMUM THE REFERRAL IS INERT, NOT FATAL.
   //
@@ -1143,16 +1152,33 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     && !(bulkSavingsResult.tier || memberPerks.freeShipping)
     && (destinationKnown ? shippingAtListTerms > 0 : true);
   const couponCodeForOrder = coupon && (couponDiscountApplied || couponWaivedShipping) ? coupon.code : null;
+
+  // A PROMOTION IS RECORDED ONLY WHEN IT IS IN THE PRICE — the same rule the
+  // coupon and the gift follow, and it became load-bearing the moment the
+  // referral was allowed to beat a promotion instead of being zeroed by one.
+  //
+  // `appliedPromotionId` is what payment-service writes to the order and what
+  // claimPromotionRedemption counts against `maxRedemptions` /
+  // `perCustomerLimit`. A promotion that lost the contest took nothing off, so
+  // recording it would burn one of a limited promotion's redemptions on an
+  // order that never received it — and would tell the customer, on their own
+  // receipt, that they got an offer they did not get.
+  const promotionDiscountApplied = customerDiscount.components.includes("bundle") && discountAmount > 0;
+  const promotionIdForOrder = promotionDiscountApplied ? appliedPromotionId : null;
+  const promotionNameForOrder = promotionDiscountApplied ? appliedPromotionName : null;
+  const promotionLimitsForOrder = promotionDiscountApplied ? appliedPromotionLimits : null;
+
   // IS THE SHOPPER ACTUALLY GETTING A REFERRAL DISCOUNT?
   //
   // Read off the resolved winner rather than re-derived, because every
   // re-derivation of this question has so far got it wrong. `components`
   // carries "referral" only when the referral bucket beat every other
-  // candidate; it loses whenever a Buy-3-Get-1 bundle is present
-  // (`!isBundle && hasReferral`), whenever quantity-bundle pricing already in
-  // the subtotal competes it to zero, and whenever membership, bulk savings or
-  // an ambassador personal discount is worth more. In each of those the code is
-  // real, the basket qualifies, and the discount is exactly $0.00.
+  // candidate; it loses whenever a promotion is worth more, whenever
+  // quantity-bundle pricing already in the subtotal competes it to zero, and
+  // whenever membership, bulk savings, a coupon or an ambassador personal
+  // discount is worth more. In each of those the code is real, the basket
+  // qualifies, and the discount is exactly $0.00 — while the ambassador is
+  // still attributed and still earns commission.
   const referralDiscountApplied = customerDiscount.components.includes("referral") && discountAmount > 0;
 
   // Sales tax — dynamic, from the SHIPPING ADDRESS: collected only for
@@ -1434,12 +1460,17 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     taxAmount,
     referral,
     couponCode: couponCodeForOrder,
-    isBuy3Get1Active,
+    // "A free/reduced-price item promotion PRICED this order" — which is what
+    // this flag has always claimed and, until the referral was allowed to beat
+    // a promotion, was the same thing as "a promotion was available". It is
+    // read to label the order's `promotionApplied` metadata, so it has to
+    // follow the resolved winner rather than the mere presence of an offer.
+    isBuy3Get1Active: promotionDiscountApplied,
     appliedOffer,
     discountLabel: customerDiscount.label,
-    appliedPromotionId,
-    appliedPromotionName,
-    appliedPromotionLimits,
+    appliedPromotionId: promotionIdForOrder,
+    appliedPromotionName: promotionNameForOrder,
+    appliedPromotionLimits: promotionLimitsForOrder,
     storeCreditRedeemedCents,
     pointsRedeemed,
     pointsDiscountAmount,

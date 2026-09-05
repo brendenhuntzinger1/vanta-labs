@@ -49,13 +49,44 @@ describe("CART-03 — the drawer says its total is not yet the card total", () =
   });
 });
 
-describe("CART-05 — a code that displaces the other kind says so", () => {
+// CART-05 USED TO ASSERT THE OPPOSITE, AND THE OPPOSITE WAS THE BUG.
+//
+// It required the cart to NAME the code it had just deleted — "Promo code X was
+// removed", "Referral code Y was removed" — on the premise that one code slot
+// existed and a shopper deserved to be told which code lost it. The premise was
+// wrong. Applying a promo code expired `vl_referral_code` outright, so a shopper
+// who arrived on an ambassador's link and then typed a public code destroyed the
+// attribution for that order and for the rest of the 30-day window. The
+// ambassador was paid nothing on a sale they had made, and the message that
+// satisfied this test was the only trace of it.
+//
+// Both codes are now held and COMPETE; the larger saving prices the order and
+// the loser is reported as accepted-but-not-applied. So the guard is inverted:
+// nothing may quietly take a code away, and the cookie may only be cleared by
+// the shopper asking for it.
+describe("CART-05 — applying one kind of code never removes the other", () => {
   const context = read("components/cart-context.tsx");
-  it("applying a referral names the promo code it removed", () => {
-    expect(context).toContain("Promo code ${displacedCoupon} was removed — promo codes can't be combined with a referral code.");
+
+  it("no branch displaces a coupon or a referral behind the shopper's back", () => {
+    expect(context).not.toContain("displacedCoupon");
+    expect(context).not.toContain("displacedReferral");
+    expect(context).not.toContain("can't be combined with a promo code");
+    expect(context).not.toContain("promo codes can't be combined with a referral code");
   });
-  it("applying a coupon (typed or restored) names the referral code it removed", () => {
-    expect(context.split("Referral code ${displacedReferral} was removed — it can't be combined with a promo code.").length - 1).toBe(2);
+
+  it("expires the referral cookie in exactly one place — the shopper removing the code", () => {
+    // `clearReferralCode` is the deliberate act: the shopper pressed Remove.
+    // Any second occurrence means some other path is expiring a 30-day
+    // attribution window as a side effect, which is what this file exists to
+    // stop happening again.
+    expect(context.split(`${"${REFERRAL_COOKIE_KEY}"}=; path=/; max-age=0`).length - 1).toBe(1);
+    const clearBody = context.slice(context.indexOf("const clearReferralCode ="));
+    expect(clearBody.slice(0, clearBody.indexOf("};"))).toContain("max-age=0");
+  });
+
+  it("refuses neither code while a promotion is running", () => {
+    expect(context).not.toContain("Referral codes cannot be combined with the");
+    expect(context).not.toContain("Coupon codes cannot be combined with the");
   });
 });
 

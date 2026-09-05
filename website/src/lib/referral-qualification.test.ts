@@ -221,10 +221,50 @@ describe("referralStatusLine — the other reasons a code gives nothing", () => 
   it.each([
     ["qualifying", true, 0],
     ["below the minimum", false, 60.01],
-  ])("says only that the code is applied when another discount has taken over (%s)", (_l, meetsMinimum, amountToQualify) => {
+  ])("says only that the code is applied when another discount has taken over and is unnamed (%s)", (_l, meetsMinimum, amountToQualify) => {
     expect(referralStatusLine({
       ...base, meetsMinimum, amountToQualify,
       referralDiscountApplied: false, competingDiscountApplied: true,
+    })).toBe("Jane Doe · referral code applied");
+  });
+
+  // A CODE WITH NOTHING BESIDE IT READS AS A CODE THAT FAILED.
+  //
+  // That reading is what used to cost the ambassador the sale: a shopper whose
+  // promotion or promo code was worth more saw "Jane Doe · referral code
+  // applied" against a total the code had not moved, concluded it was broken,
+  // and removed it — taking the attribution with it. The sentence now says why,
+  // in the same shape describeCouponOutcome uses for the coupon side.
+  it.each([
+    ["a promo code", "Promo code SAVE20"],
+    ["a promotion", "Buy 2 Get 1 Free"],
+    ["catalogue bundle pricing", "Bundle pricing"],
+    ["membership", "Membership discount"],
+  ])("names %s as the offer that beat the code", (_l, winner) => {
+    expect(referralStatusLine({
+      ...base, meetsMinimum: true, amountToQualify: 0,
+      referralDiscountApplied: false, competingDiscountApplied: true,
+      competingDiscountLabel: winner,
+    })).toBe(`Jane Doe · referral code applied · your ${winner} saves you more, so we kept that`);
+  });
+
+  it("never names a winner when the referral is the discount being given", () => {
+    expect(referralStatusLine({
+      ...base, meetsMinimum: true, amountToQualify: 0,
+      referralDiscountApplied: true, competingDiscountApplied: false,
+      competingDiscountLabel: "Promo code SAVE20",
+    })).toBe("Jane Doe · 15% customer discount");
+  });
+
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["whitespace", "   "],
+  ])("falls back to the plain sentence for a %s winner label", (_l, winner) => {
+    expect(referralStatusLine({
+      ...base, meetsMinimum: true, amountToQualify: 0,
+      referralDiscountApplied: false, competingDiscountApplied: true,
+      competingDiscountLabel: winner,
     })).toBe("Jane Doe · referral code applied");
   });
 
@@ -308,6 +348,19 @@ describe("referralCartStatus", () => {
     competingDiscountApplied: false,
     formatCurrency: money,
   };
+
+  it("passes the winner's name through to the sentence", () => {
+    const s = referralCartStatus({
+      ...base, subtotal: 200,
+      referralDiscountApplied: false,
+      competingDiscountApplied: true,
+      competingDiscountLabel: "Promo code SAVE20",
+    });
+    expect(s.line).toBe("Xavier Martinez · referral code applied · your Promo code SAVE20 saves you more, so we kept that");
+    expect(s.referralDiscountApplied).toBe(false);
+    // Amber is a call to action, and there is none: no basket size changes this.
+    expect(s.needsMoreToQualify).toBe(false);
+  });
 
   it("reports a qualifying basket as qualifying, with nothing left to add", () => {
     const s = referralCartStatus({ ...base, subtotal: 110.37 });
