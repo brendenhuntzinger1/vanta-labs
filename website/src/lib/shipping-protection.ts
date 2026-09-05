@@ -46,7 +46,7 @@
 // putting it back rather than $0.00.
 // See shipping-protection-offer-price.test.ts.
 
-export const SHIPPING_PROTECTION_PERCENT = 4;
+export const SHIPPING_PROTECTION_PERCENT = 6;
 
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;

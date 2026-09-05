@@ -60,8 +60,8 @@ describe("the shipping-protection offer shows what the add-on costs", () => {
   it("the fee helper answers with the real price regardless of selection", () => {
     // The helper never knew about the checkbox — it takes a subtotal. The bug
     // was entirely in which value the cart handed to the label.
-    expect(calculateShippingProtectionFee(69)).toBeCloseTo(2.76, 2);
-    expect(calculateShippingProtectionFee(84.98)).toBeCloseTo(3.4, 2);
+    expect(calculateShippingProtectionFee(69)).toBeCloseTo(4.14, 2);
+    expect(calculateShippingProtectionFee(84.98)).toBeCloseTo(5.1, 2);
     expect(calculateShippingProtectionFee(0)).toBe(0);
   });
 

@@ -4,6 +4,10 @@ import { buildOrderRow, type OrderRowInput } from "@/lib/quote-order";
 import { expectedOrderTotal, isTotalMismatch, maxShippingProtectionFee } from "@/lib/reconciliation-math";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 
+// These orders were charged at the 4% rate in force when they were placed. The
+// default has since moved, so the reconstruction names the historical rate.
+const HISTORICAL_RATE = 4;
+
 /**
  * Shipping Protection has to survive the trip from quote to database.
  *
@@ -104,7 +108,7 @@ describe("the invariant, on the real orders that broke it", () => {
     ["VL-8D132452", 3.8, 15, 0, 0, 18.95],
     ["VL-E8F4D52F", 54.99, 15, 3.85, 0, 76.04],
   ])("%s reconciles exactly once protection is counted", (_n, subtotal, shipping, tax, cardFee, amountPaid) => {
-    const protection = calculateShippingProtectionFee(subtotal);
+    const protection = calculateShippingProtectionFee(subtotal, HISTORICAL_RATE);
     const { total } = reconciles({ subtotal, shipping, protection, handling: 0, tax, discount: 0, cardFee, amountPaid });
     expect(total).toBe(amountPaid);
   });
@@ -120,7 +124,7 @@ describe("the invariant, on the real orders that broke it", () => {
 
 describe("reconciliation is exact once the fee is recorded", () => {
   const components = { subtotal: 54.99, shipping: 15, tax: 3.85, cardFee: 0, discount: 0, storeCredit: 0, pointsDollars: 0 };
-  const protection = calculateShippingProtectionFee(54.99); // 2.20
+  const protection = calculateShippingProtectionFee(54.99, HISTORICAL_RATE); // 2.20
 
   it("an allowance of 0 accepts the exactly-correct total", () => {
     const total = expectedOrderTotal({ ...components, shippingProtection: protection });

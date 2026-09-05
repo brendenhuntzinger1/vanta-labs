@@ -1322,7 +1322,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // The rate comes from the SAME shippingConfig object the client cart was
   // handed by /api/catalog/promotions, so an admin rate change moves the
   // preview and this authoritative total together. Passing the default here
-  // instead would silently re-price every protected order at 4% the moment an
+  // instead would silently re-price every protected order at the code default the moment an
   // admin set anything else, and the mismatch would surface to the shopper as
   // "Altered total detected" rather than as a wrong fee.
   const shippingProtectionFee = input.shippingProtection

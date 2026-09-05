@@ -16,8 +16,8 @@ describe("expectedOrderTotal", () => {
 
 describe("maxShippingProtectionFee", () => {
   it("is the percentage protection fee for the order's subtotal", () => {
-    expect(maxShippingProtectionFee(100)).toBe(4);
-    expect(maxShippingProtectionFee(500)).toBe(20);
+    expect(maxShippingProtectionFee(100)).toBe(6);
+    expect(maxShippingProtectionFee(500)).toBe(30);
     expect(maxShippingProtectionFee(0)).toBe(0);
   });
 });
