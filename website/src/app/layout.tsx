@@ -14,7 +14,7 @@ import { RecoveryLinkCatcher } from "@/components/recovery-link-catcher";
 import { StorefrontOffersBar } from "@/components/storefront-offers-bar";
 import { StorefrontOfferModal } from "@/components/storefront-offer-modal";
 import { cookies } from "next/headers";
-import { AUTH_COOKIE_NAME } from "@/lib/auth-cookie";
+import { getAuthenticatedUser } from "@/lib/auth-session";
 import {
   OFFERS_DISMISSED_COOKIE,
   getStorefrontOffers,
@@ -191,11 +191,24 @@ export default async function RootLayout({
   // flight payload, where it is just as readable and rather harder to notice.
   // That mistake is the reason the old age gate protected nothing.
   //
-  // Judged on the session cookie alone, which is the same cheap test the
-  // middleware uses. A forged cookie buys a glimpse of a discount banner and
-  // nothing else: every price the customer is actually charged is recomputed
-  // server-side, and the catalog behind it answers to row-level security.
-  const signedIn = Boolean(cookieStore.get(AUTH_COOKIE_NAME));
+  // JUDGED ON A VERIFIED SESSION, NOT ON A COOKIE BEING PRESENT.
+  //
+  // This used to read `Boolean(cookieStore.get(AUTH_COOKIE_NAME))` and argue
+  // that a forged cookie "buys a glimpse of a discount banner and nothing
+  // else". Two things were wrong with that. The smaller one is that the banner
+  // is not nothing — it carries a live coupon code and its terms, which is the
+  // promotion the store is running. The larger one is that this layout wraps
+  // the PUBLIC pages too, and middleware does not gate those at all: with a
+  // single header `Cookie: vl_session_token=totally.forged.value`, the sign-in
+  // page served "Labor Day · Buy 2 Get 1" and the code with it. There was no
+  // deeper layer under this one, because on /account/login there is no deeper
+  // layer at all.
+  //
+  // getAuthenticatedUser() verifies the token against GoTrue. It is memoised
+  // per request, so on a page that already asks (the home page, the catalog,
+  // every account screen) this costs nothing, and for a visitor with no cookie
+  // it never touches the network.
+  const signedIn = Boolean(await getAuthenticatedUser());
   const allOffers = signedIn ? await getStorefrontOffers().catch(() => []) : [];
   const dismissed = new Set(parseDismissed(cookieStore.get(OFFERS_DISMISSED_COOKIE)?.value));
   const offers = visibleOffers(allOffers.filter((offer) => !dismissed.has(offerTag(offer.id))));

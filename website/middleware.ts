@@ -3,6 +3,7 @@ import { requiresAccount } from "@/lib/access-policy";
 
 import {
   AUTH_COOKIE_NAME,
+  accessTokenExpiresAt,
   accessTokenNeedsRefresh,
   authCookieOptions,
   decodeAuthCookie,
@@ -48,11 +49,22 @@ const RENAMED_PRODUCT_SLUGS = new Map<string, string>([
 
 const MAINTENANCE_CACHE_TTL_MS = 15_000;
 const SESSION_CACHE_TTL_MS = 30_000;
+const CUSTOMER_SESSION_CACHE_TTL_MS = 30_000;
+/**
+ * Ceiling on the verified-token cache.
+ *
+ * The admin cache beside it is unbounded, which is fine for a handful of staff
+ * and is not fine here: this one is keyed by CUSTOMER token, so on a busy day
+ * it would grow with traffic inside a long-lived runtime. Oldest-out at the
+ * cap; an evicted entry costs one re-verification, never a wrong answer.
+ */
+const CUSTOMER_SESSION_CACHE_MAX = 5_000;
 
 let maintenanceCacheValue = false;
 let maintenanceCacheExpiresAt = 0;
 
 const sessionCache = new Map<string, { value: boolean; expiresAt: number }>();
+const customerSessionCache = new Map<string, { value: boolean; expiresAt: number }>();
 
 function applySecurityHeaders(response: NextResponse) {
   response.headers.set("X-Frame-Options", "DENY");
@@ -330,6 +342,129 @@ async function hasValidAdminSession(request: NextRequest) {
   return isValidAdminSessionToken(token);
 }
 
+// ---------------------------------------------------------------------------
+// THE WALL ASKS WHETHER THE TOKEN IS REAL, NOT WHETHER A COOKIE IS PRESENT.
+//
+// It used to ask only whether a cookie named vl_session_token existed, and the
+// comment beside it argued that was enough because "a forged or expired cookie
+// gets past this line and then meets the page guard, the route guard and — the
+// one that actually matters — row-level security". That argument was checked
+// against the routes rather than assumed, and it did not hold. Measured on the
+// production build with the single header
+// `Cookie: vl_session_token=totally.forged.value`:
+//
+//   /                        200, 57 KB, "Labor Day · Buy 2 Get 1" in the HTML
+//   /api/storefront/offers   200, the live offers including the coupon code
+//   /api/catalog/promotions  200, promotion flags and the whole bundle config
+//   /api/catalog/bac-water   200, a product row
+//   /api/coupons/featured    200, HARNESS10 with its discount type and value
+//
+// Only /api/catalog/products refused, because it happens to check for itself.
+// The deeper layers the comment relied on were real in some places and absent
+// in others, and "absent in others" is the only part that matters — the wall
+// was the thing that decided, and it was deciding on a string anyone can type.
+//
+// So it verifies. The cost is one call to GoTrue per token per runtime instance
+// per TTL, which is the same trade already accepted for admin sessions a few
+// lines up, and the common case is free: the expiry is read out of the JWT
+// locally first, so a plainly-dead token never reaches the network.
+//
+// IT FAILS CLOSED, DELIBERATELY, and that is a change of posture worth naming.
+// Everything else in this file fails OPEN on an auth-backend blip, because the
+// alternative there is a 500 on a page that would otherwise render. Here the
+// alternative is admitting an unverified session, which is the bug. The cost of
+// closing is also smaller than it looks: the catalog, the offers and the orders
+// all come out of the same Supabase project, so a backend that cannot answer
+// /auth/v1/user has no storefront data to serve either.
+//
+// The one softening is for a blip specifically: a network failure or a 5xx
+// re-uses this token's previous answer if there is one, rather than throwing a
+// signed-in customer out of a checkout over a dropped packet. A 401 is not a
+// blip and is never softened.
+// ---------------------------------------------------------------------------
+async function isVerifiedAccessToken(accessToken: string): Promise<boolean> {
+  const key = await sha256Hex(accessToken);
+  const now = Date.now();
+  const cached = customerSessionCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseKey) {
+    // No way to verify means no way to admit. An environment without Supabase
+    // configured has no catalog to protect and no customers to sign in.
+    return false;
+  }
+
+  const remember = (value: boolean) => {
+    if (customerSessionCache.size >= CUSTOMER_SESSION_CACHE_MAX) {
+      const oldest = customerSessionCache.keys().next();
+      if (!oldest.done) customerSessionCache.delete(oldest.value);
+    }
+    customerSessionCache.set(key, { value, expiresAt: Date.now() + CUSTOMER_SESSION_CACHE_TTL_MS });
+    return value;
+  };
+
+  try {
+    const response = await fetch(`${supabaseUrl.replace(/\/+$/, "")}/auth/v1/user`, {
+      headers: {
+        apikey: supabaseKey,
+        Authorization: `Bearer ${accessToken}`,
+      },
+      cache: "no-store",
+    });
+
+    if (response.ok) {
+      return remember(true);
+    }
+
+    // 401/403 is GoTrue's answer, not a failure to reach it: the signature is
+    // wrong, the token is expired, or the session was revoked. Believe it.
+    if (response.status === 401 || response.status === 403) {
+      return remember(false);
+    }
+
+    // Anything else (429, 5xx) is the backend struggling rather than judging.
+    return cached ? cached.value : false;
+  } catch {
+    // Network, DNS, timeout. Same treatment: last known answer, else closed.
+    return cached ? cached.value : false;
+  }
+}
+
+/**
+ * Whether this request carries a session the auth backend recognises.
+ *
+ * `refreshedCookie` short-circuits: it exists only because GoTrue just minted
+ * the pair in this same request, so it is verified by construction and asking
+ * again would be a second round trip for an answer already known.
+ */
+async function hasVerifiedSession(
+  request: NextRequest,
+  refreshedCookie: { value: string } | null,
+): Promise<boolean> {
+  if (refreshedCookie) {
+    return true;
+  }
+
+  const tokens = decodeAuthCookie(request.cookies.get(AUTH_COOKIE_NAME)?.value);
+  if (!tokens?.accessToken) {
+    return false;
+  }
+
+  // Free rejection first. An `exp` in the past means the token is spent
+  // whatever its signature says, and rotateSessionCookie has already had its
+  // chance to replace it on this same request.
+  const expiresAt = accessTokenExpiresAt(tokens.accessToken);
+  if (expiresAt !== null && expiresAt * 1000 <= Date.now()) {
+    return false;
+  }
+
+  return isVerifiedAccessToken(tokens.accessToken);
+}
+
 // A MEDIA FILE IS NOT A LANDING PAGE.
 //
 // Opening a .mp4 as a page gives you the browser's bare media viewer: the clip
@@ -521,6 +656,13 @@ export async function middleware(request: NextRequest) {
   // Rotated once per request, then attached to whichever response is returned
   // below. Skipped entirely for static assets, which never need a session.
   const refreshedCookie = isStaticAsset(pathname) ? null : await rotateSessionCookie(request);
+
+  // Verified at most once per request, and only when something below asks.
+  // A signed-out visitor never has a cookie to check, and a static asset never
+  // reaches the question at all.
+  let sessionVerification: Promise<boolean> | null = null;
+  const sessionIsVerified = () => (sessionVerification ??= hasVerifiedSession(request, refreshedCookie));
+
   const finish = (response: NextResponse) => {
     if (refreshedCookie) {
       response.cookies.set(refreshedCookie.name, refreshedCookie.value, refreshedCookie.options);
@@ -632,8 +774,7 @@ export async function middleware(request: NextRequest) {
     request.method === "GET"
     && pathname.startsWith("/account")
     && !PUBLIC_ACCOUNT_PATHS.has(pathname)
-    && !request.cookies.get(AUTH_COOKIE_NAME)
-    && !refreshedCookie
+    && !(await sessionIsVerified())
   ) {
     const login = request.nextUrl.clone();
     login.pathname = "/account/login";
@@ -665,20 +806,16 @@ export async function middleware(request: NextRequest) {
     return finish(NextResponse.redirect(moved, 308));
   }
 
-  // THE ACCESS BOUNDARY. See the public lists above for what is exempt.
+  // THE ACCESS BOUNDARY. See the public lists above for what is exempt, and
+  // hasVerifiedSession above for what "signed in" is allowed to mean here.
   //
-  // Judged on the session cookie alone, deliberately. Verifying the token with
-  // GoTrue would cost a round trip on every catalog request, and it would buy
-  // nothing this layer needs: a forged or expired cookie gets past this line
-  // and then meets the page guard, the route guard and — the one that actually
-  // matters — row-level security, none of which take the cookie's word for
-  // anything. This layer's job is to keep the catalog out of the hands of
-  // everyone who is plainly not a customer, which is every crawler and every
-  // signed-out visitor, and a cookie test answers that completely.
+  // The page guards, the route guards and row-level security all remain, and
+  // they are still the deeper layers — but this line no longer leans on them.
+  // It was written as if it could, and the routes did not back it up.
   //
   // An API request is refused rather than redirected: a fetch() follows a 307
   // and would parse a login page as JSON.
-  if (requiresAccount(pathname) && !request.cookies.get(AUTH_COOKIE_NAME) && !refreshedCookie) {
+  if (requiresAccount(pathname) && !(await sessionIsVerified())) {
     if (pathname.startsWith("/api/")) {
       return finish(
         NextResponse.json(

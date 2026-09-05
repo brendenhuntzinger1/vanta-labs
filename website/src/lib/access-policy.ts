@@ -57,7 +57,16 @@ export const PUBLIC_EXACT = new Set([
   "/robots.txt",
   "/sitemap.xml",
   "/favicon.ico",
-  "/manifest.webmanifest",
+  // THE MANIFEST THE APP ACTUALLY SERVES, not the one Next would have named.
+  //
+  // This entry said "/manifest.webmanifest" — the path a `manifest.ts` route
+  // would produce. There is no such route: layout.tsx declares
+  // `manifest: "/site.webmanifest"` and the file sits in public/. So the
+  // exemption covered an address nothing requests while the real manifest was
+  // answered with a 307 to the login page on EVERY page in the store,
+  // including the sign-in page itself. Chrome then reports "no manifest" and
+  // the install prompt is gone.
+  "/site.webmanifest",
   // Reaching a human must not require an account. Someone locked out of their
   // own account is exactly the person who needs the contact form.
   "/contact",
@@ -122,7 +131,16 @@ export const PUBLIC_PREFIXES = [
   "/r/",
 
   // ---- Framework and static assets. ----
+  //
+  // /icons holds the favicons and the apple-touch icon, all four of which are
+  // declared in the root layout's metadata and therefore requested by the
+  // browser on every page — the login page and the legal pages included. Gated,
+  // each one answered 307 to /account/login, so a signed-out visitor got no tab
+  // icon and iOS got no home-screen icon. An icon reveals nothing: these are
+  // brand marks, not catalog data, and they are already embedded in every
+  // page's <head> for anyone who asks.
   "/_next",
+  "/icons",
   "/images",
   "/videos",
   "/fonts",

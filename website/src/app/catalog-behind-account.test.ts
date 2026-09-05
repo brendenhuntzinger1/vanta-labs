@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { NextRequest } from "next/server";
+
+import { middleware as runMiddleware } from "../../middleware";
 
 const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
 
@@ -136,20 +139,39 @@ describe("middleware gates every shape of request to the catalog", () => {
     expect(code(middleware)).not.toContain("GATED_PREFIXES");
   });
 
-  it("refuses an API request rather than redirecting it", () => {
+  // THESE THREE WERE SOURCE-TEXT SLICES, AND THE SLICE BROKE BEFORE THE CODE
+  // DID. Each took `middleware.indexOf('if (requiresAccount(pathname) && !…')`
+  // and read the next N characters. When the gate's condition was rewritten to
+  // verify the session instead of counting the cookie, indexOf returned -1,
+  // slice(-1) returned the last character, and all three asserted against "\n".
+  // A test that cannot find what it is measuring should fail loudly, and this
+  // one did — but only by luck, because "\n" happens not to contain "401".
+  //
+  // So they run the real middleware now. No cookie means no network call
+  // (decodeAuthCookie returns null and the answer is known locally), so this
+  // stays a pure unit test while proving the behaviour rather than the spelling.
+  const ORIGIN = "https://www.vantalabsresearch.com";
+  const guest = (path: string) => runMiddleware(new NextRequest(`${ORIGIN}${path}`, { method: "GET" }));
+
+  it("refuses an API request rather than redirecting it", async () => {
     // fetch() follows a 307 and would parse the login page as JSON.
-    const gate = middleware.slice(middleware.indexOf('if (requiresAccount(pathname) && !request.cookies.get('));
-    expect(gate.slice(0, 700)).toContain("401");
+    const response = await guest("/api/catalog/products");
+    expect(response.status).toBe(401);
+    expect(response.headers.get("location")).toBeNull();
   });
 
-  it("carries the requested path into ?next= so referral and ad links survive", () => {
-    const gate = middleware.slice(middleware.indexOf('if (requiresAccount(pathname) && !request.cookies.get('));
-    expect(gate.slice(0, 1400)).toContain('login.searchParams.set("next"');
+  it("carries the requested path into ?next= so referral and ad links survive", async () => {
+    const response = await guest("/products/glp-1?ttclid=abc123");
+    expect(response.status).toBe(307);
+    const location = new URL(response.headers.get("location") ?? "", ORIGIN);
+    expect(location.pathname).toBe("/account/login");
+    expect(location.searchParams.get("next")).toBe("/products/glp-1?ttclid=abc123");
   });
 
-  it("never lets a session-dependent redirect be cached and replayed", () => {
-    const gate = middleware.slice(middleware.indexOf('if (requiresAccount(pathname) && !request.cookies.get('));
-    expect(gate.slice(0, 1600)).toContain('"Cache-Control", "no-store"');
+  it("never lets a session-dependent redirect be cached and replayed", async () => {
+    const response = await guest("/products");
+    expect(response.status).toBe(307);
+    expect(response.headers.get("cache-control")).toContain("no-store");
   });
 });
 

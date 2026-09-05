@@ -201,10 +201,22 @@ describe("the layout does not fetch offers for a visitor without a session", () 
     // renders nothing still serialises what it read into the flight payload,
     // where it is just as readable and harder to notice — which is exactly how
     // the old overlay "protected" the storefront.
-    expect(layout).toContain("const signedIn = Boolean(cookieStore.get(AUTH_COOKIE_NAME))");
     expect(layout).toMatch(
       /const allOffers = signedIn \? await getStorefrontOffers\(\)\.catch\(\(\) => \[\]\) : \[\];/,
     );
+  });
+
+  it("asks whether the session is REAL, not whether a cookie is present", () => {
+    // This assertion is the one with a scar. `signedIn` used to be
+    // `Boolean(cookieStore.get(AUTH_COOKIE_NAME))`, and this layout wraps the
+    // PUBLIC pages too — the ones middleware never gates. So a single header,
+    // `Cookie: vl_session_token=totally.forged.value`, put "Labor Day · Buy 2
+    // Get 1" and a live coupon code into the sign-in page's HTML. There was no
+    // deeper layer to catch it, because on /account/login there is no deeper
+    // layer.
+    expect(layout).toContain("const signedIn = Boolean(await getAuthenticatedUser())");
+    // And the presence test must not creep back in beside it.
+    expect(layout).not.toMatch(/const signedIn = Boolean\(cookieStore\.get/);
   });
 
   it("makes the decision before the call, not after", () => {
@@ -212,6 +224,100 @@ describe("the layout does not fetch offers for a visitor without a session", () 
     const guardAt = layout.indexOf("const signedIn =");
     expect(guardAt).toBeGreaterThan(-1);
     expect(guardAt, "the session must be known before the offers are read").toBeLessThan(fetchAt);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE WALL VERIFIES THE TOKEN. IT DOES NOT COUNT COOKIES.
+//
+// It used to admit on the cookie merely EXISTING, and the comment beside it
+// argued that was safe because the page guard, the route guard and row-level
+// security all sat behind it. Checked against the routes rather than assumed,
+// that was false for five surfaces. Measured on the production build with the
+// single header `Cookie: vl_session_token=totally.forged.value`:
+//
+//   /                        200, 57 KB, "Labor Day · Buy 2 Get 1" in the HTML
+//   /api/storefront/offers   200, the live offers including the coupon code
+//   /api/catalog/promotions  200, promotion flags and the whole bundle config
+//   /api/catalog/bac-water   200, a product row
+//   /api/coupons/featured    200, HARNESS10 with its discount type and value
+//
+// After the change every one of those answers 307 or 401, and a real session
+// still reaches all of them — proven end to end in the harness rather than
+// here, because only a running GoTrue can tell a good signature from a bad one.
+// These assertions hold the SHAPE, so the presence test cannot quietly return.
+// ---------------------------------------------------------------------------
+describe("the wall verifies the session rather than trusting the cookie", () => {
+  const mw = readFileSync(join(process.cwd(), "middleware.ts"), "utf8");
+
+  it("gates on a verified session at both call sites", () => {
+    expect(mw).toContain("requiresAccount(pathname) && !(await sessionIsVerified())");
+    // The /account branch that adds ?next= asks the same question, so a forged
+    // cookie cannot skip the return path either.
+    expect(mw).toContain('pathname.startsWith("/account")');
+    expect(mw.match(/await sessionIsVerified\(\)/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+  });
+
+  it("no longer decides anything on the cookie being present", () => {
+    // The two conditions that used to be the whole boundary.
+    expect(mw).not.toContain("!request.cookies.get(AUTH_COOKIE_NAME) && !refreshedCookie");
+  });
+
+  it("actually asks the auth backend, and only about a token that could be live", () => {
+    expect(mw).toContain("/auth/v1/user");
+    // The free rejection first: a token whose own exp has passed never costs a
+    // round trip.
+    expect(mw).toContain("accessTokenExpiresAt(tokens.accessToken)");
+  });
+
+  it("believes a 401 and only softens a genuine outage", () => {
+    // A 401 is GoTrue judging the token; a 5xx or a thrown fetch is GoTrue
+    // failing to answer. Only the second may reuse a previous answer, and with
+    // no previous answer both are closed.
+    expect(mw).toContain("response.status === 401 || response.status === 403");
+    expect(mw).toContain("return cached ? cached.value : false;");
+  });
+
+  it("verifies at most once per request", () => {
+    // Two call sites, one answer: without this the home page would pay for the
+    // /account branch and the wall separately.
+    expect(mw).toContain("sessionVerification ??= hasVerifiedSession(request, refreshedCookie)");
+  });
+
+  it("caps the verified-token cache", () => {
+    // Keyed by customer token, so unlike the admin cache beside it this one
+    // grows with traffic. An eviction costs a re-verification, never an
+    // admission.
+    expect(mw).toContain("CUSTOMER_SESSION_CACHE_MAX");
+    expect(mw).toMatch(/customerSessionCache\.size >= CUSTOMER_SESSION_CACHE_MAX/);
+  });
+});
+
+describe("the static files the layout declares are reachable without an account", () => {
+  it("serves the manifest the app actually names", () => {
+    // The list said "/manifest.webmanifest" — the path a manifest.ts route
+    // would produce, and there is no such route. layout.tsx declares
+    // "/site.webmanifest", which sits in public/ and was answering 307 on every
+    // page in the store.
+    expect(isPublicPath("/site.webmanifest")).toBe(true);
+    const layout = readFileSync(join(process.cwd(), "src/app/layout.tsx"), "utf8");
+    expect(layout).toContain('manifest: "/site.webmanifest"');
+  });
+
+  it("serves the icons every page asks for", () => {
+    for (const icon of [
+      "/icons/icon-16.png", "/icons/icon-32.png", "/icons/icon-192.png",
+      "/icons/icon-512.png", "/icons/apple-icon-180.png",
+    ]) {
+      expect(isPublicPath(icon), `${icon} is requested by every page`).toBe(true);
+    }
+  });
+
+  it("still walls the static file that is catalog data", () => {
+    // /product-images.json maps slugs to imagery. It lives in public/ beside
+    // the icons and is fetched by the catalog client, which only ever runs for
+    // a signed-in visitor. An icon is a brand mark; this is the shop's contents.
+    expect(requiresAccount("/product-images.json")).toBe(true);
   });
 });
 
