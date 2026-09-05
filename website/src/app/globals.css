@@ -3538,9 +3538,9 @@ select.vl-auth-field {
   background: linear-gradient(180deg, #f4eddc 0%, #e2d4b4 100%);
 }
 
-/* Secondary (category) row. Champagne is the page's "this is the active view"
-   signal and there can only be one of those, so a selected category reads as
-   lit white rather than a second cream chip competing with the status filter. */
+/* Quiet tone: the viewer's per-dose pills. Champagne is the page's "this is
+   the active view" signal and there can only be one of those, so a selected
+   dose reads as lit white rather than a second cream chip. */
 .vl-coa-pill[data-tone="quiet"][data-active="true"] {
   color: #fff;
   border-color: rgba(255, 255, 255, 0.28);
