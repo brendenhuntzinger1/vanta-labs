@@ -714,7 +714,27 @@ export async function middleware(request: NextRequest) {
   // Set-Cookie from sticking, so this is the second layer rather than the only
   // one -- but it was the single auth endpoint outside the list, which is not a
   // distinction any auth endpoint should have.
-  const CSRF_PROTECTED_PREFIXES = ["/api/admin", "/api/account", "/api/auth", "/api/membership", "/api/partner"];
+  // EVERY COOKIE-AUTHENTICATED WRITE, not the five that were thought of first.
+  //
+  // Enumerated rather than guessed: of the route handlers exporting POST/PATCH/
+  // PUT/DELETE and reading the session, six sat outside this list —
+  // /api/checkout/create-session, /api/checkout/quote, /api/checkout/express/*,
+  // /api/cart/track, /api/coupons/validate and /api/catalog/subscribe-save.
+  // create-session is the one that matters: it writes an order row.
+  //
+  // NOT A LIVE HOLE, AND THAT IS WHY IT IS A MEDIUM RATHER THAN A BLOCKER. The
+  // session cookie is SameSite=Lax, which withholds it from a cross-site form
+  // POST — verified by driving a real cross-site form submit from a different
+  // site in Chromium, WebKit and Firefox, all three of which answered 401
+  // "Sign in to continue" while the same request same-origin reached the
+  // handler. So this closes a second layer rather than a first. It is still
+  // worth closing: SameSite is a browser policy this app does not control, the
+  // comment above claimed coverage the list did not have, and a future cookie
+  // that needs SameSite=None would silently lose the only protection.
+  const CSRF_PROTECTED_PREFIXES = [
+    "/api/admin", "/api/account", "/api/auth", "/api/membership", "/api/partner",
+    "/api/checkout", "/api/cart", "/api/coupons", "/api/catalog",
+  ];
   if (
     isStateChangingMethod(request.method) &&
     CSRF_PROTECTED_PREFIXES.some((prefix) => pathname.startsWith(prefix)) &&

@@ -214,3 +214,47 @@ describe("the layout does not fetch offers for a visitor without a session", () 
     expect(guardAt, "the session must be known before the offers are read").toBeLessThan(fetchAt);
   });
 });
+
+// ---------------------------------------------------------------------------
+// EVERY COOKIE-AUTHENTICATED WRITE IS ORIGIN-CHECKED.
+//
+// The list started as the five prefixes somebody thought of, and six routes
+// that read the session and change state sat outside it — including
+// /api/checkout/create-session, which writes an order row. SameSite=Lax was
+// withholding the cookie cross-site anyway (verified in Chromium, WebKit and
+// Firefox by driving a real cross-site form POST, all three answering 401), so
+// this is a second layer rather than a first. It is still asserted here,
+// because a prefix list is exactly the kind of thing that falls behind the
+// routes it is supposed to cover.
+// ---------------------------------------------------------------------------
+
+describe("the CSRF origin check covers every cookie-authenticated write", () => {
+  const mw = readFileSync(join(process.cwd(), "middleware.ts"), "utf8");
+  const listed = (mw.match(/const CSRF_PROTECTED_PREFIXES = \[([\s\S]*?)\];/) ?? [])[1] ?? "";
+
+  it.each([
+    ["/api/admin", "admin writes"],
+    ["/api/account", "account settings"],
+    ["/api/auth", "the session endpoint itself"],
+    ["/api/membership", "subscription changes"],
+    ["/api/partner", "ambassador writes"],
+    ["/api/checkout", "creates an order row"],
+    ["/api/cart", "cart mutations"],
+    ["/api/coupons", "coupon validation"],
+    ["/api/catalog", "subscribe-and-save"],
+  ])("%s is origin-checked — %s", (prefix) => {
+    expect(listed).toContain(`"${prefix}"`);
+  });
+
+  it("leaves the self-authenticating server-to-server routes out of it", () => {
+    // Webhooks carry an HMAC signature and cron carries a bearer secret; they
+    // are not same-origin by nature and an origin check would break them.
+    for (const notListed of ["/api/webhooks", "/api/cron", "/api/health", "/api/email"]) {
+      expect(listed, `${notListed} must not be origin-checked`).not.toContain(`"${notListed}"`);
+    }
+  });
+
+  it("still only applies to state-changing methods", () => {
+    expect(mw).toContain("isStateChangingMethod(request.method)");
+  });
+});
