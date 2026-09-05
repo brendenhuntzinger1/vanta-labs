@@ -311,3 +311,52 @@ describe("signing up again", () => {
     expect(billingEvents().map((e) => e.event_type)).toEqual(["tier_change"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// RE-SUBSCRIBING MUST NOT LEAVE THE OLD SUBSCRIPTION BILLING.
+//
+// The same-tier branch above falls through to "create a REAL subscription"
+// whenever the local row is not active/trialing — paused, past_due, cancelled
+// locally. Nothing cancelled the subscription Veyra was still holding under
+// the previous veyra_membership_id before a second one was minted and the
+// column overwritten, so the member was billed twice a month and the first
+// subscription was no longer referenced anywhere it could be found.
+// ---------------------------------------------------------------------------
+describe("re-subscribing while the processor still holds a subscription", () => {
+  for (const status of ["paused", "past_due"]) {
+    it(`cancels the old Veyra subscription BEFORE minting a new one (${status})`, async () => {
+      seed({ tier_id: TIER, status, billing_cycle: "monthly", veyra_membership_id: "veyra_old", cancel_at_period_end: false });
+      veyra.start.mockResolvedValue({ ok: true, membershipId: "veyra_new" });
+
+      const result = await signup({ tokenIntentId: "tok_resubscribe" });
+
+      expect(result.success).toBe(true);
+      expect(veyra.cancel).toHaveBeenCalledWith("veyra_old", false);
+      expect(veyra.cancel.mock.invocationCallOrder[0]).toBeLessThan(veyra.start.mock.invocationCallOrder[0]);
+      expect(membership()?.veyra_membership_id).toBe("veyra_new");
+    });
+  }
+
+  it("refuses to mint a second subscription when the old one cannot be cancelled", async () => {
+    seed({ tier_id: TIER, status: "past_due", billing_cycle: "monthly", veyra_membership_id: "veyra_old", cancel_at_period_end: false });
+    veyra.cancel.mockResolvedValue({ ok: false, message: "provider unavailable" });
+
+    const result = await signup({ tokenIntentId: "tok_resubscribe" });
+
+    expect(result.success).toBe(false);
+    expect(veyra.start).not.toHaveBeenCalled();
+    expect(membership()?.veyra_membership_id).toBe("veyra_old");
+  });
+
+  it("does not touch a subscription that is already winding down at the processor", async () => {
+    // cancel_at_period_end means Veyra already agreed to stop; a second cancel
+    // would cut the days the member paid for.
+    seed({ tier_id: TIER, status: "active", billing_cycle: "monthly", veyra_membership_id: "veyra_old", cancel_at_period_end: true });
+    veyra.start.mockResolvedValue({ ok: true, membershipId: "veyra_new" });
+
+    const result = await signup({ tokenIntentId: "tok_resubscribe" });
+
+    expect(result.success).toBe(true);
+    expect(veyra.cancel).not.toHaveBeenCalledWith("veyra_old", expect.anything());
+  });
+});

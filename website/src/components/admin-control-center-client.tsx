@@ -291,7 +291,13 @@ export function AdminControlCenterClient() {
           : "",
     );
     setProfitFeeIncludesTax(profit.processing_fee_includes_tax !== false && profit.processing_fee_includes_tax !== "false");
-    setProfitCountTax(profit.count_sales_tax_as_profit !== false && profit.count_sales_tax_as_profit !== "false");
+    // FALSE UNLESS STORED TRUE. The server default (admin-control.ts
+    // DEFAULT_PROFIT_CONFIG) is false by the owner's decision — collected sales
+    // tax is not the store's money. This used to default the select to Yes
+    // whenever the key had never been stored, and the changed-keys diff then
+    // wrote `true` on the next save of ANY field, silently overstating every
+    // profit figure by the tax on every order.
+    setProfitCountTax(profit.count_sales_tax_as_profit === true || profit.count_sales_tax_as_profit === "true");
 
     // Remember exactly what was stored, so a save can send the operator's edits
     // rather than the whole form. Flattened to the "section.key" paths

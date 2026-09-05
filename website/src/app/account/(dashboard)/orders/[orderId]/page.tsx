@@ -39,7 +39,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ or
   }
 
   const unpaid = isUnpaid(order.paymentStatus);
-  const addressLines = [order.customerName, order.shippingAddress, [order.city, order.state, order.postalCode].filter(Boolean).join(", "), order.country].filter(Boolean) as string[];
+  const addressLines = [order.customerName, order.shippingAddress, order.shippingAddress2, [order.city, order.state, order.postalCode].filter(Boolean).join(", "), order.country].filter(Boolean) as string[];
 
   return (
     <div className="space-y-5">

@@ -53,6 +53,8 @@ export interface AccountOrder {
   refundAmount: number;
   customerName: string | null;
   shippingAddress: string | null;
+  /** Apartment / unit / suite — orders.shipping_address_2. */
+  shippingAddress2: string | null;
   city: string | null;
   state: string | null;
   postalCode: string | null;
@@ -65,7 +67,7 @@ export interface AccountOrder {
 }
 
 const ORDER_SELECT =
-  "order_id, order_number, created_at, paid_at, payment_status, fulfillment_status, currency, subtotal, shipping_amount, handling_fee, tax_amount, discount_amount, card_processing_fee, shipping_protection_fee, store_credit_redeemed_cents, points_redeemed, amount_paid, refund_amount, customer_name, customer_email, customer_user_id, shipping_address, city, state, postal_code, country, phone, payment_method, tracking_number, order_items(product_id, product_name, quantity, unit_price, line_total)";
+  "order_id, order_number, created_at, paid_at, payment_status, fulfillment_status, currency, subtotal, shipping_amount, handling_fee, tax_amount, discount_amount, card_processing_fee, shipping_protection_fee, store_credit_redeemed_cents, points_redeemed, amount_paid, refund_amount, customer_name, customer_email, customer_user_id, shipping_address, shipping_address_2, city, state, postal_code, country, phone, payment_method, tracking_number, order_items(product_id, product_name, quantity, unit_price, line_total)";
 
 type OrderRow = {
   order_id: string;
@@ -92,6 +94,7 @@ type OrderRow = {
   customer_email: string | null;
   customer_user_id: string | null;
   shipping_address: string | null;
+  shipping_address_2?: string | null;
   city: string | null;
   state: string | null;
   postal_code: string | null;
@@ -184,6 +187,7 @@ function mapRow(row: OrderRow, items: AccountOrderItem[], shipment: AccountOrder
     refundAmount: Number(row.refund_amount ?? 0),
     customerName: row.customer_name ? String(row.customer_name) : null,
     shippingAddress: row.shipping_address ? String(row.shipping_address) : null,
+    shippingAddress2: row.shipping_address_2 ? String(row.shipping_address_2) : null,
     city: row.city ? String(row.city) : null,
     state: row.state ? String(row.state) : null,
     postalCode: row.postal_code ? String(row.postal_code) : null,

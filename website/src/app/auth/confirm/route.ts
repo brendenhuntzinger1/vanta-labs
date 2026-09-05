@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getSiteUrl } from "@/lib/env";
 import { FORWARDABLE_LINK_TYPES, gotrueVerifyUrl } from "@/lib/auth-confirm-link";
+import { safeInternalPath } from "@/lib/internal-path";
 
 export const dynamic = "force-dynamic";
 
@@ -52,7 +53,7 @@ export async function GET(request: Request) {
   // Open-redirect guard: `next` is attacker-controllable (it rides in a URL
   // anyone can hand-build), so only a same-site absolute path is accepted.
   // "//evil.example" is protocol-relative and would leave the site.
-  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/account";
+  const next = safeInternalPath(rawNext, "/account");
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? "";
   if (!supabaseUrl) {

@@ -135,6 +135,12 @@ export async function reserveInventoryForOrder(
           p_expires_at: expiresAt,
         }));
       if (error) {
+        // Degrading is deliberate — a checkout must not die because the hold
+        // could not be taken — but it must not be SILENT: with no hold the
+        // oversell guard is off for this order, and until this line the only
+        // record of that was the `degraded` flag nobody reads. Same reporter
+        // (and the same persisted dedupe) as finalize/release/expire.
+        await reportInventoryRpcFailure("reserve_inventory", orderId, error);
         return { ok: true, unavailable: [], degraded: true };
       }
       // A strict `false` means a tracked item lacked available stock. Anything
@@ -143,7 +149,8 @@ export async function reserveInventoryForOrder(
         const detail = await readAvailable(a.slug, a.variantId);
         unavailable.push({ ...a, available: detail.available, name: detail.name });
       }
-    } catch {
+    } catch (error) {
+      await reportInventoryRpcFailure("reserve_inventory", orderId, error);
       return { ok: true, unavailable: [], degraded: true };
     }
   }

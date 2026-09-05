@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { sendEmail } from "@/lib/email/send";
-import { claimAuthEmailSend, recordAuthEmailAttempt } from "@/lib/auth-email-audit";
+import { claimAuthEmailSend, recordAuthEmailAttempt, releaseAuthEmailClaim } from "@/lib/auth-email-audit";
 import { passwordResetTemplate } from "@/lib/email/templates";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { createServerClient, supabaseAdmin } from "@/lib/supabase-server";
@@ -135,6 +135,23 @@ export async function POST(request: Request) {
  */
 async function deliverResetEmail(email: string, redirectTo: string): Promise<void> {
   try {
+    // ONE RESET EMAIL PER ADDRESS PER MINUTE, AND THE CLAIM COMES FIRST.
+    //
+    // `auth.users.recovery_token` is a single column: every recovery link
+    // minted for an address replaces the token inside the one minted before
+    // it. So the order here is load-bearing. Minting first and claiming second
+    // meant a customer who clicked "send reset link" twice had token B minted
+    // by the second click (killing the link carrying token A already in their
+    // inbox), was then refused by the debounce, and received nothing — a dead
+    // link and no second email, on the one path a locked-out person has left.
+    //
+    // Claiming first means the second click mints nothing at all. The caller
+    // answers with the same generic message either way, which is honest: the
+    // email they DO have still works.
+    if (!(await claimAuthEmailSend("password_reset", email))) {
+      return;
+    }
+
     const { data, error } = await supabaseAdmin.auth.admin.generateLink({
       type: "recovery",
       email,
@@ -157,6 +174,10 @@ async function deliverResetEmail(email: string, redirectTo: string): Promise<voi
     // The RESPONSE stays byte-identical either way; only the telemetry differs,
     // so enumeration safety is untouched.
     if (error || !data?.properties?.action_link) {
+      // Nothing was sent, so give the minute back: the slot exists to stop a
+      // second copy of an email that went out, not to lock out a retry after
+      // one that never did.
+      await releaseAuthEmailClaim("password_reset", email);
       const existing = await findUserByEmail(email).catch(() => null);
       if (existing) {
         await recordSystemAlert({
@@ -182,15 +203,6 @@ async function deliverResetEmail(email: string, redirectTo: string): Promise<voi
         fallbackActionLink: data.properties.action_link,
       }),
     });
-
-    // ONE RESET EMAIL PER ADDRESS PER MINUTE. A customer clicking "send reset
-    // link" twice used to get two, each with a different token — and on this
-    // path acting on the older one is precisely how somebody locked out stays
-    // locked out. The caller answers with the same generic message either way,
-    // which is honest: their email is on its way.
-    if (!(await claimAuthEmailSend("password_reset", email))) {
-      return;
-    }
 
     const result = await sendEmail({ to: email, ...template });
 

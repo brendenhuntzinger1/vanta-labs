@@ -150,7 +150,12 @@ export function ProductCard({
                 Batch {product.batchNumber}
               </span>
             ) : null}
-            <span className="text-white/70">{dosePreview?.label ?? "Verified lot"}</span>
+            {/* The dose label, or nothing. This used to fall back to the literal
+                "Verified lot" for a product with no dose rows — a testing claim
+                printed for a product that may have no COA at all. A card may
+                only say a lot is verified when the COA system says so (the
+                "COA verified" chip above). */}
+            {dosePreview?.label ? <span className="text-white/70">{dosePreview.label}</span> : null}
           </div>
         </div>
       </Link>

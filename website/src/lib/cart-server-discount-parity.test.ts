@@ -361,3 +361,34 @@ describe("Buy X Get Y versus coupon, referral, membership and bulk savings", () 
     expect(cartReferralWon(scenario)).toBe(serverReferralWon(scenario));
   });
 });
+
+// ---------------------------------------------------------------------------
+// AN EXACT TIE MUST RESOLVE THE SAME WAY ON BOTH SIDES.
+//
+// Same amount, different winner is not harmless: whether the REFERRAL won
+// decides whether store credit and points may be spent (store-credit-
+// redemption.ts zeroes both when a referral is applied). With a 10% referral
+// code and a 10% member tier — production's default program percent and its
+// Core/Elite tiers — the cart said "membership" and let the credit through,
+// the server said "referral" and refused it, and the posted total no longer
+// matched: "Altered total detected", rewritten to "refresh this page", on
+// every attempt. The candidate order is the tie-break, so it is pinned here.
+// ---------------------------------------------------------------------------
+describe("an exact tie between two discounts", () => {
+  const TIES: Scenario[] = [
+    { name: "referral 10% vs membership 10%", subtotal: 138, referralPercent: 10, memberPercent: 10 },
+    { name: "referral vs membership vs equal bulk savings", subtotal: 200, referralPercent: 10, memberPercent: 10, bulkSavings: 20 },
+    { name: "membership vs equal bulk savings", subtotal: 200, memberPercent: 10, bulkSavings: 20 },
+    { name: "membership vs equal personal discount", subtotal: 200, memberPercent: 10, personalDiscount: 20 },
+    { name: "referral vs equal coupon", subtotal: 200, referralPercent: 10, couponDiscount: 20 },
+    { name: "bundle vs equal referral", subtotal: 300, buy3Get1: 30, referralPercent: 10 },
+  ];
+
+  it.each(TIES)("$name — same amount", (s) => {
+    expect(cartAmount(s)).toBe(serverAmount(s));
+  });
+
+  it.each(TIES)("$name — same answer to 'did the referral win'", (s) => {
+    expect(cartReferralWon(s)).toBe(serverReferralWon(s));
+  });
+});

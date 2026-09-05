@@ -14,6 +14,7 @@ import { SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-signup-outcome";
 import { looksLikeEmail } from "@/lib/email-shape";
 import { recordMarketingOptIn } from "@/lib/marketing-broadcast";
 import { claimAuthEmailSend, recordAuthEmailAttempt } from "@/lib/auth-email-audit";
+import { safeInternalPath } from "@/lib/internal-path";
 
 export const dynamic = "force-dynamic";
 
@@ -79,7 +80,7 @@ const WINDOW_SECONDS = 15 * 60;
 /** What the confirmation link lands on once GoTrue has verified it. */
 function confirmationRedirect(nextPath: string): string {
   const site = getSiteUrl().replace(/\/+$/, "");
-  const safeNext = nextPath.startsWith("/") && !nextPath.startsWith("//") ? nextPath : "/account";
+  const safeNext = safeInternalPath(nextPath, "/account");
   return `${site}/account/login?verified=1&next=${encodeURIComponent(safeNext)}`;
 }
 

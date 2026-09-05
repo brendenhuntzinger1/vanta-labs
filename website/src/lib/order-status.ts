@@ -59,8 +59,12 @@ export function getOrderProgress(paymentStatus: string, fulfillmentStatus: strin
   // respectively; omitting them left the tracker showing "Payment confirmed"
   // for the whole window between buying a label and the carrier's first scan —
   // a customer watching their order see no movement for a day or more.
-  if (paid && ["processing", "awaiting_fulfillment", "partially_fulfilled", "ready_to_fulfill", "label_purchased"].includes(ful)) activeIndex = 2;
-  if (["shipped", "out_for_delivery"].includes(ful)) activeIndex = 3;
+  if (paid && ["processing", "awaiting_fulfillment", "partially_fulfilled", "ready_to_fulfill", "packed", "label_purchased"].includes(ful)) activeIndex = 2;
+  // `in_transit` is what the Shippo tracking webhook writes on the carrier's
+  // scans between the first pickup and the last mile (order-pipeline.ts
+  // ladder). Leaving it out of this list rendered a parcel that was moving as
+  // "Payment confirmed" — a production order sat in exactly that state.
+  if (["shipped", "in_transit", "out_for_delivery"].includes(ful)) activeIndex = 3;
   if (["delivered", "fulfilled"].includes(ful)) activeIndex = 4;
 
   const steps: TrackStep[] = STEP_DEFS.map((def, i) => ({
@@ -91,4 +95,24 @@ export const UNPAID_STATUSES = ["pending", "pending_payment", "awaiting_verifica
 
 export function isUnpaid(paymentStatus: string): boolean {
   return UNPAID_STATUSES.includes(String(paymentStatus ?? "").toLowerCase());
+}
+
+/** Statuses that record money having moved (or moved back). */
+export const MONEY_STATE_PAYMENT_STATUSES = new Set(["paid", "refunded", "partially_refunded"]);
+
+/**
+ * True when a plain status write would take an order OUT of a money state.
+ *
+ * The admin order page refuses to move an order INTO paid/refunded through
+ * its dropdown, because those transitions carry side effects. Leaving one is
+ * no different: a paid order written back to pending_payment (or to a status
+ * that does not exist) reverses nothing — not inventory, not commission, not
+ * points or store credit — and records no history. The honest exits are the
+ * refund and cancel actions.
+ */
+export function isPaymentStatusDemotion(current: string | null | undefined, next: string | null | undefined): boolean {
+  const from = String(current ?? "").trim().toLowerCase();
+  const to = String(next ?? "").trim().toLowerCase();
+  if (!from || !to || from === to) return false;
+  return MONEY_STATE_PAYMENT_STATUSES.has(from);
 }

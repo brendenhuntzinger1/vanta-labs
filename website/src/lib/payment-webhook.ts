@@ -375,6 +375,22 @@ function normalizeOrderPayload(payload: string) {
 }
 
 /**
+ * Fulfilment statuses at or past the point where the parcel may have left the
+ * building. A processor refund on one of these returns no stock automatically
+ * — see the refund branch in processPaymentWebhook. `label_purchased` is here
+ * for the reason shippo/service.ts gives when refusing to restock a cancel out
+ * of it: postage is paid, and the parcel may already be in the carrier's hands.
+ */
+const PARCEL_MAY_HAVE_LEFT_STATUSES = new Set<string>([
+  "label_purchased",
+  "shipped",
+  "in_transit",
+  "out_for_delivery",
+  "delivered",
+  "returned",
+]);
+
+/**
  * The order id, wherever the sender put it.
  *
  * The internal/mock gateway sends a flat `orderId`. VeyraGate nests it at
@@ -2763,10 +2779,40 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     if (wasPaid && refundOutcome.shouldRestock && !stockCommitted && (nextStatus === "refunded" || nextStatus === "canceled")) {
       await releaseInventoryForOrder(orderId).catch(() => {});
     }
+    // A REFUND IS NOT A RETURN. Stock comes back only if the goods never left.
+    //
+    // The admin refund action restocks nothing, on purpose: a returned vial may
+    // have spent a week in a mailbox, and whether it is sellable is a physical
+    // judgement. It describes this path as covering "an order the customer
+    // never received" — and until this check existed, nothing here asked. A
+    // full refund or chargeback issued at the processor for an order that had
+    // already shipped put units back on the shelf that nobody has, and phantom
+    // stock oversells. Same rule as the cancel chokepoint in shippo/service.ts,
+    // which refuses to restock out of label_purchased: once postage is bought
+    // the parcel may be with the carrier, so a human decides, and is told.
+    const parcelMayHaveLeft = PARCEL_MAY_HAVE_LEFT_STATUSES.has(
+      String(orderRecord?.fulfillment_status ?? "").trim().toLowerCase(),
+    );
+    if (wasPaid && stockCommitted && refundOutcome.shouldRestock && parcelMayHaveLeft
+        && (nextStatus === "refunded" || nextStatus === "canceled")) {
+      await recordSystemAlert({
+        type: "refund_after_shipment_not_restocked",
+        severity: "warning",
+        message:
+          `Order ${orderId} was fully refunded at the processor while its fulfilment status was `
+          + `"${String(orderRecord?.fulfillment_status ?? "")}", so its stock was NOT returned automatically: `
+          + "the parcel may already be with the carrier or the customer. If the goods come back and are "
+          + "resaleable, adjust the count by hand in Admin -> Inventory.",
+        context: { orderId, fulfillmentStatus: orderRecord?.fulfillment_status ?? null, eventId },
+      }).catch((alertError) => {
+        console.error("Unable to record a refund-after-shipment alert", orderId, alertError);
+      });
+    }
     // Restock ONLY on a full reversal — a partial refund must not return the
     // whole order's stock. A later full refund/cancel still restocks (its own
     // atomic claim), because a partial leaves status "partially_refunded".
-    if (wasPaid && stockCommitted && refundOutcome.shouldRestock && (nextStatus === "refunded" || nextStatus === "canceled")) {
+    if (wasPaid && stockCommitted && refundOutcome.shouldRestock && !parcelMayHaveLeft
+        && (nextStatus === "refunded" || nextStatus === "canceled")) {
       const isMembershipOrder = String(orderRecord?.order_type ?? "product") === "membership";
       // Atomic exactly-once claim: only the FIRST refund/cancel event for this
       // order restocks; a concurrent chargeback or replayed event loses the

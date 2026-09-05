@@ -1,6 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { cancelVeyraMembership, skipVeyraMembershipCycle } from "@/lib/veyra-membership";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 import { isPaidBillingEvent } from "@/lib/membership-status";
 import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
@@ -523,7 +524,7 @@ export async function assignMembershipTier(
 export async function setMembershipStatus(userId: string, status: "active" | "paused" | "cancelled") {
   const { data: existing } = await supabaseAdmin
     .from("customer_memberships")
-    .select("user_id")
+    .select("user_id, status, veyra_membership_id")
     .eq("user_id", userId)
     .maybeSingle();
 
@@ -536,6 +537,38 @@ export async function setMembershipStatus(userId: string, status: "active" | "pa
   const payload: Record<string, unknown> = { status, updated_at: new Date().toISOString() };
   if (status === "cancelled") {
     payload.cancelled_at = new Date().toISOString();
+  }
+
+  // TELL THE PROCESSOR FIRST. Veyra owns the billing schedule for a member
+  // with a veyra_membership_id, so a local-only cancel or pause stops nothing:
+  // the card keeps being charged and the next membership.renewed webhook
+  // flips the row straight back to active. The customer's own cancel and
+  // pause paths (membership-billing.ts) already do this and abort if Veyra
+  // refuses; an admin's click is held to the same rule. An admin cancel is
+  // immediate (perks are switched off now), so the processor cancel is too.
+  const veyraMembershipId = (existing as { veyra_membership_id?: string | null }).veyra_membership_id ?? null;
+  if (veyraMembershipId && status === "cancelled") {
+    const res = await cancelVeyraMembership(veyraMembershipId, false);
+    if (!res.ok) {
+      throw new Error(
+        `The payment provider refused to cancel this subscription (${res.message}). Nothing was changed.`,
+      );
+    }
+  }
+  if (veyraMembershipId && status === "paused") {
+    // Veyra has no pause: a pause defers exactly one cycle (see
+    // skipVeyraMembershipCycle). Adopt the date Veyra will actually charge on.
+    const res = await skipVeyraMembershipCycle(veyraMembershipId, "admin paused");
+    if (!res.ok) {
+      throw new Error(
+        `The payment provider refused to pause this subscription (${res.message}). Nothing was changed.`,
+      );
+    }
+    if (res.nextRenewalAt) {
+      payload.next_billing_at = res.nextRenewalAt;
+      payload.renews_at = res.nextRenewalAt;
+      payload.renewal_reminder_sent_at = null;
+    }
   }
 
   const { error } = await supabaseAdmin.from("customer_memberships").update(payload).eq("user_id", userId);

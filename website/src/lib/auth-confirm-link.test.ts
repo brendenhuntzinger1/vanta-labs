@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { brandedConfirmUrl, gotrueVerifyUrl } from "@/lib/auth-confirm-link";
+import { safeInternalPath } from "@/lib/internal-path";
 
 // ---------------------------------------------------------------------------
 // THE LAST SPAM SIGNAL THE BRANDING FIX DID NOT REMOVE.
@@ -115,8 +116,15 @@ describe("GET /auth/confirm", () => {
     for (const call of logs) expect(call).not.toContain("token");
   });
 
-  it("guards the open redirect on next", () => {
-    expect(ROUTE).toContain('rawNext.startsWith("//")');
+  it("guards the open redirect on next through the shared same-origin check", () => {
+    // `startsWith("/") && !startsWith("//")` was the guard here, and it let
+    // `/\evil.example` through (a backslash resolves as a slash). The route now
+    // delegates to safeInternalPath, which resolves the candidate and refuses
+    // anything that leaves the origin.
+    expect(ROUTE).toContain("safeInternalPath(rawNext");
+    expect(ROUTE).not.toContain('rawNext.startsWith("//")');
+    expect(safeInternalPath("/\\evil.example/steal", "/account")).toBe("/account");
+    expect(safeInternalPath("//evil.example", "/account")).toBe("/account");
   });
 
   it("sends a dead link somewhere that says so", () => {

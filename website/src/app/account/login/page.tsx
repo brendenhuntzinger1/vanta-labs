@@ -5,6 +5,7 @@ import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { AccountAuthForm } from "@/components/account-auth-form";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { safeInternalPath } from "@/lib/internal-path";
 
 export const dynamic = "force-dynamic";
 
@@ -12,10 +13,7 @@ export const dynamic = "force-dynamic";
 // an absolute URL — to prevent open-redirect abuse.
 function safeNext(next: string | string[] | undefined): string {
   const value = Array.isArray(next) ? next[0] : next;
-  if (typeof value === "string" && value.startsWith("/") && !value.startsWith("//")) {
-    return value;
-  }
-  return "/account";
+  return safeInternalPath(value, "/account");
 }
 
 export const metadata: Metadata = {

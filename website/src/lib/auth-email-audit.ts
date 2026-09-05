@@ -145,3 +145,32 @@ export async function claimAuthEmailSend(
     return true;
   }
 }
+
+/**
+ * Give a claimed slot back when nothing was sent.
+ *
+ * claimAuthEmailSend() is taken BEFORE the message exists, because for a
+ * password reset the act of minting the link is what invalidates the previous
+ * one — the claim has to precede the mint or it protects nothing. When the
+ * mint then refuses (no account for the address, or the admin API failed) no
+ * email goes out, and a 'sending' row that never closes would refuse the
+ * customer's next attempt for the rest of the minute for an email they never
+ * received.
+ *
+ * Deletes only the row this caller wrote: campaign, address, and still
+ * 'sending'. A concurrent request was refused by the unique index, so it has
+ * no row here to lose. Never throws — a release that fails leaves the slot to
+ * age out after the minute, which is the pre-existing worst case.
+ */
+export async function releaseAuthEmailClaim(kind: AuthEmailKind, email: string): Promise<void> {
+  try {
+    await supabaseAdmin
+      .from("email_send_log")
+      .delete()
+      .eq("campaign_type", `auth:${kind}`)
+      .eq("recipient_email", email)
+      .eq("status", "sending");
+  } catch {
+    /* best-effort; see above */
+  }
+}

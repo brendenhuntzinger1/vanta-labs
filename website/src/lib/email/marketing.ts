@@ -137,11 +137,21 @@ export async function sendMarketingEmail(
     return { success: false, suppressed: true, error: "Address cannot receive mail (provider test domain)" };
   }
 
-  const { data: suppressed } = await supabaseAdmin
+  const { data: suppressed, error: suppressionError } = await supabaseAdmin
     .from("email_suppressions")
     .select("email")
     .eq("email", email)
     .maybeSingle();
+
+  // FAILS CLOSED. An unreadable suppression table used to look exactly like
+  // "not suppressed", so a transient read failure mailed people who had
+  // unsubscribed, complained or bounced. Marketing mail has a retry queue and a
+  // next tick; a send that cannot verify consent does not go.
+  if (suppressionError) {
+    await releaseHeldClaim(input.claimedLogId);
+    console.error("[marketing] suppression check unavailable; refusing to send", email, suppressionError);
+    return { success: false, suppressed: false, error: "Suppression list unavailable; consent could not be verified" };
+  }
 
   if (suppressed) {
     await releaseHeldClaim(input.claimedLogId);

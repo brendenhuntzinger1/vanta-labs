@@ -15,8 +15,12 @@ const STEPS = ["Order confirmed", "Processing", "Shipped"] as const;
 /** Which step the order is on, from its fulfilment status. */
 export function stepIndexForFulfillment(fulfillmentStatus: string | null | undefined): number {
   const status = (fulfillmentStatus ?? "").trim().toLowerCase();
-  if (status === "shipped" || status === "delivered" || status === "fulfilled") return 2;
-  if (status === "processing" || status === "awaiting_fulfillment" || status === "partially_fulfilled") return 1;
+  // The same ladder order-status.ts reads: carrier scans write in_transit /
+  // out_for_delivery, and the shop writes ready_to_fulfill / packed /
+  // label_purchased before the parcel leaves. None of them may read as "not
+  // started".
+  if (["shipped", "in_transit", "out_for_delivery", "delivered", "fulfilled"].includes(status)) return 2;
+  if (["processing", "awaiting_fulfillment", "partially_fulfilled", "ready_to_fulfill", "packed", "label_purchased"].includes(status)) return 1;
   return 0;
 }
 

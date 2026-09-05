@@ -1,4 +1,5 @@
 import { getSiteUrl } from "@/lib/env";
+import { safeInternalPath } from "@/lib/internal-path";
 
 // ---------------------------------------------------------------------------
 // KEEP THE LINK ON OUR OWN DOMAIN.
@@ -58,7 +59,7 @@ export function brandedConfirmUrl(input: BrandedConfirmLinkInput): string {
   }
 
   const site = getSiteUrl().replace(/\/+$/, "");
-  const next = input.next.startsWith("/") && !input.next.startsWith("//") ? input.next : "/account";
+  const next = safeInternalPath(input.next, "/account");
 
   const params = new URLSearchParams({ token, type, next });
   return `${site}/auth/confirm?${params.toString()}`;

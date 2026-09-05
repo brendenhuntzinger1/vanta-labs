@@ -4,6 +4,7 @@ import { getRequestIpAddress } from "@/lib/admin-auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { resolveReferralCode } from "@/lib/referral-code-service";
 import { hasAnalyticsConsent } from "@/lib/cookie-consent-server";
+import { safeInternalPath } from "@/lib/internal-path";
 
 const REFERRAL_COOKIE_NAME = "vl_referral_code";
 const REFERRAL_COOKIE_MAX_AGE = 60 * 60 * 24 * 30;
@@ -16,7 +17,7 @@ export async function GET(request: Request, context: { params: Promise<{ code: s
   // this public, widely-shared referral link into an open redirect / phishing
   // primitive on the trusted brand domain.
   const rawNext = url.searchParams.get("next") || "/products";
-  const safeNext = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/products";
+  const safeNext = safeInternalPath(rawNext, "/products");
   const destination = new URL(safeNext, url.origin);
   const response = NextResponse.redirect(destination);
 

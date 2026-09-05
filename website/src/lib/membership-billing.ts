@@ -708,12 +708,40 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
     let chargeResult: ChargeCardResult;
     let veyraMembershipId: string | null = null;
 
+    // A SECOND SUBSCRIPTION MUST NOT BE MINTED WHILE THE FIRST STILL BILLS.
+    //
+    // The same-tier branch above falls through to here whenever the local row
+    // is paused, past_due or cancelled locally — and Veyra may still be
+    // holding, and charging, the subscription under the previous
+    // veyra_membership_id. Minting another and overwriting the column billed
+    // the member twice a month and left the first subscription referenced
+    // nowhere. Close it first; if the processor refuses, nothing is charged.
+    // A subscription already winding down (cancel_at_period_end) is left
+    // alone: Veyra has agreed to stop, and cancelling it again would cut the
+    // days the member paid for.
+    const priorVeyraMembershipId =
+      (existingMembership as { veyra_membership_id?: string | null } | null)?.veyra_membership_id ?? null;
+    const priorWindingDown = Boolean(
+      (existingMembership as { cancel_at_period_end?: boolean } | null)?.cancel_at_period_end,
+    );
+    let priorSubscriptionError: string | null = null;
+    if (input.tokenIntentId && contact?.email && priorVeyraMembershipId && !priorWindingDown) {
+      const stopPrior = await cancelVeyraMembership(priorVeyraMembershipId, false);
+      if (!stopPrior.ok) {
+        priorSubscriptionError =
+          `We couldn't close your previous subscription with the payment provider (${stopPrior.message}). `
+          + "Nothing was charged — please try again or contact support.";
+      }
+    }
+
     if (input.tokenIntentId) {
       if (!contact?.email) {
         // Veyra requires a customer email. Refuse rather than charge a card we
         // cannot attach to anyone — an orphaned recurring subscription is far
         // worse than a failed signup.
         chargeResult = { success: false, error: "No email on file for this account." };
+      } else if (priorSubscriptionError) {
+        chargeResult = { success: false, error: priorSubscriptionError };
       } else {
         const veyra = await startVeyraMembership({
           planCode: tier.slug || tier.id,

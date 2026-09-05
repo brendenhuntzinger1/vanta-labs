@@ -7,6 +7,7 @@ import { supabase } from "@/lib/supabase";
 import { TurnstileWidget } from "@/components/turnstile-widget";
 import { resolveSignupOutcome, SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-signup-outcome";
 import { classifyAuthReturn, deadAuthLinkMessage, type AuthReturn } from "@/lib/auth-link-fragment";
+import { safeInternalPath } from "@/lib/internal-path";
 
 // When a Turnstile site key is configured, every auth call carries a CAPTCHA
 // token that Supabase verifies — blocking bots from draining email + SMS spend.
@@ -55,13 +56,15 @@ function getEmailRedirectUrl(path: string) {
 const NEVER_A_SIGN_IN_DESTINATION = ["/legal", "/account/login"];
 
 function safeNextPath(value: string | null): string {
-  // Same-origin only — "//evil.com" is a protocol-relative URL, not a path.
-  if (value && value.startsWith("/") && !value.startsWith("//")) {
+  // Same-origin only. "//evil.com" is protocol-relative and "/\evil.com"
+  // resolves to the same place — safeInternalPath refuses both.
+  const candidate = safeInternalPath(value, "");
+  if (candidate) {
     const stranded = NEVER_A_SIGN_IN_DESTINATION.some(
-      (p) => value === p || value.startsWith(`${p}/`) || value.startsWith(`${p}?`),
+      (p) => candidate === p || candidate.startsWith(`${p}/`) || candidate.startsWith(`${p}?`),
     );
     if (!stranded) {
-      return value;
+      return candidate;
     }
   }
   // After a normal sign-in (no explicit destination) send shoppers to the

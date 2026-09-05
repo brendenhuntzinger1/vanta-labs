@@ -6,6 +6,7 @@ import { getRequestIpAddress, rateLimitKeyForRequest } from "@/lib/request-ip";
 import { getSiteUrl } from "@/lib/env";
 import { verifyTurnstileToken } from "@/lib/turnstile";
 import { looksLikeEmail } from "@/lib/email-shape";
+import { safeInternalPath } from "@/lib/internal-path";
 
 export const dynamic = "force-dynamic";
 
@@ -86,7 +87,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const safeNext = nextPath.startsWith("/") && !nextPath.startsWith("//") ? nextPath : "/account";
+    const safeNext = safeInternalPath(nextPath, "/account");
     const redirectTo = `${getSiteUrl().replace(/\/+$/, "")}/account/login?verified=1&next=${encodeURIComponent(safeNext)}`;
 
     await sendBrandedConfirmationResend(email, redirectTo);

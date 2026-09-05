@@ -94,11 +94,21 @@ export function resolveCartDiscount(inputs: CartDiscountInputs): CartDiscountRes
   // exactly as resolveCustomerDiscount does it — the distinction matters only
   // in the stacking branch below, where the server adds the coupon to the
   // winner's RAW amount and competes the pair once.
+  //
+  // IN THE SERVER'S ORDER, BECAUSE THE ORDER IS THE TIE-BREAK. Both sides pick
+  // with a strict `>`, so on an exact tie the candidate pushed FIRST wins.
+  // resolveCustomerDiscount pushes bundle, referral, membership, bulk,
+  // personal, coupon. This list used to lead with bulk and membership, so a
+  // 10% referral against a 10% member tier — production's default program
+  // percent against its Core/Elite tiers — won here as "membership" and on the
+  // server as "referral". Same amount, but whether the REFERRAL won decides
+  // whether store credit and points may be spent, so the two totals diverged
+  // and every such checkout was refused as an altered total.
   const rawCandidates: DiscountCandidate[] = [
-    { type: "bulk_savings", amount: inputs.bulkSavingsAmount },
-    { type: "member_pricing", amount: inputs.memberPricingAmount },
-    { type: "ambassador_personal", amount: inputs.ambassadorPersonalAmount },
     ...(inputs.promo ? [{ type: inputs.promo.type, amount: inputs.promo.amount }] : []),
+    { type: "member_pricing", amount: inputs.memberPricingAmount },
+    { type: "bulk_savings", amount: inputs.bulkSavingsAmount },
+    { type: "ambassador_personal", amount: inputs.ambassadorPersonalAmount },
     // With stacking ON the coupon is not a competitor — it is added on top of
     // whatever wins — so it must not also stand in the contest, or it would
     // beat the promotion it is about to be added to and be counted once

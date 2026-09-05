@@ -39,7 +39,7 @@ export type FulfillmentStatus =
  * "never go backwards" check on carrier scans, so the sequence here is a
  * behavioural contract, not just a display preference.
  */
-const PIPELINE_PROGRESSION: readonly FulfillmentStatus[] = [
+export const PIPELINE_PROGRESSION: readonly FulfillmentStatus[] = [
   "awaiting_payment",
   "paid",
   "ready_to_fulfill",

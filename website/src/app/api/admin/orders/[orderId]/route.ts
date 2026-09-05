@@ -19,6 +19,7 @@ import { revokeMembershipForRefund } from "@/lib/membership-billing";
 import { refundStoreCreditForOrder } from "@/lib/store-credit";
 import { pointsToDollars } from "@/lib/points-math";
 import { recordSystemAlert } from "@/lib/monitoring";
+import { isPaymentStatusDemotion } from "@/lib/order-status";
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
@@ -155,6 +156,19 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         .maybeSingle();
       const priorStatus = String(priorOrder?.fulfillment_status ?? "");
       const priorTracking = priorOrder?.tracking_number ? String(priorOrder.tracking_number) : "";
+
+      // Leaving a money state is refused for the same reason entering one is:
+      // writing `pending_payment` over a paid order reverses nothing and
+      // records nothing. Refund or cancel instead.
+      if (body.paymentStatus && isPaymentStatusDemotion(priorOrder?.payment_status as string | null, String(body.paymentStatus))) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "This order has already been paid. Use the refund or cancel action instead of changing its payment status directly.",
+          },
+          { status: 400 },
+        );
+      }
 
       // Never advance fulfillment (ship/deliver/etc.) on an order that hasn't
       // been paid — otherwise a pending or canceled order would send the
