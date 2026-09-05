@@ -8,6 +8,7 @@ import { supabase } from "@/lib/supabase";
 import type { Product, ProductBadge, ProductDose } from "@/lib/catalog-types";
 import { resolveHeadlineAvailability, availabilityLabel } from "@/lib/product-availability";
 import { PROCESSING_FEE_DEFAULT_PERCENT } from "@/lib/admin-control-shared";
+import { DEFAULT_COA_BATCH_NUMBER, DEFAULT_COA_PURITY } from "@/lib/coa-defaults";
 
 type ProductStatusFilter = "all" | "published" | "draft" | "archived" | "disabled";
 
@@ -240,10 +241,10 @@ export default function AdminProductsPage() {
         compareAtPrice: "",
         salePrice: "",
         inventoryQuantity: "0",
-        batchNumber: "",
+        batchNumber: DEFAULT_COA_BATCH_NUMBER,
         coaUrl: "",
         imageUrl: "",
-        purityResult: "",
+        purityResult: DEFAULT_COA_PURITY,
         isDefault: true,
       },
     ],
@@ -496,6 +497,7 @@ export default function AdminProductsPage() {
           })),
           imageUrl: wizard.variants.find((variant) => variant.isDefault)?.imageUrl || undefined,
           batchNumber: wizard.variants.find((variant) => variant.isDefault)?.batchNumber || undefined,
+          purityResult: wizard.variants.find((variant) => variant.isDefault)?.purityResult || undefined,
           coaUrl: wizard.variants.find((variant) => variant.isDefault)?.coaUrl || undefined,
         }),
       });
@@ -523,10 +525,10 @@ export default function AdminProductsPage() {
             compareAtPrice: "",
             salePrice: "",
             inventoryQuantity: "0",
-            batchNumber: "",
+            batchNumber: DEFAULT_COA_BATCH_NUMBER,
             coaUrl: "",
             imageUrl: "",
-            purityResult: "",
+            purityResult: DEFAULT_COA_PURITY,
             isDefault: true,
           },
         ],
@@ -919,10 +921,10 @@ export default function AdminProductsPage() {
                         compareAtPrice: "",
                         salePrice: "",
                         inventoryQuantity: "0",
-                        batchNumber: "",
+                        batchNumber: DEFAULT_COA_BATCH_NUMBER,
                         coaUrl: "",
                         imageUrl: "",
-                        purityResult: "",
+                        purityResult: DEFAULT_COA_PURITY,
                         isDefault: false,
                       },
                     ],
