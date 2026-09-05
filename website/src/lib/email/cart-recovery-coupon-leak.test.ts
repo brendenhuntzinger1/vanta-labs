@@ -54,6 +54,11 @@ const attempted: string[] = [];
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/env", () => ({ getSiteUrl: () => "https://www.vantalabsresearch.com" }));
+// Product names come from the catalogue at send time, never from the stored
+// snapshot (AUTH-3): the mock answers every slug the fixtures use.
+vi.mock("@/lib/catalog", () => ({
+  getCatalogProductsBySlugs: async (slugs: string[]) => slugs.map((slug) => ({ slug, name: slug === "bpc-157" ? "BPC-157" : slug })),
+}));
 vi.mock("@/lib/email/marketing", () => ({
   sendMarketingEmail: vi.fn(async (input: { to: string }) => {
     attempted.push(input.to);
@@ -94,7 +99,7 @@ vi.mock("@/lib/supabase-server", () => {
           id: CART_ID,
           email: SHOPPER,
           customer_name: "Test Shopper",
-          items: [{ productId: "p1", name: "Item", quantity: 1, priceCents: 5000 }],
+          items: [{ slug: "p1", productId: "p1", name: "Item", quantity: 1, priceCents: 5000 }],
           cart_value_cents: 5000,
           first_seen_at: new Date(Date.now() - cartAgeHours * 60 * 60 * 1000).toISOString(),
         }],

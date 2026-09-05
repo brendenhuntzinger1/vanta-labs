@@ -20,13 +20,28 @@ const PAY_PAGE = "src/app/checkout/pay/[orderId]/VeyraCheckout.tsx";
 // the order.
 // ---------------------------------------------------------------------------
 
-/** The page stops on the first non-wait answer. settledRef makes it one-way. */
+/** The first non-wait answer, and how many polls it took to get there. */
 function runPoll(sequence: unknown[]): { decision: string; pollsConsumed: number } {
   for (let i = 0; i < sequence.length; i += 1) {
     const decision = decideFromOrderStatus(sequence[i]);
     if (decision !== "wait") return { decision, pollsConsumed: i + 1 };
   }
   return { decision: "wait", pollsConsumed: sequence.length };
+}
+
+/**
+ * The page's actual watch. A decline is announced once (declineShownRef) and
+ * never repainted or withdrawn; the poll keeps running, and a settled answer
+ * navigates (settledRef) whether or not a decline was shown first.
+ */
+function watch(sequence: unknown[]): { declineShown: boolean; settledAt: number | null } {
+  let declineShown = false;
+  for (let i = 0; i < sequence.length; i += 1) {
+    const decision = decideFromOrderStatus(sequence[i]);
+    if (decision === "settled") return { declineShown, settledAt: i + 1 };
+    if (decision === "failed") declineShown = true;
+  }
+  return { declineShown, settledAt: null };
 }
 
 const PENDING = { paid: false, pending: true, status: "pending_payment" };
@@ -64,15 +79,29 @@ describe("a settled page never contradicts itself", () => {
     expect(pollsConsumed).toBe(1);
   });
 
-  it("a decline already shown is not overwritten by a later success on the page", () => {
-    // Server-side the late success DOES promote the order to paid, which is
-    // correct - a genuine late capture must be honoured. What must not happen
-    // is the page flipping under a shopper who has already been told it failed
-    // and has started again. The stop is one-way; the shopper's retry is what
-    // carries them forward.
-    const { decision, pollsConsumed } = runPoll([DECLINED, PAID]);
-    expect(decision).toBe("failed");
-    expect(pollsConsumed).toBe(1);
+  it("a decline already shown stays shown, but a later success still settles the page", () => {
+    // Server-side the late success DOES promote the order to paid, and that is
+    // the truth the page has to end on. The DECLINE is one-way: later "failed"
+    // answers neither repaint nor withdraw it. The WATCH is not: it keeps
+    // asking, and a "settled" answer takes the shopper to their receipt.
+    //
+    // This used to stop at the decline for good. The order is already
+    // payment_failed the moment the shopper reloads as the message tells them
+    // to, so the reloaded page painted the banner at once, stopped watching,
+    // and a successful retry in the freshly mounted form flipped the order to
+    // paid while the page went on insisting the card had not been charged.
+    expect(runPoll([DECLINED, PAID]).decision).toBe("failed");
+    expect(watch([DECLINED, DECLINED, PAID])).toEqual({ declineShown: true, settledAt: 3 });
+  });
+
+  it("a reload after a decline sees the old decline first and still lands on the receipt", () => {
+    // First poll on the reloaded page: the pre-existing payment_failed. Then
+    // the retry lands.
+    expect(watch([DECLINED, PENDING, PAID])).toEqual({ declineShown: true, settledAt: 3 });
+  });
+
+  it("a decline with no retry stays a decline", () => {
+    expect(watch([PENDING, DECLINED, DECLINED, DROPPED])).toEqual({ declineShown: true, settledAt: null });
   });
 });
 
@@ -153,9 +182,12 @@ describe("the decline message tells the shopper the three things they need", () 
     expect(declineCopy.length).toBeGreaterThan(40);
   });
 
-  it("stops the poll as well as showing the message", () => {
-    // Message without settledRef would leave a spinner running behind the text.
-    expect(declineBranch).toMatch(/settledRef\.current = true/);
+  it("announces the decline once and keeps watching for settlement", () => {
+    // The announcement is latched on its own ref. Latching the NAVIGATION ref
+    // here is the defect: it silenced the poll, so an order that was later
+    // paid never took the shopper to the receipt.
+    expect(declineBranch).toMatch(/declineShownRef\.current = true/);
+    expect(declineBranch).not.toMatch(/settledRef\.current = true/);
   });
 });
 

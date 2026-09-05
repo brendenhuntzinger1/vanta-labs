@@ -11,6 +11,22 @@ import type { OrderEmailKind } from "@/lib/email/order-email-once";
 
 const MAX_ATTEMPTS = 5;
 
+/**
+ * How long a queue row is held once a drain has picked it up.
+ *
+ * THE CLAIM COMES BEFORE THE SEND, here as everywhere else in this system. Both
+ * drains used to select a row and send it with nothing marking it as taken, so
+ * the scheduled sweep and an owner's manual retry landing on the same row in
+ * the same moment each sent it — and a shipping notice carries no idempotency
+ * key for the provider to collapse. Pushing `next_attempt_at` out by this much
+ * under a compare-and-set on the value just read is the claim: whichever
+ * caller's update matches the row owns it, the other's matches nothing and
+ * moves on. A process that dies mid-send leaves the row pending with this
+ * hold on it, so the next sweep after the hold simply tries again — no
+ * separate reaper, and no row stranded at a status nothing clears.
+ */
+export const IN_FLIGHT_HOLD_MS = 10 * 60_000;
+
 type QueuedEmail = { to: string; replyTo?: string } & EmailTemplate;
 
 /**
@@ -132,13 +148,56 @@ async function sendOnceSlotIsSent(orderId: string, kind: OrderEmailKind): Promis
   }
 }
 
-// Drain due pending emails (called by the scheduled sweep). Retries each, marks
-// it sent on success, or backs off exponentially (5→10→20→40→60 min) and gives
-// up after MAX_ATTEMPTS. Never throws.
+/**
+ * Take a queue row for THIS caller, by compare-and-set on what it just read.
+ *
+ * Returns the attempts figure the row now carries, or null when another drain
+ * got there first (or the row changed underneath us), in which case the caller
+ * must not send it. `countAttempt` is what separates the sweep, whose budget
+ * this is, from the manual retry, which deliberately spends none of it.
+ */
+async function claimQueuedRow(
+  row: { id: string; status?: string | null; attempts?: number | null; next_attempt_at?: string | null },
+  countAttempt: boolean,
+): Promise<number | null> {
+  const attempts = Number(row.attempts ?? 0) + (countAttempt ? 1 : 0);
+  const now = new Date().toISOString();
+  try {
+    let query = supabaseAdmin
+      .from("pending_emails")
+      .update({
+        ...(countAttempt ? { attempts } : {}),
+        next_attempt_at: new Date(Date.now() + IN_FLIGHT_HOLD_MS).toISOString(),
+        updated_at: now,
+      })
+      .eq("id", row.id)
+      .eq("status", String(row.status ?? "pending"));
+    // The value read is the fence. A row written before the column had a value
+    // (it is NOT NULL in the schema, so only a fake) is fenced on status alone.
+    if (row.next_attempt_at) query = query.eq("next_attempt_at", row.next_attempt_at);
+    const { data, error } = await query.select("id");
+    if (error || !data || (data as unknown[]).length === 0) return null;
+    return attempts;
+  } catch {
+    return null;
+  }
+}
+
+/** `j***@domain` — enough for an operator to recognise, never the address. */
+function maskAddress(email: string): string {
+  const [local, domain] = String(email ?? "").split("@");
+  if (!domain) return "***";
+  return `${local.slice(0, 1)}${"*".repeat(Math.max(3, local.length - 1))}@${domain}`;
+}
+
+// Drain due pending emails (called by the scheduled sweep). Claims each row,
+// retries it, marks it sent on success, or backs off exponentially
+// (5→10→20→40→60 min) and gives up after MAX_ATTEMPTS. Never throws.
 export async function retryPendingEmails(maxPerRun = 50): Promise<{ sent: number; retried: number; gaveUp: number }> {
   let sent = 0;
   let retried = 0;
   let gaveUp = 0;
+  const gaveUpRows: Array<{ to: string; subject: string; error: string | null }> = [];
   try {
     // Typed explicitly because the column list is chosen at runtime, which
     // defeats supabase-js's inference from a literal select string.
@@ -150,6 +209,7 @@ export async function retryPendingEmails(maxPerRun = 50): Promise<{ sent: number
       text_body: string | null;
       reply_to: string | null;
       attempts: number | null;
+      next_attempt_at?: string | null;
       order_id?: string | null;
       email_kind?: string | null;
     };
@@ -161,7 +221,7 @@ export async function retryPendingEmails(maxPerRun = 50): Promise<{ sent: number
       .order("next_attempt_at", { ascending: true })
       .limit(maxPerRun) as unknown as PromiseLike<{ data: PendingRow[] | null; error: { code?: string; message?: string } | null }>;
 
-    const BASE_COLUMNS = "id, to_email, subject, html, text_body, reply_to, attempts";
+    const BASE_COLUMNS = "id, to_email, subject, html, text_body, reply_to, attempts, next_attempt_at";
     let { data, error } = await due(`${BASE_COLUMNS}, order_id, email_kind`);
     if (error && isMissingSchema(error)) {
       // sql/pending-emails-order-link.sql has not run yet. Drain the queue the
@@ -173,6 +233,21 @@ export async function retryPendingEmails(maxPerRun = 50): Promise<{ sent: number
     for (const row of data) {
       const orderId = row.order_id ? String(row.order_id) : null;
       const kind = row.email_kind ? (String(row.email_kind) as OrderEmailKind) : null;
+
+      // OURS, OR SOMEBODY ELSE'S. See IN_FLIGHT_HOLD_MS.
+      const attempts = await claimQueuedRow({ ...row, status: "pending" }, true);
+      if (attempts === null) continue;
+      const now = new Date().toISOString();
+
+      // ALREADY DELIVERED BY ANOTHER PATH? The send-once log is the record: a
+      // 'sent' slot means the customer has this email (the webhook re-entered,
+      // or an owner resent it), and the queue row is history, not work. The
+      // manual retry has refused these since E-02; the sweep now does too.
+      if (orderId && kind && await sendOnceSlotIsSent(orderId, kind)) {
+        await supabaseAdmin.from("pending_emails").update({ status: "sent", updated_at: now }).eq("id", row.id);
+        continue;
+      }
+
       const result = await sendEmail({
         to: String(row.to_email),
         subject: String(row.subject),
@@ -184,7 +259,6 @@ export async function retryPendingEmails(maxPerRun = 50): Promise<{ sent: number
         // even a provider that would collapse the duplicate cannot.
         ...(orderId && kind ? { idempotencyKey: `${kind}:${orderId}` } : {}),
       });
-      const now = new Date().toISOString();
       if (result.success) {
         await supabaseAdmin.from("pending_emails").update({ status: "sent", updated_at: now }).eq("id", row.id);
         // CLOSE THE SLOT THIS RETRY JUST SATISFIED (C-02). The customer now has
@@ -193,32 +267,75 @@ export async function retryPendingEmails(maxPerRun = 50): Promise<{ sent: number
         // saying a receipt was never delivered when it was.
         if (orderId && kind) await closeSendOnceSlot(orderId, kind, result.provider, result.providerMessageId);
         sent += 1;
+      } else if (attempts >= MAX_ATTEMPTS) {
+        await supabaseAdmin.from("pending_emails")
+          .update({ status: "failed", attempts, last_error: result.error ?? null, updated_at: now })
+          .eq("id", row.id);
+        gaveUp += 1;
+        gaveUpRows.push({ to: String(row.to_email), subject: String(row.subject), error: result.error ?? null });
       } else {
-        const attempts = Number(row.attempts ?? 0) + 1;
-        if (attempts >= MAX_ATTEMPTS) {
-          await supabaseAdmin.from("pending_emails")
-            .update({ status: "failed", attempts, last_error: result.error ?? null, updated_at: now })
-            .eq("id", row.id);
-          gaveUp += 1;
-          await recordSystemAlert({
-            type: "email_undeliverable",
-            severity: "warning",
-            message: `Gave up delivering "${String(row.subject)}" to ${String(row.to_email)} after ${attempts} attempts`,
-            context: { to: row.to_email, subject: row.subject, error: result.error ?? null },
-          });
-        } else {
-          const backoffMinutes = Math.min(60, 5 * 2 ** (attempts - 1));
-          await supabaseAdmin.from("pending_emails")
-            .update({ attempts, last_error: result.error ?? null, next_attempt_at: new Date(Date.now() + backoffMinutes * 60_000).toISOString(), updated_at: now })
-            .eq("id", row.id);
-          retried += 1;
-        }
+        const backoffMinutes = Math.min(60, 5 * 2 ** (attempts - 1));
+        await supabaseAdmin.from("pending_emails")
+          .update({ attempts, last_error: result.error ?? null, next_attempt_at: new Date(Date.now() + backoffMinutes * 60_000).toISOString(), updated_at: now })
+          .eq("id", row.id);
+        retried += 1;
       }
     }
   } catch {
     // Table not migrated / transient — safe to skip this run.
   }
+
+  if (gaveUpRows.length > 0) await reportUndeliverable(gaveUpRows);
   return { sent, retried, gaveUp };
+}
+
+/**
+ * The retry budget is spent: these customers did NOT get a transactional
+ * email — a receipt, a shipping notice, a refund confirmation — and nothing
+ * will try again on its own.
+ *
+ * ONE ALERT PER DRAIN, AT CRITICAL, ON A CHANNEL THE OUTAGE CANNOT TAKE DOWN.
+ * This used to raise one WARNING per row. A warning is a status-page entry;
+ * nothing notifies anybody. And the only notifying channel this system had —
+ * the critical-alert email — is carried by the very provider whose failure is
+ * being reported, so during the outage that matters the operator heard
+ * nothing at all. The give-ups are collected into a single critical (the
+ * status badge counts it, Sentry gets it at error level, and the operator
+ * email goes out once the provider is back), and the same fact is pushed to
+ * the phone through the order-notification channel, which does not depend on
+ * email. Best-effort throughout; an alerting failure never touches the queue.
+ */
+async function reportUndeliverable(rows: Array<{ to: string; subject: string; error: string | null }>): Promise<void> {
+  const summary = rows
+    .slice(0, 10)
+    .map((row) => `"${row.subject}" to ${maskAddress(row.to)}`)
+    .join("; ");
+  const message =
+    `Gave up delivering ${rows.length} transactional email(s) after ${MAX_ATTEMPTS} attempts each: ${summary}`
+    + (rows.length > 10 ? `; and ${rows.length - 10} more` : "")
+    + ". Those customers did not receive them and nothing retries automatically — "
+    + "check the email provider, then retry from each order's communications panel.";
+  try {
+    await recordSystemAlert({
+      type: "email_undeliverable",
+      severity: "critical",
+      message,
+      context: {
+        count: rows.length,
+        emails: rows.slice(0, 50).map((row) => ({ to: row.to, subject: row.subject, error: row.error })),
+      },
+    });
+  } catch {
+    // Never throw from the alerting path.
+  }
+  try {
+    // Loaded on demand: the order-push module reaches the Control Center and
+    // is only wanted on the give-up path, not on every quiet drain.
+    const { sendOperatorPushNotification } = await import("@/lib/order-push-notification");
+    await sendOperatorPushNotification({ title: "Email undeliverable", message });
+  } catch {
+    // No push destination, or it refused — the alert row and Sentry stand.
+  }
 }
 
 /**
@@ -279,10 +396,11 @@ export async function retryPendingEmailsForOrder(
       reply_to: string | null;
       attempts: number | null;
       status: string | null;
+      next_attempt_at?: string | null;
       order_id?: string | null;
       email_kind?: string | null;
     };
-    const BASE_COLUMNS = "id, to_email, subject, html, text_body, reply_to, attempts, status";
+    const BASE_COLUMNS = "id, to_email, subject, html, text_body, reply_to, attempts, status, next_attempt_at";
     const matching = (columns: string) => supabaseAdmin
       .from("pending_emails")
       .select(columns)
@@ -311,6 +429,14 @@ export async function retryPendingEmailsForOrder(
           .from("pending_emails")
           .update({ status: "sent", updated_at: new Date().toISOString() })
           .eq("id", row.id);
+        continue;
+      }
+
+      // The same claim the sweep takes (IN_FLIGHT_HOLD_MS), so a click that
+      // lands while the sweep is sending this very row does not send it twice.
+      // Attempts untouched: that budget belongs to the automatic sweep.
+      if (await claimQueuedRow(row, false) === null) {
+        stillFailing += 1;
         continue;
       }
 

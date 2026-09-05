@@ -1337,7 +1337,7 @@ export default function CheckoutPage() {
                     <div>
                       <p className="mb-2 text-[10px] uppercase tracking-[0.24em] text-white/35">Rewards points</p>
                       <p className="text-xs text-white/45">
-                        <span className="text-white/80">{pointsBalance.toLocaleString()}</span> available ({formatCartCurrency(pointsToDollars(pointsBalance))} value).
+                        <span className="text-white/80">{pointsBalance.toLocaleString("en-US")}</span> available ({formatCartCurrency(pointsToDollars(pointsBalance))} value).
                       </p>
                       {referralDiscountApplied ? (
                         <p className="mt-2 rounded-xl border border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5 text-xs text-white/55">
@@ -1360,7 +1360,7 @@ export default function CheckoutPage() {
                           {pointsToRedeem > 0 ? <span className="text-xs text-emerald-300 tabular-nums">−{formatCartCurrency(pointsRedeemedDiscount)}</span> : null}
                         </div>
                       ) : null}
-                      {pointsToEarn > 0 ? <p className="mt-2 text-[11px] text-white/35">You&apos;ll earn ~{pointsToEarn.toLocaleString()} points on this order.</p> : null}
+                      {pointsToEarn > 0 ? <p className="mt-2 text-[11px] text-white/35">You&apos;ll earn ~{pointsToEarn.toLocaleString("en-US")} points on this order.</p> : null}
                     </div>
                   ) : (
                     <p className="text-xs text-white/40">

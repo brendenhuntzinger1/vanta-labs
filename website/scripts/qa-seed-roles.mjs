@@ -103,18 +103,34 @@ try {
     log(`  ${role.name.padEnd(11)} ${role.email}  ${role.confirmed ? "confirmed" : "UNCONFIRMED"}`);
 
     if (role.partner) {
-      await client.query(
+      const approvedAt = role.partner.status === "approved" ? new Date().toISOString() : null;
+      const { rows: partnerRows } = await client.query(
         `insert into partners (auth_user_id, name, email, referral_code, status, approved_at)
          values ($1, $2, $3, $4, $5, $6)
          on conflict (referral_code) do update
            set auth_user_id = excluded.auth_user_id,
                email = excluded.email,
                status = excluded.status,
+               approved_at = excluded.approved_at
+         returning id`,
+        [ids[role.name], `QA ${role.name}`, role.email, role.partner.code, role.partner.status, approvedAt],
+      );
+      // BOTH ROWS, SHARED ID — the shape production always has. The apply RPC
+      // (create_partner_application) and the admin invite write partners AND
+      // ambassadors in one transaction, and the referral-code service, checkout
+      // and commission accrual all read `ambassadors`. Seeding partners alone
+      // manufactured a state production cannot be in, and the audit reported
+      // it as "approved ambassador cannot change their code" (AA-3).
+      await client.query(
+        `insert into ambassadors (id, auth_user_id, name, email, referral_code, status, approved_at)
+         values ($1, $2, $3, $4, $5, $6, $7)
+         on conflict (id) do update
+           set auth_user_id = excluded.auth_user_id,
+               email = excluded.email,
+               referral_code = excluded.referral_code,
+               status = excluded.status,
                approved_at = excluded.approved_at`,
-        [
-          ids[role.name], `QA ${role.name}`, role.email, role.partner.code, role.partner.status,
-          role.partner.status === "approved" ? new Date().toISOString() : null,
-        ],
+        [partnerRows[0].id, ids[role.name], `QA ${role.name}`, role.email, role.partner.code, role.partner.status, approvedAt],
       );
       log(`              partner ${role.partner.code} (${role.partner.status})`);
     }

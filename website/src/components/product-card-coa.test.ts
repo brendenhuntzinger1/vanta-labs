@@ -27,13 +27,15 @@ describe("the card's COA action", () => {
   });
 
   it("opens in a new tab without handing over the opener", () => {
-    const anchor = CARD.slice(CARD.indexOf("hasCoa(product.coaUrl)"));
+    // The anchor block itself; `coaHref` is declared once at the top of the
+    // component (legacy link, else the COA-library record) and used here.
+    const anchor = CARD.slice(CARD.indexOf("href={coaHref}"));
     expect(anchor).toContain('target="_blank"');
     expect(anchor).toContain('rel="noopener noreferrer"');
   });
 
   it("sits outside the card-wide Link, so no anchor nests inside another", () => {
-    expect(CARD.indexOf("hasCoa(product.coaUrl)")).toBeGreaterThan(
+    expect(CARD.indexOf("href={coaHref}")).toBeGreaterThan(
       CARD.indexOf("</Link>"),
     );
   });

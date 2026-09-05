@@ -213,6 +213,43 @@ export async function getPublishedCoaDocumentsForProduct(productId: string): Pro
   }
 }
 
+/**
+ * The newest published COA file per product, as the public href the catalogue
+ * cards can link. One batched read for the whole catalogue.
+ *
+ * The cards read only the legacy `coa_url` column, so a COA uploaded through
+ * the library (which writes coa_records, never that column) left the card
+ * without its "COA verified" pill and "View COA" link — the exact surface the
+ * upload exists to light up.
+ */
+export async function getPublishedCoaHrefsByProduct(productIds: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const ids = [...new Set(productIds.filter(Boolean))];
+  if (ids.length === 0) return out;
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("coa_records")
+      .select(COA_SELECT_COLUMNS)
+      .in("product_id", ids)
+      .eq("status", "published");
+    if (error) throw error;
+    const byProduct = new Map<string, PublicCoaDocument[]>();
+    for (const row of (data ?? []) as CoaRow[]) {
+      if (!coaRowHasFile(row) || !row.product_id) continue;
+      const list = byProduct.get(String(row.product_id)) ?? [];
+      list.push(toPublicDocument(row));
+      byProduct.set(String(row.product_id), list);
+    }
+    for (const [productId, docs] of byProduct) {
+      docs.sort(compareCoaDocuments);
+      out.set(productId, `/api/coa/${docs[0].id}/file`);
+    }
+  } catch (error) {
+    console.error("COA library: unable to read catalogue COAs", error);
+  }
+  return out;
+}
+
 export type ResolvedCoaFile = {
   url: string;
   fileKind: CoaFileKind;

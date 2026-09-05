@@ -503,7 +503,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
                       {tier.referralBonusPoints > 0 ? (
                         <div className="flex items-baseline justify-between gap-3">
                           <dt className="text-white/55">Referral bonus</dt>
-                          <dd className="font-semibold text-white">{tier.referralBonusPoints.toLocaleString()} pts</dd>
+                          <dd className="font-semibold text-white">{tier.referralBonusPoints.toLocaleString("en-US")} pts</dd>
                         </div>
                       ) : null}
                     </dl>
@@ -614,11 +614,11 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
                   retune in /admin/control, with nothing to keep the two in step. */}
               <div className="border border-white/12 bg-black/40 p-5 text-center">
                 <p className="vl2-serif text-3xl text-white">{bulkSavings.tier1Percent}% OFF</p>
-                <p className="mt-2 text-sm text-white/70">Orders of ${bulkSavings.tier1Threshold.toLocaleString()} or more</p>
+                <p className="mt-2 text-sm text-white/70">Orders of ${bulkSavings.tier1Threshold.toLocaleString("en-US")} or more</p>
               </div>
               <div className="border border-white/12 bg-black/40 p-5 text-center">
                 <p className="vl2-serif text-3xl text-white">{bulkSavings.tier2Percent}% OFF</p>
-                <p className="mt-2 text-sm text-white/70">Orders of ${bulkSavings.tier2Threshold.toLocaleString()} or more</p>
+                <p className="mt-2 text-sm text-white/70">Orders of ${bulkSavings.tier2Threshold.toLocaleString("en-US")} or more</p>
               </div>
               <div className="border border-white/12 bg-black/40 p-5 text-center">
                 <p className="vl2-serif text-3xl text-white">Free Shipping</p>

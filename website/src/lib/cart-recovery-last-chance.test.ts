@@ -38,7 +38,7 @@ interface CartRow {
   id: string;
   email: string;
   customer_name: string | null;
-  items: Array<{ name: string; quantity: number; price: number }>;
+  items: Array<{ slug: string; name: string; quantity: number; price: number }>;
   cart_value_cents: number;
   first_seen_at: string;
   status: string;
@@ -82,6 +82,11 @@ vi.mock("@/lib/email/marketing", () => ({
   isMarketingSuppressed: async () => false,
 }));
 vi.mock("@/lib/env", () => ({ getSiteUrl: () => "https://example.test" }));
+// Product names come from the catalogue at send time, never from the stored
+// snapshot (AUTH-3): the mock answers every slug the fixtures use.
+vi.mock("@/lib/catalog", () => ({
+  getCatalogProductsBySlugs: async (slugs: string[]) => slugs.map((slug) => ({ slug, name: slug === "bpc-157" ? "BPC-157" : slug })),
+}));
 
 /** The shipped defaults — the configuration the defect actually ships under. */
 vi.mock("@/lib/admin-control", () => ({
@@ -205,7 +210,7 @@ vi.mock("@/lib/supabase-server", () => {
 function seedCart(ageHours: number): CartRow {
   const cart: CartRow = {
     id: "cart-1", email: "shopper@example.com", customer_name: "Sam",
-    items: [{ name: "BPC-157", quantity: 1, price: 42.99 }],
+    items: [{ slug: "bpc-157", name: "BPC-157", quantity: 1, price: 42.99 }],
     cart_value_cents: 4299,
     first_seen_at: new Date(Date.now() - ageHours * HOUR_MS).toISOString(),
     status: "active",

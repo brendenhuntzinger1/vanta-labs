@@ -232,12 +232,88 @@ export interface InventoryDecrementResult {
 // `orderId` is carried through to the movement ledger (see applyInventoryDelta)
 // so a finalized sale is attributable; it stays optional because the legacy
 // callers that have no order in hand still need this path.
+/**
+ * Units of one line that no OTHER order is holding.
+ *
+ * A LATE PAYMENT MUST NOT TAKE ANOTHER CHECKOUT'S UNITS. The fallback decrement
+ * runs when this order's own hold is gone (it expired before the customer paid,
+ * or the reservation RPC was unavailable). adjust_inventory_on_sale only checks
+ * `inventory_quantity + delta >= 0` — it knows nothing about reserved_quantity —
+ * so it happily sold the last unit out from under an order that was holding it.
+ * That order's later finalize then clamped at 0 and reported success: two paid
+ * orders, one vial. This reads the row's on-hand and reserved counts, adds back
+ * whatever THIS order still holds (a degraded finalize leaves its own hold
+ * active), and hands the caller the number that is genuinely free to sell.
+ *
+ * NULL when it cannot be answered. A read failure must not decide a sale either
+ * way, so the caller keeps today's behaviour for that line.
+ */
+async function readUnitsFreeForOrder(
+  adjustment: InventoryAdjustment,
+  orderId: string | null | undefined,
+): Promise<{ free: number; heldByOthers: number } | null> {
+  try {
+    const row = adjustment.variantId
+      ? await supabaseAdmin
+          .from("product_doses")
+          .select("inventory_quantity, reserved_quantity")
+          .eq("id", adjustment.variantId)
+          .maybeSingle<{ inventory_quantity: number | null; reserved_quantity: number | null }>()
+      : await supabaseAdmin
+          .from("products")
+          .select("inventory_quantity, reserved_quantity")
+          .eq("slug", adjustment.slug)
+          .maybeSingle<{ inventory_quantity: number | null; reserved_quantity: number | null }>();
+    if (row.error || !row.data) return null;
+    const onHand = Number(row.data.inventory_quantity ?? 0);
+    const reserved = Math.max(0, Number(row.data.reserved_quantity ?? 0));
+
+    let ownHold = 0;
+    if (orderId) {
+      let query = supabaseAdmin
+        .from("inventory_reservations")
+        .select("quantity")
+        .eq("order_id", orderId)
+        .eq("status", "active")
+        .eq("slug", adjustment.slug);
+      query = adjustment.variantId ? query.eq("variant_id", adjustment.variantId) : query.is("variant_id", null);
+      const { data: holds, error } = await query;
+      if (error) return null;
+      for (const hold of (holds ?? []) as Array<{ quantity?: number | null }>) {
+        ownHold += Math.max(0, Math.trunc(Number(hold.quantity ?? 0)));
+      }
+    }
+
+    const heldByOthers = Math.max(0, reserved - ownHold);
+    return { free: onHand - heldByOthers, heldByOthers };
+  } catch {
+    return null;
+  }
+}
+
 export async function decrementInventoryForOrder(items: OrderItemRef[], orderId?: string | null): Promise<InventoryDecrementResult> {
   const adjustments = planInventoryAdjustments(items);
   const errors: string[] = [];
   let failed = 0;
   for (const adjustment of adjustments) {
     try {
+      // Refuse, rather than take, units another checkout is holding. Only a
+      // line that other orders actually hold can trip this, so an untracked or
+      // unreserved row behaves exactly as before.
+      const room = await readUnitsFreeForOrder(adjustment, orderId);
+      if (room && room.heldByOthers > 0 && room.free < adjustment.quantity) {
+        const detail = `${adjustment.slug}${adjustment.variantId ? `::${adjustment.variantId}` : ""}`;
+        await recordSystemAlert({
+          type: "inventory_units_held_by_other_orders",
+          severity: "critical",
+          message:
+            `Order ${orderId ?? "(unknown)"} paid for ${adjustment.quantity} x ${detail} but only ${Math.max(0, room.free)} `
+            + `unit(s) are free — ${room.heldByOthers} are held by other checkouts in flight. Stock was NOT decremented `
+            + "so those checkouts keep their units. Fulfil this order from incoming stock or refund it, then correct the count by hand.",
+          context: { orderId: orderId ?? null, slug: adjustment.slug, variantId: adjustment.variantId, quantity: adjustment.quantity, free: room.free, heldByOthers: room.heldByOthers },
+        }).catch(() => {});
+        throw new Error(`${room.heldByOthers} unit(s) of ${detail} are held by other checkouts; only ${Math.max(0, room.free)} free`);
+      }
       await applyInventoryDelta(adjustment, -adjustment.quantity, {
         orderId,
         type: "order_completed",

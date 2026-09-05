@@ -260,7 +260,7 @@ async function deliver(eventId: string, type = "payment.succeeded") {
 }
 
 /** The arguments activation was actually called with. */
-const grant = () => activate.mock.calls[0] as unknown as [string, string, string] | undefined;
+const grant = () => activate.mock.calls[0] as unknown as [string, string, string, string] | undefined;
 
 beforeEach(() => {
   state.orderType = "membership";
@@ -279,7 +279,9 @@ describe("the member gets what they paid for", () => {
     await deliver("evt-1");
 
     expect(activate).toHaveBeenCalledTimes(1);
-    expect(grant()).toEqual([USER_ID, TIER_ID, "monthly"]);
+    // The paid ORDER rides along so the signup receipt is logged against it
+    // (send-once slot on order_email_log) instead of being fire-and-forget.
+    expect(grant()).toEqual([USER_ID, TIER_ID, "monthly", ORDER_ID]);
   });
 
   it("an annual purchase grants a year", async () => {

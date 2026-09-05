@@ -215,7 +215,7 @@ export default async function AccountDashboardPage() {
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile
           label="Point balance"
-          value={pointsBalance === null ? "—" : pointsBalance.toLocaleString()}
+          value={pointsBalance === null ? "—" : pointsBalance.toLocaleString("en-US")}
           sub={pointsBalance === null ? "Couldn't load right now" : `≈ ${money(pointsToDollars(pointsBalance))} in rewards`}
           href="/account/rewards"
         />
@@ -238,7 +238,7 @@ export default async function AccountDashboardPage() {
         ) : (
           <StatTile label="Free shipping" value={`$${shippingConfig.freeShippingThreshold}+`} sub="on qualifying orders" />
         )}
-        <StatTile label="Orders" value={orders.length.toLocaleString()} sub="all time" href="/account/orders" />
+        <StatTile label="Orders" value={orders.length.toLocaleString("en-US")} sub="all time" href="/account/orders" />
       </section>
 
       {/* Progress to next reward */}
@@ -373,7 +373,7 @@ export default async function AccountDashboardPage() {
                     <p className="text-xs text-zinc-500">{formatDisplayDate(entry.createdAt, "medium")}</p>
                   </div>
                   <span className={entry.amount >= 0 ? "font-semibold text-emerald-300" : "font-semibold text-rose-300"}>
-                    {entry.amount >= 0 ? "+" : ""}{entry.amount.toLocaleString()}
+                    {entry.amount >= 0 ? "+" : ""}{entry.amount.toLocaleString("en-US")}
                   </span>
                 </li>
               ))}

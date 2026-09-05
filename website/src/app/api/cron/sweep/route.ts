@@ -20,6 +20,8 @@ import { runOrderPushHealthCheck } from "@/lib/order-push-notification";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { describeError } from "@/lib/operator-error";
 import { runBirthdayBonusSweep } from "@/lib/membership";
+import { runCouponHygiene } from "@/lib/coupon-hygiene";
+import { resealPlaintextControlSecrets } from "@/lib/admin-control";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -111,6 +113,8 @@ const JOBS = {
   // unconfirmed auth.users row is the only evidence a delivery problem leaves,
   // and this is the only thing that looks at it.
   signupConfirmations: { label: "signup_confirmation_watch", run: alertOnStalledSignups },
+  couponHygiene: { label: "coupon_hygiene", run: runCouponHygiene },
+  controlSecretReseal: { label: "control_secret_reseal", run: resealPlaintextControlSecrets },
   // Watch for APPROVED ambassadors who have never signed in. The job above is
   // time-boxed on purpose -- past its lookback an unconfirmed signup is someone
   // who changed their mind -- and that is exactly wrong for an ambassador whose

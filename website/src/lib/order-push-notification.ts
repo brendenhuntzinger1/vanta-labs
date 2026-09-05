@@ -625,6 +625,36 @@ async function resolvePushDestination(): Promise<PushDestination> {
   return url ? { kind: "webhook", url } : { kind: "none" };
 }
 
+/**
+ * Push one operator message through the same destination orders use.
+ *
+ * Exists for the one alert that cannot travel by email: "the email provider
+ * has been refusing transactional mail for hours" (lib/email/retry-queue.ts).
+ * recordSystemAlert carries criticals by email, so during that outage the
+ * operator hears nothing unless a channel that does not depend on the mail
+ * provider carries it — and the phone already does, for orders.
+ *
+ * Pushover only. The webhook destination is a Zapier hook shaped for order
+ * payloads; posting an unrelated message into it would be noise at best and a
+ * mis-fired automation at worst. Returns false rather than throwing when there
+ * is nothing to push to or the post is refused: alerting never breaks the
+ * path it reports on.
+ */
+export async function sendOperatorPushNotification(message: { title: string; message: string }): Promise<boolean> {
+  try {
+    const destination = await resolvePushDestination();
+    if (destination.kind !== "pushover") return false;
+    const response = await sendPushover(destination, {
+      title: message.title.slice(0, 250),
+      message: message.message.slice(0, 1024),
+    });
+    return response.ok;
+  } catch (error) {
+    console.error("[order-push] operator push failed", error);
+    return false;
+  }
+}
+
 export async function sendOrderPushNotification(orderId: string): Promise<OrderPushResult> {
   const destination = await resolvePushDestination();
   const webhookUrl = destination.kind === "webhook" ? destination.url : undefined;

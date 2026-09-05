@@ -499,7 +499,7 @@ function ProductsPageContent({ initialProducts }: { initialProducts: Product[] }
             over-claim. Under-claiming costs a weaker word; over-claiming is an
             unsupported testing statement on every catalogue page. */}
         <CatalogTrustRail
-          everyProductHasCoa={products.length > 0 && products.every((product) => hasCoa(product.coaUrl))}
+          everyProductHasCoa={products.length > 0 && products.every((product) => (hasCoa(product.coaUrl) || Boolean(product.coaRecordUrl)))}
         />
       </main>
     </div>
@@ -604,7 +604,7 @@ function CatalogFallback({ products }: { products: Product[] }) {
           </section>
         </section>
         <CatalogTrustRail
-          everyProductHasCoa={ordered.length > 0 && ordered.every((product) => hasCoa(product.coaUrl))}
+          everyProductHasCoa={ordered.length > 0 && ordered.every((product) => (hasCoa(product.coaUrl) || Boolean(product.coaRecordUrl)))}
         />
       </main>
     </div>

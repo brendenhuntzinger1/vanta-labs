@@ -1589,7 +1589,7 @@ export async function finalizeManualPayment(
     try {
       if (order.customer_user_id && order.membership_tier_id) {
         const cycle = resolveMembershipCycle(order.membership_cycle, orderId);
-        await activatePaidMembership(String(order.customer_user_id), String(order.membership_tier_id), cycle);
+        await activatePaidMembership(String(order.customer_user_id), String(order.membership_tier_id), cycle, orderId);
       }
     } catch (membershipError) {
       console.error("Unable to activate membership for order", orderId, membershipError);
@@ -1674,6 +1674,15 @@ export async function finalizeManualPayment(
             `${decrement.failed} of ${decrement.attempted} stock line(s) could not be decremented: `
             + decrement.errors.join("; "),
           );
+        }
+        // A DEGRADED FINALIZE LEAVES THIS ORDER'S HOLDS ACTIVE. The fallback
+        // has just moved the stock directly, so those holds now double-count
+        // units that already left the shelf — and the stale-hold sweep skips
+        // paid orders, so they would sit on reserved_quantity for good. Drop
+        // them. Best-effort: the same outage that degraded the finalize may
+        // refuse this too, and the sale itself is already recorded.
+        if (fin.degraded) {
+          await releaseInventoryForOrder(orderId).catch(() => {});
         }
       }
       stockCommitted = true;
@@ -2024,7 +2033,29 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   // against the existing status and stop.
   const REFUND_TERMINAL_STATES = new Set(["refunded", "partially_refunded", "canceled"]);
   const priorPaymentStatus = orderRecord?.payment_status ? String(orderRecord.payment_status) : null;
-  if (nextStatus === "paid" && priorPaymentStatus && REFUND_TERMINAL_STATES.has(priorPaymentStatus)) {
+  // A CANCEL BEFORE ANY CAPTURE IS NOT A REFUND. "canceled" is written both by
+  // a processor cancel event and by an admin cancelling an unpaid order, and
+  // neither moved money. If the customer then completes the payment (a retry
+  // on the same session, or a hosted page that outlived the cancel), the money
+  // IS captured — and treating the order as terminal here left it canceled
+  // with the customer's money taken and nobody told. Only an order that was
+  // actually paid or refunded is a money-terminal state; a never-captured
+  // cancel reopens as paid, and the operator is told it happened.
+  const neverCaptured = priorPaymentStatus === "canceled"
+    && !orderRecord?.paid_at
+    && Number(orderRecord?.refund_amount ?? 0) <= 0;
+  if (nextStatus === "paid" && neverCaptured) {
+    await recordSystemAlert({
+      type: "payment_captured_after_cancel",
+      severity: "warning",
+      message:
+        `Order ${orderId} was canceled before any payment was captured, then the processor reported a successful `
+        + "payment. The order has been reopened as paid and returned to fulfilment so the money is not silently kept "
+        + "against a canceled order. Check the customer still wants it; refund it from the order page if not.",
+      context: { orderId, eventId },
+    }).catch(() => {});
+  }
+  if (nextStatus === "paid" && priorPaymentStatus && REFUND_TERMINAL_STATES.has(priorPaymentStatus) && !neverCaptured) {
     await markEventProcessed(eventId, orderId, priorPaymentStatus as OrderStatus);
     return {
       duplicate: false,
@@ -2577,7 +2608,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       if (isMembershipOrder && customerUserId && orderRecord?.membership_tier_id) {
         try {
           const cycle = resolveMembershipCycle(orderRecord.membership_cycle, orderId);
-          await activatePaidMembership(String(customerUserId), String(orderRecord.membership_tier_id), cycle);
+          await activatePaidMembership(String(customerUserId), String(orderRecord.membership_tier_id), cycle, orderId);
         } catch (membershipError) {
           console.error("Unable to activate membership for order", orderId, membershipError);
           await recordSystemAlert(unsafeEffectAlert("membership_activation", orderId, membershipError))

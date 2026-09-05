@@ -1,6 +1,8 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { isSecretControlKey, SECRET_CONTROL_KEYS } from "@/lib/admin-control-secrets";
+import { isSealedControlValue, sealControlSecret, sealingAvailable, unsealControlSecret } from "@/lib/control-secret-sealing";
 import { DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 import { DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from "@/lib/shipping";
 import { DEFAULT_SALES_TAX_CONFIG, normalizeUsState, type SalesTaxConfig } from "@/lib/sales-tax";
@@ -188,7 +190,10 @@ export async function getControlSnapshot(section?: string) {
 
     result[table] ??= {};
     if (!(key in result[table])) {
-      result[table][key] = row.metadata?.value ?? null;
+      const stored = row.metadata?.value ?? null;
+      // Secrets are sealed at rest (control-secret-sealing.ts); legacy clear
+      // rows pass through unchanged, so a reader never sees ciphertext.
+      result[table][key] = isSecretControlKey(table, key) ? unsealControlSecret(stored) : stored;
     }
   }
 
@@ -218,7 +223,7 @@ export async function upsertControlValue(input: {
       target_table: section,
       target_id: key,
       metadata: {
-        value: input.value,
+        value: isSecretControlKey(section, key) ? sealControlSecret(input.value) : input.value,
         actorUsername: input.actorUsername ?? null,
         ipAddress: input.ipAddress ?? null,
         userAgent: input.userAgent ?? null,
@@ -230,6 +235,61 @@ export async function upsertControlValue(input: {
     throw error;
   }
 }
+
+
+/**
+ * Seal any secret still stored in clear, and scrub the clear copies.
+ *
+ * Sealing only happens on WRITE, so every credential saved before the key
+ * existed is still legible in its audit row. This walks the secret keys, writes
+ * a sealed copy of each clear value as the newest row (so reads keep working),
+ * then blanks the value on every older row for that key. Idempotent and a
+ * no-op without the key; safe to run from the sweep on every tick.
+ */
+export async function resealPlaintextControlSecrets(): Promise<{ sealed: number; scrubbed: number }> {
+  if (!sealingAvailable()) return { sealed: 0, scrubbed: 0 };
+  let sealed = 0;
+  let scrubbed = 0;
+  const sections = new Set<string>();
+  for (const path of SECRET_CONTROL_KEYS) sections.add(path.split(".")[0]);
+
+  for (const section of sections) {
+    const rows = await readControlRows(sanitizeSection(section));
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const key = sanitizeKey(String(row.target_id ?? ""));
+      if (!key || seen.has(key) || !isSecretControlKey(section, key)) continue;
+      seen.add(key);
+      const stored = row.metadata?.value;
+      if (typeof stored !== "string" || stored === "" || isSealedControlValue(stored)) continue;
+      const sealedAt = new Date().toISOString();
+      await upsertControlValue({ section, key, value: stored, actorUsername: "system:reseal" });
+      sealed += 1;
+      // Blank the clear value on every OLDER row for this key, keeping the
+      // rest of each row's metadata (actor, address) so the audit trail still
+      // says who changed what and when — only the credential itself goes.
+      const { data: older, error } = await supabaseAdmin
+        .from("admin_audit_logs")
+        .select("id, metadata")
+        .eq("action", CONTROL_ACTION)
+        .eq("target_table", section)
+        .eq("target_id", key)
+        .lt("created_at", sealedAt);
+      if (error) continue;
+      for (const legacy of (older ?? []) as Array<{ id: string; metadata: Record<string, unknown> | null }>) {
+        const current = legacy.metadata?.value;
+        if (typeof current !== "string" || current === "" || current === "[sealed]" || isSealedControlValue(current)) continue;
+        const { error: scrubError } = await supabaseAdmin
+          .from("admin_audit_logs")
+          .update({ metadata: { ...(legacy.metadata ?? {}), value: "[sealed]", scrubbedAt: sealedAt } })
+          .eq("id", legacy.id);
+        if (!scrubError) scrubbed += 1;
+      }
+    }
+  }
+  return { sealed, scrubbed };
+}
+
 
 export async function getBulkSavingsControlConfig(): Promise<BulkSavingsConfig> {
   try {
@@ -287,6 +347,21 @@ export const DEFAULT_CART_RECOVERY_CONFIG: CartRecoveryConfig = {
   couponExpirationHours: 48,
 };
 
+
+function boundedPercent(value: unknown, fallback: number): number {
+  if (value === "" || value === null || value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(100, Math.max(0, parsed));
+}
+
+function boundedHours(value: unknown, fallback: number): number {
+  if (value === "" || value === null || value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, parsed);
+}
+
 export async function getCartRecoveryControlConfig(): Promise<CartRecoveryConfig> {
   try {
     const snapshot = await getControlSnapshot("cart_recovery");
@@ -296,8 +371,11 @@ export async function getCartRecoveryControlConfig(): Promise<CartRecoveryConfig
       t12hEnabled: config.t12h_enabled === true,
       t24hEnabled: config.t24h_enabled !== false,
       t72hEnabled: config.t72h_enabled !== false,
-      discountPercent: Number(config.discount_percent ?? DEFAULT_CART_RECOVERY_CONFIG.discountPercent),
-      couponExpirationHours: Number(config.coupon_expiration_hours ?? DEFAULT_CART_RECOVERY_CONFIG.couponExpirationHours),
+      // BOUNDED. A typo here mints real money: "100" is a free order, "-5" is
+      // a surcharge, "" is NaN. Percent stays within 0–100 and expiry is at
+      // least one hour; anything unparseable falls back to the default.
+      discountPercent: boundedPercent(config.discount_percent, DEFAULT_CART_RECOVERY_CONFIG.discountPercent),
+      couponExpirationHours: boundedHours(config.coupon_expiration_hours, DEFAULT_CART_RECOVERY_CONFIG.couponExpirationHours),
     };
   } catch {
     return DEFAULT_CART_RECOVERY_CONFIG;

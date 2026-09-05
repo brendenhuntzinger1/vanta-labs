@@ -59,7 +59,12 @@ export default async function AccountSubscriptionsPage() {
   // and points paths use, so what this page claims and what the buyer actually
   // gets can no longer disagree.
   const isActiveMember = perks.isActiveMember;
-  const hasPaidPlan = membership.billingCycle !== "free";
+  // A PAID plan is a paid TIER on a paid cycle. A row that sits on the free
+  // tier with a monthly cycle (a seed, a downgrade that kept its cycle) is not
+  // a paid plan that lapsed — perks.isActiveMember is false only because the
+  // tier is free — and it rendered "Expired / Your membership has ended" for
+  // an account that is active on the free membership.
+  const hasPaidPlan = membership.billingCycle !== "free" && membership.tier.slug !== "free";
   const isLapsed = hasPaidPlan && !isActiveMember;
 
   const statusPill = !hasPaidPlan

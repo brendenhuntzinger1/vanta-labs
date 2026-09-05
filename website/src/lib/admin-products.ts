@@ -725,14 +725,20 @@ export async function updateAdminProduct(productId: string, input: ProductUpdate
 }
 
 export async function deleteAdminProduct(productId: string) {
-  const [{ error: imagesError }, { error: dosesError }, { error: productError }] = await Promise.all([
-    supabaseAdmin.from("product_images").delete().eq("product_id", productId),
-    supabaseAdmin.from("product_doses").delete().eq("product_id", productId),
-    supabaseAdmin.from("products").delete().eq("id", productId),
-  ]);
-
+  // CHILDREN FIRST, ONE AT A TIME. product_images.product_id and
+  // product_doses.product_id reference products(id) with NO ON DELETE action,
+  // and these are three independent PostgREST requests, not a transaction.
+  // Fired together (Promise.all), whichever reached Postgres first won: when
+  // the parent delete landed before a child delete had committed it failed
+  // with 23503, the route threw, and the product was left half-deleted — row
+  // intact, doses and images already gone — with nothing to roll it back.
+  const { error: imagesError } = await supabaseAdmin.from("product_images").delete().eq("product_id", productId);
   if (imagesError) throw imagesError;
+
+  const { error: dosesError } = await supabaseAdmin.from("product_doses").delete().eq("product_id", productId);
   if (dosesError) throw dosesError;
+
+  const { error: productError } = await supabaseAdmin.from("products").delete().eq("id", productId);
   if (productError) throw productError;
 
   invalidateCatalogCache();

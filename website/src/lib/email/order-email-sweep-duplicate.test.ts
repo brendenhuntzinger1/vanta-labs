@@ -143,13 +143,25 @@ vi.mock("@/lib/supabase-server", () => {
         async limit() {
           return { data: db.pendingEmails.filter((r) => r.status === "pending"), error: null };
         },
-        update: (payload: { status?: string }) => ({
-          async eq(_column: string, value: number) {
-            const row = db.pendingEmails.find((r) => r.id === value);
-            if (row && payload.status) row.status = payload.status;
-            return { error: null };
-          },
-        }),
+        // Chainable and lazy: the sweep now CLAIMS a row before sending it
+        // (`.update(hold).eq("id").eq("status").eq("next_attempt_at").select("id")`)
+        // and only then marks it sent, so the fake applies every filter it is
+        // given and answers with the rows it changed.
+        update: (payload: Record<string, unknown>) => {
+          const filters: Array<[string, unknown]> = [];
+          const apply = () => {
+            const matched = db.pendingEmails.filter((r) =>
+              filters.every(([c, v]) => String((r as unknown as Record<string, unknown>)[c] ?? "") === String(v ?? "")));
+            for (const row of matched) Object.assign(row, payload);
+            return matched;
+          };
+          const chain: Record<string, unknown> = {
+            eq(column: string, value: unknown) { filters.push([column, value]); return chain; },
+            async select() { return { data: apply().map((r) => ({ id: r.id })), error: null }; },
+            then(resolve: (v: unknown) => unknown) { apply(); return Promise.resolve(resolve({ error: null })); },
+          };
+          return chain;
+        },
       };
       return builder;
     }

@@ -38,30 +38,51 @@ export function isPaidBillingEvent(event: BillingEventLike): boolean {
 }
 
 /**
- * Has this member already used their one skip for the paid period they are in?
+ * The lifecycle events that DEFER the next charge by one cycle.
+ *
+ * A skip is the obvious one. A PAUSE is the other: Veyra has no pause endpoint,
+ * so pauseMembership maps to the same skip_cycle call — the next charge moves
+ * out one cycle and nothing else happens at the processor. Resuming then flips
+ * the row back to active with that deferred date intact, so pause → resume
+ * bought exactly what a skip buys: a cycle of perks with no charge. Counting
+ * only `skip` here let that be repeated every period (pause, resume, pause,
+ * resume …) with no cap at all, because pause writes a `pause` row.
+ */
+export const DEFERRAL_EVENT_TYPES = ["skip", "pause"] as const;
+
+/**
+ * Has this member already used their one deferral (skip OR pause) for the paid
+ * period they are in?
  *
  * K-07. The single definition of the rule, in the pure module so the SERVER
- * guard (skipNextBilling) and the ACCOUNT PAGE that offers the button share it.
- * Two hand-written copies of a rule like this is how the original defect
- * survived: the cap lived 200 lines from the advance it was capping, and the
- * reminder window that made it exploitable was a third constant somewhere else.
+ * guards (skipNextBilling, pauseMembership) and the ACCOUNT PAGE that offers
+ * the button share it. Two hand-written copies of a rule like this is how the
+ * original defect survived: the cap lived 200 lines from the advance it was
+ * capping, and the reminder window that made it exploitable was a third
+ * constant somewhere else.
  *
  * Events must be supplied NEWEST FIRST. Walking back from now, the first genuinely
  * PAID event ends the current period — a renewal starts a new one and restores
  * the entitlement. A failed charge does not, and neither does a zero-amount
- * lifecycle row (cancellation, pause, resume, tier_change), which is exactly what
+ * lifecycle row (cancellation, resume, tier_change), which is exactly what
  * isPaidBillingEvent above already encodes and why this reuses it rather than
  * matching on event_type.
  *
- * A member with no paid event at all (an admin comp) has one skip ever, which is
- * the conservative reading of "one per paid period" when no period was paid for.
+ * A member with no paid event at all (an admin comp) has one deferral ever,
+ * which is the conservative reading of "one per paid period" when no period was
+ * paid for.
  */
 export function skipUsedThisPaidPeriod(
   eventsNewestFirst: ReadonlyArray<BillingEventLike>,
 ): boolean {
   for (const event of eventsNewestFirst) {
     if (isPaidBillingEvent(event)) return false;
-    if (event.eventType === "skip" && event.status === "succeeded") return true;
+    if (
+      (DEFERRAL_EVENT_TYPES as readonly string[]).includes(event.eventType) &&
+      event.status === "succeeded"
+    ) {
+      return true;
+    }
   }
   return false;
 }

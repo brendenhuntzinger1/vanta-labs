@@ -46,6 +46,17 @@ export async function recordAuthEmailAttempt(input: {
   email: string;
   success: boolean;
   error?: string;
+  /**
+   * The key the claim was taken under, when it differs from `kind`.
+   *
+   * claimAuthEmailSend(kind, email, debounceAs) writes its 'sending' row as
+   * `auth:${debounceAs}`; this closes it, so it has to look under the same
+   * key. The signup double-click branch claims as `signup_confirmation` and
+   * records as `signup_confirmation_resend` — and without this every one of
+   * those rows stayed at 'sending' for ever, holding the minute's slot shut
+   * against a genuine retry and reporting a send perpetually in flight.
+   */
+  claimedAs?: AuthEmailKind;
 }): Promise<void> {
   try {
     // CLOSE THE CLAIM IF THERE IS ONE. claimAuthEmailSend() has usually already
@@ -57,7 +68,7 @@ export async function recordAuthEmailAttempt(input: {
         status: input.success ? "sent" : "failed",
         reference_id: input.success ? null : String(input.error ?? "").slice(0, 200) || "unknown",
       })
-      .eq("campaign_type", `auth:${input.kind}`)
+      .eq("campaign_type", `auth:${input.claimedAs ?? input.kind}`)
       .eq("recipient_email", input.email)
       .eq("status", "sending")
       .select("id");

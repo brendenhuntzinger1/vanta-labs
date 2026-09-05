@@ -120,6 +120,11 @@ export default function VeyraCheckout({
   const handleRef = useRef<MountHandle | null>(null);
   // Navigation happens exactly once, whichever signal gets there first.
   const settledRef = useRef(false);
+  // A decline is announced once and then left alone. It must NOT stop the
+  // watch: the order can still become paid — the session lives for an hour, so
+  // a fresh card in the form below, or a reload of this page, can succeed — and
+  // when it does the receipt is the only honest place to be.
+  const declineShownRef = useRef(false);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [message, setMessage] = useState<string | null>(null);
   const [reassure, setReassure] = useState(false);
@@ -160,9 +165,16 @@ export default function VeyraCheckout({
         return;
       }
       if (decision === "failed") {
-        // Stop the poll the same way a success does, so the shopper is not left
-        // watching a spinner behind a message telling them it is over.
-        settledRef.current = true;
+        // Announce it once. This used to set settledRef — the navigation
+        // latch — which silenced the poll for good. The order is ALREADY
+        // payment_failed the moment the shopper reloads as the message tells
+        // them to, so the reloaded page painted this banner at once, stopped
+        // watching, and a successful retry in the freshly mounted form flipped
+        // the order to paid while the page went on insisting the card had not
+        // been charged. Only the announcement is one-way now; a later
+        // "settled" answer still takes the shopper to their receipt.
+        if (declineShownRef.current) return;
+        declineShownRef.current = true;
         setStatus("error");
         setMessage(
           "That payment did not go through, and your card has not been charged. This is usually the bank declining the transaction rather than a problem with your order. Refresh to try again, or use a different card.",

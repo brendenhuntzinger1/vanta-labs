@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createPartnerApplication } from "@/lib/partner-portal";
 import { createServerClient } from "@/lib/supabase-server";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { checkReferralCodeAvailability } from "@/lib/referral-code-service";
 import { customerSafeMessage } from "@/lib/safe-error";
 
 export async function POST(request: Request) {
@@ -41,6 +42,24 @@ export async function POST(request: Request) {
         { success: false, error: "Please wait before submitting another application." },
         { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds) } },
       );
+    }
+
+    // A TAKEN CODE IS REFUSED HERE, NOT SILENTLY SWAPPED. createPartnerApplication
+    // falls back to an auto-generated code when the preferred one is in use,
+    // and the applicant was told nothing — "under review" with a code they
+    // never chose. Same checker as the dashboard's live availability field
+    // (both tables, active aliases, look-alikes). An INVALID code keeps the
+    // existing fallback: a reserved word or a slur is not something to argue
+    // with the applicant about. After the rate limit, so this route cannot be
+    // used to enumerate live codes any faster than it can be used to apply.
+    if (preferredReferralCode) {
+      const availability = await checkReferralCodeAvailability(preferredReferralCode);
+      if (!availability.available && availability.reason === "taken") {
+        return NextResponse.json(
+          { success: false, error: "That referral code is already taken. Choose a different one, or leave it blank and we'll assign one." },
+          { status: 400 },
+        );
+      }
     }
 
     const result = await createPartnerApplication({

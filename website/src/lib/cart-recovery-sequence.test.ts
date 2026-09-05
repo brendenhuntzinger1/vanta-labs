@@ -45,6 +45,11 @@ const { sendMarketingEmail } = vi.hoisted(() => ({
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/email/marketing", () => ({ sendMarketingEmail, isMarketingSuppressed: async () => false }));
 vi.mock("@/lib/env", () => ({ getSiteUrl: () => "https://example.test" }));
+// Product names come from the catalogue at send time, never from the stored
+// snapshot (AUTH-3): the mock answers every slug the fixtures use.
+vi.mock("@/lib/catalog", () => ({
+  getCatalogProductsBySlugs: async (slugs: string[]) => slugs.map((slug) => ({ slug, name: slug === "bpc-157" ? "BPC-157" : slug })),
+}));
 
 const config = {
   t30mEnabled: true, t12hEnabled: false, t24hEnabled: true, t72hEnabled: true,
@@ -132,7 +137,7 @@ function seedCart(input: { id?: string; email?: string; firstSeenHoursAgo: numbe
     id: input.id ?? `cart-${++seq}`,
     email: input.email ?? "shopper@example.com",
     customer_name: "Sam",
-    items: [{ name: "BPC-157", quantity: 1, price: 42.99 }],
+    items: [{ slug: "bpc-157", name: "BPC-157", quantity: 1, price: 42.99 }],
     cart_value_cents: input.value ?? 4299,
     first_seen_at: new Date(Date.now() - input.firstSeenHoursAgo * HOUR_MS).toISOString(),
     last_updated_at: new Date(Date.now() - (input.lastUpdatedHoursAgo ?? input.firstSeenHoursAgo) * HOUR_MS).toISOString(),
@@ -165,6 +170,31 @@ describe("selectDueStage", () => {
 });
 
 describe("the sweep", () => {
+  it("prints the catalogue's product name and a name-shaped greeting, never the beacon's text (AUTH-3)", async () => {
+    const cart = seedCart({ firstSeenHoursAgo: 1 });
+    cart.customer_name = "URGENT call +1 555 0100 http://evil.example";
+    cart.items = [
+      { slug: "bpc-157", name: "Your account is locked - call +1 555 0100", quantity: 1, price: 42.99 },
+      { slug: "not-a-product", name: "FREE MONEY http://evil.example", quantity: 1, price: 1 },
+    ];
+
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    await runAbandonedCartSweep();
+
+    expect(sent).toHaveLength(1);
+    for (const part of [sent[0].html, sent[0].text]) {
+      expect(part).toContain("BPC-157");
+      expect(part).not.toContain("locked");
+      expect(part).not.toContain("555 0100");
+      expect(part).not.toContain("FREE MONEY");
+      expect(part).not.toContain("evil.example");
+      expect(part).not.toContain("URGENT");
+    }
+    // A "name" carrying a phone number and a URL is not a name: no greeting.
+    expect(sent[0].text).not.toMatch(/^Hi /);
+  });
+
+
   it("sends only the current stage for a cart first seen 73 hours ago", async () => {
     seedCart({ firstSeenHoursAgo: 73 });
     const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
