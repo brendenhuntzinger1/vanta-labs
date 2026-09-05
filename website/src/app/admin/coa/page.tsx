@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DEFAULT_COA_BATCH_NUMBER, DEFAULT_COA_PURITY } from "@/lib/coa-defaults";
 import { COA_MAX_FILE_BYTES, formatCoaFileSize, formatCoaTestDate } from "@/lib/coa-format";
 import type { AdminCoaRecord, CoaProductOption, CoaStatus } from "@/lib/coa-types";
 
@@ -85,11 +86,11 @@ function emptyDraft(file: File | null = null): DraftRow {
     productId: "",
     productDoseId: "",
     strength: "",
-    batchNumber: "",
+    batchNumber: DEFAULT_COA_BATCH_NUMBER,
     lotNumber: "",
     labName: "",
     testDate: "",
-    purity: "",
+    purity: DEFAULT_COA_PURITY,
     identityResult: "",
     externalUrl: "",
     status: "published",
