@@ -51,12 +51,17 @@ export async function POST(request: Request) {
         // The charge did not land, so the member is past-due with no benefits.
         // Surface it as a failure rather than a cheerful success the shopper
         // would read as "you're a member now".
+        // The signup names its own refusal when it has one — "your previous
+        // subscription could not be closed", a legacy-lane refusal — and the
+        // shopper was told to try another card for every one of them. A card
+        // is not the fix for those.
         return NextResponse.json(
-          { success: false, error: "We couldn't complete that payment. Please try another card." },
+          { success: false, error: result.error?.trim() || "We couldn't complete that payment. Please try another card." },
           { status: 402 },
         );
       }
-      return NextResponse.json({ success: true, recurring: true, chargeSucceeded: true });
+      const scheduledFor = (result as { scheduledFor?: string | null }).scheduledFor ?? null;
+      return NextResponse.json({ success: true, recurring: true, chargeSucceeded: !scheduledFor, scheduledFor });
     }
 
     // NO SILENT ONE-TIME FALLBACK.

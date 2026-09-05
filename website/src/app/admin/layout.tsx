@@ -4,7 +4,7 @@ import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { getBucketCounts } from "@/lib/fulfillment-queues";
 import { getOpenCriticalAlertCount } from "@/lib/monitoring";
 import { EMPTY_WORK_QUEUE, summarizeWorkQueue } from "@/lib/admin-work-queue";
-import { AdminTabs } from "@/components/admin-tabs";
+import { AdminTabs, type UnknownBadges } from "@/components/admin-tabs";
 import { settleRead } from "@/lib/admin-read";
 
 export const dynamic = "force-dynamic";
@@ -24,6 +24,11 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   // no longer LOOKS like an empty queue. AdminTabs draws no badge at zero, so a
   // read that did not answer used to render as a nav bar with nothing on it —
   // the same nav bar as a store with no work outstanding. It says so now.
+  //
+  // And the badge itself says so: a read that failed hands AdminTabs the name
+  // of its badge, which draws an error mark in place of the count. A blank
+  // badge is what "nothing open" looks like, so it is the one thing a failed
+  // read must never render. Whichever read DID answer still shows its count.
   const [bucketsRead, criticalsRead] = await Promise.all([
     settleRead("Fulfillment queue counts", getBucketCounts),
     settleRead("Critical alerts", getOpenCriticalAlertCount),
@@ -31,7 +36,13 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   const countsKnown = bucketsRead.ok && criticalsRead.ok;
   const work = countsKnown
     ? summarizeWorkQueue(bucketsRead.value.counts, criticalsRead.value)
-    : EMPTY_WORK_QUEUE;
+    : bucketsRead.ok || criticalsRead.ok
+      ? summarizeWorkQueue(bucketsRead.ok ? bucketsRead.value.counts : [], criticalsRead.ok ? criticalsRead.value : 0)
+      : EMPTY_WORK_QUEUE;
+  const unknownBadges: UnknownBadges = [
+    ...(bucketsRead.ok ? [] : (["work"] as const)),
+    ...(criticalsRead.ok ? [] : (["critical"] as const)),
+  ];
   const countsPartial = bucketsRead.ok && bucketsRead.value.truncated;
 
   return (
@@ -53,7 +64,7 @@ export default async function AdminLayout({ children }: { children: ReactNode })
             The store holds more orders than one scan reads, so the counts on these tabs are a floor, not a total.
           </p>
         ) : null}
-        <AdminTabs work={work} />
+        <AdminTabs work={work} unknownBadges={unknownBadges} />
       </div>
       {children}
     </div>

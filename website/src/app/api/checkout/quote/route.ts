@@ -143,12 +143,13 @@ export async function POST(request: Request) {
       return declined("not_priceable");
     }
 
-    // The gift lines, identified the same way order creation does: a $0 line
-    // the shopper did not put in the basket. Reported separately so a summary
-    // can render it as a gift rather than as a mysterious free product.
-    const requested = new Set(items.map((item) => item.id));
+    // The gift lines, by the flag quoteOrder sets on them. They used to be
+    // picked out as "a $0 line whose id the shopper did not send", but the gift
+    // is rebuilt under the same `slug::doseId` as a paid line for that dose, so
+    // a shopper who already had the gifted dose in the basket saw no gift row
+    // at all — while the order, the hold and the shipment all carried it.
     const giftLines = quote.lineItems
-      .filter((line) => line.baseUnitPrice === 0 && !requested.has(line.product.id))
+      .filter((line) => line.gift === true)
       .map((line) => ({
         name: line.product.name,
         variantLabel: line.product.variantLabel ?? null,

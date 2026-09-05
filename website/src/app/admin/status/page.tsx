@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { getSystemStatus, type StatusLevel } from "@/lib/system-status";
 import { getOpenSystemAlerts, groupOpenAlerts } from "@/lib/monitoring";
+import { failedReads, settleRead, UNKNOWN_FIGURE } from "@/lib/admin-read";
 import { AdminSystemAlertRow } from "@/components/admin-system-alert-row";
 import { CheckoutPreflight } from "@/components/checkout-preflight";
 import { InventoryReservationCheck } from "@/components/inventory-reservation-check";
@@ -34,17 +35,30 @@ export default async function AdminStatusPage() {
   // badge counts unresolved criticals; this query returns unresolved criticals;
   // the grouping below cannot drop one, because it only ever folds rows of the
   // same type together and reports the count.
-  const [statuses, criticalAlerts, recentAlerts] = await Promise.all([
+  //
+  // AND A FAILED READ IS NOT AN EMPTY LIST. These two used to be
+  // `.catch(() => [])`, and [] renders below as "No unresolved system alerts 🎉"
+  // — so an outage of the alerts table reported a celebration on the one page
+  // whose job is to say something is wrong. settleRead keeps the page up and
+  // keeps the failure, so it can be shown as what it is.
+  const [statuses, criticalsRead, recentRead] = await Promise.all([
     getSystemStatus(),
-    getOpenSystemAlerts({ severity: "critical", limit: 200 }).catch(() => []),
-    getOpenSystemAlerts({ limit: 100 }).catch(() => []),
+    settleRead("Unresolved critical alerts", () => getOpenSystemAlerts({ severity: "critical", limit: 200 })),
+    settleRead("Unresolved alerts", () => getOpenSystemAlerts({ limit: 100 })),
   ]);
   const blockers = statuses.filter((s) => s.blocksLaunch && (s.level === "not_configured" || s.level === "error"));
   const readyForOrders = blockers.length === 0;
+  const alertReadFailures = failedReads([criticalsRead, recentRead]);
+  const alertsKnown = alertReadFailures.length === 0;
   // Criticals first so a storm in the second query cannot displace one; the
-  // grouping deduplicates the overlap between the two.
-  const alertGroups = groupOpenAlerts([...criticalAlerts, ...recentAlerts]);
-  const openCriticals = criticalAlerts.length;
+  // grouping deduplicates the overlap between the two. Whatever DID load is
+  // still shown — those rows are real — beneath the notice saying the list is
+  // not complete.
+  const alertGroups = groupOpenAlerts([
+    ...(criticalsRead.ok ? criticalsRead.value : []),
+    ...(recentRead.ok ? recentRead.value : []),
+  ]);
+  const openCriticals = criticalsRead.ok ? criticalsRead.value.length : null;
 
   return (
     <div className="vl-page-shell min-h-screen bg-zinc-950 px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
@@ -97,14 +111,34 @@ export default async function AdminStatusPage() {
             {/* The same number the nav badge shows, stated next to the list it
                 describes. When they disagree, that is now visible here rather
                 than only to someone counting rows. */}
-            <span className={`text-xs ${openCriticals > 0 ? "text-rose-300" : "text-zinc-500"}`}>
-              {openCriticals} unresolved critical{openCriticals === 1 ? "" : "s"}
+            <span className={`text-xs ${openCriticals === null || openCriticals > 0 ? "text-rose-300" : "text-zinc-500"}`}>
+              {openCriticals === null
+                ? `${UNKNOWN_FIGURE} unresolved criticals (could not be counted)`
+                : `${openCriticals} unresolved critical${openCriticals === 1 ? "" : "s"}`}
             </span>
           </div>
+          {!alertsKnown ? (
+            <div
+              role="alert"
+              data-testid="alerts-read-failure"
+              className="mt-2 rounded-xl border border-rose-400/40 bg-rose-500/10 p-4 text-sm text-rose-100"
+            >
+              <p>
+                <strong>System alerts could not be loaded.</strong> This is NOT an all-clear: the alerts
+                table did not answer, so anything critical may be open and unseen.
+              </p>
+              <p className="mt-1 text-[13px] text-rose-200/90">
+                Did not load: {alertReadFailures.join(", ")}. Reload; if it persists, check the database
+                connection before acting on anything here.
+              </p>
+            </div>
+          ) : null}
           {alertGroups.length === 0 ? (
-            <p className="mt-2 rounded-xl border border-white/10 bg-white/[0.02] p-4 text-sm text-zinc-400">
-              No unresolved system alerts. 🎉 Failures (payment, email, cron, fulfillment) will appear here.
-            </p>
+            alertsKnown ? (
+              <p className="mt-2 rounded-xl border border-white/10 bg-white/[0.02] p-4 text-sm text-zinc-400">
+                No unresolved system alerts. 🎉 Failures (payment, email, cron, fulfillment) will appear here.
+              </p>
+            ) : null
           ) : (
             <div className="mt-2 divide-y divide-white/5 overflow-hidden rounded-xl border border-white/10">
               {alertGroups.map((group) => (

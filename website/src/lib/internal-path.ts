@@ -34,6 +34,20 @@ const SENTINEL_ORIGIN = "https://vanta-internal-path.invalid";
  * (`//host`), backslash tricks (`/\host`), absolute URLs, schemes, control
  * characters, and anything that is not a string.
  */
+/**
+ * The sign-in URL that brings the visitor BACK to `currentPath` afterwards.
+ *
+ * Every other "sign in first" hop in the store carries `next=`; the guest
+ * wishlist click did not, so a shopper who tapped the heart on a product page
+ * signed in and landed on their account instead of the product. The path goes
+ * through safeInternalPath so a hostile `location` can never smuggle an
+ * external target into the redirect.
+ */
+export function loginHrefWithReturn(currentPath: unknown): string {
+  const next = safeInternalPath(currentPath, "");
+  return next ? `/account/login?next=${encodeURIComponent(next)}` : "/account/login";
+}
+
 export function safeInternalPath(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
   if (!value.startsWith("/") || value.startsWith("//")) return fallback;

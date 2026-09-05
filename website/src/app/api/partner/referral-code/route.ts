@@ -3,6 +3,7 @@ import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getRequestIpAddress } from "@/lib/admin-auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { changeOwnReferralCode } from "@/lib/referral-code-service";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 // An APPROVED ambassador changes their OWN referral code. Scoped to the
 // signed-in user (server derives the ambassador from the session, never the
@@ -31,7 +32,11 @@ export async function PUT(request: Request) {
     });
     return NextResponse.json({ success: true, code: result.code });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to update your referral code.";
+    // "Only approved ambassadors can set a referral code." and the other
+    // messages written for the ambassador pass through; a database message does
+    // not.
+    console.error("[partner/referral-code]", error);
+    const message = customerSafeMessage(error, "Unable to update your referral code.");
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }

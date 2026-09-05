@@ -46,7 +46,7 @@ export const INPUTS: Record<string, unknown> = {
   cartRecoveryT24hTemplate: { name: "Zain", items: [{ name: "BPC-157", quantity: 1 }], cartValueCents: 11998, restoreUrl: URL_ },
   cartRecoveryT72hTemplate: { name: "Zain", items: [{ name: "BPC-157", quantity: 1 }], cartValueCents: 11998, restoreUrl: URL_, couponCode: "COMEBACK", discountPercent: 5, expiresAt: "September 30, 2026" },
   contactFormNotificationTemplate: { firstName: "Zain", lastName: "M", email: "z@example.test", orderNumber: "VL-1001", subject: "Question", message: "Hello" },
-  contactFormAutoReplyTemplate: { firstName: "Zain", subject: "Question", message: "Hello" },
+  contactFormAutoReplyTemplate: { firstName: "Zain" },
   wholesaleInquiryNotificationTemplate: { firstName: "Zain", lastName: "M", email: "z@example.test", phone: "+1", organization: "Lab", volume: "100", products: "BPC", message: "Hello" },
   wholesaleInquiryAutoReplyTemplate: { firstName: "Zain" },
   campaignTemplate: { subject: "News", previewText: "News", headline: "News", body: "<p>Hi</p>", promoCode: "SAVE10", ctaLabel: "Shop", ctaUrl: URL_, offerTerms: "Your gift: a free GHK-Cu on any order of $60 or more, through October 4, 2026. One per customer." },

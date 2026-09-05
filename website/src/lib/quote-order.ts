@@ -18,7 +18,7 @@ import { selectPromotionForCart, type BxgyCartLine } from "@/lib/bxgy-engine";
 import { offerMinimumMet, peekCustomerOffer, type CustomerOffer } from "@/lib/offers/customer-offers";
 import { calculateCouponDiscount } from "@/lib/coupons";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
-import { calculateShipping, isDomesticCountry, isShippableCountry } from "@/lib/shipping";
+import { calculateShipping, isDomesticCountry, isShippableCountry, isShippingWaived } from "@/lib/shipping";
 import { normalizeUsState } from "@/lib/sales-tax";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { quoteSalesTax, type ResolvedOrderTax } from "@/lib/tax-provider";
@@ -1058,7 +1058,14 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   //
   // With no address yet (express wallet), shipping is NOT knowable, so it
   // resolves to 0 here and is locked later from the wallet's address callback.
-  const shippingOtherwiseWaived = Boolean(bulkSavingsResult.tier || memberPerks.freeShipping || coupon?.freeShipping);
+  // The same isShippingWaived the cart drawer and the checkout page call, so
+  // the fee the shopper is shown is the fee the card is charged (see
+  // shipping.ts and cart-server-discount-parity.test.ts).
+  const shippingOtherwiseWaived = isShippingWaived({
+    bulkSavingsTier: Boolean(bulkSavingsResult.tier),
+    memberFreeShipping: Boolean(memberPerks.freeShipping),
+    couponFreeShipping: Boolean(coupon?.freeShipping),
+  });
   const shippingAtListTerms = destinationKnown
     ? roundMoney(calculateShipping(subtotal, input.customer.country, shippingConfig))
     : 0;

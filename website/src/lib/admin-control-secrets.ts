@@ -20,6 +20,15 @@
 export const SECRET_CONTROL_KEYS: ReadonlySet<string> = new Set([
   "notifications.pushover_token",
   "notifications.pushover_user_key",
+  // Credentials the Settings page writes. They were stored in clear in the
+  // append-only control rows; listing them here seals them at rest (see
+  // control-secret-sealing.ts) and keeps them out of any snapshot a browser
+  // receives.
+  "email.smtp_password",
+  "email.resend_api_key",
+  "email.sendgrid_api_key",
+  "payment_processor.secret_key",
+  "payment_processor.webhook_secret",
 ]);
 
 export function isSecretControlKey(section: string, key: string): boolean {

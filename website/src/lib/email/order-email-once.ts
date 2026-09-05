@@ -58,8 +58,74 @@ import { supabaseAdmin } from "@/lib/supabase-server";
  */
 export type OrderEmailKind =
   | "order_confirmation"
+  | `order_confirmation_resend:${number}`
   | "refund_confirmation"
-  | `refund_confirmation:${number}`;
+  | `refund_confirmation:${number}`
+  // Membership money emails ride the same once-per-order slot, keyed on the
+  // membership order the charge booked (membership-billing.ts).
+  | "membership_signup_receipt"
+  | "membership_renewal_receipt"
+  // SHIPPING NOTICES carry a provider idempotency key and a queue identity but
+  // take no order_email_log slot: the pipeline's own transition rules already
+  // decide whether one is due. The key is what lets a provider timeout-after-
+  // accept followed by the queued retry collapse into one email on the wire.
+  // "Shipped" and "delivered" happen once per order, so the bare kind is the
+  // identity; a tracking-number change is a different email each time the
+  // number changes, so the number rides in the kind (as a refund's amount does).
+  | "order_shipped"
+  | "order_out_for_delivery"
+  | "order_delivered"
+  | `order_tracking:${string}`;
+
+/**
+ * The provider idempotency key for an order email: the same `kind:orderId`
+ * sendOrderEmailOnce sends under and the retry queue re-sends under, so every
+ * path that emails about an order spells the identity one way.
+ */
+export function orderEmailIdempotencyKey(orderId: string, kind: OrderEmailKind): string {
+  return `${kind}:${orderId}`;
+}
+
+/**
+ * The send-once identity of a DELIBERATE admin resend of the receipt.
+ *
+ * An admin clicking "resend confirmation" wants a second copy sent, so it
+ * cannot share the original's slot or the original's provider idempotency key
+ * — both would swallow it as the duplicate they exist to prevent. It cannot be
+ * unlogged either, which is what it was: the one path that reached the
+ * provider with no order_email_log row, no idempotency key and no queue on
+ * failure. So each intentional resend gets its own numbered slot: the first
+ * click takes `order_confirmation_resend:1`, the next `:2`, and so on.
+ *
+ * Two clicks landing in the same instant both compute the same number and one
+ * of them is refused by the unique index — which is exactly the double-click
+ * debounce the customer wants. A click a moment later, after the first has
+ * settled, finds a higher number and goes out.
+ *
+ * If the log cannot be read the number is the current minute, so the send is
+ * still attempted and a double-click still collapses at the provider.
+ */
+export async function nextOrderConfirmationResendKind(orderId: string): Promise<OrderEmailKind> {
+  const prefix = "order_confirmation_resend:";
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("order_email_log")
+      .select("kind")
+      .eq("order_id", orderId)
+      .in("status", ["sending", "sent"]);
+    if (error || !data) throw error ?? new Error("unreadable");
+    let highest = 0;
+    for (const row of data as Array<{ kind?: string | null }>) {
+      const kind = String(row.kind ?? "");
+      if (!kind.startsWith(prefix)) continue;
+      const n = Number(kind.slice(prefix.length));
+      if (Number.isFinite(n) && n > highest) highest = n;
+    }
+    return `${prefix}${highest + 1}` as OrderEmailKind;
+  } catch {
+    return `${prefix}${Math.floor(Date.now() / 60_000)}` as OrderEmailKind;
+  }
+}
 
 /**
  * The send-once identity of a refund confirmation: the kind plus the CUMULATIVE

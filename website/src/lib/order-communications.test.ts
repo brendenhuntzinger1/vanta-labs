@@ -283,6 +283,10 @@ describe("the route distinguishes a failed read from an empty one", () => {
   it("checks Supabase's error object rather than relying on a throw", () => {
     // supabase-js reports a missing table through `error`, not an exception, so
     // a try/catch alone would silently produce an empty array.
-    expect(route).toContain("if (!error) pendingEmails =");
+    // Two reads now (order-linked rows, then legacy subject matches); each
+    // consults its own error object, and only a genuinely failed linked read
+    // is allowed to throw (a missing order_id column falls back to legacy).
+    expect(route).toContain("if (linked.error && !columnMissing) throw linked.error;");
+    expect(route).toContain("if (!legacy.error) {");
   });
 });

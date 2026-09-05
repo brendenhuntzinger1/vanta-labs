@@ -5,7 +5,7 @@ import { sendMarketingEmail } from "@/lib/email/marketing";
 import { campaignTemplate } from "@/lib/email/templates";
 import { getEmailRuntimeConfig, marketingBlockedReason } from "@/lib/email/settings";
 import { loadConsentedAudience } from "@/lib/email/audience";
-import { isPaidOrderStatus } from "@/lib/ledger";
+import { isPaidOrderStatus, isProductPurchaseOrder } from "@/lib/ledger";
 import { buildAutomationClickUrl, buildAutomationOpenUrl } from "@/lib/email/automation-links";
 import { resolveSitePath } from "@/lib/email/cta-path";
 import { describeOfferTerms, isOfferKey, issueCustomerOffer } from "@/lib/offers/customer-offers";
@@ -192,6 +192,34 @@ export const claimAutomationSendForTest = claimAutomationSend;
 export const closeAutomationSendForTest = closeAutomationSend;
 
 /** Everything already sent for an automation, as its dedup keys. */
+/**
+ * When each episode reference last received this automation (ms), for the
+ * ladder-spacing rule in selectAutomationTargets. Same read as loadAlreadySent
+ * with the timestamp kept.
+ */
+async function loadSentAtByReference(key: AutomationKey): Promise<Map<string, number>> {
+  const sentAt = new Map<string, number>();
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabaseAdmin
+      .from("email_send_log")
+      .select("reference_id, sent_at")
+      .eq("campaign_type", `automation:${key}`)
+      .neq("status", "failed")
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const rows = (data ?? []) as Array<{ reference_id?: string | null; sent_at?: string | null }>;
+    for (const row of rows) {
+      const reference = String(row.reference_id ?? "");
+      const at = Date.parse(String(row.sent_at ?? ""));
+      if (!reference || !Number.isFinite(at)) continue;
+      sentAt.set(reference, Math.max(sentAt.get(reference) ?? 0, at));
+    }
+    if (rows.length < PAGE) break;
+  }
+  return sentAt;
+}
+
 async function loadAlreadySent(key: AutomationKey): Promise<Set<string>> {
   const sent = new Set<string>();
   const PAGE = 1000;
@@ -224,12 +252,17 @@ async function loadPaidOrders(): Promise<PaidOrder[]> {
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabaseAdmin
       .from("orders")
-      .select("order_id, customer_email, payment_status, created_at")
+      .select("order_id, customer_email, payment_status, created_at, order_type")
       .range(from, from + PAGE - 1);
     if (error) throw error;
     const rows = data ?? [];
     for (const row of rows) {
       if (!isPaidOrderStatus(row.payment_status as string | null)) continue;
+      // A membership charge or a replacement reship is a paid order and NOT a
+      // purchase of product (EMAIL-02): "your first order" after a plan signup,
+      // "time to restock" thirty days after a free reship, and a win-back clock
+      // reset by every monthly renewal were all this one missing line.
+      if (!isProductPurchaseOrder(row as { order_type?: string | null })) continue;
       const email = String(row.customer_email ?? "").trim().toLowerCase();
       const orderId = String(row.order_id ?? "");
       const at = new Date(String(row.created_at)).getTime();
@@ -270,6 +303,14 @@ export function selectAutomationTargets(input: {
    * these as deferred so the sweep's numbers say what actually happened.
    */
   onDeferred?: (target: AutomationTarget) => void;
+  /**
+   * The earlier step of this automation's ladder, when one is enabled: when it
+   * reached each episode, and its own delay. Win-back 2 is then sent only
+   * after Win-back 1 went AND the gap between the two delays has passed since.
+   * Without it, enabling both on a base of long-lapsed customers sent both a
+   * day apart — message 2 carrying the gift before message 1 had a chance.
+   */
+  ladderPredecessor?: { sentAt: Map<string, number>; delayDays: number } | null;
   now: number;
   limit?: number;
 }): AutomationTarget[] {
@@ -352,6 +393,14 @@ export function selectAutomationTargets(input: {
       // the customer becomes eligible again after they lapse a second time.
       const reference = `${email}:${at}`;
       if (input.alreadySent.has(reference)) continue;
+      if (input.ladderPredecessor) {
+        // Not "due" until the earlier step has been sent for THIS episode and
+        // the ladder's own spacing has elapsed since. Nothing is consumed; the
+        // next sweep asks again.
+        const previousAt = input.ladderPredecessor.sentAt.get(reference);
+        const spacingMs = Math.max(0, input.delayDays - input.ladderPredecessor.delayDays) * DAY_MS;
+        if (previousAt === undefined || input.now - previousAt < spacingMs) continue;
+      }
       if (quiet({ email, referenceId: reference })) continue;
       targets.push({ email, referenceId: reference });
     }
@@ -501,9 +550,17 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
   for (const automation of automations) {
     try {
       const alreadySent = await loadAlreadySent(automation.key);
+      // Win-back 2 follows Win-back 1 when both are enabled (see ladderPredecessor).
+      const predecessor = automation.key === "winback_60"
+        ? automations.find((row) => row.key === "winback_30") ?? null
+        : null;
+      const ladderPredecessor = predecessor
+        ? { sentAt: await loadSentAtByReference(predecessor.key), delayDays: predecessor.delay_days }
+        : null;
       const targets = selectAutomationTargets({
         key: automation.key,
         delayDays: automation.delay_days,
+        ladderPredecessor,
         consented: audience.all,
         accounts: audience.accounts,
         accountCreatedAt,

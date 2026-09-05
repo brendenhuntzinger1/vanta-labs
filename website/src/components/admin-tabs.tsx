@@ -32,9 +32,23 @@ function badgeValue(tab: AdminTab, work: WorkQueueSummary): number {
   return 0;
 }
 
-function TabLink({ tab, active, work }: { tab: AdminTab; active: boolean; work: WorkQueueSummary }) {
+/** Which badge kinds could not be read this render. */
+export type UnknownBadges = ReadonlyArray<NonNullable<AdminTab["badge"]>>;
+
+function TabLink({
+  tab,
+  active,
+  work,
+  unknownBadges,
+}: {
+  tab: AdminTab;
+  active: boolean;
+  work: WorkQueueSummary;
+  unknownBadges: UnknownBadges;
+}) {
   const count = badgeValue(tab, work);
   const critical = tab.badge === "critical";
+  const unknown = tab.badge !== undefined && unknownBadges.includes(tab.badge);
 
   return (
     <Link
@@ -47,7 +61,20 @@ function TabLink({ tab, active, work }: { tab: AdminTab; active: boolean; work: 
       }`}
     >
       <span className="truncate">{tab.label}</span>
-      {count > 0 ? (
+      {unknown ? (
+        // A READ THAT DID NOT ANSWER IS NOT A ZERO. No badge is what "nothing
+        // open" looks like, so a failed read must draw something else — an
+        // error mark the operator cannot read as an all-clear.
+        <span
+          role="img"
+          aria-label={critical ? "Critical alert count could not be loaded" : "Work count could not be loaded"}
+          title={critical ? "Critical alert count could not be loaded" : "Work count could not be loaded"}
+          data-testid={`badge-unknown-${tab.badge}`}
+          className="shrink-0 rounded-full border border-rose-400/60 bg-rose-500/20 px-2 py-0.5 text-[11px] font-bold text-rose-200"
+        >
+          !
+        </span>
+      ) : count > 0 ? (
         <span
           // The count is the point of the tab, so it is announced, not just drawn.
           aria-label={critical ? `${count} unresolved critical alerts` : `${count} orders waiting`}
@@ -62,8 +89,16 @@ function TabLink({ tab, active, work }: { tab: AdminTab; active: boolean; work: 
   );
 }
 
-export function AdminTabs({ work = EMPTY_WORK_QUEUE }: { work?: WorkQueueSummary }) {
+export function AdminTabs({
+  work = EMPTY_WORK_QUEUE,
+  unknownBadges = [],
+}: {
+  work?: WorkQueueSummary;
+  /** Badge kinds whose read failed: they draw an error mark, never a blank. */
+  unknownBadges?: UnknownBadges;
+}) {
   const pathname = usePathname();
+  const anyUnknown = unknownBadges.length > 0;
   // Collapsed on phones and tablets; the desktop layout always shows the full
   // nav, so this state only governs small screens.
   const [open, setOpen] = useState(false);
@@ -100,7 +135,17 @@ export function AdminTabs({ work = EMPTY_WORK_QUEUE }: { work?: WorkQueueSummary
           <span className="truncate font-semibold text-white">{currentLabel}</span>
         </span>
         <span className="flex shrink-0 items-center gap-2">
-          {work.totalActionable > 0 ? (
+          {anyUnknown ? (
+            <span
+              role="img"
+              aria-label="Work counts could not be loaded"
+              title="Work counts could not be loaded"
+              data-testid="badge-unknown-total"
+              className="rounded-full border border-rose-400/60 bg-rose-500/20 px-2 py-0.5 text-[11px] font-bold text-rose-200"
+            >
+              !
+            </span>
+          ) : work.totalActionable > 0 ? (
             <span
               aria-label={`${work.totalActionable} items need attention`}
               className="rounded-full bg-amber-400/20 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-amber-200"
@@ -122,7 +167,7 @@ export function AdminTabs({ work = EMPTY_WORK_QUEUE }: { work?: WorkQueueSummary
               <ul className="grid gap-1.5">
                 {group.tabs.map((tab) => (
                   <li key={tab.href}>
-                    <TabLink tab={tab} active={tab.match(pathname)} work={work} />
+                    <TabLink tab={tab} active={tab.match(pathname)} work={work} unknownBadges={unknownBadges} />
                   </li>
                 ))}
               </ul>

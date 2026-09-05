@@ -38,6 +38,10 @@ function unauthorized() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
 }
 
+// The post-write re-read used to fall back to `[]` on failure. The client
+// applied whatever it got, so a transient read error right after a successful
+// adjustment wiped the table on screen and invited the operator to apply the
+// adjustment again. `null` means "not refreshed": the client keeps what it has.
 export async function POST(request: Request) {
   const session = await verifyAdminSessionFromRequest(request);
   if (!session) return unauthorized();
@@ -81,7 +85,7 @@ export async function POST(request: Request) {
         success: result.failed.length === 0,
         received: result.received,
         failed: result.failed,
-        rows: await getInventoryRows().catch(() => []),
+        rows: await getInventoryRows().catch(() => null),
       });
     }
 
@@ -101,19 +105,19 @@ export async function POST(request: Request) {
         actor,
       });
       if (!result.ok) return NextResponse.json({ success: false, error: result.message }, { status: 400 });
-      return NextResponse.json({ success: true, ...result, rows: await getInventoryRows().catch(() => []) });
+      return NextResponse.json({ success: true, ...result, rows: await getInventoryRows().catch(() => null) });
     }
 
     if (action === "set_incoming") {
       const result = await setIncoming({ ref, quantity: Number(body.quantity ?? 0), actor });
       if (!result.ok) return NextResponse.json({ success: false, error: result.message }, { status: 400 });
-      return NextResponse.json({ success: true, ...result, rows: await getInventoryRows().catch(() => []) });
+      return NextResponse.json({ success: true, ...result, rows: await getInventoryRows().catch(() => null) });
     }
 
     if (action === "receive_incoming") {
       const result = await receiveAllIncoming({ ref, actor });
       if (!result.ok) return NextResponse.json({ success: false, error: result.message }, { status: 400 });
-      return NextResponse.json({ success: true, ...result, rows: await getInventoryRows().catch(() => []) });
+      return NextResponse.json({ success: true, ...result, rows: await getInventoryRows().catch(() => null) });
     }
 
     return NextResponse.json({ success: false, error: `Unknown action: ${action}` }, { status: 400 });

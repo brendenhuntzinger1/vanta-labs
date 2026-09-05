@@ -5,6 +5,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { finalizeManualPayment } from "@/lib/payment-webhook";
 import { sendEmail } from "@/lib/email/send";
 import { manualPaymentReceivedTemplate, manualPaymentRejectedTemplate, orderConfirmationTemplate } from "@/lib/email/templates";
+import { receiptAdjustmentsFromOrder } from "@/lib/email/order-confirmation-render";
 import { getSiteUrl } from "@/lib/env";
 
 function roundMoney(value: number) {
@@ -137,6 +138,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
               cardProcessingFee: roundMoney(Number(order.card_processing_fee ?? 0)),
               total: roundMoney(Number(order.amount_paid ?? 0)),
               orderUrl: `${getSiteUrl()}/order-confirmation/${orderId}`,
+              ...receiptAdjustmentsFromOrder(order),
             })
           : manualPaymentReceivedTemplate({
               customerName: String(order.customer_name ?? ""),

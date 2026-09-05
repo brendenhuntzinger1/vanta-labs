@@ -223,6 +223,27 @@ async function requireProduct(productId: string) {
 }
 
 /**
+ * A dose id on a COA must be one of THIS product's doses. It used to be stored
+ * unchecked, so a stale or mistyped id failed only at the foreign key and the
+ * operator was told "Unable to save this COA." with no way to see what was
+ * wrong. Answers the dose's label so callers can name it.
+ */
+async function requireDoseOfProduct(productDoseId: string, productId: string): Promise<void> {
+  const { data, error } = await supabaseAdmin
+    .from("product_doses")
+    .select("id, product_id")
+    .eq("id", productDoseId)
+    .maybeSingle();
+
+  if (error) throw error;
+  assert(data, "That dose no longer exists. Pick a dose from this product's list, or leave the dose blank.");
+  assert(
+    String((data as { product_id?: unknown }).product_id ?? "") === productId,
+    "That dose belongs to a different product. Pick a dose from this product's list, or leave the dose blank.",
+  );
+}
+
+/**
  * Validates the uploaded bytes and puts them in the private bucket.
  *
  * The declared Content-Type is only used for a fast reject; the stored type
@@ -294,13 +315,23 @@ function buildRecordPayload(input: CoaRecordInput) {
     "The COA link must be a full http(s) URL, or leave it blank and upload a file.",
   );
 
+  // Typed but not a date is a validation failure with a fixable cause. Blank is
+  // simply "no test date". normalizeCoaDateInput answers null for both, so the
+  // two are told apart here.
+  const testDateRaw = normalizeCoaText(input.testDate ?? "", 32);
+  const testDate = normalizeCoaDateInput(input.testDate);
+  assert(
+    !testDateRaw || testDate,
+    "Enter the test date as a real calendar date in YYYY-MM-DD form (for example 2026-08-04), or leave it blank.",
+  );
+
   return {
-    product_dose_id: input.productDoseId ? normalizeCoaText(input.productDoseId, 64) : null,
+    product_dose_id: input.productDoseId ? normalizeCoaText(input.productDoseId, 64) || null : null,
     strength: normalizeCoaText(input.strength ?? "", 40) || null,
     batch_number: batchNumber,
     lot_number: normalizeCoaText(input.lotNumber ?? "", 80) || null,
     lab_name: normalizeCoaText(input.labName ?? "", 120) || null,
-    test_date: normalizeCoaDateInput(input.testDate),
+    test_date: testDate,
     purity: normalizeCoaText(input.purity ?? "", 40) || null,
     identity_result: normalizeCoaText(input.identityResult ?? "", 160) || null,
     external_url: externalUrl || null,
@@ -313,6 +344,7 @@ export async function createAdminCoaRecord(
 ): Promise<AdminCoaRecord> {
   const product = await requireProduct(input.productId);
   const payload = buildRecordPayload(input);
+  if (payload.product_dose_id) await requireDoseOfProduct(payload.product_dose_id, product.id);
 
   assert(
     Boolean(input.upload) || Boolean(payload.external_url),
@@ -384,6 +416,7 @@ export async function updateAdminCoaRecord(
     externalUrl: input.externalUrl !== undefined ? input.externalUrl : current.external_url,
     status: input.status !== undefined ? input.status : normalizeCoaStatus(current.status),
   });
+  if (payload.product_dose_id) await requireDoseOfProduct(payload.product_dose_id, product.id);
 
   // Publishing something a customer cannot open is the one state this system
   // must never reach — the whole point of the library is that "View COA" works.
@@ -463,23 +496,41 @@ export async function setAdminCoaStatus(coaId: string, status: CoaStatus): Promi
   return updateAdminCoaRecord(coaId, { status: normalizeCoaStatus(status) });
 }
 
-export async function deleteAdminCoaRecord(coaId: string): Promise<void> {
+/** What a delete removed, for the audit row. Null when there was nothing to remove. */
+export interface DeletedCoaSummary {
+  id: string;
+  productId: string | null;
+  batchNumber: string | null;
+  status: string | null;
+  filePath: string | null;
+}
+
+export async function deleteAdminCoaRecord(coaId: string): Promise<DeletedCoaSummary | null> {
   const id = normalizeCoaText(coaId, 64);
   assert(id, "Missing COA id.");
 
   const { data: existing, error: readError } = await supabaseAdmin
     .from("coa_records")
-    .select("id, file_path")
+    .select("id, file_path, product_id, batch_number, status")
     .eq("id", id)
     .maybeSingle();
 
   if (readError) throw readError;
-  if (!existing) return;
+  if (!existing) return null;
 
   const { error } = await supabaseAdmin.from("coa_records").delete().eq("id", id);
   if (error) throw error;
 
-  await removeCoaObject((existing as { file_path: string | null }).file_path);
+  const row = existing as { file_path: string | null; product_id?: unknown; batch_number?: unknown; status?: unknown };
+  await removeCoaObject(row.file_path);
+
+  return {
+    id,
+    productId: row.product_id == null ? null : String(row.product_id),
+    batchNumber: row.batch_number == null ? null : String(row.batch_number),
+    status: row.status == null ? null : String(row.status),
+    filePath: row.file_path ?? null,
+  };
 }
 
 export async function setCoaShowPendingProducts(input: {

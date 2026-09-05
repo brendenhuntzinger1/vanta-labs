@@ -7,7 +7,9 @@ import { getSiteUrl } from "@/lib/env";
 import { formatDisplayDate } from "@/lib/format-date";
 import { isMarketingSuppressed, sendMarketingEmail } from "@/lib/email/marketing";
 import { claimMarketingSend } from "@/lib/email/frequency";
-import { isPaidOrderStatus } from "@/lib/ledger";
+import { plainGreetingName } from "@/lib/email/greeting-name";
+import { getCatalogProductsBySlugs } from "@/lib/catalog";
+import { isPaidOrderStatus, isProductPurchaseOrder } from "@/lib/ledger";
 import {
   cartRecoveryT30mTemplate,
   cartRecoveryT12hTemplate,
@@ -148,7 +150,19 @@ export async function getAbandonedCartById(id: string): Promise<AbandonedCartSna
 // Called from payment-webhook.ts's paid-status transition - stops every
 // future reminder immediately, since the sweep only ever looks at
 // status='active' rows.
-export async function markAbandonedCartsRecovered(email: string, orderId: string) {
+//
+// ONLY A PRODUCT PURCHASE RECOVERS A PRODUCT CART (EMAIL-03). The webhook
+// called this for every paid order, so a member's monthly renewal landing
+// inside the 96-hour window silently ended the sequence for the product cart
+// they had abandoned, pointed recovered_order_id at a membership order, and
+// counted a recovery on the dashboard. Callers that know the order pass it;
+// an order that is not a purchase of product leaves the cart exactly as it was.
+export async function markAbandonedCartsRecovered(
+  email: string,
+  orderId: string,
+  order?: { order_type?: string | null; replacement_of?: string | null },
+) {
+  if (order && !isProductPurchaseOrder(order)) return;
   const { error } = await supabaseAdmin
     .from("abandoned_carts")
     .update({ status: "recovered", recovered_order_id: orderId })
@@ -239,7 +253,7 @@ export async function mintCartRecoveryCoupon(email: string, discountPercent: num
  * code the checkout will still accept counts: same predicate validateCoupon
  * runs (active, and not past ends_at).
  */
-async function findLiveCouponForCart(cartId: string): Promise<RecoveryCoupon | null> {
+export async function findLiveCouponForCart(cartId: string): Promise<RecoveryCoupon | null> {
   const { data: priorStages } = await supabaseAdmin
     .from("abandoned_cart_emails")
     .select("coupon_id")
@@ -744,10 +758,14 @@ async function loadRecoveryContext(emails: string[], now: number): Promise<Recov
   try {
     const { data } = await supabaseAdmin
       .from("orders")
-      .select("order_id, customer_email, payment_status, created_at")
+      .select("order_id, customer_email, payment_status, created_at, order_type")
       .in("customer_email", emails);
     for (const row of (data ?? []) as Array<Record<string, unknown>>) {
       if (!isPaidOrderStatus(row.payment_status as string | null)) continue;
+      // Same rule as the webhook mark above: a membership charge or a reship is
+      // not "they already bought", and it does not make them a recent buyer for
+      // the discount rule either.
+      if (!isProductPurchaseOrder(row as { order_type?: string | null })) continue;
       const email = String(row.customer_email ?? "").trim().toLowerCase();
       const at = new Date(String(row.created_at)).getTime();
       if (!email || !Number.isFinite(at)) continue;
@@ -834,6 +852,57 @@ const STAGE_RESULT_KEY: Record<RecoveryStage, keyof Pick<AbandonedCartSweepResul
 // interval just means coarser timing on when a stage fires, never a
 // duplicate send. At most ONE stage per cart per sweep, by construction of
 // selectDueStage.
+/** The most units one line of a recovery email will claim, whatever was stored. */
+const MAX_RECOVERY_LINE_QUANTITY = 99;
+
+/** What a recovery email renders per line — and nothing the client typed. */
+export interface RecoveryEmailItem {
+  name: string;
+  quantity: number;
+}
+
+/**
+ * The lines a recovery email may show, rendered FROM THE CATALOGUE.
+ *
+ * The guest tracking beacon stores whatever the browser posted: a `name`, an
+ * `image`, a price, per line, verbatim. Rendering those back out meant an
+ * anonymous POST to /api/cart/track could have any text — "Your account is
+ * locked, call +1 555 0100" — delivered as a genuine, branded, four-message
+ * series to any address it named, from the store's own domain. The catalogue
+ * is the only source of a product name this email will print: a line whose
+ * slug is not a live product is dropped, and the name is the product's own.
+ * Quantity is kept, as a bounded integer, because it is the one thing about
+ * the line that is genuinely the shopper's.
+ *
+ * Pure, so the rule is pinned without a database.
+ */
+export function recoveryEmailItems(
+  items: ReadonlyArray<Partial<AbandonedCartItemSnapshot>>,
+  namesBySlug: ReadonlyMap<string, string>,
+): RecoveryEmailItem[] {
+  const out: RecoveryEmailItem[] = [];
+  for (const item of items) {
+    const slug = String(item?.slug ?? "").trim();
+    const name = slug ? namesBySlug.get(slug) : undefined;
+    if (!name) continue;
+    const quantity = Math.floor(Number(item?.quantity ?? 0));
+    if (!Number.isFinite(quantity) || quantity < 1) continue;
+    out.push({ name, quantity: Math.min(MAX_RECOVERY_LINE_QUANTITY, quantity) });
+  }
+  return out;
+}
+
+/** Live product names for these slugs, in one catalogue read. Throws on a read failure. */
+async function loadCatalogueNames(slugs: string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(slugs.map((slug) => String(slug ?? "").trim()).filter(Boolean))];
+  const names = new Map<string, string>();
+  if (unique.length === 0) return names;
+  for (const product of await getCatalogProductsBySlugs(unique)) {
+    if (product?.slug && product.name) names.set(String(product.slug), String(product.name));
+  }
+  return names;
+}
+
 export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult> {
   const config = await getCartRecoveryControlConfig();
   const now = Date.now();
@@ -923,8 +992,25 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
   result.eligible = candidates.length;
   if (candidates.length === 0) return result;
 
+  // Product names come from the catalogue, never from the stored snapshot —
+  // see recoveryEmailItems. One read for every candidate's lines. If the
+  // catalogue cannot be read nothing is sent this sweep: no stage has been
+  // claimed yet, so the next tick simply tries again.
+  let catalogueNames: Map<string, string>;
+  try {
+    catalogueNames = await loadCatalogueNames(
+      candidates.flatMap(({ row }) => (Array.isArray(row.items) ? row.items : []).map((item) => String(item?.slug ?? ""))),
+    );
+  } catch (error) {
+    console.error("[cart-recovery] catalogue unavailable; no recovery mail sent this sweep", error);
+    return result;
+  }
+
   for (const { row, stage } of candidates) {
-    const items = row.items as AbandonedCartItemSnapshot[];
+    const items = recoveryEmailItems(Array.isArray(row.items) ? row.items : [], catalogueNames);
+    // Nothing in this cart is a live product — a retired listing, or a beacon
+    // that never named one. There is no honest email to build from it.
+    if (items.length === 0) continue;
     const email = String(row.email ?? "").trim().toLowerCase();
 
     // UNSUBSCRIBED SHOPPERS ARE SKIPPED BEFORE ANYTHING IS WRITTEN.
@@ -941,7 +1027,10 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     // restores normal service by itself.
     if (await isMarketingSuppressed(email)) continue;
 
-    const name = row.customer_name ?? "";
+    // The greeting name is held to the shape of a name for the same reason
+    // the line names come from the catalogue: it was typed by whoever posted
+    // the beacon, and it is printed at the top of a branded email.
+    const name = plainGreetingName(row.customer_name);
     const cartId = String(row.id);
     const base = { name, items, cartValueCents: row.cart_value_cents };
     let sent = false;

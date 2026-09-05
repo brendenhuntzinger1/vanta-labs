@@ -201,6 +201,67 @@ export function isInQuietPeriod(input: {
 }
 
 /**
+ * How far back "already sent" looks for a reference-keyed event message.
+ *
+ * Long enough to outlive any queued copy: a parked message may be deferred up
+ * to MARKETING_QUEUE_MAX_ATTEMPTS times, a day apart, before the queue gives
+ * up on it. Short enough that a genuinely new occurrence of the same message
+ * to the same person — a second restock alert months later, a win-back after
+ * a second cancellation — is not mistaken for the first.
+ */
+export const MARKETING_SEND_ONCE_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Has this exact message — (campaign type, reference, recipient) — already
+ * been SENT to this address inside the lookback?
+ *
+ * THE SEND-ONCE KEY FOR EVENT MAIL THAT HAS NONE. Automations carry a partial
+ * unique index on (campaign_type, reference_id); membership welcome and
+ * win-back, birthday, restock and coupon mail do not. So when two sweeps
+ * overlapped, or an activation was replayed, the second copy was not refused —
+ * the frequency guard saw the first copy's row inside the quiet window and
+ * DEFERRED it, and because these senders park deferrals, that second copy was
+ * delivered from the queue a day later. The drain's "already delivered?" read
+ * only looked for a send made AFTER the row was queued, which is exactly the
+ * copy it was not.
+ *
+ * Read-before-write, not a constraint: the RPC serialises senders on the
+ * address lock, so the one race left (two callers reading "no" together) ends
+ * with one claimed and one deferred — and the deferred one is caught here on
+ * its way into the queue, or on its way out. Fails OPEN on a read error: a
+ * duplicate marketing email is the smaller failure, and the guard's own claim
+ * still stands between it and the wire.
+ */
+export async function marketingMessageAlreadySent(input: {
+  email: string;
+  campaignType: string;
+  referenceId?: string | null;
+  now?: number;
+  lookbackMs?: number;
+}): Promise<boolean> {
+  const email = String(input.email ?? "").trim().toLowerCase();
+  const campaignType = String(input.campaignType ?? "").trim();
+  if (!email || !campaignType) return false;
+  const since = new Date((input.now ?? Date.now()) - (input.lookbackMs ?? MARKETING_SEND_ONCE_LOOKBACK_MS)).toISOString();
+  try {
+    let query = supabaseAdmin
+      .from("email_send_log")
+      .select("id")
+      .eq("recipient_email", email)
+      .eq("campaign_type", campaignType)
+      .eq("status", "sent")
+      .gte("sent_at", since)
+      .limit(1);
+    query = input.referenceId ? query.eq("reference_id", String(input.referenceId)) : query.is("reference_id", null);
+    const { data, error } = await query;
+    if (error || !data) return false;
+    return (data as unknown[]).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Park a deferred, fully rendered marketing message for the cron sweep.
  *
  * Lives here rather than in marketing-queue.ts so the sender does not import

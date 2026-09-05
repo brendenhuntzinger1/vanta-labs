@@ -65,6 +65,22 @@ const TECHNICAL_PATTERNS: RegExp[] = [
   /\brequest_id\b|\bdecline_code\b/i,            // processor envelope fields
 ];
 
+/**
+ * An error whose message WAS written for the person reading it.
+ *
+ * The deny-list below is a heuristic, and a few legitimate validation messages
+ * trip it — "Enter the email address on your PayPal account (like
+ * name@example.com)" contains a hostname. Throwing this class is the explicit
+ * signal that the text is meant for the customer, so customerSafeMessage()
+ * passes it through untouched. Use it ONLY for text you would put on a screen.
+ */
+export class CustomerFacingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CustomerFacingError";
+  }
+}
+
 /** True when this message is safe to show a customer verbatim. */
 export function isCustomerSafeMessage(message: string): boolean {
   const trimmed = (message ?? "").trim();
@@ -91,6 +107,7 @@ export function isCustomerSafeMessage(message: string): boolean {
  * never about losing the diagnostic.
  */
 export function customerSafeMessage(error: unknown, fallback: string): string {
+  if (error instanceof CustomerFacingError && error.message.trim()) return error.message;
   const raw = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   return isCustomerSafeMessage(raw) ? raw : fallback;
 }

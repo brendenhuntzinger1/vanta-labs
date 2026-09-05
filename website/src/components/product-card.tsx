@@ -28,6 +28,9 @@ export function ProductCard({
   initialInWishlist?: boolean;
 }) {
   const hasRealImage = Boolean(image) && !image.includes(".svg");
+  // A COA is either the legacy link on the product row or the newest published
+  // COA-library record; the library is where new certificates are uploaded.
+  const coaHref = hasCoa(product.coaUrl) ? product.coaUrl : product.coaRecordUrl;
   const dosePreview = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0];
   // Out of stock is honored only when inventory enforcement is on (the
   // catalog resolves everything to "In Stock" otherwise), so this simply
@@ -140,7 +143,7 @@ export function ProductCard({
                 {product.purityResult.includes("%") ? product.purityResult : `${product.purityResult} pure`}
               </span>
             ) : null}
-            {product.coaUrl ? (
+            {coaHref ? (
               <span className="rounded-full border border-white/[0.08] bg-white/[0.03] px-2 py-1 font-medium text-[#a3a3a3]">
                 COA verified
               </span>
@@ -226,9 +229,9 @@ export function ProductCard({
             It sits OUTSIDE the card-wide <Link> — this block is after its
             closing tag — because an anchor inside an anchor is invalid and
             the browser would drop one of them. */}
-        {hasCoa(product.coaUrl) ? (
+        {coaHref ? (
           <a
-            href={product.coaUrl}
+            href={coaHref}
             target="_blank"
             rel="noopener noreferrer"
             className="vl-focus-ring col-span-2 -mb-1 inline-flex min-h-6 items-center justify-center gap-1.5 py-1.5 text-[11px] text-[color:var(--accent-gold)]/75 underline-offset-4 transition hover:text-[color:var(--accent-gold)] hover:underline"

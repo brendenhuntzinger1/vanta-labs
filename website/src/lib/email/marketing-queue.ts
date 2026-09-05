@@ -3,6 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendRenderedMarketingEmail, type RenderedMarketingEmail } from "@/lib/email/marketing";
 import { getEmailRuntimeConfig, marketingBlockedReason } from "@/lib/email/settings";
+import { marketingMessageAlreadySent } from "@/lib/email/frequency";
 
 /**
  * THE DEFERRED QUEUE for event-driven marketing mail.
@@ -99,26 +100,23 @@ export async function drainMarketingSendQueue(input?: { now?: number; limit?: nu
       text: String(row.text_body ?? ""),
     };
     try {
-      // ALREADY DELIVERED? A sent-log row for this very message, written after
-      // the row was queued, means a previous drain sent it and could not record
-      // it. Mark it and move on rather than mailing the same thing twice.
-      const queuedAt = row.created_at ? String(row.created_at) : null;
-      if (queuedAt) {
-        let delivered = supabaseAdmin
-          .from("email_send_log")
-          .select("id")
-          .eq("recipient_email", rendered.to.trim().toLowerCase())
-          .eq("campaign_type", String(row.campaign_type ?? ""))
-          .eq("status", "sent")
-          .gte("sent_at", queuedAt)
-          .limit(1);
-        delivered = row.reference_id ? delivered.eq("reference_id", String(row.reference_id)) : delivered.is("reference_id", null);
-        const { data: priorSend, error: priorError } = await delivered;
-        if (!priorError && (priorSend ?? []).length > 0) {
-          result.sent++;
-          await mark(id, { status: "sent", sent_at: new Date().toISOString(), attempts, last_error: "delivered by an earlier drain" });
-          continue;
-        }
+      // ALREADY DELIVERED? A sent-log row for this very message — (campaign
+      // type, reference, recipient) — means the address has it: a previous
+      // drain sent it and could not record that, OR the send that deferred
+      // this row in the first place WAS this message, from an overlapping
+      // sweep or a replayed activation. This used to look only for a send made
+      // after the row was queued, which is exactly the copy it missed, so a
+      // membership welcome deferred by its own twin went out a day later.
+      // Mark it and move on rather than mailing the same thing twice.
+      if (await marketingMessageAlreadySent({
+        email: rendered.to,
+        campaignType: String(row.campaign_type ?? ""),
+        referenceId: row.reference_id ? String(row.reference_id) : null,
+        now,
+      })) {
+        result.sent++;
+        await mark(id, { status: "sent", sent_at: new Date().toISOString(), attempts, last_error: "already delivered to this address" });
+        continue;
       }
 
       const outcome = await sendRenderedMarketingEmail({

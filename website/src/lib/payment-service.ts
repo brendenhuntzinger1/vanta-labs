@@ -87,6 +87,30 @@ export function generateOrderNumber() {
 // isApprovedAmbassadorCustomer in src/lib/ambassador-status.ts (shared with the
 // account endpoint that drives the checkout preview).
 
+/**
+ * Hand a dead checkout's promotion slot and gift token straight back.
+ *
+ * Both holds would age out on their own, but the shopper is being told "no
+ * order was placed" right now and may retry at once — a slot or token still
+ * held by the order that just died is what makes that retry fail. Best effort
+ * on both counts: each release refuses to touch an already-redeemed claim.
+ */
+async function releaseAbandonedCheckoutClaims(
+  orderId: string,
+  quote: { appliedPromotionId?: string | null; appliedPromotionLimits?: unknown; appliedOffer?: unknown },
+) {
+  if (quote.appliedPromotionId && quote.appliedPromotionLimits) {
+    await releasePromotionRedemption(orderId).catch((error: unknown) => {
+      console.error("Unable to release promotion claim for an abandoned checkout", orderId, error);
+    });
+  }
+  if (quote.appliedOffer) {
+    await releaseCustomerOffer(orderId).catch((error: unknown) => {
+      console.error("Unable to release customer offer for an abandoned checkout", orderId, error);
+    });
+  }
+}
+
 export async function createCheckoutSession(
  payload: CreateCheckoutPayload,
 ): Promise<PendingOrder> {
@@ -338,6 +362,16 @@ export async function createCheckoutSession(
      holdSeconds: isManual ? MANUAL_CLAIM_HOLD_SECONDS : CLAIM_HOLD_SECONDS,
    });
    if (!reserved) {
+     // PRICE-03. The promotion slot claimed a few lines up belongs to an order
+     // that will now never exist. Left held, bxgy_count_redemptions counts it
+     // as live for the hold window — 15 minutes on card, 24 hours on a manual
+     // method — so the retry this message tells the shopper to make finds the
+     // promotion "exhausted" for them. Hand it straight back, as the
+     // insert-failure branch below already does. Best effort: the hold would
+     // release on its own anyway.
+     if (quote.appliedPromotionId && quote.appliedPromotionLimits) {
+       await releasePromotionRedemption(orderId);
+     }
      throw new Error(
        "Your free gift is no longer available, so your total has been updated. "
        + "Please refresh this page to see the current total, then place your order.",
@@ -373,6 +407,16 @@ export async function createCheckoutSession(
  );
  if (itemInsertError) {
    console.error("Unable to create order items", itemInsertError);
+   // The order row exists but nothing else does, and the customer is about to
+   // be told no order was placed. Cancel it and hand back the promotion slot
+   // and the gift, exactly as the branches below do — a pending order with no
+   // items was visible in admin, and a held BXGY slot / offer token stayed
+   // unavailable to the shopper's retry for the rest of the hold window.
+   await releaseAbandonedCheckoutClaims(orderId, quote);
+   await supabaseAdmin
+     .from("orders")
+     .update({ payment_status: "canceled", updated_at: new Date().toISOString() })
+     .eq("order_id", orderId);
    throw new Error("Unable to create order items");
  }
 
@@ -389,6 +433,7 @@ export async function createCheckoutSession(
    { expiresInMinutes: isManual ? MANUAL_RESERVATION_MINUTES : DEFAULT_RESERVATION_MINUTES },
  );
  if (!reservation.ok) {
+   await releaseAbandonedCheckoutClaims(orderId, quote);
    await supabaseAdmin
      .from("orders")
      .update({ payment_status: "canceled", updated_at: new Date().toISOString() })

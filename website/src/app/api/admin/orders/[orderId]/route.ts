@@ -1,4 +1,4 @@
-import { FULFILLMENT_STATUS_LABELS } from "@/lib/order-pipeline";
+import { canTransition, FULFILLMENT_STATUS_LABELS } from "@/lib/order-pipeline";
 import { NextResponse, after } from "next/server";
 import { setOrderFulfillmentStatus } from "@/lib/shippo/service";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
@@ -9,8 +9,10 @@ import { getSiteUrl } from "@/lib/env";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
 import { enqueueFailedEmail } from "@/lib/email/retry-queue";
+import { nextOrderConfirmationResendKind, orderEmailIdempotencyKey, sendOrderEmailOnce, type OrderEmailKind } from "@/lib/email/order-email-once";
+import { renderOrderConfirmationFromRecord } from "@/lib/email/order-confirmation-render";
 import { getBusinessSettings } from "@/lib/admin-control";
-import { deliveryConfirmationTemplate, orderCancelledTemplate, orderConfirmationTemplate, reimbursementRecordedTemplate, replacementOrderTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
+import { deliveryConfirmationTemplate, orderCancelledTemplate, reimbursementRecordedTemplate, replacementOrderTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
 import { createReplacementOrder } from "@/lib/admin-replacements";
 import { syncOrderToShippo } from "@/lib/shippo/order-sync";
 import { refundedMerchandiseFraction, updateCommissionOnRefund } from "@/lib/payment-webhook";
@@ -205,6 +207,30 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         updatePayload.tracking_number = body.trackingNumber.trim() || null;
       }
 
+      // SHIP-02. Every admin client sends the CURRENT status with each "Save",
+      // so entering a tracking number, correcting a carrier or setting an ETA
+      // without moving the status asked the pipeline for a same-to-same
+      // transition — which it refuses ("Order is already …") — AFTER the
+      // tracking number had already been written: a 400 with the row
+      // half-updated (tracking changed, no shipment row, no audit, no email).
+      //
+      // Re-saving the same status is a valid no-op: nothing to transition, and
+      // the details below still save. Anything else is checked against the
+      // pipeline's own rules BEFORE the first write, so a refusal can no longer
+      // leave the order half-applied. setOrderFulfillmentStatus re-checks and
+      // owns the write for a real change, exactly as before.
+      let statusUnchanged = false;
+      if (body.fulfillmentStatus) {
+        const preview = canTransition(priorStatus, String(body.fulfillmentStatus), "admin");
+        if (!preview.ok && preview.reason === "unchanged") {
+          statusUnchanged = true;
+        } else if (!preview.ok) {
+          // A refusal is the pipeline doing its job — report its sentence
+          // verbatim rather than a generic failure, so the operator learns why.
+          return NextResponse.json({ success: false, error: preview.message }, { status: 400 });
+        }
+      }
+
       const { error } = await supabaseAdmin
         .from("orders")
         .update(updatePayload)
@@ -227,7 +253,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       // only surviving trigger was a tracking number changing, and
       // setOrderFulfillmentStatus sends nothing itself.
       let transitionedTo: string | null = null;
-      if (body.fulfillmentStatus) {
+      if (body.fulfillmentStatus && !statusUnchanged) {
         const transition = await setOrderFulfillmentStatus({
           orderId,
           to: String(body.fulfillmentStatus),
@@ -291,18 +317,44 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       // was newly added or changed. Re-saving the same values sends nothing, so
       // there are no duplicate "your order shipped" emails.
       const NOTIFY_STATUSES = new Set(["shipped", "out_for_delivery", "delivered"]);
+      // A TRACKING NUMBER IS NOT A SHIPMENT. Entering one on an order that is
+      // still label_purchased / packed used to send "Order VL-1001 is now: Label
+      // purchased", and then the first carrier scan sent the real "Shipped" —
+      // two notices, the first of them wrong, on the exact case the
+      // communications panel says "a printed label does not send this". A
+      // tracking change is worth a notice only once the parcel is actually
+      // with the carrier; before that the shipping transition itself sends
+      // one, with the tracking number already on the row.
+      const IN_CARRIER_NETWORK = new Set(["shipped", "in_transit", "out_for_delivery"]);
       const newStatus = transitionedTo ?? priorStatus;
       const newTracking = updatePayload.tracking_number !== undefined
         ? (updatePayload.tracking_number ? String(updatePayload.tracking_number) : "")
         : priorTracking;
       const statusTransitioned = newStatus !== priorStatus && NOTIFY_STATUSES.has(newStatus.toLowerCase());
-      const trackingAddedOrChanged = newTracking !== "" && newTracking !== priorTracking;
+      const trackingAddedOrChanged = newTracking !== "" && newTracking !== priorTracking
+        && IN_CARRIER_NETWORK.has(newStatus.toLowerCase());
 
       if (statusTransitioned || trackingAddedOrChanged) {
         try {
           const order = await getOrderWithItems(orderId);
           if (order?.customer_email) {
             const trackingNumber = newTracking || undefined;
+            // THE NOTICE'S IDENTITY, for the provider and for the retry queue.
+            // A status transition happens once per order, so it is keyed on the
+            // status alone — the same key the Shippo-webhook sibling uses for
+            // the same event, so the two paths cannot each send a "shipped". A
+            // tracking change is a different email every time the number
+            // changes, so the number rides in the kind. The queued retry sends
+            // under this same key (retry-queue.ts), which is what makes a
+            // provider timeout-after-accept safe to retry.
+            const noticeKind: OrderEmailKind = statusTransitioned
+              ? (newStatus.toLowerCase() === "delivered"
+                  ? "order_delivered"
+                  : newStatus.toLowerCase() === "out_for_delivery"
+                    ? "order_out_for_delivery"
+                    : "order_shipped")
+              : `order_tracking:${newTracking}`;
+            const idempotencyKey = orderEmailIdempotencyKey(orderId, noticeKind);
             const carrier = body.carrier?.trim() || undefined;
             // Quote the reference the CUSTOMER holds, not the internal key.
             // `orderId` here is the route parameter — a raw `order-<uuid>` that
@@ -360,16 +412,15 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
             //
             // The Shippo-webhook sibling queues these same two templates for
             // exactly that reason; this path is now the same.
-            const result = await sendEmail({ to: String(order.customer_email), ...template });
+            const result = await sendEmail({ to: String(order.customer_email), ...template, idempotencyKey });
             if (!result.success) {
               console.error(
                 `[admin/orders] ${newStatus} notification failed for ${orderId}: ${result.error ?? "unknown error"}`,
               );
-              // No order context: `email_kind` is the send-once vocabulary for
-              // confirmations and refunds, and a shipping update is neither.
+              // With its identity, so the sweep re-sends under the same key.
               // The Shippo-webhook sibling queues these same two templates the
               // same way.
-              await enqueueFailedEmail({ to: String(order.customer_email), ...template }, result.error);
+              await enqueueFailedEmail({ to: String(order.customer_email), ...template }, result.error, { orderId, kind: noticeKind });
             }
           }
         } catch (notifyError) {
@@ -809,6 +860,16 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
 
     if (action === "cancel" || action === "resend_confirmation") {
       if (action === "cancel") {
+        // Same gate as the bulk cancel in ../route.ts: cancelling a paid order
+        // returns stock, writes history and emails the customer — a money-state
+        // change the role matrix reserves for managers. Staff could do it one
+        // order at a time through this branch while the bulk action refused.
+        if (!canManageRefunds(session.role)) {
+          return NextResponse.json(
+            { success: false, error: "Your role does not have permission to cancel orders." },
+            { status: 403 },
+          );
+        }
         // CANCELLATION IS A TRANSITION, NOT A FIELD WRITE.
         //
         // This used to be a raw UPDATE, which meant an admin could cancel an
@@ -883,28 +944,41 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
           return NextResponse.json({ success: false, error: "Order has no customer email on file." }, { status: 400 });
         }
 
-        const orderItems = (order.order_items ?? []) as Array<{ product_name?: string; product_id?: string; quantity?: number; line_total?: number }>;
-        const template = orderConfirmationTemplate({
-          customerName: String(order.customer_name ?? ""),
-          orderId: order.order_number ? String(order.order_number) : orderId,
-          items: orderItems.map((item) => ({
-            name: item.product_name ?? item.product_id ?? "Item",
-            quantity: Number(item.quantity ?? 0),
-            lineTotal: roundMoney(Number(item.line_total ?? 0)),
-          })),
-          subtotal: roundMoney(Number(order.subtotal ?? 0)),
-          shipping: roundMoney(Number(order.shipping_amount ?? 0)),
-          discount: roundMoney(Number(order.discount_amount ?? 0)),
-          tax: roundMoney(Number(order.tax_amount ?? 0)),
-          cardProcessingFee: roundMoney(Number(order.card_processing_fee ?? 0)),
-          total: roundMoney(Number(order.amount_paid ?? 0)),
-          orderUrl: `${getSiteUrl()}/order-confirmation/${orderId}`,
-        });
-
-        const result = await sendEmail({ to: String(order.customer_email), ...template });
-        if (!result.success) {
-          return NextResponse.json({ success: false, error: result.error ?? "Unable to send confirmation email." }, { status: 500 });
+        // "Order Confirmed" states that payment was received. Sending it for
+        // an order that has not been paid would tell the customer something
+        // untrue about their money, so only a paid order (or one paid and
+        // since refunded, whose receipt is still a true record) can be resent.
+        const RESENDABLE_PAYMENT_STATUSES = new Set(["paid", "completed", "succeeded", "partially_refunded", "refunded"]);
+        if (!RESENDABLE_PAYMENT_STATUSES.has(String(order.payment_status ?? "").toLowerCase())) {
+          return NextResponse.json(
+            { success: false, error: "This order has not been paid, so there is no confirmation to resend." },
+            { status: 400 },
+          );
         }
+
+        // THROUGH THE LOGGED PATH, LIKE EVERY OTHER RECEIPT. This used to call
+        // sendEmail directly: no order_email_log row, no provider idempotency
+        // key and nothing queued when the provider refused — the one receipt
+        // path with no record and no retry. It now takes its own send-once
+        // slot (`order_confirmation_resend:<n>`), deliberately distinct from
+        // the original's so an intentional resend is never swallowed as a
+        // duplicate, while two clicks in the same instant collapse onto one
+        // slot and one provider key. See nextOrderConfirmationResendKind.
+        const template = renderOrderConfirmationFromRecord(order, orderId);
+        const to = String(order.customer_email);
+        const kind = await nextOrderConfirmationResendKind(orderId);
+        const outcome = await sendOrderEmailOnce({ orderId, kind, to, template });
+        if (outcome.attempted && !outcome.sent) {
+          // Queued with its identity, so the sweep retries under the same key
+          // and closes this slot when it delivers — never a second copy.
+          await enqueueFailedEmail({ to, ...template }, outcome.error, { orderId, kind });
+          return NextResponse.json(
+            { success: false, error: "The confirmation could not be sent right now. It has been queued and will be retried automatically." },
+            { status: 500 },
+          );
+        }
+        // `already_sent` here means a concurrent click took the same slot a
+        // moment ago — the customer has the copy, so this click succeeded too.
       }
 
       const { error: auditError } = await supabaseAdmin

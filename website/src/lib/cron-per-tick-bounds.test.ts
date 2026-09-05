@@ -35,6 +35,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/env", () => ({ getSiteUrl: () => "https://example.test" }));
+// Product names come from the catalogue at send time, never from the stored
+// snapshot (AUTH-3): the mock answers every slug the fixtures use.
+vi.mock("@/lib/catalog", () => ({
+  getCatalogProductsBySlugs: async (slugs: string[]) => slugs.map((slug) => ({ slug, name: `Product ${slug}` })),
+}));
 vi.mock("@/lib/email/send", () => ({ sendEmail: vi.fn(async () => ({ success: true })) }));
 vi.mock("@/lib/email/marketing", () => ({
   isMarketingSuppressed: mocks.isMarketingSuppressed,
@@ -181,7 +186,7 @@ function seedCarts(count: number, ageHours: number) {
     id: `cart-${String(i).padStart(5, "0")}`,
     email: `shopper${i}@example.test`,
     customer_name: "Shopper",
-    items: [{ productId: "p1", name: "Item", quantity: 1, priceCents: 5000 }],
+    items: [{ slug: "p1", productId: "p1", name: "Item", quantity: 1, priceCents: 5000 }],
     cart_value_cents: 5000,
     status: "active",
     first_seen_at: new Date(Date.now() - ageHours * 60 * 60 * 1000).toISOString(),

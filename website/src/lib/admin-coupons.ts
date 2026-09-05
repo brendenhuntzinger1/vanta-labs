@@ -276,6 +276,28 @@ export async function updateAdminCoupon(id: string, input: Partial<CouponInput>)
     updatePayload.ends_at = input.endsAt;
   }
 
+  // THE SAME WINDOW CHECK CREATE RUNS. This only ever ran on create, so an edit
+  // could move the start past the end (or the end before the start) and save a
+  // coupon that can never be redeemed while the list showed it as scheduled.
+  // Resolve the EFFECTIVE pair — the stored side when only one end is in this
+  // request — so editing a single date cannot slip past the check either.
+  if (input.startsAt !== undefined || input.endsAt !== undefined) {
+    let startsAt: string | null | undefined = input.startsAt;
+    let endsAt: string | null | undefined = input.endsAt;
+    if (startsAt === undefined || endsAt === undefined) {
+      const { data: existing } = await supabaseAdmin
+        .from("coupons")
+        .select("starts_at, ends_at")
+        .eq("id", id)
+        .maybeSingle();
+      if (startsAt === undefined) startsAt = (existing?.starts_at as string | null | undefined) ?? null;
+      if (endsAt === undefined) endsAt = (existing?.ends_at as string | null | undefined) ?? null;
+    }
+    if (startsAt && endsAt && new Date(startsAt).getTime() > new Date(endsAt).getTime()) {
+      throw new Error("Start date must be before end date");
+    }
+  }
+
   if (input.maxRedemptions !== undefined) {
     if (input.maxRedemptions !== null) {
       const maxRedemptions = Number(input.maxRedemptions);

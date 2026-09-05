@@ -32,6 +32,7 @@ export function OrderConfirmationStatus({
   orderNumber,
   maskedEmail,
   initialPaid,
+  initialFailed,
   isManual,
   fulfillmentStatus,
 }: {
@@ -39,19 +40,28 @@ export function OrderConfirmationStatus({
   orderNumber: string;
   maskedEmail: string | null;
   initialPaid: boolean;
+  /**
+   * The processor has finished with this order and did NOT pay it — declined,
+   * cancelled or expired (payment_failed / canceled). Rendered as its own state:
+   * this page used to show such an order "Confirming your payment…" and then
+   * "Order received … no need to pay again", so a shopper whose card was
+   * declined was thanked for an order that will never ship and told not to pay.
+   */
+  initialFailed: boolean;
   isManual: boolean;
   fulfillmentStatus: string | null;
 }) {
   const [paid, setPaid] = useState(initialPaid);
+  const [failed, setFailed] = useState(initialFailed);
   const [timedOut, setTimedOut] = useState(false);
   const attempts = useRef(0);
 
   // Poll only for a not-yet-paid CARD order (the webhook-lag case). Manual
-  // orders genuinely await payment; paid orders are done.
-  const confirming = !paid && !isManual && !timedOut;
+  // orders genuinely await payment; paid and failed orders are done.
+  const confirming = !paid && !failed && !isManual && !timedOut;
 
   useEffect(() => {
-    if (paid || isManual) return;
+    if (paid || failed || isManual) return;
     let active = true;
     let timer: number | undefined;
     const MAX_ATTEMPTS = 20; // ~60s at 3s
@@ -61,12 +71,21 @@ export function OrderConfirmationStatus({
       attempts.current += 1;
       try {
         const res = await fetch(`/api/checkout/order-status/${encodeURIComponent(orderId)}`, { cache: "no-store" });
-        const json = (await res.json()) as { isPaid?: boolean };
+        const json = (await res.json()) as { isPaid?: boolean; pending?: boolean };
         if (active && json?.isPaid) {
           setPaid(true);
           // Announce it so measurement can react without polling this order
           // a second time. No payment logic depends on this event.
           window.dispatchEvent(new CustomEvent("vanta:order-paid", { detail: { orderId } }));
+          return;
+        }
+        // The route's own verdict: `pending: false` without `isPaid` means the
+        // processor is finished and the order was not paid. Only an explicit
+        // false counts — the same rule the payment page's decideFromOrderStatus
+        // applies — so a truncated or older response keeps polling rather than
+        // announcing a decline.
+        if (active && json?.pending === false) {
+          setFailed(true);
           return;
         }
       } catch {
@@ -85,7 +104,7 @@ export function OrderConfirmationStatus({
       active = false;
       if (timer) window.clearTimeout(timer);
     };
-  }, [paid, isManual, orderId]);
+  }, [paid, failed, isManual, orderId]);
 
   // break-words so a long masked address wraps instead of forcing the card wide
   // and clipping the reference on a narrow phone.
@@ -113,6 +132,31 @@ export function OrderConfirmationStatus({
             "Order confirmed" must not appear while we're still verifying the
             charge. It renders the moment polling flips `paid` to true. */}
         <OrderStatusTimeline fulfillmentStatus={fulfillmentStatus} />
+      </>
+    );
+  }
+
+  // A card order the processor has finished with and did NOT pay. The only
+  // honest words are that no money moved and the order will not ship — never
+  // "thank you", never "no need to pay again". Both were shown for exactly this
+  // state, and a shopper told not to pay again does not; the sale is lost in
+  // silence. A declined order releases its stock hold, so the way forward is a
+  // fresh checkout, the same as the payment page's own decline notice.
+  if (failed) {
+    return (
+      <>
+        <div className={`${icon} border-amber-300/40 bg-amber-400/15 text-xl`}>!</div>
+        <p className="vl2-eyebrow mt-4 text-amber-200" role="status" aria-live="polite">Payment not completed</p>
+        <h1 className={heading}>Your payment didn&apos;t go through</h1>
+        <p className="mt-2.5 text-sm leading-6 text-white/60">
+          Order <span className="font-semibold text-white">{orderNumber}</span>.
+        </p>
+        <p className="mt-2 text-sm leading-6 text-white/50">
+          Your card has not been charged and this order will not ship. This is usually the bank declining the transaction — go back to checkout to place the order again, or contact support if you think this is a mistake.
+        </p>
+        <Link href="/checkout" className="vl2-btn-primary vl-focus-ring mt-5 flex w-full items-center justify-center px-6 py-3.5 text-sm">
+          Back to checkout →
+        </Link>
       </>
     );
   }

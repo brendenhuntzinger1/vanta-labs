@@ -396,7 +396,15 @@ export function orderConfirmationTemplate(input: {
   cardProcessingFee?: number;
   total: number;
   orderUrl?: string;
+  creditsApplied?: number;
+  shippingProtectionFee?: number;
 }): EmailTemplate {
+  // creditsApplied — store credit and points redeemed against this order, in
+  // dollars, as the order row records them. shippingProtectionFee — the add-on
+  // the customer paid, from orders.shipping_protection_fee. When given, both
+  // print as themselves (EMAIL-02); when absent, the residual below infers them.
+  // (Documented here rather than in the signature: templates-sweep.test.ts
+  // reads the declared fields off the signature and a comment there hides one.)
   const name = escapeHtml(input.customerName || "there");
   const tax = input.tax ?? 0;
   const cardFee = input.cardProcessingFee ?? 0;
@@ -432,8 +440,30 @@ export function orderConfirmationTemplate(input: {
   const gross = Math.round((input.subtotal + input.shipping + tax + cardFee) * 100) / 100;
   const discount = input.discount > 0 && input.discount <= gross ? input.discount : 0;
   const other = Math.round((residual - discount) * 100) / 100;
-  const credits = Math.max(0, other);
-  const addOn = Math.max(0, -other);
+
+  // ...AND NEITHER ARE THE CREDITS OR THE PROTECTION FEE, WHEN THE CALLER HAS
+  // THEM (EMAIL-02). The residual can only ever print the NET of the two: $20
+  // of store credit against $4 of protection nets to $16, so the receipt said
+  // "Credits applied -$16.00" and showed no protection line — two false
+  // figures that still summed to Total. Both are stored on the order row
+  // (store_credit_redeemed_cents, points_redeemed, shipping_protection_fee),
+  // so a caller that reads the row passes them and each prints as itself. The
+  // residual keeps its job only as the fallback for a caller that has neither,
+  // and for whatever is left after the explicit figures — which is zero when
+  // the row is consistent, and otherwise still keeps the lines summing to Total.
+  const explicit = input.creditsApplied !== undefined || input.shippingProtectionFee !== undefined;
+  let credits: number;
+  let addOn: number;
+  if (explicit) {
+    credits = Math.max(0, Math.round((input.creditsApplied ?? 0) * 100) / 100);
+    addOn = Math.max(0, Math.round((input.shippingProtectionFee ?? 0) * 100) / 100);
+    const leftover = Math.round((other - credits + addOn) * 100) / 100;
+    if (leftover > 0) credits = Math.round((credits + leftover) * 100) / 100;
+    if (leftover < 0) addOn = Math.round((addOn - leftover) * 100) / 100;
+  } else {
+    credits = Math.max(0, other);
+    addOn = Math.max(0, -other);
+  }
   const rows = input.items
     .map(
       (item) =>
@@ -1924,22 +1954,20 @@ export function contactFormNotificationTemplate(input: {
 // Sent to the customer who submitted the contact form, confirming we received
 // their message. Transactional (a direct reply to their own action), so it is
 // sent via sendEmail() and is not suppressible.
+// DELIBERATELY DOES NOT QUOTE THE SUBMISSION. It used to render the subject
+// and the full message under "Your message:", which turned an anonymous form
+// into a relay: arbitrary text, branded and sent from the transactional
+// identity, to any address typed into the form. The owner's copy
+// (contactFormNotificationTemplate) still carries the message; the poster does
+// not need it echoed to know it arrived.
 export function contactFormAutoReplyTemplate(input: {
   firstName: string;
-  subject: string;
-  message: string;
 }): EmailTemplate {
   const firstName = escapeHtml(input.firstName || "there");
-  const subject = escapeHtml(input.subject);
-  const quoted = escapeHtml(input.message).replace(/\n/g, "<br />");
 
   const bodyHtml = `
     <p style="margin:0 0 14px;">Hi ${firstName},</p>
     <p style="margin:0 0 14px;">Thanks for reaching out to Vanta Labs — we've received your message and a member of our team will get back to you within 1–2 business days.</p>
-    <p style="margin:0 0 6px;font-size:12px;color:#a1a1aa;">Your message:</p>
-    <div style="margin:0 0 14px;padding:12px 14px;border-left:2px solid rgba(255,255,255,0.2);color:#d4d4d4;font-size:13px;">
-      <strong>${subject}</strong><br />${quoted}
-    </div>
     <p style="margin:0;font-size:13px;color:#a1a1aa;">If you need to add anything, just reply to this email.</p>
   `;
 
@@ -1954,10 +1982,6 @@ export function contactFormAutoReplyTemplate(input: {
       `Hi ${input.firstName || "there"},`,
       "",
       "Thanks for reaching out to Vanta Labs — we've received your message and will get back to you within 1–2 business days.",
-      "",
-      "Your message:",
-      input.subject,
-      input.message,
       "",
       "If you need to add anything, just reply to this email.",
       "",

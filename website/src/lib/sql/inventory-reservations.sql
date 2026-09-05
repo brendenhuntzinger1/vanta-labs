@@ -315,6 +315,15 @@ begin
     update public.inventory_reservations set status = 'released', updated_at = now() where id = r.id;
     n := n + 1;
   end loop;
+
+  -- Same body as migrations-applied/20260828T0730: a full batch means more
+  -- holds are still waiting, which the sweep log should say. This file is what
+  -- deploy-run-once and the harness re-apply, so it must not install a quieter
+  -- copy over the one production runs.
+  if n >= batch_limit then
+    raise warning 'expire_stale_reservations released the full per-tick batch of % holds; more remain for the next sweep', batch_limit;
+  end if;
+
   return n;
 end;
 $$;

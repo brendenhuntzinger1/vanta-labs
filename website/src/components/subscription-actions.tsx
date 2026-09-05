@@ -18,15 +18,22 @@ type Membership = {
 type ActionKey = "pause" | "resume" | "skip";
 
 const COPY: Record<ActionKey, { endpoint: string; confirm: string; cta: string; busy: string }> = {
+  // A pause is ONE deferred cycle, not an open-ended stop: the processor has no
+  // pause, so the next charge moves out one cycle and lands on that new date
+  // whether or not the member has resumed by then (membership-billing.ts
+  // pauseMembership). The copy used to promise "you won't be charged while
+  // paused", which was false after that cycle, and "billing restarts from a
+  // fresh cycle" on resume, which is not what happens either — the deferred
+  // date stands. Both now say what the code does.
   pause: {
     endpoint: "/api/membership/pause",
-    confirm: "Pause your membership? Billing stops and your member benefits pause until you resume — you won't be charged while paused.",
+    confirm: "Pause your membership? Your member benefits pause and your next charge moves forward one billing cycle. If you haven't resumed by then, billing continues on that date.",
     cta: "Pause membership",
     busy: "Pausing…",
   },
   resume: {
     endpoint: "/api/membership/resume",
-    confirm: "Resume your membership? Benefits turn back on and billing restarts from a fresh cycle.",
+    confirm: "Resume your membership? Benefits turn back on and billing continues on your next billing date.",
     cta: "Resume membership",
     busy: "Resuming…",
   },
@@ -51,10 +58,16 @@ export function SubscriptionActions({ membership }: { membership: Membership }) 
   const [message, setMessage] = useState<string | null>(null);
 
   const isPaused = membership.status === "paused";
+  // A PAUSED plan can always be resumed — including one that was then set to
+  // cancel at period end. cancelMembership on a paused row leaves it paused
+  // and only sets cancel_at_period_end, and the account page tells that member
+  // "Resume any time"; requiring !cancelAtPeriodEnd here hid the only control
+  // that instruction referred to. Resuming clears both the pause and the
+  // wind-down (resumeMembership). Skip/Pause are still withheld from a plan
+  // that is ending.
   const canManage =
     membership.billingCycle === "monthly" &&
-    !membership.cancelAtPeriodEnd &&
-    (membership.status === "active" || isPaused);
+    (isPaused || (membership.status === "active" && !membership.cancelAtPeriodEnd));
 
   if (!canManage) return null;
 

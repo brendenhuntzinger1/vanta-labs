@@ -43,3 +43,31 @@ describe("canonical ledger predicates (reporting reconciliation)", () => {
     expect(sumEarnedCommission(rows)).toBe(17); // 10 + 7 only
   });
 });
+
+// EMAIL-02 / EMAIL-03. "Is this revenue" (isSaleOrder) and "did they buy
+// product" are different questions. A membership charge is revenue and is not a
+// purchase of product; a replacement reship is neither.
+describe("isProductPurchaseOrder", () => {
+  it("a plain product order is a purchase, including a legacy row with no order_type", async () => {
+    const { isProductPurchaseOrder } = await import("@/lib/ledger");
+    expect(isProductPurchaseOrder({ order_type: "product" })).toBe(true);
+    expect(isProductPurchaseOrder({ order_type: null })).toBe(true);
+    expect(isProductPurchaseOrder({})).toBe(true);
+    expect(isProductPurchaseOrder({ order_type: "product", replacement_of: null })).toBe(true);
+  });
+
+  it("a membership charge is not", async () => {
+    const { isProductPurchaseOrder } = await import("@/lib/ledger");
+    expect(isProductPurchaseOrder({ order_type: "membership" })).toBe(false);
+    expect(isProductPurchaseOrder({ order_type: "Membership" })).toBe(false);
+  });
+
+  it("a replacement reship is not — by its type, or by the original it points at", async () => {
+    const { isProductPurchaseOrder, isSaleOrder } = await import("@/lib/ledger");
+    expect(isProductPurchaseOrder({ order_type: "replacement" })).toBe(false);
+    expect(isProductPurchaseOrder({ order_type: "product", replacement_of: "order-original" })).toBe(false);
+    // And the revenue predicate is untouched: a membership is still a sale.
+    expect(isSaleOrder("membership")).toBe(true);
+    expect(isSaleOrder("replacement")).toBe(false);
+  });
+});

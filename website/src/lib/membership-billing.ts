@@ -9,6 +9,7 @@ import {
   skipVeyraMembershipCycle,
   updateVeyraMembershipCard,
   changeVeyraMembershipPlan,
+  resumeVeyraMembership,
 } from "@/lib/veyra-membership";
 import { getPaymentProvider, isCheckoutOpen } from "@/lib/payment-provider";
 import { computeTierChangeBilling, decideMembershipAttempt, guardDuplicateMembershipPurchase, membershipTermPlan } from "@/lib/membership-billing-math";
@@ -17,6 +18,7 @@ import { PAID_EVENT_TYPES, isMembershipActive, skipUsedThisPaidPeriod } from "@/
 import { currentPeriodMonth, grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/store-credit";
 import { sendEmail } from "@/lib/email/send";
 import { enqueueFailedEmail } from "@/lib/email/retry-queue";
+import { sendOrderEmailOnce, type OrderEmailKind } from "@/lib/email/order-email-once";
 import type { EmailTemplate } from "@/lib/email/types";
 import { sendMarketingEmail } from "@/lib/email/marketing";
 import { getSiteUrl } from "@/lib/env";
@@ -101,6 +103,57 @@ export async function sendMembershipEmail(
 }
 
 /**
+ * The membership receipts that are keyed to a paid membership ORDER.
+ *
+ * Every charge lane books the money as an order (recordMembershipChargeOrder),
+ * and the order id is a stable identity for the charge — a redelivered webhook
+ * or a retried sweep resolves to the SAME order. That makes (order, kind) the
+ * right send-once slot for its receipt, exactly as order confirmations use.
+ */
+export type MembershipReceiptKind = "membership_signup_receipt" | "membership_renewal_receipt";
+
+/**
+ * Send a membership RECEIPT exactly once per charge, with a record.
+ *
+ * The signup receipt, the sweep's renewal receipt and the webhook's renewal
+ * receipt were plain `sendEmail` calls whose result was discarded: a provider
+ * refusal at the moment the card was charged left the member with money gone
+ * and no receipt, no queue row, no log line. And nothing but the caller's own
+ * discipline stopped a second copy.
+ *
+ * Order emails already solved both halves — order_email_log's partial unique
+ * index on (order_id, kind) makes a duplicate impossible at the database, the
+ * row records the outcome, and a failed send is queued for the retry sweep
+ * with the (order, kind) link so the retry closes the slot it delivers. The
+ * membership receipts go through that same path. The order id is the one the
+ * charge lane just booked; when it could not be booked (the order write
+ * failed, or a $0 event) there is no slot to claim and the receipt falls back
+ * to the queue-on-failure path so it is still never lost silently.
+ */
+export async function sendMembershipReceiptOnce(input: {
+  orderId: string | null | undefined;
+  kind: MembershipReceiptKind;
+  to: string;
+  template: EmailTemplate;
+}): Promise<boolean> {
+  const { orderId, kind, to, template } = input;
+  if (!orderId) {
+    return sendMembershipEmail(to, template, kind.replace(/_/g, " "));
+  }
+
+  // order_email_log's `kind` is free text and its index is on (order_id, kind);
+  // the TypeScript union on the order lane simply predates membership kinds.
+  const slotKind = kind as unknown as OrderEmailKind;
+  const result = await sendOrderEmailOnce({ orderId, kind: slotKind, to, template });
+  if (!result.attempted) return true; // already sent, or being sent, for this charge
+  if (result.sent) return true;
+
+  console.error(`[membership] ${kind} email failed for ${to} (order ${orderId}): ${result.error ?? "unknown error"}`);
+  await enqueueFailedEmail({ to, ...template }, result.error, { orderId, kind: slotKind });
+  return false;
+}
+
+/**
  * Has this account ever completed a real membership charge?
  *
  * Asks for a PAID event specifically — see PAID_EVENT_TYPES in
@@ -142,7 +195,28 @@ async function recordBillingEvent(input: {
   if (error) throw error;
 }
 
-async function handleChargeFailure(input: { userId: string; tier: TierRow; amountCents: number; eventType: string; error?: string }) {
+async function handleChargeFailure(input: {
+  userId: string;
+  tier: TierRow;
+  amountCents: number;
+  eventType: string;
+  error?: string;
+  /**
+   * Whether this failure means the member's PAID access has lapsed.
+   *
+   * True for a RENEWAL the sweep attempted: the period ran out and the charge
+   * that would have bought the next one declined, so past_due is the truth.
+   *
+   * False for a SIGNUP / re-subscribe attempt. The row this UPDATE hits, if
+   * one exists, is a membership the member still holds — active and paid
+   * through the period (winding down, or charged once with no processor
+   * subscription), or already paused / past_due / cancelled. Flipping it to
+   * past_due cut off perks the member had paid for, showed "Payment needed"
+   * for a renewal that was never due, and sent them a payment-failed notice
+   * about it. A declined new attempt changes nothing about what they hold.
+   */
+  demoteToPastDue: boolean;
+}) {
   await recordBillingEvent({
     userId: input.userId,
     tierId: input.tier.id,
@@ -152,21 +226,46 @@ async function handleChargeFailure(input: { userId: string; tier: TierRow; amoun
     failureReason: input.error ?? null,
   });
 
-  await supabaseAdmin
-    .from("customer_memberships")
-    .update({ status: "past_due", updated_at: new Date().toISOString() })
-    .eq("user_id", input.userId);
+  if (input.demoteToPastDue) {
+    await supabaseAdmin
+      .from("customer_memberships")
+      .update({ status: "past_due", updated_at: new Date().toISOString() })
+      .eq("user_id", input.userId);
+  }
+
+  // THE OPERATOR HEARS ABOUT IT. A failed renewal used to be a billing-event
+  // row on one admin screen and nothing else: nobody was told, and a member
+  // who went past_due stayed there until they happened to log in. Warning,
+  // not critical — a declined card is the customer's to fix — but on file, in
+  // Sentry, and grouped by type so a run of declines reads as a run.
+  await recordSystemAlert({
+    type: "membership_charge_failed",
+    severity: "warning",
+    message:
+      `Membership ${input.eventType} charge of ${(input.amountCents / 100).toFixed(2)} USD failed for user ${input.userId}`
+      + (input.demoteToPastDue ? " — the member is now past_due and no local retry will follow." : " — the member's existing membership is unchanged.")
+      + (input.error ? ` Reason: ${String(input.error).slice(0, 300)}` : ""),
+    context: {
+      userId: input.userId,
+      tierId: input.tier.id,
+      eventType: input.eventType,
+      amountCents: input.amountCents,
+      demotedToPastDue: input.demoteToPastDue,
+      error: input.error ?? null,
+    },
+  }).catch(() => {});
 
   const contact = await getAuthUserContact(input.userId);
   if (contact) {
-    await sendEmail({
-      to: contact.email,
-      ...membershipPaymentFailedTemplate({
+    await sendMembershipEmail(
+      contact.email,
+      membershipPaymentFailedTemplate({
         name: contact.name,
         amountCents: input.amountCents,
         updatePaymentUrl: `${getSiteUrl()}/account`,
       }),
-    });
+      "payment failed notice",
+    );
   }
 
   // A distinct "we attempted recovery" event, separate from the raw charge
@@ -199,7 +298,7 @@ function roundMoney(value: number) {
 // one-year, non-refundable pass paid off-platform, so it does NOT auto-renew
 // (no card on file) — it simply lapses at the end of the paid year, and perks
 // are active for the whole term.
-export async function activateAnnualMembership(userId: string, tierId: string) {
+export async function activateAnnualMembership(userId: string, tierId: string, paidOrderId?: string | null) {
   const tier = await getTierById(tierId);
   // The customer PAID for this tier. Returning quietly because it cannot be
   // resolved leaves them charged with no membership and no alert — the caller
@@ -247,10 +346,13 @@ export async function activateAnnualMembership(userId: string, tierId: string) {
       ...membershipWelcomeTemplate({ name: contact.name, tierName: tier.name }),
     });
 
-    // Transactional receipt for the real charge (always sent).
-    await sendEmail({
+    // Transactional receipt for the real charge (always sent) — once per paid
+    // order when the caller names it, queued for retry if the provider refuses.
+    await sendMembershipReceiptOnce({
+      orderId: paidOrderId ?? null,
+      kind: "membership_signup_receipt",
       to: contact.email,
-      ...membershipSignupReceiptTemplate({
+      template: membershipSignupReceiptTemplate({
         name: contact.name,
         tierName: tier.name,
         amountCents: tier.annual_price_cents ?? 0,
@@ -266,7 +368,7 @@ export async function activateAnnualMembership(userId: string, tierId: string) {
 // on immediately and the next charge is scheduled ~30 days out; the billing
 // sweep renews it once a recurring billing provider is connected (until then a
 // renewal attempt fails honestly and the member goes past-due).
-export async function activateMonthlyMembership(userId: string, tierId: string) {
+export async function activateMonthlyMembership(userId: string, tierId: string, paidOrderId?: string | null) {
   const tier = await getTierById(tierId);
   // See activateAnnualMembership: a paid membership that cannot be activated is
   // an operator's problem, not a silent no-op.
@@ -314,9 +416,11 @@ export async function activateMonthlyMembership(userId: string, tierId: string) 
       ...membershipWelcomeTemplate({ name: contact.name, tierName: tier.name }),
     });
 
-    await sendEmail({
+    await sendMembershipReceiptOnce({
+      orderId: paidOrderId ?? null,
+      kind: "membership_signup_receipt",
       to: contact.email,
-      ...membershipSignupReceiptTemplate({
+      template: membershipSignupReceiptTemplate({
         name: contact.name,
         tierName: tier.name,
         amountCents: tier.monthly_price_cents ?? 0,
@@ -331,11 +435,22 @@ export async function activateMonthlyMembership(userId: string, tierId: string) 
 // Turns on a membership after its order is PAID (card webhook or manual
 // approval), picking the right cycle. This is the single activation entry point
 // used by the payment paths.
-export async function activatePaidMembership(userId: string, tierId: string, billingCycle: "monthly" | "annual") {
+//
+// `paidOrderId` is the order that was just paid. When the caller passes it, the
+// signup receipt claims a send-once slot on that order (order_email_log) so a
+// replayed activation can never send two receipts; without it the receipt is
+// still sent and queued on failure, and once-ness rests on the caller's own
+// paid-side-effects claim as before.
+export async function activatePaidMembership(
+  userId: string,
+  tierId: string,
+  billingCycle: "monthly" | "annual",
+  paidOrderId?: string | null,
+) {
   if (billingCycle === "monthly") {
-    await activateMonthlyMembership(userId, tierId);
+    await activateMonthlyMembership(userId, tierId, paidOrderId ?? null);
   } else {
-    await activateAnnualMembership(userId, tierId);
+    await activateAnnualMembership(userId, tierId, paidOrderId ?? null);
   }
 }
 
@@ -575,7 +690,7 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
     // branch below: without them it reads undefined, treats every member as
     // having no subscription, and falls through — which would charge a
     // legitimate member again on a double-submit.
-    .select("user_id, tier_id, status, billing_cycle, cancel_at_period_end, veyra_membership_id")
+    .select("user_id, tier_id, status, billing_cycle, cancel_at_period_end, veyra_membership_id, next_billing_at, renews_at")
     .eq("user_id", input.userId)
     .maybeSingle();
 
@@ -614,6 +729,43 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
     const veyraMembershipId = (existingMembership as { veyra_membership_id?: string | null })
       .veyra_membership_id;
 
+    // NO UNPAID HIGHER TIER. Perks used to switch the moment a change was
+    // requested, with only the NEXT charge repriced — so a member could buy the
+    // cheapest tier and hold the dearest one's perks for the rest of the paid
+    // period for nothing; monthly, that loop repeats every cycle (upgrade after
+    // paying, downgrade before renewal). Veyra's `change` takes an amount and
+    // an interval and offers no supported proration or difference charge, so:
+    //
+    //   annual   The pass never renews (owner decision), so there is no paid
+    //            moment to attach the change to. Refused while paid up; the
+    //            member picks a tier when the pass ends and they rejoin.
+    //   monthly  An UPGRADE is repriced at Veyra now and parked in
+    //            pending_tier_id; membership.renewed — the first charge at the
+    //            new price — moves the member onto it. A downgrade (or an
+    //            equal price) still applies at once: the member gives perks up
+    //            and the next charge is already lower.
+    const currentTier = existingMembership.tier_id ? await getTierById(String(existingMembership.tier_id)) : null;
+    const priceFor = (row: TierRow | null) =>
+      changedCycle === "annual" ? Number(row?.annual_price_cents ?? 0) : Number(row?.monthly_price_cents ?? 0);
+    const isUpgrade = priceFor(tier) > priceFor(currentTier);
+
+    if (changedCycle === "annual" && veyraMembershipId && !isTrialing) {
+      const paidThroughIso =
+        (existingMembership as { next_billing_at?: string | null; renews_at?: string | null }).next_billing_at
+        ?? (existingMembership as { renews_at?: string | null }).renews_at
+        ?? null;
+      const stillPaid = paidThroughIso ? new Date(paidThroughIso).getTime() > now.getTime() : true;
+      if (stillPaid) {
+        await recordBillingEvent({ userId: input.userId, tierId: tier.id, eventType: "tier_change", amountCents: 0, status: "failed", failureReason: "annual_pass_active" });
+        const through = formatDisplayDate(paidThroughIso, "long");
+        return {
+          success: false,
+          changed: false,
+          error: `Your annual ${currentTier?.name ?? "membership"} pass runs through ${through ?? "the end of its term"}. Plan changes take effect when it ends — choose your new tier then.`,
+        };
+      }
+    }
+
     if (veyraMembershipId) {
       const repricedAtProcessor = await changeVeyraMembershipPlan(veyraMembershipId, {
         amountCents: repriced.nextBillingAmountCents,
@@ -640,10 +792,33 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
       }
     }
 
+    if (isUpgrade && veyraMembershipId && !isTrialing) {
+      // Repriced at Veyra above; the perks wait for the renewal that pays for them.
+      const effectiveAt =
+        (existingMembership as { next_billing_at?: string | null }).next_billing_at
+        ?? (existingMembership as { renews_at?: string | null }).renews_at
+        ?? null;
+      await supabaseAdmin
+        .from("customer_memberships")
+        .update({
+          pending_tier_id: tier.id,
+          pending_tier_effective_at: effectiveAt,
+          next_billing_amount_cents: repriced.nextBillingAmountCents,
+          renewal_reminder_sent_at: null,
+          updated_at: now.toISOString(),
+        })
+        .eq("user_id", input.userId);
+      await recordBillingEvent({ userId: input.userId, tierId: tier.id, eventType: "tier_change_scheduled", amountCents: 0, status: "succeeded" });
+      return { success: true, changed: true, scheduledFor: effectiveAt };
+    }
+
     await supabaseAdmin
       .from("customer_memberships")
       .update({
         tier_id: tier.id,
+        // A downgrade cancels any upgrade still waiting for its renewal.
+        pending_tier_id: null,
+        pending_tier_effective_at: null,
         next_billing_amount_cents: repriced.nextBillingAmountCents,
         ...(repriced.firstMonthRemainderCents !== null
           ? { first_month_remainder_cents: repriced.firstMonthRemainderCents }
@@ -680,6 +855,35 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
     const isWindingDown = Boolean(
       (existingMembership as { cancel_at_period_end?: boolean }).cancel_at_period_end,
     );
+
+    // AN ANNUAL MEMBER IS NOT "WINDING DOWN" — THEY ARE PAID UP.
+    //
+    // Every annual row carries cancel_at_period_end=true BY DESIGN (it is a
+    // one-year pass that never auto-renews: membershipTermPlan). Read as
+    // "winding down" it fell through to a fresh charge, and the upsert below
+    // reset started_at / next_billing_at to now / now+365d. An annual member
+    // two months in who confirmed the same tier again paid a second full,
+    // non-refundable year and had the ten months already paid for thrown
+    // away rather than added. Refuse while the paid term is still running;
+    // once it has lapsed the same call is a genuine, welcome rejoin.
+    const paidThrough = isMembershipActive({
+      status: String(existingMembership.status),
+      nextBillingAt: (existingMembership as { next_billing_at?: string | null }).next_billing_at ?? null,
+      renewsAt: (existingMembership as { renews_at?: string | null }).renews_at ?? null,
+    });
+    if (existingMembership.billing_cycle === "annual" && paidThrough) {
+      const accessThrough = formatDisplayDate(
+        (existingMembership as { next_billing_at?: string | null }).next_billing_at
+          ?? (existingMembership as { renews_at?: string | null }).renews_at
+          ?? null,
+        "long",
+      );
+      throw new Error(
+        `You already hold an annual ${tier.name} membership`
+        + (accessThrough ? ` through ${accessThrough}` : "")
+        + ". Nothing was charged. You can buy another year once this one ends.",
+      );
+    }
 
     if (hasProcessorSubscription && !isWindingDown) {
       return { success: true, changed: false };
@@ -725,12 +929,16 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
       (existingMembership as { cancel_at_period_end?: boolean } | null)?.cancel_at_period_end,
     );
     let priorSubscriptionError: string | null = null;
-    if (input.tokenIntentId && contact?.email && priorVeyraMembershipId && !priorWindingDown) {
+    let priorSubscriptionClosed = false;
+    const priorStillBilling = Boolean(priorVeyraMembershipId) && !priorWindingDown;
+    if (input.tokenIntentId && contact?.email && priorVeyraMembershipId && priorStillBilling) {
       const stopPrior = await cancelVeyraMembership(priorVeyraMembershipId, false);
       if (!stopPrior.ok) {
         priorSubscriptionError =
           `We couldn't close your previous subscription with the payment provider (${stopPrior.message}). `
           + "Nothing was charged — please try again or contact support.";
+      } else {
+        priorSubscriptionClosed = true;
       }
     }
 
@@ -797,6 +1005,20 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
           chargeResult = { success: false, error: veyra.message };
         }
       }
+    } else if (priorStillBilling) {
+      // THE LEGACY LANE MUST NOT ORPHAN A LIVE PROCESSOR SUBSCRIPTION.
+      //
+      // Without a card token there is no Veyra call to make, and the upsert
+      // below writes veyra_membership_id: null — which would leave the old
+      // subscription billing at Veyra with nothing local pointing at it, AND
+      // hand the row to our own sweep as a locally-billed member. Two billers
+      // on one card. Nothing in production reaches this lane (the subscribe
+      // route refuses a request with no token), so this is a guard, not a
+      // path: refuse rather than charge.
+      chargeResult = {
+        success: false,
+        error: "This membership is billed through your saved card. Please re-enter your card to change it.",
+      };
     } else {
       chargeResult = await billingProvider.chargeCard({
         billingProviderCustomerId: null,
@@ -875,7 +1097,7 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
       // its own charge is deduplicated on (`signup-<user>-<tier>-<cycle>-<day>`),
       // so a retry inside the day that the provider deduplicates cannot book a
       // second order either.
-      await recordMembershipChargeOrder({
+      const signupOrder = await recordMembershipChargeOrder({
         userId: input.userId,
         tierId: tier.id,
         billingCycle: input.billingCycle,
@@ -898,10 +1120,13 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
         });
 
         // Transactional receipt for the real charge (always sent). Annual is a
-        // one-year non-renewing pass; monthly auto-renews.
-        await sendEmail({
+        // one-year non-renewing pass; monthly auto-renews. Claimed once against
+        // the order just booked, queued for retry if the provider refuses.
+        await sendMembershipReceiptOnce({
+          orderId: signupOrder.orderId ?? null,
+          kind: "membership_signup_receipt",
           to: contact.email,
-          ...membershipSignupReceiptTemplate({
+          template: membershipSignupReceiptTemplate({
             name: contact.name,
             tierName: tier.name,
             amountCents,
@@ -912,7 +1137,42 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
         });
       }
     } else {
-      await handleChargeFailure({ userId: input.userId, tier, amountCents, eventType: "renewal", error: chargeResult.error });
+      // THE PREVIOUS SUBSCRIPTION IS GONE; THE ROW MUST NOT STILL NAME IT.
+      //
+      // The prior subscription was cancelled at Veyra above, then the new
+      // charge declined. Leaving veyra_membership_id pointing at the closed
+      // subscription would send the member's NEXT attempt back through
+      // cancelVeyraMembership on an id Veyra has already ended — and a refusal
+      // there refuses the signup, for ever, for a member trying to pay.
+      // Status is left exactly as it was (paused / past_due): nothing new was
+      // bought, and nothing they held has changed.
+      if (priorSubscriptionClosed && priorVeyraMembershipId) {
+        await supabaseAdmin
+          .from("customer_memberships")
+          .update({ veyra_membership_id: null, updated_at: now.toISOString() })
+          .eq("user_id", input.userId)
+          .eq("veyra_membership_id", priorVeyraMembershipId);
+        await recordBillingEvent({
+          userId: input.userId,
+          tierId: tier.id,
+          eventType: "cancellation",
+          amountCents: 0,
+          status: "succeeded",
+          failureReason: "Previous subscription closed at the processor before a new attempt that did not complete",
+        });
+      }
+
+      // A declined NEW attempt never demotes a membership the member still
+      // holds — see the demoteToPastDue note on handleChargeFailure. With no
+      // row at all the update would be a no-op anyway.
+      await handleChargeFailure({
+        userId: input.userId,
+        tier,
+        amountCents,
+        eventType: "renewal",
+        error: chargeResult.error,
+        demoteToPastDue: false,
+      });
     }
 
     return { success: chargeResult.success };
@@ -1047,6 +1307,28 @@ export async function pauseMembership(userId: string): Promise<MembershipSchedul
   if (existing.status !== "active") throw new Error("Only an active membership can be paused.");
   if (existing.cancel_at_period_end) throw new Error("This membership is already set to end — nothing to pause.");
 
+  // ONE DEFERRAL PER PAID PERIOD — A PAUSE IS A SKIP BY ANOTHER NAME.
+  //
+  // Veyra has no pause: pauseMembership defers the next charge exactly one
+  // cycle (skip_cycle), and resumeMembership flips the row back to active
+  // with that deferred date intact. So pause → resume is a skip that also
+  // switched perks off for however long the member left it. Nothing capped
+  // it: skipNextBilling counted only `skip` rows, and pause writes `pause`,
+  // so pause, resume, pause, resume … pushed the charge out a cycle each
+  // round while perks stayed on. The rule is now shared (DEFERRAL_EVENT_TYPES
+  // in membership-status.ts) and asked here exactly as skipNextBilling asks it,
+  // ledger first and the date as defence in depth.
+  if (await hasSkippedThisPaidPeriod(userId)) {
+    throw new Error(
+      "You've already deferred a charge this cycle, so your next billing is already pushed back. You can pause again after your next renewal, or cancel instead.",
+    );
+  }
+  if (existing.next_billing_at && new Date(existing.next_billing_at as string).getTime() >= Date.now() + 30 * ONE_DAY_MS) {
+    throw new Error(
+      "You've already deferred a charge this cycle, so your next billing is already pushed back. You can pause again after your next renewal, or cancel instead.",
+    );
+  }
+
   // Defer the charge at Veyra before flipping local state. A local-only pause
   // does not stop anything: observed live 2026-08-03, a membership paused here
   // stayed "active" at Veyra with its next charge still booked.
@@ -1094,7 +1376,7 @@ export async function pauseMembership(userId: string): Promise<MembershipSchedul
 export async function resumeMembership(userId: string): Promise<MembershipScheduleResult> {
   const { data: existing, error } = await supabaseAdmin
     .from("customer_memberships")
-    .select("user_id, tier_id, status, next_billing_at, cancel_at_period_end")
+    .select("user_id, tier_id, status, billing_cycle, next_billing_at, cancel_at_period_end, veyra_membership_id")
     .eq("user_id", userId)
     .maybeSingle();
   if (error) throw error;
@@ -1118,8 +1400,40 @@ export async function resumeMembership(userId: string): Promise<MembershipSchedu
     throw new Error("This membership is already active and set to renew.");
   }
 
+  // ANNUAL IS ENDING BY DESIGN. Its cancel_at_period_end is the one-year pass
+  // itself (membershipTermPlan), not a cancellation to undo — and Veyra was
+  // told to stop at term end on purpose. There is nothing to restore.
+  if (isEnding && !isPaused && existing.billing_cycle === "annual") {
+    throw new Error("Annual memberships run for their paid year and don't auto-renew, so there is nothing to resume.");
+  }
+
+  // TELL VEYRA FIRST when the wind-down lives there. cancelMembership sends
+  // Veyra `cancel at_period_end`; clearing our own flag does not take that
+  // back. This used to be local-only: the member read "Your membership will
+  // renew as normal. Nothing was charged." while Veyra ended the subscription
+  // at period end, nothing renewed, and the perks lapsed a few days later on
+  // a row still reading active. If Veyra refuses, refuse here too — an honest
+  // "we couldn't" beats a renewal that is not coming.
+  //
+  // A PAUSED row that is not ending needs no call: the pause was a skip_cycle
+  // that has already happened at Veyra and cannot be un-skipped; resuming only
+  // turns perks back on for the period the deferred charge will buy.
+  const veyraIdForResume = (existing as { veyra_membership_id?: string | null }).veyra_membership_id ?? null;
+  let veyraResumedTo: string | null = null;
+  if (isEnding && veyraIdForResume) {
+    const res = await resumeVeyraMembership(veyraIdForResume);
+    if (!res.ok) {
+      throw new Error(
+        `We couldn't restore your membership with the payment provider (${res.message}). Nothing was changed — please try again or contact support.`,
+      );
+    }
+    veyraResumedTo = res.nextRenewalAt ?? null;
+  }
+
   const now = new Date();
-  const storedNext = existing.next_billing_at ? new Date(existing.next_billing_at as string) : null;
+  const storedNext = veyraResumedTo
+    ? new Date(veyraResumedTo)
+    : existing.next_billing_at ? new Date(existing.next_billing_at as string) : null;
   const nextBillingAt = !storedNext || storedNext.getTime() <= now.getTime() ? new Date(now.getTime() + 30 * ONE_DAY_MS) : storedNext;
 
   const { error: updateError } = await supabaseAdmin
@@ -1437,6 +1751,8 @@ export interface MembershipBillingSweepResult {
   renewalRemindersSent: number;
   renewalChargesAttempted: number;
   cancellationsFinalized: number;
+  /** past_due members reported as stalled this tick (see step 6). */
+  pastDueStalled: number;
 }
 
 // Idempotent, safe to run at any interval - each step only ever touches
@@ -1604,6 +1920,7 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
     renewalRemindersSent: 0,
     renewalChargesAttempted: 0,
     cancellationsFinalized: 0,
+    pastDueStalled: 0,
   };
 
   const billingProvider = getBillingProvider();
@@ -1657,14 +1974,17 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
       if (!claimedRemainder || claimedRemainder.length === 0) continue;
       const contact = await getAuthUserContact(row.user_id);
       if (contact && row.first_month_remainder_cents !== null && row.intro_ends_at) {
-        await sendEmail({
-          to: contact.email,
-          ...membershipRemainderReminderTemplate({
+        // The claim above is what makes this once; the helper is what makes a
+        // refused send visible and retried instead of lost with the claim spent.
+        await sendMembershipEmail(
+          contact.email,
+          membershipRemainderReminderTemplate({
             name: contact.name,
             remainderCents: row.first_month_remainder_cents,
             chargeDate: formatDisplayDate(row.intro_ends_at, "long") ?? "",
           }),
-        });
+          "remainder reminder",
+        );
       }
       result.remainderRemindersSent += 1;
     }
@@ -1743,18 +2063,22 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
 
         const contact = await getAuthUserContact(row.user_id);
         if (contact) {
-          await sendEmail({
-            to: contact.email,
-            ...membershipRemainderReceiptTemplate({
+          // No order is booked for the remainder charge, so there is no
+          // send-once slot to claim; the schedule advance above is what keeps
+          // this lane from re-sending, and the helper keeps a refusal visible.
+          await sendMembershipEmail(
+            contact.email,
+            membershipRemainderReceiptTemplate({
               name: contact.name,
               remainderCents: amountCents,
               nextBillingDate: formatDisplayDate(nextBillingAt, "long") ?? "",
               monthlyPriceCents: tier.monthly_price_cents,
             }),
-          });
+            "remainder receipt",
+          );
         }
       } else {
-        await handleChargeFailure({ userId: row.user_id, tier, amountCents, eventType: "first_month_remainder", error: chargeResult.error });
+        await handleChargeFailure({ userId: row.user_id, tier, amountCents, eventType: "first_month_remainder", error: chargeResult.error, demoteToPastDue: true });
       }
     }
   }
@@ -1784,10 +2108,17 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
 
     for (const row of (data ?? []) as unknown as DueMembershipRow[]) {
       const tier = row.membership_tiers;
-      await supabaseAdmin
+      // Conditional on the row still being active: two overlapping sweeps (or
+      // a webhook landing first) must not both "finalize" the same wind-down
+      // and each send the win-back note. Whoever flips it mails; nobody else.
+      const { data: flipped } = await supabaseAdmin
         .from("customer_memberships")
         .update({ status: "cancelled", cancelled_at: now.toISOString(), updated_at: now.toISOString() })
-        .eq("user_id", row.user_id);
+        .eq("user_id", row.user_id)
+        .eq("status", "active")
+        .eq("cancel_at_period_end", true)
+        .select("user_id");
+      if (!flipped || flipped.length === 0) continue;
 
       const contact = await getAuthUserContact(row.user_id);
       if (contact && tier) {
@@ -1845,14 +2176,15 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
       const tier = row.membership_tiers;
       const contact = await getAuthUserContact(row.user_id);
       if (contact && tier && row.next_billing_at) {
-        await sendEmail({
-          to: contact.email,
-          ...membershipRenewalReminderTemplate({
+        await sendMembershipEmail(
+          contact.email,
+          membershipRenewalReminderTemplate({
             name: contact.name,
             monthlyPriceCents: tier.monthly_price_cents,
             chargeDate: formatDisplayDate(row.next_billing_at, "long") ?? "",
           }),
-        });
+          "renewal reminder",
+        );
       }
       result.renewalRemindersSent += 1;
     }
@@ -1930,7 +2262,7 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
         // Keyed to the period just billed — the SAME key the charge above is
         // deduplicated on at the processor — so a retried or overlapping sweep
         // books one order, not two.
-        await recordMembershipChargeOrder({
+        const renewalOrder = await recordMembershipChargeOrder({
           userId: row.user_id,
           // The row's own column, not the embedded tier: it is the value every
           // other membership surface reports from, and it is present even when
@@ -1945,9 +2277,14 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
 
         const contact = await getAuthUserContact(row.user_id);
         if (contact) {
-          await sendEmail({
+          // Once per renewal order: a retried sweep resolves to the same order
+          // (period-keyed payment_id) and therefore to the same, already-taken
+          // send-once slot.
+          await sendMembershipReceiptOnce({
+            orderId: renewalOrder.orderId ?? null,
+            kind: "membership_renewal_receipt",
             to: contact.email,
-            ...membershipRenewalReceiptTemplate({
+            template: membershipRenewalReceiptTemplate({
               name: contact.name,
               monthlyPriceCents: amountCents,
               nextBillingDate: formatDisplayDate(nextBillingAt, "long") ?? "",
@@ -1957,10 +2294,70 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
           });
         }
       } else {
-        await handleChargeFailure({ userId: row.user_id, tier, amountCents, eventType: "renewal", error: chargeResult.error });
+        await handleChargeFailure({ userId: row.user_id, tier, amountCents, eventType: "renewal", error: chargeResult.error, demoteToPastDue: true });
       }
     }
   }
 
+  // Step 6: past_due members nobody is recovering.
+  //
+  // A member whose renewal declines leaves every window above (the sweep only
+  // charges `active` rows) and is never looked at again by anything. For a
+  // Veyra-owned row that is right — Veyra runs dunning and its
+  // membership.renewed / membership.canceled webhooks settle the outcome. But
+  // NOTHING tells the operator when neither arrives, and for a locally-billed
+  // row there is no dunning at all. This does not retry: a retried charge
+  // keyed to the same period would replay the same decline on an idempotent
+  // provider and risk a second capture on one that is not, and the only lane
+  // with a live processor (Veyra) already owns its retries. It makes the
+  // stall VISIBLE instead — once a day, one alert, listing who is stuck.
+  result.pastDueStalled = await alertOnStalledPastDueMembers(now);
+
   return result;
+}
+
+/** How long a member may sit past_due before it is reported as stalled. */
+const PAST_DUE_STALL_DAYS = 7;
+
+/** Rows examined for the stall report; the alert names at most this many. */
+const PAST_DUE_STALL_SCAN = 100;
+
+async function alertOnStalledPastDueMembers(now: Date): Promise<number> {
+  const stalledBefore = new Date(now.getTime() - PAST_DUE_STALL_DAYS * ONE_DAY_MS).toISOString();
+  const { data, error } = await supabaseAdmin
+    .from("customer_memberships")
+    .select("user_id, veyra_membership_id, updated_at")
+    .eq("status", "past_due")
+    .lte("updated_at", stalledBefore)
+    .order("updated_at", { ascending: true })
+    .limit(PAST_DUE_STALL_SCAN);
+
+  // Visibility only: an unreadable table must not fail the sweep that bills.
+  if (error) {
+    console.error("[membership] could not scan for stalled past_due members", error.message ?? error);
+    return 0;
+  }
+
+  const rows = (data ?? []) as Array<{ user_id: string; veyra_membership_id: string | null; updated_at: string | null }>;
+  if (rows.length === 0) return 0;
+
+  const veyraOwned = rows.filter((row) => Boolean(row.veyra_membership_id)).length;
+  await recordSystemAlert({
+    type: "membership_past_due_stalled",
+    severity: "warning",
+    message:
+      `${rows.length} member(s) have been past_due for over ${PAST_DUE_STALL_DAYS} days with no successful renewal `
+      + `(${veyraOwned} billed by the processor, ${rows.length - veyraOwned} billed locally). `
+      + "Locally-billed rows are never retried; processor-billed rows depend on its dunning. Review and contact these members.",
+    context: {
+      count: rows.length,
+      veyraOwned,
+      stalledBefore,
+      userIds: rows.slice(0, 20).map((row) => row.user_id),
+    },
+    // A standing condition, not an event: one alert a day until it clears.
+    dedupeWindowMs: 24 * 60 * 60 * 1000,
+  }).catch(() => {});
+
+  return rows.length;
 }

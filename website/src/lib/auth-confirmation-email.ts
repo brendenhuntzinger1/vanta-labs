@@ -1,7 +1,7 @@
 import "server-only";
 
 import { sendEmail } from "@/lib/email/send";
-import { claimAuthEmailSend, recordAuthEmailAttempt } from "@/lib/auth-email-audit";
+import { claimAuthEmailSend, recordAuthEmailAttempt, releaseAuthEmailClaim } from "@/lib/auth-email-audit";
 import type { AuthEmailKind } from "@/lib/auth-email-audit";
 import { accountConfirmationResendTemplate } from "@/lib/email/templates";
 import { recordSystemAlert } from "@/lib/monitoring";
@@ -37,9 +37,37 @@ interface AdminUserLike {
   user_metadata?: Record<string, unknown> | null;
 }
 
-/** Bound on how many users to inspect, so this can never become a long request. */
-const PAGE_SIZE = 200;
-const MAX_PAGES = 5;
+/**
+ * The directory walk's page size and ceiling, for the FALLBACK path only.
+ *
+ * This used to be 200 × 5: the newest thousand accounts, and "no such user"
+ * for everyone older. Past a thousand customers that was a signup for an
+ * existing address raising a CRITICAL "no account exists" alert and sending
+ * nothing, and the resend button silently doing nothing for the people who
+ * most needed it. The direct lookup below is the fix; the walk is what runs
+ * where its function has not been applied, and its ceiling is now a safety
+ * bound on request time rather than a cap the store will grow into.
+ */
+const PAGE_SIZE = 1000;
+const MAX_PAGES = 200;
+
+type DirectLookup = { outcome: "found"; id: string } | { outcome: "not_found" } | { outcome: "unavailable" };
+
+/**
+ * Ask the database for the account directly — sql/auth-user-by-email.sql.
+ * "unavailable" (the function is not applied, or the call failed) sends the
+ * caller to the directory walk; the other two answers are authoritative.
+ */
+async function lookupUserIdByEmail(email: string): Promise<DirectLookup> {
+  try {
+    const { data, error } = await supabaseAdmin.rpc("auth_user_id_by_email", { p_email: email });
+    if (error) return { outcome: "unavailable" };
+    const id = typeof data === "string" ? data.trim() : "";
+    return id ? { outcome: "found", id } : { outcome: "not_found" };
+  } catch {
+    return { outcome: "unavailable" };
+  }
+}
 
 /**
  * The account for this address, or null if there genuinely is not one.
@@ -49,10 +77,25 @@ const MAX_PAGES = 5;
  * RESPONSE but absolutely must make in their TELEMETRY. Conflating the two is
  * how a customer ends up told a link is on its way when nothing was sent and
  * nobody was told.
+ *
+ * ANY account, not the newest thousand: the direct lookup answers by email,
+ * and the admin API then returns the user by id. Only when the lookup itself
+ * is unavailable does this walk the directory, and then it walks all of it.
  */
 export async function findUserByEmail(email: string): Promise<AdminUserLike | null> {
   const target = email.trim().toLowerCase();
   if (!target) return null;
+
+  const direct = await lookupUserIdByEmail(target);
+  if (direct.outcome === "not_found") return null;
+  if (direct.outcome === "found") {
+    try {
+      const { data, error } = await supabaseAdmin.auth.admin.getUserById(direct.id);
+      if (!error && data?.user) return data.user as AdminUserLike;
+    } catch {
+      // Fall through to the walk: the id is real, the fetch was the problem.
+    }
+  }
 
   for (let page = 1; page <= MAX_PAGES; page += 1) {
     const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: PAGE_SIZE });
@@ -62,6 +105,9 @@ export async function findUserByEmail(email: string): Promise<AdminUserLike | nu
     if (match) return match;
     if (users.length < PAGE_SIZE) return null;
   }
+  // Only reachable past MAX_PAGES × PAGE_SIZE accounts with the direct lookup
+  // unavailable. Say so, because a silent null here is a false "no account".
+  console.error("[auth-confirmation-email] user directory walk hit its ceiling; apply sql/auth-user-by-email.sql");
   return null;
 }
 
@@ -152,14 +198,25 @@ export async function sendBrandedConfirmationResend(
   // links and send three emails, each carrying a DIFFERENT token — so acting on
   // any but the newest produced "the link doesn't work". The claim is taken
   // before the link is minted, so a losing caller costs nothing.
-  if (!(await claimAuthEmailSend("signup_confirmation_resend", email, debounceAs))) return;
+  //
+  // The claim is keyed on `claimedAs`, and so is everything that closes or
+  // releases it below. Recording the outcome under this function's own kind
+  // while the claim sat under the debounce key left the row at 'sending' for
+  // ever on every double-clicked signup.
+  const claimedAs: AuthEmailKind = debounceAs ?? "signup_confirmation_resend";
+  if (!(await claimAuthEmailSend("signup_confirmation_resend", email, claimedAs))) return;
 
   const link = await supabaseAdmin.auth.admin.generateLink({
     type: "magiclink",
     email,
     options: { redirectTo },
   });
-  if (link.error || !link.data?.properties?.action_link) return;
+  if (link.error || !link.data?.properties?.action_link) {
+    // Nothing was sent, so the minute's slot goes back — otherwise a customer
+    // whose link failed to mint is refused a retry for an email they never got.
+    await releaseAuthEmailClaim(claimedAs, email);
+    return;
+  }
 
   const template = accountConfirmationResendTemplate({
     name: greetingName(found.user_metadata?.full_name),
@@ -180,6 +237,7 @@ export async function sendBrandedConfirmationResend(
     email,
     success: result.success,
     error: result.error,
+    claimedAs,
   });
   if (!result.success) {
     await fallBackToSupabaseConfirmation(email, result.error);

@@ -292,13 +292,16 @@ describe("signing up again", () => {
     expect(membership()?.cancel_at_period_end).toBe(false);
   });
 
-  it("switches tier in place instead of charging again", async () => {
+  it("schedules an upgrade for the renewal that pays for it instead of charging again", async () => {
     seed({ tier_id: TIER, status: "active", billing_cycle: "monthly", veyra_membership_id: "veyra_sub_1", cancel_at_period_end: false });
 
     const result = await signup({ tierId: OTHER_TIER, tokenIntentId: "ti_123" });
 
-    expect(result).toEqual({ success: true, changed: true });
-    expect(membership()?.tier_id).toBe(OTHER_TIER);
+    expect(result).toMatchObject({ success: true, changed: true });
+    // An UPGRADE no longer switches the perks at once (that made the dearer
+    // tier free until the next charge); it is parked until membership.renewed.
+    expect(membership()?.tier_id).toBe(TIER);
+    expect(membership()?.pending_tier_id).toBe(OTHER_TIER);
     expect(veyra.start).not.toHaveBeenCalled();
     expect(charge).not.toHaveBeenCalled();
     // Repriced to the NEW tier: leaving the old price here would undercharge an
@@ -308,7 +311,7 @@ describe("signing up again", () => {
     // subscription at the processor has to be moved too, or the next cycle
     // charges the OLD tier for ever while the member enjoys the new perks.
     expect(veyra.changePlan).toHaveBeenCalledWith("veyra_sub_1", expect.objectContaining({ amountCents: 4900 }));
-    expect(billingEvents().map((e) => e.event_type)).toEqual(["tier_change"]);
+    expect(billingEvents().map((e) => e.event_type)).toEqual(["tier_change_scheduled"]);
   });
 });
 

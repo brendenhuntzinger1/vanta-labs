@@ -103,6 +103,36 @@ export function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+/**
+ * The grants that waive the shipping fee outright, independent of the
+ * discount race.
+ *
+ * ONE EXPRESSION, IMPORTED BY BOTH SIDES. quote-order.ts decides what the card
+ * is charged; cart-context.tsx and checkout/page.tsx decide what the shopper is
+ * shown. The three used to each spell this out by hand, and the client copies
+ * had drifted: they knew about the bulk tier and the membership perk but not
+ * about a coupon flagged `free_shipping`, so a shopper below the threshold who
+ * applied a free-shipping code saw the fee still in their total and was told
+ * the code "doesn't lower the total" while the server was charging $0 for it.
+ *
+ * Shipping is deliberately NOT part of resolveCustomerDiscount's single-winner
+ * contest: a code can lose the percentage race and still waive shipping. That
+ * is why this lives here, beside the fee it waives, and not in the discount
+ * resolver.
+ */
+export interface ShippingWaivers {
+  /** The basket reached a bulk-savings tier (bulk tiers ship free). */
+  bulkSavingsTier: boolean;
+  /** The shopper's membership plan includes free shipping. */
+  memberFreeShipping: boolean;
+  /** The applied coupon carries coupons.free_shipping. */
+  couponFreeShipping: boolean;
+}
+
+export function isShippingWaived(waivers: ShippingWaivers): boolean {
+  return Boolean(waivers.bulkSavingsTier || waivers.memberFreeShipping || waivers.couponFreeShipping);
+}
+
 export function calculateShipping(
   subtotal: number,
   country?: string | null,

@@ -35,16 +35,44 @@ async function loadCommunications(order: Record<string, unknown>) {
   // supabase-js reports a missing table through `error` rather than by
   // throwing, so the error object is checked explicitly. The catch covers the
   // transport failing outright.
-  let pendingEmails:
-    | { id: string; subject: string; status: string; attempts?: number | null; last_error?: string | null; updated_at?: string | null }[]
-    | null = null;
+  type PendingRow = { id: string; subject: string; status: string; attempts?: number | null; last_error?: string | null; updated_at?: string | null; order_id?: string | null };
+  let pendingEmails: PendingRow[] | null = null;
   try {
-    const { data, error } = await supabaseAdmin
+    // THE ORDER LINK IS THE IDENTITY; THE SUBJECT IS FOR LEGACY ROWS ONLY.
+    // Order-linked rows carry order_id (sql/pending-emails-order-link.sql), so a
+    // queued notice whose subject does not quote the order number is still this
+    // order's, and a row about another order whose subject merely contains the
+    // number is not. Rows written before the column existed have no link and
+    // are still found by subject; a linked row is never matched by subject.
+    // Mirrors retryPendingEmailsForOrder, so what the panel shows is what the
+    // retry button acts on.
+    // Typed explicitly: the legacy column list is chosen at runtime, which
+    // defeats supabase-js's inference from a literal select string.
+    type Page = { data: PendingRow[] | null; error: { message?: string } | null };
+    const linked = (await supabaseAdmin
       .from("pending_emails")
-      .select("id, subject, status, attempts, last_error, updated_at")
+      .select("id, subject, status, attempts, last_error, updated_at, order_id")
+      .eq("order_id", order.order_id as string)
+      .limit(20)) as unknown as Page;
+    const columnMissing = Boolean(linked.error) && /order_id|does not exist|schema cache/i.test(String(linked.error?.message ?? ""));
+    if (linked.error && !columnMissing) throw linked.error;
+    const legacy = (await supabaseAdmin
+      .from("pending_emails")
+      .select(columnMissing ? "id, subject, status, attempts, last_error, updated_at" : "id, subject, status, attempts, last_error, updated_at, order_id")
       .ilike("subject", `%${orderNumber}%`)
-      .limit(20);
-    if (!error) pendingEmails = (data ?? []) as NonNullable<typeof pendingEmails>;
+      .limit(20)) as unknown as Page;
+    if (!legacy.error) {
+      const seen = new Set<string>();
+      const rows: PendingRow[] = [];
+      for (const row of [...(linked.data ?? []), ...(legacy.data ?? [])]) {
+        // A linked row about ANOTHER order is not this order's, whatever its subject says.
+        if (row.order_id && row.order_id !== order.order_id) continue;
+        if (seen.has(String(row.id))) continue;
+        seen.add(String(row.id));
+        rows.push(row);
+      }
+      pendingEmails = rows;
+    }
   } catch {
     /* leave null — unreadable, which the panel reports as CANNOT DETERMINE */
   }
@@ -111,7 +139,7 @@ export async function POST(_request: Request, context: { params: Promise<{ order
     order.order_number as string | null,
     order.order_id as string | null,
   );
-  const outcome = await retryPendingEmailsForOrder(orderNumber);
+  const outcome = await retryPendingEmailsForOrder(orderNumber, order.order_id as string);
 
   // The refreshed view comes back with the result, so the panel reflects the
   // new state without a second round trip.

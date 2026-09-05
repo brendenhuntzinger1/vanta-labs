@@ -64,7 +64,15 @@ export async function POST(request: Request) {
     }
 
     if (!data) {
-      return NextResponse.json({ success: true, valid: false });
+      // Unknown, or known but not approved? The cart words the refusal from
+      // this. The second read discloses only that a code string exists, which
+      // /r/<code> already makes public.
+      const { data: anyRow } = await supabaseAdmin
+        .from("ambassadors")
+        .select("id")
+        .eq("referral_code", code)
+        .maybeSingle();
+      return NextResponse.json({ success: true, valid: false, reason: anyRow ? "inactive" : "unknown" });
     }
 
     return NextResponse.json({

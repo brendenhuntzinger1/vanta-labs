@@ -196,6 +196,24 @@ export function couponOutcomeAgainstQuote(input: {
   });
 }
 
+/**
+ * The one-line description of an applied code shown under the coupon field —
+ * "SAVE10 · 10% off", "SHIPFREE · Free shipping", "VIP · 15% off + Free
+ * shipping". Shared by the cart drawer and the checkout page so a
+ * free-shipping-only code (discount_value 0) is never printed as "0% off".
+ */
+export function couponHeadline(
+  details: { code: string; discountType: "percent" | "fixed"; discountValue: number; freeShipping?: boolean },
+  formatCurrency: (value: number) => string,
+): string {
+  const parts: string[] = [];
+  if (details.discountValue > 0) {
+    parts.push(details.discountType === "fixed" ? `${formatCurrency(details.discountValue)} off` : `${details.discountValue}% off`);
+  }
+  if (details.freeShipping) parts.push("Free shipping");
+  return parts.length > 0 ? `${details.code} · ${parts.join(" + ")}` : details.code;
+}
+
 export function describeCouponOutcome(input: {
   code: string;
   /** Headline offer, e.g. "10% off". Shown ONLY when the coupon actually wins. */
@@ -203,14 +221,34 @@ export function describeCouponOutcome(input: {
   winnerType: PriceControllingDiscount | null;
   /** Customer-facing name of the winner, e.g. "Bundle pricing". */
   winnerLabel: string | null;
+  /**
+   * The code is waiving a shipping fee this order would otherwise pay. Shipping
+   * is not part of the discount race (see isShippingWaived in shipping.ts), so
+   * a code can lose the percentage contest and still be in the price — and a
+   * free-shipping-only code (discount_value 0) never enters the race at all.
+   * Either way it changed the total, so it must not be described as doing
+   * nothing.
+   */
+  waivesShipping?: boolean;
 }): CouponOutcome {
   const code = input.code.trim();
 
   if (input.winnerType === "coupon") {
     const offer = input.offerLabel?.trim();
+    const parts = [offer, input.waivesShipping ? "Free shipping" : null].filter((part): part is string => Boolean(part));
     return {
       controlsPrice: true,
-      message: offer ? `Coupon applied — ${code} · ${offer}.` : `Coupon applied — ${code}.`,
+      message: parts.length > 0 ? `Coupon applied — ${code} · ${parts.join(" + ")}.` : `Coupon applied — ${code}.`,
+    };
+  }
+
+  if (input.waivesShipping) {
+    // The percentage (if any) lost, but the shipping line is $0 because of this
+    // code. That is the code controlling part of the price, so it is confirmed
+    // — and only the part that is actually in effect is named.
+    return {
+      controlsPrice: true,
+      message: `Coupon applied — ${code} · Free shipping.`,
     };
   }
 

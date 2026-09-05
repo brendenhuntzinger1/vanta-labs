@@ -154,7 +154,13 @@ export function AdminControlCenterClient() {
   const [profitProcessingFee, setProfitProcessingFee] = useState("");
   const [profitShippingEstimate, setProfitShippingEstimate] = useState("");
   const [profitFeeIncludesTax, setProfitFeeIncludesTax] = useState(true);
-  const [profitCountTax, setProfitCountTax] = useState(true);
+  // FALSE, like the server (admin-control.ts DEFAULT_PROFIT_CONFIG). This
+  // initialised to `true`, so before the snapshot loaded — or whenever the key
+  // had never been stored — the form held a value the server would resolve
+  // differently, and the very first save of ANY field wrote
+  // count_sales_tax_as_profit=true. The loader below sets the stored value;
+  // this is what an untouched form sends, so it must be the server's default.
+  const [profitCountTax, setProfitCountTax] = useState(false);
   /**
    * What the referral rates actually resolve to, straight from the same
    * function checkout uses, plus whether each came from a stored value or the

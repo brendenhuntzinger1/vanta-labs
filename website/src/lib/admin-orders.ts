@@ -4,6 +4,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { findPaidRetry, PAID_RETRY_WINDOW_MS, type PaidOrderCandidate, type PaidRetryLink } from "@/lib/payment-failure";
 import { sendEmail } from "@/lib/email/send";
+import { enqueueFailedEmail } from "@/lib/email/retry-queue";
 import { shippingUpdateTemplate } from "@/lib/email/templates";
 import { setOrderFulfillmentStatus } from "@/lib/shippo/service";
 import { getSiteUrl } from "@/lib/env";
@@ -434,8 +435,20 @@ export async function bulkUpdateAdminOrders(input: { orderIds: string[]; action:
         // the same fallback the single-order path uses.
         trackingUrl: `${getSiteUrl()}/account/orders`,
       });
-      const result = await sendEmail({ to: String(row.customer_email), ...template });
-      if (result.success) notified++;
+      const message = { to: String(row.customer_email), ...template };
+      const result = await sendEmail(message);
+      if (result.success) {
+        notified++;
+      } else {
+        // QUEUED ON FAILURE, NOT DROPPED — the same rule as the single-order
+        // route and the Shippo path. sendEmail never throws, so the catch below
+        // never saw a provider refusal: the send was simply lost, with no queue
+        // row, no log line and no alert, and the admin saw only a lower
+        // "notified" count. The status has already advanced, so no later scan
+        // regenerates this message; the retry queue is its only way out.
+        console.error(`[admin-orders] bulk ${nextStatus} notification failed for ${orderId}: ${result.error ?? "unknown error"}`);
+        await enqueueFailedEmail(message, result.error);
+      }
     } catch {
       // Best-effort: the status change already succeeded and must stand.
     }

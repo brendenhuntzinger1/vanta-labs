@@ -123,9 +123,9 @@ describe("SOT-10 — the bulk-savings panel states the programme checkout enforc
 
   it("renders the thresholds and percentages from the config, not from literals", () => {
     expect(landing).toContain("{bulkSavings.tier1Percent}% OFF");
-    expect(landing).toContain("{bulkSavings.tier1Threshold.toLocaleString()} or more");
+    expect(landing).toContain('{bulkSavings.tier1Threshold.toLocaleString("en-US")} or more');
     expect(landing).toContain("{bulkSavings.tier2Percent}% OFF");
-    expect(landing).toContain("{bulkSavings.tier2Threshold.toLocaleString()} or more");
+    expect(landing).toContain('{bulkSavings.tier2Threshold.toLocaleString("en-US")} or more');
 
     expect(landing).not.toContain(">5% OFF<");
     expect(landing).not.toContain(">12% OFF<");

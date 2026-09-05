@@ -1,7 +1,12 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { claimInventoryRestock, restockInventoryForOrder, type OrderItemRef } from "@/lib/inventory-fulfillment";
+import {
+  claimInventoryRestock,
+  INVENTORY_ACTOR_ADMIN_CANCELLATION,
+  restockInventoryForOrder,
+  type OrderItemRef,
+} from "@/lib/inventory-fulfillment";
 import { releaseInventoryForOrder } from "@/lib/inventory-reservation";
 import { recordSystemAlert } from "@/lib/monitoring";
 
@@ -154,6 +159,15 @@ export interface CancellationInventoryOutcome {
 
 export async function returnInventoryForCancelledOrder(
   orderId: string,
+  options?: {
+    /**
+     * Who the ledger books the restock to. Every caller today is the admin
+     * cancel path (setOrderFulfillmentStatus, from the order route and the bulk
+     * action), so that is the default — it used to fall through to the
+     * webhook's actor and the ledger said "payment_webhook" for a human's click.
+     */
+    actor?: string;
+  },
 ): Promise<CancellationInventoryOutcome> {
   const { data, error } = await supabaseAdmin
     .from("orders")
@@ -210,6 +224,6 @@ export async function returnInventoryForCancelledOrder(
     return { action: "already_returned" };
   }
 
-  await restockInventoryForOrder(items, orderId);
+  await restockInventoryForOrder(items, orderId, options?.actor ?? INVENTORY_ACTOR_ADMIN_CANCELLATION);
   return { action: "restocked" };
 }

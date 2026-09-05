@@ -371,15 +371,43 @@ export interface ActiveCouponSummary {
 // (assigned_email, e.g. cart-recovery) and exhausted/limit-reached codes are
 // never advertised. Returns the most recently created qualifying coupon so the
 // last code the owner turned on is the one shoppers see.
-export async function getStorefrontCoupon(): Promise<ActiveCouponSummary | null> {
+/**
+ * Who is looking. member_scope on a coupon is 'all', 'members' or
+ * 'non_members' (validateCoupon refuses the wrong audience at checkout); an
+ * advertised code must be one the viewer can actually redeem. A guest or an
+ * unknown viewer is a non-member — the same posture validateCoupon takes with
+ * no session.
+ */
+export interface StorefrontCouponViewer {
+  isActiveMember: boolean;
+}
+
+/**
+ * Whether a coupon's member_scope admits this viewer. Exported so the rule is
+ * testable on its own; a row written before the column existed has no scope
+ * and is treated as 'all'.
+ */
+export function couponScopeAdmitsViewer(memberScope: string | null | undefined, viewer: StorefrontCouponViewer): boolean {
+  const scope = String(memberScope ?? "all").toLowerCase();
+  if (scope === "members") return viewer.isActiveMember;
+  if (scope === "non_members") return !viewer.isActiveMember;
+  return true;
+}
+
+export async function getStorefrontCoupon(
+  viewer: StorefrontCouponViewer = { isActiveMember: false },
+): Promise<ActiveCouponSummary | null> {
   const nowIso = new Date().toISOString();
 
   // is_private is a newer column (coupon-private-flag.sql): private codes are
   // valid at checkout but never advertised. If the migration hasn't been
   // applied yet, retry without the column — pre-migration behavior unchanged.
+  // member_scope rides the same newer-column read: PRICE-05 — this filter
+  // never looked at it, so a members-only (or non-members-only) code was
+  // published to everyone as the featured code and refused at checkout.
   let { data, error } = await supabaseAdmin
     .from("coupons")
-    .select("code, discount_type, discount_value, ends_at, active, assigned_email, max_redemptions, redemptions_count, is_private")
+    .select("code, discount_type, discount_value, ends_at, active, assigned_email, max_redemptions, redemptions_count, is_private, member_scope")
     .eq("active", true)
     .is("assigned_email", null)
     .or(`starts_at.is.null,starts_at.lte.${nowIso}`)
@@ -405,11 +433,12 @@ export async function getStorefrontCoupon(): Promise<ActiveCouponSummary | null>
     throw error;
   }
 
-  // Skip private (unlisted) codes and any code that has already hit its
-  // redemption cap.
+  // Skip private (unlisted) codes, any code scoped to an audience this viewer
+  // is not in, and any code that has already hit its redemption cap.
   const usable = (data ?? []).find(
     (row) =>
       !(row as { is_private?: boolean }).is_private
+      && couponScopeAdmitsViewer((row as { member_scope?: string | null }).member_scope, viewer)
       && !(typeof row.max_redemptions === "number" && Number(row.redemptions_count ?? 0) >= row.max_redemptions),
   );
 

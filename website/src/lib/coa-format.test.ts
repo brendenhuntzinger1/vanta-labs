@@ -181,6 +181,23 @@ describe("normalizeCoaDateInput", () => {
     expect(normalizeCoaDateInput("")).toBeNull();
     expect(normalizeCoaDateInput("not a date")).toBeNull();
   });
+
+  // COA-2: "2026-13-45" is four-two-two digits and passed the shape check, so
+  // it reached the Postgres `date` column and the operator saw only "Unable to
+  // save this COA." A real calendar check answers null here, and the admin
+  // layer turns that into a message naming the field.
+  it("refuses dates that do not exist on a calendar", () => {
+    expect(normalizeCoaDateInput("2026-13-45")).toBeNull();
+    expect(normalizeCoaDateInput("2026-02-30")).toBeNull();
+    expect(normalizeCoaDateInput("2026-00-10")).toBeNull();
+    expect(normalizeCoaDateInput("2026-04-31")).toBeNull();
+  });
+
+  it("accepts leap days and month ends that do exist", () => {
+    expect(normalizeCoaDateInput("2028-02-29")).toBe("2028-02-29");
+    expect(normalizeCoaDateInput("2026-12-31")).toBe("2026-12-31");
+    expect(normalizeCoaDateInput("2026-02-28")).toBe("2026-02-28");
+  });
 });
 
 describe("normalizeCoaText", () => {

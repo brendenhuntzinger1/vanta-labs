@@ -29,7 +29,13 @@ import { resolveProductImage } from "@/lib/product-image";
 // support question. The library is two small queries, and the expensive half
 // (the product catalog) is already cached under CATALOG_CACHE_TAG, so the
 // marginal cost of always-fresh COA data is one indexed read.
-const COA_SIGNED_URL_TTL_SECONDS = 60 * 60; // 1 hour
+// SHORT. The redirect at /api/coa/[coaId]/file re-checks publication and
+// mints a fresh URL on every click, so this only needs to outlive one page
+// load. At an hour, a document unpublished (or a product delisted) kept
+// answering from an already-open tab for up to 60 minutes; five minutes is
+// long enough for a slow mobile download and short enough that "unpublish"
+// means what the admin thinks it means.
+const COA_SIGNED_URL_TTL_SECONDS = 5 * 60;
 export const COA_BUCKET = "coa-documents";
 
 export const COA_SETTINGS_SECTION = "coa";
@@ -242,6 +248,43 @@ export async function getPublishedCoaDocumentsForProduct(productId: string): Pro
     console.error("COA library: unable to read product COAs", error);
     return [];
   }
+}
+
+/**
+ * The newest published COA file per product, as the public href the catalogue
+ * cards can link. One batched read for the whole catalogue.
+ *
+ * The cards read only the legacy `coa_url` column, so a COA uploaded through
+ * the library (which writes coa_records, never that column) left the card
+ * without its "COA verified" pill and "View COA" link — the exact surface the
+ * upload exists to light up.
+ */
+export async function getPublishedCoaHrefsByProduct(productIds: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const ids = [...new Set(productIds.filter(Boolean))];
+  if (ids.length === 0) return out;
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("coa_records")
+      .select(COA_SELECT_COLUMNS)
+      .in("product_id", ids)
+      .eq("status", "published");
+    if (error) throw error;
+    const byProduct = new Map<string, PublicCoaDocument[]>();
+    for (const row of (data ?? []) as CoaRow[]) {
+      if (!coaRowHasFile(row) || !row.product_id) continue;
+      const list = byProduct.get(String(row.product_id)) ?? [];
+      list.push(toPublicDocument(row));
+      byProduct.set(String(row.product_id), list);
+    }
+    for (const [productId, docs] of byProduct) {
+      docs.sort(compareCoaDocuments);
+      out.set(productId, `/api/coa/${docs[0].id}/file`);
+    }
+  } catch (error) {
+    console.error("COA library: unable to read catalogue COAs", error);
+  }
+  return out;
 }
 
 export type ResolvedCoaFile = {

@@ -286,7 +286,25 @@ export async function changeOwnReferralCode(input: {
 }): Promise<{ code: string }> {
   const policy = await getReferralCodePolicy();
   const ambassador = await loadAmbassadorByAuthUser(input.authUserId);
-  if (!ambassador || ambassador.status !== "approved") {
+  if (!ambassador) {
+    // TWO TABLES, ONE PERSON. The dashboard and the approval gate read
+    // `partners`; this change (and checkout, and commission accrual) reads and
+    // writes `ambassadors`. Production writes both in one transaction, but an
+    // approved partner whose ambassadors twin is missing CAN exist (a partial
+    // seed, a hand repair), and their code does not resolve anywhere — so the
+    // record is broken, and saying "not approved" beside a dashboard that says
+    // "approved" only sends them in circles. Name the real problem.
+    const { data: partner } = await supabaseAdmin
+      .from("partners")
+      .select("id, status")
+      .eq("auth_user_id", input.authUserId)
+      .maybeSingle();
+    if (partner?.status === "approved") {
+      throw new Error("Your ambassador record is incomplete, so your code can't be changed yet. Contact support and we'll repair it.");
+    }
+    throw new Error("Only approved ambassadors can set a referral code.");
+  }
+  if (ambassador.status !== "approved") {
     throw new Error("Only approved ambassadors can set a referral code.");
   }
   if (ambassador.referral_code_locked) {

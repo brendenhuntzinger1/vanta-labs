@@ -29,6 +29,7 @@ import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/li
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getReferralProgramConfig } from "@/lib/admin-control";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
+import { receiptAdjustmentsFromOrder } from "@/lib/email/order-confirmation-render";
 import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRestock, itemsNotFinalized } from "@/lib/inventory-fulfillment";
 import { finalizeInventoryForOrder, releaseInventoryForOrder } from "@/lib/inventory-reservation";
 import { after } from "next/server";
@@ -369,9 +370,58 @@ function normalizeOrderPayload(payload: string) {
      */
     data?: {
       metadata?: { order_id?: string; veyragate_session_id?: string };
-      object?: { metadata?: { order_id?: string; veyragate_session_id?: string } };
+      amount_cents?: number;
+      amount_charged_cents?: number;
+      amount_captured_cents?: number;
+      object?: {
+        metadata?: { order_id?: string; veyragate_session_id?: string };
+        amount_cents?: number;
+        amount_charged_cents?: number;
+        amount_captured_cents?: number;
+      };
     };
   };
+}
+
+/**
+ * How much the processor says it captured, in DOLLARS — or null when the
+ * delivery carries no amount in any shape it uses.
+ *
+ * PAY-02. The paid-amount assertion read only the flat top-level `amount` the
+ * internal/mock gateway sends. A real VeyraGate envelope has none: its charge
+ * object rides under `data` (or `data.object`) and states money in MINOR
+ * UNITS — `amount_cents` is the list price, `amount_charged_cents` /
+ * `amount_captured_cents` what was actually taken (the same fields
+ * membership-webhook.ts reads). So on every live delivery the assertion saw 0,
+ * compared nothing, and advanced the order to fulfilment whatever had been
+ * captured — the "held out of fulfilment on a mismatch" path was unreachable.
+ *
+ * NULL IS NOT ZERO, AND NOT A MISMATCH. The express reconcile sweep replays
+ * `payment.succeeded` with no amount at all on purpose, because the session's
+ * amount_cents is the address-independent figure; a missing amount must skip
+ * the assertion, never fail it. Only a present, positive amount is compared.
+ *
+ * Used by the PAID branch only. The refund branch reads the refund amount its
+ * own way (resolveRefundOutcome) and is deliberately untouched here.
+ */
+export function resolveWebhookPaidAmount(eventPayload: {
+  amount?: number;
+  data?: {
+    amount_cents?: number;
+    amount_charged_cents?: number;
+    amount_captured_cents?: number;
+    object?: { amount_cents?: number; amount_charged_cents?: number; amount_captured_cents?: number };
+  };
+}): number | null {
+  const flat = Number(eventPayload.amount);
+  if (Number.isFinite(flat) && flat > 0) return roundMoney(flat);
+
+  const charge = eventPayload.data?.object ?? eventPayload.data;
+  if (!charge) return null;
+  const cents = charge.amount_captured_cents ?? charge.amount_charged_cents ?? charge.amount_cents;
+  const asNumber = Number(cents);
+  if (cents === undefined || cents === null || !Number.isFinite(asNumber) || asNumber <= 0) return null;
+  return roundMoney(asNumber / 100);
 }
 
 /**
@@ -556,7 +606,7 @@ async function releaseEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, order_number, order_type, membership_tier_id, membership_cycle, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, shipping_address, city, postal_code, points_redeemed, store_credit_redeemed_cents, inventory_committed_at, payment_failure_kind")
+    .select("id, order_id, order_number, order_type, membership_tier_id, membership_cycle, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, shipping_protection_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, shipping_address, city, postal_code, points_redeemed, store_credit_redeemed_cents, inventory_committed_at, payment_failure_kind")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -1426,7 +1476,9 @@ export async function finalizeManualPayment(
 
   if (order.customer_email) {
     try {
-      await markAbandonedCartsRecovered(String(order.customer_email), orderId);
+      // The order row travels with the call so a membership charge or a reship
+      // does not "recover" a product cart (EMAIL-03).
+      await markAbandonedCartsRecovered(String(order.customer_email), orderId, { order_type: order.order_type as string | null });
     } catch (recoveryError) {
       console.error("Unable to mark abandoned carts recovered for order", orderId, recoveryError);
     }
@@ -1532,6 +1584,9 @@ export async function finalizeManualPayment(
         cardProcessingFee: Number(order.card_processing_fee ?? 0),
         total: amountPaid,
         orderUrl: `${getSiteUrl()}/order-confirmation/${orderId}`,
+        // Credits and protection as the row records them, not netted against
+        // each other out of the residual (EMAIL-02).
+        ...receiptAdjustmentsFromOrder(order),
       });
       // CONSUME THE ONE-TIME OFFER. The order is paid, so a free unit that was
       // reserved at checkout is now spent — permanently, and deliberately not
@@ -1589,7 +1644,7 @@ export async function finalizeManualPayment(
     try {
       if (order.customer_user_id && order.membership_tier_id) {
         const cycle = resolveMembershipCycle(order.membership_cycle, orderId);
-        await activatePaidMembership(String(order.customer_user_id), String(order.membership_tier_id), cycle);
+        await activatePaidMembership(String(order.customer_user_id), String(order.membership_tier_id), cycle, orderId);
       }
     } catch (membershipError) {
       console.error("Unable to activate membership for order", orderId, membershipError);
@@ -1674,6 +1729,15 @@ export async function finalizeManualPayment(
             `${decrement.failed} of ${decrement.attempted} stock line(s) could not be decremented: `
             + decrement.errors.join("; "),
           );
+        }
+        // A DEGRADED FINALIZE LEAVES THIS ORDER'S HOLDS ACTIVE. The fallback
+        // has just moved the stock directly, so those holds now double-count
+        // units that already left the shelf — and the stale-hold sweep skips
+        // paid orders, so they would sit on reserved_quantity for good. Drop
+        // them. Best-effort: the same outage that degraded the finalize may
+        // refuse this too, and the sale itself is already recorded.
+        if (fin.degraded) {
+          await releaseInventoryForOrder(orderId).catch(() => {});
         }
       }
       stockCommitted = true;
@@ -2024,7 +2088,29 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   // against the existing status and stop.
   const REFUND_TERMINAL_STATES = new Set(["refunded", "partially_refunded", "canceled"]);
   const priorPaymentStatus = orderRecord?.payment_status ? String(orderRecord.payment_status) : null;
-  if (nextStatus === "paid" && priorPaymentStatus && REFUND_TERMINAL_STATES.has(priorPaymentStatus)) {
+  // A CANCEL BEFORE ANY CAPTURE IS NOT A REFUND. "canceled" is written both by
+  // a processor cancel event and by an admin cancelling an unpaid order, and
+  // neither moved money. If the customer then completes the payment (a retry
+  // on the same session, or a hosted page that outlived the cancel), the money
+  // IS captured — and treating the order as terminal here left it canceled
+  // with the customer's money taken and nobody told. Only an order that was
+  // actually paid or refunded is a money-terminal state; a never-captured
+  // cancel reopens as paid, and the operator is told it happened.
+  const neverCaptured = priorPaymentStatus === "canceled"
+    && !orderRecord?.paid_at
+    && Number(orderRecord?.refund_amount ?? 0) <= 0;
+  if (nextStatus === "paid" && neverCaptured) {
+    await recordSystemAlert({
+      type: "payment_captured_after_cancel",
+      severity: "warning",
+      message:
+        `Order ${orderId} was canceled before any payment was captured, then the processor reported a successful `
+        + "payment. The order has been reopened as paid and returned to fulfilment so the money is not silently kept "
+        + "against a canceled order. Check the customer still wants it; refund it from the order page if not.",
+      context: { orderId, eventId },
+    }).catch(() => {});
+  }
+  if (nextStatus === "paid" && priorPaymentStatus && REFUND_TERMINAL_STATES.has(priorPaymentStatus) && !neverCaptured) {
     await markEventProcessed(eventId, orderId, priorPaymentStatus as OrderStatus);
     return {
       duplicate: false,
@@ -2172,16 +2258,36 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     // wrong upstream, so the order is held OUT of fulfilment (fulfillment_status
     // stays "pending" instead of advancing to "awaiting_fulfillment") and an
     // operator is alerted rather than the parcel shipping on a bad number.
-    const eventAmount = roundMoney(Number(eventPayload.amount ?? 0));
+    //
+    // Read from every shape a sender uses (resolveWebhookPaidAmount): the flat
+    // dollar `amount` of the internal gateway, or the nested minor-unit charge
+    // of a live VeyraGate envelope. A delivery with NO amount skips the check
+    // — the reconcile sweep relies on that — it is never a mismatch.
+    const eventAmount = resolveWebhookPaidAmount(eventPayload);
     const recordedAmount = roundMoney(Number(orderRecord.amount_paid ?? 0));
-    const amountDisagrees = eventAmount > 0 && recordedAmount > 0 && Math.abs(eventAmount - recordedAmount) > 0.01;
+    const amountDisagrees = eventAmount !== null && eventAmount > 0 && recordedAmount > 0
+      && Math.abs(eventAmount - recordedAmount) > 0.01;
+    // WHICH SHAPE THE AMOUNT CAME FROM DECIDES WHETHER A MISMATCH HOLDS THE
+    // ORDER. The flat `amount` is ours (internal gateway, harness), so a
+    // disagreement there is a real defect and the order is held. The nested
+    // minor-unit figure is the processor's, and no live delivery has yet been
+    // captured to prove it is the CAPTURED total rather than the checkout
+    // session's address-independent amount — the figure that, when the reconcile
+    // sweep asserted it in 2026-08, flagged every order and held all of them out
+    // of fulfilment. So until a real order confirms the nested figure matches
+    // amount_paid, a nested mismatch is ADVISORY: recorded as a warning with the
+    // numbers, fulfilment untouched. Promote by dropping `fromFlat` from
+    // holdOnMismatch once the first live orders have shown agreement.
+    const flatAmount = Number((eventPayload as { amount?: unknown }).amount);
+    const fromFlat = Number.isFinite(flatAmount) && flatAmount > 0;
+    const holdOnMismatch = amountDisagrees && fromFlat;
 
     const nowIso = new Date().toISOString();
     const { error: flipError } = await supabaseAdmin
       .from("orders")
       .update({
         payment_status: "paid",
-        fulfillment_status: amountDisagrees ? "pending" : "awaiting_fulfillment",
+        fulfillment_status: holdOnMismatch ? "pending" : "awaiting_fulfillment",
         paid_at: nowIso,
         payment_id: eventPayload.paymentId ?? orderRecord.payment_id ?? null,
         provider_event_id: eventId,
@@ -2196,9 +2302,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     if (amountDisagrees) {
       await recordSystemAlert({
         type: "payment_amount_mismatch",
-        severity: "critical",
-        message: `Order ${orderId} was paid for $${eventAmount.toFixed(2)} but checkout recorded $${recordedAmount.toFixed(2)}. The order is marked paid and held out of fulfilment pending review.`,
-        context: { order_id: orderId, event_amount: eventAmount, recorded_amount: recordedAmount, event_id: eventId },
+        severity: holdOnMismatch ? "critical" : "warning",
+        message: holdOnMismatch
+          ? `Order ${orderId} was paid for $${(eventAmount ?? 0).toFixed(2)} but checkout recorded $${recordedAmount.toFixed(2)}. The order is marked paid and held out of fulfilment pending review.`
+          : `Order ${orderId}: the processor's charge object states $${(eventAmount ?? 0).toFixed(2)} but checkout recorded $${recordedAmount.toFixed(2)}. The order is marked paid and has NOT been held: this figure comes from the nested charge object, whose meaning against the recorded total is not yet confirmed on a live delivery. If the customer's card was charged the recorded total, the nested figure is the pre-shipping session amount and this stays advisory; if the card was really charged the stated figure, review the order and promote this check to a hold (payment-webhook.ts, holdOnMismatch).`,
+        context: { order_id: orderId, event_amount: eventAmount, recorded_amount: recordedAmount, event_id: eventId, held: holdOnMismatch, amount_source: fromFlat ? "flat" : "nested" },
       });
     }
   }
@@ -2412,7 +2520,9 @@ export async function processPaymentWebhook(payload: string, signature: string, 
 
       if (buyerEmail) {
         try {
-          await markAbandonedCartsRecovered(buyerEmail, orderId);
+          // Gated on the order's type for the same reason the manual lane is:
+          // only a purchase of product recovers a product cart (EMAIL-03).
+          await markAbandonedCartsRecovered(buyerEmail, orderId, { order_type: orderRecord?.order_type as string | null });
         } catch (recoveryError) {
           console.error("Unable to mark abandoned carts recovered for order", orderId, recoveryError);
         }
@@ -2531,6 +2641,9 @@ export async function processPaymentWebhook(payload: string, signature: string, 
             cardProcessingFee: Number(orderRecord?.card_processing_fee ?? 0),
             total: amountPaid,
             orderUrl: `${getSiteUrl()}/order-confirmation/${orderId}`,
+            // Credits and protection as the row records them (EMAIL-02). With
+            // no row (a webhook-created order) the template infers as before.
+            ...(orderRecord ? receiptAdjustmentsFromOrder(orderRecord) : {}),
           });
           // CONSUME THE ONE-TIME OFFER. The order is paid, so a free unit that was
           // reserved at checkout is now spent — permanently, and deliberately not
@@ -2577,7 +2690,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       if (isMembershipOrder && customerUserId && orderRecord?.membership_tier_id) {
         try {
           const cycle = resolveMembershipCycle(orderRecord.membership_cycle, orderId);
-          await activatePaidMembership(String(customerUserId), String(orderRecord.membership_tier_id), cycle);
+          await activatePaidMembership(String(customerUserId), String(orderRecord.membership_tier_id), cycle, orderId);
         } catch (membershipError) {
           console.error("Unable to activate membership for order", orderId, membershipError);
           await recordSystemAlert(unsafeEffectAlert("membership_activation", orderId, membershipError))
@@ -2768,6 +2881,28 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     // "partially_refunded" is a paid-derived state (a partial refund was already
     // issued on a paid order), so a later full refund/cancel must still restock.
     const wasPaid = priorPaymentStatus === "paid" || priorPaymentStatus === "partially_refunded";
+
+    // PAY-08. A decline or a cancel released the STOCK hold (above) but not the
+    // store-credit / points hold reserveOrderTender took at checkout, so the
+    // shopper's balance read lower by the declined order's redemption until the
+    // 30-minute sweep — and an immediate retry quoted less credit or was
+    // refused with "your store credit balance changed". The express lane
+    // already releases on a decline; this is the card lane catching up.
+    // releaseOrderTender is idempotent and refuses an order that ever settled,
+    // so a replayed event and a paid order are both no-ops. Never on a refund:
+    // a refunded order's redemption is real money already spent.
+    if ((nextStatus === "payment_failed" || nextStatus === "canceled") && !wasPaid) {
+      try {
+        // Loaded on demand: the tender module reaches the store-credit and
+        // points ledgers, and this is the only webhook path that wants it.
+        const { releaseOrderTender } = await import("@/lib/tender-reservation");
+        await releaseOrderTender(orderId);
+      } catch (tenderReleaseError) {
+        console.error("Unable to release the tender hold for order", orderId, tenderReleaseError);
+        await recordSystemAlert(unsafeEffectAlert("tender_hold_release", orderId, tenderReleaseError))
+          .catch(() => {});
+      }
+    }
     // "PAID" IS A PROXY; THE RECEIPT IS `inventory_committed_at`. An order can
     // reach paid while its decrement failed (alerted, latch left null — see the
     // paid branch below). Restocking THAT order on a refund would add units

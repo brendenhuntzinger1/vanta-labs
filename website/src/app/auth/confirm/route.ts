@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getSiteUrl } from "@/lib/env";
-import { FORWARDABLE_LINK_TYPES, gotrueVerifyUrl } from "@/lib/auth-confirm-link";
+import { FORWARDABLE_LINK_TYPES, gotrueVerifyUrl, normalizeLinkType } from "@/lib/auth-confirm-link";
 import { safeInternalPath } from "@/lib/internal-path";
 
 export const dynamic = "force-dynamic";
@@ -43,7 +43,9 @@ export async function GET(request: Request) {
   }
 
   const token = (url.searchParams.get("token") ?? "").trim();
-  const type = (url.searchParams.get("type") ?? "").trim().toLowerCase();
+  // Accepts the generateLink aliases too (email_change_new / _current), so a
+  // hand-built or older link still lands on the verify type GoTrue expects.
+  const type = normalizeLinkType(url.searchParams.get("type"));
   const rawNext = (url.searchParams.get("next") ?? "/account").trim();
 
   if (!token || !FORWARDABLE_LINK_TYPES.has(type)) {

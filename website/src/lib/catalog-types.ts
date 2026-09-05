@@ -93,6 +93,8 @@ export type Product = {
   testingDate: string;
   labName: string;
   coaUrl: string;
+  /** Public href of the newest published COA-library record, when the legacy coaUrl is absent. */
+  coaRecordUrl?: string;
   molecularFormula?: string;
   // Premium research-data spec fields (all optional; rendered when present).
   molecularWeight?: string;

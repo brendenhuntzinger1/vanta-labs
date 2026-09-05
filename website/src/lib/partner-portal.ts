@@ -1,6 +1,9 @@
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { generateReferralCode } from "@/lib/referral-code-utils";
+import { validatePayoutHandle } from "@/lib/payout-handle-validation";
+import { redactEmailForLog } from "@/lib/log-redaction";
+import { CustomerFacingError } from "@/lib/safe-error";
 import { validateReferralCodeFormat } from "@/lib/referral-code-validation";
 import { isEarnedCommission, isRevenueOrderStatus, isSaleOrder, netOrderRevenue, REVENUE_ORDER_STATUSES } from "@/lib/ledger";
 import { readAllRowsBounded } from "@/lib/supabase-page";
@@ -302,7 +305,9 @@ async function sendAmbassadorEmail(
     return true;
   }
 
-  console.error(`[partner-portal] ${context} email failed for ${to}: ${result.error ?? "unknown error"}`);
+  // Redacted: Vercel runtime logs have no PII scrubber (Sentry does), so the
+  // full address would sit in the platform log store for its retention period.
+  console.error(`[partner-portal] ${context} email failed for ${redactEmailForLog(to)}: ${result.error ?? "unknown error"}`);
   // Best-effort by construction: enqueueFailedEmail swallows a missing table
   // and never throws, so a queue that is not migrated yet cannot turn a failed
   // notification into a failed approval.
@@ -1014,12 +1019,21 @@ export function isValidPayoutMethod(value: string): value is AmbassadorPayoutMet
 export async function updatePartnerPayoutMethod(authUserId: string, method: string, handle: string): Promise<void> {
   const normalizedMethod = method.trim().toLowerCase();
   if (!isValidPayoutMethod(normalizedMethod)) {
-    throw new Error("Choose a valid payout method: PayPal, Venmo, or Cash App.");
+    throw new CustomerFacingError("Choose a valid payout method: PayPal, Venmo, or Cash App.");
   }
-  const normalizedHandle = handle.trim().slice(0, 200);
-  if (!normalizedHandle) {
-    throw new Error("Enter your payout username, email, or handle.");
+  // Shape-checked per method, server-side. This accepted any non-empty string,
+  // so a PayPal destination of "not-an-email" was saved as success and the next
+  // payout cycle had nowhere real to send the money.
+  //
+  // CustomerFacingError, not Error: the route sanitises everything else it
+  // catches (a Postgres message must never reach an ambassador), and the PayPal
+  // hint contains "name@example.com", which the sanitiser would otherwise
+  // mistake for a leaked hostname and replace with a generic failure.
+  const checked = validatePayoutHandle(normalizedMethod, handle.slice(0, 200));
+  if (!checked.ok) {
+    throw new CustomerFacingError(checked.error);
   }
+  const normalizedHandle = checked.handle;
 
   // Capture the prior destination for the audit trail before overwriting it.
   const { data: prior } = await supabaseAdmin

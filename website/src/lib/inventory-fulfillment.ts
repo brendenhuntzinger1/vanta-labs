@@ -150,10 +150,17 @@ export async function readQuantityAfter(adjustment: InventoryAdjustment): Promis
  *    BAC Water a SECOND time — the automatic decrement had already run. An
  *    invisible movement is how a correct system produces a wrong count.
  */
+/** Who moved the stock, for the ledger. The webhook is the default because it
+ *  is the only caller that never passes one. */
+export const INVENTORY_ACTOR_PAYMENT_WEBHOOK = "payment_webhook";
+/** Every admin-initiated cancel reaches the restock through
+ *  returnInventoryForCancelledOrder, which passes this. */
+export const INVENTORY_ACTOR_ADMIN_CANCELLATION = "admin_cancellation";
+
 async function applyInventoryDelta(
   adjustment: InventoryAdjustment,
   signedQty: number,
-  context: { orderId?: string | null; type: InventoryTransactionType; reason: string },
+  context: { orderId?: string | null; type: InventoryTransactionType; reason: string; actor?: string },
 ): Promise<void> {
   const { data, error } = await supabaseAdmin.rpc("adjust_inventory_on_sale", {
     p_slug: adjustment.slug,
@@ -191,7 +198,10 @@ async function applyInventoryDelta(
     quantityBefore: after === null ? null : after - signedQty,
     quantityAfter: after,
     reason: context.reason,
-    actor: "payment_webhook",
+    // Was a hard-coded "payment_webhook" for every movement, so an admin's
+    // cancel of a paid order was booked to the webhook and the ledger could
+    // not tell the two apart.
+    actor: context.actor ?? INVENTORY_ACTOR_PAYMENT_WEBHOOK,
     orderId: context.orderId ?? null,
   });
 }
@@ -232,12 +242,88 @@ export interface InventoryDecrementResult {
 // `orderId` is carried through to the movement ledger (see applyInventoryDelta)
 // so a finalized sale is attributable; it stays optional because the legacy
 // callers that have no order in hand still need this path.
+/**
+ * Units of one line that no OTHER order is holding.
+ *
+ * A LATE PAYMENT MUST NOT TAKE ANOTHER CHECKOUT'S UNITS. The fallback decrement
+ * runs when this order's own hold is gone (it expired before the customer paid,
+ * or the reservation RPC was unavailable). adjust_inventory_on_sale only checks
+ * `inventory_quantity + delta >= 0` — it knows nothing about reserved_quantity —
+ * so it happily sold the last unit out from under an order that was holding it.
+ * That order's later finalize then clamped at 0 and reported success: two paid
+ * orders, one vial. This reads the row's on-hand and reserved counts, adds back
+ * whatever THIS order still holds (a degraded finalize leaves its own hold
+ * active), and hands the caller the number that is genuinely free to sell.
+ *
+ * NULL when it cannot be answered. A read failure must not decide a sale either
+ * way, so the caller keeps today's behaviour for that line.
+ */
+async function readUnitsFreeForOrder(
+  adjustment: InventoryAdjustment,
+  orderId: string | null | undefined,
+): Promise<{ free: number; heldByOthers: number } | null> {
+  try {
+    const row = adjustment.variantId
+      ? await supabaseAdmin
+          .from("product_doses")
+          .select("inventory_quantity, reserved_quantity")
+          .eq("id", adjustment.variantId)
+          .maybeSingle<{ inventory_quantity: number | null; reserved_quantity: number | null }>()
+      : await supabaseAdmin
+          .from("products")
+          .select("inventory_quantity, reserved_quantity")
+          .eq("slug", adjustment.slug)
+          .maybeSingle<{ inventory_quantity: number | null; reserved_quantity: number | null }>();
+    if (row.error || !row.data) return null;
+    const onHand = Number(row.data.inventory_quantity ?? 0);
+    const reserved = Math.max(0, Number(row.data.reserved_quantity ?? 0));
+
+    let ownHold = 0;
+    if (orderId) {
+      let query = supabaseAdmin
+        .from("inventory_reservations")
+        .select("quantity")
+        .eq("order_id", orderId)
+        .eq("status", "active")
+        .eq("slug", adjustment.slug);
+      query = adjustment.variantId ? query.eq("variant_id", adjustment.variantId) : query.is("variant_id", null);
+      const { data: holds, error } = await query;
+      if (error) return null;
+      for (const hold of (holds ?? []) as Array<{ quantity?: number | null }>) {
+        ownHold += Math.max(0, Math.trunc(Number(hold.quantity ?? 0)));
+      }
+    }
+
+    const heldByOthers = Math.max(0, reserved - ownHold);
+    return { free: onHand - heldByOthers, heldByOthers };
+  } catch {
+    return null;
+  }
+}
+
 export async function decrementInventoryForOrder(items: OrderItemRef[], orderId?: string | null): Promise<InventoryDecrementResult> {
   const adjustments = planInventoryAdjustments(items);
   const errors: string[] = [];
   let failed = 0;
   for (const adjustment of adjustments) {
     try {
+      // Refuse, rather than take, units another checkout is holding. Only a
+      // line that other orders actually hold can trip this, so an untracked or
+      // unreserved row behaves exactly as before.
+      const room = await readUnitsFreeForOrder(adjustment, orderId);
+      if (room && room.heldByOthers > 0 && room.free < adjustment.quantity) {
+        const detail = `${adjustment.slug}${adjustment.variantId ? `::${adjustment.variantId}` : ""}`;
+        await recordSystemAlert({
+          type: "inventory_units_held_by_other_orders",
+          severity: "critical",
+          message:
+            `Order ${orderId ?? "(unknown)"} paid for ${adjustment.quantity} x ${detail} but only ${Math.max(0, room.free)} `
+            + `unit(s) are free — ${room.heldByOthers} are held by other checkouts in flight. Stock was NOT decremented `
+            + "so those checkouts keep their units. Fulfil this order from incoming stock or refund it, then correct the count by hand.",
+          context: { orderId: orderId ?? null, slug: adjustment.slug, variantId: adjustment.variantId, quantity: adjustment.quantity, free: room.free, heldByOthers: room.heldByOthers },
+        }).catch(() => {});
+        throw new Error(`${room.heldByOthers} unit(s) of ${detail} are held by other checkouts; only ${Math.max(0, room.free)} free`);
+      }
       await applyInventoryDelta(adjustment, -adjustment.quantity, {
         orderId,
         type: "order_completed",
@@ -313,13 +399,18 @@ export async function claimInventoryRestock(orderId: string): Promise<InventoryR
 // Return stock when a paid order is fully refunded or canceled — the exact
 // inverse of the decrement above, so tracked stock nets back to where it began.
 // Gate every call with claimInventoryRestock(orderId) so it runs at most once.
-export async function restockInventoryForOrder(items: OrderItemRef[], orderId?: string | null): Promise<void> {
+export async function restockInventoryForOrder(
+  items: OrderItemRef[],
+  orderId?: string | null,
+  actor: string = INVENTORY_ACTOR_PAYMENT_WEBHOOK,
+): Promise<void> {
   for (const adjustment of planInventoryAdjustments(items)) {
     try {
       await applyInventoryDelta(adjustment, adjustment.quantity, {
         orderId,
         type: "order_canceled",
         reason: orderId ? `Returned to stock from ${orderId}` : "Returned to stock",
+        actor,
       });
     } catch (error) {
       console.error("Unable to restock inventory for", adjustment, error);

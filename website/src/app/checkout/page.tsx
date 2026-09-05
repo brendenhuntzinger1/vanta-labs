@@ -6,11 +6,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCartCurrency, useCart } from "@/components/cart-context";
 import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { readAttributionForCheckout } from "@/lib/attribution-client";
-import { calculateShipping, isDomesticCountry } from "@/lib/shipping";
+import { calculateShipping, isDomesticCountry, isShippingWaived } from "@/lib/shipping";
 import { resolveSalesTax } from "@/lib/sales-tax";
 import { useApplePayOffered } from "@/components/use-apple-pay-offered";
 import { useOfferQuote } from "@/lib/offer-quote";
-import { couponOutcomeAgainstQuote } from "@/lib/discount-resolution";
+import { couponHeadline, couponOutcomeAgainstQuote } from "@/lib/discount-resolution";
 import { CHECKOUT_SHORT, COA_SHORT, FULFILMENT_SHORT, TESTING_SHORT, trustPoints } from "@/lib/trust-claims";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { pointsToDollars } from "@/lib/points-math";
@@ -336,9 +336,15 @@ export default function CheckoutPage() {
   // what the server independently computes for the entered country.
   // Mirror the server's free-shipping-on-bulk-tier rule so expectedTotal
   // always matches (see payment-service.ts and cart-context.tsx).
+  // The waiver is the shared isShippingWaived (shipping.ts), the same call
+  // quote-order.ts makes, so a free-shipping coupon zeroes this line the way
+  // it zeroes the charge — it used to know only the bulk tier and the perk.
+  const couponFreeShipping = Boolean(couponDetails?.freeShipping);
   const shipping = useMemo(
-    () => ((bulkSavingsTierReached || memberFreeShipping) ? 0 : calculateShipping(subtotal, form.country, shippingConfig)),
-    [bulkSavingsTierReached, memberFreeShipping, subtotal, form.country, shippingConfig],
+    () => (isShippingWaived({ bulkSavingsTier: bulkSavingsTierReached, memberFreeShipping, couponFreeShipping })
+      ? 0
+      : calculateShipping(subtotal, form.country, shippingConfig)),
+    [bulkSavingsTierReached, memberFreeShipping, couponFreeShipping, subtotal, form.country, shippingConfig],
   );
   // Live, address-based sales tax: recomputed the instant any address field
   // changes, with the SAME shared resolveSalesTax the server runs when it
@@ -1322,7 +1328,7 @@ export default function CheckoutPage() {
                         beside a total the code did not move is what made the old
                         copy misleading. */}
                     {couponDetails && shownCouponOutcome?.controlsPrice ? (
-                      <p className="mt-2 text-xs text-white/45">{couponDetails.code} · {couponDetails.discountType === "fixed" ? formatCartCurrency(couponDetails.discountValue) : `${couponDetails.discountValue}%`} off</p>
+                      <p className="mt-2 text-xs text-white/45">{couponHeadline(couponDetails, formatCartCurrency)}</p>
                     ) : null}
                     {/* Always removable. A code that arrived from a restore link, or
                         was typed before a promotion loaded, must never leave the
@@ -1337,7 +1343,7 @@ export default function CheckoutPage() {
                     <div>
                       <p className="mb-2 text-[10px] uppercase tracking-[0.24em] text-white/35">Rewards points</p>
                       <p className="text-xs text-white/45">
-                        <span className="text-white/80">{pointsBalance.toLocaleString()}</span> available ({formatCartCurrency(pointsToDollars(pointsBalance))} value).
+                        <span className="text-white/80">{pointsBalance.toLocaleString("en-US")}</span> available ({formatCartCurrency(pointsToDollars(pointsBalance))} value).
                       </p>
                       {referralDiscountApplied ? (
                         <p className="mt-2 rounded-xl border border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5 text-xs text-white/55">
@@ -1360,7 +1366,7 @@ export default function CheckoutPage() {
                           {pointsToRedeem > 0 ? <span className="text-xs text-emerald-300 tabular-nums">−{formatCartCurrency(pointsRedeemedDiscount)}</span> : null}
                         </div>
                       ) : null}
-                      {pointsToEarn > 0 ? <p className="mt-2 text-[11px] text-white/35">You&apos;ll earn ~{pointsToEarn.toLocaleString()} points on this order.</p> : null}
+                      {pointsToEarn > 0 ? <p className="mt-2 text-[11px] text-white/35">You&apos;ll earn ~{pointsToEarn.toLocaleString("en-US")} points on this order.</p> : null}
                     </div>
                   ) : (
                     <p className="text-xs text-white/40">

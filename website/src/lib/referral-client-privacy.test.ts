@@ -112,6 +112,18 @@ describe("what a referral lookup hands back to the browser", () => {
     expect(JSON.stringify(result)).not.toContain("22.5");
   });
 
+  it("tells the caller WHY a refused code was refused, so the cart can word it truthfully", async () => {
+    const reasons: string[] = [];
+    respondWith({ success: true, valid: false, reason: "unknown" });
+    expect(await validateReferralCodeClient("NOSUCH", (reason) => reasons.push(reason))).toBeNull();
+    respondWith({ success: true, valid: false, reason: "inactive" });
+    expect(await validateReferralCodeClient("PAUSED", (reason) => reasons.push(reason))).toBeNull();
+    // An older server payload with no reason is treated as the safer "inactive".
+    respondWith({ success: true, valid: false });
+    expect(await validateReferralCodeClient("OLD", (reason) => reasons.push(reason))).toBeNull();
+    expect(reasons).toEqual(["unknown", "inactive", "inactive"]);
+  });
+
   it("goes through the throttled application route, never straight at PostgREST", async () => {
     // The whole point of the move. A direct /rest/v1/rpc call bypasses the rate
     // limiter, and these codes are short enough to sweep.

@@ -2,6 +2,7 @@ import "server-only";
 
 import { unstable_cache } from "next/cache";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { getPublishedCoaHrefsByProduct } from "@/lib/coa";
 import { isInventoryTrackingActive } from "@/lib/inventory-settings";
 import { CATALOG_CACHE_TAG } from "@/lib/catalog-tag";
 import { MAX_UNITS_PER_ORDER_LINE } from "@/lib/purchase-limits";
@@ -144,10 +145,14 @@ async function fetchProductRelations(productIds: string[]) {
       dosesByProductId: new Map<string, ProductDose[]>(),
       inventoryActive,
       reservedByProductId: new Map<string, number>(),
+      coaRecordUrlByProductId: new Map<string, string>(),
     };
   }
 
-  const reserved = await fetchReservedQuantities(productIds);
+  const [reserved, coaRecordUrlByProductId] = await Promise.all([
+    fetchReservedQuantities(productIds),
+    getPublishedCoaHrefsByProduct(productIds),
+  ]);
 
   const [{ data: imageRows, error: imageError }, { data: doseRows, error: doseError }] = await Promise.all([
     supabaseAdmin
@@ -233,7 +238,7 @@ async function fetchProductRelations(productIds: string[]) {
     dosesByProductId.set(productId, current);
   }
 
-  return { imagesByProductId, dosesByProductId, inventoryActive, reservedByProductId: reserved.byProductId };
+  return { imagesByProductId, dosesByProductId, inventoryActive, reservedByProductId: reserved.byProductId, coaRecordUrlByProductId };
 }
 
 function mapProductRow(
@@ -243,6 +248,8 @@ function mapProductRow(
   inventoryActive = false,
   /** Units held by in-flight checkouts for this product. */
   reservedQuantity = 0,
+  /** Newest published COA-library file for this product, if any. */
+  coaRecordUrl?: string,
 ): Product {
   const primaryImage = images.find((image) => image.isPrimary) ?? images[0];
   const defaultDose = doses.find((dose) => dose.isDefault) ?? doses[0];
@@ -327,6 +334,7 @@ function mapProductRow(
     testingDate: String(row.testing_date ?? ""),
     labName: String(row.lab_name ?? ""),
     coaUrl: effectiveCoaUrl,
+    coaRecordUrl: coaRecordUrl || undefined,
     requiresReconstitution: row.requires_reconstitution === true,
     molecularFormula: row.molecular_formula ? String(row.molecular_formula) : undefined,
     molecularWeight: row.molecular_weight ? String(row.molecular_weight) : undefined,
@@ -365,7 +373,7 @@ export const getCatalogProducts = unstable_cache(
   async () => {
     const productRows = await fetchPublicProductRows();
     const { productIds } = buildProductMaps(productRows);
-    const { imagesByProductId, dosesByProductId, inventoryActive, reservedByProductId } = await fetchProductRelations(productIds);
+    const { imagesByProductId, dosesByProductId, inventoryActive, reservedByProductId, coaRecordUrlByProductId } = await fetchProductRelations(productIds);
 
     return productRows.map((row) => {
       const productId = String(row.id);
@@ -375,6 +383,7 @@ export const getCatalogProducts = unstable_cache(
         dosesByProductId.get(productId) ?? [],
         inventoryActive,
         reservedByProductId.get(productId) ?? 0,
+        coaRecordUrlByProductId.get(productId),
       );
     });
   },
@@ -403,13 +412,14 @@ export const getCatalogProductBySlug = unstable_cache(
   }
 
   const productId = String(data.id);
-  const { imagesByProductId, dosesByProductId, inventoryActive, reservedByProductId } = await fetchProductRelations([productId]);
+  const { imagesByProductId, dosesByProductId, inventoryActive, reservedByProductId, coaRecordUrlByProductId } = await fetchProductRelations([productId]);
   return mapProductRow(
     data as Record<string, unknown>,
     imagesByProductId.get(productId) ?? [],
     dosesByProductId.get(productId) ?? [],
     inventoryActive,
     reservedByProductId.get(productId) ?? 0,
+        coaRecordUrlByProductId.get(productId),
   );
   },
   ["catalog-product-by-slug"],
@@ -436,7 +446,7 @@ export async function getCatalogProductsBySlugs(slugs: string[]) {
 
   const rows = (data ?? []) as Array<Record<string, unknown>>;
   const { productIds } = buildProductMaps(rows);
-  const { imagesByProductId, dosesByProductId, inventoryActive, reservedByProductId } = await fetchProductRelations(productIds);
+  const { imagesByProductId, dosesByProductId, inventoryActive, reservedByProductId, coaRecordUrlByProductId } = await fetchProductRelations(productIds);
 
   const bySlug = new Map(rows.map((row) => {
     const productId = String(row.id);
@@ -448,6 +458,7 @@ export async function getCatalogProductsBySlugs(slugs: string[]) {
         dosesByProductId.get(productId) ?? [],
         inventoryActive,
         reservedByProductId.get(productId) ?? 0,
+        coaRecordUrlByProductId.get(productId),
       ),
     ];
   }));
@@ -478,7 +489,7 @@ export const getCatalogProductsByCategory = unstable_cache(
   ).slice(0, limit);
 
   const { productIds } = buildProductMaps(rows);
-  const { imagesByProductId, dosesByProductId, inventoryActive, reservedByProductId } = await fetchProductRelations(productIds);
+  const { imagesByProductId, dosesByProductId, inventoryActive, reservedByProductId, coaRecordUrlByProductId } = await fetchProductRelations(productIds);
 
   return rows.map((row) => {
     const productId = String(row.id);
@@ -488,6 +499,7 @@ export const getCatalogProductsByCategory = unstable_cache(
       dosesByProductId.get(productId) ?? [],
       inventoryActive,
       reservedByProductId.get(productId) ?? 0,
+        coaRecordUrlByProductId.get(productId),
     );
   });
   },

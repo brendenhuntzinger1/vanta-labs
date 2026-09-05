@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { getAdminCustomers } from "@/lib/admin-customers";
+import { failedReads, settleRead, UNKNOWN_FIGURE } from "@/lib/admin-read";
+import { AdminReadFailureNotice } from "@/components/admin-data-notices";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +30,9 @@ export default async function AdminCustomersPage({
   const search = typeof params.search === "string" ? params.search : "";
   const page = Math.max(1, Number(params.page) || 1);
 
-  const result = await getAdminCustomers({ search, page, pageSize: 25 }).catch(() => ({ rows: [], total: 0, page: 1, pageSize: 25, pageCount: 1 }));
+  // A FAILED READ IS NOT "0 customers" — see admin-read.ts.
+  const customersRead = await settleRead("Customers", () => getAdminCustomers({ search, page, pageSize: 25 }));
+  const result = customersRead.ok ? customersRead.value : { rows: [], total: 0, page: 1, pageSize: 25, pageCount: 1 };
 
   const buildPageHref = (targetPage: number) => {
     const query = new URLSearchParams();
@@ -42,7 +46,9 @@ export default async function AdminCustomersPage({
       <div className="mx-auto max-w-6xl">
         <h1 className="text-2xl font-semibold sm:text-3xl">Customers</h1>
         <p className="mt-2 text-sm text-zinc-400">
-          {result.total} customer{result.total === 1 ? "" : "s"} — built from checkout orders. There is no separate
+          {customersRead.ok
+            ? `${result.total} customer${result.total === 1 ? "" : "s"}`
+            : `${UNKNOWN_FIGURE} customers (could not be loaded)`} — built from checkout orders. There is no separate
           customer-account system yet, so this reflects guest checkouts grouped by email, not registered accounts.
           “Checkouts” counts every checkout this email started, including abandoned and failed ones; “Total spent”
           counts only paid orders.
@@ -61,6 +67,10 @@ export default async function AdminCustomersPage({
           <Link href="/api/admin/customers/export" className="vl-btn-secondary px-4 py-2 text-xs">Export CSV</Link>
         </form>
 
+        <div className="mt-6">
+          <AdminReadFailureNotice failures={failedReads([customersRead])} />
+        </div>
+        {customersRead.ok ? (
         <div className="vl-panel mt-6 overflow-x-auto rounded-2xl">
           <table className="min-w-full divide-y divide-zinc-800 text-sm">
             <thead className="bg-zinc-900/80">
@@ -108,6 +118,7 @@ export default async function AdminCustomersPage({
             </tbody>
           </table>
         </div>
+        ) : null}
 
         {result.pageCount > 1 ? (
           <div className="mt-6 flex flex-wrap items-center justify-center gap-2">

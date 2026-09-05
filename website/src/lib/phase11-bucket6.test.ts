@@ -227,10 +227,14 @@ describe("F-09 — a webhook-created order says what it could not account for", 
 });
 
 describe("F-A-16 / P2-1 — degraded monitoring paths are audible and throttled across invocations", () => {
-  it("the critical-alert count logs its own failure instead of answering 0 silently", () => {
+  it("the critical-alert count logs its own failure and THROWS instead of answering 0 silently", () => {
+    // ADM-05 moved this one step further: it used to log and still answer 0,
+    // which the badge drew as an all-clear. Both callers run it through
+    // settleRead, so the failure is thrown and carried to the pixel instead.
     const monitoring = read("lib/monitoring.ts");
-    expect(monitoring).toContain("Critical-alert count read failed; badge may understate");
-    expect(monitoring).toContain("Critical-alert count read threw; badge may understate");
+    expect(monitoring).toContain("Critical-alert count read failed");
+    expect(monitoring).toContain("throw new Error(`system_alerts count failed:");
+    expect(monitoring).not.toContain("badge may understate");
   });
 
   it("both module-scope alert throttles also use the persisted window", () => {

@@ -147,10 +147,12 @@ export interface CustomerMembership {
   nextBillingAmountCents: number | null;
   cancelAtPeriodEnd: boolean;
   hasPaymentMethod: boolean;
+  /** An upgrade scheduled for the next renewal (monthly members), or null. */
+  pendingTier: { id: string; name: string; effectiveAt: string | null } | null;
 }
 
 const MEMBERSHIP_SELECT_FIELDS =
-  "tier_id, billing_cycle, status, started_at, renews_at, intro_status, intro_ends_at, next_billing_at, next_billing_amount_cents, cancel_at_period_end, payment_method_ref, veyra_membership_id, membership_tiers(*)";
+  "tier_id, billing_cycle, status, started_at, renews_at, intro_status, intro_ends_at, next_billing_at, next_billing_amount_cents, cancel_at_period_end, payment_method_ref, veyra_membership_id, pending_tier_id, pending_tier_effective_at, membership_tiers(*)";
 
 function mapCustomerMembership(data: Record<string, unknown>): CustomerMembership {
   return {
@@ -169,6 +171,9 @@ function mapCustomerMembership(data: Record<string, unknown>): CustomerMembershi
     // only veyra_membership_id. Checking one field told a member who had just
     // paid — and whose card is on file for renewals — "Not connected yet".
     hasPaymentMethod: Boolean(data.payment_method_ref) || Boolean(data.veyra_membership_id),
+    pendingTier: data.pending_tier_id
+      ? { id: String(data.pending_tier_id), name: "", effectiveAt: data.pending_tier_effective_at ? String(data.pending_tier_effective_at) : null }
+      : null,
   };
 }
 
@@ -238,7 +243,16 @@ export async function getCustomerMembership(userId: string): Promise<CustomerMem
   }
 
   if (data && data.membership_tiers) {
-    return mapCustomerMembership(data as unknown as Record<string, unknown>);
+    const membership = mapCustomerMembership(data as unknown as Record<string, unknown>);
+    if (membership.pendingTier) {
+      const { data: pending } = await supabaseAdmin
+        .from("membership_tiers")
+        .select("name")
+        .eq("id", membership.pendingTier.id)
+        .maybeSingle();
+      membership.pendingTier.name = String((pending as { name?: string } | null)?.name ?? "");
+    }
+    return membership;
   }
 
   const freeTier = await getFreeTier();
@@ -257,6 +271,7 @@ export async function getCustomerMembership(userId: string): Promise<CustomerMem
     nextBillingAt: null,
     nextBillingAmountCents: null,
     cancelAtPeriodEnd: false,
+    pendingTier: null,
     hasPaymentMethod: false,
   };
 }

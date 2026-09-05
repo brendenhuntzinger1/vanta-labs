@@ -1,3 +1,4 @@
+import { redactEmailForLog } from "@/lib/log-redaction";
 import "server-only";
 import { sendEmail } from "@/lib/email/send";
 import { supabaseAdmin } from "@/lib/supabase-server";
@@ -7,7 +8,7 @@ import { getEmailRuntimeConfig, resolveMarketingFrom, resolveMarketingReplyTo } 
 import type { EmailSendResult, EmailTemplate } from "@/lib/email/types";
 import { escapeHtml } from "@/lib/email/templates";
 import { isNonMailableAddress } from "@/lib/email/non-mailable";
-import { claimMarketingSend, enqueueDeferredMarketingEmail } from "@/lib/email/frequency";
+import { claimMarketingSend, enqueueDeferredMarketingEmail, marketingMessageAlreadySent } from "@/lib/email/frequency";
 
 // Compliance wrapper for every promotional/marketing send (welcome,
 // monthly benefits, birthday, win-back, launch, back-in-stock, cart
@@ -149,7 +150,7 @@ export async function sendMarketingEmail(
   // next tick; a send that cannot verify consent does not go.
   if (suppressionError) {
     await releaseHeldClaim(input.claimedLogId);
-    console.error("[marketing] suppression check unavailable; refusing to send", email, suppressionError);
+    console.error("[marketing] suppression check unavailable; refusing to send", redactEmailForLog(email), suppressionError);
     return { success: false, suppressed: false, error: "Suppression list unavailable; consent could not be verified" };
   }
 
@@ -380,6 +381,13 @@ export async function sendRenderedMarketingEmail(input: {
         break;
       case "deferred": {
         if (input.onDeferred === "queue") {
+          // A deferral of a message this address ALREADY HAS is a duplicate,
+          // not a delay. The send inside the quiet window that is deferring us
+          // is very often this same message from an overlapping sweep or a
+          // replayed activation; parking it would deliver it again tomorrow.
+          if (await marketingMessageAlreadySent({ email, campaignType: input.campaignType, referenceId: input.referenceId })) {
+            return { success: false, duplicate: true, error: "Already sent: this message has reached this address." };
+          }
           const queued = await enqueueDeferredMarketingEmail({
             rendered: { ...input.rendered, to: email },
             campaignType: input.campaignType,

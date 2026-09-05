@@ -5,6 +5,8 @@ import { getManualPaymentRows, type AdminPaymentStatusFilter } from "@/lib/admin
 import { getPaymentMethodsConfig } from "@/lib/admin-control";
 import { getEnabledPaymentMethods, isManualPaymentMethod } from "@/lib/payment-methods";
 import { AdminPaymentsClient } from "@/components/admin-payments-client";
+import { failedReads, settleRead, UNKNOWN_FIGURE } from "@/lib/admin-read";
+import { AdminReadFailureNotice } from "@/components/admin-data-notices";
 
 export const dynamic = "force-dynamic";
 
@@ -38,10 +40,16 @@ export default async function AdminPaymentsPage({
   const toDate = typeof params.toDate === "string" ? params.toDate : "";
   const page = Math.max(1, Number(params.page) || 1);
 
-  const [result, methods] = await Promise.all([
-    getManualPaymentRows({ search, paymentStatus, paymentMethod, fromDate, toDate, page, pageSize: 25 }).catch(() => ({ rows: [], total: 0, page: 1, pageSize: 25, pageCount: 1 })),
+  // A FAILED READ IS NOT AN EMPTY QUEUE. This was `.catch(() => empty page)`,
+  // which rendered "0 manual payments" and "No manual payments match these
+  // filters yet" over a database that did not answer — the same screen as a
+  // day with nothing to verify. settleRead keeps the page up and keeps the
+  // failure, so it is shown as a failure (see admin-read.ts).
+  const [paymentsRead, methods] = await Promise.all([
+    settleRead("Manual payments", () => getManualPaymentRows({ search, paymentStatus, paymentMethod, fromDate, toDate, page, pageSize: 25 })),
     getPaymentMethodsConfig().catch(() => []),
   ]);
+  const result = paymentsRead.ok ? paymentsRead.value : { rows: [], total: 0, page: 1, pageSize: 25, pageCount: 1 };
 
   const manualMethods = getEnabledPaymentMethods(methods).filter(isManualPaymentMethod);
 
@@ -63,7 +71,9 @@ export default async function AdminPaymentsPage({
           <div>
             <h1 className="text-2xl font-semibold sm:text-3xl">Payment Verification</h1>
             <p className="mt-2 text-sm text-zinc-400">
-              {result.total} manual payment{result.total === 1 ? "" : "s"} — approve to send straight to fulfillment.
+              {paymentsRead.ok
+                ? `${result.total} manual payment${result.total === 1 ? "" : "s"}`
+                : `${UNKNOWN_FIGURE} manual payments (could not be loaded)`} — approve to send straight to fulfillment.
             </p>
           </div>
           <div className="flex gap-2">
@@ -105,7 +115,10 @@ export default async function AdminPaymentsPage({
           </div>
         </form>
 
-        <AdminPaymentsClient rows={result.rows} />
+        <div className="mt-6">
+          <AdminReadFailureNotice failures={failedReads([paymentsRead])} />
+        </div>
+        {paymentsRead.ok ? <AdminPaymentsClient rows={result.rows} /> : null}
 
         {result.pageCount > 1 ? (
           <div className="mt-6 flex flex-wrap items-center justify-center gap-2">

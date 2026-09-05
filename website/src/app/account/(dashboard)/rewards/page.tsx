@@ -1,3 +1,4 @@
+import { formatDisplayDate } from "@/lib/format-date";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { detectRoleFromUser } from "@/lib/auth-role";
@@ -61,7 +62,7 @@ export default async function AccountRewardsPage() {
         <div className="grid gap-5 sm:grid-cols-3">
           <div className="rounded-xl border border-cyan-300/20 bg-gradient-to-br from-cyan-400/[0.12] to-transparent p-5">
             <p className="text-[11px] uppercase tracking-[0.2em] text-cyan-200/70">Point balance</p>
-            <p className="mt-2 text-4xl font-semibold text-white">{pointsBalance === null ? "—" : pointsBalance.toLocaleString()}</p>
+            <p className="mt-2 text-4xl font-semibold text-white">{pointsBalance === null ? "—" : pointsBalance.toLocaleString("en-US")}</p>
             <p className="mt-1 text-sm text-zinc-400">
               {pointsBalance === null
                 ? "Couldn't load right now — refresh in a moment."
@@ -125,10 +126,10 @@ export default async function AccountRewardsPage() {
               <li key={entry.id} className="flex items-center justify-between py-2.5 text-sm">
                 <div className="min-w-0">
                   <p className="truncate text-zinc-200">{LEDGER_REASON_LABELS[entry.reason] ?? entry.reason}</p>
-                  <p className="text-xs text-zinc-500">{new Date(entry.createdAt).toLocaleString()}</p>
+                  <p className="text-xs text-zinc-500">{formatDisplayDate(entry.createdAt, "datetime") ?? ""}</p>
                 </div>
                 <span className={entry.amount >= 0 ? "font-semibold text-emerald-300" : "font-semibold text-rose-300"}>
-                  {entry.amount >= 0 ? "+" : ""}{entry.amount.toLocaleString()}
+                  {entry.amount >= 0 ? "+" : ""}{entry.amount.toLocaleString("en-US")}
                 </span>
               </li>
             ))}

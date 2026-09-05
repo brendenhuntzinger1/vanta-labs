@@ -179,3 +179,36 @@ describe("where a confirmed customer is put down", () => {
     expect(ROUTE).toContain("/account/reset-password");
   });
 });
+
+// ---------------------------------------------------------------------------
+// EMAIL-08 (transactional). generateLink is asked for `email_change_new` — the
+// link that goes to the address being adopted — and echoes that name back in
+// verification_type. GoTrue's /verify endpoint verifies it under
+// `type=email_change`; it does not know the generateLink alias. Passed through
+// unmapped the type was not FORWARDABLE, so every change-of-address email fell
+// back to the raw supabase.co button — on the one auth email that had not lost
+// it.
+// ---------------------------------------------------------------------------
+describe("the email-change link GoTrue actually returns", () => {
+  it("normalises the generateLink aliases to the verify type", async () => {
+    const { normalizeLinkType } = await import("@/lib/auth-confirm-link");
+    expect(normalizeLinkType("email_change_new")).toBe("email_change");
+    expect(normalizeLinkType("email_change_current")).toBe("email_change");
+    expect(normalizeLinkType(" Email_Change_New ")).toBe("email_change");
+    // Everything else passes through, lower-cased and trimmed, exactly as before.
+    expect(normalizeLinkType("signup")).toBe("signup");
+    expect(normalizeLinkType(" Recovery ")).toBe("recovery");
+    expect(normalizeLinkType(null)).toBe("");
+  });
+
+  it("forwards an email_change_new link through /auth/confirm as type=email_change", () => {
+    const url = brandedConfirmUrl({ hashedToken: "t", type: "email_change_new", next: "/account/settings", fallbackActionLink: ACTION_LINK });
+    expect(url).toContain("https://www.vantalabsresearch.com/auth/confirm?");
+    expect(url).not.toContain("supabase.co");
+    expect(new URL(url).searchParams.get("type")).toBe("email_change");
+  });
+
+  it("the confirm route accepts the alias on the way in too", () => {
+    expect(ROUTE).toContain("normalizeLinkType(url.searchParams.get(\"type\"))");
+  });
+});

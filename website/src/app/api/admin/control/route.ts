@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageSettings } from "@/lib/admin-roles";
-import { getControlSnapshot, getReferralProgramConfig, upsertControlValue } from "@/lib/admin-control";
+import { getControlSnapshot, getReferralProgramConfig, upsertControlValue, MAX_CARD_FEE_PERCENT } from "@/lib/admin-control";
 import { findDestructiveClears, isBlankControlValue, type ControlUpdate } from "@/lib/admin-control-updates";
 import { isSecretControlKey, redactControlSnapshot } from "@/lib/admin-control-secrets";
 
@@ -138,6 +138,27 @@ export async function PATCH(request: Request) {
         },
         { status: 409 },
       );
+    }
+
+    // A CARD FEE ABOVE THE CEILING IS A TYPO, NOT A SETTING. Refused before any
+    // write, with the same 400 shape as the other validation failures, so the
+    // panel shows the reason instead of "Saved. Changes are live on checkout."
+    for (const update of writable) {
+      if (
+        String(update.section ?? "").trim().toLowerCase() === "payment_methods"
+        && String(update.key ?? "").trim().toLowerCase() === "card_processing_fee"
+        && update.value && typeof update.value === "object"
+        && (update.value as { percentage?: unknown }).percentage !== undefined
+      ) {
+        const raw = (update.value as { percentage?: unknown }).percentage;
+        const percentage = typeof raw === "number" ? raw : Number(String(raw ?? "").trim());
+        if (!Number.isFinite(percentage) || percentage < 0 || percentage > MAX_CARD_FEE_PERCENT) {
+          return NextResponse.json(
+            { success: false, error: `Card fee percentage must be a number between 0 and ${MAX_CARD_FEE_PERCENT}.` },
+            { status: 400 },
+          );
+        }
+      }
     }
 
     for (const update of writable) {

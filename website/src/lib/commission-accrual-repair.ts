@@ -489,6 +489,45 @@ async function repairMissingMirror(
   return { repaired: true };
 }
 
+/**
+ * THE HOLD PERIOD STARTS WHEN THE ORDER WAS PAID, NOT WHEN THE SWEEP NOTICED.
+ *
+ * autoApproveEligibleCommissions gates on referral_orders.created_at, and the
+ * live accrual writes created_at = now — correct on the webhook path, where now
+ * IS the payment. When the accrual failed and this sweep wrote the row later,
+ * the same rule measured the 30-day hold from the repair, so an ambassador
+ * whose commission went missing for a week was paid a week late on top of it.
+ *
+ * The accrual itself lives in payment-webhook.ts and is shared with the live
+ * path, so the age is corrected here, after the write, and only backwards: a
+ * row can be made as old as its order, never younger. Both ledgers move so the
+ * commissions mirror agrees (repairMissingMirror already copies created_at).
+ * Best effort — the commission IS recorded; a failure here is a late payout,
+ * not a lost one, and is logged.
+ */
+async function alignAccrualAgeToPaidAt(orderId: string, paidAt: unknown): Promise<void> {
+  const paidAtMs = typeof paidAt === "string" ? Date.parse(paidAt) : NaN;
+  if (!Number.isFinite(paidAtMs)) return;
+  const paidAtIso = new Date(paidAtMs).toISOString();
+
+  for (const table of ["referral_orders", "commissions"] as const) {
+    try {
+      const { error } = await supabaseAdmin
+        .from(table)
+        .update({ created_at: paidAtIso })
+        .eq("order_id", orderId)
+        .gt("created_at", paidAtIso);
+      if (error) {
+        console.error(`[commission-repair] could not align ${table}.created_at to paid_at for ${orderId}`, error);
+      }
+    } catch (error) {
+      // Never fails the repair: the commission is recorded, and the sweep must
+      // count it as such. A late payout is logged; a lost one would not be.
+      console.error(`[commission-repair] could not align ${table}.created_at to paid_at for ${orderId}`, error);
+    }
+  }
+}
+
 export async function repairMissingCommissionAccruals(options?: {
   lookbackDays?: number;
   limit?: number;
@@ -552,6 +591,7 @@ export async function repairMissingCommissionAccruals(options?: {
 
     try {
       await accrueCommissionForPaidOrder(order as Parameters<typeof accrueCommissionForPaidOrder>[0]);
+      await alignAccrualAgeToPaidAt(orderId, order.paid_at);
       result.repaired += 1;
     } catch (error) {
       // A unique violation here is the DB doing its job: the live webhook (or

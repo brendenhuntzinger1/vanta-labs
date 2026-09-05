@@ -167,7 +167,19 @@ export function normalizeCoaDateInput(raw: unknown): string | null {
   const value = normalizeCoaText(raw, 32);
   if (!value) return null;
   const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return match ? match[0] : null;
+  if (!match) return null;
+  // A REAL CALENDAR DATE, not just four-two-two digits. "2026-13-45" passed the
+  // shape check and failed at the Postgres `date` column, where the operator
+  // saw only "Unable to save this COA." — a fixable typo reported as an outage.
+  // Date.UTC normalises overflow (month 13 -> next January), so a round trip
+  // that changes any part means the input was not a date.
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  const isRealDate =
+    parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
+  return isRealDate ? match[0] : null;
 }
 
 /** Bytes as a short human string for the admin file column. */

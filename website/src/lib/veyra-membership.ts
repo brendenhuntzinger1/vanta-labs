@@ -242,6 +242,13 @@ export type VeyraLifecycleResult =
        * it was a month wrong.
        */
       nextRenewalAt?: string | null;
+      /**
+       * Whether Veyra still has the subscription ending at period end after the
+       * call, when it says. Read by resumeVeyraMembership: a 2xx that leaves
+       * this true is NOT an un-cancel, and reporting it as one would tell a
+       * member their renewal is back on while the processor still stops it.
+       */
+      cancelAtPeriodEnd?: boolean | null;
     }
   | { ok: false; message: string };
 
@@ -274,6 +281,8 @@ async function veyraPost(path: string, body: unknown): Promise<VeyraLifecycleRes
       ok: true,
       status: parsed.status as string | undefined,
       nextRenewalAt: (parsed.next_renewal_at as string | null | undefined) ?? null,
+      cancelAtPeriodEnd:
+        typeof parsed.cancel_at_period_end === "boolean" ? parsed.cancel_at_period_end : null,
     };
   } catch (e) {
     return {
@@ -297,6 +306,43 @@ export function cancelVeyraMembership(
   return veyraPost(`${encodeURIComponent(veyraMembershipId)}/cancel`, {
     at_period_end: atPeriodEnd,
   });
+}
+
+/**
+ * Undo a cancel-at-period-end at Veyra, so the subscription renews again.
+ *
+ * 🔴 WHY THIS EXISTS. "Keep my membership" (resumeMembership) cleared
+ * cancel_at_period_end LOCALLY and told the member "Your membership will renew
+ * as normal" — while the cancel our own cancelMembership had already sent to
+ * Veyra stood. Veyra ended the subscription at period end, nothing renewed,
+ * and the member lost their perks a few days later with a row still reading
+ * "active". Same local-only shape as every other hole in this file.
+ *
+ * Veyra exposes `retention` for this (verified 2026-08-03 alongside cancel /
+ * skip_cycle / change / card). The request body shape has not been verified
+ * against Veyra's source, so this wrapper is written to be honest rather than
+ * optimistic: any non-2xx is a refusal, and a 2xx whose body still reports
+ * cancel_at_period_end=true (or a cancelled status) is treated as a refusal
+ * too. The caller must leave local state untouched on a refusal — telling a
+ * member their renewal is restored when it is not is the defect this fixes.
+ */
+export async function resumeVeyraMembership(
+  veyraMembershipId: string,
+): Promise<VeyraLifecycleResult> {
+  const res = await veyraPost(`${encodeURIComponent(veyraMembershipId)}/retention`, {
+    action: "keep",
+    cancel_at_period_end: false,
+  });
+  if (!res.ok) return res;
+
+  const status = (res.status ?? "").toLowerCase();
+  if (res.cancelAtPeriodEnd === true || status === "canceled" || status === "cancelled") {
+    return {
+      ok: false,
+      message: "The payment provider did not restore renewal for this membership.",
+    };
+  }
+  return res;
 }
 
 /**

@@ -313,14 +313,47 @@ describe("drainMarketingSendQueue", () => {
     expect(state.sends).toHaveLength(0);
     expect(state.rpcCalls).toHaveLength(0);
     expect(row.status).toBe("sent");
-    expect(String(row.last_error)).toContain("earlier drain");
+    expect(String(row.last_error)).toContain("already delivered");
   });
 
-  it("a send-log row OLDER than the queue row is not 'already delivered' — that was the send that got it deferred", async () => {
+  it("a send-log row OLDER than the queue row for the SAME message is 'already delivered' — that send was this message's twin", async () => {
+    // EMAIL-10. Two overlapping sweeps both activated the same membership:
+    // the first copy went out, the second was deferred by the guard (the
+    // first copy is inside its quiet window) and parked here. The drain used
+    // to look only for a send made AFTER the row was queued, so it delivered
+    // the twin a day later. The send that deferred this row IS this message.
     const row = seedQueued();
     state.sentLog = [{
       id: "log-cause", recipient_email: BUYER, campaign_type: "back_in_stock", reference_id: "bpc-157",
       status: "sent", sent_at: new Date(NOW - 30 * HOUR).toISOString(),
+    }];
+    const result = await drainMarketingSendQueue({ now: NOW });
+    expect(result.sent).toBe(1);
+    expect(state.sends).toHaveLength(0);
+    expect(state.rpcCalls).toHaveLength(0);
+    expect(row.status).toBe("sent");
+  });
+
+  it("a prior send of a DIFFERENT message to the same address is not 'already delivered'", async () => {
+    // The ordinary deferral: a campaign yesterday held this restock alert
+    // back. Different campaign type, different reference — this message has
+    // never reached the address and must go.
+    const row = seedQueued();
+    state.sentLog = [
+      { id: "log-campaign", recipient_email: BUYER, campaign_type: "campaign", reference_id: "camp-1", status: "sent", sent_at: new Date(NOW - 30 * HOUR).toISOString() },
+      { id: "log-other-product", recipient_email: BUYER, campaign_type: "back_in_stock", reference_id: "tb-500", status: "sent", sent_at: new Date(NOW - 30 * HOUR).toISOString() },
+    ];
+    const result = await drainMarketingSendQueue({ now: NOW });
+    expect(result.sent).toBe(1);
+    expect(state.sends).toHaveLength(1);
+    expect(row.status).toBe("sent");
+  });
+
+  it("a send of the same message outside the 30-day lookback is a new occurrence, not a duplicate", async () => {
+    const row = seedQueued();
+    state.sentLog = [{
+      id: "log-old", recipient_email: BUYER, campaign_type: "back_in_stock", reference_id: "bpc-157",
+      status: "sent", sent_at: new Date(NOW - 45 * 24 * HOUR).toISOString(),
     }];
     const result = await drainMarketingSendQueue({ now: NOW });
     expect(result.sent).toBe(1);

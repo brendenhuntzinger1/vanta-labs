@@ -8,8 +8,9 @@ import { formatCartCurrency, useCart, getShippingProgress } from "@/components/c
 import { bundleDiscountRate, getBundleDiscountedLineTotal, getNextBundleTier } from "@/lib/bundle-pricing";
 import { bestPaidTier, computeCartMembershipValue } from "@/lib/member-pricing";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
+import { cartShippingLineLabel } from "@/lib/cart-shipping-line";
 import { useOfferQuote } from "@/lib/offer-quote";
-import { couponOutcomeAgainstQuote } from "@/lib/discount-resolution";
+import { couponHeadline, couponOutcomeAgainstQuote } from "@/lib/discount-resolution";
 import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
 import { ExpressApplePayButton } from "@/components/express-apple-pay-button";
 import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
@@ -95,6 +96,8 @@ export function CartDrawer() {
     isApplyingReferral,
     couponCode,
     couponDetails,
+    bulkSavingsTierReached,
+    memberFreeShipping,
     couponError,
     couponOutcome,
     applyCouponCode,
@@ -657,7 +660,7 @@ export function CartDrawer() {
                         {couponDetails ? (
                           <p className="mt-1.5 flex items-center justify-between text-xs text-zinc-400">
                             {/* Offer size shown only while the coupon controls the price. */}
-                            <span>{shownCouponOutcome?.controlsPrice ? `${couponDetails.code} · ${couponDetails.discountType === "fixed" ? formatCartCurrency(couponDetails.discountValue) : `${couponDetails.discountValue}%`} off` : couponDetails.code}</span>
+                            <span>{shownCouponOutcome?.controlsPrice ? couponHeadline(couponDetails, formatCartCurrency) : couponDetails.code}</span>
                             <button type="button" onClick={clearCouponCode} className="text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
                           </p>
                         ) : null}
@@ -796,11 +799,18 @@ export function CartDrawer() {
                     {/* "Calculated at payment" is the honest answer when nothing
                         has priced it. Once the server HAS, say what it said. */}
                     <dd className="text-zinc-200 tabular-nums" data-testid="cart-shipping">
-                      {shownShipping > 0
-                        ? formatCartCurrency(shownShipping)
-                        : offerQuote
-                          ? "Free"
-                          : "Calculated at payment"}
+                      {cartShippingLineLabel({
+                        shipping: shownShipping,
+                        serverQuoted: Boolean(offerQuote),
+                        // A zero decided by ANY grant reads "Free": the threshold,
+                        // a bulk tier, a member perk, or a free-shipping coupon
+                        // (PRICE-02) — the same waivers that zeroed `shipping`.
+                        freeShippingUnlocked: shippingProgress.isEligibleForFreeShipping
+                          || bulkSavingsTierReached
+                          || memberFreeShipping
+                          || Boolean(couponDetails?.freeShipping),
+                        format: formatCartCurrency,
+                      })}
                     </dd>
                   </div>
                   {shownDiscount > 0 ? (
@@ -825,7 +835,7 @@ export function CartDrawer() {
                   <span className="text-[2rem] font-semibold leading-none tracking-tight text-white tabular-nums" data-testid="cart-total">{formatCartCurrency(shownTotal)}</span>
                 </div>
                 <p className="mt-3 text-[11px] leading-relaxed text-zinc-600">
-                  Shipping &amp; sales tax are calculated from your address at payment. Free shipping over {formatCartCurrency(freeShipThreshold)}.
+                  Shipping &amp; sales tax are calculated from your address at payment. Free shipping over {formatCartCurrency(freeShipThreshold)}. Card payments carry a small processing fee, shown at checkout.
                 </p>
               </div>
             </div>

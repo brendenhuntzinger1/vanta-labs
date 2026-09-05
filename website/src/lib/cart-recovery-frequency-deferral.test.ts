@@ -66,6 +66,11 @@ const { sendMarketingEmail } = vi.hoisted(() => ({
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/email/marketing", () => ({ sendMarketingEmail, isMarketingSuppressed: async () => false }));
 vi.mock("@/lib/env", () => ({ getSiteUrl: () => "https://example.test" }));
+// Product names come from the catalogue at send time, never from the stored
+// snapshot (AUTH-3): the mock answers every slug the fixtures use.
+vi.mock("@/lib/catalog", () => ({
+  getCatalogProductsBySlugs: async (slugs: string[]) => slugs.map((slug) => ({ slug, name: slug === "bpc-157" ? "BPC-157" : slug })),
+}));
 
 const config = {
   t30mEnabled: true, t12hEnabled: false, t24hEnabled: true, t72hEnabled: true,
@@ -192,7 +197,7 @@ function seedCart(input: { id?: string; email?: string; firstSeenHoursAgo: numbe
     id: input.id ?? `cart-${++state.seq}`,
     email: input.email ?? "shopper@example.com",
     customer_name: "Sam",
-    items: [{ name: "BPC-157", quantity: 1, price: 42.99 }],
+    items: [{ slug: "bpc-157", name: "BPC-157", quantity: 1, price: 42.99 }],
     cart_value_cents: input.value ?? 4299,
     first_seen_at: new Date(Date.now() - input.firstSeenHoursAgo * HOUR_MS).toISOString(),
     last_updated_at: new Date(Date.now() - (input.lastUpdatedHoursAgo ?? input.firstSeenHoursAgo) * HOUR_MS).toISOString(),

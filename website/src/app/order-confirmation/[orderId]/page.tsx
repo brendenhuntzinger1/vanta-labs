@@ -75,7 +75,14 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
 
   const orderNumber = displayOrderReference(order.order_number as string | null, order.order_id as string | null);
   const items = (order.order_items ?? []) as Array<{ product_name?: string; quantity?: number; line_total?: number }>;
-  const isPaid = String(order.payment_status ?? "").toLowerCase() === "paid";
+  const paymentStatus = String(order.payment_status ?? "").toLowerCase();
+  const isPaid = paymentStatus === "paid";
+  // The processor is finished and did not pay — the same terminal set
+  // /api/checkout/order-status reports as `pending: false`. Veyra's return_url
+  // is this page, the reconcile sweep can retire an order to payment_failed
+  // while the shopper is parked here, and back/forward lands here too; every one
+  // of those used to render "Thank you for your order … no need to pay again".
+  const isFailed = paymentStatus === "payment_failed" || paymentStatus === "canceled" || paymentStatus === "cancelled";
 
   // THE TOTAL IS WHAT WAS CHARGED. amount_paid is the settled figure — never a
   // sum recomputed here, which could disagree with the card statement. The line
@@ -115,7 +122,11 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
 
   return (
     <div className="min-h-screen bg-[#0b0b0b] text-white">
-      <ClearCartOnMount />
+      {/* ClearCartOnMount exists so "a cancelled/abandoned hosted payment keeps
+          the cart intact, but a real confirmation empties it" (its own words).
+          A declined or cancelled order is the former: emptying the cart here
+          would send the shopper "back to checkout" with nothing to buy. */}
+      {!isFailed ? <ClearCartOnMount /> : null}
       <TikTokPurchaseEvent
         orderId={String(order.order_id)}
         advancedMatching={buildAdvancedMatching({ email: order.customer_email ? String(order.customer_email) : null })}
@@ -131,6 +142,7 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
             orderNumber={orderNumber}
             maskedEmail={order.customer_email ? maskEmail(String(order.customer_email)) : null}
             initialPaid={isPaid}
+            initialFailed={isFailed}
             isManual={isManual}
             fulfillmentStatus={order.fulfillment_status ? String(order.fulfillment_status) : null}
           />

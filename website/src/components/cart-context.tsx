@@ -16,7 +16,7 @@ import {
 } from "@/lib/bxgy-engine";
 import { normalizeBxgyPromotion } from "@/lib/bxgy-config";
 import { calculateShippingProtectionFee, SHIPPING_PROTECTION_PERCENT } from "@/lib/shipping-protection";
-import { calculateShipping, DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from "@/lib/shipping";
+import { calculateShipping, DEFAULT_SHIPPING_CONFIG, isShippingWaived, type ShippingConfig } from "@/lib/shipping";
 import { DEFAULT_SALES_TAX_CONFIG, type SalesTaxConfig } from "@/lib/sales-tax";
 import type { MembershipTierSummary } from "@/lib/member-pricing";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
@@ -45,9 +45,9 @@ import { resolvePointsRedemptionCents, resolveStoreCreditCents } from "@/lib/sto
  * rules; quote-order.ts still re-resolves the rate and owns the charge. This is
  * purely about when the code arrives.
  */
-async function validateReferralCodeClient(code: string) {
+async function validateReferralCodeClient(code: string, onRefused?: (reason: "unknown" | "inactive") => void) {
   const { validateReferralCodeClient: validate } = await import("@/lib/referral-client");
-  return validate(code);
+  return validate(code, onRefused);
 }
 
 
@@ -55,6 +55,12 @@ type CouponDetails = {
   code: string;
   discountType: "percent" | "fixed";
   discountValue: number;
+  /**
+   * coupons.free_shipping, as /api/coupons/validate reports it. Zeroes the
+   * shipping line here exactly as quote-order.ts zeroes the charge; absent
+   * (older payload) means false, so nothing is waived that the server won't.
+   */
+  freeShipping?: boolean;
 };
 
 export type CartItem = {
@@ -212,7 +218,7 @@ type CartContextValue = {
    * recovery code a restore link carries. Primes the address so the preview
    * prices the code the way the checkout will.
    */
-  restoreCoupon: (input: { code: string; discountType: "percent" | "fixed"; discountValue: number; email: string }) => void;
+  restoreCoupon: (input: { code: string; discountType: "percent" | "fixed"; discountValue: number; freeShipping?: boolean; email: string }) => void;
   clearCouponCode: () => void;
   clearCouponMessage: () => void;
   setKnownEmail: (email: string) => void;
@@ -1076,7 +1082,22 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // assumes domestic. checkout/page.tsx recomputes this from the shared
   // shipping.ts formula once the customer enters their country, and that
   // recomputed value (not this one) is what's sent to the server.
-  const shipping = (bulkSavingsTierReached || memberFreeShipping) ? 0 : calculateShipping(subtotal, undefined, shippingConfig);
+  //
+  // The waiver is the shared isShippingWaived (shipping.ts) — the same call
+  // quote-order.ts makes — so a free-shipping coupon zeroes this line the way
+  // it zeroes the charge. It used to name only the bulk tier and the member
+  // perk, and a free-shipping code showed the fee still in the total.
+  const shippingAtListTerms = calculateShipping(subtotal, undefined, shippingConfig);
+  const couponFreeShipping = Boolean(couponDetails?.freeShipping);
+  const shipping = isShippingWaived({ bulkSavingsTier: bulkSavingsTierReached, memberFreeShipping, couponFreeShipping })
+    ? 0
+    : shippingAtListTerms;
+  // Whether the CODE is what made shipping free: only when the fee would
+  // otherwise be charged and no other grant already waives it — the same rule
+  // quote-order.ts uses to decide whether the code is recorded on the order.
+  const couponWaivesShipping = couponFreeShipping
+    && !(bulkSavingsTierReached || memberFreeShipping)
+    && shippingAtListTerms > 0;
 
   const couponDiscountAmount = useMemo(
     // Zeroed only when the server would refuse the coupon outright: a promotion
@@ -1274,14 +1295,20 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
             : null;
     return describeCouponOutcome({
       code: couponDetails.code,
+      // A free-shipping-only code carries no percentage; naming "0% off" would
+      // be its own small lie, so the offer label is omitted and the waiver
+      // below is what gets named.
       offerLabel:
-        couponDetails.discountType === "fixed"
-          ? `${formatCurrency(couponDetails.discountValue)} off`
-          : `${couponDetails.discountValue}% off`,
+        couponDetails.discountValue > 0
+          ? (couponDetails.discountType === "fixed"
+              ? `${formatCurrency(couponDetails.discountValue)} off`
+              : `${couponDetails.discountValue}% off`)
+          : null,
       winnerType,
       winnerLabel: appliedDiscountLabel,
+      waivesShipping: couponWaivesShipping,
     });
-  }, [couponDetails, discountAmount, bestDiscount, quantityBundleSavings, appliedDiscountLabel, activePromotionAllowsCoupon, couponDiscountAmount]);
+  }, [couponDetails, discountAmount, bestDiscount, quantityBundleSavings, appliedDiscountLabel, activePromotionAllowsCoupon, couponDiscountAmount, couponWaivesShipping]);
 
   const bulkSavingsApplied = bestDiscount?.type === "bulk_savings";
   const ambassadorDiscountApplied = bestDiscount?.type === "ambassador_personal";
@@ -1622,7 +1649,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
     setIsApplyingReferral(true);
     try {
-      const validatedReferral = await validateReferralCodeClient(normalized);
+      const refusal: { reason: "unknown" | "inactive" } = { reason: "inactive" };
+      const validatedReferral = await validateReferralCodeClient(normalized, (reason) => { refusal.reason = reason; });
 
       if (!validatedReferral) {
         // Says where the OTHER kind of code goes. The offers bar advertises
@@ -1631,7 +1659,14 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         // so a shopper who copies the advertised code and pastes it here used
         // to be told a perfectly live discount was "not active", and had no
         // way to learn that checkout is where it goes.
-        setReferralError("That referral code is not active. Promo codes are applied at checkout.");
+        // "Not active" is only true of a code that exists. A code nobody has
+        // (a typo, or a promo code pasted into the wrong box) used to get the
+        // same sentence, which sent shoppers looking for a paused ambassador.
+        setReferralError(
+          refusal.reason === "unknown"
+            ? "We don't recognize that referral code. Check the spelling — promo codes are applied at checkout."
+            : "That referral code is not active. Promo codes are applied at checkout.",
+        );
         return;
       }
 
@@ -1666,9 +1701,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         minimumOrder: referralMinimumOrder,
         formatCurrency,
       }));
+      // One code slot. The coupon that was here is gone; say so, rather than
+      // letting its row vanish from the drawer without a word.
+      const displacedCoupon = couponCode;
       setCouponCode(null);
       setCouponDetails(null);
-      setCouponError(null);
+      setCouponError(displacedCoupon ? `Promo code ${displacedCoupon} was removed — promo codes can't be combined with a referral code.` : null);
       setCouponSuccess(null);
       setPointsToRedeemState(0);
       if (typeof document !== "undefined") {
@@ -1738,6 +1776,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         code?: string;
         discountType?: "percent" | "fixed";
         discountValue?: number;
+        freeShipping?: boolean;
         error?: string;
       };
 
@@ -1753,13 +1792,15 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         code: result.code,
         discountType: result.discountType,
         discountValue: Number(result.discountValue ?? 0),
+        freeShipping: result.freeShipping === true,
       });
       setCouponCode(result.code);
       setCouponError(null);
       setCouponSuccess("Coupon applied.");
+      const displacedReferral = referralCode;
       setReferralDetails(null);
       setReferralCode(null);
-      setReferralError(null);
+      setReferralError(displacedReferral ? `Referral code ${displacedReferral} was removed — it can't be combined with a promo code.` : null);
       setReferralSuccess(null);
       if (typeof document !== "undefined") {
         document.cookie = `${REFERRAL_COOKIE_KEY}=; path=/; max-age=0; samesite=lax`;
@@ -1787,17 +1828,26 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // could contradict both: a code bound to another address than the account's,
   // or one a non-stacking promotion refuses — which applyCouponCode would have
   // turned away, and which the checkout cannot then submit.
-  const [pendingRestoredCoupon, setPendingRestoredCoupon] = useState<{ code: string; discountType: "percent" | "fixed"; discountValue: number; email: string } | null>(null);
-  const restoreCoupon = (input: { code: string; discountType: "percent" | "fixed"; discountValue: number; email: string }) => {
+  type RestoredCoupon = { code: string; discountType: "percent" | "fixed"; discountValue: number; freeShipping?: boolean; email: string };
+  const [pendingRestoredCoupon, setPendingRestoredCoupon] = useState<RestoredCoupon | null>(null);
+  const restoreCoupon = (input: RestoredCoupon) => {
     const code = input.code.trim().toUpperCase();
     const email = input.email.trim().toLowerCase();
     if (!code || !email) return;
-    setPendingRestoredCoupon({ code, discountType: input.discountType, discountValue: Number(input.discountValue ?? 0), email });
+    setPendingRestoredCoupon({
+      code,
+      discountType: input.discountType,
+      discountValue: Number(input.discountValue ?? 0),
+      freeShipping: input.freeShipping === true,
+      email,
+    });
   };
-  useEffect(() => {
-    if (!pendingRestoredCoupon || !accountChecked || !storeConfigLoaded) return;
-    const pending = pendingRestoredCoupon;
-    setPendingRestoredCoupon(null);
+  // The arming step itself. Everything it reads is a dependency, so the
+  // version the effect schedules is the one for the render that saw the
+  // readiness flags flip; it clears the parked code first so it cannot run
+  // twice for the same restore.
+  const armRestoredCoupon = useCallback((pending: RestoredCoupon) => {
+    setPendingRestoredCoupon((current) => (current === pending ? null : current));
     const sessionEmail = knownEmail.trim().toLowerCase();
     if (isSignedIn && sessionEmail && sessionEmail !== pending.email) {
       // The checkout will price this account's email, not the code's.
@@ -1817,19 +1867,41 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     // The code is bound to this address; without it the preview and the
     // validator would refuse the code the server just handed over.
     if (!isSignedIn) setKnownEmail(pending.email);
-    setCouponDetails({ code: pending.code, discountType: pending.discountType, discountValue: pending.discountValue });
+    setCouponDetails({
+      code: pending.code,
+      discountType: pending.discountType,
+      discountValue: pending.discountValue,
+      freeShipping: pending.freeShipping === true,
+    });
     setCouponCode(pending.code);
     setCouponError(null);
     setCouponSuccess("Coupon applied.");
     // One code slot, exactly as applyCouponCode: a coupon replaces a referral.
+    const displacedReferral = referralCode;
     setReferralDetails(null);
     setReferralCode(null);
-    setReferralError(null);
+    setReferralError(displacedReferral ? `Referral code ${displacedReferral} was removed — it can't be combined with a promo code.` : null);
     setReferralSuccess(null);
     if (typeof document !== "undefined") {
       document.cookie = `${REFERRAL_COOKIE_KEY}=; path=/; max-age=0; samesite=lax`;
     }
-  }, [pendingRestoredCoupon, accountChecked, storeConfigLoaded, isSignedIn, knownEmail, buy3Get1FreeDiscount, activePromotionAllowsCoupon, activePromotionName]);
+  }, [knownEmail, isSignedIn, buy3Get1FreeDiscount, activePromotionAllowsCoupon, activePromotionName]);
+  // Armed once the readiness flags are up. The state updates are scheduled as
+  // a microtask, the same way the re-validate effect below defers to
+  // applyCouponCode, so none of them run synchronously inside this effect.
+  // A parked code that is still parked when the microtask runs is armed
+  // exactly once: armRestoredCoupon clears it before doing anything else.
+  useEffect(() => {
+    if (!pendingRestoredCoupon || !accountChecked || !storeConfigLoaded) return;
+    const pending = pendingRestoredCoupon;
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (!cancelled) armRestoredCoupon(pending);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingRestoredCoupon, accountChecked, storeConfigLoaded, armRestoredCoupon]);
 
   // Re-validate a coupon read back from storage, once everything the validator
   // depends on (the account's email, the promotion config) is known. Goes

@@ -167,6 +167,37 @@ describe("win-back episodes", () => {
   });
 });
 
+describe("win-back ladder spacing", () => {
+  const lapsed = { email: "lapsed@example.com", orderId: "o-1", at: NOW - 400 * DAY };
+  const reference = `${lapsed.email}:${lapsed.at}`;
+  const withPredecessor = (sentAt: Map<string, number>) => ({
+    ...base,
+    key: "winback_60" as const,
+    delayDays: 60,
+    consented: new Set([lapsed.email]),
+    paidOrders: [lapsed],
+    ladderPredecessor: { sentAt, delayDays: 30 },
+  });
+
+  it("holds Win-back 2 until Win-back 1 has gone out for the same episode", () => {
+    expect(selectAutomationTargets(withPredecessor(new Map()))).toEqual([]);
+  });
+
+  it("holds Win-back 2 while the ladder gap (60 − 30 days) since Win-back 1 is still running", () => {
+    expect(selectAutomationTargets(withPredecessor(new Map([[reference, NOW - 10 * DAY]])))).toEqual([]);
+  });
+
+  it("sends Win-back 2 once Win-back 1 is a full ladder gap behind", () => {
+    const targets = selectAutomationTargets(withPredecessor(new Map([[reference, NOW - 31 * DAY]])));
+    expect(targets).toEqual([{ email: lapsed.email, referenceId: reference }]);
+  });
+
+  it("runs Win-back 2 on its own when Win-back 1 is not enabled", () => {
+    const targets = selectAutomationTargets({ ...withPredecessor(new Map()), ladderPredecessor: null });
+    expect(targets).toEqual([{ email: lapsed.email, referenceId: reference }]);
+  });
+});
+
 describe("consent and batching", () => {
   it("skips anyone not consented, even with a perfect order history", () => {
     const targets = selectAutomationTargets({
@@ -307,5 +338,48 @@ describe("the quiet period", () => {
       lastMarketingSentAt: new Map([["busy@example.com", NOW - 2 * DAY]]),
     });
     expect(later).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// EMAIL-02. loadPaidOrders selected payment_status alone and never order_type,
+// so a membership signup or renewal (order_type 'membership', payment_status
+// 'paid') and a $0 replacement reship both counted as purchases: "your first
+// order" fourteen days after a plan signup, "time to restock" thirty days after a
+// reship, and a win-back clock that every monthly renewal reset. The loader is
+// private and the eligibility rules above are pure, so the filter is pinned at
+// the source alongside the predicate it delegates to.
+// ---------------------------------------------------------------------------
+describe("only a purchase of product feeds the automations", () => {
+  it("loadPaidOrders reads order_type and drops anything that is not a product purchase", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(`${process.cwd()}/src/lib/email/automations.ts`, "utf8");
+    const loader = src.slice(src.indexOf("async function loadPaidOrders"), src.indexOf("export type AutomationTarget"));
+    expect(loader).toContain('select("order_id, customer_email, payment_status, created_at, order_type")');
+    expect(loader).toContain("if (!isProductPurchaseOrder(row");
+    // The revenue predicate is the WRONG one here: a membership charge is a sale.
+    expect(loader).not.toContain("isSaleOrder(");
+  });
+
+  it("the predicate it delegates to excludes membership charges and reships and keeps product orders", async () => {
+    const { isProductPurchaseOrder } = await import("@/lib/ledger");
+    expect(isProductPurchaseOrder({ order_type: "membership" })).toBe(false);
+    expect(isProductPurchaseOrder({ order_type: "replacement" })).toBe(false);
+    expect(isProductPurchaseOrder({ order_type: "product" })).toBe(true);
+  });
+
+  it("a membership-only subscriber is therefore still a welcome_no_purchase target, and never a post_purchase one", () => {
+    // What the loader now produces for such a customer: no paid product orders.
+    const targets = selectAutomationTargets({
+      ...base,
+      key: "welcome_no_purchase",
+      delayDays: 3,
+      consented: new Set(["member@example.com"]),
+      accounts: new Set(["member@example.com"]),
+      accountCreatedAt: new Map([["member@example.com", NOW - 5 * DAY]]),
+      paidOrders: [],
+    });
+    expect(targets).toEqual([{ email: "member@example.com", referenceId: "member@example.com" }]);
+    expect(selectAutomationTargets({ ...base, key: "post_purchase", delayDays: 14, consented: new Set(["member@example.com"]), paidOrders: [] })).toEqual([]);
   });
 });

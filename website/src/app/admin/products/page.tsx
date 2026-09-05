@@ -428,6 +428,22 @@ export default function AdminProductsPage() {
     });
   };
 
+  // ADM-12. A network failure (timeout, offline laptop, proxy reset) used to
+  // throw straight out of the handler: `saving` stayed true, no message, and the
+  // operator could not tell whether the save had happened. Every mutation below
+  // goes through this and gets a sentence instead of a frozen button.
+  const requestJson = async <T,>(input: string, init?: RequestInit): Promise<{ res: Response; json: T } | null> => {
+    try {
+      const res = await fetch(input, init);
+      const json = (await res.json()) as T;
+      return { res, json };
+    } catch {
+      setMessage("Network error — the change may not have been saved. Reload the page to check before trying again.");
+      clearMessageSoon();
+      return null;
+    }
+  };
+
   const runBulkAction = async (action: string, value?: string | null) => {
     if (selectedIds.size === 0) {
       setMessage("Select products first.");
@@ -435,12 +451,13 @@ export default function AdminProductsPage() {
       return;
     }
 
-    const res = await fetch("/api/admin/products", {
+    const reply = await requestJson<{ success: boolean; error?: string }>("/api/admin/products", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ productIds: Array.from(selectedIds), action, value: value ?? null }),
     });
-    const json = await res.json() as { success: boolean; error?: string };
+    if (!reply) return;
+    const { res, json } = reply;
     if (!res.ok || !json.success) {
       setMessage(json.error ?? "Bulk action failed.");
       clearMessageSoon();
@@ -468,7 +485,7 @@ export default function AdminProductsPage() {
 
     setIsSavingWizard(true);
     try {
-      const res = await fetch("/api/admin/products", {
+      const reply = await requestJson<{ success: boolean; error?: string; product?: Product }>("/api/admin/products", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -502,7 +519,9 @@ export default function AdminProductsPage() {
         }),
       });
 
-      const json = await res.json() as { success: boolean; error?: string; product?: Product };
+      if (!reply) return;
+
+      const { res, json } = reply;
       if (!res.ok || !json.success) {
         throw new Error(json.error ?? "Unable to create product");
       }
@@ -549,7 +568,7 @@ export default function AdminProductsPage() {
       return;
     }
 
-    const res = await fetch(`/api/admin/products/${nextProduct.id}`, {
+    const reply = await requestJson<{ success: boolean; error?: string; product?: Product }>(`/api/admin/products/${nextProduct.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -590,7 +609,9 @@ export default function AdminProductsPage() {
       }),
     });
 
-    const json = await res.json() as { success: boolean; error?: string; product?: Product };
+    if (!reply) return;
+
+    const { res, json } = reply;
     if (!res.ok || !json.success || !json.product) {
       setMessage(json.error ?? "Unable to save product.");
       clearMessageSoon();
@@ -612,10 +633,17 @@ export default function AdminProductsPage() {
     formData.append("productId", productId);
     formData.append("makePrimary", "true");
 
-    const res = await fetch("/api/admin/upload-image", {
-      method: "POST",
-      body: formData,
-    });
+    let res: Response;
+    try {
+      res = await fetch("/api/admin/upload-image", {
+        method: "POST",
+        body: formData,
+      });
+    } catch {
+      setMessage("Network error — the photo may not have uploaded. Reload the page to check before trying again.");
+      clearMessageSoon();
+      return;
+    }
 
     // A platform-level rejection (e.g. body too large) returns a non-JSON
     // error page — never let that throw and leave the UI silent.
@@ -656,8 +684,9 @@ export default function AdminProductsPage() {
       return;
     }
 
-    const res = await fetch(`/api/admin/products/${productId}`, { method: "DELETE" });
-    const json = await res.json() as { success: boolean; error?: string };
+    const reply = await requestJson<{ success: boolean; error?: string }>(`/api/admin/products/${productId}`, { method: "DELETE" });
+    if (!reply) return;
+    const { res, json } = reply;
     if (!res.ok || !json.success) {
       setMessage(json.error ?? "Unable to delete product.");
       clearMessageSoon();
@@ -671,8 +700,9 @@ export default function AdminProductsPage() {
   };
 
   const duplicateProduct = async (productId: string) => {
-    const res = await fetch(`/api/admin/products/${productId}/duplicate`, { method: "POST" });
-    const json = await res.json() as { success: boolean; error?: string; product?: Product };
+    const reply = await requestJson<{ success: boolean; error?: string; product?: Product }>(`/api/admin/products/${productId}/duplicate`, { method: "POST" });
+    if (!reply) return;
+    const { res, json } = reply;
     if (!res.ok || !json.success) {
       setMessage(json.error ?? "Unable to duplicate product.");
       clearMessageSoon();
@@ -702,12 +732,13 @@ export default function AdminProductsPage() {
     setProducts(rows);
 
     try {
-      const res = await fetch("/api/admin/products/reorder", {
+      const reply = await requestJson<{ success: boolean; error?: string }>("/api/admin/products/reorder", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ productIds: rows.map((row) => row.id) }),
       });
-      const json = await res.json() as { success: boolean; error?: string };
+      if (!reply) return;
+      const { res, json } = reply;
       if (!res.ok || !json.success) {
         setProducts(previous);
         setMessage(json.error ?? "Unable to save the new order.");

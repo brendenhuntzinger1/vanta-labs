@@ -31,10 +31,11 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { recordMembershipChargeOrder } from "@/lib/membership-orders";
-import { getAuthUserContact, sendMembershipEmail } from "@/lib/membership-billing";
+import { getAuthUserContact, sendMembershipEmail, sendMembershipReceiptOnce } from "@/lib/membership-billing";
 import { membershipPaymentFailedTemplate, membershipRenewalReceiptTemplate } from "@/lib/email/templates";
 import { formatDisplayDate } from "@/lib/format-date";
 import { getSiteUrl } from "@/lib/env";
+import { recordSystemAlert } from "@/lib/monitoring";
 
 export const MEMBERSHIP_EVENT_TYPES = new Set([
   "membership.created",
@@ -81,12 +82,17 @@ interface LocalMembershipRow {
   // from the event would be wrong: Veyra sends the plan's interval, and the
   // local row is what every other membership surface reports from.
   billing_cycle: string | null;
+  // The end of the period already paid for, used when a cancel event carries
+  // cancel_at_period_end but no date of its own.
+  next_billing_at: string | null;
+  /** An upgrade waiting for the renewal that pays for it (membership-billing.ts). */
+  pending_tier_id?: string | null;
 }
 
 async function findLocalMembership(veyraMembershipId: string): Promise<LocalMembershipRow | null> {
   const { data, error } = await supabaseAdmin
     .from("customer_memberships")
-    .select("user_id, tier_id, status, billing_cycle")
+    .select("user_id, tier_id, status, billing_cycle, next_billing_at, pending_tier_id")
     .eq("veyra_membership_id", veyraMembershipId)
     .maybeSingle();
   if (error) throw error;
@@ -170,6 +176,16 @@ export async function handleMembershipEvent(
       patch.cancel_at_period_end = data.cancel_at_period_end;
     }
 
+    // THE RENEWAL IS THE MOMENT AN UPGRADE IS PAID FOR. A monthly upgrade was
+    // repriced at Veyra and parked in pending_tier_id (membership-billing.ts);
+    // this charge is the first at the new price, so the member moves onto the
+    // tier now — never before.
+    const appliedTierId = local.pending_tier_id ?? local.tier_id;
+    if (local.pending_tier_id) {
+      patch.tier_id = local.pending_tier_id;
+      patch.pending_tier_id = null;
+      patch.pending_tier_effective_at = null;
+    }
     const { error } = await supabaseAdmin
       .from("customer_memberships")
       .update(patch)
@@ -178,7 +194,7 @@ export async function handleMembershipEvent(
 
     await recordEvent({
       userId: local.user_id,
-      tierId: local.tier_id,
+      tierId: appliedTierId,
       eventType: "renewal",
       amountCents: chargedCents,
       status: "succeeded",
@@ -207,9 +223,9 @@ export async function handleMembershipEvent(
     // the cheaper thing to watch, and it predates this order write.
     const renewalPeriodKey =
       (data.next_renewal_at ?? data.current_period_end ?? nowIso.slice(0, 10)) || nowIso.slice(0, 10);
-    await recordMembershipChargeOrder({
+    const renewalOrder = await recordMembershipChargeOrder({
       userId: local.user_id,
-      tierId: local.tier_id,
+      tierId: appliedTierId,
       billingCycle: local.billing_cycle,
       amountCents: chargedCents,
       kind: "renewal",
@@ -228,18 +244,23 @@ export async function handleMembershipEvent(
     //
     // Never allowed to fail the webhook: the charge is already recorded, and
     // returning an error here would have Veyra retry an event we handled.
+    //
+    // Once per renewal ORDER: the order is period-keyed, so a redelivery of the
+    // same renewal resolves to the same order and the same, already-taken
+    // send-once slot — the receipt cannot go out twice for one charge.
     try {
       const contact = await getAuthUserContact(local.user_id);
       if (contact) {
-        await sendMembershipEmail(
-          contact.email,
-          membershipRenewalReceiptTemplate({
+        await sendMembershipReceiptOnce({
+          orderId: renewalOrder.orderId ?? null,
+          kind: "membership_renewal_receipt",
+          to: contact.email,
+          template: membershipRenewalReceiptTemplate({
             name: contact.name,
             monthlyPriceCents: chargedCents,
             nextBillingDate: formatDisplayDate(data.next_renewal_at ?? data.current_period_end ?? null, "long") ?? "",
           }),
-          "renewal receipt",
-        );
+        });
       }
     } catch (receiptError) {
       console.error("[membership-webhook] renewal receipt failed", receiptError);
@@ -270,6 +291,29 @@ export async function handleMembershipEvent(
           : "Renewal charge failed at the payment provider",
     });
 
+    // THE OPERATOR HEARS ABOUT IT. This lane marked the member past_due, told
+    // the member, and told nobody else: a renewal failure was a row on one
+    // admin screen. Warning, not critical — Veyra's dunning is the retry, and
+    // a declined card is the member's to fix — but on file and in Sentry so a
+    // run of failures reads as a run. No local retry: the processor owns it.
+    await recordSystemAlert({
+      type: "membership_charge_failed",
+      severity: "warning",
+      message:
+        `Processor renewal charge of ${((data.amount_charged_cents ?? data.amount_cents ?? 0) / 100).toFixed(2)} USD failed for user ${local.user_id}`
+        + (data.dunning_attempts != null ? ` (dunning attempt ${data.dunning_attempts}` + (data.next_retry_at ? `, next retry ${data.next_retry_at}` : "") + ")" : "")
+        + " — the member is past_due until the processor's retry succeeds.",
+      context: {
+        userId: local.user_id,
+        tierId: local.tier_id,
+        veyraMembershipId,
+        amountCents: data.amount_charged_cents ?? data.amount_cents ?? 0,
+        dunningAttempts: data.dunning_attempts ?? null,
+        nextRetryAt: data.next_retry_at ?? null,
+        lane: "veyra",
+      },
+    }).catch(() => {});
+
     // Perks have just stopped. Say so, and say how to fix it.
     //
     // This branch set past_due and told nobody, so the member lost their
@@ -297,16 +341,40 @@ export async function handleMembershipEvent(
   }
 
   if (eventType === "membership.canceled") {
-    // Terminal. Mirrors a cancel initiated at Veyra (admin action, dunning
-    // exhaustion, or our own cancel call echoing back) so the two sides agree.
+    // WINDING DOWN OR TERMINAL — the event says which, and they are not the
+    // same thing. Our own cancelMembership asks Veyra for `cancel at_period_end`
+    // and keeps the row active until the paid period runs out; if Veyra echoes
+    // that request back as membership.canceled with cancel_at_period_end=true
+    // and a period end still ahead, treating it as terminal flipped the row to
+    // cancelled on the spot and stripped perks the member had paid for — the
+    // opposite of what the cancel confirmation had just promised them. So a
+    // period-end cancel with time left is recorded the way the app already
+    // represents one (cancel_at_period_end, status untouched), and only a
+    // cancel whose period has ended — or an immediate one — ends access now.
+    const periodEndRaw = data.current_period_end ?? data.next_renewal_at ?? local.next_billing_at ?? null;
+    const periodEndMs = periodEndRaw ? new Date(periodEndRaw).getTime() : Number.NaN;
+    const windingDown =
+      data.cancel_at_period_end === true && Number.isFinite(periodEndMs) && periodEndMs > Date.now();
+
+    const patch: Record<string, unknown> = windingDown
+      ? {
+          cancel_at_period_end: true,
+          updated_at: nowIso,
+          // Veyra's date for the end of the paid period is the authority on
+          // when access stops; adopt it so the account page and the expiry
+          // guard agree with the processor.
+          ...(data.current_period_end ? { next_billing_at: data.current_period_end, renews_at: data.current_period_end } : {}),
+        }
+      : {
+          status: "cancelled",
+          cancel_at_period_end: true,
+          cancelled_at: nowIso,
+          updated_at: nowIso,
+        };
+
     const { error } = await supabaseAdmin
       .from("customer_memberships")
-      .update({
-        status: "cancelled",
-        cancel_at_period_end: true,
-        cancelled_at: nowIso,
-        updated_at: nowIso,
-      })
+      .update(patch)
       .eq("veyra_membership_id", veyraMembershipId);
     if (error) throw error;
 
@@ -316,7 +384,9 @@ export async function handleMembershipEvent(
       eventType: "cancel",
       amountCents: 0,
       status: "succeeded",
-      failureReason: data.cancellation_reason ?? null,
+      failureReason: windingDown
+        ? `Ends at period end${data.cancellation_reason ? `: ${data.cancellation_reason}` : ""}`
+        : (data.cancellation_reason ?? null),
     });
 
     return { handled: true, membershipId: veyraMembershipId, userId: local.user_id };

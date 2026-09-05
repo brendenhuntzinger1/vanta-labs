@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 import { sendEmail } from "@/lib/email/send";
 import { contactFormNotificationTemplate, contactFormAutoReplyTemplate } from "@/lib/email/templates";
+import { plainGreetingName } from "@/lib/email/greeting-name";
 import { getBusinessSettings } from "@/lib/admin-control";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { rateLimitKeyForRequest } from "@/lib/request-ip";
 import { customerSafeMessage } from "@/lib/safe-error";
+import { recordSystemAlert } from "@/lib/monitoring";
 
 const SUBMISSION_WINDOW_MS = 3000;
 const RATE_LIMIT_WINDOW_SECONDS = 10 * 60;
@@ -93,6 +95,26 @@ export async function POST(request: Request) {
       // ("Resend API error (401): ..."). It is exactly what safe-error.ts exists
       // to keep off a customer's screen, and this endpoint is anonymous.
       console.error("[contact] notification send failed:", result.error);
+      // SF-5. The email was the only sink, so a provider outage LOST the
+      // customer's message: the form told them it failed, and nothing anywhere
+      // held what they wrote. Record it on the status page (Admin → Status)
+      // with the sender's address and the full text in context, so the owner
+      // can read it and reply by hand. Best effort — the customer is still told
+      // the truth below whether or not this write lands.
+      await recordSystemAlert({
+        type: "contact_form_undelivered",
+        severity: "warning",
+        message: `A contact-form message from ${email} could not be emailed to the support inbox (${result.error ?? "provider refused"}). The message is preserved in this alert's context — reply to the sender by hand.`,
+        context: {
+          from_email: email,
+          first_name: firstName,
+          last_name: lastName,
+          order_number: orderNumber || null,
+          subject,
+          message,
+          provider_error: result.error ?? null,
+        },
+      }).catch(() => {});
       return NextResponse.json(
         { success: false, error: "We couldn't send your message just now. Please try again shortly." },
         { status: 500 },
@@ -101,8 +123,16 @@ export async function POST(request: Request) {
 
     // Best-effort confirmation to the customer. A failure here must not fail
     // the submission — the team already received the message above.
+    //
+    // NOTHING THE POSTER TYPED IS ECHOED. This is an anonymous form and the
+    // reply goes to whatever address was entered, from the identity that
+    // carries receipts and password resets. Quoting the subject and 5,000
+    // characters of message back made it a relay: anyone could have arbitrary
+    // text delivered, Vanta-branded, to any inbox, and the spam complaints
+    // land on the transactional domain. The template now says only what the
+    // store has to say; the greeting name is held to the shape of a name.
     try {
-      const autoReply = contactFormAutoReplyTemplate({ firstName, subject, message });
+      const autoReply = contactFormAutoReplyTemplate({ firstName: plainGreetingName(firstName) });
       await sendEmail({ to: email, replyTo: supportEmail, ...autoReply });
     } catch {
       // Non-fatal.
