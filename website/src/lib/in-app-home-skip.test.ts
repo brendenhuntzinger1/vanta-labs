@@ -97,68 +97,68 @@ async function redirectTarget(shape: RequestShape): Promise<string | null> {
   return `${url.pathname}${url.search}`;
 }
 
-describe("an in-app browser is never handed the home page", () => {
+// ---------------------------------------------------------------------------
+// THE REDIRECT DESCRIBED ABOVE IS GONE, AND THE CATALOG GATE IS WHY.
+//
+// Everything in the header above was true and the reasoning still holds: an
+// app's WebView cannot play the hero, and a motionless magnified vial filling a
+// phone screen is a poor first impression. The fix was to send those visitors
+// to the catalog instead.
+//
+// The catalog now requires an account (GATED_PREFIXES in middleware.ts). So the
+// redirect's destination became a login wall, and "skip the still hero" turned
+// into "meet a sign-in form before seeing anything at all" — strictly worse
+// than the problem it solved, and inflicted on precisely the paid social
+// traffic the rule existed to serve.
+//
+// So IN_APP_HOME_REPLACEMENT is null and homePageReplacement returns null for
+// everyone. What these tests now pin is that the redirect STAYS gone, because
+// re-adding it would be an easy and plausible-looking mistake for anyone
+// reading the header comment above without reading this one.
+//
+// The signed-out home page is a reasonable landing for these browsers now: it
+// carries the brand, the testing story, and an explicit invitation to sign in,
+// and hero-video.tsx independently serves a still rather than a broken player.
+// ---------------------------------------------------------------------------
+describe("an in-app browser now keeps the home page, like everyone else", () => {
   for (const [app, ua] of Object.entries(IN_APP_AGENTS)) {
-    it(`sends ${app} to the catalog instead of "/"`, async () => {
-      expect(await redirectTarget({ path: "/", ua })).toBe("/products");
+    it(`leaves ${app} on "/"`, async () => {
+      const response = await middleware(request({ path: "/", ua }));
+      expect(response.status).not.toBe(307);
+      expect(response.headers.get("location")).toBeNull();
     });
   }
 
-  it("does it on the server, before any home page HTML exists", async () => {
-    // The distinction that matters: a redirect carries a Location and no body,
-    // so the hero is never rendered, never fetched and never painted. The
-    // client-side push it replaces could only run after the page was on screen.
-    const response = await middleware(request({ path: "/", ua: IN_APP_AGENTS.tiktok }));
-    expect(response.status).toBe(307);
-    expect(response.headers.get("x-middleware-next")).toBeNull();
+  it("never sends an in-app visitor to the gated catalog", async () => {
+    // The specific regression this file exists to prevent now. A redirect to
+    // /products would immediately be re-redirected to /account/login, so a
+    // TikTok visitor's first screen would be a sign-in form.
+    for (const ua of Object.values(IN_APP_AGENTS)) {
+      const response = await middleware(request({ path: "/", ua }));
+      expect(response.headers.get("location") ?? "").not.toContain("/products");
+      expect(response.headers.get("location") ?? "").not.toContain("/account/login");
+    }
   });
 
-  it("is temporary, so no browser or CDN pins it to the URL", async () => {
-    // 308 or 301 would be cached against "/" itself and outlive the browser
-    // that asked — the same URL opened later in Safari would still bounce.
-    // The answer depends on WHO is asking, so it can only ever be a 307.
-    const response = await middleware(request({ path: "/", ua: IN_APP_AGENTS.snapchat }));
-    expect(response.status).toBe(307);
+  it("keeps the campaign query on the URL the visitor asked for", async () => {
+    // Nothing is rewritten, so ttclid and utm_* simply stay where they were.
+    // Attribution never had to survive a hop because there is no hop.
+    const response = await middleware(
+      request({ path: "/?ttclid=ABC123&utm_source=tiktok", ua: IN_APP_AGENTS.tiktok }),
+    );
+    expect(response.status).not.toBe(307);
   });
 
-  it("carries the campaign query onto the catalog", async () => {
-    // Nearly all of this traffic is paid. Dropping ttclid or fbclid here would
-    // break attribution for exactly the visitors this rule exists to serve, and
-    // the loss would be invisible until a report came back empty.
-    expect(
-      await redirectTarget({
-        path: "/?ttclid=ABC123&utm_source=tiktok&utm_medium=paid",
-        ua: IN_APP_AGENTS.tiktok,
-      }),
-    ).toBe("/products?ttclid=ABC123&utm_source=tiktok&utm_medium=paid");
+  it("treats an RSC navigation the same as a page load", async () => {
+    const response = await middleware(
+      request({ path: "/", ua: IN_APP_AGENTS.tiktok, document: false }),
+    );
+    expect(response.status).not.toBe(307);
   });
 
-  it("moves a client-side navigation too, not just a fresh page load", async () => {
-    // THIS IS THE HOLE THE CLIENT-SIDE VERSION COULD NOT CLOSE. Tapping the
-    // header wordmark is an RSC fetch, not a document request — it never
-    // carries `sec-fetch-dest: document`. A rule that only redirected real page
-    // loads would leave the wordmark, the "Home" breadcrumb and the 404 button
-    // all landing on the page this exists to skip.
-    expect(
-      await redirectTarget({ path: "/", ua: IN_APP_AGENTS.tiktok, document: false }),
-    ).toBe("/products");
-  });
-
-  it("marks the redirect itself as varying by user-agent, and uncacheable", async () => {
-    // This redirect was invented from the User-Agent, so no intermediary may
-    // replay it to a different browser. It is the ONLY response that needs
-    // saying: middleware runs before the CDN cache, so a cache is only ever
-    // consulted for requests already let through, and it therefore only ever
-    // holds the one variant of "/" — the home page.
-    //
-    // Asserted on the redirect and not on the pass-through deliberately.
-    // Verified with curl against the harness build: the 307 carries
-    // `Vary: User-Agent`, and a `Vary` set on the page response does NOT
-    // survive — Next replaces it with its own RSC value. A test asserting the
-    // pass-through here would pass on the object and be false on the wire.
-    const response = await middleware(request({ path: "/", ua: IN_APP_AGENTS.tiktok }));
-    expect(response.headers.get("vary") ?? "").toMatch(/user-agent/i);
-    expect(response.headers.get("cache-control") ?? "").toContain("no-store");
+  it("holds the replacement at null, so the rule cannot come back by accident", () => {
+    const mw = read("middleware.ts");
+    expect(mw).toMatch(/const IN_APP_HOME_REPLACEMENT: string \| null = null;/);
   });
 });
 
@@ -183,22 +183,33 @@ describe("every browser that can play the vial keeps it", () => {
   });
 });
 
-describe("only the home page is skipped", () => {
-  // The rule is about ONE page. Redirecting anything else would throw away the
-  // click that brought the visitor — an ad straight to a product, a shared
-  // cart, a checkout mid-purchase.
+describe("no page is redirected on account of the browser", () => {
+  // The in-app rule is gone entirely, so nothing is moved because of WHO is
+  // asking. These paths are ungated, and an in-app browser must reach every one
+  // of them exactly as any other browser does.
   for (const path of [
-    "/products",
-    "/products/bpc-157-10mg",
     "/cart",
     "/checkout",
     "/membership",
     "/account/login",
     "/legal/terms",
-    "/coa-library",
+    "/research",
   ]) {
     it(`leaves ${path} alone in an in-app browser`, async () => {
       expect(await redirectTarget({ path, ua: IN_APP_AGENTS.tiktok })).toBeNull();
+    });
+  }
+
+  // The catalog paths DO redirect now, and it is essential that they redirect
+  // for a reason that has nothing to do with the browser. These assertions are
+  // the proof: the same path gives the same answer to an in-app browser and to
+  // desktop Chrome. If those two ever diverge, the wall has become a cloak.
+  for (const path of ["/products", "/products/bpc-157-10mg", "/coa-library"]) {
+    it(`sends ${path} to sign in, identically for every browser`, async () => {
+      const inApp = await redirectTarget({ path, ua: IN_APP_AGENTS.tiktok });
+      const desktop = await redirectTarget({ path, ua: REAL_BROWSER_AGENTS["chrome desktop"] });
+      expect(inApp).toContain("/account/login");
+      expect(inApp).toBe(desktop);
     });
   }
 });
@@ -210,10 +221,15 @@ describe("only the home page is skipped", () => {
 // destination has to obey the same rule as everything else.
 // ---------------------------------------------------------------------------
 describe("the media-file correction obeys the same rule", () => {
-  it("puts an in-app visitor on the catalog, in one hop", async () => {
+  it("puts an in-app visitor on the home page, like everyone else", async () => {
+    // This used to land on /products, because the in-app rule sent that
+    // audience there and the correction obeyed it in one hop rather than two.
+    // With the catalog gated there is no such destination, so the correction
+    // has one answer for every browser — which is also one fewer way for this
+    // file to develop a browser-dependent behaviour.
     expect(
       await redirectTarget({ path: "/videos/vanta-labs-hero-opt.mp4", ua: IN_APP_AGENTS.tiktok }),
-    ).toBe("/products");
+    ).toBe("/");
   });
 
   it("still puts everyone else on the home page", async () => {
@@ -252,9 +268,14 @@ describe("the classifier is not duplicated", () => {
     }
   });
 
-  it("keeps the age gate's fallback pointing at the same place", () => {
+  it("keeps the age gate's fallback in step with middleware", () => {
+    // The two used to name the same destination and now both name none. They
+    // are still meant to agree: if middleware ever stops redirecting in-app
+    // browsers and the gate keeps pushing them somewhere, a visitor gets moved
+    // by the client after the page is already on screen — the flash this whole
+    // mechanism was built to remove.
     const gate = read("src/components/age-gate.tsx");
-    expect(gate).toMatch(/const SOCIAL_DESTINATION = "\/products";/);
-    expect(mw).toMatch(/const IN_APP_HOME_REPLACEMENT = "\/products";/);
+    expect(gate).not.toContain("SOCIAL_DESTINATION");
+    expect(mw).toMatch(/const IN_APP_HOME_REPLACEMENT: string \| null = null;/);
   });
 });

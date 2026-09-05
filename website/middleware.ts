@@ -12,6 +12,56 @@ import { isInAppBrowser } from "@/lib/in-app-browser";
 const ADMIN_SESSION_COOKIE = "vl_admin_session";
 /** Account routes a signed-out visitor is meant to reach. */
 const PUBLIC_ACCOUNT_PATHS = new Set(["/account/login", "/account/forgot-password", "/account/reset-password"]);
+
+// ---------------------------------------------------------------------------
+// THE CATALOG IS NOT PUBLIC. THE BRAND IS.
+//
+// Everything that names a compound, quotes a price, or reports a batch result
+// requires an account. Everything that describes the company — the home page,
+// the research library, the legal policies, testing standards, contact —
+// stays open and indexable.
+//
+// THIS IS A UNIFORM WALL, AND THAT IS THE WHOLE POINT. There is no user-agent
+// test here, no IP test, no crawler list. Googlebot, TikTok's reviewer, Meta's
+// reviewer, a competitor and an ordinary signed-out shopper all receive the
+// identical response, because they are all simply unauthenticated. Any rule
+// that varied by WHO is asking would be cloaking, which is against the ad
+// platforms' policies and is a far larger risk than the one it would solve.
+// If a future change needs to know the requester's identity to decide what to
+// serve here, that change is wrong.
+//
+// WHY MIDDLEWARE CARRIES IT.
+//
+//   * IT SEES EVERY SHAPE OF REQUEST. A page load, a client-side navigation's
+//     RSC payload fetch and an API call all pass through here. Verified
+//     against production before this was written: an anonymous request to a
+//     gated /account route carrying `RSC: 1` returns the redirect, not the
+//     page. A guard that lived only in the page component would hand the RSC
+//     payload to anyone who asked for it directly.
+//   * IT RUNS BEFORE THE DATA IS FETCHED. A server component that reads the
+//     catalog and then renders nothing still serialises what it read into the
+//     flight payload. Not fetching is the only version of "hidden" that holds.
+//   * IT CANNOT ENUMERATE. This file knows nothing about which slugs exist, so
+//     /products/glp-1 and /products/does-not-exist produce byte-identical
+//     answers. A guard inside the page would have to look the product up, and
+//     the 404-versus-redirect difference would leak the entire catalog to
+//     anyone willing to iterate a word list.
+//
+// The page and route guards remain as defence in depth — see the catalog page
+// and the catalog API — because one check in one layer is one deploy away from
+// being bypassed. The real boundary is neither of them: it is row-level
+// security in Postgres, which is what stops the public anon key reading the
+// products table straight off PostgREST regardless of anything in this app.
+const GATED_PREFIXES = [
+  "/products",
+  "/coa-library",
+  "/api/catalog",
+  "/api/coa",
+];
+
+function isGatedPath(pathname: string) {
+  return GATED_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+}
 const MAINTENANCE_CACHE_TTL_MS = 15_000;
 const SESSION_CACHE_TTL_MS = 30_000;
 
@@ -371,7 +421,26 @@ function isTopLevelNavigation(request: NextRequest) {
 // a visitor landing on the catalog instead of the home page — a page they can
 // leave with one tap — against a false negative's dead full-screen still.
 // ---------------------------------------------------------------------------
-const IN_APP_HOME_REPLACEMENT = "/products";
+// THIS USED TO BE "/products", AND THE CATALOG GATE MADE THAT DESTINATION
+// WRONG.
+//
+// The rule above exists because an app's embedded WebView cannot play the
+// hero, leaving a motionless magnified vial filling the screen; sending those
+// visitors to the catalog got them to something useful instead. The catalog now
+// requires an account, so that same redirect would make a login wall the first
+// thing a TikTok or Instagram visitor ever sees — strictly worse than the still
+// it was avoiding, and on the traffic that matters most.
+//
+// The home page is the right destination for them now for the same reason it is
+// for everyone else: signed out, it carries the brand, the testing story and an
+// explicit invitation to sign in, and hero-video.tsx independently serves these
+// browsers a still rather than a broken player. So there is no replacement any
+// more, and homePageReplacement returns null for every visitor.
+//
+// Kept as a named constant rather than deleted so the media-file correction
+// below keeps one place to ask, and so this reasoning stays attached to the
+// decision if a future destination is ever wanted.
+const IN_APP_HOME_REPLACEMENT: string | null = null;
 
 /**
  * Where this request should go instead of the home page, or null to keep it.
@@ -381,6 +450,9 @@ const IN_APP_HOME_REPLACEMENT = "/products";
  * visitor is not supposed to be sent.
  */
 function homePageReplacement(request: NextRequest): string | null {
+  if (!IN_APP_HOME_REPLACEMENT) {
+    return null;
+  }
   return isInAppBrowser(request.headers.get("user-agent")) ? IN_APP_HOME_REPLACEMENT : null;
 }
 
@@ -563,6 +635,45 @@ export async function middleware(request: NextRequest) {
     login.search = "";
     login.searchParams.set("next", `${pathname}${request.nextUrl.search}`);
     return finish(NextResponse.redirect(login, 307));
+  }
+
+  // THE CATALOG GATE. See GATED_PREFIXES above for why it lives here.
+  //
+  // Judged on the session cookie alone, deliberately. Verifying the token with
+  // GoTrue would cost a round trip on every catalog request, and it would buy
+  // nothing this layer needs: a forged or expired cookie gets past this line
+  // and then meets the page guard, the route guard and — the one that actually
+  // matters — row-level security, none of which take the cookie's word for
+  // anything. This layer's job is to keep the catalog out of the hands of
+  // everyone who is plainly not a customer, which is every crawler and every
+  // signed-out visitor, and a cookie test answers that completely.
+  //
+  // An API request is refused rather than redirected: a fetch() follows a 307
+  // and would parse a login page as JSON.
+  if (isGatedPath(pathname) && !request.cookies.get(AUTH_COOKIE_NAME) && !refreshedCookie) {
+    if (pathname.startsWith("/api/")) {
+      return finish(
+        NextResponse.json(
+          { success: false, error: "Sign in to view the catalog" },
+          { status: 401 },
+        ),
+      );
+    }
+
+    // The query is carried into ?next= so a referral or campaign link resolves
+    // to what it pointed at once the visitor signs in. safeInternalPath on the
+    // login form is what makes accepting it safe — see lib/internal-path.ts —
+    // and the referral code itself is already in a cookie by this point, set
+    // by /r/[code] before it redirected here, so attribution survives the hop.
+    const login = request.nextUrl.clone();
+    login.pathname = "/account/login";
+    login.search = "";
+    login.searchParams.set("next", `${pathname}${request.nextUrl.search}`);
+    // 307 and no-store: this answer depends on the requester's session, so it
+    // must never be cached and handed to a different one.
+    const response = NextResponse.redirect(login, 307);
+    response.headers.set("Cache-Control", "no-store");
+    return finish(response);
   }
 
   // CSRF defense-in-depth: reject cross-site state-changing requests to the

@@ -65,10 +65,24 @@ describe("private and utility routes are noindex in their own right", () => {
     expect(noindexDeclaredFor(route)).toBe(true);
   });
 
+  // "products" and "coa-library" WERE in the list below and have moved here.
+  // Both now require an account (GATED_PREFIXES in middleware.ts), so a crawler
+  // asking for either is redirected to the login page and there is nothing left
+  // to index. They are also gone from the sitemap, which is what keeps the two
+  // halves of this test consistent: the rule is "noindex exactly what the
+  // sitemap does not publish", and both moved sides together.
+  //
+  // noindex matters here beyond robots.txt and the redirect, because it is the
+  // only one of the three that speaks to a URL Google has ALREADY indexed.
+  // robots.txt merely asks a crawler not to fetch; it does not retract.
+  it.each(["products", "coa-library"])("%s is noindex now that it needs an account", (route) => {
+    expect(noindexDeclaredFor(route)).toBe(true);
+  });
+
   it("does not noindex anything the sitemap publishes", () => {
     // The other half of the guard: a noindex that creeps onto a page we are
     // asking Google to index is worse than a missing one.
-    for (const route of ["", "products", "coa-library", "research", "partner", "membership", "wholesale", "contact", "ambassador"]) {
+    for (const route of ["", "research", "partner", "membership", "wholesale", "contact", "ambassador"]) {
       expect(noindexDeclaredFor(route), `${route || "/"} must stay indexable`).toBe(false);
     }
   });

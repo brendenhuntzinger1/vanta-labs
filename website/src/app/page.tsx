@@ -6,6 +6,7 @@ import { ProductCard } from "@/components/product-card";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { getHomepageControlConfig } from "@/lib/admin-control";
 import { getCatalogProducts } from "@/lib/catalog";
+import { getAuthenticatedUser } from "@/lib/auth-session";
 import { COA_SHORT, FULFILMENT_CUTOFF, trustPoints } from "@/lib/trust-claims";
 import { BRAND_LEGAL_NAME } from "@/lib/site-identity";
 
@@ -62,15 +63,43 @@ const FAQ = [
 
 export default async function HomePage() {
   const control = await getHomepageControlConfig();
+
+  // THE HOME PAGE IS PUBLIC. THE CATALOG ON IT IS NOT.
+  //
+  // This page is the brand's front door and the one page that has to win the
+  // branded search, so it stays fully indexable. What cannot stay is the
+  // product data it used to carry: six featured cards with names and prices,
+  // and a category list built from the live catalog. Measured before this
+  // change, the signed-out home page named a compound nine times.
+  //
+  // NOT FETCHED, RATHER THAN FETCHED AND HIDDEN. This is the distinction that
+  // matters and the one that is easy to get wrong. A server component that
+  // reads the catalog and then declines to render it still serialises every
+  // row into the RSC flight payload embedded in the HTML, where it is one
+  // "view source" away from anyone. Rendering nothing is not withholding
+  // anything. So the read itself is conditional, and there is no branch below
+  // in which the data exists but goes unused.
+  //
+  // The condition is the visitor's SESSION, never their identity as a client.
+  // A signed-out shopper, Googlebot, an ad-platform reviewer and a competitor
+  // are treated identically here because they are identical here: all
+  // unauthenticated. Nothing in this file may ever consult a user-agent.
+  const viewer = await getAuthenticatedUser().catch(() => null);
+  const catalogVisible = Boolean(viewer);
+
   // getCatalogProducts (unlike getHomepageControlConfig) has no internal
   // error handling - a Supabase outage shouldn't take down the whole
   // homepage (hero, nav, FAQ) just because the catalog fetch failed.
-  const catalogProducts = await getCatalogProducts().catch(() => []);
+  const catalogProducts = catalogVisible ? await getCatalogProducts().catch(() => []) : [];
 
   const featuredForHome = control.featuredProductSlugs?.length
     ? catalogProducts.filter((product) => control.featuredProductSlugs?.includes(product.slug))
     : catalogProducts;
 
+  // Category names are catalog data too. "GLP Research" and "Metabolic
+  // Research" name what the shop sells as plainly as a product card does, so
+  // they are empty for a signed-out visitor by construction: the array they
+  // are derived from is empty.
   const categories = Array.from(new Set(catalogProducts.map((product) => product.category))).slice(0, 4);
 
   return (
@@ -239,8 +268,38 @@ export default async function HomePage() {
               ))}
             </div>
           ) : (
-            <div className="vl2-glass p-6 text-sm text-white/60">
-              Featured products will appear here once published in the live catalog.
+            <div className="vl2-glass p-6 sm:p-8">
+              {/* TWO REASONS THIS BLOCK IS EMPTY, AND THEY NEED DIFFERENT WORDS.
+                  A signed-out visitor is not looking at a catalogue outage —
+                  they are looking at a catalogue that requires an account, and
+                  telling them products "will appear once published" would be
+                  simply untrue. An admin with a genuinely empty featured list
+                  still gets the original message. */}
+              {catalogVisible ? (
+                <p className="text-sm text-white/60">
+                  Featured products will appear here once published in the live catalog.
+                </p>
+              ) : (
+                <>
+                  <p className="text-base text-white">The catalog is open to account holders.</p>
+                  <p className="mt-3 max-w-prose text-sm leading-6 text-white/60">
+                    Vanta Labs supplies laboratory research materials to labs, businesses and
+                    research organizations. Compound listings, pricing and batch certificates are
+                    available once you have an account.
+                  </p>
+                  <div className="mt-7 flex flex-wrap gap-3">
+                    <Link href="/account/login?next=%2Fproducts" className="vl2-btn-primary vl-focus-ring px-7 py-3.5">
+                      Sign in to browse
+                    </Link>
+                    <Link
+                      href="/research"
+                      className="vl-focus-ring inline-flex min-h-11 items-center px-2 text-xs uppercase tracking-[0.14em] text-white/55 transition hover:text-white"
+                    >
+                      Read the research library →
+                    </Link>
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>

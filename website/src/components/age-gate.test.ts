@@ -416,16 +416,19 @@ describe("the gate survives an app's own toolbars", () => {
     // destination and which an in-app browser can land you on by accident.
     expect(gate).toMatch(/const NEVER_A_DESTINATION = \["\/legal"\];/);
     expect(gate).toMatch(/if \(stranded\) return POST_GATE_DESTINATION;/);
-    // The hero animation is skipped ONLY where it does not work, and the
-    // bounce happens ONLY from the home page — a visitor who asked for a
-    // specific page keeps it.
-    expect(gate).toMatch(/const SOCIAL_DESTINATION = "\/products";/);
-    expect(gate).toMatch(
-      /if \(pathname === POST_GATE_DESTINATION && heroAnimationUnsupported\(\)\) \{/,
-    );
-    // Attribution must survive the redirect or paid traffic stops being
-    // measurable, and the loss would be invisible until a report came back empty.
-    expect(gate).toMatch(/return `\$\{SOCIAL_DESTINATION\}\$\{query\}`;/);
+    // THE IN-APP BOUNCE IS GONE, SO THERE IS NO SECOND DESTINATION LEFT.
+    //
+    // This used to assert SOCIAL_DESTINATION = "/products": an in-app browser
+    // clearing the gate on "/" was pushed to the catalog, because it cannot
+    // play the hero. The catalog now requires an account, so that push would
+    // land a TikTok visitor on a sign-in form the instant they attested — worse
+    // than the still hero it was avoiding. Middleware dropped the same rule
+    // (IN_APP_HOME_REPLACEMENT is null) and these two must agree.
+    //
+    // What remains is the stronger property: clearing the gate is not a
+    // navigation at all, except away from a legal page.
+    expect(gate).not.toContain("SOCIAL_DESTINATION");
+    expect(gate).not.toContain("heroAnimationUnsupported()");
     // Judged on arrival, never on a destination a link asserts.
     expect(gate).not.toMatch(/params\.get\("(next|redirect|returnTo|redirectTo)"\)/);
     // Comments are allowed to NAME these; code is not allowed to call them.
@@ -571,20 +574,40 @@ describe("the gate's policy links are tappable", () => {
 // not what their browser can render, and it is attacker-supplied besides.
 // ---------------------------------------------------------------------------
 
-describe("the home page is skipped only where the hero cannot play", () => {
+describe("the gate routes nobody on the strength of their browser", () => {
   const gate = read("src/components/age-gate.tsx");
+  // Comments are allowed to NAME these signals — the file explains at length
+  // why each one is refused — but code is not allowed to consult them. Same
+  // convention as the attestation block above.
+  const gateCode = gate
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, " ")
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/^\s*\/\/.*$/gm, " ")
+    .replace(/\/\/.*$/gm, " ");
 
-  it("decides on the browser, never on a campaign marker or referrer", () => {
-    const fnStart = gate.indexOf("function heroAnimationUnsupported");
-    expect(fnStart, "heroAnimationUnsupported must exist").toBeGreaterThan(-1);
-    const after = gate.slice(fnStart);
-    const fn = after.slice(0, after.indexOf("\n}") + 2);
+  // THIS DESCRIBE USED TO PIN THE OPPOSITE, AND THE CATALOG GATE INVERTED IT.
+  //
+  // The old rule sent an in-app browser to /products on clearing the gate,
+  // because those WebViews cannot play the hero. The catalog now requires an
+  // account, so that destination became a sign-in form: a TikTok visitor would
+  // attest their age and meet a login wall in the same instant. Middleware
+  // dropped its half too (IN_APP_HOME_REPLACEMENT is null).
+  //
+  // The old tests here were careful about WHICH browser signal was allowed to
+  // route a visitor, and forbade campaign markers and referrers from doing it.
+  // That care is preserved and strengthened: no signal of any kind may route a
+  // visitor from this file now.
 
-    // The whole decision, and the only input it is allowed.
-    expect(fn).toContain("detectInAppBrowser()");
+  it("consults no browser signal at all", () => {
+    expect(gateCode).not.toContain("detectInAppBrowser");
+    expect(gateCode).not.toContain("in-app-browser");
+    expect(gateCode).not.toMatch(/navigator\.userAgent/);
+  });
 
-    // The markers that used to drive it. A browser that renders the hero must
-    // keep the home page no matter which link it arrived through.
+  it("consults no campaign marker, referrer or redirect parameter either", () => {
+    // These say where a visitor came FROM. They never decided anything here and
+    // they must not start: an external link cannot be allowed to choose where
+    // someone lands after attesting.
     for (const marker of [
       "ttclid",
       "fbclid",
@@ -594,32 +617,19 @@ describe("the home page is skipped only where the hero cannot play", () => {
       "utm_source",
       "utm_medium",
       "document.referrer",
-      "location.search",
-      "URLSearchParams",
     ]) {
-      expect(
-        fn,
-        `${marker} says where a visitor came from, not whether their browser can play the hero`,
-      ).not.toContain(marker);
+      expect(gateCode, `${marker} must not influence the destination`).not.toContain(marker);
     }
+    expect(gateCode).not.toMatch(/params\.get\("(next|redirect|returnTo|redirectTo)"\)/);
   });
 
-  it("still carries attribution across the bounce it does make", () => {
-    // Narrowing the trigger must not quietly drop the query on the visitors
-    // who ARE still redirected, or in-app paid traffic stops being measurable.
-    expect(gate).toMatch(/return `\$\{SOCIAL_DESTINATION\}\$\{query\}`;/);
-  });
-
-  it("keeps the in-app skip that the whole mechanism exists for", () => {
-    // hero-video.tsx serves these visitors a still image; this sends them to
-    // the catalog. Both halves are the same decision and must agree.
-    expect(gate).toContain("detectInAppBrowser");
-    expect(read("src/components/hero-video.tsx")).toContain("detectInAppBrowser");
+  it("leaves clearing the gate as a non-navigation, except off a legal page", () => {
+    expect(gate).toMatch(/const POST_GATE_DESTINATION = "\/";/);
+    expect(gate).toMatch(/const NEVER_A_DESTINATION = \["\/legal"\];/);
+    expect(gate).toMatch(/if \(stranded\) return POST_GATE_DESTINATION;/);
   });
 });
 
-// ---------------------------------------------------------------------------
-// The gate renders on all 111 public URLs, so its heading is on all of them.
 // ---------------------------------------------------------------------------
 describe("the age gate does not add a second H1 to every page", () => {
   const src = readFileSync(join(process.cwd(), "src/components/age-gate.tsx"), "utf8");

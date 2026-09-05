@@ -45,7 +45,25 @@ describe("a signed-out visitor on an account page", () => {
     expect(response.status).not.toBe(307);
   });
 
-  it("does not touch the storefront", async () => {
-    expect((await guestGet("/products")).status).not.toBe(307);
+  // THIS USED TO ASSERT THE OPPOSITE, AND THE CATALOG GATE IS WHY.
+  //
+  // The account gate's contract was "divert /account and nothing else", so this
+  // test proved it left the storefront alone by checking that /products was not
+  // a redirect for a guest. /products now requires an account in its own right
+  // (GATED_PREFIXES in middleware.ts), so a guest asking for it IS redirected —
+  // by a different rule, to the same login page, for a different reason.
+  //
+  // What this test still needs to prove is that the ACCOUNT gate has not
+  // widened. A public page is the honest probe for that now.
+  it("does not touch the public storefront", async () => {
+    expect((await guestGet("/research")).status).not.toBe(307);
+    expect((await guestGet("/")).status).not.toBe(307);
+  });
+
+  it("sends a guest asking for the catalog to sign in, carrying the path back", async () => {
+    const response = await guestGet("/products");
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toContain("/account/login");
+    expect(response.headers.get("location")).toContain("next=%2Fproducts");
   });
 });

@@ -1,11 +1,37 @@
 import { NextResponse } from "next/server";
 import { getStorefrontCatalog } from "@/lib/storefront-catalog";
+import { getAuthenticatedUser } from "@/lib/auth-session";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { customerSafeMessage } from "@/lib/safe-error";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  // THE CATALOGUE REQUIRES AN ACCOUNT, AND THIS ROUTE IS WHERE IT LEAKED WORST.
+  //
+  // Anonymous, this endpoint returned the entire catalogue as JSON — 104 KB,
+  // every name, slug, category and price, measured against production on
+  // 2026-09-05. It is the single easiest way to take the whole product list,
+  // easier than scraping the pages, and nothing about search-engine indexing
+  // ever needed it: crawlers read HTML pages, not a private JSON API.
+  //
+  // Middleware refuses this path for a request with no session cookie
+  // (GATED_PREFIXES in middleware.ts) and this check is the second layer, not
+  // the first. It exists because a matcher edit or a route move is one careless
+  // deploy away from putting this handler back on the open internet, and
+  // because middleware trusts the cookie's presence while this verifies the
+  // session for real.
+  //
+  // 401 rather than a redirect: the caller is fetch(), which would follow a 307
+  // and try to parse a login page as JSON.
+  const viewer = await getAuthenticatedUser().catch(() => null);
+  if (!viewer) {
+    return NextResponse.json(
+      { success: false, error: "Sign in to view the catalog" },
+      { status: 401 },
+    );
+  }
+
   try {
     // Shared with the /products page, which now paints this same list on the
     // server. Two copies of the best-seller rule would drift, and a drift is
