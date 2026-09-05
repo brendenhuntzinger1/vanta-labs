@@ -18,6 +18,14 @@ export default function AdminError({
   useEffect(() => {
     // Surfaced in the server/browser logs for debugging without exposing details in the UI.
     console.error("Admin section error:", error);
+    // Report it, the way global-error.tsx already does. A crash caught by an
+    // explicit error boundary reaches only console.error in Next 16 — the
+    // browser Sentry SDK never sees it — so a customer-facing "We hit a snag"
+    // was invisible to the operator. Fire-and-forget: the boundary must still
+    // render if Sentry is absent or fails.
+    import("@sentry/nextjs")
+      .then((Sentry) => Sentry.captureException(error, { tags: { boundary: "admin" } }))
+      .catch(() => {});
   }, [error]);
 
   return (
