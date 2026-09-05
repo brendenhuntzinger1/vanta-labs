@@ -1,8 +1,18 @@
 # Launch audit — closeout, 2026-09-05
 
-Branch `claude/vanta-labs-full-audit-u7ly6y`. `main` is at `5a48471` and is what
-production runs. Everything below `5a48471` on the branch is **not deployed**:
-`e5e60d6` (second pass) and the closeout commits after it.
+**DEPLOYED.** `main` fast-forwarded to `06ad132` (the audit branch merged with
+the two COA changes that had landed on `main` in the meantime) and Vercel
+promoted it to production at 11:17 UTC on 2026-09-05. The 11:30 UTC sweep tick
+ran every job clean and retired three of the four abandoned August checkouts;
+the fourth (created 2026-08-31) reaches seven days on 2026-09-07 and retires
+then. Post-deploy cleanup (Step 4a/4b below) was run at 11:36 UTC. The
+read-only production smoke (Step 5) passed at 390 px and desktop.
+
+**Still owed by the owner:** `ADMIN_CONTROL_SECRET_KEY` in Vercel → Production
+(Step 1), followed by a redeploy. Until then credentials stay plaintext,
+exactly as before; nothing else waits on it.
+
+Originally: branch `claude/vanta-labs-full-audit-u7ly6y`, cut from `5a48471`.
 
 This file is the single record of (1) the exact production deployment order,
 (2) the reconciliation of every finding from the audit, and (3) the four open
