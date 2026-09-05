@@ -8,6 +8,7 @@ import { TurnstileWidget } from "@/components/turnstile-widget";
 import { resolveSignupOutcome, SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-signup-outcome";
 import { classifyAuthReturn, deadAuthLinkMessage, type AuthReturn } from "@/lib/auth-link-fragment";
 import { safeInternalPath } from "@/lib/internal-path";
+import { signInFailureMessage } from "@/lib/sign-in-failure-message";
 import {
   hasAnyOAuthProvider,
   isAppleSignInEnabled,
@@ -431,7 +432,7 @@ export function AccountAuthForm() {
 
       await establishSessionAndGo(data.session.access_token, data.session.refresh_token ?? null);
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "Unable to sign in");
+      setError(signInFailureMessage(submitError));
     } finally {
       setLoading(false);
       resetCaptcha();
@@ -614,17 +615,77 @@ export function AccountAuthForm() {
       // record of what the visitor asserted, and a value the visitor could edit
       // in a query string would be worth nothing as evidence either way. Scoped
       // to the tab, cleared once used.
+      // CONSENT ONLY COUNTS FROM A SCREEN THAT SHOWS THE BOX.
+      //
+      // marketingOptIn is component state and it survives a mode switch, but
+      // the checkbox does not: the portal's "Sign in" link drops the visitor
+      // into login mode, which renders the two attestations and no marketing
+      // box at all. So someone who ticked the optional box at the portal and
+      // then chose "Already have an account?" would have been subscribed from a
+      // screen that could not show them the state, could not let them undo it,
+      // and whose only sentence about marketing promised it would not happen.
+      const marketingBoxOnScreen = mode === "portal" || mode === "signup";
+      const marketingConsent = marketingBoxOnScreen && marketingOptIn;
+
+      // A WRITE THAT DID NOT LAND IS NOT AN ATTESTATION, BUT IT IS NOT A DEAD
+      // END EITHER.
+      //
+      // This marker rides tab-scoped sessionStorage across two external
+      // redirects. It can fail to be written (Safari with "Block All Cookies",
+      // hardened privacy modes) and — the case this page cannot detect at all —
+      // it can be written and then be unreachable, because Google refuses OAuth
+      // inside embedded webviews and bounces an in-app-browser visitor out to
+      // the system browser, where this tab does not exist.
+      //
+      // Neither is a reason to refuse someone the fastest door, and neither may
+      // silently admit them without the record. The callback re-asks when the
+      // marker does not arrive, which covers every loss mode including the ones
+      // detectable only at the far end. Reading the write back here is what
+      // tells the log which kind of failure this was.
+      let attestationStored = false;
       try {
         window.sessionStorage.setItem("vl-oauth-attested", "true");
         // Recorded separately from the attestation because they are different
         // kinds of thing: one is a representation the visitor must make to
         // enter, the other is permission they may withhold and still enter.
-        window.sessionStorage.setItem("vl-oauth-marketing", marketingOptIn ? "true" : "false");
+        window.sessionStorage.setItem("vl-oauth-marketing", marketingConsent ? "true" : "false");
+        // The ambassador who sent them. `?ref=` opens SIGNUP mode and signup
+        // mode puts "Continue with Google" directly under the submit button, so
+        // a referred visitor is one tap from the door that used to drop this —
+        // costing her the welcome points and the ambassador the referral bonus,
+        // silently, with a success screen either way and no repair path.
+        if (referralCodeFromUrl) {
+          window.sessionStorage.setItem("vl-oauth-referral", referralCodeFromUrl);
+        } else {
+          window.sessionStorage.removeItem("vl-oauth-referral");
+        }
+        // setItem can also succeed against a quota-full store and drop the
+        // value, so this is read back rather than assumed.
+        attestationStored = window.sessionStorage.getItem("vl-oauth-attested") === "true";
       } catch {
-        /* private mode: the callback simply will not claim an attestation */
+        attestationStored = false;
       }
+
+      if (!attestationStored) {
+        console.info("[auth] attestation marker could not be stored; the callback will re-ask");
+      }
+
       const safeNext = safeInternalPath(nextPath, "/account");
-      const redirectTo = `${window.location.origin}/account/auth/callback?next=${encodeURIComponent(safeNext)}`;
+      // BUILT FROM THE CONFIGURED SITE URL WHERE THERE IS ONE, NOT THE HOST THE
+      // BROWSER HAPPENS TO BE ON.
+      //
+      // window.location.origin means every host this page answers on has to be
+      // allow-listed in Supabase separately, and a host that is not on the list
+      // does not fail loudly: GoTrue quietly substitutes the Site URL, so the
+      // visitor completes Google and is dropped on the home page with no
+      // session and no explanation. That is exactly what the apex-versus-www
+      // mismatch produced. getEmailRedirectUrl already prefers
+      // NEXT_PUBLIC_SITE_URL for the confirmation and recovery links, and using
+      // it here puts every emailed link and every provider hand-off on one
+      // canonical host, with one entry to allow-list.
+      const redirectTo =
+        getEmailRedirectUrl(`/account/auth/callback?next=${encodeURIComponent(safeNext)}`) ??
+        `${window.location.origin}/account/auth/callback?next=${encodeURIComponent(safeNext)}`;
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider,
         options: {
@@ -1175,8 +1236,15 @@ export function AccountAuthForm() {
                   : isGoogleSignInEnabled()
                     ? "Google"
                     : "Apple"}{" "}
-                shares your name and email address with Vanta Labs. It does not subscribe you to
-                marketing email.
+                shares your name and email address with Vanta Labs.{" "}
+                {/* The promise is only made on the screen where it is true. In
+                    signup mode a marketing checkbox sits right above this, and
+                    it may be ticked — stating flatly that a provider sign-in
+                    does not subscribe them would contradict the control they
+                    can see. */}
+                {mode === "signup"
+                  ? "Whether we email you is set by the checkbox above."
+                  : "It does not subscribe you to marketing email."}
               </p>
 
         </div>

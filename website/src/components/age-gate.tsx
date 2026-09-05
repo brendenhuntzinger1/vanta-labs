@@ -129,6 +129,35 @@ const STAFF_ONLY = ["/admin", "/vault"];
 // yet attested to anything.
 const PAYMENT_AND_RECEIPT = ["/checkout/pay", "/pay", "/order-confirmation"];
 
+// THE SIGN-IN SCREEN, WHICH NOW ASKS THE SAME TWO QUESTIONS ITSELF.
+//
+// Since the catalog went behind an account, middleware redirects a signed-out
+// hit on /products to /account/login — so for anyone arriving from an ad, that
+// login screen is the FIRST document of the visit. sessionStorage is therefore
+// empty, the gate renders, and it holds the card inert behind two checkboxes:
+// "I'm 21 or older" and "for laboratory research only". Clearing it moves
+// nobody (destinationAfterGate returns null for this path), so the visitor
+// stays put — and the Research Access Portal underneath immediately asks the
+// same two things again, as ageConfirmed and researchUseAgreed, and refuses to
+// hand anyone to Google without both. Four checkboxes, two near-identical
+// consent screens, on the single page standing between every paid click and
+// the entire catalog.
+//
+// Exempting it removes NO age assurance, by exactly the argument that exempts
+// the payment pages above. The portal's attestation is strictly STRONGER than
+// this gate's: the gate stores nothing at all and is forgotten on the next
+// document, while the portal's two boxes are required to proceed, travel with
+// the sign-in, and are written to the account as age_confirmed_21 /
+// research_use_only_agreed with a timestamp. Showing the weaker, unrecorded
+// version first adds no evidence and no protection, only friction that is paid
+// for on every acquisition.
+//
+// Deliberately narrow: the sign-in surface only. Everything a signed-out
+// visitor can still browse — home, research library, membership, legal — is
+// gated exactly as before, and none of those collects an attestation of its
+// own.
+const COLLECTS_ITS_OWN_ATTESTATION = ["/account/login"];
+
 // WHERE A VISITOR LANDS AFTER CLEARING THE GATE.
 //
 // The home page, unless they are standing on one of a fixed, hard-coded list of
@@ -257,7 +286,13 @@ export function isVerifiedForDocument(input: {
     list.some((p) => pathname === p || pathname?.startsWith(`${p}/`));
   // Route exemptions remain, as defence in depth — but they are no longer what
   // carries a shopper through checkout. The session is.
-  return confirmedInMemory || sessionConfirmed || matches(STAFF_ONLY) || matches(PAYMENT_AND_RECEIPT);
+  return (
+    confirmedInMemory ||
+    sessionConfirmed ||
+    matches(STAFF_ONLY) ||
+    matches(PAYMENT_AND_RECEIPT) ||
+    matches(COLLECTS_ITS_OWN_ATTESTATION)
+  );
 }
 
 function readSessionConfirmation(): boolean {

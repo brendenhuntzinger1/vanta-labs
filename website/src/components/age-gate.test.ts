@@ -167,15 +167,37 @@ describe("the gate fails closed and locks the page behind it", () => {
       expect(gate, `${shopper} must never be exempt from the gate`)
         .not.toMatch(new RegExp(`STAFF_ONLY[^\\]]*${shopper}`));
     }
-    // There is exactly ONE other exemption, and it is the payment/receipt one.
-    // Its own rules live in age-gate-payment-routes.test.ts; what matters here
-    // is that a third list cannot appear unnoticed.
+    // There are exactly TWO other exemptions, and each has its own justification
+    // and its own tests. What matters here is that a further list cannot appear
+    // unnoticed — this count is the tripwire, so raising it is a deliberate act.
     const exemptionLists = gate.match(/^const [A-Z_]+ = \[[^\]]*\];$/gm) ?? [];
     const routeLists = exemptionLists.filter((line) => line.includes('"/'));
     expect(
       routeLists.length,
       `unexpected route list in age-gate.tsx:\n${routeLists.join("\n")}`,
-    ).toBe(3); // STAFF_ONLY, PAYMENT_AND_RECEIPT, NEVER_A_DESTINATION
+    ).toBe(4); // STAFF_ONLY, PAYMENT_AND_RECEIPT, COLLECTS_ITS_OWN_ATTESTATION, NEVER_A_DESTINATION
+  });
+
+  it("exempts the sign-in screen ONLY while the portal still asks the same two things", () => {
+    // This is the one exemption that covers a page a shopper reaches, so it is
+    // justified by evidence rather than by the page being out of scope: the
+    // Research Access Portal asks the same two questions, refuses to proceed
+    // without both, and unlike this gate records them against the account. If
+    // that ever stops being true the exemption becomes a real hole, so the
+    // justification is asserted here rather than only argued in a comment.
+    expect(gate).toContain('const COLLECTS_ITS_OWN_ATTESTATION = ["/account/login"];');
+    expect(gate).toMatch(/matches\(COLLECTS_ITS_OWN_ATTESTATION\)/);
+
+    // Narrow: the sign-in surface only, never the whole account area.
+    expect(gate).not.toMatch(/COLLECTS_ITS_OWN_ATTESTATION[^\]]*"\/account"/);
+
+    const form = readFileSync(join(process.cwd(), "src/components/account-auth-form.tsx"), "utf8");
+    // The portal collects both...
+    expect(form).toContain("setAgeConfirmed");
+    expect(form).toContain("setResearchUseAgreed");
+    // ...and entry genuinely depends on them, rather than merely displaying them.
+    expect(form).toMatch(/const canEnter = ageConfirmed && researchUseAgreed/);
+    expect(form).toMatch(/if \(!ageConfirmed \|\| !researchUseAgreed\) \{/);
   });
 
   it("marks the overlay so the pre-paint CSS can find it", () => {

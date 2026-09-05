@@ -192,7 +192,19 @@ describe("the redirect target is laundered, never trusted", () => {
   });
 
   it("the error path also launders the link it offers back", () => {
-    expect(code(callback)).toMatch(/href=\{`\/account\/login\?next=\$\{encodeURIComponent\(safeInternalPath/);
+    // Asserted as a PROPERTY rather than as one inline expression: the
+    // laundering is now hoisted into `destination` and reused by the redirect,
+    // the re-ask and this link, which is the same guarantee written once
+    // instead of three times. What must stay true is that nothing anywhere
+    // builds a destination out of the raw query parameter.
+    const body = code(callback);
+    expect(body).toMatch(/const destination = safeInternalPath\(params\.get\("next"\), FALLBACK\)/);
+    expect(body).toContain("`/account/login?next=${encodeURIComponent(destination)}`");
+
+    // The only permitted reads of the raw parameter are the laundering itself
+    // and the provider's error text; every other use would be a raw path.
+    const rawReads = [...body.matchAll(/params\.get\("next"\)/g)];
+    expect(rawReads.length, "next is read raw more than once").toBe(1);
   });
 });
 
@@ -354,60 +366,90 @@ describe("the portal is not a one-way door", () => {
 // So the fragment is classified FIRST, in a render-time initializer, before
 // anything touches supabase.auth and lets the client consume it.
 // ---------------------------------------------------------------------------
+// A CALLBACK WITH NO SIGN-IN IN IT MUST NOT SIGN ANYONE IN.
+//
+// /account/auth/callback is an ordinary address: typed, shared, bookmarked,
+// reached with the back button. getSession() does not fail on such a load — it
+// answers from localStorage, which on a shared machine is the previous
+// customer's session, and it is a perfectly valid token, so the server verifies
+// it and writes a thirty-day cookie. The visitor lands as somebody else.
+//
+// The first attempt at this guard asked whether the URL LOOKED like a callback.
+// That was bypassable, because supabase-js asks a different question: it ignores
+// refresh_token entirely, so `#refresh_token=x` read as a session here and as no
+// callback at all there, and the fall-through restored storage anyway.
+//
+// So the page no longer asks a proxy question. It reads the tokens out of the
+// fragment and uses THOSE — for the client session and for the server post —
+// and never consults client storage. What follows pins that.
+// ---------------------------------------------------------------------------
 
-describe("the OAuth callback refuses to promote a session it was not given", () => {
+describe("the OAuth callback uses the tokens it was given, and no others", () => {
   const body = code(callback);
 
-  it("classifies the fragment with the shared guard rather than its own predicate", () => {
-    expect(body).toContain("classifyAuthReturn(window.location.hash)");
+  it("reads the tokens from the fragment with the shared reader", () => {
+    expect(body).toContain("readOAuthCallbackFragment(window.location.hash)");
     // A hand-rolled substring test is how the original bug was written.
     expect(body).not.toMatch(/hash\.includes\(\s*["']access_token/);
   });
 
-  it("reads the fragment before anything can consume it", () => {
-    const classifyAt = body.indexOf("classifyAuthReturn(window.location.hash)");
-    const firstAuthAccess = body.indexOf("supabase.auth");
-    expect(classifyAt).toBeGreaterThan(-1);
-    expect(firstAuthAccess).toBeGreaterThan(-1);
-    expect(
-      classifyAt < firstAuthAccess,
-      "the fragment must be classified before supabase.auth is first touched",
-    ).toBe(true);
+  it("never asks client storage what the session is", () => {
+    // getSession() is the whole defect: it answers from localStorage. The page
+    // must not call it, nor wait on an auth-state event that could fire for a
+    // restored session rather than this one.
+    expect(body).not.toContain("supabase.auth.getSession()");
+    expect(body).not.toContain("onAuthStateChange");
   });
 
-  it("bails out before requesting a session when no session arrived", () => {
-    const guardAt = body.indexOf('authReturn.kind !== "session"');
-    expect(guardAt).toBeGreaterThan(-1);
-    // The guard must come before the getSession call it is protecting...
-    const getSessionAt = body.indexOf("supabase.auth.getSession()");
-    expect(guardAt).toBeLessThan(getSessionAt);
-    // ...and before the POST that would mint the cookie.
+  it("establishes the client session from the fragment's own token pair", () => {
+    const at = body.indexOf("supabase.auth.setSession(");
+    expect(at).toBeGreaterThan(-1);
+    const call = body.slice(at, at + 240);
+    expect(call).toContain("access_token: signIn.accessToken");
+    expect(call).toContain("refresh_token: signIn.refreshToken");
+  });
+
+  it("posts the fragment's token, not a re-read of client state", () => {
     const postAt = body.indexOf('"/api/auth/session"');
-    expect(guardAt).toBeLessThan(postAt);
-    // ...and it must actually stop, not merely warn.
-    expect(body.slice(guardAt, guardAt + 260)).toContain("return;");
+    expect(postAt).toBeGreaterThan(-1);
+    const post = body.slice(postAt, postAt + 800);
+    expect(post).toContain("accessToken: signIn.accessToken");
+    // Never a re-read of client state.
+    expect(post).not.toContain("session.access_token");
   });
 
-  it("does not spend the stored attestation on a load that carries no sign-in", () => {
-    // Consuming it on a stray load would silently strip the 21+ and
-    // research-use representations from the real sign-in that follows.
-    const guardAt = body.indexOf('authReturn.kind !== "session"');
-    const storageAt = body.indexOf('sessionStorage.getItem("vl-oauth-attested")');
-    // Assert both are PRESENT before comparing them. A missing guard makes
-    // indexOf return -1, and -1 is less than every real offset, so an ordering
-    // assertion on its own passes most loudly exactly when the guard is gone.
+  it("bails out before any of that when no tokens arrived", () => {
+    const guardAt = body.indexOf('callbackReturn.kind !== "session"');
     expect(guardAt, "the no-session guard is missing entirely").toBeGreaterThan(-1);
-    expect(storageAt).toBeGreaterThan(-1);
-    expect(guardAt).toBeLessThan(storageAt);
+    // The guard lives in the effect; completeSignIn is declared above it, so
+    // compare against the CALL that the guard protects, not the declaration.
+    const completeAt = body.indexOf("await completeSignIn(", guardAt);
+    expect(completeAt, "nothing is completed after the guard").toBeGreaterThan(guardAt);
+    expect(body.slice(guardAt, guardAt + 200)).toContain("return;");
   });
 
-  it("reports a GoTrue refusal from the fragment, which is a different channel from the query", () => {
-    expect(body).toContain('authReturn.kind === "error"');
-    const fragmentErrAt = body.indexOf('authReturn.kind === "error"');
-    const queryErrAt = body.indexOf('params.get("error_description")');
-    expect(queryErrAt).toBeGreaterThan(-1);
-    expect(fragmentErrAt).toBeGreaterThan(-1);
-    // Both are read; neither replaces the other.
-    expect(fragmentErrAt).not.toBe(queryErrAt);
+  it("does not spend the stored attestation until the server has accepted it", () => {
+    // Clearing it before the work that can fail left a retry with nothing to
+    // send — and the retry then succeeded, recording no attestation at all.
+    const clearAt = body.indexOf('sessionStorage.removeItem("vl-oauth-attested")');
+    const postAt = body.indexOf('"/api/auth/session"');
+    const okAt = body.indexOf("if (!response.ok)");
+    expect(clearAt, "the attestation is never cleared").toBeGreaterThan(-1);
+    expect(okAt).toBeGreaterThan(postAt);
+    expect(clearAt, "the attestation is spent before the post can fail").toBeGreaterThan(okAt);
+  });
+
+  it("reports a GoTrue refusal from the fragment, a different channel from the query", () => {
+    expect(body).toContain('callbackReturn.kind === "error"');
+    expect(body).toContain('params.get("error_description")');
+  });
+
+  it("never prints provider-supplied text on our own sign-in surface", () => {
+    // The query string comes from whoever wrote the link. Rendering it verbatim
+    // publishes attacker-chosen prose under our domain and our styling, which is
+    // a complete phishing message we would be hosting for them.
+    expect(body).not.toContain("setError(providerError)");
+    const at = body.indexOf("providerError");
+    expect(body.slice(at, at + 400)).toContain("SIGN_IN_FAILED");
   });
 });

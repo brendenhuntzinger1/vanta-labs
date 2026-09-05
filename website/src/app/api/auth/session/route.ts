@@ -24,6 +24,20 @@ export async function POST(request: Request) {
     // Strict true only. A missing field, a null, or anything else is "no" —
     // silence is never consent, and this value crosses a network boundary.
     const oauthMarketingOptIn = body?.oauthMarketingOptIn === true;
+    // The ambassador code the visitor arrived on, carried across the provider
+    // round trip because Google hands back an identity and nothing else. Only
+    // ever used when the account does not already carry one — see the referral
+    // block below, where the stored value always wins.
+    //
+    // Bounded and character-restricted here rather than trusted: it survives a
+    // trip through two external services and is written to user_metadata, so it
+    // is attacker-supplied by construction. getUserIdByReferralCode is the thing
+    // that decides whether it names a real ambassador; this only decides it is
+    // shaped like a code at all.
+    const oauthReferralCode =
+      typeof body?.oauthReferralCode === "string"
+        ? body.oauthReferralCode.trim().slice(0, 64).replace(/[^A-Za-z0-9_-]/g, "")
+        : "";
 
     if (!accessToken) {
       return NextResponse.json({ success: false, error: "Missing access token" }, { status: 400 });
@@ -65,20 +79,40 @@ export async function POST(request: Request) {
     //
     // `role` is set at the same time and for the same reason: detectRoleFromUser
     // reads user_metadata.role, and an OAuth account arrives without one.
+    // ERRORS HERE ARE RETURNED, NOT THROWN, AND THAT MATTERS.
+    //
+    // admin.updateUserById catches every GoTrue non-2xx and RETURNS it as
+    // `{ error }`; PostgREST builders likewise default to shouldThrowOnError
+    // false. So a `try/catch` around these calls only ever fires on a raw
+    // network throw, and the refusals that actually happen — a 429 under
+    // sign-in load, a service-key rotation, a column or constraint change —
+    // sailed through as success with nothing in the logs. Every write below
+    // inspects its returned error as well as catching a throw.
+    const oauthMeta = (data.user.user_metadata ?? {}) as Record<string, unknown>;
+    const alreadyAttested =
+      oauthMeta.age_confirmed_21 === true && oauthMeta.research_use_only_agreed === true;
+
     if (oauthAttested) {
-      const meta = (data.user.user_metadata ?? {}) as Record<string, unknown>;
-      const alreadyAttested = meta.age_confirmed_21 === true && meta.research_use_only_agreed === true;
       if (!alreadyAttested) {
         try {
-          await supabaseAdmin.auth.admin.updateUserById(data.user.id, {
-            user_metadata: {
-              ...meta,
-              age_confirmed_21: true,
-              research_use_only_agreed: true,
-              attested_at: new Date().toISOString(),
-              ...(meta.role ? {} : { role: "customer" }),
+          const { error: attestationError } = await supabaseAdmin.auth.admin.updateUserById(
+            data.user.id,
+            {
+              user_metadata: {
+                ...oauthMeta,
+                age_confirmed_21: true,
+                research_use_only_agreed: true,
+                attested_at: new Date().toISOString(),
+                ...(oauthMeta.role ? {} : { role: "customer" }),
+              },
             },
-          });
+          );
+          if (attestationError) {
+            console.error(
+              "[auth/session] REFUSED: could not record OAuth attestation",
+              { userId: data.user.id, message: attestationError.message },
+            );
+          }
         } catch (attestationError) {
           // Never fail the sign-in over it. The visitor made the representation
           // and the age gate holds the session-level record; losing the durable
@@ -86,6 +120,22 @@ export async function POST(request: Request) {
           console.error("[auth/session] could not record OAuth attestation", attestationError);
         }
       }
+    } else if (!alreadyAttested) {
+      // ADMITTED WITH NO ATTESTATION ON FILE, AND NOBODY WOULD HAVE KNOWN.
+      //
+      // The sign-in form refuses to hand anyone to a provider without both
+      // ticks, so reaching here means the record of those ticks did not survive
+      // the round trip — sessionStorage blocked, or the provider returned into a
+      // different tab. The session is still issued (locking someone out of their
+      // own account over a storage quirk would be worse), but this store sells
+      // 21+ research-use-only material and an account admitted without the
+      // representations is a hole in the compliance record. Silence was the
+      // actual defect: nothing reads these flags anywhere, so an absent one is
+      // invisible forever. At minimum it is now greppable.
+      console.warn(
+        "[auth/session] account admitted with no 21+/research-use attestation on file",
+        { userId: data.user.id, provider: data.user.app_metadata?.provider ?? "unknown" },
+      );
     }
 
     // ------------------------------------------------------------------
@@ -110,13 +160,27 @@ export async function POST(request: Request) {
     // address and needs no special case here.
     if (oauthMarketingOptIn && data.user.email) {
       try {
-        await recordMarketingOptIn(data.user.email, "oauth_portal");
-        await supabaseAdmin
+        const subscribed = await recordMarketingOptIn(data.user.email, "oauth_portal");
+        if (subscribed === false) {
+          // The owner's whole reason for the optional third box is that the
+          // address turns up in the subscribers admin. A refused write means it
+          // did not, and that has to be visible rather than assumed.
+          console.error("[auth/session] REFUSED: marketing_subscribers write did not land", {
+            userId: data.user.id,
+          });
+        }
+        const { error: preferenceError } = await supabaseAdmin
           .from("customer_preferences")
           .upsert(
             { user_id: data.user.id, marketing_emails: true, updated_at: new Date().toISOString() },
             { onConflict: "user_id" },
           );
+        if (preferenceError) {
+          console.error("[auth/session] REFUSED: could not set marketing preference", {
+            userId: data.user.id,
+            message: preferenceError.message,
+          });
+        }
       } catch (consentError) {
         // Never fail a sign-in over a mailing list.
         console.error("[auth/session] could not record marketing consent", consentError);
@@ -129,9 +193,49 @@ export async function POST(request: Request) {
       try {
         await awardSignupBonusIfNeeded(data.user.id);
 
-        const referredByCode = typeof data.user.user_metadata?.referred_by_code === "string"
+        // THE CODE CAN ARRIVE TWO WAYS NOW, AND ONLY ONE OF THEM EXISTED.
+        //
+        // The email paths write referred_by_code into user_metadata at signup,
+        // so it is on the account by the time this runs. A provider signup has
+        // no equivalent: Google hands back an identity and nothing else, and
+        // startOAuth used to carry only the attestation and the marketing tick
+        // across the round trip. So a customer who followed an ambassador link
+        // and then took the fastest door was silently unattributed — no welcome
+        // points for her, no referral bonus for the ambassador who sent her, and
+        // no repair path, because nothing later ever asks again.
+        //
+        // Squarely reachable rather than a corner: `?ref=` opens SIGNUP mode,
+        // and signup mode renders "Continue with Google" directly beneath the
+        // submit button.
+        //
+        // The stored value still wins. It was written at signup, is not
+        // attacker-supplied at this point, and re-attributing an existing
+        // account from a URL a later sign-in happened to carry is exactly the
+        // hijack this must not allow.
+        const storedReferralCode = typeof data.user.user_metadata?.referred_by_code === "string"
           ? data.user.user_metadata.referred_by_code
           : "";
+        const referredByCode = storedReferralCode || oauthReferralCode;
+
+        // Persist it so the account carries its attribution the same way an
+        // email signup's does, and a second sign-in cannot re-point it.
+        if (!storedReferralCode && referredByCode) {
+          const { error: referralMetaError } = await supabaseAdmin.auth.admin.updateUserById(
+            data.user.id,
+            {
+              user_metadata: {
+                ...((data.user.user_metadata ?? {}) as Record<string, unknown>),
+                referred_by_code: referredByCode,
+              },
+            },
+          );
+          if (referralMetaError) {
+            console.error("[auth/session] could not stamp referral code on account", {
+              userId: data.user.id,
+              message: referralMetaError.message,
+            });
+          }
+        }
 
         if (referredByCode) {
           await setReferredByCode(data.user.id, referredByCode);
