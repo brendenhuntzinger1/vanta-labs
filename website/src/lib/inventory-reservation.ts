@@ -122,18 +122,33 @@ export async function reserveInventoryForOrder(
   const expiresAt = new Date(Date.now() + minutes * 60_000).toISOString();
 
   const unavailable: ReserveResult["unavailable"] = [];
+  // EXPIRED HOLDS COUNT AGAINST AVAILABILITY UNTIL SOMETHING RECLAIMS THEM, and
+  // the only thing that did was the half-hourly sweep. A hold lapses after
+  // fifteen minutes, so for up to half an hour after that the shelf still
+  // reads "held": the product page said In Stock, and the checkout refused
+  // with "out of stock" over units nobody was buying. Reclaim once, on the
+  // first refusal, and retry that line — the sweep's own RPC, so nothing new
+  // to trust.
+  let reclaimedStaleHolds = false;
+  const reserveLine = (a: (typeof adjustments)[number]) => rpcWithAuthRetry<boolean>(async () =>
+    supabaseAdmin.rpc("reserve_inventory", {
+      p_slug: a.slug,
+      p_variant_id: a.variantId,
+      p_order_id: orderId,
+      p_quantity: a.quantity,
+      p_expires_at: expiresAt,
+    }));
   for (const a of adjustments) {
     try {
       // Retried on an edge rejection: degrading here lets the checkout proceed
       // with NO hold on the stock it just sold.
-      const { data, error } = await rpcWithAuthRetry<boolean>(async () =>
-        supabaseAdmin.rpc("reserve_inventory", {
-          p_slug: a.slug,
-          p_variant_id: a.variantId,
-          p_order_id: orderId,
-          p_quantity: a.quantity,
-          p_expires_at: expiresAt,
-        }));
+      let { data, error } = await reserveLine(a);
+      if (!error && data === false && !reclaimedStaleHolds) {
+        reclaimedStaleHolds = true;
+        if ((await expireStaleReservations()) > 0) {
+          ({ data, error } = await reserveLine(a));
+        }
+      }
       if (error) {
         // Degrading is deliberate — a checkout must not die because the hold
         // could not be taken — but it must not be SILENT: with no hold the

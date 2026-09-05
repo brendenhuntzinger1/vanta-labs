@@ -277,7 +277,16 @@ export default function VeyraCheckout({
       )}
       {status === "error" && (
         <div className="mb-4 border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-          {message}
+          <p>{message}</p>
+          {/* A declined order releases its stock hold and cannot be paid again
+              from this page; the way forward is a fresh checkout. This page
+              has no site navigation of its own, so without this link the
+              only way out was the footer. */}
+          <p className="mt-3">
+            <a href="/checkout" className="font-semibold text-white underline underline-offset-4">
+              Back to checkout to try again
+            </a>
+          </p>
         </div>
       )}
       {/* The processor replaces this node's contents with the card iframe.

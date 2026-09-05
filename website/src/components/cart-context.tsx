@@ -317,6 +317,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [referralError, setReferralError] = useState<string | null>(null);
   const [referralSuccess, setReferralSuccess] = useState<string | null>(null);
   const [couponCode, setCouponCode] = useState<string | null>(null);
+  /** A coupon code read back from storage, waiting to be re-validated. */
+  const pendingReapplyCouponRef = useRef<string | null>(null);
   const [couponDetails, setCouponDetails] = useState<CouponDetails | null>(null);
   const [couponError, setCouponError] = useState<string | null>(null);
   const [couponSuccess, setCouponSuccess] = useState<string | null>(null);
@@ -590,12 +592,23 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           const parsed = JSON.parse(stored) as {
             items?: CartItem[];
             referralCode?: string | null;
+            couponCode?: string | null;
             shippingProtectionEnabled?: boolean;
             shippingProtectionChoiceMade?: boolean;
           };
 
           if (Array.isArray(parsed.items)) {
             setItems(sanitizeCartItems(parsed.items));
+          }
+          // A coupon the shopper applied survives a reload the way the referral
+          // code does — re-validated against the server once the account and
+          // store config are known (see the reapply effect), never trusted
+          // from storage. Until this existed a coupon lived only in React
+          // memory: a reload or a direct visit to /checkout dropped the
+          // discount row without a word and the order was created at full
+          // price.
+          if (typeof parsed.couponCode === "string" && parsed.couponCode.trim()) {
+            pendingReapplyCouponRef.current = parsed.couponCode.trim().toUpperCase();
           }
 
           if (typeof parsed.referralCode === "string") {
@@ -792,12 +805,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     try {
       window.localStorage.setItem(
         CART_STORAGE_KEY,
-        JSON.stringify({ items, referralCode, shippingProtectionEnabled, shippingProtectionChoiceMade }),
+        JSON.stringify({ items, referralCode, couponCode, shippingProtectionEnabled, shippingProtectionChoiceMade }),
       );
     } catch (error) {
       console.error("Unable to save cart state", error);
     }
-  }, [items, referralCode, shippingProtectionEnabled, shippingProtectionChoiceMade, isHydrated]);
+  }, [items, referralCode, couponCode, shippingProtectionEnabled, shippingProtectionChoiceMade, isHydrated]);
 
   useEffect(() => {
     if (!isHydrated || !referralCode || referralDetails) {
@@ -1817,6 +1830,23 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       document.cookie = `${REFERRAL_COOKIE_KEY}=; path=/; max-age=0; samesite=lax`;
     }
   }, [pendingRestoredCoupon, accountChecked, storeConfigLoaded, isSignedIn, knownEmail, buy3Get1FreeDiscount, activePromotionAllowsCoupon, activePromotionName]);
+
+  // Re-validate a coupon read back from storage, once everything the validator
+  // depends on (the account's email, the promotion config) is known. Goes
+  // through applyCouponCode, so an expired or exhausted code is refused with
+  // the same message the shopper would see typing it — nothing is trusted
+  // from storage. Scheduled as a microtask so the state updates happen after
+  // this effect, not inside it.
+  useEffect(() => {
+    if (!isHydrated || !accountChecked || !storeConfigLoaded) return;
+    const code = pendingReapplyCouponRef.current;
+    if (!code) return;
+    pendingReapplyCouponRef.current = null;
+    void Promise.resolve().then(() => applyCouponCode(code));
+    // applyCouponCode is recreated every render; the three flags are the
+    // readiness signal and the ref carries the code, so this runs once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHydrated, accountChecked, storeConfigLoaded]);
 
   const clearCouponMessage = () => {
     setCouponError(null);
