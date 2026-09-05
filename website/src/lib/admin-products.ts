@@ -439,11 +439,34 @@ export function assertPublishablePrice(priceCents: unknown, productName?: string
   }
 }
 
+/**
+ * Refuse a malformed dose BEFORE anything is written.
+ *
+ * The product row used to be inserted first and the doses mapped afterwards,
+ * so a dose missing its slug suffix threw a raw TypeError out of
+ * `dose.slugSuffix.trim()` — after the products row existed. The operator saw
+ * "Cannot read properties of undefined (reading 'trim')", retried, and got a
+ * second half-made product. Validate up front and say what is missing.
+ */
+export function assertDosesWellFormed(doses: DoseInput[] | undefined): void {
+  for (const [index, dose] of (doses ?? []).entries()) {
+    const label = typeof dose?.label === "string" ? dose.label.trim() : "";
+    const suffix = typeof dose?.slugSuffix === "string" ? dose.slugSuffix.trim() : "";
+    if (!label || !suffix) {
+      throw new Error(`Dose ${index + 1} needs a label and a slug suffix.`);
+    }
+    if (!Number.isFinite(Number(dose.priceCents))) {
+      throw new Error(`Dose ${index + 1} (${label}) needs a price.`);
+    }
+  }
+}
+
 export async function createAdminProduct(input: ProductCreateInput) {
   const slug = slugify(input.slug || input.name);
   if (!slug) {
     throw new Error("Product slug could not be generated.");
   }
+  assertDosesWellFormed(input.doses);
 
   const now = new Date().toISOString();
   const productId = randomUUID();

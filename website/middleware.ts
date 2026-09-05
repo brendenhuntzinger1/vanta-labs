@@ -10,6 +10,8 @@ import {
 import { isInAppBrowser } from "@/lib/in-app-browser";
 
 const ADMIN_SESSION_COOKIE = "vl_admin_session";
+/** Account routes a signed-out visitor is meant to reach. */
+const PUBLIC_ACCOUNT_PATHS = new Set(["/account/login", "/account/forgot-password", "/account/reset-password"]);
 const MAINTENANCE_CACHE_TTL_MS = 15_000;
 const SESSION_CACHE_TTL_MS = 30_000;
 
@@ -538,6 +540,29 @@ export async function middleware(request: NextRequest) {
       // still cannot choose where anyone lands.
       return finish(varyOnBrowser(NextResponse.redirect(destination, 307)));
     }
+  }
+
+  // A GUEST SENT TO SIGN IN IS SENT BACK TO WHERE THEY WERE GOING.
+  //
+  // Every account page guards itself server-side with a bare
+  // redirect("/account/login"), so a customer who opened /account/orders from
+  // an email signed in and landed on the home page. The path is known here,
+  // and the login form already honours ?next= (through safeInternalPath), so
+  // the return path is attached here. Only a request with NO session cookie
+  // at all is diverted — the page guards still decide for a cookie that turns
+  // out to be stale, exactly as before.
+  if (
+    request.method === "GET"
+    && pathname.startsWith("/account")
+    && !PUBLIC_ACCOUNT_PATHS.has(pathname)
+    && !request.cookies.get(AUTH_COOKIE_NAME)
+    && !refreshedCookie
+  ) {
+    const login = request.nextUrl.clone();
+    login.pathname = "/account/login";
+    login.search = "";
+    login.searchParams.set("next", `${pathname}${request.nextUrl.search}`);
+    return finish(NextResponse.redirect(login, 307));
   }
 
   // CSRF defense-in-depth: reject cross-site state-changing requests to the
