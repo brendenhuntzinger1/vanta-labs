@@ -108,13 +108,28 @@ describe("the catalogue page ships its products in the HTML", () => {
 describe("the sitemap tells Google when things actually changed", () => {
   const sitemap = read("src/app/sitemap.ts");
 
-  it("emits lastModified for products, from the row's own timestamp", () => {
-    expect(sitemap).toContain("lastModified");
-    expect(sitemap).toContain("product.updatedAt");
-    // Surfaced from the database rather than invented.
+  // THE SITEMAP NO LONGER CARRIES PRODUCTS, SO IT NO LONGER CARRIES THEIR DATES.
+  //
+  // This block used to prove that each product URL was stamped with its own
+  // `updated_at` rather than an invented date. Product URLs are gone from the
+  // sitemap entirely: they require an account now (GATED_PREFIXES in
+  // middleware.ts), and a public sitemap listing them would have been the
+  // easiest way left to enumerate the whole catalog without signing in.
+  //
+  // The timestamp plumbing it guarded is deliberately still asserted below. It
+  // is read by the admin screens and by the catalog itself, it costs nothing to
+  // keep correct, and it is what a future sitemap would need if these URLs ever
+  // become public again.
+  it("keeps the product timestamp plumbing, which the catalog still reads", () => {
     expect(read("src/lib/catalog.ts")).toContain("updated_at");
     expect(read("src/lib/catalog.ts")).toMatch(/updatedAt: row\.updated_at/);
     expect(read("src/lib/catalog-types.ts")).toContain("updatedAt?: string;");
+  });
+
+  it("publishes no product URL at all", () => {
+    const code = sitemap.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/.*$/gm, " ");
+    expect(code).not.toContain("/products/${");
+    expect(code).not.toContain("getCatalogProducts");
   });
 
   it("never stamps every URL with the current date", () => {
@@ -127,7 +142,11 @@ describe("the sitemap tells Google when things actually changed", () => {
     expect(sitemap).not.toMatch(/lastModified:\s*Date\.now\(\)/);
   });
 
-  it("only emits a date it can parse", () => {
-    expect(sitemap).toContain("Number.isNaN(changed.getTime())");
+  it("emits no fabricated dates for what it does still publish", () => {
+    // The static routes, legal policies and research articles never had a
+    // trustworthy timestamp, so they carry none — the same rule as before,
+    // now applied to everything left in the file.
+    const code = sitemap.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/.*$/gm, " ");
+    expect(code).not.toContain("lastModified");
   });
 });

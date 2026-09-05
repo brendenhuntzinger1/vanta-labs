@@ -85,18 +85,39 @@ export async function getMarketingRecipientEmails(): Promise<string[]> {
 // Records a marketing opt-in (guest OR account) keyed by email so the coupon
 // broadcast can reach them. Best-effort by design — a failure here (incl. the
 // table not existing yet) must NEVER block checkout.
-export async function recordMarketingOptIn(email: string, source: string): Promise<void> {
+//
+// BEST-EFFORT IS NOT THE SAME AS UNOBSERVABLE, and this used to be both. The
+// upsert's result was discarded and the catch was bare, so a refusal — the
+// table missing, a constraint or column-type change, a service-key rotation —
+// looked exactly like a success to every caller. The address simply never
+// appeared in the subscribers admin and nothing anywhere said why.
+//
+// So it still never throws and still never blocks anything, but it now REPORTS:
+// true when the row landed, false when it did not. Callers that care (the OAuth
+// portal's optional consent box, whose entire purpose is that the address turns
+// up on the list) can log the difference; callers that genuinely do not care
+// can keep ignoring it exactly as before.
+export async function recordMarketingOptIn(email: string, source: string): Promise<boolean> {
   const normalized = email.trim().toLowerCase();
-  if (!normalized || !normalized.includes("@")) return;
+  if (!normalized || !normalized.includes("@")) return false;
   try {
-    await supabaseAdmin
+    const { error } = await supabaseAdmin
       .from("marketing_subscribers")
       .upsert(
         { email: normalized, source, opted_in_at: new Date().toISOString(), unsubscribed_at: null },
         { onConflict: "email" },
       );
-  } catch {
-    // Table missing (migration not run) or transient error — silently skip.
+    if (error) {
+      // PostgREST returns its refusals rather than throwing, so without this
+      // the catch below is dead code for the failure that actually happens.
+      console.error("[marketing] opt-in row was refused", { source, message: error.message });
+      return false;
+    }
+    return true;
+  } catch (err) {
+    // Table missing (migration not run) or transient error — never fatal.
+    console.error("[marketing] opt-in row could not be written", { source, err });
+    return false;
   }
 }
 

@@ -28,7 +28,11 @@ export type PublicCoaDocument = {
   purity: string | null;
   identityResult: string | null;
   fileKind: CoaFileKind;
-  fileName: string | null;
+  /* fileName is deliberately absent from the PUBLIC document shape. The stored
+     names carry the compound (Semaglutide_Vanta184290_COA.pdf), nothing
+     rendered it, and shipping it put the compound in the page payload where a
+     scan finds it and a reader cannot. The admin shape below keeps it, because
+     the admin screens genuinely list files by name. See lib/coa.ts. */
   /** False when the record exists but its document is missing/unreadable. */
   hasFile: boolean;
 };

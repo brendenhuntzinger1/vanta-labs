@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { MIN_PASSWORD_LENGTH } from "@/lib/password-policy";
 
+import { hasPasswordIdentity } from "@/lib/account-identity";
 import { getAuthenticatedUser, getSessionAccessToken } from "@/lib/auth-session";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { checkRateLimit } from "@/lib/rate-limit";
@@ -73,7 +74,24 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
-    if (!currentPassword) {
+    // AN ACCOUNT WITH NO PASSWORD IS SETTING ITS FIRST, NOT CHANGING ONE.
+    //
+    // A provider account has no password identity, so signInWithPassword below
+    // can only ever fail for it and the gate answered "Current password is
+    // incorrect" — false, about a password that never existed, with no route
+    // out of it anywhere in the app.
+    //
+    // This is not a hole in the gate. There is nothing to re-authenticate
+    // against, and no secret is being replaced: the account gains a credential
+    // it did not have, which is Supabase's own documented way to add
+    // email+password login to an OAuth account. Everything else still applies —
+    // both rate limits, the alert, and the fact that the caller must already
+    // hold a verified session cookie to be here at all. Once the password
+    // exists, this route and email-change both work exactly as written, for
+    // everybody, unaltered.
+    const settingFirstPassword = !hasPasswordIdentity(user);
+
+    if (!settingFirstPassword && !currentPassword) {
       return NextResponse.json(
         { success: false, error: "Enter your current password." },
         { status: 400 },
@@ -103,16 +121,18 @@ export async function POST(request: Request) {
 
     // RE-AUTHENTICATE SERVER-SIDE. This is the whole point of the route: a
     // caller holding only a session token cannot get past it.
-    const client = createServerClient();
-    const { error: reauthError } = await client.auth.signInWithPassword({
-      email: user.email,
-      password: currentPassword,
-    });
-    if (reauthError) {
-      return NextResponse.json(
-        { success: false, error: "Current password is incorrect." },
-        { status: 403 },
-      );
+    if (!settingFirstPassword) {
+      const client = createServerClient();
+      const { error: reauthError } = await client.auth.signInWithPassword({
+        email: user.email,
+        password: currentPassword,
+      });
+      if (reauthError) {
+        return NextResponse.json(
+          { success: false, error: "Current password is incorrect." },
+          { status: 403 },
+        );
+      }
     }
 
     const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(user.id, {

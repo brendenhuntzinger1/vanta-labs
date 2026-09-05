@@ -97,7 +97,26 @@ function toPublicDocument(row: CoaRow): PublicCoaDocument {
     purity: formatCoaPurity(row.purity),
     identityResult: formatCoaTextResult(row.identity_result),
     fileKind: resolveCoaFileKind(row),
-    fileName: row.file_name?.trim() || null,
+    // THE STORED FILENAME DOES NOT GO TO THE BROWSER.
+    //
+    // It was serialised into the RSC payload of every product page and the COA
+    // library, and NOTHING rendered it — there is not one `.fileName` read in
+    // any component. So it was dead weight in the HTML that also happened to
+    // publish the one thing this catalogue deliberately keeps in the
+    // certificate: the stored names are Semaglutide_Vanta184290_COA.pdf and
+    // similar, so a text scan of a product page found the compound while a
+    // person reading that page never could. Measured on production before this
+    // change: four occurrences in the HTML of /products/glp-1, zero in the
+    // rendered text, even with the COA panel opened.
+    //
+    // WHAT THIS DOES NOT DO: it does not hide the compound from customers. The
+    // certificate still names it, on its own face and in the filename the
+    // download arrives with — getCoaDocumentUrl reads row.file_name straight
+    // from the database and is untouched. Identity stays exactly where this
+    // catalogue puts it, on the document whose whole job is to establish it.
+    // A page carrying a catalogue code while the certificate carries the
+    // compound is a normal supply pattern; a page leaking the compound only to
+    // machines is not a pattern, it is an accident.
     hasFile: coaRowHasFile(row),
   };
 }

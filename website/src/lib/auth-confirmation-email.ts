@@ -180,7 +180,19 @@ export async function sendBrandedConfirmationResend(
   debounceAs?: AuthEmailKind,
 ): Promise<void> {
   const found = await findUnconfirmedUser(email);
-  if (!found) return;
+  if (!found) {
+    // NOT AN ERROR, BUT NOT NOTHING EITHER.
+    //
+    // findUnconfirmedUser answers null for a CONFIRMED account, and every
+    // account created through Google is confirmed on arrival. So a Google-first
+    // customer who fills in the signup form reaches here, no mail is sent, and
+    // she is still shown "Check your email." The shared message now points her
+    // at the provider route as well, which is the real fix; this line is so that
+    // the branch is visible at all, because previously it returned in silence
+    // and nothing recorded that a confirmation had been asked for and skipped.
+    console.info("[auth] confirmation resend skipped: no unconfirmed user for that address");
+    return;
+  }
 
   // ONE PER MINUTE. Three impatient clicks of "resend" used to mint three magic
   // links and send three emails, each carrying a DIFFERENT token — so acting on

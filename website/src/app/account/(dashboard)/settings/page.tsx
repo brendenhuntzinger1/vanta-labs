@@ -3,6 +3,7 @@ import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getCustomerPreferences, getCustomerAddresses } from "@/lib/customer-account";
 import { AccountSettingsClient } from "@/components/account-settings-client";
+import { hasPasswordIdentity } from "@/lib/account-identity";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,7 @@ export default async function AccountSettingsPage() {
         initialEmail={user.email ?? ""}
         initialPreferences={preferences}
         initialAddresses={addresses}
+        hasPassword={hasPasswordIdentity(user)}
       />
     </div>
   );

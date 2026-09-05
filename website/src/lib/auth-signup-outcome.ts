@@ -18,9 +18,23 @@
 // revealing which of the two they are.
 // ---------------------------------------------------------------------------
 
+// A THIRD KIND OF RETURNING USER THE ORIGINAL WORDING DID NOT COVER.
+//
+// Since the portal added Google, an address can already be registered WITHOUT
+// ever having had a password — Supabase creates a provider account with no
+// password identity. That customer gets this same message, follows the only two
+// routes it offers, and both fail her: "sign in instead" answers "Invalid login
+// credentials" for a password she never set, and "Forgot your password?" reads
+// as recovery for something she never had. Nothing tells her the account is a
+// Google one.
+//
+// Naming the provider route here fixes that without creating the enumeration
+// oracle this file exists to avoid: the sentence is offered to EVERY address,
+// so it still says nothing about which kind this one is.
 export const SIGNUP_CHECK_EMAIL_MESSAGE =
   "Check your email. If this address is new, a link is waiting there to finish setting up your account. " +
-  "If you already have an account, sign in instead — or use “Forgot your password?” to reset it.";
+  "If you already have an account, sign in instead — with your password, or with Google if that is how you " +
+  "created it — or use “Forgot your password?” to set one.";
 
 export type SignupOutcome =
   | { kind: "session"; accessToken: string; refreshToken: string | null }

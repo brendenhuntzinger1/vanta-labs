@@ -22,11 +22,21 @@ export function AccountSettingsClient({
   initialEmail,
   initialPreferences,
   initialAddresses,
+  // FALSE ONLY FOR AN ACCOUNT THAT SIGNED UP THROUGH A PROVIDER.
+  //
+  // Such an account has no password identity, so every control on this page
+  // that asks for a "current password" is asking for something that does not
+  // exist. Rather than let those controls fail with "Current password is
+  // incorrect" — false, and unactionable — the two that depend on one change
+  // shape: the password card sets a first password, and the email card explains
+  // that it needs one first.
+  hasPassword = true,
 }: {
   initialFullName: string;
   initialEmail: string;
   initialPreferences: CustomerPreferences;
   initialAddresses: CustomerAddress[];
+  hasPassword?: boolean;
 }) {
   const [category, setCategory] = useState<Category>("profile");
 
@@ -77,7 +87,11 @@ export function AccountSettingsClient({
       // all this does is stop the customer making a round trip to be told they
       // left the field blank.
       if (updates.email && initialEmail && !emailChangePassword) {
-        setProfileError("Enter your current password to change your email.");
+        setProfileError(
+          hasPassword
+            ? "Enter your current password to change your email."
+            : "Your account signs in with Google, so it has no password yet. Add one under Security first, then you can change your email.",
+        );
         return;
       }
 
@@ -290,12 +304,20 @@ export function AccountSettingsClient({
       {category === "security" ? (
         <div className="space-y-5">
           <section className="vl-panel rounded-2xl p-5 sm:p-6">
-            <h2 className="text-lg font-semibold text-white">Change password</h2>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <label className="text-sm text-zinc-300">
-                Current password
-                <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" autoComplete="current-password" />
-              </label>
+            <h2 className="text-lg font-semibold text-white">{hasPassword ? "Change password" : "Add a password"}</h2>
+            {hasPassword ? null : (
+              <p className="mt-2 text-sm leading-6 text-zinc-400">
+                You sign in with Google, so this account has no password yet. Setting one lets you
+                sign in either way — and it is required before you can change your email address.
+              </p>
+            )}
+            <div className={`mt-4 grid gap-3 ${hasPassword ? "sm:grid-cols-2" : ""}`}>
+              {hasPassword ? (
+                <label className="text-sm text-zinc-300">
+                  Current password
+                  <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" autoComplete="current-password" />
+                </label>
+              ) : null}
               <label className="text-sm text-zinc-300">
                 New password
                 <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" autoComplete="new-password" minLength={8} />
@@ -304,7 +326,7 @@ export function AccountSettingsClient({
             {passwordError ? <p className="mt-3 text-sm text-rose-300">{passwordError}</p> : null}
             {passwordMessage ? <p className="mt-3 text-sm text-emerald-300">{passwordMessage}</p> : null}
             <button type="button" onClick={handleChangePassword} disabled={savingPassword} className="vl-btn-primary vl-focus-ring mt-4 px-5 py-2.5 text-sm disabled:opacity-60">
-              {savingPassword ? "Updating…" : "Update password"}
+              {savingPassword ? "Saving…" : hasPassword ? "Update password" : "Set password"}
             </button>
           </section>
 

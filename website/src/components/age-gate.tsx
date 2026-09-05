@@ -2,7 +2,6 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { detectInAppBrowser } from "@/lib/in-app-browser";
 import { trustPoints } from "@/lib/trust-claims";
 
 // ACCESS IS PUBLISHED, NEVER REACHED FOR.
@@ -130,6 +129,35 @@ const STAFF_ONLY = ["/admin", "/vault"];
 // yet attested to anything.
 const PAYMENT_AND_RECEIPT = ["/checkout/pay", "/pay", "/order-confirmation"];
 
+// THE SIGN-IN SCREEN, WHICH NOW ASKS THE SAME TWO QUESTIONS ITSELF.
+//
+// Since the catalog went behind an account, middleware redirects a signed-out
+// hit on /products to /account/login — so for anyone arriving from an ad, that
+// login screen is the FIRST document of the visit. sessionStorage is therefore
+// empty, the gate renders, and it holds the card inert behind two checkboxes:
+// "I'm 21 or older" and "for laboratory research only". Clearing it moves
+// nobody (destinationAfterGate returns null for this path), so the visitor
+// stays put — and the Research Access Portal underneath immediately asks the
+// same two things again, as ageConfirmed and researchUseAgreed, and refuses to
+// hand anyone to Google without both. Four checkboxes, two near-identical
+// consent screens, on the single page standing between every paid click and
+// the entire catalog.
+//
+// Exempting it removes NO age assurance, by exactly the argument that exempts
+// the payment pages above. The portal's attestation is strictly STRONGER than
+// this gate's: the gate stores nothing at all and is forgotten on the next
+// document, while the portal's two boxes are required to proceed, travel with
+// the sign-in, and are written to the account as age_confirmed_21 /
+// research_use_only_agreed with a timestamp. Showing the weaker, unrecorded
+// version first adds no evidence and no protection, only friction that is paid
+// for on every acquisition.
+//
+// Deliberately narrow: the sign-in surface only. Everything a signed-out
+// visitor can still browse — home, research library, membership, legal — is
+// gated exactly as before, and none of those collects an attestation of its
+// own.
+const COLLECTS_ITS_OWN_ATTESTATION = ["/account/login"];
+
 // WHERE A VISITOR LANDS AFTER CLEARING THE GATE.
 //
 // The home page, unless they are standing on one of a fixed, hard-coded list of
@@ -149,49 +177,30 @@ const PAYMENT_AND_RECEIPT = ["/checkout/pay", "/pay", "/order-confirmation"];
 // A legal page is deliberately NOT on the list. Nobody chooses the Research
 // Disclaimer as a destination; landing there was the reported bug.
 const POST_GATE_DESTINATION = "/";
-const SOCIAL_DESTINATION = "/products";
 const NEVER_A_DESTINATION = ["/legal"];
 
-// THE HOME PAGE IS SKIPPED ONLY WHERE ITS HERO CANNOT PLAY.
+// THE HOME PAGE IS NO LONGER SKIPPED FOR ANYONE, AND THE CATALOG GATE IS WHY.
 //
-// The spinning vial IS the home page, and it is meant to be seen. One class of
-// browser cannot show it: an app's embedded WebView, where five rounds of
-// fixes still ended with an iPhone showing the vial alone on white. Those
-// visitors go to the catalog, and hero-video.tsx independently serves them a
-// still — the same decision, made twice, on the same signal.
+// A long-lived rule lived here: an app's embedded WebView cannot play the hero
+// vial, so those visitors were pushed to the catalog on clearing the gate, with
+// middleware making the same decision on the server. hero-video.tsx served them
+// a still independently.
 //
-// THIS IS NO LONGER WHERE THAT DECISION IS MADE, AND IT IS KEPT ANYWAY.
-// Middleware now answers it on the server, before any home page HTML exists
-// (see IN_APP_HOME_REPLACEMENT in middleware.ts). It had to move: the push
-// below could only run after the gate closed and the page behind it was on
-// screen — measured at ~430ms of ungated home page on a throttled phone — and
-// it only ran from the enter handler, so the wordmark, the "Home" breadcrumb
-// and every later link into "/" landed on the page this exists to skip.
+// The catalog now requires an account (GATED_PREFIXES in middleware.ts), so
+// that push resolves to a sign-in form. A TikTok or Instagram visitor would
+// attest their age and be handed a login wall in the same instant — worse than
+// the motionless hero the rule was written to avoid, and aimed squarely at the
+// paid traffic it was written to serve.
 //
-// With middleware in front, an in-app visitor can no longer be standing on "/"
-// when they clear the gate, so the branch below is unreachable in practice. It
-// stays as the fallback for any path where middleware does not run, and it
-// costs one comparison to keep. Both halves read the same constant; the test
-// alongside pins them to the same destination so they cannot drift apart.
+// So both halves are gone: IN_APP_HOME_REPLACEMENT is null in middleware, and
+// the in-app branch that used to sit here is deleted rather than left
+// unreachable, along with the helper it called. detectInAppBrowser is no longer imported by this file
+// at all, which is the point — the gate now routes nobody on the strength of
+// their browser, and cannot start again by having a dormant helper revived.
 //
-// THIS USED TO ASK "did they come from social", WHICH IS A MUCH WIDER NET THAN
-// THE ONE PLATFORM THAT BREAKS. It matched ttclid, fbclid, igshid, sccid,
-// twclid, a utm_* value containing "paid", and a social referrer — so mobile
-// Safari from a TikTok ad, and desktop Chrome from a Google Ads click carrying
-// utm_medium=paid, both lost the hero they render perfectly well. Measured on
-// the harness, 2026-08-28. Traffic source is not a rendering capability, and a
-// browser that can play the vial should always get it.
-//
-// Judged on the browser alone. Nothing a link asserts is consulted, so no
-// campaign marker or referrer — forged or genuine — can move a visitor.
-function heroAnimationUnsupported(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return detectInAppBrowser();
-  } catch {
-    return false;
-  }
-}
+// hero-video.tsx keeps its own check, and should: choosing a still over a
+// player is a judgement about what a browser can DO. Deciding what a visitor
+// may SEE is the thing that must never depend on their client.
 
 function destinationAfterGate(pathname: string | null): string | null {
   if (!pathname) return POST_GATE_DESTINATION;
@@ -214,19 +223,20 @@ function destinationAfterGate(pathname: string | null): string | null {
   // Only a visitor who arrived on the home page is re-routed. Anyone who asked
   // for a specific page — a product, the cart, checkout — stays there; sending
   // them to the catalog would throw away the click that brought them.
-  if (pathname === POST_GATE_DESTINATION && heroAnimationUnsupported()) {
-    // ATTRIBUTION SURVIVES THE REDIRECT. ttclid, fbclid, utm_*, a referral
-    // code — everything the campaign attached is carried onto the catalog.
-    // Dropping it here would silently break attribution for exactly the paid
-    // traffic this route exists to serve, and the loss would be invisible
-    // until a report came back empty.
-    //
-    // The query is carried, never consulted: it decides nothing about where
-    // the visitor goes, so a forged parameter still cannot choose a
-    // destination. Only the path above does that, and it is a constant.
-    const query = typeof window !== "undefined" ? window.location.search : "";
-    return `${SOCIAL_DESTINATION}${query}`;
-  }
+  // AN IN-APP BROWSER IS NO LONGER MOVED OFF THE HOME PAGE, AND THE CATALOG
+  // GATE IS WHY.
+  //
+  // This used to return "/products" for a browser that cannot play the hero,
+  // mirroring the middleware rule of the same name. The catalog now requires an
+  // account, so both halves of that rule would land a TikTok or Instagram
+  // visitor on a login wall as their first impression — worse than the still
+  // hero it was avoiding, and on the traffic that matters most. Middleware's
+  // IN_APP_HOME_REPLACEMENT is null for the same reason; the two are meant to
+  // agree and the test alongside pins that they do.
+  //
+  // Signed out, the home page now carries the brand, the testing story and an
+  // explicit invitation to sign in, so it is a reasonable landing for these
+  // browsers even with a motionless hero.
   return null;
 }
 
@@ -276,7 +286,13 @@ export function isVerifiedForDocument(input: {
     list.some((p) => pathname === p || pathname?.startsWith(`${p}/`));
   // Route exemptions remain, as defence in depth — but they are no longer what
   // carries a shopper through checkout. The session is.
-  return confirmedInMemory || sessionConfirmed || matches(STAFF_ONLY) || matches(PAYMENT_AND_RECEIPT);
+  return (
+    confirmedInMemory ||
+    sessionConfirmed ||
+    matches(STAFF_ONLY) ||
+    matches(PAYMENT_AND_RECEIPT) ||
+    matches(COLLECTS_ITS_OWN_ATTESTATION)
+  );
 }
 
 function readSessionConfirmation(): boolean {

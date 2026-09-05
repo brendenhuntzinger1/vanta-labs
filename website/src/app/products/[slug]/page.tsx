@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { ProductDetailClient } from "@/components/product-detail-client";
 import { TikTokViewContent } from "@/components/tiktok-view-content";
 import { getCatalogProductBySlug, getCatalogProductsByCategory } from "@/lib/catalog";
+import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getHomepageControlConfig } from "@/lib/admin-control";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
 import { advertisableBxgyPromotions, isSlugEligible, storefrontDescription } from "@/lib/bxgy-engine";
@@ -22,6 +23,36 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
+
+  // A GATED PAGE MUST NOT DESCRIBE ITSELF.
+  //
+  // This function ran before anything else on the route and put the compound
+  // straight into the document head: the live title was "GLP-1 | Vanta Labs".
+  // A title tag is the most quotable line on a page — it is what a search
+  // result shows and what a link preview scrapes — so leaving it product-shaped
+  // would publish the catalogue one page at a time no matter what the body did.
+  //
+  // NOTHING IS LOOKED UP FOR A SIGNED-OUT REQUEST, and that ordering is the
+  // point rather than an optimisation. Reading the product first and then
+  // deciding what to say about it would make the ANSWER depend on whether the
+  // slug is real, and a 200-versus-404 difference is a working catalogue
+  // enumerator for anyone with a word list. Returning the same head for
+  // /products/glp-1 and /products/not-a-product is what closes that.
+  //
+  // In practice middleware has already redirected this request (GATED_PREFIXES
+  // in middleware.ts) and this function never runs. It is written to be correct
+  // on its own regardless, because the day the matcher changes is the day that
+  // assumption stops being true.
+  const viewer = await getAuthenticatedUser().catch(() => null);
+  if (!viewer) {
+    return {
+      title: "Sign in",
+      description: "The Vanta Labs catalog is available to account holders.",
+      robots: { index: false, follow: false },
+      alternates: { canonical: "/account/login" },
+    };
+  }
+
   const product = await getCatalogProductBySlug(slug);
   if (!product) return {};
 
@@ -76,6 +107,18 @@ export default async function ProductDetailPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
+
+  // Redirected, not 404'd, and BEFORE the lookup — same reasoning as
+  // generateMetadata above. A signed-out request must get one answer for every
+  // slug, real or invented, or the difference between them enumerates the
+  // catalogue. The slug is carried into ?next= so signing in lands the visitor
+  // on the product they actually clicked, which is what keeps an ad, a bio link
+  // or an ambassador's referral worth following.
+  const viewer = await getAuthenticatedUser().catch(() => null);
+  if (!viewer) {
+    redirect(`/account/login?next=${encodeURIComponent(`/products/${slug}`)}`);
+  }
+
   const product = await getCatalogProductBySlug(slug);
 
   if (!product) {

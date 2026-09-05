@@ -232,7 +232,6 @@ const doc = (overrides: Partial<PublicCoaDocument>): PublicCoaDocument => ({
   purity: "99.2%",
   identityResult: null,
   fileKind: "pdf",
-  fileName: null,
   hasFile: true,
   ...overrides,
 });

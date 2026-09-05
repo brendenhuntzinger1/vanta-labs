@@ -8,6 +8,12 @@ import { TurnstileWidget } from "@/components/turnstile-widget";
 import { resolveSignupOutcome, SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-signup-outcome";
 import { classifyAuthReturn, deadAuthLinkMessage, type AuthReturn } from "@/lib/auth-link-fragment";
 import { safeInternalPath } from "@/lib/internal-path";
+import { signInFailureMessage } from "@/lib/sign-in-failure-message";
+import {
+  hasAnyOAuthProvider,
+  isAppleSignInEnabled,
+  isGoogleSignInEnabled,
+} from "@/lib/oauth-providers";
 
 // When a Turnstile site key is configured, every auth call carries a CAPTCHA
 // token that Supabase verifies — blocking bots from draining email + SMS spend.
@@ -24,7 +30,13 @@ const OTP_RESEND_COOLDOWN_SECONDS = 45;
 // real shoppers. Flip to true once Twilio approves the account, then redeploy.
 const PHONE_LOGIN_ENABLED = false;
 
-type AuthMode = "login" | "signup";
+// PORTAL IS THE FIRST SCREEN, AND THE ONLY ONE MOST VISITORS SEE.
+//
+// It asks the three questions the store has to ask and offers the two fastest
+// ways in. The email forms are one tap behind it rather than in front of it:
+// showing eight fields to someone who is going to press "Continue with Google"
+// is the single biggest thing that made this card feel like paperwork.
+type AuthMode = "portal" | "login" | "signup";
 
 // Business type shown on the account-creation screen, alongside the age +
 // research-use confirmations. "Other" is the default selection.
@@ -77,7 +89,28 @@ export function AccountAuthForm() {
   const searchParams = useSearchParams();
   const referralCodeFromUrl = searchParams.get("ref") ?? "";
   const nextPath = safeNextPath(searchParams.get("next"));
-  const [mode, setMode] = useState<AuthMode>(referralCodeFromUrl ? "signup" : "login");
+  // A referral link is an invitation to JOIN, so it opens the signup form
+  // directly. A verification return has an account already and must not be
+  // parked behind a gate. Everyone else starts at the portal.
+  const [mode, setMode] = useState<AuthMode>(() => {
+    // A referral link is an invitation to JOIN, so it opens the signup form.
+    if (referralCodeFromUrl) return "signup";
+    // ANYONE ARRIVING FROM AN EMAILED LINK SKIPS THE PORTAL.
+    //
+    // A confirmation or recovery return carries a message the sign-in form is
+    // built to show — "your address is confirmed", "that link has expired",
+    // "sign in to continue". Parking that person behind a gate asking them to
+    // confirm their age would bury the one sentence they came back for, and
+    // they have an account already, so the gate has nothing left to ask.
+    //
+    // Computed here rather than in an effect: both inputs are known at first
+    // render, and deciding later would paint the portal and then replace it.
+    if (typeof window !== "undefined") {
+      const fromEmailLink = searchParams.get("verified") === "1" || Boolean(window.location.hash);
+      if (fromEmailLink) return "login";
+    }
+    return "portal";
+  });
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -87,7 +120,18 @@ export function AccountAuthForm() {
   // Starts ticked, with the same "optional, unsubscribe anytime" wording the
   // checkout box uses. Before 2026-09-04 there was no box at all here, so no
   // account ever opted in and the welcome flow had never had a recipient.
-  const [marketingOptIn, setMarketingOptIn] = useState(true);
+  // UNCHECKED BY DEFAULT, AND THIS IS A DELIBERATE CHANGE.
+  //
+  // It used to arrive pre-ticked on the signup form. On the portal it sits
+  // beside two boxes that are genuinely required to enter, and a pre-ticked
+  // third box in that company reads as one more thing to get past rather than
+  // a choice. Consent collected that way is worth very little: it produces a
+  // list that opens badly and complains loudly, and it is the first thing an
+  // inbox provider holds against a sending domain.
+  //
+  // Ticking it is what puts someone in marketing_subscribers. Not ticking it
+  // costs them nothing — entry never depends on it, see canEnter below.
+  const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   // Purely presentational: toggles the password field between text and
   // password. Never touches what is submitted.
@@ -156,6 +200,7 @@ export function AccountAuthForm() {
   const [otpSent, setOtpSent] = useState(false);
   const [otpCooldown, setOtpCooldown] = useState(0);
   // Single-use Turnstile token + a bump counter to reset the widget after each try.
+  const [oauthPending, setOauthPending] = useState<"google" | "apple" | null>(null);
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   const [captchaResetKey, setCaptchaResetKey] = useState(0);
 
@@ -387,7 +432,7 @@ export function AccountAuthForm() {
 
       await establishSessionAndGo(data.session.access_token, data.session.refresh_token ?? null);
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "Unable to sign in");
+      setError(signInFailureMessage(submitError));
     } finally {
       setLoading(false);
       resetCaptcha();
@@ -523,6 +568,321 @@ export function AccountAuthForm() {
     return (
       <div className="vl-panel mx-auto w-full max-w-md rounded-[1.75rem] p-6 text-center sm:p-8">
         <p className="text-sm text-zinc-300">Confirming your account…</p>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // HANDING OFF TO A PROVIDER.
+  //
+  // The only thing this decides is where the visitor comes back to, and that
+  // is built from window.location.origin plus a fixed path — never from
+  // anything in the URL. `next` rides along as a query parameter so the
+  // callback can return the visitor to the page that sent them here, and it is
+  // re-validated there through safeInternalPath rather than trusted on the way
+  // out. A redirect target that survives a round trip through two external
+  // services is attacker-supplied by definition.
+  //
+  // No captcha here on purpose: the provider runs its own challenge, and the
+  // token this flow returns is verified against GoTrue server-side before any
+  // cookie is written.
+  const startOAuth = async (provider: "google" | "apple") => {
+    setError(null);
+    setMessage(null);
+
+    // THE SAME TWO REPRESENTATIONS EMAIL SIGNUP REQUIRES.
+    //
+    // /api/auth/signup writes age_confirmed_21 and research_use_only_agreed
+    // into user_metadata, and it can only run once the form's two boxes are
+    // ticked. A provider hands back an identity and nothing else, so without
+    // this an account created through Google or Apple would carry neither —
+    // and this store sells 21+ research-use-only material. The account-level
+    // record is not optional just because the front door changed.
+    //
+    // Asked in BOTH modes, deliberately, because nothing here can tell a new
+    // customer from a returning one until after the provider answers. Two taps
+    // for a returning customer is the honest price of never creating an
+    // unattested account.
+    if (!ageConfirmed || !researchUseAgreed) {
+      setError("Please confirm both statements above before continuing with Google or Apple.");
+      return;
+    }
+
+    setOauthPending(provider);
+    try {
+      // Survives the round trip through two external services, and is read back
+      // by the callback. sessionStorage rather than the redirect URL: this is a
+      // record of what the visitor asserted, and a value the visitor could edit
+      // in a query string would be worth nothing as evidence either way. Scoped
+      // to the tab, cleared once used.
+      // CONSENT ONLY COUNTS FROM A SCREEN THAT SHOWS THE BOX.
+      //
+      // marketingOptIn is component state and it survives a mode switch, but
+      // the checkbox does not: the portal's "Sign in" link drops the visitor
+      // into login mode, which renders the two attestations and no marketing
+      // box at all. So someone who ticked the optional box at the portal and
+      // then chose "Already have an account?" would have been subscribed from a
+      // screen that could not show them the state, could not let them undo it,
+      // and whose only sentence about marketing promised it would not happen.
+      const marketingBoxOnScreen = mode === "portal" || mode === "signup";
+      const marketingConsent = marketingBoxOnScreen && marketingOptIn;
+
+      // A WRITE THAT DID NOT LAND IS NOT AN ATTESTATION, BUT IT IS NOT A DEAD
+      // END EITHER.
+      //
+      // This marker rides tab-scoped sessionStorage across two external
+      // redirects. It can fail to be written (Safari with "Block All Cookies",
+      // hardened privacy modes) and — the case this page cannot detect at all —
+      // it can be written and then be unreachable, because Google refuses OAuth
+      // inside embedded webviews and bounces an in-app-browser visitor out to
+      // the system browser, where this tab does not exist.
+      //
+      // Neither is a reason to refuse someone the fastest door, and neither may
+      // silently admit them without the record. The callback re-asks when the
+      // marker does not arrive, which covers every loss mode including the ones
+      // detectable only at the far end. Reading the write back here is what
+      // tells the log which kind of failure this was.
+      let attestationStored = false;
+      try {
+        window.sessionStorage.setItem("vl-oauth-attested", "true");
+        // Recorded separately from the attestation because they are different
+        // kinds of thing: one is a representation the visitor must make to
+        // enter, the other is permission they may withhold and still enter.
+        window.sessionStorage.setItem("vl-oauth-marketing", marketingConsent ? "true" : "false");
+        // The ambassador who sent them. `?ref=` opens SIGNUP mode and signup
+        // mode puts "Continue with Google" directly under the submit button, so
+        // a referred visitor is one tap from the door that used to drop this —
+        // costing her the welcome points and the ambassador the referral bonus,
+        // silently, with a success screen either way and no repair path.
+        if (referralCodeFromUrl) {
+          window.sessionStorage.setItem("vl-oauth-referral", referralCodeFromUrl);
+        } else {
+          window.sessionStorage.removeItem("vl-oauth-referral");
+        }
+        // setItem can also succeed against a quota-full store and drop the
+        // value, so this is read back rather than assumed.
+        attestationStored = window.sessionStorage.getItem("vl-oauth-attested") === "true";
+      } catch {
+        attestationStored = false;
+      }
+
+      if (!attestationStored) {
+        console.info("[auth] attestation marker could not be stored; the callback will re-ask");
+      }
+
+      const safeNext = safeInternalPath(nextPath, "/account");
+      // BUILT FROM THE CONFIGURED SITE URL WHERE THERE IS ONE, NOT THE HOST THE
+      // BROWSER HAPPENS TO BE ON.
+      //
+      // window.location.origin means every host this page answers on has to be
+      // allow-listed in Supabase separately, and a host that is not on the list
+      // does not fail loudly: GoTrue quietly substitutes the Site URL, so the
+      // visitor completes Google and is dropped on the home page with no
+      // session and no explanation. That is exactly what the apex-versus-www
+      // mismatch produced. getEmailRedirectUrl already prefers
+      // NEXT_PUBLIC_SITE_URL for the confirmation and recovery links, and using
+      // it here puts every emailed link and every provider hand-off on one
+      // canonical host, with one entry to allow-list.
+      const redirectTo =
+        getEmailRedirectUrl(`/account/auth/callback?next=${encodeURIComponent(safeNext)}`) ??
+        `${window.location.origin}/account/auth/callback?next=${encodeURIComponent(safeNext)}`;
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: {
+          redirectTo,
+          // Ask for nothing beyond identity. The catalogue gate needs to know
+          // WHO someone is, not to read their contacts or calendar, and a
+          // consent screen listing scopes nobody uses costs conversions.
+          scopes: provider === "google" ? "email profile" : undefined,
+        },
+      });
+      if (oauthError) {
+        throw new Error(oauthError.message);
+      }
+      // On success the browser is navigating away, so `oauthPending` stays set
+      // deliberately — clearing it would flash the idle label mid-redirect.
+    } catch (err) {
+      setOauthPending(null);
+      setError(
+        err instanceof Error && err.message
+          ? err.message
+          : "We could not reach that sign-in provider. Please try again.",
+      );
+    }
+  };
+
+  // ---------------------------------------------------------------------
+  // THE PORTAL. Two required representations, one optional permission, and the
+  // two fastest doors.
+  //
+  // ENTRY DEPENDS ON THE FIRST TWO BOXES AND NEVER ON THE THIRD. That is not a
+  // style choice: consent that is the price of admission is not consent, it is
+  // a toll. It also poisons the list it fills — people who had no way to
+  // decline are the ones who mark mail as spam, and that is charged against the
+  // sending domain, not against the signup form. So the third box is genuinely
+  // optional and genuinely off until someone turns it on.
+  const canEnter = ageConfirmed && researchUseAgreed;
+
+  if (mode === "portal") {
+    return (
+      <div className="vl-auth-card vl-fade-up mx-auto w-full max-w-[26rem] rounded-[22px] p-6 sm:p-8">
+        <header className="text-center">
+          <p className="text-[11px] font-medium uppercase tracking-[0.28em] text-[color:var(--accent-gold)]">
+            Vanta Labs
+          </p>
+          <h1 className="mt-3 text-[1.75rem] font-semibold leading-[1.15] tracking-[-0.01em] text-white sm:text-[2rem]">
+            Research Access Portal
+          </h1>
+          <p className="mt-3 text-[0.9375rem] leading-6 text-white/55">
+            Access is limited to verified account holders.
+          </p>
+        </header>
+
+        <p className="mt-7 text-center text-[0.8125rem] uppercase tracking-[0.16em] text-white/40">
+          Please confirm the following to continue
+        </p>
+
+        {/* THE WHOLE ROW IS THE CONTROL.
+            Each row is a <label> wrapping its input, so the tap target is the
+            full width of the card rather than a 16px box. On a phone that is
+            the difference between three confident taps and three near-misses,
+            and it is why these are not bare checkboxes in a list. */}
+        <div className="mt-4 space-y-2.5">
+          <label className="vl-portal-row">
+            <input
+              type="checkbox"
+              checked={ageConfirmed}
+              onChange={(event) => setAgeConfirmed(event.target.checked)}
+              className="vl-auth-check mt-0.5"
+            />
+            <span>I confirm I am 21 years of age or older</span>
+          </label>
+
+          <label className="vl-portal-row">
+            <input
+              type="checkbox"
+              checked={researchUseAgreed}
+              onChange={(event) => setResearchUseAgreed(event.target.checked)}
+              className="vl-auth-check mt-0.5"
+            />
+            <span>I understand products are offered exclusively for research use</span>
+          </label>
+
+          {/* Visually set apart from the two above, because it is a different
+              kind of statement and the difference should be legible before it
+              is read. The two above are conditions of entry; this one is a
+              favour, and marking it optional in the label is the honest way to
+              ask for it. */}
+          <label className="vl-portal-row vl-portal-row-optional">
+            <input
+              type="checkbox"
+              checked={marketingOptIn}
+              onChange={(event) => setMarketingOptIn(event.target.checked)}
+              className="vl-auth-check mt-0.5"
+            />
+            <span>
+              I agree to receive Vanta Labs emails, product updates and offers
+              <span className="ml-1.5 text-white/35">(optional)</span>
+            </span>
+          </label>
+        </div>
+
+        {error ? (
+          <p role="alert" className="mt-5 rounded-[12px] border border-rose-400/25 bg-rose-500/[0.08] px-4 py-3 text-[0.875rem] leading-6 text-rose-200">{error}</p>
+        ) : null}
+
+        {hasAnyOAuthProvider() ? (
+          <>
+            <div className="mt-6 h-px bg-white/[0.08]" aria-hidden="true" />
+
+            <div className="mt-6 space-y-3">
+              {isGoogleSignInEnabled() ? (
+                <button
+                  type="button"
+                  onClick={() => void startOAuth("google")}
+                  disabled={oauthPending !== null || !canEnter}
+                  className="vl-oauth-btn vl-oauth-btn-lg vl-focus-ring"
+                >
+                  <svg viewBox="0 0 24 24" className="h-5 w-5 shrink-0" aria-hidden="true">
+                    <path fill="#4285F4" d="M23.06 12.25c0-.85-.08-1.67-.22-2.45H12v4.63h6.2a5.3 5.3 0 0 1-2.3 3.48v2.89h3.72c2.18-2 3.44-4.96 3.44-8.55z" />
+                    <path fill="#34A853" d="M12 23.5c3.11 0 5.72-1.03 7.62-2.79l-3.72-2.89c-1.03.69-2.35 1.1-3.9 1.1-3 0-5.54-2.02-6.45-4.74H1.7v2.98A11.5 11.5 0 0 0 12 23.5z" />
+                    <path fill="#FBBC05" d="M5.55 14.18a6.9 6.9 0 0 1 0-4.36V6.84H1.7a11.5 11.5 0 0 0 0 10.32l3.85-2.98z" />
+                    <path fill="#EA4335" d="M12 4.75c1.69 0 3.21.58 4.4 1.72l3.3-3.3C17.72 1.28 15.11.25 12 .25A11.5 11.5 0 0 0 1.7 6.84l3.85 2.98C6.46 7.1 9 4.75 12 4.75z" />
+                  </svg>
+                  <span>{oauthPending === "google" ? "Opening Google…" : "Continue with Google"}</span>
+                </button>
+              ) : null}
+
+              {isAppleSignInEnabled() ? (
+                <button
+                  type="button"
+                  onClick={() => void startOAuth("apple")}
+                  disabled={oauthPending !== null || !canEnter}
+                  className="vl-oauth-btn vl-oauth-btn-lg vl-focus-ring"
+                >
+                  <svg viewBox="0 0 24 24" className="h-[21px] w-[21px] shrink-0" aria-hidden="true" fill="currentColor">
+                    <path d="M17.05 12.54c-.02-2.2 1.8-3.26 1.88-3.31-1.02-1.5-2.62-1.7-3.19-1.72-1.36-.14-2.65.8-3.34.8-.69 0-1.75-.78-2.87-.76-1.48.02-2.84.86-3.6 2.18-1.53 2.66-.39 6.6 1.1 8.76.73 1.06 1.6 2.25 2.74 2.2 1.1-.04 1.52-.71 2.85-.71 1.33 0 1.7.71 2.87.69 1.18-.02 1.93-1.08 2.65-2.14.83-1.22 1.18-2.4 1.2-2.46-.03-.01-2.3-.88-2.32-3.5zM14.9 5.1c.6-.74 1.01-1.75.9-2.77-.87.04-1.94.59-2.57 1.31-.56.64-1.05 1.68-.92 2.67.98.08 1.98-.5 2.59-1.21z" />
+                  </svg>
+                  <span>{oauthPending === "apple" ? "Opening Apple…" : "Continue with Apple"}</span>
+                </button>
+              ) : null}
+            </div>
+
+            <div className="my-6 flex items-center gap-3" aria-hidden="true">
+              <span className="h-px flex-1 bg-white/[0.06]" />
+              <span className="text-[0.6875rem] uppercase tracking-[0.2em] text-white/30">or</span>
+              <span className="h-px flex-1 bg-white/[0.06]" />
+            </div>
+          </>
+        ) : (
+          // No provider to offer: "Create an account" becomes the only door, so
+          // it needs the breathing room the divider was providing.
+          <div className="mt-7" />
+        )}
+
+        <button
+          type="button"
+          onClick={() => {
+            if (!canEnter) {
+              setError("Please confirm the first two statements to continue.");
+              return;
+            }
+            setError(null);
+            setMode("signup");
+          }}
+          disabled={!canEnter}
+          className="vl-auth-submit vl-focus-ring w-full"
+        >
+          Create an account
+        </button>
+
+        {/* Sign in is a LINK, not a third button. A returning customer knows
+            exactly what they are looking for, and giving it button weight would
+            put three competing calls to action on a screen whose whole job is
+            to make one choice obvious. It also stays available whatever the
+            boxes say: someone who already has an account made these
+            representations when they created it, and blocking them from their
+            own orders over an unticked box would be absurd. */}
+        <p className="mt-6 text-center text-[0.875rem] text-white/45">
+          Already have an account?{" "}
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              setMode("login");
+            }}
+            className="vl-focus-ring inline-flex min-h-6 items-center rounded-[6px] font-medium text-white/85 underline underline-offset-4 decoration-white/25 transition-colors duration-200 hover:text-white hover:decoration-white/60"
+          >
+            Sign in
+          </button>
+        </p>
+
+        <p className="mt-6 text-center text-[0.75rem] leading-5 text-white/35">
+          By continuing, you agree to our{" "}
+          <Link href="/legal/terms" className="underline underline-offset-2 decoration-white/20 transition-colors hover:text-white/60">Terms</Link>
+          {" "}and{" "}
+          <Link href="/legal/privacy" className="underline underline-offset-2 decoration-white/20 transition-colors hover:text-white/60">Privacy Policy</Link>.
+        </p>
       </div>
     );
   }
@@ -764,7 +1124,150 @@ export function AccountAuthForm() {
         {loading ? "Please wait…" : primaryLabel}
       </button>
 
+      {/* ------------------------------------------------------------------
+          THREE FRONT DOORS, ONE SESSION.
+          Google and Apple end at the same POST /api/auth/session that the form
+          above does, so the cookie, its rotation and every authorisation check
+          downstream are identical. A provider is a way of proving who you are,
+          never a source of extra access.
+
+          EMAIL STAYS. Requiring a Google or Apple account to shop would turn
+          away buyers who have neither, for no security gain — all three prove
+          the same thing to the same endpoint. It is a choice of door, not a
+          tier of trust.
+
+          Placed BELOW the primary action rather than above it. A returning
+          customer's muscle memory is the email field; leading with provider
+          buttons pushes the form they came for under the fold on a phone.
+          ------------------------------------------------------------------ */}
+      {/* THE WHOLE SECTION GOES, OR NONE OF IT DOES.
+
+          The divider and the login-mode attestation boxes only exist to
+          serve the provider buttons below them — the boxes are here purely
+          because startOAuth refuses without them. Guarding just the buttons
+          left an 'or continue with' rule pointing at nothing, above two
+          checkboxes asking a returning customer to make representations for
+          a control that is not on the page. */}
+      {hasAnyOAuthProvider() ? (
+        <div className="mt-7">
+          <div className="flex items-center gap-3" aria-hidden="true">
+            <span className="h-px flex-1 bg-white/[0.08]" />
+            <span className="text-[0.6875rem] uppercase tracking-[0.2em] text-white/35">or continue with</span>
+            <span className="h-px flex-1 bg-white/[0.08]" />
+          </div>
+
+          {/* IN LOGIN MODE THE TWO ATTESTATIONS LIVE HERE, BESIDE THE BUTTONS
+              THAT REQUIRE THEM.
+              Signup mode already renders them above the submit button, so
+              repeating them there would ask the same question twice on one card.
+              Login mode has no such block, and startOAuth refuses without them —
+              so without this the visitor would be told to confirm two statements
+              that are nowhere on screen, which is the worst kind of dead end. */}
+          {mode === "login" ? (
+            <div className="mt-5 space-y-2.5">
+              <label className="flex cursor-pointer items-start gap-3 rounded-[14px] border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[0.8125rem] leading-6 text-white/70 transition-colors duration-200 hover:border-white/[0.12]">
+                <input
+                  type="checkbox"
+                  checked={ageConfirmed}
+                  onChange={(event) => setAgeConfirmed(event.target.checked)}
+                  className="vl-auth-check mt-0.5"
+                />
+                <span>I confirm that I am at least 21 years old.</span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-3 rounded-[14px] border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[0.8125rem] leading-6 text-white/70 transition-colors duration-200 hover:border-white/[0.12]">
+                <input
+                  type="checkbox"
+                  checked={researchUseAgreed}
+                  onChange={(event) => setResearchUseAgreed(event.target.checked)}
+                  className="vl-auth-check mt-0.5"
+                />
+                <span>These products are for laboratory research use only, not for human or animal consumption.</span>
+              </label>
+            </div>
+          ) : null}
+
+              {/* Two-up only when there are two. A lone button in a two-column
+                  grid sits at half width against a full-width form above it,
+                  which reads as a rendering fault rather than a choice. */}
+              <div
+                className={`mt-5 grid gap-3 ${
+                  isGoogleSignInEnabled() && isAppleSignInEnabled() ? "sm:grid-cols-2" : "grid-cols-1"
+                }`}
+              >
+                {isGoogleSignInEnabled() ? (
+                  <button
+                    type="button"
+                    onClick={() => void startOAuth("google")}
+                    disabled={oauthPending !== null || !ageConfirmed || !researchUseAgreed}
+                    className="vl-oauth-btn vl-focus-ring"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-[18px] w-[18px] shrink-0" aria-hidden="true">
+                      <path fill="#4285F4" d="M23.06 12.25c0-.85-.08-1.67-.22-2.45H12v4.63h6.2a5.3 5.3 0 0 1-2.3 3.48v2.89h3.72c2.18-2 3.44-4.960 3.44-8.55z" />
+                      <path fill="#34A853" d="M12 23.5c3.11 0 5.72-1.03 7.62-2.79l-3.72-2.89c-1.03.69-2.35 1.1-3.9 1.1-3 0-5.54-2.02-6.45-4.74H1.7v2.98A11.5 11.5 0 0 0 12 23.5z" />
+                      <path fill="#FBBC05" d="M5.55 14.18a6.9 6.9 0 0 1 0-4.36V6.84H1.7a11.5 11.5 0 0 0 0 10.32l3.85-2.98z" />
+                      <path fill="#EA4335" d="M12 4.75c1.69 0 3.21.58 4.4 1.72l3.3-3.3C17.72 1.28 15.11.25 12 .25A11.5 11.5 0 0 0 1.7 6.84l3.85 2.98C6.46 7.1 9 4.75 12 4.75z" />
+                    </svg>
+                    <span>{oauthPending === "google" ? "Opening Google…" : "Continue with Google"}</span>
+                  </button>
+                ) : null}
+
+                {isAppleSignInEnabled() ? (
+                  <button
+                    type="button"
+                    onClick={() => void startOAuth("apple")}
+                    disabled={oauthPending !== null || !ageConfirmed || !researchUseAgreed}
+                    className="vl-oauth-btn vl-focus-ring"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-[19px] w-[19px] shrink-0" aria-hidden="true" fill="currentColor">
+                      <path d="M17.05 12.54c-.02-2.2 1.8-3.26 1.88-3.31-1.02-1.5-2.62-1.7-3.19-1.72-1.36-.14-2.65.8-3.34.8-.69 0-1.75-.78-2.87-.76-1.48.02-2.84.86-3.6 2.18-1.53 2.66-.39 6.6 1.1 8.76.73 1.06 1.6 2.25 2.74 2.2 1.1-.04 1.52-.71 2.85-.71 1.33 0 1.7.71 2.87.69 1.18-.02 1.93-1.08 2.65-2.14.83-1.22 1.18-2.4 1.2-2.46-.03-.01-2.3-.88-2.32-3.5zM14.9 5.1c.6-.74 1.01-1.75.9-2.77-.87.04-1.94.59-2.57 1.31-.56.64-1.05 1.68-.92 2.67.98.08 1.98-.5 2.59-1.21z" />
+                    </svg>
+                    <span>{oauthPending === "apple" ? "Opening Apple…" : "Continue with Apple"}</span>
+                  </button>
+                ) : null}
+              </div>
+
+              {/* Names only the providers actually on offer. Telling someone what
+                  "Google or Apple" does with their data, on a screen showing one
+                  button, describes a choice they were never given. */}
+              <p className="mt-4 text-[0.75rem] leading-5 text-white/40">
+                Signing in with{" "}
+                {isGoogleSignInEnabled() && isAppleSignInEnabled()
+                  ? "Google or Apple"
+                  : isGoogleSignInEnabled()
+                    ? "Google"
+                    : "Apple"}{" "}
+                shares your name and email address with Vanta Labs.{" "}
+                {/* The promise is only made on the screen where it is true. In
+                    signup mode a marketing checkbox sits right above this, and
+                    it may be ticked — stating flatly that a provider sign-in
+                    does not subscribe them would contradict the control they
+                    can see. */}
+                {mode === "signup"
+                  ? "Whether we email you is set by the checkbox above."
+                  : "It does not subscribe you to marketing email."}
+              </p>
+
+        </div>
+      ) : null}
+
       <div className="mt-7 space-y-4 border-t border-white/[0.06] pt-6 text-center">
+        {/* The way back out. Without it the email form is a one-way door: a
+            visitor who opened "Create an account" and then decided to use
+            Google has no route back to the buttons that offer it, short of
+            reloading the page. */}
+        <button
+          type="button"
+          onClick={() => {
+            setMode("portal");
+            resetTransientState();
+          }}
+          className="vl-focus-ring inline-flex min-h-6 items-center gap-1.5 rounded-[6px] text-[0.8125rem] text-white/40 transition-colors duration-200 hover:text-white/70"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-3.5 w-3.5" aria-hidden="true">
+            <path d="M19 12H5M11 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          All sign-in options
+        </button>
         <p className="text-[0.875rem] text-white/45">
           {mode === "signup" ? "Already have an account?" : "New to Vanta Labs?"}{" "}
           <button

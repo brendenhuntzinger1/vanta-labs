@@ -159,3 +159,62 @@ export function deadAuthLinkMessage(errorCode?: string): string {
   }
   return "We couldn't complete that confirmation link. Enter your email below and we'll send you a new one.";
 }
+
+// ---------------------------------------------------------------------------
+// THE OAUTH LANDING, WHERE "DID A SESSION ARRIVE" IS THE WRONG QUESTION.
+//
+// classifyAuthReturn above answers whether a URL LOOKS like a return from an
+// auth link. For /account/auth/callback that is not enough, and the gap is not
+// theoretical — it is the same shared-browser defect one predicate later.
+//
+// classifyAuthReturn accepts access_token OR refresh_token as proof. supabase-js
+// does not: _isImplicitGrantCallback tests access_token/error/error_description/
+// error_code and ignores refresh_token entirely. So `#refresh_token=x` reads as
+// a session here and as no callback at all there, supabase-js falls through to
+// _recoverAndRefresh(), and getSession() hands back whatever was already in
+// localStorage — the previous customer's session, on a shared machine. Posting
+// that mints a thirty-day cookie for the wrong person. `#access_token=x` alone
+// gets there too, by a different route: _getSessionFromURL throws, but
+// __loadSession reads storage directly and answers anyway.
+//
+// The fix is to stop asking a proxy question. What the page actually needs is
+// not "does this URL look like a callback" but "which tokens arrived in it" —
+// so this returns the tokens themselves, and the caller uses those and never
+// consults client storage at all. A fragment carrying only half a session is
+// not a session, so both halves are required.
+// ---------------------------------------------------------------------------
+
+export type OAuthCallbackReturn =
+  /** Both tokens arrived in the fragment. These, and only these, may be used. */
+  | { kind: "session"; accessToken: string; refreshToken: string }
+  /** GoTrue refused. Say so; never fall back to stored state. */
+  | { kind: "error"; errorCode?: string }
+  /** Nothing usable arrived. Never sign anyone in on this. */
+  | { kind: "none" };
+
+/**
+ * The tokens carried by an OAuth callback fragment, or why there are none.
+ *
+ * Parsed rather than substring-matched, for the same reason as everything else
+ * in this file: `#error_description=missing+access_token` contains the marker
+ * and carries no session.
+ */
+export function readOAuthCallbackFragment(hash: string): OAuthCallbackReturn {
+  const raw = hash.startsWith("#") ? hash.slice(1) : hash;
+  if (!raw) return { kind: "none" };
+
+  const params = new URLSearchParams(raw);
+
+  // Error first: a fragment can carry both an error and a stale token, and the
+  // error is the thing that decides what happens next.
+  const errorCode = params.get("error_code") ?? params.get("error");
+  if (errorCode) return { kind: "error", errorCode };
+
+  const accessToken = params.get("access_token");
+  const refreshToken = params.get("refresh_token");
+  // BOTH, DELIBERATELY. Half a session is the exact shape of the bypass
+  // described above, and the implicit flow always returns the pair.
+  if (!accessToken || !refreshToken) return { kind: "none" };
+
+  return { kind: "session", accessToken, refreshToken };
+}

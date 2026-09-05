@@ -4,6 +4,7 @@ import {
   isActionablePasswordSetupLink,
   isPasswordSetupLink,
   passwordSetupLinkType,
+  readOAuthCallbackFragment,
 } from "@/lib/auth-link-fragment";
 
 // ---------------------------------------------------------------------------
@@ -79,5 +80,68 @@ describe("isActionablePasswordSetupLink", () => {
 
   it("still refuses a signup fragment that carries a token", () => {
     expect(isActionablePasswordSetupLink("#access_token=abc&type=signup")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE OAUTH LANDING, AND THE TWO FRAGMENTS THAT USED TO GET PAST IT.
+//
+// The first guard on /account/auth/callback reused classifyAuthReturn, which
+// accepts access_token OR refresh_token. supabase-js disagrees: its
+// _isImplicitGrantCallback ignores refresh_token entirely. The gap between the
+// two predicates was the whole hole, so both halves are now required and these
+// pin the exact shapes that walked through it.
+// ---------------------------------------------------------------------------
+
+describe("readOAuthCallbackFragment", () => {
+  it("accepts a real implicit-grant return", () => {
+    expect(readOAuthCallbackFragment("#access_token=abc&refresh_token=def&token_type=bearer")).toEqual({
+      kind: "session",
+      accessToken: "abc",
+      refreshToken: "def",
+    });
+  });
+
+  it("REFUSES a refresh_token on its own — bypass path A", () => {
+    // classifyAuthReturn called this a session. supabase-js saw no callback at
+    // all, fell through to _recoverAndRefresh(), and getSession() then handed
+    // back the previous customer's stored session.
+    expect(readOAuthCallbackFragment("#refresh_token=x")).toEqual({ kind: "none" });
+  });
+
+  it("REFUSES an access_token on its own — bypass path B", () => {
+    // _getSessionFromURL throws on this, but __loadSession reads storage
+    // directly and answers anyway, so the stored session came back regardless.
+    expect(readOAuthCallbackFragment("#access_token=x")).toEqual({ kind: "none" });
+  });
+
+  it("treats an empty or absent fragment as nothing", () => {
+    for (const hash of ["", "#", "#="]) {
+      expect(readOAuthCallbackFragment(hash).kind).toBe("none");
+    }
+  });
+
+  it("reports a GoTrue refusal, and prefers it over any token alongside it", () => {
+    expect(readOAuthCallbackFragment("#error=access_denied")).toEqual({
+      kind: "error",
+      errorCode: "access_denied",
+    });
+    // A fragment can carry both; the error is what decides what happens next.
+    const both = readOAuthCallbackFragment("#error_code=otp_expired&access_token=a&refresh_token=b");
+    expect(both).toEqual({ kind: "error", errorCode: "otp_expired" });
+  });
+
+  it("parses rather than substring-matches, so prose naming a token is not one", () => {
+    // "#error_description=missing+access_token" contains the marker and carries
+    // no session — and it is an error, so it must read as one.
+    const r = readOAuthCallbackFragment("#error=invalid_request&error_description=missing+access_token");
+    expect(r.kind).toBe("error");
+
+    // And a value that merely mentions the key is not the key.
+    expect(readOAuthCallbackFragment("#state=access_token_and_refresh_token").kind).toBe("none");
+  });
+
+  it("tolerates the leading # being absent, as URLSearchParams callers vary", () => {
+    expect(readOAuthCallbackFragment("access_token=a&refresh_token=b").kind).toBe("session");
   });
 });
