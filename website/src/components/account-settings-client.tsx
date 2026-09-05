@@ -308,15 +308,6 @@ export function AccountSettingsClient({
             </button>
           </section>
 
-          <section className="vl-panel rounded-2xl p-5 sm:p-6">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-semibold text-white">Two-factor authentication</h2>
-                <p className="mt-1 text-sm text-zinc-400">Add an extra layer of security to your account at sign-in.</p>
-              </div>
-              <span className="shrink-0 rounded-full border border-white/12 bg-white/[0.04] px-3 py-1 text-[11px] uppercase tracking-[0.14em] text-zinc-400">Coming soon</span>
-            </div>
-          </section>
         </div>
       ) : null}
 
@@ -361,13 +352,6 @@ export function AccountSettingsClient({
                 className="h-5 w-5 shrink-0 accent-cyan-400"
               />
             </label>
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-4 text-sm text-zinc-400">
-              <span>
-                SMS text updates
-                <span className="mt-0.5 block text-xs text-zinc-500">Shipping and order texts.</span>
-              </span>
-              <span className="shrink-0 rounded-full border border-white/12 bg-white/[0.04] px-3 py-1 text-[11px] uppercase tracking-[0.14em] text-zinc-400">Coming soon</span>
-            </div>
           </div>
           {preferencesMessage ? <p className="mt-3 text-sm text-zinc-300">{preferencesMessage}</p> : null}
           <button type="button" onClick={handleSavePreferences} disabled={savingPreferences} className="vl-btn-primary vl-focus-ring mt-4 px-5 py-2.5 text-sm disabled:opacity-60">

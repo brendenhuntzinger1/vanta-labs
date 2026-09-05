@@ -208,3 +208,43 @@ describe("what reaches the browser", () => {
     expect(product).not.toHaveProperty("inventoryQuantity");
   });
 });
+
+describe("a product with several doses is in stock when ANY enabled dose can be sold", () => {
+  // The card, the "In Stock" filter and the Product JSON-LD all read
+  // product.stockStatus, which was the DEFAULT dose's status alone. A product
+  // whose default dose sold out (or was fully held by in-flight checkouts)
+  // while another dose still had units was presented as OUT OF STOCK on the
+  // catalog and to Google — while its product page happily sold the other
+  // dose. Seven live products carry more than one dose.
+  it("is In Stock when the default dose is empty but another enabled dose is stocked", async () => {
+    state.doses = [
+      dose({ inventory_quantity: 0 }),
+      dose({ id: "dose-5mg", label: "5mg", slug_suffix: "5mg", sku: "GLP1-5", price_cents: 4999, inventory_quantity: 7, is_default: false, position: 1 }),
+    ];
+    const [product] = await getCatalogProductsBySlugs(["glp-1"]);
+    expect(product.stockStatus).toBe("In Stock");
+  });
+
+  it("is In Stock when the default dose is fully held but another dose is free", async () => {
+    state.doses = [
+      dose({ inventory_quantity: 20 }),
+      dose({ id: "dose-5mg", label: "5mg", slug_suffix: "5mg", sku: "GLP1-5", price_cents: 4999, inventory_quantity: 8, is_default: false, position: 1 }),
+    ];
+    state.doseReserved = { [DOSE_ID]: 20, "dose-5mg": 1 };
+    const [product] = await getCatalogProductsBySlugs(["glp-1"]);
+    expect(product.stockStatus).toBe("In Stock");
+  });
+
+  it("stays Out of Stock when the only stocked dose is disabled, or every dose is empty", async () => {
+    state.doses = [
+      dose({ inventory_quantity: 0 }),
+      dose({ id: "dose-5mg", label: "5mg", slug_suffix: "5mg", sku: "GLP1-5", inventory_quantity: 7, is_default: false, is_enabled: false, position: 1 }),
+    ];
+    const [disabledOnly] = await getCatalogProductsBySlugs(["glp-1"]);
+    expect(disabledOnly.stockStatus).toBe("Out of Stock");
+
+    state.doses = [dose({ inventory_quantity: 0 }), dose({ id: "dose-5mg", label: "5mg", slug_suffix: "5mg", sku: "GLP1-5", inventory_quantity: 0, is_default: false, position: 1 })];
+    const [allEmpty] = await getCatalogProductsBySlugs(["glp-1"]);
+    expect(allEmpty.stockStatus).toBe("Out of Stock");
+  });
+});

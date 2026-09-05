@@ -267,11 +267,24 @@ function mapProductRow(
     : sellable(productLevelQuantity, reservedQuantity);
   // Availability has exactly one source of truth: Vanta Labs. Until tracking is
   // on (inventoryActive === false) everything is In Stock.
-  const stockStatus = resolveStockStatus(
+  const defaultDoseStatus = resolveStockStatus(
     String(defaultDose?.stockStatus ?? row.stock_status ?? "In Stock"),
     inventoryActive,
     backingAvailability,
   );
+  // A PRODUCT WITH SEVERAL DOSES IS IN STOCK WHEN ANY ENABLED DOSE CAN BE SOLD.
+  //
+  // The headline status was the default dose's alone. The card, the "In Stock"
+  // filter and the Product JSON-LD all read it, so a product whose default dose
+  // sold out — or was fully held by in-flight checkouts — while another dose
+  // still had units was presented as OUT OF STOCK on the catalog and to Google,
+  // while its own page sold the other dose. Each dose's status already has its
+  // own reservations and stored status baked in (fetchProductRelations).
+  const anotherDoseSellable = doses.some(
+    (dose) => dose.id !== defaultDose?.id && dose.isEnabled !== false && dose.stockStatus === "In Stock",
+  );
+  const stockStatus: Product["stockStatus"] =
+    defaultDoseStatus === "In Stock" || !anotherDoseSellable ? defaultDoseStatus : "In Stock";
   const effectiveImage = resolveProductImage(defaultDose?.imageUrl ?? primaryImage?.imageUrl ?? row.image_url);
   const effectiveBatchNumber = defaultDose?.batchNumber ?? String(row.batch_number ?? "");
   const effectiveCoaUrl = defaultDose?.coaUrl ?? sanitizeCoaUrl(row.coa_url);
