@@ -64,8 +64,6 @@ export function CartPageClient() {
     applyReferralCode,
     clearReferralCode,
     isApplyingReferral,
-    isBuy3Get1FreeActive,
-    activePromotionName,
     bulkSavingsApplied,
     bulkSavingsPercent,
     bulkSavingsProgress,
@@ -484,47 +482,46 @@ export function CartPageClient() {
               <li>{TRACKING_SENTENCE}</li>
             </ul>
 
-            {isBuy3Get1FreeActive ? (
-              <p className="mt-8 border border-white/20 px-3 py-2 text-sm text-white/75">
-                {activePromotionName ?? "A promotion"} is active. Referral discounts cannot be combined with this
-                promotion.
-              </p>
-            ) : (
-              <>
-                <label className="mt-8 block text-sm text-white/50">
-                  <span className="vl2-eyebrow mb-2 block">Referral Code</span>
-                  <input
-                    type="text"
-                    value={effectiveReferralInput}
-                    onChange={(event) => setReferralInput(event.target.value)}
-                    placeholder="VANTA10"
-                    className="w-full border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/60 outline-none transition focus:border-white/50"
-                  />
-                </label>
-                <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-                  <button
-                    type="button"
-                    onClick={() => applyReferralCode(effectiveReferralInput)}
-                    disabled={isApplyingReferral}
-                    className="vl2-btn-primary vl-focus-ring px-4 py-3 text-sm disabled:opacity-60"
-                  >
-                    {isApplyingReferral ? "Applying…" : "Apply code"}
-                  </button>
-                  {referralCode ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        clearReferralCode();
-                        setReferralInput("");
-                      }}
-                      className="vl2-btn-secondary vl-focus-ring px-4 py-3 text-sm"
-                    >
-                      Clear
-                    </button>
-                  ) : null}
-                </div>
-              </>
-            )}
+            {/* THE REFERRAL FIELD IS ALWAYS OPEN — see the same note on
+                checkout/page.tsx. This used to be replaced, for the whole of
+                every promotion, by "<promotion> is active. Referral discounts
+                cannot be combined with this promotion." — leaving a shopper who
+                arrived on an ambassador's link with nowhere to enter the code,
+                and the ambassador with no attribution on the sale. A referral
+                competes with the promotion now; referralStatusText says which
+                one won. */}
+            <label className="mt-8 block text-sm text-white/50">
+              <span className="vl2-eyebrow mb-2 block">Referral Code</span>
+              <input
+                type="text"
+                value={effectiveReferralInput}
+                onChange={(event) => setReferralInput(event.target.value)}
+                placeholder="VANTA10"
+                className="w-full border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/60 outline-none transition focus:border-white/50"
+              />
+            </label>
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => applyReferralCode(effectiveReferralInput)}
+                disabled={isApplyingReferral}
+                className="vl2-btn-primary vl-focus-ring px-4 py-3 text-sm disabled:opacity-60"
+              >
+                {isApplyingReferral ? "Applying…" : "Apply code"}
+              </button>
+              {referralCode ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearReferralCode();
+                    setReferralInput("");
+                  }}
+                  className="vl2-btn-secondary vl-focus-ring px-4 py-3 text-sm"
+                >
+                  Clear
+                </button>
+              ) : null}
+            </div>
             {referralSuccess ? <p className="mt-4 text-sm text-emerald-300">{referralSuccess}</p> : null}
             {referralError ? <p className="mt-4 text-sm text-rose-300">{referralError}</p> : null}
             {referralStatusText ? (

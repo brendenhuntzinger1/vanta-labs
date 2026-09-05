@@ -127,6 +127,19 @@ export function referralStatusLine(input: {
   referralDiscountApplied?: boolean;
   /** Some OTHER discount is what the shopper is getting instead. */
   competingDiscountApplied?: boolean;
+  /**
+   * Customer-facing name of the discount that beat this code, e.g. "Bundle
+   * pricing", "Promo code SAVE20". Named in the sentence so a shopper whose
+   * ambassador code took nothing off can see WHY, and see that it is because
+   * they are getting something better rather than because the code failed.
+   *
+   * The coupon side of the cart has said this since describeCouponOutcome
+   * landed — "SAVE20 accepted — but your Bundle pricing saves you more, so we
+   * kept that." The referral side said only "Robin · referral code applied",
+   * which is true and tells the shopper nothing about the contest they just
+   * won. Optional: with no label the sentence falls back to that wording.
+   */
+  competingDiscountLabel?: string | null;
 }): string {
   const { discountPercent, meetsMinimum, amountToQualify, minimumOrder, formatCurrency } = input;
   const referralDiscountApplied = input.referralDiscountApplied ?? false;
@@ -158,7 +171,14 @@ export function referralStatusLine(input: {
   // anything while that holds, and it is just as wrong above the minimum as
   // below it — so this is checked BEFORE the shortfall wording, not after.
   if (competingDiscountApplied) {
-    return applied;
+    const winner = input.competingDiscountLabel?.trim();
+    // Name it, and say the code is still doing its other job. A shopper who
+    // sees their ambassador's code sitting there with no discount beside it
+    // reasonably concludes it failed and removes it — which is exactly the act
+    // that used to cost the ambassador the commission.
+    return winner
+      ? `${applied} · your ${winner} saves you more, so we kept that`
+      : applied;
   }
   if (meetsMinimum) {
     // Qualifies, nothing else applied, and the referral still won nothing: the
@@ -247,6 +267,8 @@ export function referralCartStatus(input: {
   referralDiscountApplied: boolean;
   /** Some other discount is what the shopper is getting instead. */
   competingDiscountApplied: boolean;
+  /** Customer-facing name of that other discount, for the sentence. */
+  competingDiscountLabel?: string | null;
   formatCurrency: (value: number) => string;
 }): {
   meetsMinimum: boolean;
@@ -279,6 +301,7 @@ export function referralCartStatus(input: {
       formatCurrency,
       referralDiscountApplied,
       competingDiscountApplied,
+      competingDiscountLabel: input.competingDiscountLabel ?? null,
     }),
   };
 }

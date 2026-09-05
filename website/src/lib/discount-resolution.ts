@@ -61,11 +61,20 @@ export interface CartDiscountInputs {
    */
   allowCouponStacking?: boolean;
   /**
-   * The Buy-3-Get-1 free item, or a valid referral — never both, and never
-   * alongside the coupon. A bundle suppresses the referral outright, matching
-   * `!isBundle && hasReferral` in profit-engine's resolveCustomerDiscount.
+   * The Buy-X-Get-Y free item AND a valid referral — both, when both are live.
+   *
+   * THIS WAS `promo: DiscountCandidate | null`, "one or the other", because
+   * resolveCustomerDiscount zeroed the referral whenever a promotion was
+   * present (`!isBundle && hasReferral`). It no longer does: a promotion and a
+   * referral are two candidates that compete on savings like everything else,
+   * so the cart has to rank both or it would preview a promotion on a basket
+   * the server prices with the referral.
+   *
+   * Order matters on an exact tie. Both sides pick with a strict `>`, so the
+   * candidate listed FIRST wins one; resolveCustomerDiscount pushes bundle
+   * before referral, so a caller must too.
    */
-  promo: DiscountCandidate | null;
+  promos: DiscountCandidate[];
 }
 
 export interface CartDiscountResult {
@@ -105,7 +114,7 @@ export function resolveCartDiscount(inputs: CartDiscountInputs): CartDiscountRes
   // whether store credit and points may be spent, so the two totals diverged
   // and every such checkout was refused as an altered total.
   const rawCandidates: DiscountCandidate[] = [
-    ...(inputs.promo ? [{ type: inputs.promo.type, amount: inputs.promo.amount }] : []),
+    ...inputs.promos.map((promo) => ({ type: promo.type, amount: promo.amount })),
     { type: "member_pricing", amount: inputs.memberPricingAmount },
     { type: "bulk_savings", amount: inputs.bulkSavingsAmount },
     { type: "ambassador_personal", amount: inputs.ambassadorPersonalAmount },

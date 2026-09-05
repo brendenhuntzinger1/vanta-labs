@@ -155,11 +155,14 @@ export interface DiscountBreakdown {
 // Resolves the SINGLE customer discount for an order — the one shared rulebook
 // used by both the live checkout and the profit guard:
 //   • ONE customer discount applies, whichever gives the best value, among:
-//     the referral discount, membership pricing, bulk savings, the personal
-//     ambassador discount, and (when it doesn't stack) a coupon.
-//   • Discounts NEVER stack: a Buy-3-Get-1 (bundle) order gives the free item
-//     only — a referral code on top adds NO extra %. The ambassador is still
-//     attributed and paid commission; the customer just doesn't double-dip.
+//     a Buy-X-Get-Y promotion, the referral discount, membership pricing, bulk
+//     savings, the personal ambassador discount, and (when it doesn't stack) a
+//     coupon. Every one of them competes on savings; none of them is seeded
+//     ahead of the others.
+//   • Discounts NEVER stack: the winner is the whole discount. A referral code
+//     on top of a promotion adds NO extra %, and a promotion on top of a
+//     referral adds none either. The ambassador is still attributed and paid
+//     commission whichever one wins; the customer just doesn't double-dip.
 //   • A coupon competes as a candidate when stacking is off; when the admin
 //     enables stacking it adds on top of the best promo.
 // Ambassador commission is NOT a customer discount — it is computed separately
@@ -183,8 +186,8 @@ export function resolveCustomerDiscount(
   const alreadyGranted = Math.max(0, inputs.quantityBundleSavings ?? 0);
   const compete = (raw: number) => Math.max(0, round(raw - alreadyGranted));
 
-  // The bundle "bucket": the Buy-3-Get-1 free item only. A referral code does
-  // NOT stack an extra % on top of a bundle — the bundle is the whole discount.
+  // The bundle "bucket": the Buy-X-Get-Y free item only. It never stacks with
+  // a referral — it COMPETES with one, like every other candidate below.
   let bundleBucket = 0;
   const bundleComponents: DiscountComponent[] = [];
   let bundleLabel = "";
@@ -194,8 +197,25 @@ export function resolveCustomerDiscount(
     bundleLabel = "Bundle";
   }
 
-  // The plain referral bucket (non-bundle order with a code).
-  const referralBucket = !isBundle && hasReferral ? pct(base, inputs.referralPercent) : 0;
+  // The referral bucket.
+  //
+  // THIS USED TO READ `!isBundle && hasReferral`, WHICH IS NOT A CONTEST — it
+  // is a walkover. Any live promotion zeroed the referral outright, however
+  // little the promotion was worth and however much the referral was: four
+  // $40 units against Buy 3 Get 1 earns one free unit ($40), while a 40%
+  // ambassador's code on the same basket is worth $64. The shopper was charged
+  // $24 more than the best offer the store had for them, and the store's own
+  // promise — "checkout automatically applies whichever single discount saves
+  // you the most" — was false on every promotion order carrying a code.
+  //
+  // Now it enters the candidate list like everything else and the largest
+  // saving wins. Exclusivity is unchanged: bundle and referral still never
+  // BOTH apply, because only one candidate is ever chosen.
+  //
+  // The caller must not record a promotion that lost — quoteOrder drops
+  // appliedPromotionId when "bundle" is absent from `components`, so a limited
+  // promotion never burns a redemption on an order it did not price.
+  const referralBucket = hasReferral ? pct(base, inputs.referralPercent) : 0;
 
   // Perk candidates that compete for best value (never stack, never removed by
   // the profit guard — they carry no removable component).
