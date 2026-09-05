@@ -192,7 +192,7 @@ describe("the renamed product URL redirects rather than breaking", () => {
     // Gating first would send an old link to the login page with the dead slug
     // in ?next=, so the visitor would sign in and land on a 404.
     const renameAt = code.indexOf("RENAMED_PRODUCT_SLUGS.has(pathname)");
-    const gateAt = code.indexOf("requiresAccount(pathname) &&");
+    const gateAt = code.indexOf('if (requiresAccount(pathname) && !request.cookies.get(');
     expect(renameAt).toBeGreaterThan(-1);
     expect(gateAt).toBeGreaterThan(-1);
     expect(renameAt).toBeLessThan(gateAt);

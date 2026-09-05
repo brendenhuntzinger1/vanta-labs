@@ -103,7 +103,7 @@ describe("the gate is uniform: it never varies by who is asking", () => {
       expect(gate, `the gate must not branch on ${tell}`).not.toMatch(tell);
     }
 
-    const enforcement = body.slice(body.indexOf("if (requiresAccount(pathname)"));
+    const enforcement = body.slice(body.indexOf('if (requiresAccount(pathname) && !request.cookies.get('));
     for (const tell of CLOAKING_TELLS) {
       expect(enforcement.slice(0, 1800), `enforcement must not branch on ${tell}`).not.toMatch(tell);
     }
@@ -138,17 +138,17 @@ describe("middleware gates every shape of request to the catalog", () => {
 
   it("refuses an API request rather than redirecting it", () => {
     // fetch() follows a 307 and would parse the login page as JSON.
-    const gate = middleware.slice(middleware.indexOf("if (requiresAccount(pathname)"));
+    const gate = middleware.slice(middleware.indexOf('if (requiresAccount(pathname) && !request.cookies.get('));
     expect(gate.slice(0, 700)).toContain("401");
   });
 
   it("carries the requested path into ?next= so referral and ad links survive", () => {
-    const gate = middleware.slice(middleware.indexOf("if (requiresAccount(pathname)"));
+    const gate = middleware.slice(middleware.indexOf('if (requiresAccount(pathname) && !request.cookies.get('));
     expect(gate.slice(0, 1400)).toContain('login.searchParams.set("next"');
   });
 
   it("never lets a session-dependent redirect be cached and replayed", () => {
-    const gate = middleware.slice(middleware.indexOf("if (requiresAccount(pathname)"));
+    const gate = middleware.slice(middleware.indexOf('if (requiresAccount(pathname) && !request.cookies.get('));
     expect(gate.slice(0, 1600)).toContain('"Cache-Control", "no-store"');
   });
 });

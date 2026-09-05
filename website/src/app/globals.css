@@ -1164,7 +1164,7 @@ body[data-welcome-offer="true"] .vl2-nav {
 /* ------------------------------------------------------------------ */
 /*  AGE GATE — the storefront is inert until someone confirms.          */
 /*                                                                     */
-/*  data-age-verified is rendered onto <html> by app/layout.tsx as the  */
+
 /*  constant "false" — every document, every request, no exceptions —   */
 /*  and components/age-gate.tsx flips it to "true" in memory once all   */
 /*  four attestations are made. It is never persisted, so there is no   */
@@ -1181,9 +1181,6 @@ body[data-welcome-offer="true"] .vl2-nav {
 /*  JavaScript disabled the attribute stays "false" and the gate stays  */
 /*  up: the failure mode is a locked store, never an open one.          */
 /* ------------------------------------------------------------------ */
-html[data-age-verified="true"] [data-age-gate] {
-  display: none;
-}
 
 /* The scroll lock is otherwise applied by an effect, which cannot run until
    hydration — on a slow connection the store scrolled behind the overlay in
@@ -1195,19 +1192,9 @@ html[data-age-verified="true"] [data-age-gate] {
    page. Pinning both elements to the viewport is what actually holds it: with
    height fixed and overflow hidden on BOTH html and body there is nothing left
    to scroll. Released the moment the attribute flips to "true". */
-html[data-age-verified="false"],
-html[data-age-verified="false"] body {
-  overflow: hidden;
-  height: 100%;
-  overscroll-behavior: none;
-}
 
 /* The gate itself is the one thing that may scroll — it is taller than a phone
    screen — and it needs momentum scrolling of its own on iOS. */
-html[data-age-verified="false"] [data-age-gate] {
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
-}
 
 /* COVER THE VISUAL VIEWPORT, NOT THE LAYOUT ONE.
    `fixed inset-0` sizes against the LAYOUT viewport. In an in-app webview the
@@ -1216,19 +1203,6 @@ html[data-age-verified="false"] [data-age-gate] {
    showing through the moment you tapped an attestation. 100dvh follows the
    viewport as it changes; the vh line before it is the fallback for anything
    that does not know dvh. */
-[data-age-gate] {
-  min-height: 100vh;
-  min-height: 100dvh;
-  /* AND AT LEAST AS TALL AS THE VIEWPORT CAN EVER GET.
-     `dvh` follows the viewport as it changes, which is right until it changes
-     faster than a repaint: an in-app toolbar retracting grows the visual
-     viewport, and for a frame the overlay is shorter than the screen. `lvh` is
-     the viewport with the browser chrome RETRACTED — its maximum — so an
-     overlay sized to it cannot be caught short by a toolbar getting out of the
-     way. Last of the three because it is the newest; anything that does not
-     know it keeps the dvh answer. */
-  min-height: 100lvh;
-}
 
 /* AN OPAQUE FIELD THAT EXISTS BEFORE THE STOREFRONT DOES, AND IS BIGGER THAN
    THE SCREEN CAN GET.
@@ -1258,13 +1232,6 @@ html[data-age-verified="false"] [data-age-gate] {
    over the storefront WITHOUT taking it out of the render tree, which is the
    whole point: a covered page is still a rendered page, and Google indexes
    what it renders. */
-html[data-age-verified="false"]::before {
-  content: "";
-  position: fixed;
-  inset: -50%;
-  z-index: 99;
-  background: #0a0908;
-}
 
 /* THE STOREFRONT IS COVERED AND INERT. IT USED TO BE INVISIBLE AS WELL, AND
    THAT COST MORE THAN IT WAS WORTH.
@@ -1321,12 +1288,6 @@ html[data-age-verified="false"]::before {
    <script> and the diagnostics panel are exempt for the same reasons as
    before: one must keep running, the other exists to be readable exactly when
    entry is misbehaving. */
-html[data-age-verified="false"] body > *:not([data-age-gate]):not(script):not([data-entry-diagnostics]) {
-  /* A tap must not reach the storefront. Covered content still takes
-     hit-tests where the overlay does not reach, so this is what makes the
-     store inert rather than merely out of sight. */
-  pointer-events: none;
-}
 
 /* A PLAYING VIDEO IS NOT COVERED BY `visibility: hidden` IN WEBKIT.
    It is promoted to its own compositing layer, and on iOS that layer paints
@@ -1340,9 +1301,6 @@ html[data-age-verified="false"] body > *:not([data-age-gate]):not(script):not([d
    attribute flips, and hero-video.tsx starts playback then. No layout shift:
    the element is absolutely positioned inside .vl2-hero, which keeps its own
    background. */
-html[data-age-verified="false"] video {
-  display: none !important;
-}
 
 /* THE APP'S OWN TOOLBARS SIT ON TOP OF THE PAGE.
    Safari insets the page for its chrome. The TikTok and Instagram webviews do
@@ -1356,10 +1314,6 @@ html[data-age-verified="false"] video {
    env(safe-area-inset-*) is 0 where there is nothing to avoid, so this costs a
    normal browser nothing. The extra 1.5rem at the bottom is for in-app bars,
    which the safe-area inset does not describe. */
-[data-age-gate] {
-  padding-top: calc(2rem + env(safe-area-inset-top));
-  padding-bottom: calc(3.5rem + env(safe-area-inset-bottom));
-}
 
 /* THE WAY OUT OF THE GATE IS ALWAYS ON SCREEN.
    The gate scrolls internally, and the card is taller than an in-app browser's
@@ -1382,9 +1336,6 @@ html[data-age-verified="false"] video {
    A hijacked control is far worse than a scroll. The gate is a scrolling panel
    and always has been; the buttons sit at the end of it, reachable the ordinary
    way, and nothing overlays anything. */
-.vl-gate-actions {
-  position: relative;
-}
 
 /* ------------------------------------------------------------------ */
 /*  THE GATE IS PART OF THE STORE, NOT A NOTICE IN FRONT OF IT.        */
@@ -1419,84 +1370,16 @@ html[data-age-verified="false"] video {
 /* The light the panel sits in. Leads warm, with the original cool
    counter-light kept as a quiet second source so the gold has something
    to be gold against. */
-.vl-gate-glow {
-  background:
-    radial-gradient(ellipse 90% 62% at 22% 10%, rgba(199, 174, 94, 0.2), transparent 60%),
-    radial-gradient(ellipse 72% 52% at 84% 88%, rgba(199, 174, 94, 0.11), transparent 58%),
-    radial-gradient(ellipse 62% 46% at 88% 18%, rgba(140, 180, 255, 0.05), transparent 60%),
-    linear-gradient(165deg, #0b0a08 0%, #16130d 46%, #0a0908 100%);
-}
-
-.vl-gate-panel {
-  background:
-    radial-gradient(125% 90% at 10% 0%, rgba(199, 174, 94, 0.11), transparent 58%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.015)),
-    rgba(17, 15, 12, 0.82);
-  /* Champagne, not white: the focus ring was the only thing drawing a
-     visible edge here, so a visitor arriving by mouse — who gets no
-     :focus-visible — saw an unframed slab. The rim is the edge now, and the
-     ring is an addition to it rather than the whole of it. */
-  border: 1px solid rgba(199, 174, 94, 0.28);
-  box-shadow:
-    inset 0 1px 0 rgba(232, 214, 170, 0.16),
-    0 1px 2px rgba(0, 0, 0, 0.5),
-    0 0 0 1px rgba(199, 174, 94, 0.14),
-    0 4px 24px -10px rgba(199, 174, 94, 0.13),
-    0 22px 70px -26px rgba(199, 174, 94, 0.08),
-    0 40px 90px -34px rgba(0, 0, 0, 0.8);
-}
 
 /* An attestation is the one thing on this screen the visitor DOES, so it is
    the one thing that visibly answers. At rest it is lit charcoal like any
    card in the store; ticked, the champagne rim closes around it. */
-.vl-gate-row {
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.014));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 1px 2px rgba(0, 0, 0, 0.4);
-  transition:
-    border-color var(--duration-base) var(--ease-out-premium),
-    box-shadow var(--duration-base) var(--ease-out-premium),
-    background var(--duration-base) var(--ease-out-premium);
-}
-
-.vl-gate-row:hover {
-  border-color: rgba(199, 174, 94, 0.3);
-}
-
-.vl-gate-row:has(:checked) {
-  border-color: rgba(199, 174, 94, 0.44);
-  background: linear-gradient(180deg, rgba(199, 174, 94, 0.13), rgba(199, 174, 94, 0.04));
-  box-shadow:
-    inset 0 1px 0 rgba(232, 214, 170, 0.2),
-    0 0 0 1px rgba(199, 174, 94, 0.2),
-    0 2px 18px -8px rgba(199, 174, 94, 0.3);
-}
 
 /* Champagne is the store's label colour (see --accent-gold): borders, labels
    and savings text. These are labels. */
-.vl-gate-chip {
-  border: 1px solid rgba(199, 174, 94, 0.24);
-  background: linear-gradient(180deg, rgba(199, 174, 94, 0.1), rgba(199, 174, 94, 0.03));
-  box-shadow: inset 0 1px 0 rgba(232, 214, 170, 0.12);
-  color: rgba(226, 210, 170, 0.78);
-}
-
-.vl-gate-monogram {
-  border: 1px solid rgba(199, 174, 94, 0.45);
-  background:
-    radial-gradient(125% 125% at 30% 18%, rgba(199, 174, 94, 0.32), rgba(199, 174, 94, 0.07) 58%, rgba(255, 255, 255, 0.02));
-  box-shadow:
-    inset 0 1px 0 rgba(232, 214, 170, 0.35),
-    0 0 34px -8px rgba(199, 174, 94, 0.42);
-}
 
 /* Light, not a line: the flanks either side of the eyebrow, and the rule that
    separates brand from form on a phone. */
-.vl-gate-rule {
-  background: linear-gradient(90deg, transparent, rgba(199, 174, 94, 0.55), transparent);
-}
 
 /* SEPARATION AT REST, NOT ON HOVER — the same argument .vl2-product-card
    makes. This is the single most important control on the site's first
@@ -1505,23 +1388,6 @@ html[data-age-verified="false"] video {
    .vl2-btn-primary otherwise keeps for :hover. It is still glass: the border
    warms and a halo appears outside it, nothing is repainted gold. Disabled is
    excluded — an unearned glow would be a lie about what the button will do. */
-.vl-gate-cta:not(:disabled) {
-  border-color: rgba(199, 174, 94, 0.45);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.14),
-    0 2px 4px rgba(0, 0, 0, 0.35),
-    0 0 0 1px rgba(199, 174, 94, 0.14),
-    0 14px 32px -16px rgba(199, 174, 94, 0.45);
-}
-
-.vl-gate-cta:not(:disabled):hover {
-  border-color: rgba(199, 174, 94, 0.65);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.18),
-    0 2px 4px rgba(0, 0, 0, 0.35),
-    0 0 0 1px rgba(199, 174, 94, 0.2),
-    0 18px 40px -16px rgba(199, 174, 94, 0.55);
-}
 
 /* THE PANEL'S OWN FOCUS RING, IN THE BRAND'S COLOUR.
    The gate moves focus onto the panel as it opens, so keyboard and screen
@@ -1533,10 +1399,6 @@ html[data-age-verified="false"] video {
    Champagne keeps the same 2px and clears the 3:1 non-text contrast minimum
    against this backdrop by a wide margin (#c7ae5e on #0b0a08 is about 8:1),
    so the indicator is not weakened, only brought in line. */
-.vl-gate-panel.vl-focus-ring:focus-visible {
-  outline: 2px solid rgba(199, 174, 94, 0.9);
-  outline-offset: 3px;
-}
 
 /* THE BOX A VISITOR ACTUALLY TICKS.
    It was the browser's own control with accent-color set, which paints the
@@ -1554,66 +1416,6 @@ html[data-age-verified="false"] video {
    would look tidier: a control boundary needs 3:1 against its background
    under WCAG 1.4.11, and at 0.62 over the row it computes to about 3.5:1.
    Below that this becomes a control a low-vision visitor cannot find. */
-.vl-gate-check {
-  appearance: none;
-  -webkit-appearance: none;
-  display: inline-grid;
-  place-content: center;
-  border-radius: 0.45rem;
-  border: 1px solid rgba(199, 174, 94, 0.62);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.015));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
-  cursor: pointer;
-  transition:
-    background var(--duration-fast) var(--ease-out-premium),
-    border-color var(--duration-fast) var(--ease-out-premium),
-    box-shadow var(--duration-fast) var(--ease-out-premium);
-}
-
-.vl-gate-check::after {
-  content: "";
-  width: 0.6rem;
-  height: 0.3rem;
-  border-left: 2px solid #14120d;
-  border-bottom: 2px solid #14120d;
-  transform: rotate(-45deg) translateY(-0.08rem);
-  opacity: 0;
-  transition: opacity var(--duration-fast) var(--ease-out-premium);
-}
-
-/* Champagne fill, charcoal tick — the one place on the gate where gold is a
-   surface rather than light, because a tick has to read instantly. */
-.vl-gate-check:checked {
-  border-color: rgba(216, 192, 122, 0.95);
-  background: linear-gradient(180deg, var(--accent-gold-strong), var(--accent-gold));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.3),
-    0 0 16px -3px rgba(199, 174, 94, 0.6);
-}
-
-.vl-gate-check:checked::after {
-  opacity: 1;
-}
-
-.vl-gate-check:focus-visible {
-  outline: 2px solid rgba(199, 174, 94, 0.9);
-  outline-offset: 2px;
-}
-
-/* An appearance:none control is drawn by us, and Windows High Contrast
-   replaces our colours with the user's — which would leave two empty squares
-   with no way to tell ticked from unticked. Hand the native control back
-   where that is in force. */
-@media (forced-colors: active) {
-  .vl-gate-check {
-    appearance: auto;
-    -webkit-appearance: auto;
-  }
-
-  .vl-gate-check::after {
-    display: none;
-  }
-}
 
 /* Published so the diagnostics panel can report what the device actually says. */
 :root {
@@ -3014,6 +2816,24 @@ select.vl-auth-field {
 .vl-auth-check:focus-visible {
   outline: 2px solid rgba(199, 174, 94, 0.85);
   outline-offset: 2px;
+}
+
+/* WINDOWS HIGH CONTRAST TURNS THIS CONTROL INTO AN EMPTY SQUARE.
+   .vl-auth-check is appearance:none and draws its tick as a background-image.
+   forced-colors replaces our colours with the user's AND drops background
+   images, so ticked and unticked would render identically — on the two boxes a
+   visitor MUST tick to enter the store, which makes the control unusable
+   rather than merely ugly. Hand the native checkbox back where that is in
+   force; the browser then draws a tick the user's own theme guarantees.
+
+   The deleted age gate carried exactly this rule for its own checkbox. The
+   portal that replaced it never did, and removing the gate's dead CSS is what
+   made the omission visible. */
+@media (forced-colors: active) {
+  .vl-auth-check {
+    appearance: auto;
+    -webkit-appearance: auto;
+  }
 }
 
 .vl-auth-submit {

@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { AccountAuthForm } from "@/components/account-auth-form";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
@@ -39,7 +38,14 @@ export default async function AccountLoginPage({
 
   return (
     <div className="vl-auth-shell relative min-h-screen overflow-hidden text-white">
-      <SiteHeaderV2 />
+      {/* NO SITE HEADER HERE, DELIBERATELY.
+          This page is the front door now — with the catalog behind an account,
+          it is the first screen of almost every visit. The full header put a
+          cart icon, an account icon and a nav menu above the one decision the
+          screen exists to ask for, and every one of those leads somewhere the
+          visitor cannot go yet: the cart is empty and gated, the account is the
+          page they are already on, and the menu links into the wall. The card
+          carries the brand and the footer carries the public links. */}
 
       <main className="relative mx-auto grid w-full max-w-6xl grid-cols-1 items-stretch lg:grid-cols-[1.05fr_1fr]">
         {/* Brand panel — desktop only. Gives the page somewhere to breathe so
@@ -88,7 +94,7 @@ export default async function AccountLoginPage({
             screen, sits directly over the Sign In button. Without room to
             scroll, the primary action is unreachable until the banner is
             dismissed. This gives the card somewhere to move. */}
-        <section className="flex items-center justify-center px-4 pb-[calc(15rem+env(safe-area-inset-bottom))] pt-10 sm:px-6 sm:pt-14 lg:px-12 lg:pb-[calc(4rem+env(safe-area-inset-bottom))]">
+        <section className="flex items-center justify-center px-4 pb-[calc(7rem+env(safe-area-inset-bottom))] pt-10 sm:px-6 sm:pt-14 lg:px-12 lg:pb-[calc(4rem+env(safe-area-inset-bottom))]">
           <div className="w-full max-w-[26rem]">
             <Suspense fallback={null}>
               <AccountAuthForm />

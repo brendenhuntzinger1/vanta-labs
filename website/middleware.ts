@@ -525,6 +525,27 @@ export async function middleware(request: NextRequest) {
     if (refreshedCookie) {
       response.cookies.set(refreshedCookie.name, refreshedCookie.value, refreshedCookie.options);
     }
+
+    // NOTHING BEHIND THE WALL IS SHARED-CACHEABLE.
+    //
+    // Every response on a path that requires an account depends on WHO asked,
+    // so a shared cache holding one and replaying it to another request would
+    // hand one customer's answer to somebody else.
+    //
+    // Next already writes `private, no-cache, no-store, max-age=0,
+    // must-revalidate` on the dynamic PAGE responses, but route handlers get
+    // whatever they set for themselves — and measured on the harness build, an
+    // authenticated GET /api/catalog/products returned 4.6 KB of catalog JSON
+    // with NO Cache-Control header at all. Setting it here covers every gated
+    // route handler at once, including the ones nobody has written yet, which
+    // is the same reason the access list itself is deny-by-default.
+    //
+    // Only set when absent: a handler that has deliberately chosen its own
+    // caching (a signed asset URL, say) keeps it.
+    if (requiresAccount(pathname) && !response.headers.has("Cache-Control")) {
+      response.headers.set("Cache-Control", "private, no-store");
+    }
+
     return applySecurityHeaders(response);
   };
 
