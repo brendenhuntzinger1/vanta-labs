@@ -23,7 +23,18 @@ import type { Product, ProductDose } from "@/lib/catalog-types";
  * One list now feeds both the recogniser and the resolver, so the two halves of
  * the cross-sell cannot disagree about what this product is called.
  */
-export const BAC_WATER_SLUG_CANDIDATES = ["bacteriostatic-water", "bac-water-30ml"] as const;
+// "bac-water" IS THE CANONICAL SLUG NOW, AND THE OLD ONES STAY RESOLVABLE.
+//
+// The product has always been called BAC Water on the page; only the URL still
+// said "bacteriostatic-water", and a slug is not private — it was the canonical
+// tag, the og:url, the breadcrumb, the sku in the Product schema and the
+// sitemap entry. Every occurrence of the long word on the live site traced
+// back to this one string.
+//
+// The older slugs are kept, not retired. They are what a shared link, a
+// bookmark and Google's index still point at, and dropping them would 404 all
+// three. Order matters: index 0 is what the app treats as canonical.
+export const BAC_WATER_SLUG_CANDIDATES = ["bac-water", "bacteriostatic-water", "bac-water-30ml"] as const;
 
 /** The SKU the cross-sell offers when more than one is published. */
 export const BAC_WATER_SLUG = BAC_WATER_SLUG_CANDIDATES[0];

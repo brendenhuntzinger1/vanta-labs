@@ -74,6 +74,18 @@ const GATED_PREFIXES = [
   "/api/coa",
 ];
 
+/**
+ * Product URLs that moved, and where they moved to.
+ *
+ * Kept as data rather than a rewrite rule so each entry states a fact that can
+ * be read and deleted individually once its traffic has drained. The query
+ * string is carried by the clone, so a referral or campaign link survives.
+ */
+const RENAMED_PRODUCT_SLUGS = new Map<string, string>([
+  ["/products/bacteriostatic-water", "/products/bac-water"],
+  ["/products/bac-water-30ml", "/products/bac-water"],
+]);
+
 function isGatedPath(pathname: string) {
   return GATED_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }
@@ -650,6 +662,29 @@ export async function middleware(request: NextRequest) {
     login.search = "";
     login.searchParams.set("next", `${pathname}${request.nextUrl.search}`);
     return finish(NextResponse.redirect(login, 307));
+  }
+
+  // A RENAMED PRODUCT KEEPS ITS OLD ADDRESS WORKING.
+  //
+  // BAC Water's slug was "bacteriostatic-water" and is now "bac-water". The
+  // page always said BAC Water; the URL was the last place the long word
+  // survived, and because a slug is echoed into the canonical tag, og:url, the
+  // breadcrumb, the Product schema's sku and the sitemap, that one string was
+  // every occurrence of it on the live site.
+  //
+  // BEFORE THE GATE, DELIBERATELY. Gating first would send an old link to
+  // /account/login?next=/products/bacteriostatic-water, and the visitor would
+  // sign in only to land on a 404. Normalising first means the old address
+  // survives the rename for a shared link, a bookmark and Google's index alike.
+  //
+  // 308 rather than 307: this genuinely is a permanent change of address, and
+  // it is the same answer for every visitor, so it is safe for an intermediary
+  // to cache. That is also what tells Google to move the URL rather than keep
+  // both.
+  if (request.method === "GET" && RENAMED_PRODUCT_SLUGS.has(pathname)) {
+    const moved = request.nextUrl.clone();
+    moved.pathname = RENAMED_PRODUCT_SLUGS.get(pathname)!;
+    return finish(NextResponse.redirect(moved, 308));
   }
 
   // THE CATALOG GATE. See GATED_PREFIXES above for why it lives here.

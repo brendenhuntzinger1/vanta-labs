@@ -402,7 +402,7 @@ export function BacWaterAddedPopup() {
           ) : null}
           <div className="min-w-0">
             <p id="bac-water-nudge-title" className="vl2-serif text-[1.35rem] leading-tight text-white">
-              Need bacteriostatic water?
+              Need BAC water?
             </p>
             {/* A statement about laboratory practice, not a purchase statistic.
                 There is no order-history query behind this component, so it
@@ -414,7 +414,7 @@ export function BacWaterAddedPopup() {
         {/* Deliberately optional. The offer now appears for products of any
             form, so it must never assert that THIS product needs it. */}
         <p className="mt-3.5 text-[0.8125rem] leading-6 text-white/55">
-          Bacteriostatic water is available separately for laboratory reconstitution. Add it if your
+          BAC water is available separately for laboratory use. Add it if your
           protocol calls for it.
         </p>
 

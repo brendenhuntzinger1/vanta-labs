@@ -72,8 +72,12 @@ describe("bacteriostatic water is excluded from its own offer", () => {
 describe("the copy stays optional and research-use only", () => {
   it("never claims the product requires reconstitution", () => {
     expect(UPSELL).not.toMatch(/supplied in lyophilized form/i);
-    expect(UPSELL).not.toMatch(/you need bacteriostatic water/i);
-    expect(UPSELL).toContain("Need bacteriostatic water?");
+    // The copy now says "BAC water" rather than the long form, matching the
+    // product name, the descriptions and the slug. What the assertion is
+    // actually protecting is unchanged: the offer must READ as optional, never
+    // as a requirement, so both phrasings of the demand are still refused.
+    expect(UPSELL).not.toMatch(/you need bac(teriostatic)?[-\s]?water/i);
+    expect(UPSELL).toContain("Need BAC water?");
     expect(UPSELL).toContain("Add it if your");
   });
 

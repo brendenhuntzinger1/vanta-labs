@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import {
   BAC_WATER_SLUG,
@@ -112,15 +114,29 @@ describe("resolving the published BAC water product", () => {
 
   it("keeps looking when one lookup throws rather than failing the cross-sell", async () => {
     // A transient error on the first slug must not take out a cross-sell that
-    // the second slug could still serve.
+    // a later slug could still serve.
+    //
+    // Written against the candidate LIST rather than a hard-coded slug, because
+    // the order has changed once already: "bac-water" became canonical when the
+    // product's URL was renamed off "bacteriostatic-water". Pinning position
+    // rather than spelling means the next rename does not produce a failure
+    // that says nothing about the behaviour under test.
+    const [first, second] = BAC_WATER_SLUG_CANDIDATES;
     const lookup = vi.fn(async (slug: string) => {
-      if (slug === "bacteriostatic-water") throw new Error("transient");
+      if (slug === first) throw new Error("transient");
       return product(slug);
     });
 
     const resolved = await resolveBacWaterProduct(lookup);
 
-    expect(resolved?.slug).toBe("bac-water-30ml");
+    expect(resolved?.slug).toBe(second);
+  });
+
+  it("prefers the canonical slug, and keeps the renamed-from slugs resolvable", () => {
+    // Old links, bookmarks and Google's index still point at the previous
+    // slugs; dropping them would 404 all three.
+    expect(BAC_WATER_SLUG_CANDIDATES[0]).toBe("bac-water");
+    expect(BAC_WATER_SLUG_CANDIDATES).toContain("bacteriostatic-water");
   });
 });
 
@@ -144,5 +160,41 @@ describe("negative control: the single-slug lookup really did 404", () => {
     expect(await legacyLookup(lookup)).toBeNull();
     // The new resolver finds it on the same catalogue.
     expect((await resolveBacWaterProduct(lookup))?.slug).toBe("bac-water-30ml");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE OLD ADDRESS KEEPS WORKING.
+//
+// A slug is not an internal detail. Next echoes it into the canonical tag,
+// og:url, the BreadcrumbList and the Product schema's sku, and the sitemap
+// publishes it — which is why "bacteriostatic-water" was every occurrence of
+// that word on the public site while the page itself said BAC Water throughout.
+//
+// Renaming it without a redirect would 404 every shared link, every bookmark
+// and everything Google holds.
+// ---------------------------------------------------------------------------
+describe("the renamed product URL redirects rather than breaking", () => {
+  const middleware = readFileSync(join(process.cwd(), "middleware.ts"), "utf8");
+  const code = middleware.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/.*$/gm, " ");
+
+  it("maps the old slugs to the new one", () => {
+    expect(code).toContain('["/products/bacteriostatic-water", "/products/bac-water"]');
+    expect(code).toContain('["/products/bac-water-30ml", "/products/bac-water"]');
+  });
+
+  it("redirects permanently, so search engines move the URL", () => {
+    const block = code.slice(code.indexOf("RENAMED_PRODUCT_SLUGS.has(pathname)"));
+    expect(block.slice(0, 400)).toContain("308");
+  });
+
+  it("runs BEFORE the catalog gate", () => {
+    // Gating first would send an old link to the login page with the dead slug
+    // in ?next=, so the visitor would sign in and land on a 404.
+    const renameAt = code.indexOf("RENAMED_PRODUCT_SLUGS.has(pathname)");
+    const gateAt = code.indexOf("isGatedPath(pathname) &&");
+    expect(renameAt).toBeGreaterThan(-1);
+    expect(gateAt).toBeGreaterThan(-1);
+    expect(renameAt).toBeLessThan(gateAt);
   });
 });
