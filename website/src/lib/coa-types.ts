@@ -2,6 +2,8 @@
 // and the client surfaces that render them. No server imports here so the admin
 // page and the public library can both pull the types in.
 
+import { DEFAULT_COA_HIDDEN_PRODUCT_SLUGS } from "@/lib/coa-hidden";
+
 export type CoaStatus = "draft" | "published" | "archived";
 
 /** How the document should be presented: inline PDF viewer, or an image. */
@@ -96,8 +98,16 @@ export type CoaLibrarySettings = {
    * first batches are still being uploaded.
    */
   showPendingProducts: boolean;
+  /**
+   * Product slugs left out of the public library altogether — no card, pending
+   * or otherwise, and no contribution to the hero's counts. For products the
+   * store sells but has not sent for testing. Defaults to the untested lines
+   * (see src/lib/coa-hidden.ts) until the owner saves a list from admin.
+   */
+  hiddenProductSlugs: string[];
 };
 
 export const DEFAULT_COA_LIBRARY_SETTINGS: CoaLibrarySettings = {
   showPendingProducts: true,
+  hiddenProductSlugs: [...DEFAULT_COA_HIDDEN_PRODUCT_SLUGS],
 };
