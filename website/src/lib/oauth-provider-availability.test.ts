@@ -124,6 +124,23 @@ describe("the auth form cannot render a provider button unguarded", () => {
     expect(groupGuard).toBeLessThan(firstButton);
   });
 
+  it("drops the SECOND divider too, and the checkboxes that only serve it", () => {
+    // Guarding only the buttons here left an "or continue with" rule pointing
+    // at nothing, above two attestation boxes that exist purely because
+    // startOAuth refuses without them. Latent while Google is on, and exactly
+    // the dead furniture the guard was supposed to remove.
+    const dividerAt = form.indexOf("or continue with");
+    expect(dividerAt).toBeGreaterThan(-1);
+    const guardAt = form.lastIndexOf("hasAnyOAuthProvider()", dividerAt);
+    expect(guardAt, "the second divider renders outside any provider guard").toBeGreaterThan(-1);
+
+    // The login-mode attestation boxes must sit inside the SAME guard, not
+    // between it and the buttons' own.
+    const loginBoxesAt = form.indexOf('mode === "login" ?', dividerAt);
+    expect(loginBoxesAt).toBeGreaterThan(-1);
+    expect(guardAt).toBeLessThan(loginBoxesAt);
+  });
+
   it("names only the providers actually on offer in the data-sharing notice", () => {
     // "Google or Apple" printed under a lone Google button describes a choice
     // the visitor was never given.
