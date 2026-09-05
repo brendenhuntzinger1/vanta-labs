@@ -334,3 +334,80 @@ describe("the portal is not a one-way door", () => {
     expect(init.slice(0, 900)).toContain('referralCodeFromUrl) return "signup"');
   });
 });
+
+// ---------------------------------------------------------------------------
+// A CALLBACK WITH NO SIGN-IN IN IT MUST NOT SIGN ANYONE IN.
+//
+// /account/auth/callback is an ordinary address: typed, shared, bookmarked,
+// reached with the back button. On every one of those loads the fragment is
+// empty — and getSession() does not fail on an empty fragment, it returns
+// whatever supabase-js kept in localStorage. On a shared machine that is the
+// previous person's session, and it is a perfectly valid token, so
+// /api/auth/session verifies it and writes a cookie. The visitor lands signed
+// in as whoever last used the browser.
+//
+// lib/auth-link-fragment.ts exists because this exact defect shipped once
+// before, on /account/login?verified=1, and its header records the incident.
+// It is worse here: that cookie lapsed hourly, this one asks the browser to
+// remember for thirty days (rememberMe: true).
+//
+// So the fragment is classified FIRST, in a render-time initializer, before
+// anything touches supabase.auth and lets the client consume it.
+// ---------------------------------------------------------------------------
+
+describe("the OAuth callback refuses to promote a session it was not given", () => {
+  const body = code(callback);
+
+  it("classifies the fragment with the shared guard rather than its own predicate", () => {
+    expect(body).toContain("classifyAuthReturn(window.location.hash)");
+    // A hand-rolled substring test is how the original bug was written.
+    expect(body).not.toMatch(/hash\.includes\(\s*["']access_token/);
+  });
+
+  it("reads the fragment before anything can consume it", () => {
+    const classifyAt = body.indexOf("classifyAuthReturn(window.location.hash)");
+    const firstAuthAccess = body.indexOf("supabase.auth");
+    expect(classifyAt).toBeGreaterThan(-1);
+    expect(firstAuthAccess).toBeGreaterThan(-1);
+    expect(
+      classifyAt < firstAuthAccess,
+      "the fragment must be classified before supabase.auth is first touched",
+    ).toBe(true);
+  });
+
+  it("bails out before requesting a session when no session arrived", () => {
+    const guardAt = body.indexOf('authReturn.kind !== "session"');
+    expect(guardAt).toBeGreaterThan(-1);
+    // The guard must come before the getSession call it is protecting...
+    const getSessionAt = body.indexOf("supabase.auth.getSession()");
+    expect(guardAt).toBeLessThan(getSessionAt);
+    // ...and before the POST that would mint the cookie.
+    const postAt = body.indexOf('"/api/auth/session"');
+    expect(guardAt).toBeLessThan(postAt);
+    // ...and it must actually stop, not merely warn.
+    expect(body.slice(guardAt, guardAt + 260)).toContain("return;");
+  });
+
+  it("does not spend the stored attestation on a load that carries no sign-in", () => {
+    // Consuming it on a stray load would silently strip the 21+ and
+    // research-use representations from the real sign-in that follows.
+    const guardAt = body.indexOf('authReturn.kind !== "session"');
+    const storageAt = body.indexOf('sessionStorage.getItem("vl-oauth-attested")');
+    // Assert both are PRESENT before comparing them. A missing guard makes
+    // indexOf return -1, and -1 is less than every real offset, so an ordering
+    // assertion on its own passes most loudly exactly when the guard is gone.
+    expect(guardAt, "the no-session guard is missing entirely").toBeGreaterThan(-1);
+    expect(storageAt).toBeGreaterThan(-1);
+    expect(guardAt).toBeLessThan(storageAt);
+  });
+
+  it("reports a GoTrue refusal from the fragment, which is a different channel from the query", () => {
+    expect(body).toContain('authReturn.kind === "error"');
+    const fragmentErrAt = body.indexOf('authReturn.kind === "error"');
+    const queryErrAt = body.indexOf('params.get("error_description")');
+    expect(queryErrAt).toBeGreaterThan(-1);
+    expect(fragmentErrAt).toBeGreaterThan(-1);
+    // Both are read; neither replaces the other.
+    expect(fragmentErrAt).not.toBe(queryErrAt);
+  });
+});

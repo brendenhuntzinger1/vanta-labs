@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { safeInternalPath } from "@/lib/internal-path";
+import { classifyAuthReturn, type AuthReturn } from "@/lib/auth-link-fragment";
 
 // ---------------------------------------------------------------------------
 // WHERE GOOGLE AND APPLE LAND, AND WHERE THEY BECOME A REAL SESSION.
@@ -46,6 +47,31 @@ export default function OAuthCallbackPage() {
   const ran = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
+  // WHETHER A SESSION REALLY ARRIVED IN THIS URL, DECIDED BEFORE ANYTHING READS
+  // supabase.auth.
+  //
+  // This page's address is ordinary: it can be typed, shared, bookmarked, and
+  // re-opened with the back button, and on every one of those loads the
+  // fragment is empty. getSession() does not fail on an empty fragment — it
+  // falls back to whatever supabase-js kept in localStorage, which on a shared
+  // machine is the previous person's session. Without this guard the page would
+  // hand that session to /api/auth/session, which would verify it (it is a
+  // perfectly valid token, just somebody else's) and mint a 30-day cookie.
+  // The visitor would land signed in as whoever last used the browser.
+  //
+  // That is not hypothetical. It is the same defect lib/auth-link-fragment.ts
+  // was written to close on /account/login?verified=1, described in full there,
+  // and it is worse here: that cookie lapsed hourly, this one is asked to
+  // remember the browser for a month.
+  //
+  // Classified in a useState initializer, which runs during render, so it reads
+  // the fragment before the effect below triggers the lazy construction of the
+  // supabase browser client that would consume it.
+  const [authReturn] = useState<AuthReturn>(() => {
+    if (typeof window === "undefined") return { kind: "none" };
+    return classifyAuthReturn(window.location.hash);
+  });
+
   useEffect(() => {
     // React 18/19 mount effects run twice in development. Exchanging once is not
     // merely tidier: the second run finds the fragment already consumed and
@@ -62,6 +88,23 @@ export default function OAuthCallbackPage() {
       const providerError = params.get("error_description") || params.get("error");
       if (providerError) {
         setError(providerError);
+        return;
+      }
+
+      // GoTrue reports its own refusals in the FRAGMENT rather than the query,
+      // so this is a second, separate channel from the provider error above and
+      // both have to be read.
+      if (authReturn.kind === "error") {
+        setError("We couldn't complete that sign-in. Please try again.");
+        return;
+      }
+
+      // NOTHING ARRIVED. Never sign anyone in on this — see the note on
+      // authReturn above. Landing here means the page was opened without a
+      // sign-in attached to it, so the only honest answer is to send them back
+      // to the front door rather than to somebody else's account.
+      if (authReturn.kind !== "session") {
+        setError("Open this page by signing in, rather than by returning to this address.");
         return;
       }
 
@@ -153,7 +196,7 @@ export default function OAuthCallbackPage() {
         setError("We could not complete that sign-in. Please try again.");
       }
     })();
-  }, [params, router]);
+  }, [authReturn, params, router]);
 
   return (
     <main className="flex min-h-[60vh] items-center justify-center px-6 py-16">
