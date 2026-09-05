@@ -74,3 +74,16 @@ describe("reserveInventoryForOrder when the shelf is held only by expired reserv
     expect(rpc.mock.calls.filter((c) => c[0] === "expire_stale_reservations")).toHaveLength(1);
   });
 });
+
+describe("the quote-time stock guard", () => {
+  it("reclaims expired holds and re-reads the catalogue before refusing a sold-out line", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const source = readFileSync(join(process.cwd(), "src/lib/quote-order.ts"), "utf8");
+    const guard = source.slice(source.indexOf("let catalogProducts = await getCatalogProductsBySlugs"), source.indexOf("const stockLevels = await getStockLevelsBySlugs"));
+    expect(guard).toContain("expireStaleReservations()");
+    expect(guard).toContain("catalogProducts = await getCatalogProductsBySlugs(requestedSlugs)");
+    // The reclaim runs BEFORE the "Product is out of stock" refusal.
+    expect(source.indexOf("expireStaleReservations()")).toBeLessThan(source.indexOf("Product is out of stock:"));
+  });
+});

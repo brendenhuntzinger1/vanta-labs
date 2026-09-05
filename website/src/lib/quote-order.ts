@@ -3,6 +3,7 @@
 // and the transitive supabase-server import already makes a client import a
 // build error.
 import { getCatalogProductsBySlugs, getStockLevelsBySlugs } from "@/lib/catalog";
+import { expireStaleReservations } from "@/lib/inventory-reservation";
 import { calculateDiscountAmount } from "@/lib/referral-service";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 import { referralQualifies } from "@/lib/referral-qualification";
@@ -482,7 +483,21 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     ...sanitizedItems.map((item) => item.id.split("::")[0]),
     ...(offer?.product_slug ? [offer.product_slug] : []),
   ]));
-  const catalogProducts = await getCatalogProductsBySlugs(requestedSlugs);
+  let catalogProducts = await getCatalogProductsBySlugs(requestedSlugs);
+  // EXPIRED HOLDS MUST NOT REFUSE A SALE HERE EITHER. The catalogue's
+  // availability is stock minus reserved_quantity, and an expired hold stays
+  // in that counter until the half-hourly sweep reclaims it — so for up to
+  // thirty minutes after an abandoned checkout a line read "Out of Stock" at
+  // quote time over units nobody held, and the guard below refused it before
+  // the reservation RPC (which now reclaims for itself) was ever reached.
+  // Reclaim once when anything requested reads sold out, and re-read: the
+  // reclaim drops the catalogue cache, so the second read is fresh.
+  if (catalogProducts.some((product) =>
+    product.stockStatus === "Out of Stock" || product.doses?.some((dose) => dose.stockStatus === "Out of Stock"))) {
+    if ((await expireStaleReservations().catch(() => 0)) > 0) {
+      catalogProducts = await getCatalogProductsBySlugs(requestedSlugs);
+    }
+  }
   // Raw stock, read separately and server-side only. The catalog objects above
   // are the same ones handed to client components, so they carry no counts —
   // see getStockLevelsBySlugs. Keyed by slug for a product, dose id for a variant.
