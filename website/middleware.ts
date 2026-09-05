@@ -10,8 +10,23 @@ import {
 import { isInAppBrowser } from "@/lib/in-app-browser";
 
 const ADMIN_SESSION_COOKIE = "vl_admin_session";
-/** Account routes a signed-out visitor is meant to reach. */
-const PUBLIC_ACCOUNT_PATHS = new Set(["/account/login", "/account/forgot-password", "/account/reset-password"]);
+/**
+ * Account routes a signed-out visitor is meant to reach.
+ *
+ * /account/auth/callback is here because it is where Google and Apple return a
+ * visitor, and at that instant they are BY DEFINITION still signed out — the
+ * whole purpose of the page is to turn the provider's answer into a session.
+ * Gating it would bounce every OAuth sign-in to the login form it just came
+ * from, which is an infinite round trip that looks exactly like a broken
+ * provider. It grants nothing: the page holds no data, and the session it
+ * establishes is verified server-side by /api/auth/session against GoTrue.
+ */
+const PUBLIC_ACCOUNT_PATHS = new Set([
+  "/account/login",
+  "/account/forgot-password",
+  "/account/reset-password",
+  "/account/auth/callback",
+]);
 
 // ---------------------------------------------------------------------------
 // THE CATALOG IS NOT PUBLIC. THE BRAND IS.

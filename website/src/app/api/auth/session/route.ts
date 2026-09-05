@@ -17,6 +17,9 @@ export async function POST(request: Request) {
     // Default to remembering (persistent cookie); an explicit `false` makes it
     // a session-only cookie that clears when the browser closes.
     const rememberMe = body?.rememberMe !== false;
+    // Set by the OAuth callback, and only there. Email signup records the same
+    // two representations through /api/auth/signup before the account exists.
+    const oauthAttested = body?.oauthAttested === true;
 
     if (!accessToken) {
       return NextResponse.json({ success: false, error: "Missing access token" }, { status: 400 });
@@ -40,6 +43,47 @@ export async function POST(request: Request) {
     // and referral points at scale. Both awards are idempotent, so they fire on
     // the first confirmed session and never double. If the project auto-confirms
     // emails, email_confirmed_at is already set and this is a no-op.
+    // ------------------------------------------------------------------
+    // AN ACCOUNT CREATED THROUGH A PROVIDER STILL HAS TO MAKE THE SAME TWO
+    // REPRESENTATIONS.
+    //
+    // /api/auth/signup writes age_confirmed_21 and research_use_only_agreed
+    // into user_metadata, and cannot run until the form's boxes are ticked.
+    // Google and Apple hand back an identity and nothing else, so without this
+    // an OAuth account would carry neither — on a store that sells 21+
+    // research-use-only material. The sign-in form refuses to hand a visitor to
+    // a provider until they have ticked both; this records what they ticked.
+    //
+    // WRITTEN ONCE, NEVER OVERWRITTEN. A returning customer already carries the
+    // flags from their original signup, and re-stamping them on every sign-in
+    // would replace a real first-time attestation with today's date and destroy
+    // the only evidence of when it was actually made.
+    //
+    // `role` is set at the same time and for the same reason: detectRoleFromUser
+    // reads user_metadata.role, and an OAuth account arrives without one.
+    if (oauthAttested) {
+      const meta = (data.user.user_metadata ?? {}) as Record<string, unknown>;
+      const alreadyAttested = meta.age_confirmed_21 === true && meta.research_use_only_agreed === true;
+      if (!alreadyAttested) {
+        try {
+          await supabaseAdmin.auth.admin.updateUserById(data.user.id, {
+            user_metadata: {
+              ...meta,
+              age_confirmed_21: true,
+              research_use_only_agreed: true,
+              attested_at: new Date().toISOString(),
+              ...(meta.role ? {} : { role: "customer" }),
+            },
+          });
+        } catch (attestationError) {
+          // Never fail the sign-in over it. The visitor made the representation
+          // and the age gate holds the session-level record; losing the durable
+          // copy is worth logging, not worth locking someone out of their account.
+          console.error("[auth/session] could not record OAuth attestation", attestationError);
+        }
+      }
+    }
+
     const emailConfirmed = Boolean(data.user.email_confirmed_at);
 
     if (role === "customer" && emailConfirmed) {

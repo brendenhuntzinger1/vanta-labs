@@ -156,6 +156,7 @@ export function AccountAuthForm() {
   const [otpSent, setOtpSent] = useState(false);
   const [otpCooldown, setOtpCooldown] = useState(0);
   // Single-use Turnstile token + a bump counter to reset the widget after each try.
+  const [oauthPending, setOauthPending] = useState<"google" | "apple" | null>(null);
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   const [captchaResetKey, setCaptchaResetKey] = useState(0);
 
@@ -527,6 +528,81 @@ export function AccountAuthForm() {
     );
   }
 
+  // ---------------------------------------------------------------------
+  // HANDING OFF TO A PROVIDER.
+  //
+  // The only thing this decides is where the visitor comes back to, and that
+  // is built from window.location.origin plus a fixed path — never from
+  // anything in the URL. `next` rides along as a query parameter so the
+  // callback can return the visitor to the page that sent them here, and it is
+  // re-validated there through safeInternalPath rather than trusted on the way
+  // out. A redirect target that survives a round trip through two external
+  // services is attacker-supplied by definition.
+  //
+  // No captcha here on purpose: the provider runs its own challenge, and the
+  // token this flow returns is verified against GoTrue server-side before any
+  // cookie is written.
+  const startOAuth = async (provider: "google" | "apple") => {
+    setError(null);
+    setMessage(null);
+
+    // THE SAME TWO REPRESENTATIONS EMAIL SIGNUP REQUIRES.
+    //
+    // /api/auth/signup writes age_confirmed_21 and research_use_only_agreed
+    // into user_metadata, and it can only run once the form's two boxes are
+    // ticked. A provider hands back an identity and nothing else, so without
+    // this an account created through Google or Apple would carry neither —
+    // and this store sells 21+ research-use-only material. The account-level
+    // record is not optional just because the front door changed.
+    //
+    // Asked in BOTH modes, deliberately, because nothing here can tell a new
+    // customer from a returning one until after the provider answers. Two taps
+    // for a returning customer is the honest price of never creating an
+    // unattested account.
+    if (!ageConfirmed || !researchUseAgreed) {
+      setError("Please confirm both statements above before continuing with Google or Apple.");
+      return;
+    }
+
+    setOauthPending(provider);
+    try {
+      // Survives the round trip through two external services, and is read back
+      // by the callback. sessionStorage rather than the redirect URL: this is a
+      // record of what the visitor asserted, and a value the visitor could edit
+      // in a query string would be worth nothing as evidence either way. Scoped
+      // to the tab, cleared once used.
+      try {
+        window.sessionStorage.setItem("vl-oauth-attested", "true");
+      } catch {
+        /* private mode: the callback simply will not claim an attestation */
+      }
+      const safeNext = safeInternalPath(nextPath, "/account");
+      const redirectTo = `${window.location.origin}/account/auth/callback?next=${encodeURIComponent(safeNext)}`;
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: {
+          redirectTo,
+          // Ask for nothing beyond identity. The catalogue gate needs to know
+          // WHO someone is, not to read their contacts or calendar, and a
+          // consent screen listing scopes nobody uses costs conversions.
+          scopes: provider === "google" ? "email profile" : undefined,
+        },
+      });
+      if (oauthError) {
+        throw new Error(oauthError.message);
+      }
+      // On success the browser is navigating away, so `oauthPending` stays set
+      // deliberately — clearing it would flash the idle label mid-redirect.
+    } catch (err) {
+      setOauthPending(null);
+      setError(
+        err instanceof Error && err.message
+          ? err.message
+          : "We could not reach that sign-in provider. Please try again.",
+      );
+    }
+  };
+
   const isSendCodeAction = mode === "login" && loginMethod === "phone" && !otpSent;
   const sendBlockedByCooldown = isSendCodeAction && otpCooldown > 0;
 
@@ -763,6 +839,94 @@ export function AccountAuthForm() {
       >
         {loading ? "Please wait…" : primaryLabel}
       </button>
+
+      {/* ------------------------------------------------------------------
+          THREE FRONT DOORS, ONE SESSION.
+          Google and Apple end at the same POST /api/auth/session that the form
+          above does, so the cookie, its rotation and every authorisation check
+          downstream are identical. A provider is a way of proving who you are,
+          never a source of extra access.
+
+          EMAIL STAYS. Requiring a Google or Apple account to shop would turn
+          away buyers who have neither, for no security gain — all three prove
+          the same thing to the same endpoint. It is a choice of door, not a
+          tier of trust.
+
+          Placed BELOW the primary action rather than above it. A returning
+          customer's muscle memory is the email field; leading with provider
+          buttons pushes the form they came for under the fold on a phone.
+          ------------------------------------------------------------------ */}
+      <div className="mt-7">
+        <div className="flex items-center gap-3" aria-hidden="true">
+          <span className="h-px flex-1 bg-white/[0.08]" />
+          <span className="text-[0.6875rem] uppercase tracking-[0.2em] text-white/35">or continue with</span>
+          <span className="h-px flex-1 bg-white/[0.08]" />
+        </div>
+
+        {/* IN LOGIN MODE THE TWO ATTESTATIONS LIVE HERE, BESIDE THE BUTTONS
+            THAT REQUIRE THEM.
+            Signup mode already renders them above the submit button, so
+            repeating them there would ask the same question twice on one card.
+            Login mode has no such block, and startOAuth refuses without them —
+            so without this the visitor would be told to confirm two statements
+            that are nowhere on screen, which is the worst kind of dead end. */}
+        {mode === "login" ? (
+          <div className="mt-5 space-y-2.5">
+            <label className="flex cursor-pointer items-start gap-3 rounded-[14px] border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[0.8125rem] leading-6 text-white/70 transition-colors duration-200 hover:border-white/[0.12]">
+              <input
+                type="checkbox"
+                checked={ageConfirmed}
+                onChange={(event) => setAgeConfirmed(event.target.checked)}
+                className="vl-auth-check mt-0.5"
+              />
+              <span>I confirm that I am at least 21 years old.</span>
+            </label>
+            <label className="flex cursor-pointer items-start gap-3 rounded-[14px] border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[0.8125rem] leading-6 text-white/70 transition-colors duration-200 hover:border-white/[0.12]">
+              <input
+                type="checkbox"
+                checked={researchUseAgreed}
+                onChange={(event) => setResearchUseAgreed(event.target.checked)}
+                className="vl-auth-check mt-0.5"
+              />
+              <span>These products are for laboratory research use only, not for human or animal consumption.</span>
+            </label>
+          </div>
+        ) : null}
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => void startOAuth("google")}
+            disabled={oauthPending !== null || !ageConfirmed || !researchUseAgreed}
+            className="vl-oauth-btn vl-focus-ring"
+          >
+            <svg viewBox="0 0 24 24" className="h-[18px] w-[18px] shrink-0" aria-hidden="true">
+              <path fill="#4285F4" d="M23.06 12.25c0-.85-.08-1.67-.22-2.45H12v4.63h6.2a5.3 5.3 0 0 1-2.3 3.48v2.89h3.72c2.18-2 3.44-4.960 3.44-8.55z" />
+              <path fill="#34A853" d="M12 23.5c3.11 0 5.72-1.03 7.62-2.79l-3.72-2.89c-1.03.69-2.35 1.1-3.9 1.1-3 0-5.54-2.02-6.45-4.74H1.7v2.98A11.5 11.5 0 0 0 12 23.5z" />
+              <path fill="#FBBC05" d="M5.55 14.18a6.9 6.9 0 0 1 0-4.36V6.84H1.7a11.5 11.5 0 0 0 0 10.32l3.85-2.98z" />
+              <path fill="#EA4335" d="M12 4.75c1.69 0 3.21.58 4.4 1.72l3.3-3.3C17.72 1.28 15.11.25 12 .25A11.5 11.5 0 0 0 1.7 6.84l3.85 2.98C6.46 7.1 9 4.75 12 4.75z" />
+            </svg>
+            <span>{oauthPending === "google" ? "Opening Google…" : "Continue with Google"}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void startOAuth("apple")}
+            disabled={oauthPending !== null || !ageConfirmed || !researchUseAgreed}
+            className="vl-oauth-btn vl-focus-ring"
+          >
+            <svg viewBox="0 0 24 24" className="h-[19px] w-[19px] shrink-0" aria-hidden="true" fill="currentColor">
+              <path d="M17.05 12.54c-.02-2.2 1.8-3.26 1.88-3.31-1.02-1.5-2.62-1.7-3.19-1.72-1.36-.14-2.65.8-3.34.8-.69 0-1.75-.78-2.87-.76-1.48.02-2.84.86-3.6 2.18-1.53 2.66-.39 6.6 1.1 8.76.73 1.06 1.6 2.25 2.74 2.2 1.1-.04 1.52-.71 2.85-.71 1.33 0 1.7.71 2.87.69 1.18-.02 1.93-1.08 2.65-2.14.83-1.22 1.18-2.4 1.2-2.46-.03-.01-2.3-.88-2.32-3.5zM14.9 5.1c.6-.74 1.01-1.75.9-2.77-.87.04-1.94.59-2.57 1.31-.56.64-1.05 1.68-.92 2.67.98.08 1.98-.5 2.59-1.21z" />
+            </svg>
+            <span>{oauthPending === "apple" ? "Opening Apple…" : "Continue with Apple"}</span>
+          </button>
+        </div>
+
+        <p className="mt-4 text-[0.75rem] leading-5 text-white/40">
+          Signing in with Google or Apple shares your name and email address with Vanta Labs. It
+          does not subscribe you to marketing email.
+        </p>
+      </div>
 
       <div className="mt-7 space-y-4 border-t border-white/[0.06] pt-6 text-center">
         <p className="text-[0.875rem] text-white/45">

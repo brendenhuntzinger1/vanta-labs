@@ -3054,6 +3054,76 @@ select.vl-auth-field {
 
 .vl-auth-submit:active:not(:disabled) { transform: translateY(1px); }
 
+/* ---------------------------------------------------------------------------
+   PROVIDER SIGN-IN BUTTONS (Google, Apple)
+   ---------------------------------------------------------------------------
+   Deliberately QUIETER than .vl-auth-submit. There are two of them side by
+   side, and giving each the primary button's weight would put three equally
+   loud calls to action in one card and leave the visitor deciding rather than
+   acting. These read as the alternative route they are: same height, same
+   radius, a flatter surface and no gold on hover.
+
+   Height is pinned to 52px rather than left to the content. The two labels are
+   different lengths and one of them swaps to "Opening Google…" mid-press; a
+   content-sized button would resize under the cursor at the exact moment it is
+   being tapped.
+
+   The brand marks keep their own colours — Google's four and Apple's solid
+   fill via currentColor — because both companies' brand guidelines require the
+   logo be shown unmodified, and a recoloured mark is the kind of thing that
+   fails a provider review.
+
+   Grid on mobile stacks them full-width, which is why min-width is 0: without
+   it the longer label forces a horizontal overflow at 390px. */
+.vl-oauth-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.625rem;
+  min-width: 0;
+  min-height: 52px;
+  padding: 0 1rem;
+  border-radius: 13px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.035);
+  color: #ece9e2;
+  font-size: 0.875rem;
+  font-weight: 550;
+  letter-spacing: 0.005em;
+  cursor: pointer;
+  backdrop-filter: blur(10px) saturate(115%);
+  -webkit-backdrop-filter: blur(10px) saturate(115%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 1px 2px rgba(0, 0, 0, 0.35);
+  transition: background-color 180ms ease, border-color 180ms ease, transform 140ms ease;
+}
+
+.vl-oauth-btn span {
+  /* The label truncates rather than wrapping to a second line, which would
+     break the shared 52px height and stagger the two buttons. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vl-oauth-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.vl-oauth-btn:active:not(:disabled) { transform: translateY(1px); }
+
+.vl-oauth-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* One provider being pressed must not make the other look broken, only
+   unavailable — hence opacity rather than a disabled-looking colour change. */
+@media (prefers-reduced-motion: reduce) {
+  .vl-oauth-btn { transition: none; }
+  .vl-oauth-btn:active:not(:disabled) { transform: none; }
+}
+
 .vl-auth-submit:disabled {
   opacity: 0.42;
   cursor: not-allowed;
