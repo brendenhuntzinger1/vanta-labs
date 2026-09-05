@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_COA_BATCH_NUMBER, DEFAULT_COA_PURITY } from "@/lib/coa-defaults";
 import { COA_MAX_FILE_BYTES, formatCoaFileSize, formatCoaTestDate } from "@/lib/coa-format";
+import { isCoaProductHidden } from "@/lib/coa-hidden";
 import type { AdminCoaRecord, CoaProductOption, CoaStatus } from "@/lib/coa-types";
 
 type StatusFilter = CoaStatus | "all";
@@ -12,7 +13,7 @@ type LoadResponse = {
   success: boolean;
   records?: AdminCoaRecord[];
   products?: CoaProductOption[];
-  settings?: { showPendingProducts: boolean };
+  settings?: { showPendingProducts: boolean; hiddenProductSlugs?: string[] };
   error?: string;
 };
 
@@ -122,6 +123,7 @@ export default function AdminCoaPage() {
   const [records, setRecords] = useState<AdminCoaRecord[]>([]);
   const [products, setProducts] = useState<CoaProductOption[]>([]);
   const [showPending, setShowPending] = useState(true);
+  const [hiddenSlugs, setHiddenSlugs] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -158,6 +160,7 @@ export default function AdminCoaPage() {
       setRecords(json.records ?? []);
       setProducts(json.products ?? []);
       setShowPending(json.settings?.showPendingProducts !== false);
+      setHiddenSlugs(json.settings?.hiddenProductSlugs ?? []);
     } catch {
       flash("Unable to reach the server.");
     } finally {
@@ -391,7 +394,43 @@ export default function AdminCoaPage() {
     [flash],
   );
 
+  /**
+   * Keep-or-drop one product from the public library. The server holds the
+   * whole list, so the whole list is what gets sent — a slug the owner cannot
+   * see here (an archived product, say) rides along untouched rather than
+   * being dropped because this screen never rendered a box for it.
+   */
+  const saveHiddenSlugs = useCallback(
+    async (slug: string, hidden: boolean) => {
+      const previous = hiddenSlugs;
+      const next = hidden
+        ? Array.from(new Set([...previous, slug]))
+        : previous.filter((candidate) => candidate !== slug);
+      setHiddenSlugs(next);
+      try {
+        const res = await fetch("/api/admin/coa/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hiddenProductSlugs: next }),
+        });
+        const json = (await res.json()) as { success: boolean; error?: string; settings?: { hiddenProductSlugs?: string[] } };
+        if (!res.ok || !json.success) {
+          setHiddenSlugs(previous);
+          flash(json.error ?? "Unable to save that setting.");
+          return;
+        }
+        setHiddenSlugs(json.settings?.hiddenProductSlugs ?? next);
+        flash(hidden ? "Removed from the public COA library." : "Back on the public COA library.");
+      } catch {
+        setHiddenSlugs(previous);
+        flash("Unable to reach the server.");
+      }
+    },
+    [flash, hiddenSlugs],
+  );
+
   const publishedCount = records.filter((record) => record.status === "published").length;
+  const hiddenProductCount = products.filter((product) => isCoaProductHidden(product, hiddenSlugs)).length;
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -507,6 +546,53 @@ export default function AdminCoaPage() {
           </label>
         </div>
 
+        {/* Per-product removal. Independent of the switch above: a hidden
+            product is gone from the library whether or not it has a COA, so a
+            product that was never sent for testing does not sit there as a
+            "pending" promise. */}
+        <details className="vl-panel rounded-2xl p-4" open={hiddenProductCount > 0}>
+          <summary className="cursor-pointer text-sm text-zinc-300">
+            <span className="font-medium text-white">Hide products from the public COA library</span>
+            <span className="ml-2 whitespace-nowrap text-xs text-zinc-500">
+              {hiddenProductCount === 0
+                ? "Nothing hidden"
+                : `${hiddenProductCount} hidden`}
+            </span>
+            <span className="mt-1 block text-xs text-zinc-500">
+              Tick a product to take it off the library entirely — no card, no &ldquo;pending&rdquo; note, not
+              counted. For products you sell but did not send for testing. Its product page is unaffected.
+            </span>
+          </summary>
+          <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3" data-testid="coa-hidden-products">
+            {products.map((product) => {
+              const hidden = isCoaProductHidden(product, hiddenSlugs);
+              return (
+                <label
+                  key={product.id}
+                  className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${
+                    hidden ? "border-amber-500/40 bg-amber-500/5 text-amber-100" : "border-zinc-800 text-zinc-300"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={hidden}
+                    onChange={(event) => void saveHiddenSlugs(product.slug, event.target.checked)}
+                    className="mt-0.5 h-4 w-4"
+                    aria-label={`Hide ${product.name} from the public COA library`}
+                  />
+                  <span className="min-w-0">
+                    <span className="block truncate">{product.name}</span>
+                    <span className="block truncate text-xs text-zinc-500">
+                      /{product.slug}
+                      {!product.isPublished ? " · unpublished" : ""}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </details>
+
         <div className="vl-panel overflow-hidden rounded-2xl">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[980px] text-left text-sm">
@@ -544,6 +630,11 @@ export default function AdminCoaPage() {
                     <td className="px-4 py-3">
                       <div className="font-medium text-white">{record.productName}</div>
                       {record.productSlug ? <div className="text-xs text-zinc-500">/{record.productSlug}</div> : null}
+                      {isCoaProductHidden(record.productSlug, hiddenSlugs) ? (
+                        <span className="mt-1 inline-block rounded-full border border-amber-500/40 px-2 py-0.5 text-[10px] uppercase tracking-[0.12em] text-amber-300">
+                          Hidden from library
+                        </span>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3 text-zinc-300">{record.strength ?? "—"}</td>
                     <td className="px-4 py-3">

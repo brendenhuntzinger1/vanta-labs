@@ -4,7 +4,14 @@ import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { upsertControlValue } from "@/lib/admin-control";
 import { sanitizeCoaUrl } from "@/lib/coa-url";
-import { COA_BUCKET, COA_SETTINGS_SECTION, coaRowHasFile, resolveCoaFileKind } from "@/lib/coa";
+import {
+  COA_BUCKET,
+  COA_SETTINGS_HIDDEN_PRODUCTS_KEY,
+  COA_SETTINGS_SECTION,
+  coaRowHasFile,
+  resolveCoaFileKind,
+} from "@/lib/coa";
+import { normalizeCoaHiddenProductSlugs } from "@/lib/coa-hidden";
 import {
   buildCoaStoragePath,
   COA_ALLOWED_MIME_TYPES,
@@ -485,4 +492,31 @@ export async function setCoaShowPendingProducts(input: {
     value: Boolean(input.showPendingProducts),
     actorUsername: input.actorUsername ?? null,
   });
+}
+
+/**
+ * Replace the list of products kept out of the public COA library.
+ *
+ * The whole list every time, never a diff: the admin panel is a row of
+ * checkboxes, and "the boxes as they now stand" is the only state it has. An
+ * empty list is stored as an empty list — that is the owner un-hiding
+ * everything, and it must not be confused with "never set".
+ */
+export async function setCoaHiddenProductSlugs(input: {
+  hiddenProductSlugs: string[];
+  actorUsername?: string | null;
+}): Promise<string[]> {
+  // Normalised again here, not only at the route: this is the write, and a
+  // later caller that skips the route must not be able to store junk.
+  const slugs = normalizeCoaHiddenProductSlugs(input.hiddenProductSlugs);
+  assert(slugs, "Send the hidden products as a list of product slugs.");
+
+  await upsertControlValue({
+    section: COA_SETTINGS_SECTION,
+    key: COA_SETTINGS_HIDDEN_PRODUCTS_KEY,
+    value: slugs,
+    actorUsername: input.actorUsername ?? null,
+  });
+
+  return slugs;
 }

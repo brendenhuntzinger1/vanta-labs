@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { getCatalogProducts } from "@/lib/catalog";
 import { getControlSnapshot } from "@/lib/admin-control";
 import { sanitizeCoaUrl } from "@/lib/coa-url";
+import { isCoaProductHidden, normalizeCoaHiddenProductSlugs } from "@/lib/coa-hidden";
 import {
   compareCoaDocuments,
   coaFileKindFromMime,
@@ -33,6 +34,7 @@ export const COA_BUCKET = "coa-documents";
 
 export const COA_SETTINGS_SECTION = "coa";
 const COA_SETTINGS_SHOW_PENDING_KEY = "show_pending_products";
+export const COA_SETTINGS_HIDDEN_PRODUCTS_KEY = "hidden_product_slugs";
 
 type CoaRow = {
   id: string;
@@ -115,11 +117,16 @@ export async function getCoaLibrarySettings(): Promise<CoaLibrarySettings> {
     const raw = cfg[COA_SETTINGS_SHOW_PENDING_KEY];
     const showPendingProducts =
       typeof raw === "boolean" ? raw : typeof raw === "string" ? raw.toLowerCase() !== "false" : DEFAULT_COA_LIBRARY_SETTINGS.showPendingProducts;
-    return { showPendingProducts };
+    // Null means "never saved", and only then does the default list apply. A
+    // saved empty list is the owner choosing to hide nothing.
+    const hiddenProductSlugs =
+      normalizeCoaHiddenProductSlugs(cfg[COA_SETTINGS_HIDDEN_PRODUCTS_KEY]) ??
+      [...DEFAULT_COA_LIBRARY_SETTINGS.hiddenProductSlugs];
+    return { showPendingProducts, hiddenProductSlugs };
   } catch {
     // An unreadable setting must not empty the library — fall back to showing
     // everything, which is the state the page is designed to look good in.
-    return DEFAULT_COA_LIBRARY_SETTINGS;
+    return { ...DEFAULT_COA_LIBRARY_SETTINGS, hiddenProductSlugs: [...DEFAULT_COA_LIBRARY_SETTINGS.hiddenProductSlugs] };
   }
 }
 
@@ -151,6 +158,11 @@ export async function getCoaLibrarySnapshot(): Promise<CoaLibrarySnapshot> {
   for (const product of products) {
     const productId = product.id ? String(product.id) : "";
     if (!productId) continue;
+
+    // Hidden means gone: not a pending card, not a documented card, and not a
+    // number in the hero. A published COA on a hidden product stays reachable
+    // by direct link (it is still a published record); it just is not listed.
+    if (isCoaProductHidden(product, settings.hiddenProductSlugs)) continue;
 
     const documents = (documentsByProductId.get(productId) ?? []).sort(compareCoaDocuments);
     if (documents.length === 0 && !settings.showPendingProducts) {
