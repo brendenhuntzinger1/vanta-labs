@@ -34,17 +34,6 @@ function isRealProductPhoto(url: string | null | undefined): boolean {
   return !PLACEHOLDER_IMAGE_PATHS.some((placeholder) => value.endsWith(placeholder));
 }
 
-type StatusFilter = "all" | "verified" | "pending";
-
-// "Documentation Pending" is wide enough to claim a whole row to itself on a
-// phone, pushing the archive another 60px down. The short label carries the
-// same meaning next to "Verified", and the full wording is still on the cards.
-const STATUS_FILTERS: Array<{ key: StatusFilter; label: string; shortLabel: string }> = [
-  { key: "all", label: "All", shortLabel: "All" },
-  { key: "verified", label: "Verified", shortLabel: "Verified" },
-  { key: "pending", label: "Documentation Pending", shortLabel: "Pending" },
-];
-
 function CheckIcon({ className = "" }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
@@ -623,27 +612,16 @@ function CoaDocument({
 
 export function CoaLibraryPageClient({ snapshot }: { snapshot: CoaLibrarySnapshot }) {
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState<StatusFilter>("all");
-  const [category, setCategory] = useState("All");
   const [openProductId, setOpenProductId] = useState<string | null>(null);
 
   const trustIndicators = useMemo(() => buildTrustIndicators(snapshot), [snapshot]);
 
-  const categories = useMemo(() => {
-    const found = Array.from(new Set(snapshot.products.map((product) => product.category))).filter(Boolean).sort();
-    return ["All", ...found];
-  }, [snapshot.products]);
-
+  // Search is the only way to narrow the archive. Status and category pill
+  // rows used to sit under the box; they read as a storefront filter bar and
+  // are gone. The card badge still says whether a record is verified.
   const visibleProducts = useMemo(
-    () =>
-      snapshot.products.filter((product) => {
-        const verified = product.documents.length > 0;
-        if (status === "verified" && !verified) return false;
-        if (status === "pending" && verified) return false;
-        if (category !== "All" && product.category !== category) return false;
-        return matchesCoaSearch(coaSearchHaystack(product), query);
-      }),
-    [category, query, snapshot.products, status],
+    () => snapshot.products.filter((product) => matchesCoaSearch(coaSearchHaystack(product), query)),
+    [query, snapshot.products],
   );
 
   const openProduct = useMemo(
@@ -662,7 +640,6 @@ export function CoaLibraryPageClient({ snapshot }: { snapshot: CoaLibrarySnapsho
   );
 
   const hasAnyProducts = snapshot.products.length > 0;
-  const pendingCount = snapshot.products.length - snapshot.documentedProductCount;
 
   return (
     <div className="vl-coa-page min-h-screen">
@@ -736,7 +713,7 @@ export function CoaLibraryPageClient({ snapshot }: { snapshot: CoaLibrarySnapsho
 
         {hasAnyProducts ? (
           <>
-            {/* ——— Search + filters ————————————————————————————————— */}
+            {/* ——— Search ——————————————————————————————————————————— */}
             <section className="mx-auto max-w-[1180px] px-5 sm:px-6 lg:px-10">
               <label className="vl-coa-search vl-focus-ring relative mx-auto flex max-w-2xl items-center">
                 <span className="sr-only">{SEARCH_PLACEHOLDER}</span>
@@ -749,49 +726,6 @@ export function CoaLibraryPageClient({ snapshot }: { snapshot: CoaLibrarySnapsho
                   className="h-[54px] w-full rounded-full bg-transparent pl-[3.25rem] pr-5 text-[15px] text-white outline-none placeholder:text-white/33 sm:h-[58px]"
                 />
               </label>
-
-              <div className="mt-6 flex flex-wrap justify-center gap-2">
-                {STATUS_FILTERS.map((item) => {
-                  const count =
-                    item.key === "all"
-                      ? snapshot.products.length
-                      : item.key === "verified"
-                        ? snapshot.documentedProductCount
-                        : pendingCount;
-                  return (
-                    <button
-                      key={item.key}
-                      type="button"
-                      onClick={() => setStatus(item.key)}
-                      data-active={status === item.key}
-                      aria-pressed={status === item.key}
-                      className="vl-coa-pill vl-focus-ring min-h-[42px] px-4 text-[11px] font-semibold uppercase tracking-[0.12em]"
-                    >
-                      <span className="sm:hidden">{item.shortLabel}</span>
-                      <span className="hidden sm:inline">{item.label}</span>
-                      <span className="opacity-55">{count}</span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {categories.length > 2 ? (
-                <div className="mx-auto mt-3 flex max-w-3xl flex-wrap justify-center gap-2">
-                  {categories.map((item) => (
-                    <button
-                      key={item}
-                      type="button"
-                      onClick={() => setCategory(item)}
-                      data-active={category === item}
-                      aria-pressed={category === item}
-                      data-tone="quiet"
-                      className="vl-coa-pill vl-focus-ring min-h-[38px] px-3.5 text-[12px] font-medium"
-                    >
-                      {item}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
             </section>
 
             {/* ——— Archive ——————————————————————————————————————————— */}
@@ -816,19 +750,15 @@ export function CoaLibraryPageClient({ snapshot }: { snapshot: CoaLibrarySnapsho
                 <div className="mx-auto max-w-lg rounded-3xl border border-white/[0.07] bg-white/[0.012] px-6 py-16 text-center">
                   <h2 className="vl2-serif text-xl text-white sm:text-2xl">No matching records</h2>
                   <p className="mt-3 text-sm leading-7 text-white/42">
-                    Nothing matched the current filters. Try a product name, a batch number, or clear
-                    them and browse the full archive.
+                    Nothing matched that search. Try a product name, a compound, or a batch number, or
+                    clear it and browse the full archive.
                   </p>
                   <button
                     type="button"
-                    onClick={() => {
-                      setQuery("");
-                      setCategory("All");
-                      setStatus("all");
-                    }}
+                    onClick={() => setQuery("")}
                     className="vl-coa-cta vl-focus-ring mx-auto mt-7 w-auto px-7"
                   >
-                    Clear filters
+                    Clear search
                   </button>
                 </div>
               )}
