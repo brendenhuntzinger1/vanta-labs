@@ -55,9 +55,15 @@ describe("a signed-out visitor on an account page", () => {
   //
   // What this test still needs to prove is that the ACCOUNT gate has not
   // widened. A public page is the honest probe for that now.
-  it("does not touch the public storefront", async () => {
-    expect((await guestGet("/research")).status).not.toBe(307);
-    expect((await guestGet("/")).status).not.toBe(307);
+  it("leaves the paths that must stay reachable alone", async () => {
+    // This used to probe "/" and "/research", which were public. They are not
+    // any more — the default is closed and the owner accepted that the home
+    // page and research library leave Google's index. So the honest probe for
+    // "the account gate has not widened" is a path that must work for someone
+    // with no account at all, and a legal policy is the clearest case: it has
+    // to be readable to be agreed to.
+    expect((await guestGet("/legal/privacy")).status).not.toBe(307);
+    expect((await guestGet("/contact")).status).not.toBe(307);
   });
 
   it("sends a guest asking for the catalog to sign in, carrying the path back", async () => {

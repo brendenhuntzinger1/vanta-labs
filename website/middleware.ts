@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requiresAccount } from "@/lib/access-policy";
 
 import {
   AUTH_COOKIE_NAME,
@@ -28,51 +29,10 @@ const PUBLIC_ACCOUNT_PATHS = new Set([
   "/account/auth/callback",
 ]);
 
-// ---------------------------------------------------------------------------
-// THE CATALOG IS NOT PUBLIC. THE BRAND IS.
-//
-// Everything that names a compound, quotes a price, or reports a batch result
-// requires an account. Everything that describes the company — the home page,
-// the research library, the legal policies, testing standards, contact —
-// stays open and indexable.
-//
-// THIS IS A UNIFORM WALL, AND THAT IS THE WHOLE POINT. There is no user-agent
-// test here, no IP test, no crawler list. Googlebot, TikTok's reviewer, Meta's
-// reviewer, a competitor and an ordinary signed-out shopper all receive the
-// identical response, because they are all simply unauthenticated. Any rule
-// that varied by WHO is asking would be cloaking, which is against the ad
-// platforms' policies and is a far larger risk than the one it would solve.
-// If a future change needs to know the requester's identity to decide what to
-// serve here, that change is wrong.
-//
-// WHY MIDDLEWARE CARRIES IT.
-//
-//   * IT SEES EVERY SHAPE OF REQUEST. A page load, a client-side navigation's
-//     RSC payload fetch and an API call all pass through here. Verified
-//     against production before this was written: an anonymous request to a
-//     gated /account route carrying `RSC: 1` returns the redirect, not the
-//     page. A guard that lived only in the page component would hand the RSC
-//     payload to anyone who asked for it directly.
-//   * IT RUNS BEFORE THE DATA IS FETCHED. A server component that reads the
-//     catalog and then renders nothing still serialises what it read into the
-//     flight payload. Not fetching is the only version of "hidden" that holds.
-//   * IT CANNOT ENUMERATE. This file knows nothing about which slugs exist, so
-//     /products/glp-1 and /products/does-not-exist produce byte-identical
-//     answers. A guard inside the page would have to look the product up, and
-//     the 404-versus-redirect difference would leak the entire catalog to
-//     anyone willing to iterate a word list.
-//
-// The page and route guards remain as defence in depth — see the catalog page
-// and the catalog API — because one check in one layer is one deploy away from
-// being bypassed. The real boundary is neither of them: it is row-level
-// security in Postgres, which is what stops the public anon key reading the
-// products table straight off PostgREST regardless of anything in this app.
-const GATED_PREFIXES = [
-  "/products",
-  "/coa-library",
-  "/api/catalog",
-  "/api/coa",
-];
+// The access policy — which paths may be served without an account — lives in
+// lib/access-policy.ts so the decision can be exercised directly by tests
+// rather than only inferred from this file's source text. Its header explains
+// why the default is closed and what each exemption is protecting.
 
 /**
  * Product URLs that moved, and where they moved to.
@@ -86,9 +46,6 @@ const RENAMED_PRODUCT_SLUGS = new Map<string, string>([
   ["/products/bac-water-30ml", "/products/bac-water"],
 ]);
 
-function isGatedPath(pathname: string) {
-  return GATED_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
-}
 const MAINTENANCE_CACHE_TTL_MS = 15_000;
 const SESSION_CACHE_TTL_MS = 30_000;
 
@@ -687,7 +644,7 @@ export async function middleware(request: NextRequest) {
     return finish(NextResponse.redirect(moved, 308));
   }
 
-  // THE CATALOG GATE. See GATED_PREFIXES above for why it lives here.
+  // THE ACCESS BOUNDARY. See the public lists above for what is exempt.
   //
   // Judged on the session cookie alone, deliberately. Verifying the token with
   // GoTrue would cost a round trip on every catalog request, and it would buy
@@ -700,11 +657,11 @@ export async function middleware(request: NextRequest) {
   //
   // An API request is refused rather than redirected: a fetch() follows a 307
   // and would parse a login page as JSON.
-  if (isGatedPath(pathname) && !request.cookies.get(AUTH_COOKIE_NAME) && !refreshedCookie) {
+  if (requiresAccount(pathname) && !request.cookies.get(AUTH_COOKIE_NAME) && !refreshedCookie) {
     if (pathname.startsWith("/api/")) {
       return finish(
         NextResponse.json(
-          { success: false, error: "Sign in to view the catalog" },
+          { success: false, error: "Sign in to continue" },
           { status: 401 },
         ),
       );

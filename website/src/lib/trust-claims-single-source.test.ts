@@ -83,7 +83,6 @@ describe("no page re-declares its own trust claims", () => {
     "src/app/page.tsx",
     "src/app/checkout/page.tsx",
     "src/components/site-footer.tsx",
-    "src/components/age-gate.tsx",
   ])("%s sources its claims from @/lib/trust-claims", (path) => {
     expect(read(path)).toContain("@/lib/trust-claims");
   });
@@ -94,7 +93,6 @@ describe("the claims that were never substantiated are gone", () => {
     "src/app/page.tsx",
     "src/app/checkout/page.tsx",
     "src/components/site-footer.tsx",
-    "src/components/age-gate.tsx",
     "src/components/product-detail-client.tsx",
   ];
 

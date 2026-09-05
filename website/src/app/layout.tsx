@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Fraunces, Geist_Mono, Manrope } from "next/font/google";
 import { Suspense } from "react";
-import { AgeGate } from "@/components/age-gate";
 import { CartDrawer } from "@/components/cart-drawer";
 import { BacWaterAddedPopup } from "@/components/bac-water-upsell";
 import { CartProvider } from "@/components/cart-context";
@@ -15,6 +14,7 @@ import { RecoveryLinkCatcher } from "@/components/recovery-link-catcher";
 import { StorefrontOffersBar } from "@/components/storefront-offers-bar";
 import { StorefrontOfferModal } from "@/components/storefront-offer-modal";
 import { cookies } from "next/headers";
+import { AUTH_COOKIE_NAME } from "@/lib/auth-cookie";
 import {
   OFFERS_DISMISSED_COOKIE,
   getStorefrontOffers,
@@ -175,10 +175,28 @@ export default async function RootLayout({
   // can render the final answer once and the page never moves.
   //
   // Neither call may take the site down over a promotion, so both are guarded.
-  const [allOffers, cookieStore] = await Promise.all([
-    getStorefrontOffers().catch(() => []),
-    cookies(),
-  ]);
+  const cookieStore = await cookies();
+
+  // A PROMOTION IS STOREFRONT DATA, AND THE SIGN-IN PAGE IS PUBLIC.
+  //
+  // Almost every route requires an account now, but a handful cannot: the
+  // sign-in page itself, the legal policies, the contact form. This layout
+  // wraps those too, and it used to fetch the live offers for every one of
+  // them — so "Labor Day · Buy 2 Get 1" and a working coupon code were served,
+  // in the raw HTML, to anyone who asked for the login page. Measured: the
+  // campaign name twice and the code four times, with no session.
+  //
+  // NOT FETCHING IS THE FIX, not hiding. A server component that reads the
+  // offers and then renders nothing still serialises what it read into the
+  // flight payload, where it is just as readable and rather harder to notice.
+  // That mistake is the reason the old age gate protected nothing.
+  //
+  // Judged on the session cookie alone, which is the same cheap test the
+  // middleware uses. A forged cookie buys a glimpse of a discount banner and
+  // nothing else: every price the customer is actually charged is recomputed
+  // server-side, and the catalog behind it answers to row-level security.
+  const signedIn = Boolean(cookieStore.get(AUTH_COOKIE_NAME));
+  const allOffers = signedIn ? await getStorefrontOffers().catch(() => []) : [];
   const dismissed = new Set(parseDismissed(cookieStore.get(OFFERS_DISMISSED_COOKIE)?.value));
   const offers = visibleOffers(allOffers.filter((offer) => !dismissed.has(offerTag(offer.id))));
 
@@ -217,36 +235,8 @@ export default async function RootLayout({
       // attribute, so the storefront behind the gate is inert from the very
       // first paint rather than from hydration.
       //
-      // The age-gate component flips this to "true" once the four attestations
-      // are confirmed, and records that confirmation in sessionStorage so it
-      // survives the full-document navigations a checkout makes. The inline
-      // script at the top of <body> restores it before paint on later documents
-      // in the same visit; a NEW visit has no key and is asked again.
-      data-age-verified="false"
-      // The attribute above is updated client-side on confirmation, so the DOM
-      // legitimately diverges from the server's output here.
-      suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col">
-        {/* Restore this visit's age confirmation BEFORE the first paint.
-
-            The attribute above is server-rendered "false" and the CSS keys the
-            overlay off it, so without this the gate would flash on every
-            full-document navigation within a visit — which is what pressing
-            BACK from the payment page does. React cannot do this job: it only
-            learns what is in sessionStorage after hydration, which is already
-            too late to avoid the flash.
-
-            Fail-closed by construction. Any throw, any missing key, any browser
-            that refuses storage leaves the attribute exactly as the server
-            wrote it, and the gate stays up. Nothing here can open the store —
-            it can only restore a confirmation this visit already gave. */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html:
-              'try{if(sessionStorage.getItem("vl-age-confirmed-session")==="true"){document.documentElement.setAttribute("data-age-verified","true")}}catch(e){}',
-          }}
-        />
         {/* Site-wide Organization + WebSite structured data for brand/knowledge
             panel eligibility. Rendered server-side so crawlers always see it. */}
         <script
@@ -263,62 +253,60 @@ export default async function RootLayout({
           <Suspense fallback={null}>
             <SiteAnalyticsTracker />
           </Suspense>
-          <AgeGate>
-            {/* Both in flow, above the header, so they overlay nothing. */}
-            <CookieConsent initiallyOpen={!consentAnswered} />
-            {/* REPLACES <WelcomeOffer />, RATHER THAN JOINING IT.
-                The welcome offer is a promotion, and it is now resolved by
-                storefront-offers.ts alongside every other live offer. Rendering
-                both would put the same code on the screen twice, one above the
-                other, at the top of a phone — the stacked-banner outcome this
-                bar exists to avoid. One bar, every live offer, one source of
-                truth. welcome-offer.tsx and its endpoint are left untouched and
-                simply no longer mounted. */}
-            <StorefrontOffersBar offers={offers} />
-            {/* THE SAME ARRAY, NOT A SECOND LOOKUP OF THE SAME IDEA.
-                The card announces the promotion once, centred, when a shopper
-                first reaches the catalogue; the band above carries it from then
-                on. Handing both the one resolved list is what makes it
-                impossible for them to disagree with each other — or with the
-                till, since resolveStorefrontOffers builds this list from the
-                promotions checkout prices from.
+          {/* Both in flow, above the header, so they overlay nothing. */}
+          <CookieConsent initiallyOpen={!consentAnswered} />
+          {/* REPLACES <WelcomeOffer />, RATHER THAN JOINING IT.
+              The welcome offer is a promotion, and it is now resolved by
+              storefront-offers.ts alongside every other live offer. Rendering
+              both would put the same code on the screen twice, one above the
+              other, at the top of a phone — the stacked-banner outcome this
+              bar exists to avoid. One bar, every live offer, one source of
+              truth. welcome-offer.tsx and its endpoint are left untouched and
+              simply no longer mounted. */}
+          <StorefrontOffersBar offers={offers} />
+          {/* THE SAME ARRAY, NOT A SECOND LOOKUP OF THE SAME IDEA.
+              The card announces the promotion once, centred, when a shopper
+              first reaches the catalogue; the band above carries it from then
+              on. Handing both the one resolved list is what makes it
+              impossible for them to disagree with each other — or with the
+              till, since resolveStorefrontOffers builds this list from the
+              promotions checkout prices from.
 
-                Rendered here rather than inside the catalogue page for the same
-                reason the bar is: this is where the offers are already
-                resolved, on the server, once. The card decides for itself which
-                routes it belongs on. */}
-            <StorefrontOfferModal offers={offers} />
-            {children}
-            <SiteFooter />
-            {/* vl-bottom-bar lifts this out of the consent banner's way while
-                the banner is on screen. Being fixed, the link cannot be
-                scrolled clear, so without it the admin entry point is
-                untappable on a phone until cookies are answered.
+              Rendered here rather than inside the catalogue page for the same
+              reason the bar is: this is where the offers are already
+              resolved, on the server, once. The card decides for itself which
+              routes it belongs on. */}
+          <StorefrontOfferModal offers={offers} />
+          {children}
+          <SiteFooter />
+          {/* vl-bottom-bar lifts this out of the consent banner's way while
+              the banner is on screen. Being fixed, the link cannot be
+              scrolled clear, so without it the admin entry point is
+              untappable on a phone until cookies are answered.
 
-                z-30 keeps it BENEATH the app's full-width fixed bottom bars
-                (account nav, product CTA, checkout CTA — all z-40/z-50). It
-                used to be z-40 like them and, being rendered last, won the tie
-                and painted on top: on a phone its 38x24 box sat over the
-                bottom-right of every one of those bars. On /account that is
-                exactly the "More" tab, the only route to Sign out and to
-                Addresses/Notifications/Settings/Support/Wishlist — all of them
-                untappable. On /checkout it sat over the corner of the pay
-                button. A discreet staff shortcut must never outrank a
-                customer's primary navigation, so it now yields to those bars
-                and stays tappable everywhere they are absent. */}
-            <Link
-              href="/vault"
-              aria-label="Secure access"
-              /* inline-flex + min-h-6 gives the box a 24px tap height while the
-                 10px label and its faint colour are untouched — the link looks
-                 exactly as before, it is simply reachable. */
-              className="vl-bottom-bar vl-staff-shortcut fixed bottom-2 right-2 z-30 inline-flex min-h-6 items-center text-[10px] uppercase tracking-[0.2em] text-white/15 transition hover:text-white/45"
-            >
-              vault
-            </Link>
-            <CartDrawer />
-            <BacWaterAddedPopup />
-          </AgeGate>
+              z-30 keeps it BENEATH the app's full-width fixed bottom bars
+              (account nav, product CTA, checkout CTA — all z-40/z-50). It
+              used to be z-40 like them and, being rendered last, won the tie
+              and painted on top: on a phone its 38x24 box sat over the
+              bottom-right of every one of those bars. On /account that is
+              exactly the "More" tab, the only route to Sign out and to
+              Addresses/Notifications/Settings/Support/Wishlist — all of them
+              untappable. On /checkout it sat over the corner of the pay
+              button. A discreet staff shortcut must never outrank a
+              customer's primary navigation, so it now yields to those bars
+              and stays tappable everywhere they are absent. */}
+          <Link
+            href="/vault"
+            aria-label="Secure access"
+            /* inline-flex + min-h-6 gives the box a 24px tap height while the
+               10px label and its faint colour are untouched — the link looks
+               exactly as before, it is simply reachable. */
+            className="vl-bottom-bar vl-staff-shortcut fixed bottom-2 right-2 z-30 inline-flex min-h-6 items-center text-[10px] uppercase tracking-[0.2em] text-white/15 transition hover:text-white/45"
+          >
+            vault
+          </Link>
+          <CartDrawer />
+          <BacWaterAddedPopup />
         </CartProvider>
         <ConsentedAnalytics />
         <Suspense fallback={null}>

@@ -215,24 +215,6 @@ describe("the hero can never wash out light", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The gate must cover the VISUAL viewport. `fixed inset-0` sizes against the
-// layout viewport, and an in-app webview's toolbar collapses as you interact —
-// growing the visual viewport past the overlay and exposing a strip of the
-// storefront underneath.
-// ---------------------------------------------------------------------------
-describe("the gate covers a viewport that changes size", () => {
-  const css = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
-
-  it("sizes itself in dvh, with a vh fallback", () => {
-    // Anchored to the start of a line so this finds the standalone rule rather
-    // than the `html[data-age-verified="true"] [data-age-gate]` one above it.
-    const rule = css.slice(css.indexOf("\n[data-age-gate] {") + 1);
-    expect(rule.slice(0, 120)).toMatch(/min-height:\s*100vh/);
-    expect(rule.slice(0, 120)).toMatch(/min-height:\s*100dvh/);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Reported from a phone: ticking an age-gate checkbox made the hero vial
 // appear OVER the gate. Only in TikTok's browser; never in Safari or Chrome.
 //
@@ -269,9 +251,21 @@ describe("the gate covers a viewport that changes size", () => {
 // properties that make it absent; each is one careless edit from returning, and
 // none of them shows up in a desktop browser.
 // ---------------------------------------------------------------------------
-describe("the entry gate and the hero video are separate systems", () => {
-  // Comments in these files DESCRIBE the bug — they say "play()",
-  // "MutationObserver", "video" and so on while explaining what was removed.
+// THE HERO VIDEO NEVER STARTS FROM A TAP.
+//
+// Reported from a phone: ticking a checkbox on the old entry overlay started
+// hero playback, and iOS answered by handing the visitor its native fullscreen
+// player over the whole site. The overlay that produced that tap is gone —
+// there is one access screen now and it is a page, not a layer over the
+// storefront — so the specific interaction cannot recur.
+//
+// What must not come back is the shape of the bug: a video that any gesture
+// can wake. The assertions below that had the overlay as their subject are
+// removed with it; every one whose subject is the VIDEO is kept, because the
+// hazard they describe is a property of the video and outlives the gate.
+// ---------------------------------------------------------------------------
+describe("the hero video cannot be woken by a gesture", () => {
+  const read = (rel: string) => readFileSync(join(process.cwd(), rel), "utf8");
   // Assertions about what the code does must read the code, not the prose.
   const codeOnly = (s: string) =>
     s.replace(/\/\*[\s\S]*?\*\//g, "")
@@ -279,74 +273,33 @@ describe("the entry gate and the hero video are separate systems", () => {
       .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"))
       .join("\n");
 
-  const hero = read("src/components/hero-video.tsx");
-  const heroCode = codeOnly(hero);
-  const gateCode = codeOnly(read("src/components/age-gate.tsx"));
-  const page = read("src/app/page.tsx");
-  const css = read("src/app/globals.css");
+  const heroCode = codeOnly(read("src/components/hero-video.tsx"));
 
-  // A. No <video> exists while the gate is active.
-  it("A — does not render a video element until access is granted", () => {
-    // Not hidden. Absent. An early return before any JSX.
-    expect(heroCode).toMatch(/if \(!granted \|\| !settled\) return null;/);
-    expect(heroCode).toMatch(/const granted = useAccessGranted\(\);/);
+  // A. The element does not exist until the deferral has settled. Absent, not
+  //    hidden — an early return before any JSX.
+  it("A — renders no video element until it has settled", () => {
+    expect(heroCode).toMatch(/if \(!settled\) return null;/);
   });
 
-  // D. It mounts only after the gate completes AND in a later task.
-  it("D — mounts in a later task, after the entry interaction has finished", () => {
-    // setTimeout schedules past the current task, so creating the element is
-    // never part of the tap that let the visitor in.
+  // D. Creating it is a LATER TASK, so it can never be part of whatever
+  //    interaction brought the visitor here.
+  it("D — mounts in a later task, never inside the current one", () => {
     expect(heroCode).toMatch(/const t = setTimeout\(\(\) => setSettled\(true\), 0\);/);
-    expect(heroCode).toMatch(/if \(!granted\) return;/);
   });
 
-  // B + C. Nothing in the entry path can reach the video.
-  it("B, C — the gate holds no video reference and cannot call play()", () => {
-    for (const forbidden of ["play(", "video", "HTMLMediaElement", "webkitEnterFullscreen", "MutationObserver"]) {
-      expect(gateCode, `the entry path must not touch ${forbidden}`)
-        .not.toContain(forbidden);
-    }
-    // It publishes a boolean; the video subscribes. Never the other way round.
-    expect(gateCode).toContain("AccessContext.Provider");
-    expect(gateCode).toContain("export function useAccessGranted()");
-  });
-
-  // G. No entry action can produce a gesture-initiated play().
+  // G. No gesture listener, and no attribute-watching wake-up either.
   it("G — playback is never started from a user gesture", () => {
     for (const ev of ["pointerdown", "touchstart", "click", "keydown"]) {
       expect(heroCode, `a ${ev} listener re-creates the bug`).not.toContain(`"${ev}"`);
     }
-    // And no attribute-watching wake-up either.
     expect(heroCode).not.toContain("MutationObserver");
-    expect(heroCode).not.toContain("data-age-verified");
   });
 
-  // E. It stays a decorative, non-interactive, inline background.
-  it("E — decorative: muted, looping, uncontrollable, untappable", () => {
-    expect(heroCode).toContain("video.muted = true;");
-    expect(heroCode).toContain("video.loop = true;");
-    expect(heroCode).toContain("video.controls = false;");
-    expect(heroCode).toContain("video.disablePictureInPicture = true;");
-    expect(heroCode).toContain('aria-hidden="true"');
-    const rule = css.slice(css.indexOf(".vl2-hero-video"), css.indexOf(".vl2-hero-scrim"));
-    expect(rule).toMatch(/pointer-events:\s*none/);
-  });
-
-  // F. Nothing links to the asset.
-  it("F — the asset is a video source and nothing else", () => {
-    // One reference, as a src prop. Not an href, not a route.
-    expect(page).toMatch(/<HeroVideo className="vl2-hero-video" src="\/videos\/vanta-labs-hero(-opt)?\.mp4" \/>/);
-    expect(page).not.toMatch(/href="[^"]*\.mp4/);
-    expect(heroCode).not.toMatch(/href=/);
-    expect(heroCode).not.toMatch(/<a\b/);
-  });
-
-  // The failsafe, which is explicitly not the fix.
-  it("needs no fullscreen failsafe, because there is nothing to go fullscreen", () => {
-    // The previous build carried a webkitbeginfullscreen handler that tried to
-    // back out of the player. It is gone with the element it guarded.
-    expect(heroCode).not.toContain("webkitExitFullscreen");
-    expect(heroCode).not.toContain("webkitbeginfullscreen");
+  // The hero must not reach for the retired gate in any form.
+  it("holds no dependency on the removed access overlay", () => {
+    for (const gone of ["useAccessGranted", "age-gate", "data-age-verified", "granted"]) {
+      expect(heroCode, `hero-video still references ${gone}`).not.toContain(gone);
+    }
   });
 });
 

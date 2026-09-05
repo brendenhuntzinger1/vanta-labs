@@ -188,11 +188,11 @@ describe("the renamed product URL redirects rather than breaking", () => {
     expect(block.slice(0, 400)).toContain("308");
   });
 
-  it("runs BEFORE the catalog gate", () => {
+  it("runs BEFORE the access boundary", () => {
     // Gating first would send an old link to the login page with the dead slug
     // in ?next=, so the visitor would sign in and land on a 404.
     const renameAt = code.indexOf("RENAMED_PRODUCT_SLUGS.has(pathname)");
-    const gateAt = code.indexOf("isGatedPath(pathname) &&");
+    const gateAt = code.indexOf("requiresAccount(pathname) &&");
     expect(renameAt).toBeGreaterThan(-1);
     expect(gateAt).toBeGreaterThan(-1);
     expect(renameAt).toBeLessThan(gateAt);

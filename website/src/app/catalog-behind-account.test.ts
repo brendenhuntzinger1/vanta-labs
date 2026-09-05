@@ -98,12 +98,12 @@ describe("the gate is uniform: it never varies by who is asking", () => {
     // The gate region only. If a UA test ever appears between these two
     // markers, the wall has started varying by who is asking.
     const body = code(middleware);
-    const gate = body.slice(body.indexOf("const GATED_PREFIXES"), body.indexOf("function isGatedPath") + 400);
+    const gate = body.slice(body.indexOf("const PUBLIC_EXACT"), body.indexOf("function requiresAccount") + 400);
     for (const tell of CLOAKING_TELLS) {
       expect(gate, `the gate must not branch on ${tell}`).not.toMatch(tell);
     }
 
-    const enforcement = body.slice(body.indexOf("if (isGatedPath(pathname)"));
+    const enforcement = body.slice(body.indexOf("if (requiresAccount(pathname)"));
     for (const tell of CLOAKING_TELLS) {
       expect(enforcement.slice(0, 1800), `enforcement must not branch on ${tell}`).not.toMatch(tell);
     }
@@ -122,30 +122,33 @@ describe("the gate is uniform: it never varies by who is asking", () => {
 });
 
 describe("middleware gates every shape of request to the catalog", () => {
-  it("gates the catalog, product pages, the catalog API and the COA library", () => {
-    for (const prefix of ["/products", "/coa-library", "/api/catalog", "/api/coa"]) {
-      expect(code(middleware), `${prefix} must be gated`).toContain(`"${prefix}"`);
-    }
-    expect(code(middleware)).toContain("GATED_PREFIXES");
-  });
-
-  it("matches a prefix and everything beneath it, so no product slug slips past", () => {
-    expect(code(middleware)).toMatch(/pathname === prefix \|\| pathname\.startsWith\(`\$\{prefix\}\/`\)/);
+  // WHICH PATHS ARE GATED IS NO LONGER A LIST IN THIS FILE.
+  //
+  // It used to be: middleware named the closed prefixes and everything else was
+  // open, so these two tests read that list as text. The default is closed now,
+  // and the decision lives in lib/access-policy.ts where access-policy.test.ts
+  // exercises it directly — asking the real predicate about real paths beats
+  // asserting that a string appears in a source file. What stays here is the
+  // part that is genuinely about the middleware: the SHAPE of its refusal.
+  it("asks the one policy rather than keeping a second copy of the answer", () => {
+    expect(code(middleware)).toContain('from "@/lib/access-policy"');
+    expect(code(middleware)).toContain("requiresAccount(pathname)");
+    expect(code(middleware)).not.toContain("GATED_PREFIXES");
   });
 
   it("refuses an API request rather than redirecting it", () => {
     // fetch() follows a 307 and would parse the login page as JSON.
-    const gate = middleware.slice(middleware.indexOf("if (isGatedPath(pathname)"));
+    const gate = middleware.slice(middleware.indexOf("if (requiresAccount(pathname)"));
     expect(gate.slice(0, 700)).toContain("401");
   });
 
   it("carries the requested path into ?next= so referral and ad links survive", () => {
-    const gate = middleware.slice(middleware.indexOf("if (isGatedPath(pathname)"));
+    const gate = middleware.slice(middleware.indexOf("if (requiresAccount(pathname)"));
     expect(gate.slice(0, 1400)).toContain('login.searchParams.set("next"');
   });
 
   it("never lets a session-dependent redirect be cached and replayed", () => {
-    const gate = middleware.slice(middleware.indexOf("if (isGatedPath(pathname)"));
+    const gate = middleware.slice(middleware.indexOf("if (requiresAccount(pathname)"));
     expect(gate.slice(0, 1600)).toContain('"Cache-Control", "no-store"');
   });
 });
@@ -265,8 +268,8 @@ describe("row-level security is the boundary the app cannot bypass", () => {
 describe("the public brand surface is untouched", () => {
   it("does not gate the home page, research, or legal routes", () => {
     const gated = code(middleware).slice(
-      code(middleware).indexOf("const GATED_PREFIXES"),
-      code(middleware).indexOf("function isGatedPath"),
+      code(middleware).indexOf("const PUBLIC_EXACT"),
+      code(middleware).indexOf("function requiresAccount"),
     );
     for (const publicPath of ['"/research"', '"/legal"', '"/contact"', '"/membership"']) {
       expect(gated, `${publicPath} must stay public`).not.toContain(publicPath);

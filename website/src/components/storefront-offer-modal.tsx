@@ -2,7 +2,6 @@
 
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { useAccessGranted } from "@/components/age-gate";
 import { offerTag, type StorefrontOffer } from "@/lib/storefront-offer-format";
 
 // ---------------------------------------------------------------------------
@@ -154,7 +153,6 @@ function CloseIcon() {
 
 export function StorefrontOfferModal({ offers }: { offers: StorefrontOffer[] }) {
   const pathname = usePathname();
-  const granted = useAccessGranted();
   const seenRaw = useSyncExternalStore(subscribeToSeen, seenClientSnapshot, seenServerSnapshot);
   const [copied, setCopied] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -169,7 +167,9 @@ export function StorefrontOfferModal({ offers }: { offers: StorefrontOffer[] }) 
   // still working out whether it should have been.
   //
   // It is false on the server on two counts: nothing has been seen there, and
-  // `granted` is false until the age gate is cleared in the browser. So the
+  // The age gate is gone — the Research Access Portal is the one consent
+  // screen now, and it stands at the catalog rather than in front of the site.
+  // So the
   // document ships without it and it appears when the shopper actually arrives,
   // which is also the answer to "never over the age gate".
   const seen = useMemo<string[]>(() => {
@@ -182,7 +182,7 @@ export function StorefrontOfferModal({ offers }: { offers: StorefrontOffer[] }) 
   }, [seenRaw]);
 
   const open = Boolean(
-    granted && isShoppingRoute(pathname) && offer && !seen.includes(offerTag(offer.id)),
+    isShoppingRoute(pathname) && offer && !seen.includes(offerTag(offer.id)),
   );
 
   const close = useCallback(() => {
