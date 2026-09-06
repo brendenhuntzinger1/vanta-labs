@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   computeProfit,
   resolveCustomerDiscount,
-  protectProfit,
   DEFAULT_PROFIT_SETTINGS,
   type OrderInputs,
   type DiscountComponent,
 } from "@/lib/profit-engine";
+import { buildProfitFloorSnapshot } from "@/lib/profit-floor-alert";
 import { resolveRefundOutcome, computeRetainedCommission } from "@/lib/payment-webhook";
 import { calculateShipping, DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
 import { calculateTaxAmount as calculateTax } from "@/lib/sales-tax";
@@ -139,20 +139,25 @@ describe(`fuzz: profit engine invariants (${ITER.toLocaleString()} cases each)`,
     expect(CASES).toBeGreaterThan(0);
   });
 
-  it("protectProfit: finalizable => meets floor; removing promos only raises profit", TIMEOUT, () => {
+  // WAS: "protectProfit: finalizable => meets floor; removing promos only
+  // raises profit". The peel-back it fuzzed is gone with protectProfit — the
+  // floor reports and never refuses — so the property under fuzz is now the
+  // REPORT itself: for any order the engine can produce, the flag says exactly
+  // what the configured thresholds say, and the figures reconcile.
+  it("profit floor: the flag always agrees with the thresholds, and never throws", TIMEOUT, () => {
     const g = makeRng(0xbeef);
+    const SETTINGS = { minProfitDollars: DEFAULT_PROFIT_SETTINGS.minProfitDollars, minProfitPercent: DEFAULT_PROFIT_SETTINGS.minProfitPercent };
     for (let i = 0; i < ITER; i++) {
       const inp = randomOrderInputs(g);
-      const guarded = protectProfit(inp, DEFAULT_PROFIT_SETTINGS);
-      if (guarded.profitable) {
-        check(guarded.grossProfit >= DEFAULT_PROFIT_SETTINGS.minProfitDollars - EPS, () => `finalized below floor: ${guarded.grossProfit}`);
-        check(guarded.blockedReason === null, () => `profitable but blockedReason set`);
-      } else {
-        check(guarded.blockedReason !== null, () => `blocked but no reason`);
-      }
-      const withAll = computeProfit(inp, resolveCustomerDiscount(inp, ALL));
-      check(guarded.grossProfit >= withAll.grossProfit - 1e-6, () => `guard lowered profit ${guarded.grossProfit} < ${withAll.grossProfit}`);
-      check(!guarded.removed.includes("membership"), () => `removed membership`);
+      const discount = resolveCustomerDiscount(inp, ALL);
+      const profit = computeProfit(inp, discount);
+      const snap = buildProfitFloorSnapshot(profit, SETTINGS, discount.label, inp.shippingCollected);
+
+      const expectedBelow = profit.grossProfit < SETTINGS.minProfitDollars
+        || (profit.discountedSubtotal > 0 && profit.grossMarginPercent < SETTINGS.minProfitPercent);
+      check(snap.belowFloor === expectedBelow, () => `flag ${snap.belowFloor} != thresholds ${expectedBelow}`);
+      check(Math.abs(snap.estimatedProfit - profit.grossProfit) < 0.011, () => `profit drifted: ${snap.estimatedProfit} vs ${profit.grossProfit}`);
+      check(Number.isFinite(snap.estimatedProfit), () => `non-finite profit ${snap.estimatedProfit}`);
       CASES++;
     }
     expect(CASES).toBeGreaterThan(0);

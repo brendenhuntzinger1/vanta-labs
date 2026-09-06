@@ -313,6 +313,9 @@ export async function POST(request: Request) {
     // Same promotion the wallet lane priced against (quoteA), recorded so a
     // usage limit counts this order too.
     promotionId: quoteA.appliedPromotionId,
+    // Internal only — insertOrderRow turns this into the owner's
+    // below-floor notice and never writes it to a column.
+    profitFloor: quoteA.profitFloor,
   });
 
   // Same atomic claim the card lane takes, before the order row exists, so the
