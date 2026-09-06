@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getSiteUrl } from "@/lib/env";
+import { stampCartRecoveryEngagement } from "@/lib/email/engagement";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,7 @@ export async function GET(request: NextRequest) {
     } catch {
       // Non-fatal - the redirect still needs to happen.
     }
+    await stampCartRecoveryEngagement("clicked", id);
   }
 
   return NextResponse.redirect(destination);

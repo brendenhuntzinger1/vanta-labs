@@ -10,6 +10,7 @@ import {
 } from "@/lib/email/campaign-links";
 import { normalizeLinkButtons } from "@/lib/email/affiliate-campaign-template";
 import { hashIpAddress } from "@/lib/ip-hash";
+import { stampCampaignEngagement } from "@/lib/email/engagement";
 
 export const dynamic = "force-dynamic";
 
@@ -121,6 +122,12 @@ export async function GET(request: NextRequest) {
   } catch {
     // Metrics are not worth failing a customer's click over.
   }
+
+  // And in email_send_log, the one table that lists every send whatever channel
+  // produced it, so "who clicked what" has a single answer rather than one per
+  // kind of mail. Separately guarded: a failure inserting the click detail
+  // above must not cost the send log its record of the click.
+  await stampCampaignEngagement("clicked", campaignId, email);
 
   const response = NextResponse.redirect(destination, { status: 302 });
   response.cookies.set({

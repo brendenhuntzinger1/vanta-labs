@@ -22,9 +22,16 @@ export const dynamic = "force-dynamic";
 //      set this endpoint accepts nothing — it fails closed.
 //   3. Point the provider at it:
 //        Resend   → Webhooks → Add: https://<site>/api/webhooks/email?secret=<value>
-//                   Events: email.bounced, email.complained
+//                   Events: email.bounced, email.complained, email.delivered,
+//                           email.delivery_delayed, email.failed,
+//                           email.opened, email.clicked
+//                   AND Domains → <domain> → Open tracking ON. The webhook
+//                   subscription alone sends nothing: Resend only emits
+//                   email.opened for a domain whose tracking is enabled, so
+//                   half the configuration looks identical to none of it.
 //        SendGrid → Settings → Mail Settings → Event Webhook, same URL,
-//                   Events: Bounced, Dropped, Spam Reports
+//                   Events: Bounced, Dropped, Spam Reports, Delivered,
+//                           Opened, Clicked
 //      Both store the full URL and send the query string back on every
 //      delivery, so the secret travels with each request. A sender that can set
 //      headers may use `x-email-webhook-secret` instead.
@@ -105,7 +112,16 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json(
-    { received: events.length, suppressed: outcome.suppressed, ignored: outcome.ignored },
+    {
+      received: events.length,
+      suppressed: outcome.suppressed,
+      ignored: outcome.ignored,
+      // Opens and clicks that were matched back to a send. Reported because the
+      // provider's dashboard shows the delivery attempt and this shows whether
+      // it landed anywhere we can read it — the two disagreeing is the signal
+      // that message-id capture has regressed.
+      engaged: outcome.engaged,
+    },
     { status: 200 },
   );
 }
