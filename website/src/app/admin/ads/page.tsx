@@ -5,6 +5,9 @@ import { AdsSectionTabs } from "@/components/ads-section-tabs";
 import { AdsTrackingHealth } from "@/components/ads-tracking-health";
 import { SnapTrackingHealth } from "@/components/snap-tracking-health";
 import { AdsCampaignsPanel } from "@/components/ads-campaigns-panel";
+import { AdUrlBuilder } from "@/components/ad-url-builder";
+import { getCatalogProducts } from "@/lib/catalog";
+import { getSiteUrl } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
@@ -340,7 +343,18 @@ function CreativeTable({ rows, empty }: { rows: CreativeRow[]; empty: string }) 
 }
 
 export default async function AdsDashboardPage() {
-  const [d, spend] = await Promise.all([getAdsDashboard(), getSpendDashboard()]);
+  const [d, spend, catalogue] = await Promise.all([
+    getAdsDashboard(),
+    getSpendDashboard(),
+    // The landing-page picker offers real pages, so a tagged URL cannot point at
+    // a slug that 404s. Failing softly: the builder still works with the two
+    // generic paths if the catalogue cannot be read.
+    getCatalogProducts().catch(() => []),
+  ]);
+  const siteUrl = getSiteUrl();
+  const products = catalogue
+    .map((p) => ({ slug: String(p.slug ?? ""), name: String(p.name ?? p.slug ?? "") }))
+    .filter((p) => p.slug);
   const spendLocked = `TikTok is not connected — ${d.tiktok.missing.length} credential(s) missing and eligibility unconfirmed.`;
   const modeLabel = d.guardrails.frozen ? "FROZEN" : d.guardrails.mode.replace("_", " ").toUpperCase();
 
@@ -394,6 +408,65 @@ export default async function AdsDashboardPage() {
           The two disagree by design — each platform counts under its own attribution model — so the platforms&apos; own
           count sits in its own column below rather than being blended in.
         </p>
+      </Panel>
+
+      <Panel
+        title="Tag a new ad"
+        subtitle="the one step that has to be done by hand — everything above is read from these tags"
+      >
+        <AdUrlBuilder siteUrl={siteUrl} products={products} />
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          <div>
+            <h3 className="text-[10px] uppercase tracking-[0.16em] text-white/35">The two parts you change</h3>
+            <dl className="mt-2 space-y-2 text-[11px] leading-5">
+              <div>
+                <dt className="text-white/70">Landing page</dt>
+                <dd className="text-white/45">
+                  The product page the ad opens. Pick the product that ad is selling.
+                </dd>
+              </div>
+              <div>
+                <dt className="text-white/70">Ad</dt>
+                <dd className="text-white/45">
+                  A short name for this one ad, like <code className="font-mono text-white/60">hook_a</code>. Give every
+                  ad a different one — that is how you find out which ad made the money.
+                </dd>
+              </div>
+              <div>
+                <dt className="text-white/70">Campaign</dt>
+                <dd className="text-white/45">Same name on every ad in the campaign.</dd>
+              </div>
+            </dl>
+            <p className="mt-3 text-[11px] leading-5 text-white/30">
+              The rest of the link is set for you. Use lowercase letters, numbers,{" "}
+              <code className="font-mono">_</code> and <code className="font-mono">-</code> only — spaces and capitals
+              break it, and the ad shows up under &ldquo;What is not measured&rdquo; instead of earning a ROAS.
+            </p>
+          </div>
+
+          <div>
+            <h3 className="text-[10px] uppercase tracking-[0.16em] text-white/35">Where to paste it</h3>
+            <ul className="mt-2 space-y-1.5 text-[11px] leading-5">
+              {[
+                ["Meta", "Ads Manager → your ad → Website URL"],
+                ["TikTok", "Ad → Destination page → URL"],
+                ["Reddit", "Ad → Destination URL"],
+                ["Snapchat", "Ad → Attachment → Website URL"],
+              ].map(([platform, where]) => (
+                <li key={platform} className="flex gap-2">
+                  <span className="w-16 shrink-0 text-white/70">{platform}</span>
+                  <span className="text-white/45">{where}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 rounded-xl border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.05] px-3 py-2 text-[11px] leading-5 text-white/55">
+              <span className="text-white/80">Snapchat only:</span> also type the same ad name into Snapchat&apos;s own
+              ad-name box. Snapchat is the one platform that does not tell us the link, so the name is how it gets
+              matched.
+            </p>
+          </div>
+        </div>
       </Panel>
 
       {spend.platforms.length > 0 ? (
