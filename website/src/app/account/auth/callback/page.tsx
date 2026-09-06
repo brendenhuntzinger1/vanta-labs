@@ -183,7 +183,19 @@ export default function OAuthCallbackPage() {
 
         // replace(), not push(): the callback URL held the tokens and has no
         // business in the visitor's history.
+        //
+        // refresh() beside it, and it is not decorative. A client-side
+        // navigation reuses the layouts it already has, so the ROOT layout —
+        // which reads the session to decide the nav, the live promotion bar and
+        // the offer modal — kept its signed-out render after a Google sign-in.
+        // The destination page itself came back correct, which is what made
+        // this look like a styling quirk rather than a stale tree: the customer
+        // was signed in and the chrome said otherwise until their next full
+        // page load. The email/password path has always called both (see
+        // establishSessionAndGo in components/account-auth-form.tsx); the
+        // provider path is the same event and gets the same pair.
         router.replace(landAt);
+        router.refresh();
         return true;
       } catch (err) {
         console.error("OAuth callback failed", err);

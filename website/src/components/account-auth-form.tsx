@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { TurnstileWidget } from "@/components/turnstile-widget";
 import { resolveSignupOutcome, SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-signup-outcome";
-import { classifyAuthReturn, deadAuthLinkMessage, type AuthReturn } from "@/lib/auth-link-fragment";
+import { deadAuthLinkMessage, readOAuthCallbackFragment, type OAuthCallbackReturn } from "@/lib/auth-link-fragment";
 import { safeInternalPath } from "@/lib/internal-path";
 import { signInFailureMessage } from "@/lib/sign-in-failure-message";
 import {
@@ -160,9 +160,33 @@ export function AccountAuthForm() {
   // getSession() falls back to whatever supabase-js kept in localStorage — so
   // the page signed the visitor in as whoever last used the browser. Only a
   // fragment that actually carries a token counts. See lib/auth-link-fragment.
-  const [authReturn] = useState<AuthReturn>(() => {
+  //
+  // READ WITH readOAuthCallbackFragment, NOT classifyAuthReturn, AND THE
+  // DIFFERENCE IS AN ACCOUNT TAKEOVER ON A SHARED BROWSER.
+  //
+  // classifyAuthReturn answers "does this URL LOOK like a return from an auth
+  // link", accepting access_token OR refresh_token. The effect below then asked
+  // supabase.auth.getSession() for the tokens — a PROXY question, and the wrong
+  // one. supabase-js's _isImplicitGrantCallback ignores refresh_token entirely,
+  // so `#refresh_token=anything` reads as a session here and as no callback at
+  // all there; supabase-js falls through to _recoverAndRefresh() and
+  // getSession() hands back whatever is in localStorage — the PREVIOUS
+  // customer's live session on a shared machine. Posting that to
+  // /api/auth/session mints an httpOnly cookie for the wrong person, and the
+  // server cannot tell: the token is genuine, so GoTrue verifies it happily.
+  //
+  // This is the same defect, one file over, that /account/auth/callback was
+  // rewritten to close — and readOAuthCallbackFragment's own header describes
+  // it. The callback stopped asking the proxy question; this page had not.
+  //
+  // So the tokens come from the fragment and client storage is never consulted
+  // for identity. Both halves are required, because half a session is exactly
+  // the shape of the bypass. Classified ONCE, at first render, before
+  // supabase-js can consume the fragment (its client is lazily constructed on
+  // first `supabase.auth` access, which happens later, inside the effect).
+  const [authReturn] = useState<OAuthCallbackReturn>(() => {
     if (typeof window === "undefined") return { kind: "none" };
-    return classifyAuthReturn(window.location.hash);
+    return readOAuthCallbackFragment(window.location.hash);
   });
   const [arrivedFromEmailLink] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -217,14 +241,26 @@ export function AccountAuthForm() {
 
 
   // A shopper who clicked the confirmation link in Supabase's built-in
-  // verification email lands back here with a session already established
-  // by the Supabase client (it reads the token from the URL fragment) -
+  // verification email lands back here with the session in the URL fragment —
   // finish signing them in by setting our own httpOnly session cookie.
   //
-  // Gated to verification returns ONLY. The Supabase client also keeps a
-  // long-lived copy of past sessions in localStorage, and running this on
-  // every visit made the login page silently re-establish that session and
-  // bounce straight to the home page — the shopper never saw the form.
+  // RUNS ONLY WHEN THE FRAGMENT ITSELF CARRIED BOTH TOKENS, AND USES THOSE.
+  // Two earlier versions of this gate were not enough, and each failure was the
+  // same one: the page signing a visitor in as whoever last used the browser.
+  //
+  //   `?verified=1`               a query param is typed, shared, bookmarked and
+  //                               re-opened; on any of those the fragment is
+  //                               empty and getSession() answered from
+  //                               localStorage.
+  //   classifyAuthReturn + getSession()
+  //                               a fragment carrying only `refresh_token`
+  //                               reads as a session here and as no callback at
+  //                               all to supabase-js, which then answers from
+  //                               localStorage just the same.
+  //
+  // Both are closed by asking the real question instead of a proxy for it:
+  // WHICH TOKENS ARRIVED IN THIS URL. Client storage is never consulted for
+  // identity, so there is nothing for a stale session to be read out of.
   useEffect(() => {
     if (!isVerificationReturn) {
       return;
@@ -233,12 +269,19 @@ export function AccountAuthForm() {
     let active = true;
 
     (async () => {
-      const { data } = await supabase.auth.getSession();
-      const accessToken = data.session?.access_token;
-      const refreshToken = data.session?.refresh_token ?? null;
-      const user = data.session?.user;
+      // FROM THE FRAGMENT, NEVER FROM STORAGE. See the comment on `authReturn`
+      // above: getSession() here was the shared-browser hole.
+      const { accessToken, refreshToken } = authReturn;
 
-      if (!accessToken || !user) {
+      // Verified against GoTrue with THIS token, rather than read off whatever
+      // session the client happens to hold. getUser(jwt) sends the token and
+      // touches no storage, so an expired or forged fragment simply yields no
+      // user and nothing is established.
+      const { data, error: userError } = await supabase.auth.getUser(accessToken);
+      const user = data?.user;
+
+      if (userError || !user) {
+        if (active) setError(deadAuthLinkMessage());
         return;
       }
 
@@ -289,7 +332,7 @@ export function AccountAuthForm() {
     return () => {
       active = false;
     };
-  }, [router, nextPath, isVerificationReturn]);
+  }, [router, nextPath, isVerificationReturn, authReturn]);
 
   // Tick down the "Text me a code" cooldown once per second.
   useEffect(() => {

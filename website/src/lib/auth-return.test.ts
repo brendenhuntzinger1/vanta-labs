@@ -101,9 +101,25 @@ const stripComments = (source: string) => source
 const RESET_CODE = stripComments(RESET);
 
 describe("the login page trusts the fragment, not the query string", () => {
-  it("gates the sign-in on a real session having arrived", () => {
-    expect(LOGIN).toContain("classifyAuthReturn(window.location.hash)");
+  // THE PREDICATE TIGHTENED AGAIN, AND THESE TWO ASSERTIONS MOVED WITH IT.
+  //
+  // classifyAuthReturn was the fix for `?verified=1`, and it was not enough.
+  // It accepts access_token OR refresh_token, while supabase-js's
+  // _isImplicitGrantCallback ignores refresh_token entirely — so
+  // `#refresh_token=anything` read as a session here, supabase-js found no
+  // callback, and the getSession() beside it answered from localStorage with
+  // the PREVIOUS customer's live session on a shared machine. That was posted
+  // and a cookie minted for the wrong person.
+  //
+  // readOAuthCallbackFragment is the predicate /account/auth/callback was
+  // rewritten to use for exactly this reason: it requires BOTH tokens and
+  // RETURNS them, so the caller never consults client storage for identity.
+  // The login page now uses the same one.
+  it("gates the sign-in on a real session having arrived, in the fragment", () => {
+    expect(LOGIN).toContain("readOAuthCallbackFragment(window.location.hash)");
     expect(LOGIN).toContain('const isVerificationReturn = authReturn.kind === "session";');
+    // The weaker predicate must not come back to gate a session here.
+    expect(stripComments(LOGIN)).not.toContain("classifyAuthReturn");
   });
 
   it("no longer treats ?verified=1 alone as a verification return", () => {
@@ -114,7 +130,7 @@ describe("the login page trusts the fragment, not the query string", () => {
   it("classifies once, before supabase-js can consume the fragment", () => {
     // The browser client is lazily constructed on first `supabase.auth` access,
     // which happens inside an effect — after this runs.
-    expect(LOGIN).toContain("const [authReturn] = useState<AuthReturn>(");
+    expect(LOGIN).toContain("const [authReturn] = useState<OAuthCallbackReturn>(");
   });
 
   it("says something when the link is dead", () => {
