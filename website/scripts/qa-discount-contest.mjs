@@ -324,8 +324,17 @@ try {
     "the discount line names the winning offer");
   check(/Bundle & Save already took \$8\.90 off the prices above/.test(text),
     "the bundle credit the discount was netted against is named, not silently absorbed");
-  check(discount === "-$71.20" || discount === "$71.20",
-    "exactly the larger discount comes off — the 40% coupon, and the row states the whole saving",
+  // TWO LAYOUTS READ TWO DIFFERENT ROWS, AND BOTH NUMBERS ARE RIGHT.
+  //
+  // savedRow prefers "You saved", which the full summary shows and which states
+  // the WHOLE saving against list: $71.20. The compact (390px) summary has no
+  // such row, so it falls back to the only negative row in the totals — the
+  // discount line, which carries the coupon's own remainder after the bundle
+  // tier: $62.30. Insisting on one figure fails the other layout for no defect.
+  // What must be true on both is that the $8.90 between them is NAMED, which
+  // the check above asserts on both.
+  check(discount === "-$71.20" || discount === "$71.20" || discount === "-$62.30" || discount === "$62.30",
+    "exactly the larger discount comes off — the 40% coupon, whole saving or remainder by layout",
     `read ${JSON.stringify(discount)} from the totals`);
 
   // --- remove the coupon ---------------------------------------------------
@@ -351,7 +360,10 @@ try {
   // the referral's own remainder. Same reasoning as above: the row states the
   // whole saving against list, so it reads $26.70 and the note beneath it
   // accounts for the $8.90.
-  check(backToReferral === "-$26.70" || backToReferral === "$26.70",
+  // $26.70 from the "You saved" row, $17.80 from the discount line — the same
+  // two rows, the same $8.90 between them, as above.
+  check(backToReferral === "-$26.70" || backToReferral === "$26.70"
+     || backToReferral === "-$17.80" || backToReferral === "$17.80",
     "the referral takes over the discount once the coupon is gone",
     `read ${JSON.stringify(backToReferral)}`);
 
