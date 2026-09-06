@@ -469,7 +469,24 @@ export function copyAdParams(from: URLSearchParams, to: URLSearchParams): number
   let copied = 0;
 
   for (const key of AD_LANDING_PARAM_KEYS) {
-    if (to.has(key)) continue;
+    // ALREADY THERE? THEN LEAVE IT — asked the same way the value will be READ.
+    //
+    // `to.has(key)` was the obvious spelling and was wrong twice, in opposite
+    // directions, because it asks a narrower question than the parser does:
+    //
+    //   * CASING. has() is case-sensitive, so a destination already carrying
+    //     `sccid=…` did not look like it had ScCid, the copy ran anyway, and
+    //     the URL ended up with BOTH spellings — where readParamAnyCase then
+    //     preferred the one just copied in. That is the overwrite this rule
+    //     exists to prevent, performed by the check meant to prevent it.
+    //   * EMPTINESS. has() is true for `utm_source=` with no value, so an empty
+    //     parameter on the destination suppressed a real incoming tag, and the
+    //     parser then read null for a visit that genuinely carried one.
+    //
+    // Reading it through the same accessor settles both: a destination "has" a
+    // parameter only when it holds a value the parser would actually use.
+    const existing = key === "ScCid" ? readParamAnyCase(to, key) : readParam(to, key);
+    if (existing) continue;
 
     // Read and normalise exactly as parseAttributionTouch does for this key:
     // campaign tags through normalizeCampaignTag (trim, lowercase, drop an

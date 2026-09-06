@@ -516,6 +516,45 @@ describe("carrying ad parameters is safe and stable", () => {
     expect(normalizeCampaignTag("__CREATIVE__")).toBeNull();
   });
 
+  it("leaves an already-present value alone across a different spelling", async () => {
+    // The skip guard asks the question the same way the value will be READ, and
+    // these two cases are why. Both are only reachable through a crafted `next`
+    // on /r/<code> — the wall always starts from an empty query — and neither
+    // could fabricate attribution, but the first performed the exact overwrite
+    // the guard exists to prevent.
+    const { copyAdParams } = await import("@/lib/attribution");
+
+    // CASING: a destination already carrying `sccid=` did not look like it had
+    // `ScCid`, so the copy ran and BOTH spellings ended up on the URL — where
+    // the parser's case-insensitive read then preferred the one just copied in.
+    const casing = new URLSearchParams("sccid=destination");
+    expect(copyAdParams(new URLSearchParams("SCCID=incoming"), casing)).toBe(0);
+    expect(casing.toString()).toBe("sccid=destination");
+    expect(captureAtPortal(new URL(`https://x.test/p?${casing}`), null)!.scCid).toBe("destination");
+  });
+
+  it("treats an empty parameter on the destination as absent", async () => {
+    // EMPTINESS: `utm_source=` with no value is "present" to has() but is
+    // nothing to the parser, so it silently suppressed a real incoming tag.
+    const { copyAdParams } = await import("@/lib/attribution");
+
+    const empty = new URLSearchParams("utm_source=");
+    expect(copyAdParams(new URLSearchParams("utm_source=tiktok&ttclid=abc"), empty)).toBe(2);
+    expect(empty.get("utm_source")).toBe("tiktok");
+    expect(empty.get("ttclid")).toBe("abc");
+  });
+
+  it("resolves a repeated parameter the same way the parser does", async () => {
+    // ?utm_source=a&utm_source=b — both sides take the first, so a duplicated
+    // tag cannot make the copy and a direct landing disagree.
+    const { copyAdParams } = await import("@/lib/attribution");
+
+    const to = new URLSearchParams();
+    copyAdParams(new URLSearchParams("utm_source=a&utm_source=b"), to);
+    expect(to.get("utm_source")).toBe("a");
+    expect(parseAttributionTouch({ search: "?utm_source=a&utm_source=b", pathname: "/p", referrer: null, now: NOW })!.utmSource).toBe("a");
+  });
+
   it("leaves an already-present value alone", async () => {
     // Precedence rule, and the reason the copy is idempotent: a value already
     // on the destination was put there deliberately and outranks a carried one.
