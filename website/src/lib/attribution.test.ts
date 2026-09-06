@@ -48,6 +48,33 @@ describe("parseAttributionTouch", () => {
     expect(parseAttributionTouch({ search: "?gclid=g_abc", now: NOW })!.gclid).toBe("g_abc");
   });
 
+  it("captures Reddit and Snapchat click ids, the other two platforms actually running", () => {
+    const reddit = parseAttributionTouch({ search: "?rdt_cid=rd_abc", now: NOW });
+    expect(reddit!.rdtCid).toBe("rd_abc");
+    expect(hasPaidClickId(reddit)).toBe(true);
+
+    const snap = parseAttributionTouch({ search: "?ScCid=sc_abc", now: NOW });
+    expect(snap!.scCid).toBe("sc_abc");
+    expect(hasPaidClickId(snap)).toBe(true);
+  });
+
+  // Snapchat documents `ScCid` but sends `sccid` and `SCCID` too, depending on
+  // which surface built the link. A case-exact read drops the click id from a
+  // real paid visit, which presents as "Snapchat doesn't convert".
+  it("reads Snapchat's click id whatever case it arrives in", () => {
+    for (const key of ["ScCid", "sccid", "SCCID", "scCid"]) {
+      const touch = parseAttributionTouch({ search: `?${key}=sc_1`, now: NOW });
+      expect(touch, key).not.toBeNull();
+      expect(touch!.scCid, key).toBe("sc_1");
+    }
+  });
+
+  // Reddit's parameter is not case-flexible in the wild, and accepting variants
+  // would mean accepting `RDT_CID` from a source that isn't Reddit.
+  it("does not invent a Reddit click id from a bare visit", () => {
+    expect(parseAttributionTouch({ search: "?page=2", now: NOW })).toBeNull();
+  });
+
   // THE CENTRAL RULE. A bare visit is not an ad click.
   it("returns null for an organic visit rather than inventing a touch", () => {
     expect(parseAttributionTouch({ search: "", pathname: "/products", now: NOW })).toBeNull();
@@ -194,6 +221,19 @@ describe("storage mapping", () => {
     expect(row.last_utm_source).toBe("meta");
     expect(row.last_fbclid).toBe("f1");
     expect(row.last_ttclid).toBeNull();
+  });
+
+  it("flattens Reddit and Snapchat click ids onto their own columns", () => {
+    const record = mergeAttribution(
+      null,
+      parseAttributionTouch({ search: "?utm_source=reddit&rdt_cid=rd1&ScCid=sc1", now: NOW }),
+      { now: NOW, visitorId: "v1" },
+    );
+    const row = toOrderAttributionRow("order-789", record);
+    expect(row.last_rdt_cid).toBe("rd1");
+    expect(row.last_sccid).toBe("sc1");
+    expect(row.first_rdt_cid).toBe("rd1");
+    expect(row.first_sccid).toBe("sc1");
   });
 
   it("emits nulls for an identity-only record instead of guessing a campaign", () => {

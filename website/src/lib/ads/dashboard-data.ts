@@ -182,7 +182,7 @@ type QueryOutcome<T> = { rows: T[]; missing: boolean; error: string | null };
  * pre-migration state — rather than an error — is what lets the dashboard be
  * built and reviewed before the schema is applied.
  */
-async function safeSelect<T>(table: string, columns: string, build?: (q: ReturnType<typeof buildQuery>) => unknown): Promise<QueryOutcome<T>> {
+export async function safeSelect<T>(table: string, columns: string, build?: (q: ReturnType<typeof buildQuery>) => unknown): Promise<QueryOutcome<T>> {
   function buildQuery() {
     return supabaseAdmin.from(table).select(columns);
   }

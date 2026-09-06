@@ -1,0 +1,84 @@
+-- ============================================================================
+-- AD SPEND AND ROAS — the layer that lets revenue be compared against cost.
+--
+-- APPLIED TO PRODUCTION 2026-09-06 as Supabase migration `ads_spend_roas`. The
+-- full DDL with its reasoning is src/lib/sql/ads-spend-roas.sql; this file
+-- records that it ran, what was verified, and the one deliberate deviation.
+--
+-- ----------------------------------------------------------------------------
+-- WHY IT WAS NEEDED.
+--
+-- ads-system.sql (applied 2026-08-28) created ad_performance_daily, which holds
+-- spend beside site revenue per CREATIVE. It had never held a row: nothing in
+-- the codebase wrote it, and its creative_id foreign key requires a creative
+-- designed inside this system, which no ad running on the four live platforms
+-- has. Spend had nowhere to land at all, so every ROAS panel was structurally
+-- empty — not because performance was zero.
+--
+-- This adds the layer underneath: ad_spend_daily, keyed by the PLATFORM's own
+-- (platform, ad_id, stat_date), with no dependency on ad_creatives. Revenue
+-- joins to it through UTM tags rather than through a foreign key.
+--
+-- ----------------------------------------------------------------------------
+-- WHY IT WAS SAFE TO DEPLOY, checked rather than asserted.
+--
+--   * One new table, four new views, four nullable columns on order_attribution,
+--     four indexes. Every statement `create ... if not exists` or
+--     `create or replace`.
+--   * WRITES TO NO EXISTING TABLE. The only change to an existing object is
+--     `alter table order_attribution add column if not exists` x4 — metadata
+--     only (nullable, no default, no backfill), so it takes no rewrite lock and
+--     is safe against a live table.
+--   * Reads orders, but only through a view: ad_revenue_daily selects
+--     amount_paid, refund_amount, payment_status and created_at. No commerce
+--     path writes anything here, and the view cannot fail an order.
+--   * getSpendDashboard degrades cleanly on absence (42P01 via safeSelect), so
+--     nothing that worked before could break.
+--
+-- ----------------------------------------------------------------------------
+-- VERIFIED AFTER APPLYING, against the real production rows.
+--
+--   * All five objects exist with the expected table_type.
+--   * ad_revenue_daily returns zero rows, and that is CORRECT: the only two
+--     orders carrying a utm_source are payment_status 'canceled' and
+--     'pending_payment'. Re-running the view's own expressions with the paid
+--     filter relaxed returns exactly those two at $68.49 each — so the filter
+--     is suppressing $136.98 of revenue the store never took. Without
+--     `payment_status = 'paid'` the dashboard would have opened reporting it.
+--   * The same check confirmed the join, ad_platform_key() and the refund
+--     netting all work on real rows.
+--
+-- End-to-end behaviour was then verified on the local harness (which this
+-- migration was also added to, in setup-local-harness.sh) with synthetic spend
+-- and attributed orders: platform ROAS, per-creative ROAS, the untagged
+-- blind-spot view and the admin panel all computed correctly, including that a
+-- 'canceled' order is excluded and a $50 refund is netted off its order's day.
+--
+-- ----------------------------------------------------------------------------
+-- THE DEVIATION, and it is cosmetic. The production run applied the same
+-- statements with the prose comments stripped — SQL comments do not need to
+-- reach the database, and the source file is the record. Nothing executable
+-- differs. The one substantive difference from an early draft of the source is
+-- that `gross_revenue` was REMOVED from ad_revenue_daily before applying:
+-- ledger-sql-parity.test.ts forbids any sum of amount_paid that does not net
+-- refund_amount in the same expression, and it was right to. Net revenue is
+-- `sum(amount_paid - refund_amount)`; refunds are exposed on their own.
+--
+-- ----------------------------------------------------------------------------
+-- Re-running this file is a no-op. It is recorded here, not re-executed.
+-- ============================================================================
+
+-- Verify:
+--
+-- select table_name, table_type from information_schema.tables
+--  where table_schema='public'
+--    and table_name in ('ad_spend_daily','ad_revenue_daily',
+--                       'ad_creative_roas_daily','ad_spend_untagged',
+--                       'ad_platform_daily')
+--  order by 1;
+-- Expect five rows: four VIEW, ad_spend_daily BASE TABLE.
+--
+-- select column_name from information_schema.columns
+--  where table_schema='public' and table_name='order_attribution'
+--    and column_name in ('first_rdt_cid','last_rdt_cid','first_sccid','last_sccid');
+-- Expect four rows.
