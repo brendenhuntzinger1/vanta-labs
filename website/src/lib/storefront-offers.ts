@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getHomepageControlConfig, getShippingConfig, getWelcomeOffer } from "@/lib/admin-control";
+import { isFreeShippingSitewide } from "@/lib/shipping";
 
 // ---------------------------------------------------------------------------
 // WHAT THE STOREFRONT IS ALLOWED TO ADVERTISE.
@@ -384,7 +385,30 @@ export async function resolveStorefrontOffers(deps: ResolveOffersDeps = {}): Pro
   }
 
   // STANDING TERMS — real, honoured, and never the reason the bar appears.
-  if (shipping && shipping.freeShippingThreshold > 0) {
+  //
+  // Free shipping SITEWIDE is still standing terms, not a promotion: no code,
+  // no window, no redemption count, applied by the same shipping math as the
+  // thresholds it replaces. So it restates this same card rather than adding
+  // one — with its own id, because the id is what the bar dedupes and dismisses
+  // on, and "free over $200" and "free on everything" are not the same claim.
+  if (shipping && isFreeShippingSitewide(shipping)) {
+    offers.push({
+      id: offerId(["free_shipping", "sitewide"]),
+      kind: "free_shipping",
+      eyebrow: "Always included",
+      headline: "Complimentary shipping on every order",
+      code: null,
+      automaticNote: "Applied automatically at checkout",
+      endsAt: null,
+      details: [
+        "United States and Canada: free on every order, no minimum.",
+        "No code needed — it is already in the price you see at checkout.",
+      ],
+      href: null,
+      priority: 80,
+      standing: true,
+    });
+  } else if (shipping && shipping.freeShippingThreshold > 0) {
     offers.push({
       id: offerId(["free_shipping", shipping.freeShippingThreshold]),
       kind: "free_shipping",

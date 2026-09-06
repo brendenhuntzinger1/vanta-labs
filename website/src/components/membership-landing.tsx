@@ -14,6 +14,7 @@ import { POINTS_PER_DOLLAR_REDEMPTION } from "@/lib/points-math";
 import { DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { useCart, formatCartCurrency } from "@/components/cart-context";
+import { isFreeShippingSitewide } from "@/lib/shipping";
 // Shared with checkout so the calculator's shipping assumption always matches
 // what an order is actually charged.
 
@@ -191,11 +192,17 @@ function SavingsCalculator({ tiers }: { tiers: MembershipTier[] }) {
 
   const usingCart = subtotal > 0;
   const basis = usingCart ? subtotal : simulatedSpend;
+  // The simulated-spend branch has to price shipping the way checkout would.
+  // With free shipping sitewide on that is $0 at any spend, which also means a
+  // plan's free-shipping perk saves nothing extra — and the calculator must not
+  // claim savings the member is already getting for nothing.
   const basisShipping = usingCart
     ? shipping
-    : basis >= shippingConfig.freeShippingThreshold
+    : isFreeShippingSitewide(shippingConfig)
       ? 0
-      : shippingConfig.domesticFee;
+      : basis >= shippingConfig.freeShippingThreshold
+        ? 0
+        : shippingConfig.domesticFee;
 
   const discountSavings = Math.round(basis * tier.memberDiscountPercent) / 100;
   const shippingSavings = tier.freeShipping ? basisShipping : 0;

@@ -2043,7 +2043,21 @@ export function useCart() {
   return context;
 }
 
-export function getShippingProgress(subtotal: number, freeShippingThreshold: number = DEFAULT_SHIPPING_CONFIG.freeShippingThreshold) {
+// `freeShippingSitewide` is the Control Center switch (shipping.ts). When it is
+// on there is no bar left to reach, so the progress card must report "unlocked"
+// rather than asking for a bigger basket — otherwise the drawer tells a shopper
+// to spend $37 more for something the checkout is already giving them, directly
+// above a Shipping row reading Free. Both progress bars (the drawer and /cart)
+// read this one function, so they cannot disagree about it.
+export function getShippingProgress(
+  subtotal: number,
+  freeShippingThreshold: number = DEFAULT_SHIPPING_CONFIG.freeShippingThreshold,
+  freeShippingSitewide: boolean = false,
+) {
+  if (freeShippingSitewide) {
+    return { isEligibleForFreeShipping: true, amountToFreeShipping: 0, progressPercentage: 100 };
+  }
+
   const isEligibleForFreeShipping = subtotal >= freeShippingThreshold;
   const amountToFreeShipping = Math.max(0, freeShippingThreshold - subtotal);
   const progressPercentage = Math.min((subtotal / freeShippingThreshold) * 100, 100);

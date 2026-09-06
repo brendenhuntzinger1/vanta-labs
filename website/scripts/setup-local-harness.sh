@@ -150,13 +150,27 @@ echo "==> post-parity migrations"
 # every read against the shim — which reads as the feature being broken rather
 # than as the harness being a schema behind. CLAUDE.md makes this harness the
 # DEFAULT browser-test target, so that false negative is the expensive kind.
+#
+# The last three arrived by the same route and for the same reason. order-
+# attribution.sql and ads-system.sql have been in production since 2026-08-28 and
+# were never listed here, so /admin/ads had NO order_attribution and none of the
+# 13 ad tables locally — every panel read as broken rather than as unmigrated,
+# and the page could not be browser-verified at all. ads-spend-roas.sql is the
+# new spend/ROAS layer and sits with them.
+#
+# All three are post-parity rather than feature migrations, and that ordering is
+# load-bearing: ads-spend-roas.sql's `ad_revenue_daily` view selects
+# orders.amount_paid, orders.refund_amount and orders.payment_status. Run before
+# harness-prod-parity-columns.sql adds those, the view fails to create, `|| true`
+# swallows it, and the harness comes up missing exactly the view under test.
 for f in referral-orders-commission-lifecycle referral-orders-manual-review-status \
          refund-exactly-once-indexes pending-emails-order-link automation-send-once auth-email-debounce \
          affiliate-email-system email-automation-tracking customer-offers coupon-free-shipping \
          email-delivery-event-log email-lifecycle-2026-09-04 payment-failure-detail \
   marketing-frequency-guard \
   auth-user-by-email \
-  membership-pending-tier-change; do
+  membership-pending-tier-change \
+  order-attribution ads-system ads-spend-roas; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
 done
 

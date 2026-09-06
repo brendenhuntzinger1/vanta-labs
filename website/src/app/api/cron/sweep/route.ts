@@ -23,6 +23,7 @@ import { runBirthdayBonusSweep } from "@/lib/membership";
 import { runCouponHygiene } from "@/lib/coupon-hygiene";
 import { resealPlaintextControlSecrets } from "@/lib/admin-control";
 import { repairUnredeemedPaidOffers } from "@/lib/offers/customer-offer-repair";
+import { ingestAdSpend } from "@/lib/ads/spend-ingest";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -132,6 +133,14 @@ const JOBS = {
   // SENDS NOTHING, so this can run every tick without becoming the thing that
   // gets muted. Alerts at most once a day, and never throws.
   orderPushHealth: { label: "order_push_health", run: runOrderPushHealthCheck },
+  // Pull ad spend from Meta, TikTok, Reddit and Snapchat into ad_spend_daily,
+  // which is the only thing that lets revenue be compared against cost. Two
+  // reasons it is safe on a 30-minute sweep: it re-fetches a trailing window and
+  // UPSERTS on the platform's own (platform, ad_id, date) key, so a re-run
+  // cannot double a day's spend; and it self-limits to one real fetch every six
+  // hours, because the platforms restate a few times a day and 192 requests
+  // daily would buy nothing.
+  adSpendIngest: { label: "ad_spend_ingest", run: ingestAdSpend },
 } as const;
 
 type JobName = keyof typeof JOBS;

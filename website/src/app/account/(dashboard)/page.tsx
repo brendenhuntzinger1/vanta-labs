@@ -24,7 +24,7 @@ import type { Product } from "@/lib/catalog-types";
 import { ReorderButton } from "@/components/reorder-button";
 import { AccountRecentlyViewed } from "@/components/account-recently-viewed";
 import { getShippingConfig } from "@/lib/admin-control";
-import { DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
+import { DEFAULT_SHIPPING_CONFIG, isFreeShippingSitewide } from "@/lib/shipping";
 import { displayOrderReference } from "@/lib/order-reference";
 import { formatDisplayDate } from "@/lib/format-date";
 import { resolveProductImage } from "@/lib/product-image";
@@ -236,7 +236,14 @@ export default async function AccountDashboardPage() {
         ) : lifetimeSavings.total > 0 ? (
           <StatTile label="Lifetime saved" value={money(lifetimeSavings.total)} sub="member savings" />
         ) : (
-          <StatTile label="Free shipping" value={`$${shippingConfig.freeShippingThreshold}+`} sub="on qualifying orders" />
+          <StatTile
+            label="Free shipping"
+            // With the sitewide switch on there IS no qualifying threshold, and
+            // a tile still advertising one contradicts the $0 shipping line on
+            // the order this customer is about to place.
+            value={isFreeShippingSitewide(shippingConfig) ? "Always" : `$${shippingConfig.freeShippingThreshold}+`}
+            sub={isFreeShippingSitewide(shippingConfig) ? "on every order" : "on qualifying orders"}
+          />
         )}
         <StatTile label="Orders" value={orders.length.toLocaleString("en-US")} sub="all time" href="/account/orders" />
       </section>

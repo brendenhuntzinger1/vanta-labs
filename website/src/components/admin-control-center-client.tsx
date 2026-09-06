@@ -100,6 +100,11 @@ export function AdminControlCenterClient() {
   const [shippingNaFlatRate, setShippingNaFlatRate] = useState("");
   const [shippingNaFreeThreshold, setShippingNaFreeThreshold] = useState("");
   const [shippingProtectionPercent, setShippingProtectionPercent] = useState("");
+  // FREE SHIPPING SITEWIDE. A real boolean, not a string like the fee fields
+  // beside it: buildControlUpdates normalises booleans before comparing, and a
+  // stored `false` is a chosen value rather than a blank, so turning the switch
+  // back OFF is an ordinary save and never trips the destructive-clear guard.
+  const [shippingFreeSitewide, setShippingFreeSitewide] = useState(false);
   // Sales tax nexus: the states where the store is registered and must
   // collect. Checkout collects tax ONLY for these destinations, at each
   // state's built-in combined rate (override-able below).
@@ -235,6 +240,10 @@ export function AdminControlCenterClient() {
     setShippingNaFlatRate(String(shipping.north_america_flat_rate ?? ""));
     setShippingNaFreeThreshold(String(shipping.north_america_free_shipping_threshold ?? ""));
     setShippingProtectionPercent(String(shipping.protection_percent ?? ""));
+    // Mirrors getShippingConfig's own strict `=== true`: the form must show OFF
+    // for anything the server would read as OFF, or the operator sees a switch
+    // that disagrees with what checkout is charging.
+    setShippingFreeSitewide(shipping.free_shipping_sitewide === true);
     const tax = next.tax ?? {};
     setTaxNexusStates(String(tax.nexus_states ?? "").split(",").map((s) => s.trim().toUpperCase()).filter((s) => Boolean(US_STATE_TAX_TABLE[s])));
     setTaxRateOverrides(String(tax.rate_overrides ?? ""));
@@ -383,6 +392,7 @@ export function AdminControlCenterClient() {
       { section: "shipping", key: "north_america_flat_rate", value: shippingNaFlatRate },
       { section: "shipping", key: "north_america_free_shipping_threshold", value: shippingNaFreeThreshold },
       { section: "shipping", key: "protection_percent", value: shippingProtectionPercent },
+      { section: "shipping", key: "free_shipping_sitewide", value: shippingFreeSitewide },
       { section: "tax", key: "nexus_states", value: taxNexusStates.join(",") },
       { section: "tax", key: "rate_overrides", value: taxRateOverrides },
 
@@ -633,6 +643,21 @@ export function AdminControlCenterClient() {
                   read (getShippingConfig falls back to the default) so a typo
                   cannot multiply an order total. */}
               <label className="text-zinc-300">Shipping protection rate (%)<input value={shippingProtectionPercent} onChange={(e) => setShippingProtectionPercent(e.target.value)} placeholder={String(DEFAULT_SHIPPING_CONFIG.protectionPercent ?? "")} className="vl-input mt-1 w-full px-3 py-2" /></label>
+              {/* FREE SHIPPING SITEWIDE — the one switch that overrides every
+                  number above it. No code, no threshold, every zone. It is a
+                  giveaway on every order at once, so the label says what it
+                  costs and what it does NOT cover: Shipping Protection is a
+                  separate opt-in add-on priced off the subtotal and goes on
+                  charging exactly as it does today. */}
+              <label className="flex items-start gap-2 text-zinc-300 sm:col-span-2">
+                <input type="checkbox" className="mt-0.5" checked={shippingFreeSitewide} onChange={(e) => setShippingFreeSitewide(e.target.checked)} />
+                <span>
+                  Free shipping sitewide
+                  <span className="mt-0.5 block text-xs text-zinc-500">
+                    Every order ships free — any subtotal, US and Canada, no code needed. Overrides the flat rates and thresholds above while it is on. Shipping protection still charges normally.
+                  </span>
+                </span>
+              </label>
             </div>
           </section>
 
