@@ -43,11 +43,13 @@ vi.mock("@/lib/supabase-server", () => {
     let mode: "select" | "update" | "upsert" = "select";
     let patch: Row = {};
     let limit = Infinity;
+    let rangeFrom = 0;
+    let rangeTo = Infinity;
 
     const matching = () => (db.tables[table] ?? []).filter((row) => filters.every((f) => f(row)));
 
     const settle = () => {
-      const rows = matching().slice(0, limit);
+      const rows = matching().slice(0, limit).slice(rangeFrom, rangeTo + 1);
       if (mode === "update") {
         for (const row of rows) Object.assign(row, patch);
         db.updates.push({ table, patch: { ...patch }, matched: rows.length });
@@ -64,6 +66,12 @@ vi.mock("@/lib/supabase-server", () => {
       in: (col: string, values: unknown[]) => { filters.push((r) => values.includes(r[col])); return builder; },
       is: (col: string, value: unknown) => { filters.push((r) => (r[col] ?? null) === value); return builder; },
       order: () => builder,
+      // The ledger's delivery-event joins are paged and time-bounded now: an
+      // unpaged read silently returns a 1000-row prefix on real Supabase, and
+      // the local stand-in caps nothing, so the read could only be wrong in
+      // production. The fake models the shape rather than the cap.
+      gte: (col: string, value: unknown) => { filters.push((r) => String(r[col] ?? "") >= String(value)); return builder; },
+      range: (from: number, to: number) => { rangeFrom = from; rangeTo = to; return builder; },
       limit: (n: number) => { limit = n; return builder; },
       maybeSingle: () => Promise.resolve({ data: matching()[0] ?? null, error: null }),
       then: (resolve: (v: unknown) => unknown) => Promise.resolve(settle()).then(resolve),

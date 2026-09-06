@@ -222,6 +222,35 @@ from public.orders o
 join public.order_attribution oa on oa.order_id = o.order_id
 where o.payment_status in ('paid', 'refunded', 'partially_refunded')
   and oa.last_utm_source is not null
+  -- ONE PRIMARY SOURCE PER ORDER, AND THIS VIEW WAS THE ONE THAT IGNORED IT.
+  --
+  -- marketing-source.ts exists to stop a single order being counted as revenue
+  -- by more than one channel: "One $150 order could be $150 of campaign revenue
+  -- and $150 of automation revenue and $150 'recovered', and no page said so."
+  -- The email dashboard honours it (admin-email.ts filters on
+  -- marketing_source_kind = 'campaign'; automation-stats.ts uses 'automation'
+  -- for revenue and assistedOrders for a touch that was not primary). Nothing
+  -- in this file mentioned it.
+  --
+  -- So an ad click in September that did not convert, followed three weeks
+  -- later by a campaign-email click that did, was $150 of campaign revenue on
+  -- the Email tab AND $150 of TikTok revenue against TikTok spend on the Ads
+  -- tab — with the 30-day attribution window making that the ordinary case, not
+  -- a corner. Every email-driven repeat order inflated paid ROAS, and the
+  -- scale-or-kill decision on live budget was made on the inflated number.
+  --
+  -- Excluded: the three channels that report the same order as their OWN
+  -- revenue on another page. `null` still counts, so nothing is lost while
+  -- marketing_source_at backfills, and so does 'ad'.
+  --
+  -- 'ambassador' is deliberately NOT excluded. The one-source rule ranks a
+  -- typed referral code above an ad touch, but the ambassador's commission is a
+  -- separate ledger by that module's own statement, and an ad that paid for a
+  -- click onto an ambassador link is a real ad-driven sale. Which of the two
+  -- should carry the revenue is a tagging-policy decision for the owner, not
+  -- one to make silently inside a view.
+  and (o.marketing_source_kind is null
+       or o.marketing_source_kind not in ('campaign', 'automation', 'cart_recovery'))
 group by 1, 2, 3, 4, 5;
 
 revoke all on public.ad_revenue_daily from anon, authenticated;

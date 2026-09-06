@@ -32,6 +32,17 @@ function DeliveryCell({ row }: { row: SendLedgerRow }) {
   }
   if (row.complained) return <span className="text-rose-300">Marked spam</span>;
   if (row.bounced) return <span className="text-amber-300">Bounced</span>;
+  // A reported failure is not silence. email.failed used to parse as "ignored",
+  // so a permanently rejected message rendered "No word yet" — identical to one
+  // still in flight — while the channel row read "0 of 1 delivered" with
+  // nothing saying why.
+  if (row.failed) {
+    return (
+      <span className="text-rose-300" title="The provider reported it could not send this message. Not a bounce: nothing was accepted and then returned.">
+        Could not send
+      </span>
+    );
+  }
   if (row.delivered) {
     return (
       <span className="text-emerald-300">

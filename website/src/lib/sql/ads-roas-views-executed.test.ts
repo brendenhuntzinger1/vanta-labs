@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "pg";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -54,6 +54,10 @@ create table orders (
   payment_status text not null default 'paid',
   amount_paid numeric not null default 0,
   refund_amount numeric not null default 0,
+  -- The one-source stamp. ad_revenue_daily reads it so an order the store has
+  -- already credited to a campaign, an automation or cart recovery is not ALSO
+  -- counted as ad revenue against ad spend.
+  marketing_source_kind text,
   created_at timestamptz not null default now()
 );
 create table order_attribution (
@@ -111,9 +115,16 @@ describeDb("the ROAS views, run against a real Postgres", () => {
 
   async function addOrder(o: Record<string, unknown>) {
     await client.query(
-      `insert into orders (order_id, payment_status, amount_paid, refund_amount, created_at)
-       values ($1,$2,$3,$4,$5)`,
-      [o.order_id, o.payment_status ?? "paid", o.amount_paid ?? 0, o.refund_amount ?? 0, o.created_at],
+      `insert into orders (order_id, payment_status, amount_paid, refund_amount, marketing_source_kind, created_at)
+       values ($1,$2,$3,$4,$5,$6)`,
+      [
+        o.order_id,
+        o.payment_status ?? "paid",
+        o.amount_paid ?? 0,
+        o.refund_amount ?? 0,
+        o.marketing_source_kind ?? null,
+        o.created_at,
+      ],
     );
     await client.query(
       `insert into order_attribution (order_id, last_utm_source, last_utm_campaign, last_utm_content)
@@ -554,5 +565,85 @@ describeDb("the ROAS views, run against a real Postgres", () => {
     expect(Number(rows[0].cpc)).toBeCloseTo(2, 9); // 100/50
     expect(Number(rows[0].cpm)).toBeCloseTo(4, 9); // 100/25000*1000
     expect(Number(rows[0].ctr)).toBeCloseTo(0.002, 9); // 50/25000
+  });
+
+  // ---------------------------------------------------------------------------
+  // ONE ORDER IS ONE CHANNEL'S REVENUE.
+  //
+  // marketing-source.ts decides a single primary channel per order precisely so
+  // "$150 of campaign revenue AND $150 of automation revenue AND $150
+  // recovered" cannot happen. The email dashboard honours it. These views did
+  // not mention it, so an ad click that did not convert followed weeks later by
+  // a campaign-email click that did was counted in full on BOTH tabs — and with
+  // a 30-day attribution window that is the ordinary repeat purchase, not a
+  // corner case. Live budget decisions were made on the inflated ROAS.
+  // ---------------------------------------------------------------------------
+  describe("revenue another channel has already claimed", () => {
+    beforeEach(reset);
+
+    it.each([
+      ["a campaign email", "campaign"],
+      ["an automation", "automation"],
+      ["cart recovery", "cart_recovery"],
+    ])("is not also counted as ad revenue when %s owns the order", async (_label, kind) => {
+      await addSpend([{ platform: "tiktok", ad_id: "a1", stat_date: D, spend: 50, utm_source: "tiktok", utm_campaign: "launch", utm_content: "hook_a" }]);
+      await addOrder({
+        order_id: "o1", amount_paid: 150, created_at: T, marketing_source_kind: kind,
+        last_utm_source: "tiktok", last_utm_campaign: "launch", last_utm_content: "hook_a",
+      });
+
+      const { rows } = await client.query("select coalesce(sum(net_revenue),0)::float8 as revenue from ad_revenue_daily");
+      expect(rows[0].revenue).toBe(0);
+    });
+
+    it("still counts an order the ads pipeline owns", async () => {
+      await addOrder({
+        order_id: "o1", amount_paid: 150, created_at: T, marketing_source_kind: "ad",
+        last_utm_source: "tiktok", last_utm_campaign: "launch", last_utm_content: "hook_a",
+      });
+
+      const { rows } = await client.query("select coalesce(sum(net_revenue),0)::float8 as revenue from ad_revenue_daily");
+      expect(rows[0].revenue).toBe(150);
+    });
+
+    it("still counts an order with no stamp at all, so nothing is lost while it backfills", async () => {
+      await addOrder({
+        order_id: "o1", amount_paid: 150, created_at: T,
+        last_utm_source: "tiktok", last_utm_campaign: "launch", last_utm_content: "hook_a",
+      });
+
+      const { rows } = await client.query("select coalesce(sum(net_revenue),0)::float8 as revenue from ad_revenue_daily");
+      expect(rows[0].revenue).toBe(150);
+    });
+
+    it("still counts an ambassador-attributed order, which is left as an owner decision", async () => {
+      // The rule ranks a typed referral code above an ad touch, but the
+      // ambassador's commission is a separate ledger and an ad that paid for
+      // the click onto their link produced a real ad-driven sale. Which side
+      // carries the revenue is a tagging-policy call, not one for a view.
+      await addOrder({
+        order_id: "o1", amount_paid: 150, created_at: T, marketing_source_kind: "ambassador",
+        last_utm_source: "tiktok", last_utm_campaign: "launch", last_utm_content: "hook_a",
+      });
+
+      const { rows } = await client.query("select coalesce(sum(net_revenue),0)::float8 as revenue from ad_revenue_daily");
+      expect(rows[0].revenue).toBe(150);
+    });
+
+    it("keeps the ROAS honest end to end: $50 spend, one campaign-owned order, no revenue", async () => {
+      await addSpend([{ platform: "tiktok", ad_id: "a1", stat_date: D, spend: 50, utm_source: "tiktok", utm_campaign: "launch", utm_content: "hook_a" }]);
+      await addOrder({
+        order_id: "o1", amount_paid: 150, created_at: T, marketing_source_kind: "campaign",
+        last_utm_source: "tiktok", last_utm_campaign: "launch", last_utm_content: "hook_a",
+      });
+
+      const { rows } = await client.query(
+        "select spend::float8 as spend, net_revenue::float8 as net_revenue, roas::float8 as roas from ad_creative_roas_daily",
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0].spend).toBe(50);
+      expect(rows[0].net_revenue).toBe(0);
+      expect(rows[0].roas, "3.0 before the fix — three times the truth").toBe(0);
+    });
   });
 });
