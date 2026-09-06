@@ -248,6 +248,18 @@ describe("the policy is the only place the decision is made", () => {
     expect(slot).not.toMatch(/display\s*:\s*none/);
   });
 
+  it("keeps the storefront header off the whole auth surface, not just the portal", () => {
+    // The portal lost its header; its two siblings kept theirs, so a customer
+    // who cannot sign in was shown a nav of five links — the wordmark,
+    // Products, COA Library, Membership, Account — every one of which requires
+    // the account they are locked out of, and every one of which bounces back
+    // to the form they just left.
+    for (const page of ["login", "forgot-password", "reset-password"]) {
+      const source = readFileSync(join(process.cwd(), `src/app/account/${page}/page.tsx`), "utf8");
+      expect(source, `${page} must not render the storefront header`).not.toContain("<SiteHeaderV2 />");
+    }
+  });
+
   it("renders the footer exactly once everywhere it does belong", () => {
     // /wholesale imported SiteFooter and the root layout rendered another, so
     // the page shipped two. Measured in Chromium: 2 <footer> elements on
