@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultBxgyPromotions } from "@/lib/bxgy-config";
+import { BAC_WATER_SLUG } from "@/lib/bac-water";
 import type { BxgyPromotion } from "@/lib/bxgy-engine";
 
 // ---------------------------------------------------------------------------
@@ -122,7 +123,12 @@ const PRODUCTS = {
   "vial-6998": { name: "Vial 69.98", category: "Research Peptides", price: "$69.98", stockStatus: "In Stock", image: "/d.png", description: "" },
   "vial-37": { name: "Vial 37", category: "Research Peptides", price: "$37.00", stockStatus: "In Stock", image: "/e.png", description: "" },
   "ghk-cu": { name: "GHK-Cu", category: "Research Peptides", price: "$47.99", stockStatus: "In Stock", image: "/g.png", description: "" },
-  "bacteriostatic-water": { name: "BAC Water", category: "Supplies", price: "$9.99", stockStatus: "In Stock", image: "/w.png", description: "" },
+  // "bac-water" is the canonical slug in production (rename-bac-water-slug.sql).
+  // This mock said "bacteriostatic-water" while OFFER_CATALOG did too, so the
+  // pair agreed with each other and disagreed with the database: the gift
+  // resolved here and resolved to nothing live. Both now take the slug from
+  // bac-water.ts, which is the only place that decides it.
+  [BAC_WATER_SLUG]: { name: "BAC Water", category: "Supplies", price: "$9.99", stockStatus: "In Stock", image: "/w.png", description: "" },
 } as const;
 
 vi.mock("@/lib/catalog", () => ({
@@ -175,7 +181,7 @@ const base: OfferRow = {
   expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), reserved_order_id: null, redeemed_at: null,
 };
 const percent15 = (): OfferRow => ({ ...base });
-const bacWater10 = (): OfferRow => ({ ...base, offer_key: "winback_60_bac_water_10", reward_kind: "free_product_percent", product_slug: "bacteriostatic-water", percent_off: 10 });
+const bacWater10 = (): OfferRow => ({ ...base, offer_key: "winback_60_bac_water_10", reward_kind: "free_product_percent", product_slug: BAC_WATER_SLUG, percent_off: 10 });
 const freeShipping = (): OfferRow => ({ ...base, offer_key: "winback_60_free_shipping", reward_kind: "free_shipping", percent_off: null });
 const freeGhk = (): OfferRow => ({ ...base, offer_key: "winback_60_free_ghkcu", reward_kind: "free_product", product_slug: "ghk-cu", percent_off: null, min_subtotal_cents: 6000 });
 
