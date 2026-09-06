@@ -314,7 +314,47 @@ function calculateCouponDiscountAmount(subtotal: number, coupon: CouponDetails |
   return Math.min(Math.max(amount, 0), subtotal);
 }
 
-export function CartProvider({ children }: { children: React.ReactNode }) {
+// ---------------------------------------------------------------------------
+// THE CART HAS TO BE TOLD WHEN THE VIEWER SIGNS IN.
+//
+// Every configuration this provider prices with — the shipping config, the
+// promotions, the bundle rates, the member and ambassador discounts, the points
+// and store-credit balances — is fetched in a mount effect with an EMPTY
+// dependency array. That was correct while the store was open to anonymous
+// visitors: the config arrived once and never changed under a shopper.
+//
+// Closing the default broke it, and the break is silent. This provider lives in
+// the ROOT layout, so it mounts on the sign-in portal — the first page every
+// visitor now sees. There, every one of those endpoints answers 401, each
+// effect returns early, and the provider keeps its BUILT-IN DEFAULTS. Signing
+// in is a client-side navigation plus router.refresh(); neither remounts a
+// provider above the changing segment, so the effects never run again and the
+// defaults are what the shopper is priced against for the rest of that page
+// session.
+//
+// Measured in a real browser against the harness, with the store's production
+// setting (Free Shipping Sitewide ON) — portal, sign in through the form, then
+// click through to the catalogue, a product and the cart with no reload:
+//
+//     what the shopper was shown      Estimated shipping  $15.00
+//                                     "Free shipping at $200.00 — $131 away"
+//                                     Estimated total     $88.14
+//     what the server would charge    shipping            $0.00
+//                                     total               $73.14
+//
+// A $15 phantom fee and a "spend $131 more" nag on a store that ships
+// everything free — and then a checkout whose expectedTotal cannot match, so
+// the order is refused with "your total has been updated". The live Buy 2 Get 1
+// promotion is missing from the same session for the same reason.
+//
+// `signedIn` comes from the root layout, which already resolves it, and is in
+// the dependency array of every effect that reads a gated or per-customer
+// endpoint. router.refresh() re-renders the layout, the prop flips, and the
+// config is fetched for real. The provider is NOT remounted and does not need
+// to be — remounting would empty the shopper's cart, which is the one thing
+// worse than the bug.
+// ---------------------------------------------------------------------------
+export function CartProvider({ children, signedIn = false }: { children: React.ReactNode; signedIn?: boolean }) {
   const [items, setItems] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -464,7 +504,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         setAccountChecked(true);
       }
     })();
-  }, []);
+  }, [signedIn]);
 
   useEffect(() => {
     (async () => {
@@ -479,7 +519,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         // Not an ambassador / signed out — no personal discount shown.
       }
     })();
-  }, []);
+  }, [signedIn]);
 
   // PER-CUSTOMER USAGE LIMITS, LEARNED THE MOMENT AN EMAIL IS KNOWN.
   //
@@ -519,7 +559,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [knownEmail]);
+  }, [knownEmail, signedIn]);
 
   useEffect(() => {
     (async () => {
@@ -568,7 +608,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         setStoreConfigLoaded(true);
       }
     })();
-  }, []);
+  }, [signedIn]);
 
   useEffect(() => {
     (async () => {
@@ -583,7 +623,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         // Defaults to the built-in config if this fails.
       }
     })();
-  }, []);
+  }, [signedIn]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
