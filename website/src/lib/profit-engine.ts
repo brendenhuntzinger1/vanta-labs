@@ -60,14 +60,14 @@ export const DEFAULT_PROFIT_SETTINGS: ProfitSettings = {
   processingFeePercent: PROCESSING_FEE_DEFAULT_PERCENT,
 };
 
-/** A customer discount component, in the order promotions are peeled off when
- * an order is unprofitable (lowest priority first). Membership is a PAID
- * benefit and is never stripped for margin. */
+/**
+ * A customer discount component.
+ *
+ * The ordering here once meant "the sequence the profit guard peels these off
+ * in". Nothing peels any more — the floor reports and never refuses — so this
+ * is simply the set of things that can reduce a customer's price.
+ */
 export type DiscountComponent = "coupon" | "referral" | "bundle" | "membership";
-
-// Lowest-priority-first: the profit guard removes coupon, then the referral
-// customer discount, then the bundle discount. Membership is never removed.
-const REMOVAL_ORDER: DiscountComponent[] = ["coupon", "referral", "bundle"];
 
 export interface OrderInputs {
   /** Retail subtotal = sum(unitPrice × qty). */
@@ -376,54 +376,24 @@ export function computeProfit(inputs: OrderInputs, discount: DiscountBreakdown):
     amountCharged,
   };
 }
-
-export interface ProtectedOrder extends ProfitBreakdown {
-  /** True when the order meets the profit floor and may finalize. */
-  profitable: boolean;
-  /** Discount components removed by the profit guard to restore margin. */
-  removed: DiscountComponent[];
-  /** Set when the order is blocked even with all promos removed. */
-  blockedReason: string | null;
-}
-
 // THE floor predicate. Exported because the live checkout (quote-order.ts) ran
 // its own inlined copy of these two comparisons, so "is this order above the
 // floor?" had two homes and only one of them was the module documented as the
 // guardrail. One rule, one place.
-export function meetsFloor(p: ProfitBreakdown, settings: ProfitSettings): boolean {
+//
+// IT NO LONGER DECIDES WHETHER AN ORDER MAY COMPLETE — nothing refuses a sale
+// for margin any more. It decides whether the owner is TOLD about one, which is
+// the same comparison against the same two admin settings, so it stays here
+// rather than being restated in the alerting module (that restatement is what
+// this export exists to prevent, and SOT-08 guards).
+//
+// Takes only the two floors it actually reads, so a caller holding an alerting
+// threshold rather than a full ProfitSettings can use the same predicate.
+export function meetsFloor(
+  p: ProfitBreakdown,
+  settings: Pick<ProfitSettings, "minProfitDollars" | "minProfitPercent">,
+): boolean {
   if (p.grossProfit < settings.minProfitDollars) return false;
   if (p.discountedSubtotal > 0 && p.grossMarginPercent < settings.minProfitPercent) return false;
   return true;
-}
-
-// The guardrail. Computes the order, and if it's below the floor, peels off the
-// lowest-priority customer discount and recomputes, repeating until it's
-// profitable or no removable promo remains. If it still can't meet the floor
-// (base pricing/commission alone lose money), the order is blocked.
-export function protectProfit(inputs: OrderInputs, settings: ProfitSettings = DEFAULT_PROFIT_SETTINGS): ProtectedOrder {
-  const enabled = new Set<DiscountComponent>(["coupon", "referral", "bundle", "membership"]);
-  const removed: DiscountComponent[] = [];
-
-  for (;;) {
-    const discount = resolveCustomerDiscount(inputs, enabled);
-    const profit = computeProfit(inputs, discount);
-
-    if (meetsFloor(profit, settings)) {
-      return { ...profit, profitable: true, removed, blockedReason: null };
-    }
-
-    // Remove the lowest-priority discount still in play and try again.
-    const next = REMOVAL_ORDER.find((component) => enabled.has(component) && discount.components.includes(component));
-    if (!next) {
-      // Nothing left to remove — the order loses money even at full price.
-      return {
-        ...profit,
-        profitable: false,
-        removed,
-        blockedReason: "This order can't be completed at a profitable price. Promotion unavailable on this order.",
-      };
-    }
-    enabled.delete(next);
-    removed.push(next);
-  }
 }
