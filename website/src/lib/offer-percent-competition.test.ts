@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultBxgyPromotions } from "@/lib/bxgy-config";
 import { BAC_WATER_SLUG } from "@/lib/bac-water";
+import { OFFER_CATALOG } from "@/lib/offers/customer-offers";
 import type { BxgyPromotion } from "@/lib/bxgy-engine";
 
 // ---------------------------------------------------------------------------
@@ -336,6 +337,104 @@ describe("a free-shipping gift", () => {
     const q = await quote([{ id: "peptide-b", quantity: 2 }], { member: true });
     expect(q.shipping).toBe(0);
     expect(q.appliedOffer).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE 30/40/50 RETENTION LADDER, PRICED THROUGH THE REAL quoteOrder.
+//
+// The rows above are hand-written fixtures, which is right for the competition
+// rules they exercise — those tests are about the discount race, not about the
+// catalogue. This block is the opposite: it is about whether OFFER_CATALOG's
+// OWN values price correctly, so its rows are DERIVED from the catalogue by
+// the same mapping issueCustomerOffer uses when it mints a token
+// (customer-offers.ts: reward_kind / product_slug / percent_off /
+// min_subtotal_cents).
+//
+// That derivation is the whole point. A hand-typed product_slug is exactly how
+// the BAC Water gift broke: the catalogue said "bacteriostatic-water" after
+// production had renamed the product to "bac-water", and every fixture in this
+// file agreed with the catalogue, so the suite was green while a live gift
+// resolved to no product at all. Deriving from the catalogue means a stale slug
+// fails HERE, in a test that prices a real order, rather than in a customer's
+// inbox.
+// ---------------------------------------------------------------------------
+
+/** The row issueCustomerOffer would write for a catalogue entry. */
+function mintedRow(offerKey: keyof typeof OFFER_CATALOG): OfferRow {
+  const config = OFFER_CATALOG[offerKey];
+  const reward = config.reward;
+  const isProduct = reward.kind === "free_product" || reward.kind === "free_product_percent";
+  const hasPercent = reward.kind === "free_shipping_percent" || reward.kind === "percent" || reward.kind === "free_product_percent";
+  return {
+    ...base,
+    offer_key: offerKey,
+    reward_kind: reward.kind,
+    product_slug: isProduct && "productSlug" in reward ? reward.productSlug : null,
+    percent_off: hasPercent && "percent" in reward ? reward.percent : null,
+    min_subtotal_cents: config.minSubtotalCents,
+  };
+}
+
+describe("the retention ladder as production configures it", () => {
+  // Day 30 — replenishment. Free shipping AND 10% off, both halves granted.
+  it("day 30 (winback_60_free_shipping_10) waives shipping AND takes 10% off", async () => {
+    state.offer = mintedRow("winback_60_free_shipping_10");
+    // 2 x $40 = $80: over the $35 minimum, under the $200 free-shipping
+    // threshold, so the waiver is worth the $15 domestic fee.
+    const q = await quote([{ id: "peptide-b", quantity: 2 }]);
+    expect(q.shipping).toBe(0);
+    expect(q.discountAmount).toBe(8);
+    expect(q.appliedOffer?.description).toBe("Free shipping + 10% off");
+    expect(q.appliedOffer?.shippingApplied).toBe(true);
+    expect(q.appliedOffer?.percentApplied).toBe(true);
+  });
+
+  // Day 40 — winback_30. The vial must actually be in the order, not merely
+  // promised: this is the assertion the stale slug would have failed.
+  it("day 40 (winback_60_bac_water_15) adds a real $0 BAC Water AND takes 15% off", async () => {
+    state.offer = mintedRow("winback_60_bac_water_15");
+    const q = await quote([{ id: "peptide-b", quantity: 2 }]);
+    const gift = q.lineItems.find((line) => line.gift);
+    expect(gift?.product.name).toBe("BAC Water");
+    expect(gift?.product.price).toBe(0);
+    expect(gift?.quantity).toBe(1);
+    expect(q.discountAmount).toBe(12);
+    expect(q.appliedOffer?.description).toBe("BAC Water + 15% off");
+    expect(q.appliedOffer?.productApplied).toBe(true);
+    expect(q.appliedOffer?.percentApplied).toBe(true);
+  });
+
+  it("day 40's gift resolves the product by the slug the catalogue actually carries", async () => {
+    const row = mintedRow("winback_60_bac_water_15");
+    // The guard: if OFFER_CATALOG ever names a slug the store does not publish,
+    // catalogProducts.find returns undefined, no gift line is pushed, and the
+    // customer gets the percentage with none of the product they were promised.
+    expect(row.product_slug).toBe(BAC_WATER_SLUG);
+    state.offer = row;
+    const q = await quote([{ id: "peptide-b", quantity: 2 }]);
+    expect(q.lineItems.some((line) => line.gift)).toBe(true);
+    expect(q.lineItems.find((line) => line.gift)?.product.id).toContain(BAC_WATER_SLUG);
+  });
+
+  // Day 50 — winback_60, unchanged. Its $60 floor is the reason the gift cannot
+  // be redeemed against a basket smaller than the vial it gives away.
+  it("day 50 (winback_60_free_ghkcu) still gives the vial only above its $60 minimum", async () => {
+    state.offer = mintedRow("winback_60_free_ghkcu");
+    const above = await quote([{ id: "peptide-b", quantity: 2 }]);
+    expect(above.lineItems.find((line) => line.gift)?.product.name).toBe("GHK-Cu");
+    expect(above.appliedOffer?.description).toBe("GHK-Cu");
+
+    state.offer = mintedRow("winback_60_free_ghkcu");
+    const below = await quote([{ id: "peptide-b", quantity: 1 }]);
+    expect(below.lineItems.some((line) => line.gift)).toBe(false);
+    expect(below.appliedOffer).toBeNull();
+  });
+
+  it("the ladder's three offers carry the minimums the catalogue states", () => {
+    expect(mintedRow("winback_60_free_shipping_10").min_subtotal_cents).toBe(3500);
+    expect(mintedRow("winback_60_bac_water_15").min_subtotal_cents).toBe(3500);
+    expect(mintedRow("winback_60_free_ghkcu").min_subtotal_cents).toBe(6000);
   });
 });
 
