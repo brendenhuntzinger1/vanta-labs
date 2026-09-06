@@ -183,28 +183,48 @@ describe("a referral discount that IS given is exclusive, as it always was", () 
   });
 });
 
-describe("a referral that gives nothing costs the shopper nothing", () => {
-  it("redeems store credit below the minimum qualifying order", async () => {
-    // One vial, $60.00 — under the $100 minimum, so no referral discount.
+// ---------------------------------------------------------------------------
+// THE SMALL BASKET CHANGED SIDES.
+//
+// A one-vial $60.00 basket used to be the file's cheapest way to produce an
+// inert referral: it was under the $100 minimum, so no discount was given and
+// store credit redeemed alongside the code. The minimum has been removed, so
+// that basket now WINS the referral discount like any other — and the
+// exclusivity rule follows it across, unchanged. This block is the old
+// below-minimum pair, re-pointed at the answer the same carts give now.
+//
+// This is the real customer-visible consequence of removing the minimum, and it
+// is not only "she gets a discount": a member who would have spent store credit
+// on a small referred order now keeps that credit and takes the discount
+// instead. Better for her either way — see the parity test at the end of the
+// file, which is what actually pins that.
+// ---------------------------------------------------------------------------
+describe("a small referred basket now wins the discount, so the rule follows it", () => {
+  it("suppresses store credit on a one-vial basket that used to be below the minimum", async () => {
     const quoted = await quote({ quantity: 1, storeCreditCents: 5000 });
 
-    expect(quoted.discountAmount).toBe(0);
-    expect(quoted.storeCreditRedeemedCents).toBe(5000);
-    // And the code is still on the order, so the ambassador keeps the credit
-    // for sending the customer.
+    expect(quoted.discountAmount).toBeGreaterThan(0);
+    expect(quoted.storeCreditRedeemedCents).toBe(0);
+    // The code is on the order either way, so the ambassador keeps the credit
+    // for sending the customer — and now earns on it as well.
     expect(quoted.referral?.code).toBe("VANTA15");
   });
 
-  it("redeems points below the minimum qualifying order", async () => {
+  it("suppresses points on a one-vial basket that used to be below the minimum", async () => {
     const quoted = await quote({ quantity: 1, points: 500 });
 
-    expect(quoted.discountAmount).toBe(0);
-    expect(quoted.pointsRedeemed).toBeGreaterThan(0);
+    expect(quoted.discountAmount).toBeGreaterThan(0);
+    expect(quoted.pointsRedeemed).toBe(0);
+    expect(quoted.pointsDiscountAmount).toBe(0);
   });
+});
 
+describe("a referral that gives nothing costs the shopper nothing", () => {
   // THE CASE THE FIRST REPAIR MISSED, AND THE ONE NOBODY WOULD EVER REPORT:
-  // the basket clears the minimum, so "does it qualify" says yes, and the
-  // referral still wins nothing.
+  // "does it qualify" says yes and the referral still wins nothing. With the
+  // minimum removed this is no longer merely the subtle case — it is the ONLY
+  // way an inert referral arises, which is exactly why the guard must ask
+  // whether the referral WON and never whether the basket was big enough.
   it("redeems store credit when a commission-only ambassador's code gives 0%", async () => {
     ambassador.customer_discount_percent = 0;
 
@@ -236,11 +256,47 @@ describe("a referral that gives nothing costs the shopper nothing", () => {
 
   // The shopper must never be worse off for having clicked the link. This is
   // the invariant the whole rule exists to protect, stated directly.
+  //
+  // It used to be checked on a one-vial basket, which was inert only because it
+  // sat under the $100 minimum. With no minimum left, the inertness has to come
+  // from the ambassador's own 0% rate — the mechanism, not the basket size.
   it("charges the same as the identical basket with no code at all", async () => {
+    ambassador.customer_discount_percent = 0;
+
     const withCode = await quote({ quantity: 1, storeCreditCents: 5000 });
     const withoutCode = await quote({ quantity: 1, withCode: false, storeCreditCents: 5000 });
 
     expect(withCode.expectedTotal).toBe(withoutCode.expectedTotal);
     expect(withCode.storeCreditRedeemedCents).toBe(withoutCode.storeCreditRedeemedCents);
+  });
+
+  // ---------------------------------------------------------------------
+  // FLAGGED, NOT FIXED, AND NOT CAUSED HERE.
+  //
+  // "Never worse off" holds only while the referral is INERT. Once the code
+  // wins, it suppresses store credit — and a member holding more credit than
+  // the discount is worth pays MORE with the code than without it. On a
+  // one-vial basket with $50.00 of credit: $66.00 with the code (15% off
+  // $60.00, credit suppressed) against $25.00 without it ($60.00 less the full
+  // $50.00 credit).
+  //
+  // This is NOT a consequence of removing the qualifying minimum. It is the
+  // store-credit exclusivity rule, and it behaved exactly this way on every
+  // basket over $100 before the minimum was removed — verified by restoring
+  // the old constant and re-running the qualifying-basket case above, which
+  // passes either way. What the removal changed is the REACH: small baskets
+  // are now inside the rule too, so a member can meet it on a $60 order.
+  //
+  // Pinned rather than corrected because choosing between a shopper's credit
+  // and an ambassador's commission is the owner's call, not a bug fix to make
+  // in passing. Delete this test when that call is made.
+  // ---------------------------------------------------------------------
+  it("can cost a credit-holding member MORE than no code — pre-existing, now reachable on small baskets", async () => {
+    const withCode = await quote({ quantity: 1, storeCreditCents: 5000 });
+    const withoutCode = await quote({ quantity: 1, withCode: false, storeCreditCents: 5000 });
+
+    expect(withCode.storeCreditRedeemedCents).toBe(0);
+    expect(withoutCode.storeCreditRedeemedCents).toBe(5000);
+    expect(withCode.expectedTotal).toBeGreaterThan(withoutCode.expectedTotal);
   });
 });

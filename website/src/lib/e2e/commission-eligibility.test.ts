@@ -312,10 +312,13 @@ describe("a commission only accrues when the ambassador and the program are live
     expect(Number(row!.commission_percent)).toBe(12);
   });
 
-  it("an order below the minimum qualifying subtotal earns NOTHING", async () => {
-    // The seeded minimum is 100; one $120 unit clears it, so drop to a cart
-    // that cannot. Uses its own cheap product so the rest of the file is
-    // unaffected.
+  // WAS: "an order below the minimum qualifying subtotal earns NOTHING",
+  // asserting commission_amount 0 and an ineligible_reason naming the minimum.
+  // The qualifying minimum has been removed programme-wide, so the cart that
+  // used to be the canonical zero-commission case is now an ordinary earning
+  // order. A $10 cart is kept as the case precisely because it is the smallest
+  // thing the old gate refused.
+  it("a tiny order NOW earns, with no ineligible reason", async () => {
     harness.reset();
     seedStore(harness.db, [
       { slug: SLUG, name: "Alpha Peptide 10mg", priceCents: 1000, inventory: 40, unitCostCents: 200, weightOz: 0.4 },
@@ -326,8 +329,8 @@ describe("a commission only accrues when the ambassador and the program are live
 
     const row = commissionRow();
     expect(row).not.toBeNull();
-    expect(Number(row!.commission_amount)).toBe(0);
-    expect(String(row!.ineligible_reason)).toMatch(/minimum qualifying order/i);
+    expect(Number(row!.commission_amount)).toBeGreaterThan(0);
+    expect(row!.ineligible_reason ?? null).toBeNull();
   });
 });
 
@@ -360,20 +363,21 @@ describe("checkout refuses a referral code that should not apply", () => {
     expect(String(order.referral_code)).toBe(CODE);
   });
 
-  // BELOW THE MINIMUM IS NOT AN ERROR.
+  // A SMALL CART IS AN ORDINARY CART NOW.
   //
-  // This used to assert HTTP 400 and zero orders. That was the defect, not the
-  // guarantee: a customer who followed an ambassador's link with a small basket
-  // was told in the cart that they had a discount, given none, and then STOPPED
-  // at the pay button by a minimum nobody had mentioned. Production carried 75
-  // referral clicks and 0 referral orders.
+  // The history here is worth keeping, because this test has been wrong in both
+  // directions. It first asserted HTTP 400 and zero orders — a customer who
+  // followed an ambassador's link with a small basket was told in the cart that
+  // they had a discount, given none, and then STOPPED at the pay button by a
+  // minimum nobody had mentioned. That was corrected to "the sale completes at
+  // full price, attribution kept", which was right for as long as a minimum
+  // existed.
   //
-  // The invariant that matters is the one the stale-code case states two
-  // paragraphs down — "no undeserved discount is given" — not "the order is
-  // refused". Attribution is kept so the ambassador can see the conversion she
-  // sent; payment-webhook.ts records it with an ineligible_reason and zero
-  // commission, which is what that code was already built to do.
-  it("allows a cart below the minimum, at full price, and keeps the attribution", async () => {
+  // The minimum has now been removed, so $99.99 earns the same rate as $100.01
+  // and the shopper gets the discount the cart promised her. The two invariants
+  // that survive every version of this test are unchanged: the sale is never
+  // refused, and the attribution is always kept.
+  it("gives the discount on a $99.99 cart and keeps the attribution", async () => {
     harness.reset();
     seedStore(harness.db, [
       { slug: SLUG, name: "Alpha Peptide 10mg", priceCents: 9999, inventory: 40, unitCostCents: 1000, weightOz: 0.4 },
@@ -388,35 +392,31 @@ describe("checkout refuses a referral code that should not apply", () => {
     const orders = harness.db.tables.get("orders") ?? [];
     expect(orders).toHaveLength(1);
 
-    // No undeserved discount — $99.99 does not earn the $100 rate.
-    expect(Number(orders[0].discount_amount)).toBe(0);
+    // $99.99 now earns the same rate as $100.01 — that is the removal.
+    expect(Number(orders[0].discount_amount)).toBeGreaterThan(0);
 
     // The ambassador still gets credit for sending the customer.
     expect(String(orders[0].referral_code)).toBe(CODE);
   });
 
-  // THE PROFIT GUARD MUST NOT BE CHARGED FOR A COMMISSION THAT WILL NEVER BE PAID.
+  // THE PROFIT GUARD IS NOW CHARGED FOR THE COMMISSION, BECAUSE IT WILL BE PAID.
   //
-  // A below-minimum referral earns the ambassador nothing, so reserving her
-  // commission against the break-even floor makes the floor strictly harsher
-  // than reality — and it fails CLOSED, refusing the order outright with
-  // "Promotion unavailable on this order." on any thin-margin cart.
+  // THIS TEST HAS INVERTED, AND THE INVERSION IS THE POINT. It used to assert
+  // that a thin-margin below-minimum cart went THROUGH, because reserving a
+  // commission that would never be paid made the break-even floor strictly
+  // harsher than reality and refused sales that were actually profitable.
   //
-  // The margin here is deliberately thin, and the window was measured rather
-  // than guessed. With the guard correctly gated, a $99.99 cart is refused only
-  // once unit cost passes $105. With the guard charged for a commission that
-  // will never be paid, the refusal starts at $80 — so every below-minimum
-  // referred cart costing between $80 and $105 was refused outright, while the
-  // identical cart WITHOUT a code went through.
+  // With the minimum removed there is no such thing as a referred order that
+  // cannot earn. Every referred cart owes a real commission, so charging the
+  // floor for it is now correct, and a cart whose margin genuinely cannot carry
+  // both the discount and the commission must be refused rather than sold at a
+  // loss. The fixture is deliberately extreme — 95% COGS, a $95.00 unit cost on
+  // a $99.99 price — so this pins the guard, not the catalogue.
   //
-  // MUTATION CONTROL: reverting BOTH gates in quote-order.ts — the guard's
-  // `referralAccepted: referralQualifiesForDiscount` back to `Boolean(referral)`
-  // AND `if (referral && referralQualifiesForDiscount)` back to `if (referral)` —
-  // turns this test red with exactly "Promotion unavailable on this order."
-  // Either gate alone suppresses the phantom commission (profit-engine.ts:244
-  // multiplies the rate by referralAccepted), which is why reverting only one
-  // survived the whole 241-test checkout suite.
-  it("does not charge the profit guard for a commission a below-minimum cart cannot earn", async () => {
+  // What has NOT changed, and is asserted below: the identical cart WITHOUT a
+  // code still goes through. The refusal must come from the referral economics,
+  // never from the guard misreading an ordinary sale.
+  it("refuses a thin-margin referred cart that cannot carry the commission", async () => {
     harness.reset();
     seedStore(harness.db, [
       { slug: SLUG, name: "Alpha Peptide 10mg", priceCents: 9999, inventory: 40, unitCostCents: 9500, weightOz: 0.4 },
@@ -425,12 +425,30 @@ describe("checkout refuses a referral code that should not apply", () => {
 
     const result = await checkoutWithCode(CODE, 1);
 
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    expect(String(result.body.error ?? "")).not.toMatch(/promotion unavailable/i);
+    expect(result.status).toBe(400);
+    expect(String(result.body.error ?? "")).toMatch(/promotion unavailable/i);
+    expect(harness.db.tables.get("orders") ?? []).toHaveLength(0);
+  });
+
+  it("still sells that same thin-margin cart at full price with no code", async () => {
+    harness.reset();
+    seedStore(harness.db, [
+      { slug: SLUG, name: "Alpha Peptide 10mg", priceCents: 9999, inventory: 40, unitCostCents: 9500, weightOz: 0.4 },
+    ]);
+    seedAmbassador("approved");
+
+    const { POST } = await import("@/app/api/checkout/create-session/route");
+    const response = await POST(new Request("https://vantalabsresearch.test/api/checkout/create-session", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.9" },
+      body: JSON.stringify(checkoutBody(BUYER, [{ productId: SLUG, quantity: 1 }])),
+    }));
+
+    expect(response.status).toBe(200);
     expect(harness.db.tables.get("orders") ?? []).toHaveLength(1);
   });
 
-  it("applies the discount on a cart exactly ON the minimum", async () => {
+  it("applies the discount on a $100.00 cart, as it always did", async () => {
     harness.reset();
     seedStore(harness.db, [
       { slug: SLUG, name: "Alpha Peptide 10mg", priceCents: 10000, inventory: 40, unitCostCents: 1000, weightOz: 0.4 },
@@ -442,7 +460,6 @@ describe("checkout refuses a referral code that should not apply", () => {
 
     const orders = harness.db.tables.get("orders") ?? [];
     expect(orders).toHaveLength(1);
-    // "at least $100" means $100.00 earns.
     expect(Number(orders[0].discount_amount)).toBeGreaterThan(0);
     expect(String(orders[0].referral_code)).toBe(CODE);
   });
@@ -550,7 +567,16 @@ describe("store credit and points against a referral that gives nothing", () => 
     });
   }
 
-  it("redeems points on a below-minimum referred order, because no discount was given", async () => {
+  // WAS: "redeems points on a below-minimum referred order, because no discount
+  // was given". The $60.00 cart was inert only because it sat under the $100
+  // minimum; with the minimum removed it wins the referral discount, so the
+  // exclusivity rule applies to it exactly as it does to a large cart.
+  //
+  // The rule itself has not moved a line. What moved is which baskets are
+  // inside it — and the test below this one, which produces an inert referral
+  // from the ambassador's own 0% rate rather than from basket size, is now the
+  // one that covers "a referral that gives nothing leaves the points alone".
+  it("suppresses points on a small referred order, now that the discount IS given", async () => {
     harness.reset();
     seedStore(harness.db, [
       { slug: SLUG, name: "Alpha Peptide 10mg", priceCents: 6000, inventory: 40, unitCostCents: 1000, weightOz: 0.4 },
@@ -559,11 +585,9 @@ describe("store credit and points against a referral that gives nothing", () => 
 
     const quoted = await quote(1, 500);
 
-    // The referral gave nothing — that part is already settled elsewhere.
-    expect(quoted.discountAmount).toBe(0);
-    // ...so the points the shopper already owns are hers to spend.
-    expect(quoted.pointsRedeemed).toBeGreaterThan(0);
-    expect(quoted.pointsDiscountAmount).toBeGreaterThan(0);
+    expect(quoted.discountAmount).toBeGreaterThan(0);
+    expect(quoted.pointsRedeemed).toBe(0);
+    expect(quoted.pointsDiscountAmount).toBe(0);
   });
 
   // THE EXCLUSIVITY RULE ITSELF IS UNCHANGED. Without this, "fix" the divergence

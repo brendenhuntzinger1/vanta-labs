@@ -58,6 +58,27 @@ function minimumCents(minimumQualifyingOrder: number): number {
 }
 
 /**
+ * Is there a qualifying minimum at all?
+ *
+ * FOR COPY, NOT FOR MONEY. Nothing about what a basket earns should ask this —
+ * `referralQualifies` answers that and answers it for every value. This is for
+ * the sentences: with the minimum removed the recruitment pages would otherwise
+ * advertise a "$0 minimum order" and a commission "on every completed order of
+ * $0 or more", which reads as a bug rather than as the benefit it is.
+ *
+ * It delegates to `minimumCents` rather than testing `> 0` itself, and that is
+ * the whole point of it existing. The rule for what counts as "no gate" —
+ * zero, a negative, a corrupt value — lives in exactly one place, so a stored
+ * value that the money path treats as no minimum can never be described to a
+ * shopper as one. Three copies of `subtotal < minimum` are what this module was
+ * created to replace; a fourth copy of `minimum > 0` would be the same mistake
+ * in the sentence layer.
+ */
+export function hasMinimumQualifyingOrder(minimumQualifyingOrder: number): boolean {
+  return minimumCents(minimumQualifyingOrder) > 0;
+}
+
+/**
  * True when the basket is at least the programme minimum.
  *
  * `subtotal` is the MERCHANDISE subtotal after quantity-bundle pricing — the

@@ -106,45 +106,59 @@ describe("ordinary checkout, no referral code — totals must be untouched", () 
 });
 
 // ---------------------------------------------------------------------------
-// THE $100 GATE. Your stated policy, asserted at the boundary.
+// THE GATE THAT IS NO LONGER THERE.
+//
+// This block asserted a $100 minimum at its boundary — $99.98 and $99.99 earned
+// nothing, $100.00 earned. That policy has been removed: every referred order
+// earns, at any basket size. The boundary cases are kept, with their answers
+// inverted, because they are the exact carts the old gate turned away and they
+// are what a re-introduced gate would fail on first.
 // ---------------------------------------------------------------------------
-describe("the $100 minimum qualifying order", () => {
-  it("is $100", () => {
-    expect(DEFAULT_MINIMUM_QUALIFYING_ORDER).toBe(100);
+describe("no minimum qualifying order", () => {
+  it("is 0 — no gate", () => {
+    expect(DEFAULT_MINIMUM_QUALIFYING_ORDER).toBe(0);
   });
 
   // $99.98 is the real near-miss from this catalogue: BPC-157 5mg + Selank.
-  it("a $99.98 referred order earns NO commission", () => {
-    expect(qualifies(99.98)).toBe(false);
+  // Under the old policy this cart converted and paid the ambassador nothing.
+  it("a $99.98 referred order NOW earns a commission", () => {
+    expect(qualifies(99.98)).toBe(true);
   });
 
-  it("a $99.99 referred order earns NO commission", () => {
-    expect(qualifies(99.99)).toBe(false);
+  it("a $99.99 referred order NOW earns a commission", () => {
+    expect(qualifies(99.99)).toBe(true);
   });
 
-  it("exactly $100.00 qualifies — the test is >=, not >", () => {
-    expect(qualifies(100)).toBe(true);
+  it("a $1 referred order earns too — there is no floor left to clear", () => {
+    expect(qualifies(1)).toBe(true);
   });
 
-  it("$104.97 qualifies", () => {
+  it("$104.97 qualifies, as it always did", () => {
     expect(qualifies(104.97)).toBe(true);
   });
 
-  // The subtlety that decides real money: the gate reads the PRE-discount
-  // subtotal, so a qualifying cart is never disqualified by its own referral
-  // discount. A $104.97 cart nets $94.47 -- under $100 -- and still qualifies.
-  it("a qualifying cart is not disqualified by its own discount", () => {
+  // Kept from the gated era and still the thing that decides real money: the
+  // eligibility read takes the PRE-discount subtotal, so a cart is never
+  // disqualified by its own referral discount. A $104.97 cart nets $94.47.
+  // Vacuous while the minimum is 0 — and deliberately retained, because it is
+  // the assertion that catches a future minimum being wired to the wrong
+  // subtotal.
+  it("a cart is not disqualified by its own discount", () => {
     const discount = round(104.97 * 0.1);
     expect(round(104.97 - discount)).toBe(94.47);
     expect(qualifies(104.97)).toBe(true);
+    expect(qualifies(94.47)).toBe(true);
   });
 
-  // ...and a customer discount still applies below the minimum. The shopper
-  // saves; the ambassador simply earns nothing.
-  it("still discounts the customer below $100, at $0 commission", () => {
+  // The customer discount was always given below the minimum; only the
+  // commission was withheld. Now both are given, and the shopper's side of it
+  // is unchanged — which is what proves the removal touched eligibility only
+  // and not the discount arithmetic.
+  it("discounts the customer below $100 exactly as before, and now pays too", () => {
     const d = resolveCustomerDiscount({ ...CART, subtotal: 99.98, referralAccepted: true, referralPercent: 10 }, ALL);
     expect(d.amount).toBe(10); // 99.98 x 10% = 9.998 -> 10.00
-    expect(qualifies(99.98)).toBe(false);
+    expect(qualifies(99.98)).toBe(true);
+    expect(commissionFor(99.98, 10, 15)).toBe(13.5); // 89.98 x 15%
   });
 });
 

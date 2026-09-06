@@ -30,8 +30,10 @@ async function getSupabase() {
 import {
   type PublicProgramTerms,
   formatPercent,
+  formatThreshold,
   holdDuration,
 } from "@/lib/public-program-terms-shared";
+import { hasMinimumQualifyingOrder } from "@/lib/referral-qualification";
 import type { PartnerProgramStats } from "@/lib/partner-portal";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 
@@ -446,10 +448,15 @@ export function PartnerProgramLanding({ initialStats, terms }: { initialStats: P
             {[
               `${formatPercent(terms.personalDiscountPercent)} discount on all of your own purchases — active the whole time you're approved.`,
               `A personal referral code that gives your audience ${formatPercent(terms.customerDiscountPercent)} off.`,
-              // The minimum is stated here because the checkout enforces it:
+              // The minimum is stated here ONLY while the checkout enforces one:
               // below it the order is attributed to you but earns nothing, and
               // "every completed order" was a promise the ledger did not keep.
-              `A ${formatPercent(terms.commissionPercent)} commission on every completed order of $${Math.round(terms.minimumQualifyingOrder)} or more placed with your code.`,
+              // With the minimum removed the ledger keeps it, so the sentence
+              // makes it plainly — "of $0 or more" would say the same thing in
+              // a way that reads as a broken template.
+              hasMinimumQualifyingOrder(terms.minimumQualifyingOrder)
+                ? `A ${formatPercent(terms.commissionPercent)} commission on every completed order of ${formatThreshold(terms.minimumQualifyingOrder)} or more placed with your code.`
+                : `A ${formatPercent(terms.commissionPercent)} commission on every completed order placed with your code — no minimum.`,
               "A real-time dashboard: pending, approved, and paid commissions, referral orders, and total earnings.",
               "Payouts every two weeks.",
               "Opportunities for performance bonuses and a higher commission rate.",

@@ -10,6 +10,7 @@ import {
   holdDuration,
   holdLabel,
 } from "@/lib/public-program-terms-shared";
+import { hasMinimumQualifyingOrder } from "@/lib/referral-qualification";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 
 function formatCurrency(value: number) {
@@ -79,7 +80,12 @@ export function AmbassadorPageClient({ terms }: { terms: PublicProgramTerms }) {
             {[
               { k: `You earn ${formatPercent(terms.commissionPercent)}`, v: `${formatPercent(terms.commissionPercent)} commission on every qualifying order placed with your code. Higher tiers unlock as your volume grows.` },
               { k: `Your audience saves ${formatPercent(terms.customerDiscountPercent)}`, v: `Anyone who uses your referral code gets ${formatPercent(terms.customerDiscountPercent)} off their order — a real reason for them to buy through you.` },
-              { k: `${formatThreshold(terms.minimumQualifyingOrder)} minimum order`, v: `Orders must be at least ${formatThreshold(terms.minimumQualifyingOrder)} (before shipping) to earn a commission, so every payout is on a real sale.` },
+              // The minimum is a real term while it exists and is stated as one.
+              // With it removed, "$0 minimum order" is not a smaller promise —
+              // it is an unreadable one, so the tile states the absence instead.
+              hasMinimumQualifyingOrder(terms.minimumQualifyingOrder)
+                ? { k: `${formatThreshold(terms.minimumQualifyingOrder)} minimum order`, v: `Orders must be at least ${formatThreshold(terms.minimumQualifyingOrder)} (before shipping) to earn a commission, so every payout is on a real sale.` }
+                : { k: "No minimum order", v: "Every order placed with your code earns a commission, whatever the basket size — there is no minimum to clear first." },
               { k: holdLabel(terms.commissionHoldDays), v: `Commissions are held ${holdDuration(terms.commissionHoldDays)} after an order to clear the return window, then become payable.` },
               { k: `${formatThreshold(terms.minimumPayoutThreshold)} payout minimum`, v: `Once your cleared balance reaches ${formatThreshold(terms.minimumPayoutThreshold)}, you can be paid out.` },
               { k: "Fair & transparent", v: "One discount per order, no self-referrals, live tracking in your dashboard. What you see is what you earn." },

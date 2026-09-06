@@ -77,9 +77,12 @@ describe("stored and defaulted are told apart", () => {
   });
 });
 
-describe("the $100 policy", () => {
-  it("has a built-in fallback of 100 until it is stored", () => {
-    expect(DEFAULT_MINIMUM_QUALIFYING_ORDER).toBe(100);
+describe("the programme policy defaults", () => {
+  // Was 100. The qualifying minimum has been removed programme-wide, and the
+  // fallback has to carry that or an unreadable control table would silently
+  // put a $100 gate back on live baskets — see referral-minimum-removal.test.ts.
+  it("has a built-in fallback of 0 — no qualifying minimum — until it is stored", () => {
+    expect(DEFAULT_MINIMUM_QUALIFYING_ORDER).toBe(0);
   });
 
   it("holds commission for 30 days by default", () => {
