@@ -5,7 +5,7 @@
 ordinary evening.
 
 **The remediation is done, verified, and pushed.** Branch
-`claude/vanta-labs-launch-audit-px3297` at `9d0a6f1` is 23 commits ahead of
+`claude/vanta-labs-launch-audit-px3297` is 26 commits ahead of
 `main`, contains all of it, and is green everywhere I can measure. Merging it
 plus **three owner actions** (§18) is the whole distance between this verdict
 and READY.
@@ -480,9 +480,9 @@ business rule, not an engineering defect:
 ## 20. Exact final state
 
     branch   claude/vanta-labs-launch-audit-px3297
-    HEAD     9d0a6f1b605d7c1550bd795e4e44b2a38c00be92
+    HEAD     9023ab0  (plus this report's own two commits)
     base     f81bf5fe38c2649aed2f36dc6290f02aad544ac3   (origin/main)
-    ahead    23 commits, 103 files, +7605 / −412
+    ahead    26 commits, 105 files, +8132 / −413
     new tests 25 files
     working tree clean
 
