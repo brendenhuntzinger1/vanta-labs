@@ -39,6 +39,23 @@
     "inverse",
     "reverted_by"
   ],
+  "ad_creative_roas_daily": [
+    "platform",
+    "stat_date",
+    "utm_content",
+    "ad_id",
+    "ad_name",
+    "campaign_name",
+    "spend",
+    "impressions",
+    "clicks",
+    "orders",
+    "net_revenue",
+    "ctr",
+    "cpc",
+    "cpa",
+    "roas"
+  ],
   "ad_creatives": [
     "creative_id",
     "concept_id",
@@ -187,6 +204,18 @@
     "hook_rate",
     "hold_rate"
   ],
+  "ad_platform_daily": [
+    "platform",
+    "stat_date",
+    "spend",
+    "impressions",
+    "clicks",
+    "orders",
+    "net_revenue",
+    "ctr",
+    "cpa",
+    "roas"
+  ],
   "ad_platform_refs": [
     "creative_id",
     "platform",
@@ -221,6 +250,44 @@
     "do_not_copy",
     "compliance_flags",
     "updated_at"
+  ],
+  "ad_revenue_daily": [
+    "stat_date",
+    "platform",
+    "utm_source",
+    "utm_campaign",
+    "utm_content",
+    "orders",
+    "refunds",
+    "net_revenue"
+  ],
+  "ad_spend_daily": [
+    "platform",
+    "ad_id",
+    "stat_date",
+    "campaign_id",
+    "campaign_name",
+    "adgroup_id",
+    "adgroup_name",
+    "ad_name",
+    "landing_url",
+    "utm_content",
+    "spend",
+    "impressions",
+    "clicks",
+    "currency",
+    "source",
+    "ingested_at"
+  ],
+  "ad_spend_untagged": [
+    "platform",
+    "stat_date",
+    "ad_id",
+    "ad_name",
+    "campaign_name",
+    "landing_url",
+    "spend",
+    "reason"
   ],
   "admin_audit_logs": [
     "id",
@@ -788,7 +855,11 @@
     "last_landing_path",
     "last_referrer",
     "created_at",
-    "updated_at"
+    "updated_at",
+    "first_rdt_cid",
+    "last_rdt_cid",
+    "first_sccid",
+    "last_sccid"
   ],
   "order_email_log": [
     "id",

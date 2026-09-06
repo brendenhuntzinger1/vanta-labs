@@ -28,11 +28,17 @@ const MAX_REFERRER_LENGTH = 1200;
 export const UTM_KEYS = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"] as const;
 
 /**
- * Platform click identifiers. Provider-agnostic by construction: adding Meta or
- * Google later is one entry here plus one column, not a new attribution model.
- * `ttclid` is TikTok, `fbclid` Meta, `gclid` Google.
+ * Platform click identifiers. Provider-agnostic by construction: adding a
+ * platform is one entry here plus one column, not a new attribution model.
+ * `ttclid` is TikTok, `fbclid` Meta, `gclid` Google, `rdt_cid` Reddit and
+ * `ScCid` Snapchat.
+ *
+ * Reddit and Snapchat were added because the store advertises on both and
+ * neither had anywhere to land — the strongest available evidence of a paid
+ * click was being read off the URL and then dropped, on half the platforms
+ * actually running.
  */
-export const CLICK_ID_KEYS = ["ttclid", "fbclid", "gclid"] as const;
+export const CLICK_ID_KEYS = ["ttclid", "fbclid", "gclid", "rdt_cid", "ScCid"] as const;
 
 export type UtmKey = (typeof UTM_KEYS)[number];
 export type ClickIdKey = (typeof CLICK_ID_KEYS)[number];
@@ -46,6 +52,8 @@ export interface AttributionTouch {
   ttclid: string | null;
   fbclid: string | null;
   gclid: string | null;
+  rdtCid: string | null;
+  scCid: string | null;
   landingPath: string | null;
   referrer: string | null;
   /** ISO timestamp of when this touch happened. */
@@ -95,6 +103,28 @@ function readParam(params: URLSearchParams, key: string): string | null {
 }
 
 /**
+ * Read a parameter whose casing is not dependable.
+ *
+ * Snapchat documents its click id as `ScCid`, but it arrives as `sccid` and
+ * `SCCID` too depending on which surface built the link, and URL parameters are
+ * case-sensitive. A case-exact read drops the click id from a real paid visit
+ * roughly whenever Snapchat feels like it — the kind of gap that looks like
+ * "Snapchat just doesn't convert" rather than like a bug.
+ */
+function readParamAnyCase(params: URLSearchParams, key: string): string | null {
+  const exact = readParam(params, key);
+  if (exact) return exact;
+  const wanted = key.toLowerCase();
+  for (const [name, value] of params.entries()) {
+    if (name.toLowerCase() === wanted) {
+      const normalized = normalizeValue(value);
+      if (normalized) return normalized;
+    }
+  }
+  return null;
+}
+
+/**
  * Build a touch from a page view, or return null when the visit carries no
  * campaign evidence at all.
  *
@@ -124,6 +154,8 @@ export function parseAttributionTouch(input: {
     ttclid: readParam(params, "ttclid"),
     fbclid: readParam(params, "fbclid"),
     gclid: readParam(params, "gclid"),
+    rdtCid: readParam(params, "rdt_cid"),
+    scCid: readParamAnyCase(params, "ScCid"),
     landingPath: normalizePath(input.pathname),
     referrer: normalizeReferrer(input.referrer),
     at: input.now.toISOString(),
@@ -144,7 +176,9 @@ export function hasCampaignEvidence(touch: AttributionTouch | null | undefined):
       touch.utmTerm ||
       touch.ttclid ||
       touch.fbclid ||
-      touch.gclid,
+      touch.gclid ||
+      touch.rdtCid ||
+      touch.scCid,
   );
 }
 
@@ -152,7 +186,7 @@ export function hasCampaignEvidence(touch: AttributionTouch | null | undefined):
  *  available, and what the ad platforms themselves match on. */
 export function hasPaidClickId(touch: AttributionTouch | null | undefined): boolean {
   if (!touch) return false;
-  return Boolean(touch.ttclid || touch.fbclid || touch.gclid);
+  return Boolean(touch.ttclid || touch.fbclid || touch.gclid || touch.rdtCid || touch.scCid);
 }
 
 export function isTouchExpired(touch: AttributionTouch | null | undefined, now: Date, windowDays = ATTRIBUTION_WINDOW_DAYS): boolean {
@@ -232,6 +266,8 @@ export function sanitizeAttributionRecord(raw: unknown, now: Date): AttributionR
       ttclid: normalizeValue(t.ttclid),
       fbclid: normalizeValue(t.fbclid),
       gclid: normalizeValue(t.gclid),
+      rdtCid: normalizeValue(t.rdtCid),
+      scCid: normalizeValue(t.scCid),
       landingPath: normalizePath(t.landingPath),
       referrer: normalizeReferrer(t.referrer),
       // A missing or unparseable timestamp becomes "now" rather than being
@@ -272,6 +308,8 @@ export function toOrderAttributionRow(orderId: string, record: AttributionRecord
     first_ttclid: first?.ttclid ?? null,
     first_fbclid: first?.fbclid ?? null,
     first_gclid: first?.gclid ?? null,
+    first_rdt_cid: first?.rdtCid ?? null,
+    first_sccid: first?.scCid ?? null,
     first_landing_path: first?.landingPath ?? null,
     first_referrer: first?.referrer ?? null,
 
@@ -284,6 +322,8 @@ export function toOrderAttributionRow(orderId: string, record: AttributionRecord
     last_ttclid: last?.ttclid ?? null,
     last_fbclid: last?.fbclid ?? null,
     last_gclid: last?.gclid ?? null,
+    last_rdt_cid: last?.rdtCid ?? null,
+    last_sccid: last?.scCid ?? null,
     last_landing_path: last?.landingPath ?? null,
     last_referrer: last?.referrer ?? null,
   };

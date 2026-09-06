@@ -85,6 +85,13 @@ vi.mock("@/lib/order-push-notification", () => ({ runOrderPushHealthCheck: () =>
 vi.mock("@/lib/coupon-hygiene", () => ({ runCouponHygiene: async () => ({ couponsDeactivated: 0, cartsExpired: 0 }) }));
 vi.mock("@/lib/admin-control", () => ({ resealPlaintextControlSecrets: async () => ({ sealed: 0, scrubbed: 0 }) }));
 vi.mock("@/lib/offers/customer-offer-repair", () => ({ repairUnredeemedPaidOffers: async () => ({ checked: 0, redeemed: 0, failed: 0 }) }));
+// Ad spend ingest: stubbed to the unconfigured outcome, which is what a
+// deployment without WINDSOR_API_KEY reports. It must count as a SUCCESSFUL job
+// — an unconfigured feed is a state, not a sweep failure that alerts an operator
+// at 2am.
+vi.mock("@/lib/ads/spend-ingest", () => ({
+  ingestAdSpend: async () => ({ ran: false, reason: "WINDSOR_API_KEY is not set", connectors: [], totalWritten: 0, totalSpend: 0 }),
+}));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: (alert: SystemAlert) => recordSystemAlert(alert) }));
 
 const SECRET = "test-cron-secret";

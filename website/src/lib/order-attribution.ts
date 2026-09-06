@@ -103,6 +103,8 @@ export async function getOrderAttribution(orderId: string): Promise<AttributionR
         ttclid: (row[`${prefix}_ttclid`] as string) ?? null,
         fbclid: (row[`${prefix}_fbclid`] as string) ?? null,
         gclid: (row[`${prefix}_gclid`] as string) ?? null,
+        rdtCid: (row[`${prefix}_rdt_cid`] as string) ?? null,
+        scCid: (row[`${prefix}_sccid`] as string) ?? null,
         landingPath: (row[`${prefix}_landing_path`] as string) ?? null,
         referrer: (row[`${prefix}_referrer`] as string) ?? null,
         at: String(at),
