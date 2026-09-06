@@ -315,7 +315,19 @@ export async function POST(request: Request) {
     promotionId: quoteA.appliedPromotionId,
     // Internal only — insertOrderRow turns this into the owner's
     // below-floor notice and never writes it to a column.
-    profitFloor: quoteA.profitFloor,
+    //
+    // FROM THE FULL QUOTE, NOT THE ADDRESS-LESS ONE. quoteA is priced with
+    // `mode: "address_optional"`, which sets destinationKnown = false and
+    // therefore zeroes both shipping legs and the tax rate in the figures the
+    // profit snapshot is built from. That zeroing is correct where the floor is
+    // a GATE — quote-order.ts says so, and names this route's full-mode re-quote
+    // as the authoritative guard — but as the basis for an ALERT it is a
+    // measurement error: every wallet order was assessed as if shipping cost
+    // the store nothing, so a genuinely loss-making express order raised no
+    // notice at all. quoteFull is computed a few lines above with the real
+    // destination and is already trusted here for the coupon code, the tax rate
+    // and the tax state on this same row.
+    profitFloor: quoteFull.profitFloor,
   });
 
   // Same atomic claim the card lane takes, before the order row exists, so the

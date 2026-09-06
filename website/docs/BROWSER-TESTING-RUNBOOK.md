@@ -235,6 +235,40 @@ With tracking on, a parent-zero/all-doses-zero product correctly renders
 `OUT OF STOCK` with a `NOTIFY ME` button in place of the buy CTA, and a
 parent-zero/dose-stocked product (F-001) correctly stays purchasable.
 
+### 3b. Setting stock by hand: reset `reserved_quantity` too
+
+`reserve_inventory` gates on `inventory_quantity - reserved_quantity >= n`, and
+the real release path is the `release_inventory_for_order` RPC — not the
+`inventory_reservations` rows. So this, which looks like a reset, is not one:
+
+```sql
+update inventory_reservations set status = 'released' where status = 'active';
+update product_doses set inventory_quantity = 1 where id = '<dose>';
+```
+
+The rows are marked released and `reserved_quantity` is untouched. Measured
+during the 2026-09-06 audit after a few dozen harness orders: stock 3,
+`reserved_quantity` 62, available **-59** — and every checkout answered
+
+    "BPC-157 10mg 10mg just sold out. Please adjust your cart and try again."
+
+which reads exactly like an off-by-one that makes the last unit unsellable, and
+is not one. Reset both sides:
+
+```sql
+update inventory_reservations set status = 'released' where status = 'active';
+update product_doses
+   set inventory_quantity = :n, reserved_quantity = 0, stock_status = 'in_stock'
+ where product_id = (select id from products where slug = :slug);
+update products
+   set inventory_quantity = :n, reserved_quantity = 0, stock_status = 'in_stock'
+ where slug = :slug;
+```
+
+With that, the concurrency invariants are demonstrable: two simultaneous
+checkouts for one unit produce exactly one order, ten for three units produce
+exactly three, stock never goes negative, and holds never exceed stock.
+
 ### 4. Start the shim
 
 ```bash
@@ -680,6 +714,31 @@ wait the window out.
 ---
 
 ## Shim limitations to work around
+
+- **Ad attribution captures NOTHING until you turn analytics on, and the
+  harness ships it off.** `.env.local` and `.env.test.local` both carry
+  `NEXT_PUBLIC_ENABLE_ANALYTICS=false`, and site-analytics-tracker.tsx gates the
+  whole capture on `NODE_ENV === "production" || that flag`. The harness runs
+  `NODE_ENV=test`, so on the default configuration a visit with a full set of
+  UTM tags and a click id writes no `vl_attribution`, no
+  `website_analytics_events` row and no `order_attribution` — and every
+  assertion about campaign attribution passes vacuously by measuring an empty
+  store.
+
+  To verify anything in the ads or affiliate-attribution path:
+
+      # in website/.env.local AND website/.env.test.local
+      NEXT_PUBLIC_ENABLE_ANALYTICS=true
+      npm run harness:build && npm run harness:start   # it is a build-time inline
+
+  Consent is a second gate and is the product's rule, not a harness quirk:
+  accept the cookie banner (or the capture correctly writes nothing). With both
+  in place, `?utm_source=TikTok&utm_content=Hook_A` stores `tiktok` / `hook_a`
+  — lowercased to match the spend side of the join — with the click id kept
+  verbatim.
+
+  Set it back to `false` when you are done, or the next run of an unrelated
+  journey carries analytics traffic it did not ask for.
 
 - **Embedded selects** (`select=a,b,rel(x,y)`) ARE implemented, as of
   2026-08-28. Both directions work — a child array (`orders` →

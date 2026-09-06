@@ -70,6 +70,10 @@ describe("a recording failure is logged, not swallowed in silence", () => {
   });
 
   it("still never throws — a broken log must not stop a bounce suppressing", () => {
-    expect(CODE).toContain("recordDeliveryEvent(event, false).catch(() => {})");
+    // The write is also the FIRST-SIGHTING answer now (a redelivered complaint
+    // must not raise a second alert), so it has a value; a failed write answers
+    // true, which alerts as before rather than going quiet.
+    expect(CODE).toContain("await recordDeliveryEvent(event, false).catch(() => true)");
+    expect(CODE).toContain("await recordDeliveryEvent(event, true).catch(() => {})");
   });
 });

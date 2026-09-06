@@ -20,22 +20,33 @@ export async function GET(request: Request, context: { params: Promise<{ code: s
   const rawNext = url.searchParams.get("next") || "/products";
   const safeNext = safeInternalPath(rawNext, "/products");
   const destination = new URL(safeNext, url.origin);
-  // AN AMBASSADOR LINK IS OFTEN ALSO AN AD LINK, AND THE AD HALF WAS BEING
-  // DROPPED HERE.
+
+  // AN AD THAT LANDS ON AN AMBASSADOR LINK KEPT ITS AMBASSADOR AND LOST ITS AD.
   //
-  // The destination is built from the path alone, so every parameter sitting on
-  // the /r/<code> URL itself stopped at this hop. The referral cookie set below
-  // survived — the ambassador still got paid — but a paid click that also
-  // carried utm_* or a platform click id arrived at /products stripped of both,
-  // and from there the access wall could not carry forward what was no longer
-  // in the URL. The click was billed and then recorded as organic.
+  // This route redirects to a path with no query, so `?utm_source=meta&ttclid=…`
+  // on the incoming link died here. The click was written to partner_clicks —
+  // when the visitor had accepted analytics — but the LANDING page never saw
+  // the parameters, and the landing page is the only thing that writes the
+  // visitor's attribution touch. So an ambassador running paid traffic to their
+  // own link produced orders that read as organic: no spend joined to them, no
+  // ROAS, and the click id that Meta/TikTok's conversion API needs was gone.
   //
-  // Only the known ad keys move, never the whole query string: `next` already
-  // carries anything the destination itself needs, and a blanket copy would
-  // forward parameters this route knows nothing about onto a page that may read
-  // them. Existing values win, so a tag deliberately placed inside `next` is
-  // not overwritten by one on the outside.
+  // Forwarded by ALLOWLIST rather than wholesale, because this is a public,
+  // widely shared link redirecting to an internal path: only the campaign tags
+  // and the platforms' click ids this store already knows how to read travel,
+  // and an explicit `next` that carries its own value for one of them keeps it.
+  //
+  // THE ALLOWLIST LOOP THAT USED TO SIT HERE IS NOW copyAdParams, WHICH IS THE
+  // SAME COPY THE ACCESS WALL PERFORMS. It was written here first, inline, and
+  // a second copy of it then appeared in middleware.ts for the wall — two
+  // implementations of "carry an ad's tags across a redirect" that would drift
+  // apart the first time either changed. They already differed: this one read
+  // each key case-exactly and forwarded the raw value, so Snapchat's `SCCID`
+  // and `sccid` spellings were missed and a tag reached the destination without
+  // the normalisation parseAttributionTouch applies when it reads it back.
+  // One function now answers for both hops, and it mirrors the parser.
   copyAdParams(url.searchParams, destination.searchParams);
+
   const response = NextResponse.redirect(destination);
 
   // Resolve to the ambassador: a live code, OR an aliased OLD code that redirects

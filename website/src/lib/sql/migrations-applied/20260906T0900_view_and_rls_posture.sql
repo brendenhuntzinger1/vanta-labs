@@ -1,0 +1,60 @@
+-- ============================================================================
+-- THE ONE PUBLIC VIEW THAT RAN WITH OWNER RIGHTS, AND THE SWEEPS AROUND IT.
+--
+-- Full DDL with reasoning lives in src/lib/sql/admin-control-current-view.sql,
+-- src/lib/sql/revoke-anon-table-access.sql and
+-- src/lib/sql/rls-enforce-all-tables.sql, which remain the sources of truth.
+-- This file records what was applied to production and when.
+--
+-- ----------------------------------------------------------------------------
+-- 1. admin_control_current had no security_invoker.
+--
+-- A view created without it runs as its OWNER, and the owner of a table is
+-- exempt from that table's RLS — so this view read admin_audit_logs straight
+-- through the deny-by-default policy protecting it. Measured before the change:
+-- every one of the seven ads views carried security_invoker=true and this one
+-- carried nothing.
+--
+-- Its only protection was a one-shot `revoke all ... from anon, authenticated`,
+-- and a revoke does not survive a DROP. `create or replace view` cannot drop or
+-- reorder columns, so any later change to the column list requires DROP VIEW —
+-- which is exactly what the ads v2 migration did to five views hours earlier in
+-- this same burst. The recreate would take a fresh SELECT grant from Supabase's
+-- platform default-privilege entry for anon, and the store-wide revoke sweep
+-- would not put it back, because that sweep covered relkind in ('r','p') and
+-- never views.
+--
+-- Behind it: the live commercial configuration, read out of the audit log —
+-- ambassador commission percentages, the free-shipping threshold and flat
+-- rates, every /admin control setting — readable with the public anon key that
+-- ships in the browser bundle, with no error and no log line.
+--
+-- 2. The anon revoke sweep now covers views and materialised views.
+--
+-- Nothing to revoke on the day (production held zero anon/authenticated table
+-- grants before and after), so this is preventative: a recreated view cannot
+-- silently regain one.
+--
+-- 3. The RLS sweep enumerates rather than remembers.
+--
+-- rls-enforce-all-tables.sql carried a hand-maintained array of table names,
+-- and ambassador_wallet_ledger — user_id, amount_cents, reason, order_id and a
+-- free-text note — appeared in no RLS statement anywhere in the repository.
+-- Production was never exposed, because Supabase's own `ensure_rls` event
+-- trigger covers every new table in `public`; but that is a platform feature
+-- this repository does not create, so a rebuild elsewhere came up with exactly
+-- one RLS-off table. (BASELINE-live-functions-2026-08-25.sql credits a
+-- `rls_auto_enable` function and points at a `create event trigger` statement
+-- below it. There is no such statement in that file, or anywhere in the repo.)
+--
+-- ----------------------------------------------------------------------------
+-- APPLIED 2026-09-06. Verified immediately afterwards:
+--   views without security_invoker : 0
+--   public tables without RLS      : 0
+--   anon/authenticated table grants: 0
+-- and admin_control_current still returns all 120 rows to service_role, which
+-- is BYPASSRLS — so nothing in the application changed.
+--
+-- The local harness now applies the security SQL and asserts all three of those
+-- numbers in its parity self-check; it previously applied none of it.
+-- ============================================================================

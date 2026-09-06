@@ -295,8 +295,9 @@ export function AdminCouponsClient({
                 On top of the discount above, so one code can give a percentage AND free shipping.
                 Shipping is not part of the &ldquo;single best discount&rdquo; rule, so this applies even
                 when the percentage loses to a customer&apos;s membership or ambassador pricing.
-                Worth nothing on orders that already ship free &mdash; over $200 domestic, $400 to the
-                rest of North America.
+                Worth nothing on an order that already ships free &mdash; which, while Free Shipping
+                Sitewide is on in Control Center &rarr; Shipping, is every order. With it off, orders
+                over the free-shipping thresholds set there.
               </span>
             </span>
           </label>

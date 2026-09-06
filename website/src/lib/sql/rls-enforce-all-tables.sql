@@ -23,60 +23,61 @@
 -- Idempotent: `enable row level security` is a no-op when already enabled.
 -- Run this after all other migrations. Verify afterward with the query at the
 -- bottom (Supabase SQL editor) — it must return zero rows.
+--
+-- ---------------------------------------------------------------------------
+-- IT ASKS POSTGRES WHICH TABLES ARE UNCOVERED. IT USED TO CARRY A LIST.
+--
+-- The list was hand-maintained, and a hand-maintained list of "every table"
+-- goes stale the first time somebody adds a table — silently, because a missing
+-- name looks exactly like a table that was considered and left out on purpose.
+-- ambassador_wallet_ledger is the one that proved it: a real production table
+-- carrying user_id, amount_cents, reason, order_id and a free-text note, named
+-- in no RLS statement anywhere in this repository. Rebuild the database from
+-- the checked-in SQL and it was the only table in `public` with RLS off.
+--
+-- Production itself was never exposed, because Supabase's own `ensure_rls`
+-- event trigger enables RLS on every new table in `public` — that is what makes
+-- coverage "every table" rather than "the tables someone remembered", and it is
+-- a platform feature this repository does not create and cannot rely on when
+-- rebuilding elsewhere. (BASELINE-live-functions-2026-08-25.sql credits a
+-- `rls_auto_enable` function for this and points at a `create event trigger`
+-- statement below it. There is no such statement in that file, and none in the
+-- corpus; the trigger doing the work in production is the platform's.)
+--
+-- So the sweep now enumerates rather than remembers. A new table is covered the
+-- moment this runs, whatever anybody remembered to write down.
+-- ---------------------------------------------------------------------------
 
 do $$
 declare
   target text;
-  tables text[] := array[
-    -- Highly sensitive (credentials, sessions, PII, money)
-    'admin_credentials', 'admin_sessions', 'admin_login_attempts', 'admin_audit_logs',
-    'orders', 'order_items', 'order_shipments', 'payment_events', 'payouts',
-    'partner_payouts', 'fulfillment_payouts', 'commissions', 'commission_tier_rules',
-    'customer_addresses', 'customer_preferences', 'customer_memberships',
-    'store_credit_ledger', 'points_ledger', 'promotional_point_events',
-    -- Operational
-    'products', 'product_doses', 'product_images', 'product_subscriptions',
-    'inventory_items', 'coupons', 'membership_tiers', 'membership_billing_events',
-    'ambassadors', 'partners', 'partner_clicks', 'partner_program_stats',
-    'referrals', 'referral_orders',
-    'abandoned_carts', 'abandoned_cart_emails', 'back_in_stock_requests',
-    'wishlist_items', 'email_send_log', 'email_suppressions', 'notification_queue',
-    'fulfillment_orders', 'fulfillment_events', 'website_analytics_events',
-    -- Marketing consent and campaign machinery. These each enable RLS in their
-    -- own migration, but this sweep is what asserts it — a table that is only
-    -- protected by the migration that created it loses that protection the
-    -- first time someone recreates it by hand. marketing_subscribers is a list
-    -- of customer email addresses, so it is exactly the wrong one to leave out.
-    'marketing_subscribers', 'email_campaigns', 'email_campaign_recipients',
-    'email_campaign_clicks', 'email_automations',
-    -- Tables this sweep had never covered, found by asking Postgres which
-    -- public tables still had rowsecurity = false rather than by re-reading the
-    -- list. Every one is written only through the service-role client, so
-    -- enabling RLS changes nothing for the app.
-    --
-    -- pending_emails is the urgent one: it is the retry queue for transactional
-    -- mail and stores `to_email` plus the rendered `html` of anything that
-    -- failed to send — which includes password-reset messages, and therefore
-    -- live reset links. Anon-readable, that is an account-takeover path, not
-    -- just a privacy problem.
-    'pending_emails',
-    -- Operational alerts, whose `context` carries whatever a failing job put
-    -- there.
-    'system_alerts',
-    -- Unit costs and margin history.
-    'product_cost_changes',
-    -- Ambassador code history, including the actor's IP address and user agent.
-    'referral_code_changes', 'referral_code_aliases'
-  ];
 begin
-  foreach target in array tables loop
-    if exists (
-      select 1 from information_schema.tables
-      where table_schema = 'public' and table_name = target
-    ) then
-      execute format('alter table public.%I enable row level security;', target);
-    end if;
+  -- EVERY ordinary and partitioned table in `public` that does not already have
+  -- it. Nothing is named here on purpose: a name is something to forget.
+  for target in
+    select c.relname
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind in ('r', 'p')
+      and not c.relrowsecurity
+    order by c.relname
+  loop
+    execute format('alter table public.%I enable row level security;', target);
   end loop;
+end $$;
+
+-- Named explicitly as well, so this file states the one that was missing rather
+-- than only implying it. A no-op after the sweep above, and harmless if the
+-- table does not exist in this environment.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.tables
+    where table_schema = 'public' and table_name = 'ambassador_wallet_ledger'
+  ) then
+    execute 'alter table public.ambassador_wallet_ledger enable row level security';
+  end if;
 end $$;
 
 -- Verification (run manually in the Supabase SQL editor; expect zero rows):

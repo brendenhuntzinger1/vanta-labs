@@ -20,7 +20,16 @@ export const dynamic = "force-dynamic";
  * visible, deliberate act rather than a surprise.
  */
 
-const money = (n: number) => `$${n.toFixed(2)}`;
+// NEGATIVE MONEY IS REACHABLE HERE AND MUST NOT READ AS "$-12.50".
+//
+// net_revenue is `sum(amount_paid - refund_amount)` and is deliberately not
+// clamped at zero — "an over-refunded order must stay negative or it disagrees
+// with the ledger exactly where the store lost money" — so any day whose
+// refunds exceed its takings is negative. Intl puts the sign before the symbol,
+// which is the accounting convention, and adds the thousands separators the
+// hand-rolled formatter never had ($12340.00).
+const MONEY = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+const money = (n: number) => MONEY.format(n);
 const pct = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(2)}%`);
 const ratio = (n: number | null) => (n === null ? "—" : n.toFixed(2));
 
@@ -28,7 +37,14 @@ function Panel({ title, subtitle, children, action }: {
   title: string; subtitle?: string; children: React.ReactNode; action?: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-white/[0.07] bg-[#141414] p-5">
+    // `min-w-0` IS LOAD-BEARING, NOT COSMETIC. A grid item's min-width defaults to
+    // `auto`, which resolves to its min-content contribution — and the min-content
+    // of the tables inside is their 48rem min-width, not 0. So below 1024px the
+    // section grew to fit the table, the inner `overflow-x-auto` never became a
+    // scroller, and `body { overflow-x: clip }` then made the cut-off columns
+    // permanently unreachable: on a phone the ROAS numbers past the third column
+    // could not be read at all.
+    <section className="min-w-0 rounded-2xl border border-white/[0.07] bg-[#141414] p-5">
       <header className="mb-4 flex items-start justify-between gap-4">
         <div>
           <h2 className="text-sm font-medium uppercase tracking-[0.14em] text-white/70">{title}</h2>
@@ -205,12 +221,56 @@ function SpendEmptyState({ s }: { s: SpendDashboard }) {
 
 /** Rows exist but nothing will refresh them. Showing the numbers without saying
  *  so would present a frozen snapshot as current. */
+/**
+ * THE WARNING HAD TO BE ABLE TO FIRE FOR THE FAILURE THAT ACTUALLY HAPPENS.
+ *
+ * This tested one thing: whether WINDSOR_API_KEY is set. That is the failure
+ * nobody has — a missing key is noticed on the day it is configured. The one
+ * that happens is a key that IS set while the feed has stopped delivering: a
+ * revoked ad-account grant, an expired Windsor connection, a plan limit. On
+ * 2026-09-06 the live account was returning an account notice instead of data
+ * on all four connectors, with the key perfectly present.
+ *
+ * In that state this panel showed whatever last landed, with no indication that
+ * it was old — which is the same figure a genuinely quiet week produces. So it
+ * now also states the AGE of the newest row it has.
+ *
+ * The threshold is derived from the machinery, not picked: the sweep runs every
+ * 30 minutes (vercel.json) and the ingest self-limits to one fetch every
+ * MIN_HOURS_BETWEEN_RUNS = 6, so anything past a day is several missed windows
+ * and cannot be normal. It reports hours, so the operator can see the
+ * difference between "an hour late" and "four days dead".
+ */
+const STALE_AFTER_HOURS = 24;
+
 function StaleFeedNotice({ s }: { s: SpendDashboard }) {
-  if (s.feedConfigured || s.platforms.length === 0) return null;
+  if (s.platforms.length === 0) return null;
+
+  if (!s.feedConfigured) {
+    return (
+      <p className="mt-3 rounded-xl border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.05] px-3 py-2 text-[11px] leading-5 text-white/60">
+        These figures will not update: <code className="font-mono text-white/80">WINDSOR_API_KEY</code> is unset, so the
+        nightly job cannot fetch spend. What is shown is whatever last landed.
+      </p>
+    );
+  }
+
+  const hours = s.lastIngestedAgeHours;
+  if (hours === null) {
+    return (
+      <p className="mt-3 rounded-xl border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.05] px-3 py-2 text-[11px] leading-5 text-white/60">
+        The key is configured but no spend has ever landed. Check the sweep&apos;s ad_spend_ingest job.
+      </p>
+    );
+  }
+
+  if (hours < STALE_AFTER_HOURS) return null;
+
   return (
     <p className="mt-3 rounded-xl border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.05] px-3 py-2 text-[11px] leading-5 text-white/60">
-      These figures will not update: <code className="font-mono text-white/80">WINDSOR_API_KEY</code> is unset, so the
-      nightly job cannot fetch spend. What is shown is whatever last landed.
+      <strong className="text-white/80">These figures are {hours} hours old.</strong> The key is set, so the feed is
+      answering with something the ingest will not accept — a revoked ad-account grant, an expired Windsor connection or
+      a plan limit. Spend since then is missing from every number on this page.
     </p>
   );
 }
@@ -376,14 +436,23 @@ export default async function AdsDashboardPage() {
     <>
       {schemaBanner}
 
-      <Panel title="Today" subtitle={d.schemaReady ? "UTC day, site-attributed revenue net of refunds" : "no data source yet"}>
+      {/* FROM THE SAME SOURCE AS THE THIRTY-DAY PANEL BELOW IT.
+          This read `d.today`, which comes from ad_performance_daily — the table
+          PR #161 was written to replace, because its creative_id foreign key
+          requires a creative designed inside this system and no ad running on
+          the four live platforms has one. So the strip showed
+          $0.00 / $0.00 / 0 / — / — for ever, directly above a panel reporting
+          real money, on a page that promises "an empty panel means no data,
+          never a guess". Measured: $573.45 of spend seeded across five days
+          including today, and this strip read $0.00. */}
+      <Panel title="Today" subtitle={spend.schemaReady ? "site-attributed revenue net of refunds" : "no data source yet"}>
         <dl className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           {[
-            ["Spend", money(d.today.spend)],
-            ["Revenue", money(d.today.revenue)],
-            ["Purchases", String(d.today.purchases)],
-            ["CPA", d.today.cpa === null ? "—" : money(d.today.cpa)],
-            ["ROAS", ratio(d.today.roas)],
+            ["Spend", money(spend.today.spend)],
+            ["Revenue", money(spend.today.revenue)],
+            ["Purchases", String(spend.today.orders)],
+            ["CPA", spend.today.cpa === null ? "—" : money(spend.today.cpa)],
+            ["ROAS", ratio(spend.today.roas)],
           ].map(([label, value]) => (
             <div key={label} className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
               <dt className="text-[10px] uppercase tracking-[0.16em] text-white/35">{label}</dt>

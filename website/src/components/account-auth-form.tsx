@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { TurnstileWidget } from "@/components/turnstile-widget";
 import { resolveSignupOutcome, SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-signup-outcome";
-import { classifyAuthReturn, deadAuthLinkMessage, type AuthReturn } from "@/lib/auth-link-fragment";
+import { deadAuthLinkMessage, readOAuthCallbackFragment, type OAuthCallbackReturn } from "@/lib/auth-link-fragment";
 import { safeInternalPath } from "@/lib/internal-path";
 import { signInFailureMessage } from "@/lib/sign-in-failure-message";
 import {
@@ -29,6 +29,30 @@ const OTP_RESEND_COOLDOWN_SECONDS = 45;
 // is approved — otherwise the "Text me a code" button returns a Twilio error to
 // real shoppers. Flip to true once Twilio approves the account, then redeploy.
 const PHONE_LOGIN_ENABLED = false;
+
+// THE AMBASSADOR COOKIE, READ THE WAY THIS CODEBASE READS BROWSER FACTS.
+//
+// `/r/<code>` sets `vl_referral_code` and then bounces the visitor at the
+// access wall, so by the time they reach this form the `?ref=` that carried the
+// attribution is long gone and the cookie is the only surviving record of whose
+// link they followed. It cannot be read during SSR, and it never changes within
+// a page load, so there is nothing to subscribe to — exactly the shape
+// `useApplePayOffered` already uses.
+const REFERRAL_COOKIE_KEY = "vl_referral_code";
+const subscribeNever = () => () => {};
+const getServerReferralCookie = () => "";
+const readReferralCookie = () => {
+  try {
+    const raw = document.cookie
+      .split("; ")
+      .find((entry) => entry.startsWith(`${REFERRAL_COOKIE_KEY}=`))
+      ?.split("=")[1];
+    return raw ? decodeURIComponent(raw) : "";
+  } catch {
+    // No cookie access: signup simply carries no referral, as before.
+    return "";
+  }
+};
 
 // PORTAL IS THE FIRST SCREEN, AND THE ONLY ONE MOST VISITORS SEE.
 //
@@ -88,6 +112,48 @@ export function AccountAuthForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const referralCodeFromUrl = searchParams.get("ref") ?? "";
+  // ---------------------------------------------------------------------
+  // THE AMBASSADOR'S OWN LINK CARRIES NO ?ref, AND AFTER THE WALL NOTHING DOES.
+  //
+  // `?ref=` was the only source of a referral at signup. Two changes removed
+  // every way for it to arrive:
+  //
+  //   * The shared link is /r/<code> (admin/partners builds it), and that route
+  //     puts the code in the vl_referral_code COOKIE and redirects to
+  //     /products. It never puts ?ref on a URL.
+  //   * The wall then rewrites even a hand-made ?ref out of the top level.
+  //     Measured: GET /products?ref=EXPLICIT15&ttclid=abc answers
+  //     location: /account/login?next=%2Fproducts%3Fref%3DEXPLICIT15%26ttclid%3Dabc
+  //     — the whole query buried inside `next`, where nothing reads it.
+  //
+  // So a new customer following an ambassador's link and being made to create
+  // an account signed up with no referred_by_code at all: awardReferralSignupBonus
+  // never fired, the customer never got the 100-point welcome bonus (real money
+  // at checkout) and the ambassador never got their referral bonus. Both awards
+  // are attempted at this one moment and guarded by a points_ledger lookup, so
+  // nothing backfills them — the loss was permanent and silent on every
+  // referred signup.
+  //
+  // The cookie is the thing the ambassador's link actually sets, so that is
+  // what this reads, with ?ref still winning when present. cart-context.tsx
+  // discovers the code exactly this way for the cart.
+  //
+  // DELIBERATELY NOT USED TO CHOOSE THE FORM'S MODE (see initialMode below).
+  // An explicit ?ref in the address bar is an invitation to JOIN and opens the
+  // signup form; a thirty-day cookie is not, and treating it as one would send
+  // every returning customer who ever followed an ambassador link to a signup
+  // form instead of the sign-in they asked for.
+  //
+  // Read through useSyncExternalStore, matching useApplePayOffered: the cookie
+  // is a browser fact that cannot exist during SSR, and this is how the rest of
+  // this codebase reads one without a hydration mismatch or a cascading render.
+  const referralCodeFromCookie = useSyncExternalStore(
+    subscribeNever,
+    readReferralCookie,
+    getServerReferralCookie,
+  );
+  /** What the new account should be attributed to. The URL wins; the cookie is the fallback. */
+  const referralCodeForSignup = referralCodeFromUrl || referralCodeFromCookie;
   const nextPath = safeNextPath(searchParams.get("next"));
   // A referral link is an invitation to JOIN, so it opens the signup form
   // directly. A verification return has an account already and must not be
@@ -160,9 +226,33 @@ export function AccountAuthForm() {
   // getSession() falls back to whatever supabase-js kept in localStorage — so
   // the page signed the visitor in as whoever last used the browser. Only a
   // fragment that actually carries a token counts. See lib/auth-link-fragment.
-  const [authReturn] = useState<AuthReturn>(() => {
+  //
+  // READ WITH readOAuthCallbackFragment, NOT classifyAuthReturn, AND THE
+  // DIFFERENCE IS AN ACCOUNT TAKEOVER ON A SHARED BROWSER.
+  //
+  // classifyAuthReturn answers "does this URL LOOK like a return from an auth
+  // link", accepting access_token OR refresh_token. The effect below then asked
+  // supabase.auth.getSession() for the tokens — a PROXY question, and the wrong
+  // one. supabase-js's _isImplicitGrantCallback ignores refresh_token entirely,
+  // so `#refresh_token=anything` reads as a session here and as no callback at
+  // all there; supabase-js falls through to _recoverAndRefresh() and
+  // getSession() hands back whatever is in localStorage — the PREVIOUS
+  // customer's live session on a shared machine. Posting that to
+  // /api/auth/session mints an httpOnly cookie for the wrong person, and the
+  // server cannot tell: the token is genuine, so GoTrue verifies it happily.
+  //
+  // This is the same defect, one file over, that /account/auth/callback was
+  // rewritten to close — and readOAuthCallbackFragment's own header describes
+  // it. The callback stopped asking the proxy question; this page had not.
+  //
+  // So the tokens come from the fragment and client storage is never consulted
+  // for identity. Both halves are required, because half a session is exactly
+  // the shape of the bypass. Classified ONCE, at first render, before
+  // supabase-js can consume the fragment (its client is lazily constructed on
+  // first `supabase.auth` access, which happens later, inside the effect).
+  const [authReturn] = useState<OAuthCallbackReturn>(() => {
     if (typeof window === "undefined") return { kind: "none" };
-    return classifyAuthReturn(window.location.hash);
+    return readOAuthCallbackFragment(window.location.hash);
   });
   const [arrivedFromEmailLink] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -217,14 +307,26 @@ export function AccountAuthForm() {
 
 
   // A shopper who clicked the confirmation link in Supabase's built-in
-  // verification email lands back here with a session already established
-  // by the Supabase client (it reads the token from the URL fragment) -
+  // verification email lands back here with the session in the URL fragment —
   // finish signing them in by setting our own httpOnly session cookie.
   //
-  // Gated to verification returns ONLY. The Supabase client also keeps a
-  // long-lived copy of past sessions in localStorage, and running this on
-  // every visit made the login page silently re-establish that session and
-  // bounce straight to the home page — the shopper never saw the form.
+  // RUNS ONLY WHEN THE FRAGMENT ITSELF CARRIED BOTH TOKENS, AND USES THOSE.
+  // Two earlier versions of this gate were not enough, and each failure was the
+  // same one: the page signing a visitor in as whoever last used the browser.
+  //
+  //   `?verified=1`               a query param is typed, shared, bookmarked and
+  //                               re-opened; on any of those the fragment is
+  //                               empty and getSession() answered from
+  //                               localStorage.
+  //   classifyAuthReturn + getSession()
+  //                               a fragment carrying only `refresh_token`
+  //                               reads as a session here and as no callback at
+  //                               all to supabase-js, which then answers from
+  //                               localStorage just the same.
+  //
+  // Both are closed by asking the real question instead of a proxy for it:
+  // WHICH TOKENS ARRIVED IN THIS URL. Client storage is never consulted for
+  // identity, so there is nothing for a stale session to be read out of.
   useEffect(() => {
     if (!isVerificationReturn) {
       return;
@@ -233,12 +335,19 @@ export function AccountAuthForm() {
     let active = true;
 
     (async () => {
-      const { data } = await supabase.auth.getSession();
-      const accessToken = data.session?.access_token;
-      const refreshToken = data.session?.refresh_token ?? null;
-      const user = data.session?.user;
+      // FROM THE FRAGMENT, NEVER FROM STORAGE. See the comment on `authReturn`
+      // above: getSession() here was the shared-browser hole.
+      const { accessToken, refreshToken } = authReturn;
 
-      if (!accessToken || !user) {
+      // Verified against GoTrue with THIS token, rather than read off whatever
+      // session the client happens to hold. getUser(jwt) sends the token and
+      // touches no storage, so an expired or forged fragment simply yields no
+      // user and nothing is established.
+      const { data, error: userError } = await supabase.auth.getUser(accessToken);
+      const user = data?.user;
+
+      if (userError || !user) {
+        if (active) setError(deadAuthLinkMessage());
         return;
       }
 
@@ -289,7 +398,7 @@ export function AccountAuthForm() {
     return () => {
       active = false;
     };
-  }, [router, nextPath, isVerificationReturn]);
+  }, [router, nextPath, isVerificationReturn, authReturn]);
 
   // Tick down the "Text me a code" cooldown once per second.
   useEffect(() => {
@@ -358,7 +467,7 @@ export function AccountAuthForm() {
           password,
           fullName: fullName.trim(),
           businessType,
-          referredByCode: referralCodeFromUrl || "",
+          referredByCode: referralCodeForSignup || "",
           captchaToken: captchaToken ?? "",
           nextPath,
           marketingOptIn,
@@ -398,7 +507,7 @@ export function AccountAuthForm() {
             business_type: businessType,
             age_confirmed_21: true,
             research_use_only_agreed: true,
-            referred_by_code: referralCodeFromUrl || undefined,
+            referred_by_code: referralCodeForSignup || undefined,
           },
           emailRedirectTo: getEmailRedirectUrl(`/account/login?verified=1&next=${encodeURIComponent(nextPath)}`),
           captchaToken: captchaToken ?? undefined,
@@ -680,8 +789,8 @@ export function AccountAuthForm() {
         // a referred visitor is one tap from the door that used to drop this —
         // costing her the welcome points and the ambassador the referral bonus,
         // silently, with a success screen either way and no repair path.
-        if (referralCodeFromUrl) {
-          window.sessionStorage.setItem("vl-oauth-referral", referralCodeFromUrl);
+        if (referralCodeForSignup) {
+          window.sessionStorage.setItem("vl-oauth-referral", referralCodeForSignup);
         } else {
           window.sessionStorage.removeItem("vl-oauth-referral");
         }
@@ -752,28 +861,78 @@ export function AccountAuthForm() {
   if (mode === "portal") {
     return (
       <div className="vl-auth-card vl-fade-up mx-auto w-full max-w-[26rem] rounded-[22px] p-6 sm:p-8">
+        {/* WHAT THIS SCREEN SAYS ABOUT ITSELF IN THE FIRST TWO SECONDS.
+            "Research Access Portal / Access is limited to verified account
+            holders." was accurate and it was costing visitors. Read cold, on a
+            phone, by someone who has never heard of us, it says: you are not on
+            the list, and there is a process. The visitor leaves before reading
+            far enough to find out that the process is one tap of Google.
+
+            The heading now names the destination rather than the checkpoint,
+            and the line under it answers the only question that actually
+            drives the bounce — how long is this going to take. Neither
+            sentence promises anything the page does not deliver: the fastest
+            door really is two taps and no typing. What is gated has not
+            changed; how long it looks like it will take has. */}
         <header className="text-center">
           <p className="text-[11px] font-medium uppercase tracking-[0.28em] text-[color:var(--accent-gold)]">
             Vanta Labs
           </p>
           <h1 className="mt-3 text-[1.75rem] font-semibold leading-[1.15] tracking-[-0.01em] text-white sm:text-[2rem]">
-            Research Access Portal
+            Access Vanta Labs
           </h1>
-          <p className="mt-3 text-[0.9375rem] leading-6 text-white/55">
-            Access is limited to verified account holders.
+          <p className="mt-2.5 text-[0.9375rem] leading-6 text-white/55">
+            Sign in in seconds to continue.
           </p>
         </header>
 
-        <p className="mt-7 text-center text-[0.8125rem] uppercase tracking-[0.16em] text-white/40">
-          Please confirm the following to continue
+        {/* TWO ROWS ABOVE THE DOOR, NOT FOUR.
+            There were four checkbox rows here, and they pushed "Continue with
+            Google" to 708px on a 390x844 phone — under the fold on any real
+            handset once the browser chrome and the consent bar are counted. So
+            the screen's first impression was a column of compliance boxes with
+            the fast path hidden below it, which is precisely the "this will
+            take a while" read that loses the visit.
+
+            The two that remain are the two that GATE entry: startOAuth refuses
+            without both, and this store sells 21+ research-use-only material,
+            so they are not negotiable and they must stay in front of the
+            button that requires them. The two OPTIONAL boxes are not conditions
+            of entry and have no business standing in front of one, so they now
+            sit in their own group at the foot of the card. Nothing about what
+            is required, recorded or enforced changed — only how much of it
+            stands between a visitor and the fastest way in. */}
+
+        {/* text-white/50 IS A CONTRAST FLOOR, NOT A TASTE CALL — same for the
+            "Optional" label and the line under the Google button.
+
+            Composited against this card (the shell is #0a0a0a, the card a
+            0.82→0.88 alpha gradient over it, so the surface behind this text is
+            about rgb(19,20,24)), the muted whites measure:
+
+                white/30  2.69:1     white/45  4.52:1
+                white/35  3.22:1     white/50  5.30:1
+                white/40  3.83:1     white/55  6.17:1
+
+            WCAG AA wants 4.5:1, and 11px uppercase is not "large text" by any
+            reading. The label this replaced was white/40 at 13px — 3.83:1, a
+            fail — so anything dimmer than /45 here would have carried a real
+            defect forward while claiming to improve the screen. /50 is the
+            first step with margin for the gradient's darker end.
+
+            The "or" rule below stays at white/30 because its container is
+            aria-hidden and it says nothing the layout does not: it is
+            decoration, and decoration is exempt. These three are instructions. */}
+        <p className="mt-6 text-center text-[0.6875rem] font-medium uppercase tracking-[0.2em] text-white/50">
+          Confirm to continue
         </p>
 
         {/* THE WHOLE ROW IS THE CONTROL.
             Each row is a <label> wrapping its input, so the tap target is the
             full width of the card rather than a 16px box. On a phone that is
-            the difference between three confident taps and three near-misses,
+            the difference between two confident taps and two near-misses,
             and it is why these are not bare checkboxes in a list. */}
-        <div className="mt-4 space-y-2.5">
+        <div className="mt-3 space-y-2.5">
           <label className="vl-portal-row">
             <input
               type="checkbox"
@@ -793,71 +952,76 @@ export function AccountAuthForm() {
             />
             <span>I understand products are offered exclusively for research use</span>
           </label>
-
-          {/* Visually set apart from the two above, because it is a different
-              kind of statement and the difference should be legible before it
-              is read. The two above are conditions of entry; this one is a
-              favour, and marking it optional in the label is the honest way to
-              ask for it. */}
-          <label className="vl-portal-row vl-portal-row-optional">
-            <input
-              type="checkbox"
-              checked={marketingOptIn}
-              onChange={(event) => setMarketingOptIn(event.target.checked)}
-              className="vl-auth-check mt-0.5"
-            />
-            <span>
-              I agree to receive Vanta Labs emails, product updates and offers
-              <span className="ml-1.5 text-white/35">(optional)</span>
-            </span>
-          </label>
-
-          {/* ON THE PORTAL, BECAUSE THE PORTAL IS WHERE GOOGLE IS.
-              This control existed only on the email and create-account forms,
-              so anyone taking the fastest door never saw it — and the callback
-              sent `rememberMe: true` regardless, on the reasoning that
-              "a visitor who chose a provider account is asking that browser to
-              remember them". That is a decision made on the visitor's behalf
-              and then described as theirs. Here it is a question, asked once,
-              before either door. */}
-          <label className="vl-portal-row vl-portal-row-optional">
-            <input
-              type="checkbox"
-              checked={rememberMe}
-              onChange={(event) => setRememberMe(event.target.checked)}
-              className="vl-auth-check mt-0.5"
-            />
-            <span>
-              Keep me signed in on this device
-              <span className="ml-1.5 text-white/35">(optional)</span>
-            </span>
-          </label>
         </div>
 
         {error ? (
           <p role="alert" className="mt-5 rounded-[12px] border border-rose-400/25 bg-rose-500/[0.08] px-4 py-3 text-[0.875rem] leading-6 text-rose-200">{error}</p>
         ) : null}
 
+        {/* ---------------------------------------------------------------
+            THE FASTEST DOOR, MARKED AS SUCH.
+
+            The provider button and "Create an account" used to be the same
+            size, the same weight and the same colour, stacked one above the
+            other. A screen that offers two identical-looking doors has not
+            recommended anything; it has asked the visitor to compare. So the
+            one that takes two taps and no typing now says so — a small gold
+            marker above it, the brighter surface below it, and one line under
+            that answering what the visitor is actually weighing up ("is this
+            going to be a signup form?").
+
+            The claim is literally true, which is the only reason it is allowed
+            on this page: Google returns an identity, the callback exchanges it
+            for the same session the email form produces, and nothing is typed
+            on the way. Nothing here changes what the button DOES — same
+            startOAuth, same attestations, same scopes, same round trip.
+            --------------------------------------------------------------- */}
         {hasAnyOAuthProvider() ? (
           <>
             <div className="mt-6 h-px bg-white/[0.08]" aria-hidden="true" />
 
+            {/* Badge, button and promise are ONE guarded unit, in that order.
+                A fragment's children are direct children of this div, so the
+                12px rhythm applies to each of them — and Apple, if it is ever
+                switched on, lands after the promise rather than between the
+                button and the sentence describing it. */}
             <div className="mt-6 space-y-3">
               {isGoogleSignInEnabled() ? (
-                <button
-                  type="button"
-                  onClick={() => void startOAuth("google")}
-                  disabled={oauthPending !== null || !canEnter}
-                  className="vl-oauth-btn vl-oauth-btn-lg vl-focus-ring"
-                >
-                  <svg viewBox="0 0 24 24" className="h-5 w-5 shrink-0" aria-hidden="true">
-                    <path fill="#4285F4" d="M23.06 12.25c0-.85-.08-1.67-.22-2.45H12v4.63h6.2a5.3 5.3 0 0 1-2.3 3.48v2.89h3.72c2.18-2 3.44-4.96 3.44-8.55z" />
-                    <path fill="#34A853" d="M12 23.5c3.11 0 5.72-1.03 7.62-2.79l-3.72-2.89c-1.03.69-2.35 1.1-3.9 1.1-3 0-5.54-2.02-6.45-4.74H1.7v2.98A11.5 11.5 0 0 0 12 23.5z" />
-                    <path fill="#FBBC05" d="M5.55 14.18a6.9 6.9 0 0 1 0-4.36V6.84H1.7a11.5 11.5 0 0 0 0 10.32l3.85-2.98z" />
-                    <path fill="#EA4335" d="M12 4.75c1.69 0 3.21.58 4.4 1.72l3.3-3.3C17.72 1.28 15.11.25 12 .25A11.5 11.5 0 0 0 1.7 6.84l3.85 2.98C6.46 7.1 9 4.75 12 4.75z" />
-                  </svg>
-                  <span>{oauthPending === "google" ? "Opening Google…" : "Continue with Google"}</span>
-                </button>
+                <>
+                  <p className="flex justify-center">
+                    <span className="vl-fastest-badge" id="vl-fastest-label">
+                      <svg viewBox="0 0 24 24" fill="currentColor" className="h-3 w-3 shrink-0" aria-hidden="true">
+                        <path d="M13.4 2 4 13.6h6l-1.4 8.4L20 10.4h-6.6L13.4 2Z" />
+                      </svg>
+                      Fastest option
+                    </span>
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={() => void startOAuth("google")}
+                    disabled={oauthPending !== null || !canEnter}
+                    aria-describedby="vl-fastest-label vl-fastest-note"
+                    className="vl-oauth-btn vl-oauth-btn-lg vl-oauth-btn-primary vl-focus-ring"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-5 w-5 shrink-0" aria-hidden="true">
+                      <path fill="#4285F4" d="M23.06 12.25c0-.85-.08-1.67-.22-2.45H12v4.63h6.2a5.3 5.3 0 0 1-2.3 3.48v2.89h3.72c2.18-2 3.44-4.96 3.44-8.55z" />
+                      <path fill="#34A853" d="M12 23.5c3.11 0 5.72-1.03 7.62-2.79l-3.72-2.89c-1.03.69-2.35 1.1-3.9 1.1-3 0-5.54-2.02-6.45-4.74H1.7v2.98A11.5 11.5 0 0 0 12 23.5z" />
+                      <path fill="#FBBC05" d="M5.55 14.18a6.9 6.9 0 0 1 0-4.36V6.84H1.7a11.5 11.5 0 0 0 0 10.32l3.85-2.98z" />
+                      <path fill="#EA4335" d="M12 4.75c1.69 0 3.21.58 4.4 1.72l3.3-3.3C17.72 1.28 15.11.25 12 .25A11.5 11.5 0 0 0 1.7 6.84l3.85 2.98C6.46 7.1 9 4.75 12 4.75z" />
+                    </svg>
+                    <span>{oauthPending === "google" ? "Opening Google…" : "Continue with Google"}</span>
+                  </button>
+
+                  {/* The reassurance goes UNDER the button, not above it.
+                      Above, it is one more line to read before the visitor can
+                      act; below, it is there for the split second of hesitation
+                      before the tap, and invisible to anyone who was already
+                      going to press it. */}
+                  <p id="vl-fastest-note" className="text-center text-[0.8125rem] leading-5 text-white/55">
+                    Fast, secure access — no lengthy signup.
+                  </p>
+                </>
               ) : null}
 
               {isAppleSignInEnabled() ? (
@@ -887,18 +1051,30 @@ export function AccountAuthForm() {
           <div className="mt-7" />
         )}
 
+        {/* THE EMAIL DOOR. Quieter than the provider button above it, and still
+            a full-width 54px target — a second choice, not a footnote. Someone
+            with no Google account has to be able to find this instantly. */}
         <button
           type="button"
           onClick={() => {
             if (!canEnter) {
-              setError("Please confirm the first two statements to continue.");
+              setError("Please confirm both statements above to continue.");
               return;
             }
             setError(null);
             setMode("signup");
           }}
           disabled={!canEnter}
-          className="vl-auth-submit vl-focus-ring w-full"
+          /* QUIET ONLY WHILE THERE IS SOMETHING LOUDER TO BE QUIET AGAINST.
+             The demotion exists to rank this against the provider button above
+             it. Switch every provider off — one env var away, and the exact
+             thing lib/oauth-providers.ts exists to make survivable — and the
+             divider, the marker and the button all disappear, leaving this as
+             the ONLY door on the screen, deliberately dimmed, with nothing on
+             the card it could be ranked below. A sole call to action styled as
+             a runner-up reads as disabled or broken, which is a worse front
+             door than the one this change set out to fix. */
+          className={`vl-auth-submit vl-focus-ring w-full ${hasAnyOAuthProvider() ? "vl-auth-submit-quiet" : ""}`}
         >
           Create an account
         </button>
@@ -909,8 +1085,14 @@ export function AccountAuthForm() {
             to make one choice obvious. It also stays available whatever the
             boxes say: someone who already has an account made these
             representations when they created it, and blocking them from their
-            own orders over an unticked box would be absurd. */}
-        <p className="mt-6 text-center text-[0.875rem] text-white/45">
+            own orders over an unticked box would be absurd.
+
+            "Sign in" alone was ambiguous next to a Google button that also
+            signs you in — a returning Google customer could reasonably read it
+            as the route back to their own account and land on a password form
+            they never set a password for. "Sign in with email" names the door
+            it actually opens, which is the whole point of having three. */}
+        <p className="mt-5 text-center text-[0.875rem] text-white/45">
           Already have an account?{" "}
           <button
             type="button"
@@ -920,9 +1102,70 @@ export function AccountAuthForm() {
             }}
             className="vl-focus-ring inline-flex min-h-6 items-center rounded-[6px] font-medium text-white/85 underline underline-offset-4 decoration-white/25 transition-colors duration-200 hover:text-white hover:decoration-white/60"
           >
-            Sign in
+            Sign in with email
           </button>
         </p>
+
+        {/* THE TWO OPTIONAL BOXES, IN THEIR OWN GROUP AT THE FOOT OF THE CARD.
+            They were directly beneath the two required ones, which made four
+            near-identical rows the visitor had to read and sort before they
+            could see a way in — and buried the fast path under the fold on a
+            phone. They are still on THIS screen, still ticked before either
+            door is taken, and still read at the moment startOAuth fires, so
+            what a visitor can consent to has not changed. What changed is that
+            a favour is no longer standing in the queue in front of a
+            condition of entry.
+
+            Kept together, below both doors and above the terms line, because
+            neither belongs to one door: the marketing tick and the session
+            length apply whether the visitor leaves through Google or through
+            email. Both remain OFF until someone turns them on. */}
+        <div className="mt-7 border-t border-white/[0.06] pt-6">
+          <p className="text-center text-[0.6875rem] font-medium uppercase tracking-[0.2em] text-white/50">
+            Optional
+          </p>
+
+          <div className="mt-3 space-y-2.5">
+            {/* Visually set apart from the two required rows above, because it
+                is a different kind of statement and the difference should be
+                legible before it is read. Those are conditions of entry; this
+                one is a favour, and marking it optional in the label is the
+                honest way to ask for it. */}
+            <label className="vl-portal-row vl-portal-row-optional">
+              <input
+                type="checkbox"
+                checked={marketingOptIn}
+                onChange={(event) => setMarketingOptIn(event.target.checked)}
+                className="vl-auth-check mt-0.5"
+              />
+              <span>
+                I agree to receive Vanta Labs emails, product updates and offers
+                <span className="ml-1.5 text-white/35">(optional)</span>
+              </span>
+            </label>
+
+            {/* ON THE PORTAL, BECAUSE THE PORTAL IS WHERE GOOGLE IS.
+                This control existed only on the email and create-account forms,
+                so anyone taking the fastest door never saw it — and the callback
+                sent `rememberMe: true` regardless, on the reasoning that
+                "a visitor who chose a provider account is asking that browser to
+                remember them". That is a decision made on the visitor's behalf
+                and then described as theirs. Here it is a question, asked once,
+                and it reaches both doors. */}
+            <label className="vl-portal-row vl-portal-row-optional">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(event) => setRememberMe(event.target.checked)}
+                className="vl-auth-check mt-0.5"
+              />
+              <span>
+                Keep me signed in on this device
+                <span className="ml-1.5 text-white/35">(optional)</span>
+              </span>
+            </label>
+          </div>
+        </div>
 
         <p className="mt-6 text-center text-[0.75rem] leading-5 text-white/35">
           By continuing, you agree to our{" "}

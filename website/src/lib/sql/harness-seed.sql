@@ -1,6 +1,45 @@
+-- IMAGES POINT AT A FILE THAT EXISTS.
+--
+-- These rows carried '/img/p1.png' … '/img/p5.png', and nothing in public/ has
+-- ever been at those paths. So every product card on the harness answered
+--   400 GET /_next/image?url=%2Fimg%2Fp1.png
+-- and a browser verification run opened with a wall of image errors that were
+-- pure seed noise — which is exactly the condition under which a REAL image
+-- failure goes unnoticed. public/images/product-placeholder.png is a real file
+-- the app already ships.
+
 -- Block G/H harness seed. Mirrors production SHAPES, never production data.
 -- Every value here is synthetic. See docs/BROWSER-TESTING-RUNBOOK.md section 3.
 begin;
+-- order_attribution REFERENCES orders, so it goes first.
+--
+-- Left out, this file's very first statement fails on any harness that has ever
+-- recorded a campaign touch — and the setup script applies it with `|| true`, so
+-- the whole seed rolls back in silence and the harness keeps whatever catalogue
+-- it already had. The table arrived with order-attribution.sql, which the setup
+-- script applies BEFORE this; nothing connected the two.
+-- CHILDREN FIRST. order_attribution references orders and referral_orders
+-- references ambassadors, and both tables arrive in migrations the setup script
+-- applies BEFORE this file. Left out, the very first delete fails on any harness
+-- that has ever recorded a campaign touch or an affiliate order — and the setup
+-- script applies this with `|| true`, so the whole seed rolls back in silence
+-- and the harness keeps whatever catalogue it already had. Nothing connected
+-- the two, and a silently un-reseeded harness is the state every browser
+-- verification is then run against.
+-- Derived from the FK graph, not remembered:
+--   select c.conrelid::regclass, c.confrelid::regclass from pg_constraint c
+--   where c.contype='f' and c.confrelid::regclass::text in (…the tables below…);
+-- Every one of these arrives in a migration the setup script applies BEFORE
+-- this file, and `if exists` keeps the statement harmless on a database that
+-- does not have it yet.
+delete from order_attribution;
+delete from referral_orders;
+delete from abandoned_cart_emails; delete from abandoned_carts;
+delete from coa_records;
+delete from commissions; delete from payouts; delete from referrals;
+delete from customer_memberships; delete from membership_billing_events;
+delete from fulfillment_batch_orders; delete from fulfillment_orders; delete from fulfillment_payouts;
+delete from order_shipments; delete from order_shipping_cost_audit;
 delete from order_items; delete from orders; delete from inventory_reservations;
 delete from product_doses; delete from product_images; delete from products;
 delete from ambassadors; delete from partners; delete from coupons; delete from membership_tiers;
@@ -9,7 +48,7 @@ delete from ambassadors; delete from partners; delete from coupons; delete from 
 insert into products (id, slug, name, category, price_cents, stock_status, inventory_quantity,
   is_active, is_published, is_enabled, track_inventory, short_description, image_url, position)
 values ('11111111-1111-1111-1111-111111111111','bpc-157-10mg','BPC-157 10mg','Research Peptides',
-  6900,'In Stock',0,true,true,true,true,'Synthetic harness product (parent-zero shape).','/img/p1.png',1);
+  6900,'In Stock',0,true,true,true,true,'Synthetic harness product (parent-zero shape).','/images/product-placeholder.png',1);
 insert into product_doses (id, product_id, label, slug_suffix, price_cents, inventory_quantity,
   stock_status, is_default, is_enabled, track_inventory, position, sku)
 values ('aaaaaaa1-0000-4000-8000-000000000001','11111111-1111-1111-1111-111111111111','10mg','10mg',
@@ -21,7 +60,7 @@ values ('aaaaaaa1-0000-4000-8000-000000000001','11111111-1111-1111-1111-11111111
 insert into products (id, slug, name, category, price_cents, stock_status, inventory_quantity,
   is_active, is_published, is_enabled, track_inventory, short_description, image_url, position)
 values ('22222222-2222-2222-2222-222222222222','tb-500-5mg','TB-500 5mg','Research Peptides',
-  8900,'Out of Stock',0,true,true,true,true,'Synthetic harness product (all doses zero).','/img/p2.png',2);
+  8900,'Out of Stock',0,true,true,true,true,'Synthetic harness product (all doses zero).','/images/product-placeholder.png',2);
 insert into product_doses (id, product_id, label, slug_suffix, price_cents, inventory_quantity,
   stock_status, is_default, is_enabled, track_inventory, position, sku)
 values ('bbbbbbb1-0000-4000-8000-000000000001','22222222-2222-2222-2222-222222222222','5mg','5mg',
@@ -31,7 +70,7 @@ values ('bbbbbbb1-0000-4000-8000-000000000001','22222222-2222-2222-2222-22222222
 insert into products (id, slug, name, category, price_cents, stock_status, inventory_quantity,
   is_active, is_published, is_enabled, track_inventory, short_description, image_url, position)
 values ('33333333-3333-3333-3333-333333333333','ipamorelin-5mg','Ipamorelin 5mg','Research Peptides',
-  5900,'In Stock',40,true,true,true,true,'Synthetic harness product (parent image only).','/img/p3.png',3);
+  5900,'In Stock',40,true,true,true,true,'Synthetic harness product (parent image only).','/images/product-placeholder.png',3);
 
 -- Inverse: gallery rows, no parent image.
 insert into products (id, slug, name, category, price_cents, stock_status, inventory_quantity,
@@ -39,7 +78,7 @@ insert into products (id, slug, name, category, price_cents, stock_status, inven
 values ('44444444-4444-4444-4444-444444444444','cjc-1295-2mg','CJC-1295 2mg','Research Peptides',
   7900,'In Stock',15,true,true,true,true,'Synthetic harness product (gallery only).',null,4);
 insert into product_images (id, product_id, image_url, position)
-values ('cccccccc-0000-4000-8000-000000000001','44444444-4444-4444-4444-444444444444','/img/g1.png',1);
+values ('cccccccc-0000-4000-8000-000000000001','44444444-4444-4444-4444-444444444444','/images/product-placeholder.png',1);
 
 -- THE GIFT PRODUCT. The 60-day win-back can attach a free GHK-Cu, and
 -- qa-customer-offer.mjs tops up its stock and asserts on its COGS — but nothing
@@ -50,7 +89,7 @@ insert into products (id, slug, name, category, price_cents, product_cost_cents,
   inventory_quantity, is_active, is_published, is_enabled, track_inventory, short_description,
   image_url, position)
 values ('55555555-5555-5555-5555-555555555555','ghk-cu','GHK-Cu 50mg','Research Peptides',
-  4799,2288,'In Stock',60,true,true,true,true,'Synthetic harness product (the win-back gift).','/img/p5.png',5);
+  4799,2288,'In Stock',60,true,true,true,true,'Synthetic harness product (the win-back gift).','/images/product-placeholder.png',5);
 
 -- BAC WATER. The cart drawer's accessory upsell fetches /api/catalog/bac-water
 -- on every page that renders the site chrome — including /admin — so without
@@ -62,7 +101,7 @@ insert into products (id, slug, name, category, price_cents, product_cost_cents,
   inventory_quantity, is_active, is_published, is_enabled, track_inventory, short_description,
   image_url, position)
 values ('66666666-6666-6666-6666-666666666666','bacteriostatic-water','Bacteriostatic Water 30ml','Accessories',
-  1499,300,'In Stock',200,true,true,true,true,'Synthetic harness product (the reconstitution upsell).','/img/p6.png',6);
+  1499,300,'In Stock',200,true,true,true,true,'Synthetic harness product (the reconstitution upsell).','/images/product-placeholder.png',6);
 
 -- Ambassadors: all three discount resolutions.
 insert into ambassadors (id, name, email, referral_code, commission_percent, customer_discount_percent, status, approved_at)

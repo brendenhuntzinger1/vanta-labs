@@ -85,7 +85,21 @@ begin;
 --
 -- Table-level REVOKE also removes column-level grants, which is what these
 -- are. Done as a loop rather than 340 statements so it cannot drift out of
--- date, and restricted to ordinary tables so views and sequences are untouched.
+-- date.
+--
+-- VIEWS ARE IN THE SWEEP NOW, and they are the relkind where a lost grant is
+-- hardest to see. This loop used to be restricted to `('r','p')` — ordinary and
+-- partitioned tables — on the reasoning that views and sequences should be left
+-- alone. But a view is a readable object with its own grants, and one that is
+-- recreated (which `create or replace view` cannot avoid whenever a column is
+-- dropped or reordered) takes a fresh SELECT grant for anon from Supabase's
+-- platform default-privilege entry. Nothing here would have taken it back, and
+-- a view over a table whose RLS is doing the work reads straight past it unless
+-- it was also declared security_invoker.
+--
+-- Every view in this schema is read by the server through the service role, so
+-- there is nothing for anon or authenticated to lose. Sequences stay out: they
+-- are not readable objects and nothing here reads one.
 -- ---------------------------------------------------------------------------
 do $$
 declare r record;
@@ -94,7 +108,7 @@ begin
     select c.relname
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
-    where n.nspname = 'public' and c.relkind in ('r', 'p')
+    where n.nspname = 'public' and c.relkind in ('r', 'p', 'v', 'm')
   loop
     execute format('revoke select on public.%I from anon, authenticated', r.relname);
   end loop;
@@ -134,6 +148,30 @@ alter default privileges in schema public revoke select on tables from authentic
 drop policy if exists products_select_public on public.products;
 drop policy if exists product_doses_select_public on public.product_doses;
 drop policy if exists product_images_select_public on public.product_images;
+
+-- AND THE NAMES THIS FILE IS ABOUT TO CREATE, because it is not the only file
+-- that creates them.
+--
+-- gate-catalog-behind-account.sql also creates products_select_admin and
+-- product_doses_select_admin. Applying that file and then this one to a fresh
+-- database — a new staging project, a restore, a second store — failed here:
+--
+--   ERROR:  policy "products_select_admin" for table "products" already exists
+--   ERROR:  current transaction is aborted, commands ignored until end of...
+--
+-- and because the whole file is one transaction, EVERYTHING in it rolled back:
+-- the 340-grant revoke loop, the ALTER DEFAULT PRIVILEGES change that stops the
+-- next migration re-granting to the world, and product_images_select_admin. The
+-- database came up with anon holding every grant it had before — the exact
+-- state this file exists to end — while psql still exited 0, because the errors
+-- are per-statement.
+--
+-- Reproduced on a throwaway Postgres before writing this, and
+-- catalog-lockdown-sql-is-idempotent.test.ts now applies both files in both
+-- orders, twice each, against a real database.
+drop policy if exists products_select_admin on public.products;
+drop policy if exists product_doses_select_admin on public.product_doses;
+drop policy if exists product_images_select_admin on public.product_images;
 
 create policy products_select_admin on public.products
   for select using ((select public.current_auth_role()) = 'admin');

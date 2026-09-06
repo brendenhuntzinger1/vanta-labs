@@ -18,6 +18,11 @@ const db = {
   order_email_log: [] as Row[],
   pending_emails: [] as Row[],
   email_suppressions: [] as Row[],
+  // The delivery-event log. It exists here because recordDeliveryEvent now
+  // reads back whether the row it wrote was NEW — that answer is what stops a
+  // redelivered complaint raising a second alert — so a fake that has no table
+  // to write to no longer models the code.
+  email_delivery_events: [] as Row[],
 };
 
 const alerts: Array<{ type: string; context?: Record<string, unknown> }> = [];
@@ -88,12 +93,25 @@ vi.mock("@/lib/supabase-server", () => ({
       return {
         select: () => makeQuery(table, "select"),
         update: (patch: Row) => makeQuery(table, "update", patch),
-        upsert: async (row: Row, options: { onConflict: string }) => {
-          const key = options.onConflict;
-          const existing = db[table].find((candidate) => candidate[key] === row[key]);
-          if (existing) Object.assign(existing, row);
-          else db[table].push({ ...row });
-          return { error: null };
+        upsert: (row: Row, options: { onConflict: string; ignoreDuplicates?: boolean }) => {
+          // The composite conflict target used by email_delivery_events is a
+          // comma-separated list; the single-column ones are just a name.
+          const keys = String(options.onConflict).split(",").map((k) => k.trim());
+          const existing = db[table].find((candidate) => keys.every((k) => candidate[k] === row[k]));
+          let wrote: Row | null = null;
+          if (existing) {
+            // ignoreDuplicates KEEPS the original row and returns nothing — the
+            // property the "is this the first sighting" answer rests on.
+            if (!options.ignoreDuplicates) Object.assign(existing, row);
+          } else {
+            wrote = { ...row };
+            db[table].push(wrote);
+          }
+          const result = { data: wrote ? [{ id: db[table].length }] : [], error: null };
+          return {
+            select: async () => result,
+            then: (resolve: (value: { error: null }) => unknown) => Promise.resolve({ error: null }).then(resolve),
+          };
         },
         insert: async (row: Row) => {
           db[table].push({ ...row });
@@ -108,6 +126,7 @@ beforeEach(() => {
   db.order_email_log = [];
   db.pending_emails = [];
   db.email_suppressions = [];
+  db.email_delivery_events = [];
   alerts.length = 0;
   sends.length = 0;
   sendResult.value = { success: true, provider: "resend", providerMessageId: "msg_1" };

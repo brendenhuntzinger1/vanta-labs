@@ -51,6 +51,36 @@ jobs:
         # package.json and no node_modules.
         working-directory: website
 
+    # A THROWAWAY POSTGRES, BECAUSE 200-ODD ASSERTIONS SKIPPED WITHOUT ONE.
+    #
+    # Seventeen suites gate themselves on VANTA_TEST_DATABASE_URL and print a
+    # SKIPPED line to stderr when it is absent — which is every CI run, so the
+    # workflow reported success while never executing any of them. Among the
+    # things that were not being checked on any pull request:
+    #
+    #   the ROAS views' arithmetic, executed against a real Postgres, including
+    #   the revenue fan-out that shipped once already;
+    #   that the two catalogue-lockdown files can both be applied to a fresh
+    #   database at all;
+    #   the inventory, offer and marketing-frequency suites.
+    #
+    # A skip that reads as a pass is the failure mode this whole workflow was
+    # added to prevent, so the database is provided rather than the suites
+    # excluded. It is a container that exists for the length of one job: no
+    # secret, no data, nothing a fork's pull request cannot have.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -92,8 +122,40 @@ jobs:
       # is the state a fresh CI checkout is in. Nothing here needs a secret, and
       # nothing here should — a test that needs production credentials is a test
       # that cannot run on a pull request from a fork.
+      #
+      # VANTA_TEST_DATABASE_URL points at the throwaway service container above.
+      # The database-backed suites create their OWN database per suite
+      # (lib/e2e/suite-database.ts) and drop it first, so they never share
+      # tables and never touch anything they did not name. The URL is refused by
+      # those suites if it names a harness database, which this one is not.
       - name: Tests
+        env:
+          VANTA_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
         run: npx vitest run
+
+      # A SKIP THAT READS AS A PASS IS THE THING THIS GUARDS AGAINST.
+      #
+      # If the service container ever stops being reachable, every one of those
+      # suites goes back to skipping quietly and the run stays green. So the
+      # count is asserted: the run must execute the database-backed files rather
+      # than merely not fail.
+      - name: The database-backed suites actually ran
+        env:
+          VANTA_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
+        run: |
+          npx vitest run src/lib/sql/ads-roas-views-executed.test.ts \
+                         src/lib/sql/catalog-lockdown-sql-is-idempotent.test.ts \
+                         --reporter=json --outputFile=/tmp/db-suites.json
+          node -e '
+            const r = require("/tmp/db-suites.json");
+            const skipped = r.numPendingTests ?? 0;
+            const passed = r.numPassedTests ?? 0;
+            if (skipped > 0 || passed === 0) {
+              console.error(`database-backed suites did not run: ${passed} passed, ${skipped} skipped`);
+              process.exit(1);
+            }
+            console.log(`database-backed suites executed: ${passed} assertions`);
+          '
 
       - name: Types
         run: npx tsc --noEmit

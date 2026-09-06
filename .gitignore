@@ -12,3 +12,16 @@ node_modules/
 
 # Ephemeral git worktrees created for isolated review agents.
 .claude/worktrees/
+
+# Environment files AT THE REPOSITORY ROOT ONLY. `.env.test.local` was committed
+# here once by accident: Next reads env files from the app directory (website/),
+# never from the repo root, so a copy here configures nothing and is pure
+# confusion. website/.gitignore covers the app's own env files; these patterns
+# are deliberately root-anchored so they cannot reach into it.
+/.env
+/.env.*
+
+# Browser-testing screenshots dropped at the root. Root-anchored on purpose:
+# an unanchored *.png would silently swallow every product image under
+# website/public/images/, which is the opposite of what this is for.
+/*.png

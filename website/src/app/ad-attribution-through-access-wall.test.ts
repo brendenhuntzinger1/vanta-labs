@@ -365,9 +365,75 @@ describe("carrying ad parameters is safe and stable", () => {
     const { response, location } = await adClick(
       `/products/bac-water?utm_campaign=${encodeURIComponent("launch\r\nX-Injected: 1")}`,
     );
-    // Nothing that could split a header survives into one.
-    expect(location.searchParams.get("utm_campaign")).toBe("launch X-Injected: 1");
+    // Nothing that could split a header survives into one. Lowercased because
+    // a campaign tag goes through normalizeCampaignTag, same as the parser.
+    expect(location.searchParams.get("utm_campaign")).toBe("launch x-injected: 1");
     expect(response.headers.get("location")).not.toContain("\n");
+  });
+
+  it("lowercases a campaign tag so both sides of the ROAS join agree", async () => {
+    // ads/utm.ts lowercases on the SPEND side; normalizeCampaignTag does it on
+    // the revenue side. A tag carried across the wall has to leave here in the
+    // same case it would have been stored in, or `Hook_A` reaches
+    // website_analytics_events — which posts params.get() raw, without the
+    // parser — while the order row holds `hook_a`, and the creative shows spend
+    // against zero revenue.
+    const { location } = await adClick(
+      "/products/bac-water?utm_source=TikTok&utm_campaign=Summer_Launch&utm_content=Hook_A&ttclid=TT_Click_Id_KeepCase",
+    );
+
+    expect(location.searchParams.get("utm_source")).toBe("tiktok");
+    expect(location.searchParams.get("utm_campaign")).toBe("summer_launch");
+    expect(location.searchParams.get("utm_content")).toBe("hook_a");
+    // A click id is an opaque token the platform matches on, NOT a join key we
+    // own — lowercasing one would break the conversion API. Case is preserved.
+    expect(location.searchParams.get("ttclid")).toBe("TT_Click_Id_KeepCase");
+
+    const touch = captureAtPortal(location, null);
+    expect(touch!.utmContent).toBe("hook_a");
+    expect(touch!.ttclid).toBe("TT_Click_Id_KeepCase");
+  });
+
+  it.each(["{{campaign.name}}", "__CAMPAIGN_NAME__", "{{ad.id}}"])(
+    "drops the unexpanded macro %s rather than carrying it",
+    async (macro) => {
+      // A platform that fails to substitute its own macro sends the literal
+      // template. The parser already refuses it; carrying it would put a
+      // template string on a URL and, from there, into a column as though it
+      // were a campaign.
+      const { location } = await adClick(
+        `/products/bac-water?utm_campaign=${encodeURIComponent(macro)}&utm_source=tiktok`,
+      );
+      expect(location.searchParams.has("utm_campaign")).toBe(false);
+      // The tags either side of it still travel — one bad value is not a reason
+      // to lose the whole touch.
+      expect(location.searchParams.get("utm_source")).toBe("tiktok");
+      expect(captureAtPortal(location, null)!.utmCampaign).toBeNull();
+    },
+  );
+
+  it("hands the portal exactly what a direct landing would have parsed", async () => {
+    // The invariant the whole copy exists to hold: going through the wall must
+    // produce the same touch as never having met it. Compared field by field
+    // rather than by eye, so a future divergence between copyAdParams and the
+    // parser fails here instead of silently splitting the join.
+    const raw = "/products/bac-water?utm_source=TikTok&utm_medium=Paid_Social&utm_campaign=Launch"
+      + "&utm_content=Hook_A&utm_term=Peptide&ttclid=TT_9&SCCID=Snap_9";
+
+    const direct = parseAttributionTouch({
+      search: new URL(raw, ORIGIN).search,
+      pathname: "/products/bac-water",
+      referrer: null,
+      now: NOW,
+    });
+    const throughWall = captureAtPortal((await adClick(raw)).location, null);
+
+    const fields = ["utmSource", "utmMedium", "utmCampaign", "utmContent", "utmTerm", "ttclid", "scCid"] as const;
+    for (const field of fields) {
+      // Field name carried into the assertion so a failure names the field
+      // that diverged rather than just showing two unequal strings.
+      expect([field, throughWall![field]]).toEqual([field, direct![field]]);
+    }
   });
 
   it("caps an absurdly long value rather than reflecting it whole", async () => {
@@ -426,6 +492,28 @@ describe("carrying ad parameters is safe and stable", () => {
     expect(digest).toContain("/account/login?");
     expect(digest).toContain("utm_source=tiktok");
     expect(digest).toContain("ttclid=TT_LEGACY_1");
+  });
+
+  it("stores the analytics tag under the same key the order side uses", async () => {
+    // THE OTHER HALF OF THE JOIN. The browser tracker posts
+    // params.get("utm_content") RAW to /api/analytics/track — it never goes
+    // through parseAttributionTouch — so before this, a walled visit wrote
+    // `hook_a` (normalised by the wall) for the portal page view and `Hook_A`
+    // (raw, restored verbatim by `next`) for the page view after sign-in. Two
+    // rows, one campaign, two group-by keys, in the same session.
+    //
+    // Asserted against normalizeCampaignTag directly because that IS the rule
+    // the route now applies, and it is the same one the parser applies.
+    const { normalizeCampaignTag } = await import("@/lib/attribution");
+
+    expect(normalizeCampaignTag("Hook_A")).toBe("hook_a");
+    expect(normalizeCampaignTag("  Summer_Launch  ")).toBe("summer_launch");
+    // ads-spend-roas.sql lower()s the order side on read, so lowercase-on-write
+    // is what makes the analytics side land on the same key.
+    expect(normalizeCampaignTag("TikTok")).toBe(normalizeCampaignTag("tiktok"));
+    // A macro the platform failed to substitute is not a campaign name.
+    expect(normalizeCampaignTag("{{campaign.name}}")).toBeNull();
+    expect(normalizeCampaignTag("__CREATIVE__")).toBeNull();
   });
 
   it("leaves an already-present value alone", async () => {

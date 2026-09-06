@@ -1,0 +1,41 @@
+-- ============================================================================
+-- ATOMIC HOLDS FOR STORE CREDIT AND LOYALTY POINTS.
+--
+-- Full DDL with reasoning is src/lib/sql/tender-hold-claim.sql, which is the
+-- single source of truth. This file records what was applied to production and
+-- when.
+--
+-- ----------------------------------------------------------------------------
+-- THE PROOF THAT DID NOT HOLD.
+--
+-- tender-reservation.ts holds a money-like balance the way inventory holds
+-- stock. Its claim wrote the ledger debit FIRST and validated it with a
+-- SEPARATE read: every writer summed the ledger in one fixed order and kept its
+-- row only if the running balance was still solvent up to and including its own
+-- row. Two racing $50 claims against $50 were supposed to agree on which came
+-- first, with the loser deleting its own row.
+--
+-- Nothing made the loser SEE the winner. The insert and the read are two
+-- independent round trips under READ COMMITTED, so a claim that is LATER in the
+-- agreed order can finish its read before the earlier claim's insert has
+-- committed, sum a ledger without its rival in it, and approve itself.
+--
+-- Reproduced against this store's own schema through the real
+-- reserveOrderTender: one user granted exactly 5000 cents, two concurrent
+-- claims of 5000 cents for two different orders, 250 rounds — 2 double spends.
+-- Both orders priced $50 off, both cards were charged the reduced amount, and
+-- the ledger netted to -$50 while $100 of discount had been given away. That is
+-- the VL-11 loss the module was written to close, narrowed from "as many copies
+-- as a shopper can start" to "as many as they can start SIMULTANEOUSLY" — the
+-- easier one to do on purpose.
+--
+-- ----------------------------------------------------------------------------
+-- APPLIED 2026-09-06. Two functions; no table and no row was touched. Additive,
+-- so an application that has not been redeployed keeps working unchanged: it
+-- simply does not call them.
+--
+-- The application falls back to the old algorithm when these are absent, and
+-- that fallback is silent apart from one console.warn — so the harness setup
+-- script asserts both functions take the advisory lock, and the DB-backed
+-- concurrency proof lives in src/lib/sql/tender-hold-claim.test.ts.
+-- ============================================================================

@@ -143,6 +143,9 @@ export function aggregateCampaigns(rows: Record<string, unknown>[]): CampaignRow
     };
     accumulate(entry.parts, row);
     entry.conversions = addCount(entry.conversions, row.platform_conversions);
+    // As in aggregateCreatives: a revenue-only day carries no campaign_name,
+    // so take one from whichever day has it rather than rendering it nameless.
+    entry.campaignName ??= text(row.campaign_name);
     by.set(key, entry);
   }
   return [...by.values()]
@@ -181,6 +184,12 @@ export function aggregateCreatives(rows: Record<string, unknown>[]): CreativeRow
     };
     accumulate(entry.parts, row);
     entry.conversions = addCount(entry.conversions, row.platform_conversions);
+    // A REVENUE-ONLY DAY CARRIES NO NAME, so take one from whichever day has it.
+    // The views full-join spend to revenue, so a creative that earned on a day
+    // it did not spend produces a row whose ad_name and campaign_name are null;
+    // if that row happened to be seen first, the ad rendered nameless.
+    entry.adName ??= text(row.ad_name);
+    entry.campaignName ??= text(row.campaign_name);
     // `ads` comes from the view's own count of distinct ads sharing the tag on
     // that day. Taking the max rather than the sum: the same ad appearing on
     // seven days is one ad, not seven.

@@ -29,9 +29,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // mechanism. What is fixed is the silence and the arithmetic.
 // ---------------------------------------------------------------------------
 
-type Hit = { bucket: string; created_at: string };
+type Hit = { id: number; bucket: string; created_at: string };
 
 const store = vi.hoisted(() => ({
+  nextId: 1,
   hits: [] as Hit[],
   failInsert: null as null | { message: string },
   failCount: null as null | { message: string },
@@ -53,17 +54,44 @@ vi.mock("@/lib/supabase-server", () => {
     if (store.throwOnAccess) throw new Error("connection reset");
     if (table !== "rate_limit_hits") throw new Error(`unexpected table ${table}`);
     const builder: Record<string, unknown> = {
-      insert: async ({ bucket }: { bucket: string }) => {
-        if (store.failInsert) return { error: store.failInsert };
-        store.hits.push({ bucket, created_at: store.now() });
-        return { error: null };
+      // insert(...).select("id").maybeSingle() — the id is what lets a REFUSED
+      // request withdraw its own hit, so the fake has to hand one back.
+      insert: ({ bucket }: { bucket: string }) => {
+        const result = (() => {
+          if (store.failInsert) return { data: null, error: store.failInsert };
+          const row: Hit = { id: store.nextId++, bucket, created_at: store.now() };
+          store.hits.push(row);
+          return { data: { id: row.id }, error: null };
+        })();
+        return {
+          ...result,
+          select: () => ({
+            ...result,
+            maybeSingle: async () => result,
+            single: async () => result,
+          }),
+          then: (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve),
+        };
       },
       select: () => {
         const filters: Record<string, string> = {};
+        let ordered = false;
         const chain: Record<string, unknown> = {
           eq(column: string, value: string) { filters[column] = value; return chain; },
           gt(column: string, value: string) { filters[`gt:${column}`] = value; return chain; },
+          order() { ordered = true; return chain; },
+          // .order().limit() is the oldest-surviving-hit lookup on the deny
+          // path; it resolves to rows, not a count.
+          limit(n: number) {
+            const rows = store.hits
+              .filter((h) => h.bucket === filters.bucket && h.created_at > filters["gt:created_at"])
+              .sort((a, b) => a.created_at.localeCompare(b.created_at))
+              .slice(0, n)
+              .map((h) => ({ created_at: h.created_at }));
+            return Promise.resolve({ data: rows, error: null });
+          },
           then(resolve: (v: unknown) => unknown) {
+            if (ordered) return Promise.resolve(resolve({ data: [], error: null }));
             if (store.failCount) return Promise.resolve(resolve({ count: null, error: store.failCount }));
             const count = store.hits.filter(
               (h) => h.bucket === filters.bucket && h.created_at > filters["gt:created_at"],
@@ -73,7 +101,15 @@ vi.mock("@/lib/supabase-server", () => {
         };
         return chain;
       },
-      delete: () => ({ lt: async () => ({ error: null }) }),
+      delete: () => ({
+        // The sampled cleanup.
+        lt: async () => ({ error: null }),
+        // A refused request withdrawing its own hit.
+        eq: async (_column: string, id: number) => {
+          store.hits = store.hits.filter((h) => h.id !== id);
+          return { error: null };
+        },
+      }),
     };
     return builder;
   };
@@ -84,6 +120,7 @@ const { checkRateLimit, __resetRateLimitAlertThrottle, __deniedBucketMemoSize } 
 
 beforeEach(() => {
   store.hits = [];
+  store.nextId = 1;
   store.failInsert = null;
   store.failCount = null;
   store.throwOnAccess = false;
@@ -140,18 +177,78 @@ describe("the limit holds under a CONCURRENT burst — K-15b", () => {
     expect((await checkRateLimit("coupon:someone-else", 5, 60)).allowed).toBe(true);
   });
 
-  it("every request in the burst is counted, allowed or not", async () => {
-    await Promise.all(Array.from({ length: 50 }, () => checkRateLimit("coupon:burst2", 5, 60)));
+  it("leaves behind a row for every request it SERVED, and none for the rest", async () => {
+    const results = await Promise.all(
+      Array.from({ length: 50 }, () => checkRateLimit("coupon:burst2", 5, 60)),
+    );
+    const served = results.filter((r) => r.allowed).length;
 
-    // Recording first is what makes the count truthful. Within a single burst
-    // every request costs a row — the deliberate trade, and the safe direction.
+    // THIS ASSERTION USED TO READ `toHaveLength(50)`, and that was the bug.
     //
-    // Still exactly 50 after review finding 6: the denied-bucket memo cannot
-    // help here, because all 50 are in flight before any of them has learned the
-    // limit is blown. It only short-circuits requests that arrive AFTER the
-    // bucket is known to be over — which is the sustained-abuse case, not this
-    // one. The burst guarantee is untouched.
-    expect(store.hits.filter((h) => h.bucket === "coupon:burst2")).toHaveLength(50);
+    // Recording first is still what makes the count truthful under a burst —
+    // every request inserts before any of them asks how big the burst is, and
+    // that is untouched. What changed is what happens to the hit belonging to a
+    // request the limiter then REFUSED: it is withdrawn.
+    //
+    // Keeping it meant every refusal pushed the trailing window forward from
+    // the moment of that refusal, so a bucket never drained while anyone kept
+    // trying. The person most likely to keep trying is the customer whose reset
+    // email went to spam and who is clicking "Send reset link" again — and
+    // since the store now requires an account to see anything, that customer
+    // was locked out of the whole site with no way back.
+    //
+    // The cap is unchanged and is what actually protects the endpoint: at most
+    // `limit` requests are SERVED per window, and only served requests leave a
+    // trace.
+    expect(served).toBeLessThanOrEqual(5);
+    expect(store.hits.filter((h) => h.bucket === "coupon:burst2")).toHaveLength(served);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A REFUSAL IS NOT CONSUMPTION.
+// ---------------------------------------------------------------------------
+
+describe("a refused request does not extend the window", () => {
+  it("does not record a hit for the request it turned away", async () => {
+    for (let i = 0; i < 3; i += 1) await checkRateLimit("password-reset-email:a@b.test", 3, 900);
+    expect(store.hits).toHaveLength(3);
+
+    const denied = await checkRateLimit("password-reset-email:a@b.test", 3, 900);
+    expect(denied.allowed).toBe(false);
+    expect(store.hits, "the refused request must leave no trace").toHaveLength(3);
+  });
+
+  it("keeps refusing at the same count however many times it is asked", async () => {
+    for (let i = 0; i < 3; i += 1) await checkRateLimit("password-reset-email:c@d.test", 3, 900);
+    // The customer clicking "Send reset link" over and over. Before the fix,
+    // every one of these recorded a hit and reset the fifteen-minute clock.
+    for (let i = 0; i < 20; i += 1) await checkRateLimit("password-reset-email:c@d.test", 3, 900);
+    expect(store.hits.filter((h) => h.bucket === "password-reset-email:c@d.test")).toHaveLength(3);
+  });
+
+  it("tells the caller when the bucket ACTUALLY frees up, not a blanket window", async () => {
+    // Three hits, the oldest of them ten minutes into a fifteen-minute window,
+    // so the honest answer is about five minutes rather than fifteen.
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    store.hits.push(
+      { id: store.nextId++, bucket: "reset:e@f.test", created_at: tenMinutesAgo },
+      { id: store.nextId++, bucket: "reset:e@f.test", created_at: new Date(Date.now() - 60_000).toISOString() },
+      { id: store.nextId++, bucket: "reset:e@f.test", created_at: new Date(Date.now() - 30_000).toISOString() },
+    );
+
+    const denied = await checkRateLimit("reset:e@f.test", 3, 900);
+    expect(denied.allowed).toBe(false);
+    expect(denied.retryAfterSeconds).toBeGreaterThan(250);
+    expect(denied.retryAfterSeconds).toBeLessThan(340);
+  });
+
+  it("still caps what it SERVES, which is the protection that matters", async () => {
+    let served = 0;
+    for (let i = 0; i < 30; i += 1) {
+      if ((await checkRateLimit("login:9.9.9.9", 5, 900)).allowed) served += 1;
+    }
+    expect(served, "a sustained attacker gets the limit and no more").toBe(5);
   });
 });
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requiresAccount } from "@/lib/access-policy";
+import { isPerRequesterResponse, requiresAccount } from "@/lib/access-policy";
 import { copyAdParams } from "@/lib/attribution";
 
 import {
@@ -719,7 +719,13 @@ export async function middleware(request: NextRequest) {
     //
     // Only set when absent: a handler that has deliberately chosen its own
     // caching (a signed asset URL, say) keeps it.
-    if (requiresAccount(pathname) && !response.headers.has("Cache-Control")) {
+    // isPerRequesterResponse, not requiresAccount: the two answered the same
+    // question until the admin, partner and vault surfaces were exempted from
+    // the customer wall because they carry their OWN boundary. That exemption
+    // is right, and it silently took this header off every one of them — 7
+    // partner routes and 76 of 84 admin routes, each returning a body that
+    // depends on who asked, with no Cache-Control at all.
+    if (isPerRequesterResponse(pathname) && !response.headers.has("Cache-Control")) {
       response.headers.set("Cache-Control", "private, no-store");
     }
 
@@ -846,7 +852,47 @@ export async function middleware(request: NextRequest) {
   //
   // An API request is refused rather than redirected: a fetch() follows a 307
   // and would parse a login page as JSON.
-  if (requiresAccount(pathname) && !(await sessionIsVerified())) {
+  // AN ADMIN IS AUTHENTICATED. THE WALL ONLY KNEW ONE COOKIE.
+  //
+  // hasVerifiedSession reads vl_session_token, the CUSTOMER session. The owner
+  // holds vl_admin_session and, unless they happen to be signed in as a
+  // customer in the same browser, has no vl_session_token at all — so the wall
+  // refused them before their own guard ever ran.
+  //
+  // Measured on /admin/ads: the campaigns panel, the tracking-health panel,
+  // the TikTok test-event button and the order inspector are all fetched from
+  // the browser (components/ads-campaigns-panel.tsx, ads-tracking-health.tsx)
+  // and hit /api/ads/campaigns, /api/ads/tracking-health,
+  // /api/ads/tiktok-test-event and /api/ads/purchase-event/<id>?inspect=1. All
+  // four begin with, or branch on, verifyAdminSessionFromCookie() — and all
+  // four answered 401 "Sign in to continue" before reaching it. The panels
+  // render their own error state, so the page read as a disconnected
+  // integration rather than a broken one.
+  //
+  // ADMITTING THE SESSION IS THE FIX, NOT WIDENING THE PUBLIC LIST. Naming
+  // those paths as public would work for three of them and reopen the fourth:
+  // purchase-event's admin check sits inside its ?inspect=1 branch on purpose,
+  // so that an ordinary caller holding a valid order id gets the normal answer
+  // rather than a 401 — exempting the path would hand its anonymous
+  // bearer-token half back out. access-policy.test.ts pins those four as gated
+  // for exactly that reason, and they stay gated: this admits the ADMIN, not
+  // the path.
+  //
+  // This is not a hole and it is not cloaking. isValidAdminSessionToken hashes
+  // the cookie, requires an unexpired row in admin_sessions AND an is_active
+  // admin_credentials row, and fails CLOSED on any error — a stronger check
+  // than the customer one beside it. Everything downstream still applies its
+  // own guard; this only stops the wall refusing someone who is signed in.
+  //
+  // Deliberately NOT consulted by the /account branch above: an admin opening
+  // /account/orders is asking for a CUSTOMER's page and should still be sent to
+  // the customer sign-in, which is why that branch reads sessionIsVerified()
+  // alone.
+  //
+  // Ordered second, so the ordinary shopper never pays for it: the customer
+  // check runs first and short-circuits, and this only runs for a request that
+  // failed it while carrying an admin cookie.
+  if (requiresAccount(pathname) && !(await sessionIsVerified()) && !(await hasValidAdminSession(request))) {
     if (pathname.startsWith("/api/")) {
       return finish(
         NextResponse.json(
@@ -902,6 +948,14 @@ export async function middleware(request: NextRequest) {
   const CSRF_PROTECTED_PREFIXES = [
     "/api/admin", "/api/account", "/api/auth", "/api/membership", "/api/partner",
     "/api/checkout", "/api/cart", "/api/coupons", "/api/catalog",
+    // /api/ads authenticates the SAME admin cookie /api/admin does
+    // (verifyAdminSessionFromCookie), which is exactly what makes a
+    // cross-origin POST forgeable: the browser attaches the cookie. It sat
+    // outside a list this comment calls exhaustive because it was added later,
+    // under a different prefix. Its POST fires a TikTok test conversion event,
+    // so the exposure is a nuisance rather than money — but "the only
+    // cookie-authenticated write not covered" is not a state to leave a list in.
+    "/api/ads",
   ];
   if (
     isStateChangingMethod(request.method) &&

@@ -137,6 +137,44 @@ function readParamAnyCase(params: URLSearchParams, key: string): string | null {
  * still recorded ALONGSIDE a real touch as context, and every page view keeps
  * its referrer in `website_analytics_events` regardless.
  */
+/**
+ * A campaign tag, normalised the way the SPEND side normalises it.
+ *
+ * BOTH SIDES OF THE JOIN HAVE TO COME FROM ONE RULE, and only one of them did.
+ * ads/utm.ts states the contract in its own header — "the code that WRITES
+ * those tags and the code that READS them back have to agree exactly, and the
+ * only way to guarantee that is for both to be this module" — and the spend
+ * side honours it: parseAdTagsFromUrl trims, lowercases and rejects unexpanded
+ * platform macros before a row reaches ad_spend_daily. The revenue side stored
+ * whatever the URL carried: `normalizeValue` strips control characters,
+ * collapses whitespace and truncates, and does not lowercase.
+ *
+ * So an ad tagged `?utm_content=Hook_A` — a capital letter is all it takes, and
+ * a hand-built link or a platform macro produces them routinely — recorded
+ * `Hook_A` against the order and `hook_a` against the spend, and the two never
+ * joined: that creative showed spend with zero revenue, and the sale showed as
+ * unattributed. The ROAS views were taught to `lower()` on read, which fixes
+ * the join for rows already stored; this fixes what is stored.
+ *
+ * Not `toSafeTag`: this is a READ of what an ad actually carried, and rewriting
+ * a customer's tag into a different string would invent a join key. Trim,
+ * lowercase, and drop an unsubstituted macro — exactly the spend side's `read`.
+ */
+// Exported because the analytics WRITE path needs the identical rule: the
+// browser tracker posts `params.get("utm_content")` straight to
+// /api/analytics/track without going through parseAttributionTouch, so without
+// this the same campaign lands in website_analytics_events under whatever case
+// the URL carried while order_attribution holds the lowercased form — the two
+// halves of the funnel report then group the same creative separately.
+export function normalizeCampaignTag(value: unknown): string | null {
+  const normalized = normalizeValue(value);
+  if (!normalized) return null;
+  const lowered = normalized.toLowerCase();
+  // An unexpanded platform macro is not a value. Same test the spend side uses.
+  if (/[{}<>]|^__.*__$/.test(lowered)) return null;
+  return lowered;
+}
+
 export function parseAttributionTouch(input: {
   search: string;
   pathname?: string | null;
@@ -146,11 +184,11 @@ export function parseAttributionTouch(input: {
   const params = new URLSearchParams(input.search ?? "");
 
   const touch: AttributionTouch = {
-    utmSource: readParam(params, "utm_source"),
-    utmMedium: readParam(params, "utm_medium"),
-    utmCampaign: readParam(params, "utm_campaign"),
-    utmContent: readParam(params, "utm_content"),
-    utmTerm: readParam(params, "utm_term"),
+    utmSource: normalizeCampaignTag(params.get("utm_source")),
+    utmMedium: normalizeCampaignTag(params.get("utm_medium")),
+    utmCampaign: normalizeCampaignTag(params.get("utm_campaign")),
+    utmContent: normalizeCampaignTag(params.get("utm_content")),
+    utmTerm: normalizeCampaignTag(params.get("utm_term")),
     ttclid: readParam(params, "ttclid"),
     fbclid: readParam(params, "fbclid"),
     gclid: readParam(params, "gclid"),
@@ -258,11 +296,13 @@ export function sanitizeAttributionRecord(raw: unknown, now: Date): AttributionR
     const t = value as Record<string, unknown>;
     const parsedAt = Date.parse(String(t.at ?? ""));
     const touch: AttributionTouch = {
-      utmSource: normalizeValue(t.utmSource),
-      utmMedium: normalizeValue(t.utmMedium),
-      utmCampaign: normalizeValue(t.utmCampaign),
-      utmContent: normalizeValue(t.utmContent),
-      utmTerm: normalizeValue(t.utmTerm),
+      // The same rule the capture uses — this path re-validates a payload the
+      // client sent, so it must not be the looser of the two.
+      utmSource: normalizeCampaignTag(t.utmSource),
+      utmMedium: normalizeCampaignTag(t.utmMedium),
+      utmCampaign: normalizeCampaignTag(t.utmCampaign),
+      utmContent: normalizeCampaignTag(t.utmContent),
+      utmTerm: normalizeCampaignTag(t.utmTerm),
       ttclid: normalizeValue(t.ttclid),
       fbclid: normalizeValue(t.fbclid),
       gclid: normalizeValue(t.gclid),
@@ -404,6 +444,22 @@ export const AD_LANDING_PARAM_KEYS: readonly string[] = [...UTM_KEYS, ...CLICK_I
  * Copy ad parameters from `from` onto `to`, and report how many were carried.
  *
  * Only the keys above, only when absent from `to`, only after normalisation.
+ *
+ * NORMALISED WITH THE PARSER'S OWN RULES, NOT A SECOND SET. A UTM tag goes
+ * through normalizeCampaignTag and a click id through normalizeValue, exactly
+ * as parseAttributionTouch reads them, so what this writes onto a redirect is
+ * character-for-character what the parser would have produced had the visitor
+ * reached the page directly. Two consequences worth stating:
+ *
+ *   * `?utm_content=Hook_A` leaves here as `hook_a`. That is the join key both
+ *     sides of the ROAS report agree on — and it also fixes the tracker, which
+ *     posts `params.get("utm_content")` RAW to website_analytics_events without
+ *     going through the parser at all. Before, the analytics row said `Hook_A`
+ *     and the order row said `hook_a`, and the two did not join.
+ *   * An unexpanded platform macro (`{{campaign.name}}`, `__CAMPAIGN__`) is
+ *     dropped rather than carried, so it never reaches a URL or a column. It
+ *     was never a value; the parser would have rejected it on arrival.
+ *
  * `ScCid` is matched case-insensitively for the reason readParamAnyCase gives:
  * Snapchat sends it as `ScCid`, `sccid` and `SCCID` depending on the surface
  * that built the link. It is written back under the canonical spelling, so
@@ -415,11 +471,15 @@ export function copyAdParams(from: URLSearchParams, to: URLSearchParams): number
   for (const key of AD_LANDING_PARAM_KEYS) {
     if (to.has(key)) continue;
 
-    // The one key whose casing is not dependable is the one the parser also
-    // reads loosely. Every other key is matched exactly, so this copies
-    // precisely what parseAttributionTouch would have read had the visitor
-    // reached the page directly.
-    const value = key === "ScCid" ? readParamAnyCase(from, key) : readParam(from, key);
+    // Read and normalise exactly as parseAttributionTouch does for this key:
+    // campaign tags through normalizeCampaignTag (trim, lowercase, drop an
+    // unexpanded macro), click ids through normalizeValue, and only ScCid
+    // case-insensitively — the one key whose casing is not dependable.
+    const value = (UTM_KEYS as readonly string[]).includes(key)
+      ? normalizeCampaignTag(from.get(key))
+      : key === "ScCid"
+        ? readParamAnyCase(from, key)
+        : readParam(from, key);
     if (!value) continue;
 
     to.set(key, value);

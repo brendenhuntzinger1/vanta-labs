@@ -166,6 +166,8 @@ type CartContextValue = {
   activePromotionName: string | null;
   /** That promotion permits a coupon code on top of it. */
   activePromotionAllowsCoupon: boolean;
+  /** Whether the viewer has an account session. Every gated read hangs off it. */
+  signedIn: boolean;
   /** What it did, in one sentence: "Buy 2 Get 1 Free applied — 1 item free." */
   activePromotionMessage: string | null;
   /** The nudge: "Add 1 more item to unlock an item free." */
@@ -314,7 +316,47 @@ function calculateCouponDiscountAmount(subtotal: number, coupon: CouponDetails |
   return Math.min(Math.max(amount, 0), subtotal);
 }
 
-export function CartProvider({ children }: { children: React.ReactNode }) {
+// ---------------------------------------------------------------------------
+// THE CART HAS TO BE TOLD WHEN THE VIEWER SIGNS IN.
+//
+// Every configuration this provider prices with — the shipping config, the
+// promotions, the bundle rates, the member and ambassador discounts, the points
+// and store-credit balances — is fetched in a mount effect with an EMPTY
+// dependency array. That was correct while the store was open to anonymous
+// visitors: the config arrived once and never changed under a shopper.
+//
+// Closing the default broke it, and the break is silent. This provider lives in
+// the ROOT layout, so it mounts on the sign-in portal — the first page every
+// visitor now sees. There, every one of those endpoints answers 401, each
+// effect returns early, and the provider keeps its BUILT-IN DEFAULTS. Signing
+// in is a client-side navigation plus router.refresh(); neither remounts a
+// provider above the changing segment, so the effects never run again and the
+// defaults are what the shopper is priced against for the rest of that page
+// session.
+//
+// Measured in a real browser against the harness, with the store's production
+// setting (Free Shipping Sitewide ON) — portal, sign in through the form, then
+// click through to the catalogue, a product and the cart with no reload:
+//
+//     what the shopper was shown      Estimated shipping  $15.00
+//                                     "Free shipping at $200.00 — $131 away"
+//                                     Estimated total     $88.14
+//     what the server would charge    shipping            $0.00
+//                                     total               $73.14
+//
+// A $15 phantom fee and a "spend $131 more" nag on a store that ships
+// everything free — and then a checkout whose expectedTotal cannot match, so
+// the order is refused with "your total has been updated". The live Buy 2 Get 1
+// promotion is missing from the same session for the same reason.
+//
+// `signedIn` comes from the root layout, which already resolves it, and is in
+// the dependency array of every effect that reads a gated or per-customer
+// endpoint. router.refresh() re-renders the layout, the prop flips, and the
+// config is fetched for real. The provider is NOT remounted and does not need
+// to be — remounting would empty the shopper's cart, which is the one thing
+// worse than the bug.
+// ---------------------------------------------------------------------------
+export function CartProvider({ children, signedIn = false }: { children: React.ReactNode; signedIn?: boolean }) {
   const [items, setItems] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -430,6 +472,15 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     (async () => {
+      // NOTHING TO ASK FOR WHILE SIGNED OUT. Every one of these five endpoints
+      // is behind the account wall, so a signed-out page — the sign-in portal
+      // itself, which is now the first screen of almost every visit — fired
+      // five requests it knew would be refused, and put five 401s in the
+      // console of the page a new customer sees first. `signedIn` is already a
+      // dependency (the config has to be re-read the moment a session appears),
+      // so this costs nothing and skips work that could never succeed.
+      if (!signedIn) return;
+
       try {
         const response = await fetch("/api/account/me", { cache: "no-store" });
         if (!response.ok) return;
@@ -464,10 +515,19 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         setAccountChecked(true);
       }
     })();
-  }, []);
+  }, [signedIn]);
 
   useEffect(() => {
     (async () => {
+      // NOTHING TO ASK FOR WHILE SIGNED OUT. Every one of these five endpoints
+      // is behind the account wall, so a signed-out page — the sign-in portal
+      // itself, which is now the first screen of almost every visit — fired
+      // five requests it knew would be refused, and put five 401s in the
+      // console of the page a new customer sees first. `signedIn` is already a
+      // dependency (the config has to be re-read the moment a session appears),
+      // so this costs nothing and skips work that could never succeed.
+      if (!signedIn) return;
+
       try {
         const response = await fetch("/api/account/ambassador-discount", { cache: "no-store" });
         if (!response.ok) return;
@@ -479,7 +539,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         // Not an ambassador / signed out — no personal discount shown.
       }
     })();
-  }, []);
+  }, [signedIn]);
 
   // PER-CUSTOMER USAGE LIMITS, LEARNED THE MOMENT AN EMAIL IS KNOWN.
   //
@@ -492,6 +552,15 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     const email = knownEmail.trim().toLowerCase();
     let cancelled = false;
     (async () => {
+      // NOTHING TO ASK FOR WHILE SIGNED OUT. Every one of these five endpoints
+      // is behind the account wall, so a signed-out page — the sign-in portal
+      // itself, which is now the first screen of almost every visit — fired
+      // five requests it knew would be refused, and put five 401s in the
+      // console of the page a new customer sees first. `signedIn` is already a
+      // dependency (the config has to be re-read the moment a session appears),
+      // so this costs nothing and skips work that could never succeed.
+      if (!signedIn) return;
+
       // No email yet (or one cleared): back to the store-wide list. Same
       // reference when it is already empty, so this cannot loop.
       if (!email || !email.includes("@")) {
@@ -519,10 +588,19 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [knownEmail]);
+  }, [knownEmail, signedIn]);
 
   useEffect(() => {
     (async () => {
+      // NOTHING TO ASK FOR WHILE SIGNED OUT. Every one of these five endpoints
+      // is behind the account wall, so a signed-out page — the sign-in portal
+      // itself, which is now the first screen of almost every visit — fired
+      // five requests it knew would be refused, and put five 401s in the
+      // console of the page a new customer sees first. `signedIn` is already a
+      // dependency (the config has to be re-read the moment a session appears),
+      // so this costs nothing and skips work that could never succeed.
+      if (!signedIn) return;
+
       try {
         const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
         if (!response.ok) return;
@@ -568,10 +646,19 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         setStoreConfigLoaded(true);
       }
     })();
-  }, []);
+  }, [signedIn]);
 
   useEffect(() => {
     (async () => {
+      // NOTHING TO ASK FOR WHILE SIGNED OUT. Every one of these five endpoints
+      // is behind the account wall, so a signed-out page — the sign-in portal
+      // itself, which is now the first screen of almost every visit — fired
+      // five requests it knew would be refused, and put five 401s in the
+      // console of the page a new customer sees first. `signedIn` is already a
+      // dependency (the config has to be re-read the moment a session appears),
+      // so this costs nothing and skips work that could never succeed.
+      if (!signedIn) return;
+
       try {
         const response = await fetch("/api/catalog/bulk-savings-config", { cache: "no-store" });
         if (!response.ok) return;
@@ -583,7 +670,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         // Defaults to the built-in config if this fails.
       }
     })();
-  }, []);
+  }, [signedIn]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -864,7 +951,23 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [isHydrated, referralCode, referralDetails, referralProgramEnabled]);
+    // `signedIn` IS A DEPENDENCY BECAUSE THE FIRST ATTEMPT USUALLY 401s.
+    //
+    // /api/catalog/referral/validate is behind the wall, and this provider
+    // mounts on the sign-in portal, so an ambassador's visitor validates their
+    // code before they have an account: the fetch throws, the catch sets
+    // referralDetails to null, and none of the other deps ever moves again.
+    // What the shopper then saw was the code sitting in the box with no
+    // ambassador name, no discount line — and a CLEAR button beside it. Press
+    // it and `vl_referral_code` is expired outright, which costs the ambassador
+    // the sale they made AND the rest of their thirty-day window: the exact
+    // failure this file's own note calls "the single most expensive line this
+    // change removes", reintroduced through a different door.
+    //
+    // referralProgramEnabled does move when the promotions read succeeds after
+    // sign-in, so this would recover by that route today. Naming signedIn makes
+    // it explicit rather than a chain through another effect's state.
+  }, [isHydrated, referralCode, referralDetails, referralProgramEnabled, signedIn]);
 
   // A DEFINITE "OFF" CLEARS THE CODE, AND ONLY A DEFINITE ONE.
   //
@@ -1183,8 +1286,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [discountBase, isEligibleForBulkSavings, bulkSavingsConfig],
   );
 
+  // ROUNDED AT THE SERVER'S MOMENT — before the candidate competes against the
+  // quantity-bundle savings, which is where profit-engine.ts's pct() rounds it.
+  // Rounding only later, inside compete(), differs by a cent whenever the raw
+  // product lands on a half-cent: 76 of 200,000 randomised baskets, every one
+  // exactly a cent and every one with the server giving more.
   const memberPricingAmount = useMemo(
-    () => (memberDiscountPercent > 0 ? discountBase * (memberDiscountPercent / 100) : 0),
+    () => (memberDiscountPercent > 0 ? Math.round(discountBase * memberDiscountPercent) / 100 : 0),
     [memberDiscountPercent, discountBase],
   );
 
@@ -1192,7 +1300,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // competes for best value with everything else — a bigger coupon wins, and it
   // never stacks. Mirrors payment-service.ts.
   const ambassadorPersonalAmount = useMemo(
-    () => (ambassadorDiscountPercent > 0 ? discountBase * (ambassadorDiscountPercent / 100) : 0),
+    () => (ambassadorDiscountPercent > 0 ? Math.round(discountBase * ambassadorDiscountPercent) / 100 : 0),
     [ambassadorDiscountPercent, discountBase],
   );
 
@@ -1310,8 +1418,24 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     // on top of whatever else applies, so naming the promotion as the reason
     // the code "didn't lower the total" would be false — the code is in the
     // price. Saying so needs the same condition the price used.
+    //
+    // AND `activePromotionAllowsCoupon` IS NOT THAT CONDITION. It is the OR of
+    // the two stacking licences — store-wide stacking, or this promotion's own
+    // stackWithCoupon — and PR #153 split those everywhere the PRICE is decided
+    // while leaving the OR behind in the sentence describing it. A promotion
+    // carrying stackWithCoupon only folds the coupon in when the PACKAGE WINS
+    // (resolveCartDiscount, and resolveCustomerDiscount server-side do the
+    // same); a promotion that loses licences nothing. So whenever store-wide
+    // stacking was off, a promotion carried stackWithCoupon, and something else
+    // beat the package, the shopper was told "Coupon applied — CODE · 20% off"
+    // over a total the code had not moved by a cent.
+    //
+    // Asked the way the price asks it: store-wide stacking, or the package
+    // actually winning.
+    const couponIsInThePrice =
+      couponStackingEnabled || (promotionStacksCoupon && bestDiscount?.type === "buy3get1");
     const winnerType: PriceControllingDiscount | null =
-      activePromotionAllowsCoupon && couponDiscountAmount > 0 && discountAmount > 0
+      couponIsInThePrice && couponDiscountAmount > 0 && discountAmount > 0
         ? "coupon"
         : discountAmount > 0 && bestDiscount
           ? bestDiscount.type
@@ -1333,7 +1457,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       winnerLabel: appliedDiscountLabel,
       waivesShipping: couponWaivesShipping,
     });
-  }, [couponDetails, discountAmount, bestDiscount, quantityBundleSavings, appliedDiscountLabel, activePromotionAllowsCoupon, couponDiscountAmount, couponWaivesShipping]);
+  }, [couponDetails, discountAmount, bestDiscount, quantityBundleSavings, appliedDiscountLabel, couponStackingEnabled, promotionStacksCoupon, couponDiscountAmount, couponWaivesShipping]);
 
   const bulkSavingsApplied = bestDiscount?.type === "bulk_savings";
   const ambassadorDiscountApplied = bestDiscount?.type === "ambassador_personal";
@@ -2000,6 +2124,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     buy3Get1UntilNextFree,
     activePromotionName,
     activePromotionAllowsCoupon,
+    signedIn,
     activePromotionMessage,
     promotionProgressMessage,
     availablePromotions,
