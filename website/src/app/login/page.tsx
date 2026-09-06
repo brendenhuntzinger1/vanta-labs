@@ -17,6 +17,30 @@ export const dynamic = "force-dynamic";
 // Nothing in the app ever linked here; it was reachable only by bookmark or an
 // old link, which is exactly the returning-affiliate case it failed. Forwarding
 // to the single account sign-in gives those visitors the full form.
-export default function LegacyPartnerLoginRedirect() {
-  redirect("/account/login");
+// THE QUERY COMES WITH IT, FOR THE SAME REASON EVERY OTHER HOP CARRIES IT.
+//
+// This dropped the query string, so an old link that still carried a campaign
+// tag or a referral code arrived at the portal stripped of both — the same
+// silent attribution loss the access wall used to cause, one route further
+// out. `next` is not special-cased: the whole query is forwarded, so a `next`
+// riding on it reaches the sign-in form, which re-validates it through
+// safeInternalPath exactly as it does on every other path in.
+//
+// The destination is a constant, so nothing in the query can redirect anyone
+// anywhere: this cannot become an open redirect however the URL was built.
+export default async function LegacyPartnerLoginRedirect({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(await searchParams)) {
+    // A repeated parameter arrives as an array; keep every occurrence rather
+    // than silently picking one.
+    for (const single of Array.isArray(value) ? value : value === undefined ? [] : [value]) {
+      query.append(key, single);
+    }
+  }
+  const search = query.toString();
+  redirect(search ? `/account/login?${search}` : "/account/login");
 }

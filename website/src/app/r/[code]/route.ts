@@ -5,6 +5,7 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { resolveReferralCode } from "@/lib/referral-code-service";
 import { hasAnalyticsConsent } from "@/lib/cookie-consent-server";
 import { safeInternalPath } from "@/lib/internal-path";
+import { copyAdParams } from "@/lib/attribution";
 
 const REFERRAL_COOKIE_NAME = "vl_referral_code";
 const REFERRAL_COOKIE_MAX_AGE = 60 * 60 * 24 * 30;
@@ -19,6 +20,22 @@ export async function GET(request: Request, context: { params: Promise<{ code: s
   const rawNext = url.searchParams.get("next") || "/products";
   const safeNext = safeInternalPath(rawNext, "/products");
   const destination = new URL(safeNext, url.origin);
+  // AN AMBASSADOR LINK IS OFTEN ALSO AN AD LINK, AND THE AD HALF WAS BEING
+  // DROPPED HERE.
+  //
+  // The destination is built from the path alone, so every parameter sitting on
+  // the /r/<code> URL itself stopped at this hop. The referral cookie set below
+  // survived — the ambassador still got paid — but a paid click that also
+  // carried utm_* or a platform click id arrived at /products stripped of both,
+  // and from there the access wall could not carry forward what was no longer
+  // in the URL. The click was billed and then recorded as organic.
+  //
+  // Only the known ad keys move, never the whole query string: `next` already
+  // carries anything the destination itself needs, and a blanket copy would
+  // forward parameters this route knows nothing about onto a page that may read
+  // them. Existing values win, so a tag deliberately placed inside `next` is
+  // not overwritten by one on the outside.
+  copyAdParams(url.searchParams, destination.searchParams);
   const response = NextResponse.redirect(destination);
 
   // Resolve to the ambassador: a live code, OR an aliased OLD code that redirects
