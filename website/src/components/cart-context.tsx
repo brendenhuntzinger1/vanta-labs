@@ -1366,8 +1366,24 @@ export function CartProvider({ children, signedIn = false }: { children: React.R
     // on top of whatever else applies, so naming the promotion as the reason
     // the code "didn't lower the total" would be false — the code is in the
     // price. Saying so needs the same condition the price used.
+    //
+    // AND `activePromotionAllowsCoupon` IS NOT THAT CONDITION. It is the OR of
+    // the two stacking licences — store-wide stacking, or this promotion's own
+    // stackWithCoupon — and PR #153 split those everywhere the PRICE is decided
+    // while leaving the OR behind in the sentence describing it. A promotion
+    // carrying stackWithCoupon only folds the coupon in when the PACKAGE WINS
+    // (resolveCartDiscount, and resolveCustomerDiscount server-side do the
+    // same); a promotion that loses licences nothing. So whenever store-wide
+    // stacking was off, a promotion carried stackWithCoupon, and something else
+    // beat the package, the shopper was told "Coupon applied — CODE · 20% off"
+    // over a total the code had not moved by a cent.
+    //
+    // Asked the way the price asks it: store-wide stacking, or the package
+    // actually winning.
+    const couponIsInThePrice =
+      couponStackingEnabled || (promotionStacksCoupon && bestDiscount?.type === "buy3get1");
     const winnerType: PriceControllingDiscount | null =
-      activePromotionAllowsCoupon && couponDiscountAmount > 0 && discountAmount > 0
+      couponIsInThePrice && couponDiscountAmount > 0 && discountAmount > 0
         ? "coupon"
         : discountAmount > 0 && bestDiscount
           ? bestDiscount.type
@@ -1389,7 +1405,7 @@ export function CartProvider({ children, signedIn = false }: { children: React.R
       winnerLabel: appliedDiscountLabel,
       waivesShipping: couponWaivesShipping,
     });
-  }, [couponDetails, discountAmount, bestDiscount, quantityBundleSavings, appliedDiscountLabel, activePromotionAllowsCoupon, couponDiscountAmount, couponWaivesShipping]);
+  }, [couponDetails, discountAmount, bestDiscount, quantityBundleSavings, appliedDiscountLabel, couponStackingEnabled, promotionStacksCoupon, couponDiscountAmount, couponWaivesShipping]);
 
   const bulkSavingsApplied = bestDiscount?.type === "bulk_savings";
   const ambassadorDiscountApplied = bestDiscount?.type === "ambassador_personal";

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { checkRateLimit } from "@/lib/rate-limit";
 import {
   WINDSOR_CONNECTORS,
   fetchConnectorSpend,
@@ -232,7 +233,43 @@ export async function runSpendIngest(deps: {
  * so running it more often than nightly is harmless and running it less often
  * only means coarser freshness.
  */
+/**
+ * The freshness gate keys off rows that were successfully WRITTEN, which means
+ * it cannot engage while the feed is broken.
+ *
+ * readLastIngestedAt returns the newest `ingested_at` in ad_spend_daily, so a
+ * run that writes nothing leaves the gate permanently disarmed. That is not
+ * hypothetical — it is the live state of this store: Windsor currently answers
+ * every connector with a plan-limit notice in place of data, every row is
+ * rejected, nothing is written, and the job throws. vercel.json runs the sweep
+ * every thirty minutes, so the six-hour interval this file exists to enforce
+ * becomes 192 Windsor calls a day, and the cron_sweep_failed alert (which had
+ * no dedupe window, unlike the timeout alert fifteen lines above it) becomes
+ * 48 criticals and 48 operator emails a day. That is one standing problem, not
+ * forty-eight.
+ *
+ * So the interval is enforced on ATTEMPTS as well as on writes, through the
+ * store's own rate limiter rather than a new table. A failing feed now backs
+ * off exactly as a healthy one does, and an operator pressing refresh still
+ * bypasses both gates with `force`.
+ */
+const ATTEMPT_BUCKET = "ads-spend-ingest";
+
 export async function ingestAdSpend(options: { force?: boolean } = {}): Promise<SpendIngestResult> {
+  if (!options.force) {
+    const attempt = await checkRateLimit(ATTEMPT_BUCKET, 1, MIN_HOURS_BETWEEN_RUNS * 3600);
+    if (!attempt.allowed) {
+      return {
+        ran: false,
+        connectors: [],
+        totalWritten: 0,
+        totalSpend: 0,
+        reason:
+          `last ATTEMPT was under ${MIN_HOURS_BETWEEN_RUNS}h ago (retry in ${attempt.retryAfterSeconds}s); `
+          + "the interval is enforced on attempts so a failing feed backs off like a healthy one",
+      };
+    }
+  }
   return runSpendIngest({
     apiKey: process.env.WINDSOR_API_KEY,
     now: new Date(),

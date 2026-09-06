@@ -1338,6 +1338,12 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       // Nothing is let through by this: express/authorize re-quotes in "full"
       // mode with the real address, and THAT is the authoritative guard. An
       // order that genuinely loses money on goods alone still fails here.
+      //
+      // AND THE ALERT MUST READ THE SAME QUOTE THE GUARD DOES. The wallet lane
+      // used to hand the address-less quote's snapshot to the below-floor
+      // notice, which measured every express order as if shipping cost nothing
+      // — so a genuinely loss-making one raised no notice at all. It now passes
+      // quoteFull.profitFloor, the quote this paragraph calls authoritative.
       shippingCost: destinationKnown ? profitSettings.shippingCostPerOrder : 0,
       handlingCollected: 0,
       // Effective rate actually applied to this destination (0 when the
