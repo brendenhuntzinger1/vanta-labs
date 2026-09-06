@@ -87,6 +87,12 @@ begin;
 -- storefront never depended on this policy at all.
 -- ---------------------------------------------------------------------------
 drop policy if exists products_select_public on public.products;
+-- ...and the name about to be created. revoke-anon-table-access.sql creates the
+-- same policy, so whichever of the two files runs second aborted its own
+-- transaction on a fresh database. Both files are now re-runnable in either
+-- order; catalog-lockdown-sql-is-idempotent.test.ts proves it against a real
+-- Postgres.
+drop policy if exists products_select_admin on public.products;
 
 create policy products_select_admin
   on public.products
@@ -109,6 +115,7 @@ create policy products_select_admin
 -- product_id would rebuild much of the catalogue shape besides.
 -- ---------------------------------------------------------------------------
 drop policy if exists product_doses_select_public on public.product_doses;
+drop policy if exists product_doses_select_admin on public.product_doses;
 
 create policy product_doses_select_admin
   on public.product_doses

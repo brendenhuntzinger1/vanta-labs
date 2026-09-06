@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { isTransientAuthRejection } from "@/lib/inventory-reservation";
 import {
   STORE_CREDIT_REDEMPTION_REASON,
   startOfCurrentMonthIso,
@@ -37,16 +38,40 @@ import { readAllRowsBounded } from "@/lib/supabase-page";
 // event in the customer's balance history, and a hold plus a reversal would
 // double-count on any later refund that sums the debits.
 //
-// HOW THE CLAIM IS ATOMIC WITHOUT A LOCK. PostgREST cannot express
-// "check the balance and debit it" in one statement, and a read-then-write is a
-// race by construction — the very bug being fixed. So the debit is written
-// FIRST and validated after: every writer then sums the ledger in one fixed
-// order (created_at, id) and keeps its row only if the running balance is still
+// HOW THE CLAIM IS ATOMIC: ONE LOCKED FUNCTION IN THE DATABASE.
+//
+// claim_store_credit_hold / claim_points_hold (src/lib/sql/tender-hold-claim.sql)
+// take one advisory lock on the customer's ledger, sum the spendable window and
+// write the debit — all inside one transaction. Two racing claims against the
+// same balance serialise on that lock, so the second one counts the first.
+//
+// THIS REPLACED A PROOF THAT DID NOT HOLD, and the failure is worth stating
+// because the argument was persuasive. PostgREST cannot express "check the
+// balance and debit it" in one statement, so the debit used to be written FIRST
+// and validated after: every writer summed the ledger in one fixed order
+// (created_at, id) and kept its row only if the running balance was still
 // solvent up to and including its own row. Two racing $50 claims against $50
-// therefore agree on which of them came first — the loser sees its own row
-// leave the balance negative and deletes it. The claim can be refused when it
-// did not have to be (a claim that raced and lost is refused even if the winner
-// is later released), and that is the safe direction: a refused claim shows the
+// were supposed to agree on which came first, with the loser seeing its own row
+// leave the balance negative and deleting it.
+//
+// Nothing made the loser SEE the winner. The insert and the validating read are
+// two independent round trips under READ COMMITTED, so a claim that is LATER in
+// the agreed order can finish its read before the earlier claim's insert has
+// committed, sum a ledger that does not contain its rival, and approve itself.
+// Reproduced against the real schema through this very function: one user with
+// exactly 5000 cents, two concurrent claims of 5000 for two different orders,
+// 250 rounds — 2 double spends. Both orders priced $50 off, both cards were
+// charged the reduced amount, and the ledger netted to -$50 having given away
+// $100 of discount. Exactly the VL-11 loss this module was written to close,
+// narrowed from "as many copies as the shopper can start" to "as many as they
+// can start SIMULTANEOUSLY", which is the easier one to do on purpose.
+//
+// The old algorithm is still here, and still correct as far as it goes: it is
+// the fallback for a database where the functions have not been applied yet, so
+// an un-migrated environment behaves exactly as it did before rather than
+// failing checkout. It is not the primary path anywhere the SQL has run.
+//
+// A refusal is still the safe direction either way: a refused claim shows the
 // shopper a refreshed total, an accepted one spends money that is not there.
 // ---------------------------------------------------------------------------
 
@@ -56,6 +81,8 @@ import { readAllRowsBounded } from "@/lib/supabase-page";
  */
 interface LedgerSpec {
   table: "store_credit_ledger" | "points_ledger";
+  /** The atomic claim for this ledger. See src/lib/sql/tender-hold-claim.sql. */
+  claimRpc: "claim_store_credit_hold" | "claim_points_hold";
   /** Signed amount column: negative rows are spends. */
   amountColumn: "amount_cents" | "amount";
   /** The debit reason this ledger already uses for an order redemption. */
@@ -73,6 +100,7 @@ interface LedgerSpec {
 
 const STORE_CREDIT: LedgerSpec = {
   table: "store_credit_ledger",
+  claimRpc: "claim_store_credit_hold",
   amountColumn: "amount_cents",
   reason: STORE_CREDIT_REDEMPTION_REASON,
   label: "store credit",
@@ -81,6 +109,7 @@ const STORE_CREDIT: LedgerSpec = {
 
 const POINTS: LedgerSpec = {
   table: "points_ledger",
+  claimRpc: "claim_points_hold",
   amountColumn: "amount",
   reason: POINTS_REDEMPTION_REASON,
   label: "rewards points",
@@ -143,6 +172,99 @@ async function claim(
   const wanted = Math.round(amount);
   if (!userId || !Number.isFinite(wanted) || wanted <= 0) return true;
 
+  // THE ATOMIC PATH. One locked function does the whole claim; see the header.
+  const atomic = await claimAtomically(spec, userId, orderId, wanted);
+  if (atomic !== "unavailable") return atomic;
+
+  return claimByWriteThenValidate(spec, userId, orderId, wanted);
+}
+
+/**
+ * A missing function, and nothing else.
+ *
+ * 42883 / 42P01 are Postgres saying the object does not exist. PGRST202 is
+ * PostgREST's "could not find the function", which it also answers for a moment
+ * after any migration or reload while its schema cache is stale — honoured for
+ * THIS call only, exactly as bxgy-promotions.ts honours it, because latching on
+ * a blip would switch the lock off for the rest of the process.
+ *
+ * CODES ONLY, DELIBERATELY. The sibling in bxgy-promotions.ts also matches the
+ * function NAME in the message as a last resort against unknown codes. That is
+ * affordable there, where the wrong answer over-runs a promotion cap; here the
+ * wrong answer spends a customer's money on the algorithm that cannot see a
+ * race. Every error mentioning this function — a timeout inside it, a
+ * permission failure naming it — would have been read as "not deployed".
+ */
+function looksLikeMissingClaimFunction(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  return error.code === "42883" || error.code === "42P01" || error.code === "PGRST202";
+}
+
+let claimFunctionsReportedMissing = false;
+
+/**
+ * Claim through the database function.
+ *
+ * Answers "unavailable" only when the function is not there — an environment
+ * where tender-hold-claim.sql has not been applied, which then falls back to
+ * the pre-lock algorithm below. Any OTHER failure THROWS, exactly as the
+ * fallback's own insert and read failures always have: a claim that cannot be
+ * proved must not be granted.
+ */
+async function claimAtomically(
+  spec: LedgerSpec,
+  userId: string,
+  orderId: string,
+  wanted: number,
+): Promise<boolean | "unavailable"> {
+  const call = () => supabaseAdmin.rpc(spec.claimRpc, {
+    p_user_id: userId,
+    p_order_id: orderId,
+    p_amount: wanted,
+    p_reason: spec.reason,
+    p_window_start: spec.windowStartIso(),
+  });
+
+  // Retried once on the rejection that provably never ran — production refuses
+  // roughly 0.1% of this app's Supabase calls with a 401 "JWT issued at future".
+  // A 401 is refused at the edge, so re-issuing it cannot debit twice; the
+  // inventory RPCs retry the same class for the same reason.
+  let { data, error } = await call();
+  if (error && isTransientAuthRejection(error)) {
+    await new Promise((resolve) => setTimeout(resolve, CLAIM_RETRY_DELAY_MS));
+    ({ data, error } = await call());
+  }
+
+  if (!error) return data !== false;
+
+  if (looksLikeMissingClaimFunction(error as { code?: string; message?: string })) {
+    if (!claimFunctionsReportedMissing) {
+      claimFunctionsReportedMissing = true;
+      console.warn(
+        `[tender] ${spec.claimRpc} is not available; holding ${spec.label} with the pre-lock algorithm, `
+        + "which can double-spend a balance under concurrent checkouts. Apply src/lib/sql/tender-hold-claim.sql.",
+      );
+    }
+    return "unavailable";
+  }
+  throw error;
+}
+
+/** Pause before the single retry of a claim refused at the edge. */
+const CLAIM_RETRY_DELAY_MS = 250;
+
+/**
+ * The pre-lock algorithm, kept for a database without the claim functions.
+ *
+ * Correct except under concurrency, which is why it is not the primary path.
+ * See the header for the race it cannot see.
+ */
+async function claimByWriteThenValidate(
+  spec: LedgerSpec,
+  userId: string,
+  orderId: string,
+  wanted: number,
+): Promise<boolean> {
   const held = await existingHold(spec, orderId);
   if (held !== null) return held >= wanted;
 

@@ -30,6 +30,23 @@ export default function robots(): MetadataRoute.Robots {
         // a control and it does not remove a URL already in an index. The
         // middleware gate is what actually withholds the content; this line
         // just stops us advertising doors that are locked.
+        //
+        // KEPT IN STEP WITH THE WALL. This list was written when /products and
+        // /coa-library were the only gated prefixes. Closing the default in
+        // access-policy.ts moved the research library and the membership page
+        // behind the same wall and this file was not touched, so we went on
+        // inviting crawlers to fetch URLs that answer 307. That costs crawl
+        // budget and teaches Google the site is full of redirects.
+        //
+        // The home page is deliberately NOT listed: "Disallow: /" would block
+        // the whole site including the pages that ARE public. It is gated, so a
+        // crawler gets the login page there and nothing else; robots.txt has
+        // nothing useful to add.
+        //
+        // sitemap.ts derives its list from isPublicPath() and cannot drift
+        // again. This one cannot be derived the same way — it names PREFIXES,
+        // and the public set is expressed as exact paths plus prefixes — so
+        // robots-matches-the-wall.test.ts checks it instead.
         disallow: [
           "/admin",
           "/vault",
@@ -42,6 +59,8 @@ export default function robots(): MetadataRoute.Robots {
           "/r/",
           "/products",
           "/coa-library",
+          "/research",
+          "/membership",
         ],
       },
     ],

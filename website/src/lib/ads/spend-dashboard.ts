@@ -1,6 +1,6 @@
 import "server-only";
 
-import { safeSelect } from "./dashboard-data";
+import { safeSelect, safeSelectAll } from "./dashboard-data";
 import { ingestAdSpend } from "./spend-ingest";
 import {
   aggregateCampaigns,
@@ -49,6 +49,14 @@ export type SpendDashboard = {
   feedConfigured: boolean;
   /** When spend was last pulled, or null if never. */
   lastIngestedAt: string | null;
+  /**
+   * How old that pull is, in whole hours — null when nothing has ever landed.
+   *
+   * Derived here rather than in the page because the page renders it, and
+   * reading the clock during render is exactly the impurity the React compiler
+   * refuses. Freshness is a property of the data, so it travels with it.
+   */
+  lastIngestedAgeHours: number | null;
   windowDays: number;
 
   /** The headline. Everything the owner needs before scrolling. */
@@ -61,6 +69,25 @@ export type SpendDashboard = {
   /** Best and worst by ROAS among ads that actually spent. */
   winners: CreativeRow[];
   losers: CreativeRow[];
+
+  /**
+   * TODAY, from the same source as the window above it.
+   *
+   * The page's Today strip read `ad_performance_daily`, which is the table PR
+   * #161 was written to replace: its creative_id foreign key requires a
+   * creative designed inside this system, and no ad running on the four live
+   * platforms has one, so it "could never hold a row". The strip therefore read
+   * $0.00 / $0.00 / 0 / — / — for ever, sitting directly above a thirty-day
+   * panel showing real money, on a page whose own copy promises that "an empty
+   * panel means no data, never a guess".
+   *
+   * Measured: $573.45 of spend seeded across five days INCLUDING today, and the
+   * strip showed $0.00.
+   *
+   * Derived from the platform rows already fetched, so it costs no extra query
+   * and cannot disagree with the window beside it.
+   */
+  today: Parts & Rates;
 
   /** Spend we can see but cannot tie to revenue. */
   untagged: UntaggedRow[];
@@ -77,19 +104,44 @@ const DEFAULT_WINDOW_DAYS = 30;
  *  silently. */
 export const TABLE_LIMIT = 25;
 
+/**
+ * The first day of an INCLUSIVE window of `windowDays` days.
+ *
+ * `windowDays - 1`, because the reads compare a DATE with `>=` and today is one
+ * of the days. Without it "last 30 days" spanned 31 distinct dates — every
+ * total on the page was a day wider than its own label, which on a dashboard
+ * that drives spend decisions is a number that quietly does not mean what it
+ * says.
+ */
 function since(windowDays: number): string {
-  return new Date(Date.now() - windowDays * 86_400_000).toISOString().slice(0, 10);
+  return new Date(Date.now() - Math.max(0, windowDays - 1) * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** Today, as the reads' upper bound: a future-dated reporting row from a
+ *  platform in a leading timezone must not enter the window unnoticed. */
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 export async function getSpendDashboard(windowDays = DEFAULT_WINDOW_DAYS): Promise<SpendDashboard> {
   const from = since(windowDays);
+  // Bounded at both ends. See since() — the window is inclusive of today, and a
+  // platform reporting a day ahead of UTC must not silently widen it.
+  const to = today();
 
   const [platformRes, campaignRes, creativeRes, untaggedRes, unattributedRes, freshnessRes] = await Promise.all([
-    safeSelect<Record<string, unknown>>("ad_platform_daily", "*", (q) => q.gte("stat_date", from)),
-    safeSelect<Record<string, unknown>>("ad_campaign_daily", "*", (q) => q.gte("stat_date", from)),
-    safeSelect<Record<string, unknown>>("ad_creative_roas_daily", "*", (q) => q.gte("stat_date", from)),
-    safeSelect<Record<string, unknown>>("ad_spend_untagged", "*", (q) => q.gte("stat_date", from)),
-    safeSelect<Record<string, unknown>>("ad_revenue_unattributed", "*", (q) => q.gte("stat_date", from)),
+    // PAGED, every one of them. PostgREST caps a select at 1000 rows and says
+    // so only in a header supabase-js does not surface, so an unpaged read of a
+    // per-day-per-creative view returns a prefix and the sums below present that
+    // prefix as a total. Four platforms over thirty days crosses 1000 at about
+    // nine creatives per platform — and the two figures it would truncate,
+    // untagged spend and unattributed revenue, exist precisely to state the size
+    // of the blind spot.
+    safeSelectAll<Record<string, unknown>>("ad_platform_daily", "*", (q) => q.gte("stat_date", from).lte("stat_date", to)),
+    safeSelectAll<Record<string, unknown>>("ad_campaign_daily", "*", (q) => q.gte("stat_date", from).lte("stat_date", to)),
+    safeSelectAll<Record<string, unknown>>("ad_creative_roas_daily", "*", (q) => q.gte("stat_date", from).lte("stat_date", to)),
+    safeSelectAll<Record<string, unknown>>("ad_spend_untagged", "*", (q) => q.gte("stat_date", from).lte("stat_date", to)),
+    safeSelectAll<Record<string, unknown>>("ad_revenue_unattributed", "*", (q) => q.gte("stat_date", from).lte("stat_date", to)),
     safeSelect<Record<string, unknown>>("ad_spend_daily", "ingested_at", (q) =>
       q.order("ingested_at", { ascending: false }).limit(1),
     ),
@@ -105,6 +157,14 @@ export async function getSpendDashboard(windowDays = DEFAULT_WINDOW_DAYS): Promi
   // rows include untagged spend and unattributed revenue. Summing creatives
   // would silently exclude both and report a flattering, smaller denominator.
   const parts: Parts = platforms.length > 0 ? totalParts(platforms) : { ...EMPTY_PARTS };
+
+  // The same rollup, narrowed to today's stat_date. aggregatePlatforms collapses
+  // the per-day rows, so today is taken from the raw rows before that.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayRows = aggregatePlatforms(
+    platformRes.rows.filter((row) => String(row.stat_date ?? "").slice(0, 10) === todayIso),
+  );
+  const todayParts: Parts = todayRows.length > 0 ? totalParts(todayRows) : { ...EMPTY_PARTS };
   const platformConversions = platforms.reduce<number | null>(
     (acc, p) => (p.platformConversions === null ? acc : (acc ?? 0) + p.platformConversions),
     null,
@@ -117,14 +177,21 @@ export async function getSpendDashboard(windowDays = DEFAULT_WINDOW_DAYS): Promi
   const half = Math.floor(ranked.length / 2);
   const cut = Math.min(5, half);
 
+  const lastIngestedAt = (freshnessRes.rows[0]?.ingested_at as string | undefined) ?? null;
+  const lastIngestedMs = lastIngestedAt ? Date.parse(lastIngestedAt) : NaN;
+
   return {
     schemaReady: !platformRes.missing,
     schemaError: [platformRes.error, campaignRes.error, creativeRes.error, untaggedRes.error].find(Boolean) ?? null,
     feedConfigured: Boolean(process.env.WINDSOR_API_KEY?.trim()),
-    lastIngestedAt: (freshnessRes.rows[0]?.ingested_at as string | undefined) ?? null,
+    lastIngestedAt,
+    lastIngestedAgeHours: Number.isNaN(lastIngestedMs)
+      ? null
+      : Math.max(0, Math.floor((Date.now() - lastIngestedMs) / 3_600_000)),
     windowDays,
 
     totals: { ...parts, ...ratios(parts), platformConversions },
+    today: { ...todayParts, ...ratios(todayParts) },
 
     platforms,
     campaigns: campaigns.slice(0, TABLE_LIMIT),

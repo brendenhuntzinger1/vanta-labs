@@ -51,3 +51,11 @@ next-env.d.ts
 # vitest.config.ts excludes scratchpad separately; both are required.
 /scratchpad/*.test.ts
 /scratch-verify/
+# And the throwaway probe NAMES, because a scratch file that lives beside the
+# code it is measuring — not in the scratch directory — rode into a commit on
+# `git add -A` once. A name that cannot be typed by accident is cheaper than
+# remembering to delete it.
+src/**/__verify_*
+src/**/__scratch_*
+src/**/__probe_*
+src/**/zz-verify-*

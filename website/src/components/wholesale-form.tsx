@@ -171,7 +171,7 @@ export function WholesaleForm() {
           id="wholesale-products"
           name="products"
           maxLength={200}
-          placeholder="e.g. BPC-157, TB-500"
+          placeholder="Which products, and what volumes?"
           className={field}
         />
       </div>

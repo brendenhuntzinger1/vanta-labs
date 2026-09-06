@@ -822,6 +822,30 @@ export async function getCouponPolicyConfig(): Promise<CouponPolicyConfig> {
   }
 }
 
+/**
+ * The last shipping config that was read SUCCESSFULLY, and when.
+ *
+ * A READ FAILURE USED TO INVERT THE STORE'S LIVE SETTING. The catch below
+ * answered DEFAULT_SHIPPING_CONFIG, whose `freeShippingSitewide` is false —
+ * "OFF by default: the threshold is the store's standing rule until an admin
+ * deliberately switches this on". Correct as a first-run default, and the exact
+ * opposite of the live value while the switch is ON.
+ *
+ * The cost of that inversion is not a mispriced order, it is a REFUSED one. The
+ * cart preview is built from a separate, earlier read of the same setting and
+ * its total is posted back as `expectedTotal`, which quote-order treats as a
+ * hard floor: a transient control-read blip at pay time re-prices the order
+ * with shipping charged, the shopper's honest total is now below the server's,
+ * and they are told "Altered total detected" — an anti-tamper message, for a
+ * failure inside the store.
+ *
+ * Last-known-good is strictly better than a coded default here: it is the value
+ * this process most recently proved, and its staleness is bounded by how often
+ * the read succeeds. On a cold process with no successful read yet there is
+ * nothing to serve and the coded default stands, exactly as before.
+ */
+let lastGoodShippingConfig: ShippingConfig | null = null;
+
 // Admin-editable shipping config (Control Center → Shipping). A blank/invalid
 // field falls back to the coded default in shipping.ts, so the checkout math
 // keeps working before an admin ever touches these. The domestic flat rate +
@@ -854,7 +878,7 @@ export async function getShippingConfig(): Promise<ShippingConfig> {
       return parsed;
     };
 
-    return {
+    const config: ShippingConfig = {
       domesticFee: num(shipping.flat_rate, DEFAULT_SHIPPING_CONFIG.domesticFee),
       freeShippingThreshold: num(shipping.free_shipping_threshold, DEFAULT_SHIPPING_CONFIG.freeShippingThreshold),
       northAmericaFee: num(shipping.north_america_flat_rate, DEFAULT_SHIPPING_CONFIG.northAmericaFee),
@@ -874,8 +898,11 @@ export async function getShippingConfig(): Promise<ShippingConfig> {
       // the other direction is giving away shipping on every order at once.
       freeShippingSitewide: shipping.free_shipping_sitewide === true,
     };
+    lastGoodShippingConfig = config;
+    return config;
   } catch {
-    return DEFAULT_SHIPPING_CONFIG;
+    // Last-known-good, not the coded default — see lastGoodShippingConfig.
+    return lastGoodShippingConfig ?? DEFAULT_SHIPPING_CONFIG;
   }
 }
 

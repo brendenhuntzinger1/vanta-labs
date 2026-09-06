@@ -172,27 +172,91 @@ comment on table public.ad_spend_daily is
 -- 30-day total except at the two window edges, which is why the dashboard leads
 -- with a window total and treats the daily series as a trend rather than a
 -- ledger. Do not "fix" this by shifting one side without the other.
+-- A REFUNDED ORDER IS STILL AN ORDER, AND A PARTIAL REFUND IS MOSTLY REVENUE.
+--
+-- `payment_status = 'paid'` was the whole filter, and payment-webhook.ts moves a
+-- refunded order OUT of that status: 'refunded' on a full refund, and
+-- 'partially_refunded' when the cumulative refund is less than amount_paid
+-- (two-step refunds — goods, then shipping — are ordinary practice here). So
+-- the moment any money went back, the order left these views entirely.
+--
+-- On a PARTIAL refund that is plainly wrong: the store kept most of the money
+-- and the ad still earned it, but the day's revenue dropped by the whole order
+-- and ROAS was understated by the same amount. On a FULL refund it silently
+-- deleted the evidence instead of showing it: `refunds` went to zero too, so a
+-- day of refunded sales read identically to a day with none.
+--
+-- It also defeated the arithmetic directly above, which was written for exactly
+-- this: `amount_paid - refund_amount` already nets a refund to the money the
+-- store kept, and `refunds` already reports what went back. Neither can run on
+-- a row the WHERE clause has removed. The three statuses below are the ones in
+-- which money was actually taken; the netting does the rest.
+--
+-- `orders` deliberately still counts a refunded order. It WAS a conversion the
+-- ad produced, which is how the ad platforms count it too, so CPA and CVR stay
+-- comparable with what Meta and TikTok report. The money truth lives in
+-- net_revenue.
+--
+-- LOWERCASED JOIN KEYS, because the two sides were normalised differently and
+-- only one of them knew. parseAdTagsFromUrl reads the tags back out of the ad's
+-- destination URL and lowercases every value, so ad_spend_daily.utm_content is
+-- always lowercase. The ORDER side stores what the browser saw, untouched. An
+-- ad built by hand in Meta Ads Manager with `utm_content=Hook_A` therefore
+-- produced a spend row keyed `hook_a` and orders keyed `Hook_A`, the join in
+-- every view below found nothing, and that ad reported ROAS 0.00 with its
+-- revenue appearing in none of the blind-spot views either. Lowering here fixes
+-- the history as well as the future, and changes nothing for a tag the store's
+-- own URL builder produced, which isSafeTag already requires to be lowercase.
 create or replace view public.ad_revenue_daily
 with (security_invoker = true) as
 select
   (o.created_at at time zone 'UTC')::date        as stat_date,
   public.ad_platform_key(oa.last_utm_source)     as platform,
-  oa.last_utm_source                             as utm_source,
-  oa.last_utm_campaign                           as utm_campaign,
-  oa.last_utm_content                            as utm_content,
+  lower(oa.last_utm_source)                      as utm_source,
+  lower(oa.last_utm_campaign)                    as utm_campaign,
+  lower(oa.last_utm_content)                     as utm_content,
   count(*)                                       as orders,
   coalesce(sum(o.refund_amount), 0)::numeric(12,2) as refunds,
   coalesce(sum(o.amount_paid - o.refund_amount), 0)::numeric(12,2) as net_revenue
 from public.orders o
 join public.order_attribution oa on oa.order_id = o.order_id
-where o.payment_status = 'paid'
+where o.payment_status in ('paid', 'refunded', 'partially_refunded')
   and oa.last_utm_source is not null
+  -- ONE PRIMARY SOURCE PER ORDER, AND THIS VIEW WAS THE ONE THAT IGNORED IT.
+  --
+  -- marketing-source.ts exists to stop a single order being counted as revenue
+  -- by more than one channel: "One $150 order could be $150 of campaign revenue
+  -- and $150 of automation revenue and $150 'recovered', and no page said so."
+  -- The email dashboard honours it (admin-email.ts filters on
+  -- marketing_source_kind = 'campaign'; automation-stats.ts uses 'automation'
+  -- for revenue and assistedOrders for a touch that was not primary). Nothing
+  -- in this file mentioned it.
+  --
+  -- So an ad click in September that did not convert, followed three weeks
+  -- later by a campaign-email click that did, was $150 of campaign revenue on
+  -- the Email tab AND $150 of TikTok revenue against TikTok spend on the Ads
+  -- tab — with the 30-day attribution window making that the ordinary case, not
+  -- a corner. Every email-driven repeat order inflated paid ROAS, and the
+  -- scale-or-kill decision on live budget was made on the inflated number.
+  --
+  -- Excluded: the three channels that report the same order as their OWN
+  -- revenue on another page. `null` still counts, so nothing is lost while
+  -- marketing_source_at backfills, and so does 'ad'.
+  --
+  -- 'ambassador' is deliberately NOT excluded. The one-source rule ranks a
+  -- typed referral code above an ad touch, but the ambassador's commission is a
+  -- separate ledger by that module's own statement, and an ad that paid for a
+  -- click onto an ambassador link is a real ad-driven sale. Which of the two
+  -- should carry the revenue is a tagging-policy decision for the owner, not
+  -- one to make silently inside a view.
+  and (o.marketing_source_kind is null
+       or o.marketing_source_kind not in ('campaign', 'automation', 'cart_recovery'))
 group by 1, 2, 3, 4, 5;
 
 revoke all on public.ad_revenue_daily from anon, authenticated;
 
 comment on view public.ad_revenue_daily is
-  'Last-touch attributed revenue per day/platform/campaign/creative, derived live from paid orders only. The finest grain; every ROAS view below re-groups it to its own grain before joining.';
+  'Last-touch attributed revenue per day/platform/campaign/creative, derived live from orders in which money was taken (paid, refunded, partially_refunded) with refunds netted inside the sum. Tag values are lowercased to match the ingest, which lowercases them when reading them back out of the ad URL. The finest grain; every ROAS view below re-groups it to its own grain before joining.';
 
 -- -----------------------------------------------------------------------------
 -- 4. ROAS at three grains — spend aggregated to the grain FIRST
@@ -245,21 +309,46 @@ revenue as (
   where utm_content is not null
   group by 1, 2, 3
 )
+-- FULL JOIN, for the same reason the platform grain below already uses one:
+-- BOTH HALVES ARE INFORMATIVE ALONE, and a LEFT join from spend threw one of
+-- them away silently.
+--
+-- Revenue arrives on the day of the ORDER; spend on the day of the CLICK. They
+-- are routinely different days — a click at 23:00 that converts at 00:30, an ad
+-- paused mid-flight that keeps converting, or simply the offset between the ad
+-- account's reporting day and UTC. Every one of those produced a revenue row
+-- with no spend row to join to, and a LEFT join from spend dropped it.
+--
+-- Measured on the harness: $100 spent on 2026-08-20 on `lag_hook`, one $400
+-- order attributed to it on 2026-08-21. The platform grain showed both days
+-- correctly. This view showed ONE row — spend 100, revenue 0, ROAS 0.000 — and
+-- the $400 appeared nowhere. Because the dashboard ranks Winners and Losers by
+-- ROAS, that ad was listed as the store's worst performer while actually
+-- returning 4x, which is a decision-grade error: the owner kills it.
+--
+-- Keys are coalesced so a revenue-only row still carries its platform, day and
+-- tag. Spend-derived columns stay null on such a row and every ratio is already
+-- guarded, so ROAS on a no-spend day is null rather than a division by zero.
 select
-  s.platform, s.stat_date, s.utm_content, s.ad_name, s.campaign_name, s.ads,
-  s.spend, s.impressions, s.clicks,
+  coalesce(s.platform, r.platform)     as platform,
+  coalesce(s.stat_date, r.stat_date)   as stat_date,
+  coalesce(s.utm_content, r.utm_content) as utm_content,
+  s.ad_name, s.campaign_name, s.ads,
+  coalesce(s.spend, 0)       as spend,
+  coalesce(s.impressions, 0) as impressions,
+  coalesce(s.clicks, 0)      as clicks,
   s.platform_conversions,
   coalesce(r.orders, 0)      as orders,
   coalesce(r.net_revenue, 0) as net_revenue,
   coalesce(r.refunds, 0)     as refunds,
-  case when s.impressions > 0 then s.clicks::numeric / s.impressions end       as ctr,
-  case when s.clicks > 0 then s.spend / s.clicks end                           as cpc,
-  case when s.impressions > 0 then (s.spend / s.impressions) * 1000 end        as cpm,
-  case when s.clicks > 0 then coalesce(r.orders, 0)::numeric / s.clicks end    as cvr,
-  case when coalesce(r.orders, 0) > 0 then s.spend / r.orders end              as cpa,
-  case when s.spend > 0 then coalesce(r.net_revenue, 0) / s.spend end          as roas
+  case when coalesce(s.impressions, 0) > 0 then s.clicks::numeric / s.impressions end       as ctr,
+  case when coalesce(s.clicks, 0) > 0 then s.spend / s.clicks end                           as cpc,
+  case when coalesce(s.impressions, 0) > 0 then (s.spend / s.impressions) * 1000 end        as cpm,
+  case when coalesce(s.clicks, 0) > 0 then coalesce(r.orders, 0)::numeric / s.clicks end    as cvr,
+  case when coalesce(r.orders, 0) > 0 and coalesce(s.spend, 0) > 0 then s.spend / r.orders end as cpa,
+  case when coalesce(s.spend, 0) > 0 then coalesce(r.net_revenue, 0) / s.spend end          as roas
 from spend s
-left join revenue r
+full join revenue r
   on r.platform = s.platform and r.stat_date = s.stat_date and r.utm_content = s.utm_content;
 
 revoke all on public.ad_creative_roas_daily from anon, authenticated;
@@ -287,19 +376,27 @@ revenue as (
   where utm_campaign is not null
   group by 1, 2, 3
 )
+-- FULL JOIN for the same reason as the creative grain above: an order placed
+-- the day after the click had no spend row to join to and vanished.
 select
-  s.platform, s.stat_date, s.utm_campaign, s.campaign_name,
-  s.spend, s.impressions, s.clicks, s.platform_conversions,
+  coalesce(s.platform, r.platform)         as platform,
+  coalesce(s.stat_date, r.stat_date)       as stat_date,
+  coalesce(s.utm_campaign, r.utm_campaign) as utm_campaign,
+  s.campaign_name,
+  coalesce(s.spend, 0)       as spend,
+  coalesce(s.impressions, 0) as impressions,
+  coalesce(s.clicks, 0)      as clicks,
+  s.platform_conversions,
   coalesce(r.orders, 0)      as orders,
   coalesce(r.net_revenue, 0) as net_revenue,
-  case when s.impressions > 0 then s.clicks::numeric / s.impressions end       as ctr,
-  case when s.clicks > 0 then s.spend / s.clicks end                           as cpc,
-  case when s.impressions > 0 then (s.spend / s.impressions) * 1000 end        as cpm,
-  case when s.clicks > 0 then coalesce(r.orders, 0)::numeric / s.clicks end    as cvr,
-  case when coalesce(r.orders, 0) > 0 then s.spend / r.orders end              as cpa,
-  case when s.spend > 0 then coalesce(r.net_revenue, 0) / s.spend end          as roas
+  case when coalesce(s.impressions, 0) > 0 then s.clicks::numeric / s.impressions end       as ctr,
+  case when coalesce(s.clicks, 0) > 0 then s.spend / s.clicks end                           as cpc,
+  case when coalesce(s.impressions, 0) > 0 then (s.spend / s.impressions) * 1000 end        as cpm,
+  case when coalesce(s.clicks, 0) > 0 then coalesce(r.orders, 0)::numeric / s.clicks end    as cvr,
+  case when coalesce(r.orders, 0) > 0 and coalesce(s.spend, 0) > 0 then s.spend / r.orders end as cpa,
+  case when coalesce(s.spend, 0) > 0 then coalesce(r.net_revenue, 0) / s.spend end          as roas
 from spend s
-left join revenue r
+full join revenue r
   on r.platform = s.platform and r.stat_date = s.stat_date and r.utm_campaign = s.utm_campaign;
 
 revoke all on public.ad_campaign_daily from anon, authenticated;

@@ -1,0 +1,45 @@
+-- ============================================================================
+-- ONE ORDER IS ONE CHANNEL'S REVENUE. ad_revenue_daily was the view that
+-- ignored the store's own rule.
+--
+-- Full DDL with reasoning is src/lib/sql/ads-spend-roas.sql, which remains the
+-- single source of truth. This file records what was applied and when.
+--
+-- ----------------------------------------------------------------------------
+-- marketing-source.ts exists to stop a single order being counted as revenue by
+-- more than one channel. Its header states the failure it prevents: "One $150
+-- order could be $150 of campaign revenue and $150 of automation revenue and
+-- $150 'recovered', and no page said so." The email dashboard honours it —
+-- admin-email.ts filters on marketing_source_kind = 'campaign', and
+-- automation-stats.ts uses 'automation' for revenue with assistedOrders for a
+-- touch that was not primary. The ROAS views did not mention it at all.
+--
+-- So an ad click in September that did NOT convert, followed three weeks later
+-- by a campaign-email click that DID, was $150 of campaign revenue on the Email
+-- tab and $150 of TikTok revenue against TikTok spend on the Ads tab. With a
+-- 30-day attribution window that is the ordinary repeat purchase rather than a
+-- corner case, so every email-driven repeat order inflated paid ROAS — and the
+-- scale-or-kill decision on live budget is made on that number.
+--
+-- EXCLUDED: campaign, automation, cart_recovery — the three channels that
+-- report the same order as their own revenue on another page. A null stamp
+-- still counts, so nothing is lost while marketing_source_at backfills, and so
+-- does 'ad'.
+--
+-- NOT EXCLUDED: 'ambassador'. The one-source rule ranks a typed referral code
+-- above an ad touch, but the ambassador's commission is a separate ledger by
+-- that module's own statement, and an ad that paid for the click onto an
+-- ambassador's link produced a real ad-driven sale. Which of the two carries
+-- the revenue is a tagging-policy decision for the owner, not one to make
+-- silently inside a view. REPORTED, not changed.
+--
+-- ----------------------------------------------------------------------------
+-- APPLIED 2026-09-06. One view replaced; the four views built on it
+-- (ad_platform_daily, ad_campaign_daily, ad_creative_roas_daily,
+-- ad_revenue_unattributed) pick the change up unchanged. Verified afterwards:
+-- the view still reports, and no public view lost security_invoker.
+--
+-- The DB-backed proof is in src/lib/sql/ads-roas-views-executed.test.ts, which
+-- runs the shipped file against a real Postgres: $50 of spend and one
+-- campaign-owned $150 order now reads ROAS 0.00, where it read 3.00 before.
+-- ============================================================================

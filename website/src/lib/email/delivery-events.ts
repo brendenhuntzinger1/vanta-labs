@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { mirrorEngagementToChannel, stampSendLogEngagementByMessageId } from "@/lib/email/engagement";
+import { findUserByEmail } from "@/lib/auth-confirmation-email";
 
 /**
  * E-08 — THE BOUNCE/COMPLAINT LOOP.
@@ -52,6 +53,10 @@ export type DeliveryEventKind =
   | "delayed"
   | "opened"
   | "clicked"
+  // The provider tried and could not send. NOT a bounce: nothing was accepted
+  // and then returned, so there is no bounce severity to read and no basis for
+  // deciding permanence here.
+  | "failed"
   | "ignored";
 
 export interface DeliveryEvent {
@@ -117,6 +122,29 @@ function parseResend(body: Record<string, unknown>): DeliveryEvent[] {
       kind: permanent ? "hard_bounce" : "soft_bounce",
       providerMessageId,
       rawType: `${type}:${severity || "unspecified"}`,
+    }];
+  }
+  if (type === "email.failed") {
+    // THE ROUTE TELLS THE OPERATOR TO SUBSCRIBE TO THIS EVENT, and it used to
+    // fall off the end of this function as "ignored". The ledger then read the
+    // send as `evidence: none` and the panel built to answer "is the mail
+    // arriving?" rendered a permanently rejected signup confirmation as "No
+    // word yet" — indistinguishable from a message still in flight, with the
+    // channel row reading "0 of 1 delivered" and nothing saying why.
+    //
+    // Recorded, NOT suppressed. Resend's failure reasons cover both permanent
+    // rejection and transient refusal, and suppressing an address on a
+    // transient one would retire a real customer on a bad afternoon. Which of
+    // them warrants suppression is a list-hygiene decision for the owner, not
+    // one to infer inside a parser — so this stops presenting a reported
+    // failure as silence, and leaves the suppression rule alone.
+    const failure = (data.failed ?? {}) as Record<string, unknown>;
+    const reason = str(failure.reason);
+    return [{
+      email,
+      kind: "failed",
+      providerMessageId,
+      rawType: reason ? `${type}:${reason.slice(0, 120)}` : type,
     }];
   }
   return [{ email, kind: "ignored", providerMessageId, rawType: type }];
@@ -248,8 +276,25 @@ function isMissingRelationError(error: unknown, _relationName: string): boolean 
  * So a failure is logged now. Still never thrown: a logging fault must not stop
  * a bounce being suppressed. But it must not be invisible either.
  */
-async function recordDeliveryEvent(event: DeliveryEvent, suppressed: boolean): Promise<void> {
-  const { error } = await supabaseAdmin
+/**
+ * Write the event, and say whether it had ever been seen before.
+ *
+ * The caller needs the answer: a redelivery of one complaint used to write a
+ * fresh `email_complaint` warning and a fresh Sentry event every time, even
+ * though the log row and the suppression were both idempotent. Resend
+ * redelivers routinely — this file says so two hundred lines up — and the route
+ * answers 503 on a suppression write failure specifically so it will. One
+ * spam complaint arriving three times produced three unresolved warnings on
+ * /admin/status; on a launch day with a bad segment that buries the criticals
+ * underneath, which is the state monitoring.ts records as having happened once
+ * already.
+ *
+ * `ignoreDuplicates` makes the conflicting insert return no row, so an empty
+ * result IS "already seen". A write that could not be evaluated answers true —
+ * alerting on something twice is better than never alerting at all.
+ */
+async function recordDeliveryEvent(event: DeliveryEvent, suppressed: boolean): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
     .from("email_delivery_events")
     .upsert(
       {
@@ -268,7 +313,8 @@ async function recordDeliveryEvent(event: DeliveryEvent, suppressed: boolean): P
       // rests on. Keeping the first write also makes redelivery genuinely
       // idempotent rather than merely harmless.
       { onConflict: "provider_message_id,event_type,recipient_email", ignoreDuplicates: true },
-    );
+    )
+    .select("id");
 
   // A missing table is the one expected failure (a deployment that has not run
   // the migration). Anything else means the log is broken while the webhook
@@ -280,6 +326,8 @@ async function recordDeliveryEvent(event: DeliveryEvent, suppressed: boolean): P
       `[email] could not record a ${event.kind} delivery event: ${error.message ?? "unknown error"}`,
     );
   }
+  if (error) return true;
+  return (data ?? []).length > 0;
 }
 
 /**
@@ -378,7 +426,15 @@ export async function applyDeliveryEvents(events: DeliveryEvent[]): Promise<Deli
     // settles it. Best-effort by construction: a logging failure must never
     // stop a bounce being suppressed, which is the thing that protects the
     // sending domain.
-    await recordDeliveryEvent(event, false).catch(() => {});
+    //
+    // AND IT ANSWERS WHETHER THIS DELIVERY IS THE FIRST SIGHTING. The log row
+    // and the suppression are both idempotent; the ALERT was not, so one spam
+    // complaint redelivered three times — which Resend does routinely, and
+    // which the route's 503-on-write-failure deliberately provokes — wrote
+    // three unresolved warnings and three Sentry events for one customer.
+    // Taken here rather than from the second write below, because by then this
+    // row exists and every caller would look like a repeat.
+    const firstTimeSeen = await recordDeliveryEvent(event, false).catch(() => true);
 
     // AN OPEN OR A CLICK IS THE ONLY REASON MOST OF THIS MAIL IS SENT, so it is
     // joined straight back to the send that produced it rather than left as a
@@ -461,11 +517,16 @@ export async function applyDeliveryEvents(events: DeliveryEvent[]): Promise<Deli
     //
     // Best-effort, exactly like the unsubscribe route's identical mirror: the
     // suppression above already did the work that matters.
+    //
+    // ASKED FOR BY ADDRESS, NOT SCANNED. This read `listUsers({ perPage: 1000 })`
+    // and searched the result — page ONE of the directory — so for every
+    // customer past the thousandth the mirror silently did nothing and the
+    // account page kept "Product news and promotions" ticked for someone who
+    // had reported the store as spam: exactly the state the paragraph above
+    // says this exists to prevent. The unsubscribe route hit the same cliff and
+    // fixed it the same way, with a comment saying so.
     try {
-      const { data } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
-      const matchedUser = data?.users.find(
-        (user) => user.email?.toLowerCase() === event.email.toLowerCase(),
-      );
+      const matchedUser = await findUserByEmail(event.email);
       if (matchedUser) {
         await supabaseAdmin
           .from("customer_preferences")
@@ -488,6 +549,13 @@ export async function applyDeliveryEvents(events: DeliveryEvent[]): Promise<Deli
     // past. If a cold sending domain ever starts deferring at scale, this alert
     // is the only thing that would show a wave of customers being retired — so
     // it names what happened and is loud enough to notice.
+    // A REDELIVERY IS THE SAME FACT, NOT A SECOND ONE. See the first sighting
+    // above: the suppression it announces has not changed, so neither has
+    // anything an operator could act on.
+    if (!firstTimeSeen) {
+      continue;
+    }
+
     await recordSystemAlert({
       type: event.kind === "complaint"
         ? "email_complaint"

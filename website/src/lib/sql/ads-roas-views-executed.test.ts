@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "pg";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -54,6 +54,10 @@ create table orders (
   payment_status text not null default 'paid',
   amount_paid numeric not null default 0,
   refund_amount numeric not null default 0,
+  -- The one-source stamp. ad_revenue_daily reads it so an order the store has
+  -- already credited to a campaign, an automation or cart recovery is not ALSO
+  -- counted as ad revenue against ad spend.
+  marketing_source_kind text,
   created_at timestamptz not null default now()
 );
 create table order_attribution (
@@ -111,9 +115,16 @@ describeDb("the ROAS views, run against a real Postgres", () => {
 
   async function addOrder(o: Record<string, unknown>) {
     await client.query(
-      `insert into orders (order_id, payment_status, amount_paid, refund_amount, created_at)
-       values ($1,$2,$3,$4,$5)`,
-      [o.order_id, o.payment_status ?? "paid", o.amount_paid ?? 0, o.refund_amount ?? 0, o.created_at],
+      `insert into orders (order_id, payment_status, amount_paid, refund_amount, marketing_source_kind, created_at)
+       values ($1,$2,$3,$4,$5,$6)`,
+      [
+        o.order_id,
+        o.payment_status ?? "paid",
+        o.amount_paid ?? 0,
+        o.refund_amount ?? 0,
+        o.marketing_source_kind ?? null,
+        o.created_at,
+      ],
     );
     await client.query(
       `insert into order_attribution (order_id, last_utm_source, last_utm_campaign, last_utm_content)
@@ -225,6 +236,156 @@ describeDb("the ROAS views, run against a real Postgres", () => {
       const { rows } = await client.query(`select net_revenue from ad_creative_roas_daily where platform='reddit'`);
       expect(Number(rows[0].net_revenue)).toBe(-40); // (200-300) + (100-40)
       await client.query(`update orders set refund_amount = 0 where order_id = 'paid'`);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // A REFUND CHANGES THE STATUS, AND THE STATUS FILTER HAD NOT BEEN TOLD
+  // -------------------------------------------------------------------------
+
+  describe("an order that took money and then gave some back", () => {
+    // payment-webhook.ts moves a refunded order OUT of 'paid': 'refunded' on a
+    // full refund, and 'partially_refunded' when the cumulative refund is less
+    // than amount_paid (two-step refunds — goods, then shipping — are ordinary
+    // practice here). `payment_status = 'paid'` was the whole filter, so the
+    // moment any money went back the order left every ROAS view: a PARTIAL
+    // refund dropped the WHOLE order's revenue although the store kept most of
+    // it, and a FULL refund deleted the evidence rather than showing it,
+    // because `refunds` went to zero as well.
+    beforeAll(async () => {
+      await reset();
+      await addSpend([{ platform: "reddit", ad_id: "rr", stat_date: D, utm_content: "hook_ref", utm_campaign: "c", spend: 50, clicks: 10, impressions: 500 }]);
+      const attribution = { last_utm_source: "reddit", last_utm_campaign: "c", last_utm_content: "hook_ref" };
+      await addOrder({ order_id: "kept-all", payment_status: "paid", amount_paid: 100, created_at: T, ...attribution });
+      await addOrder({ order_id: "kept-most", payment_status: "partially_refunded", amount_paid: 100, refund_amount: 30, created_at: T, ...attribution });
+      await addOrder({ order_id: "kept-none", payment_status: "refunded", amount_paid: 100, refund_amount: 100, created_at: T, ...attribution });
+      await addOrder({ order_id: "never-paid", payment_status: "payment_failed", amount_paid: 100, created_at: T, ...attribution });
+    });
+
+    it("keeps the money the store actually kept", async () => {
+      const { rows } = await client.query(`select orders, net_revenue, refunds from ad_creative_roas_daily where utm_content='hook_ref'`);
+      // 100 + (100-30) + (100-100) = 170. Under the old filter this was 100 —
+      // the partial refund's $70 vanished with it.
+      expect(Number(rows[0].net_revenue)).toBe(170);
+      expect(Number(rows[0].refunds)).toBe(130);
+    });
+
+    it("still counts a refunded order as the conversion the ad produced", async () => {
+      // Which is how the platforms count it, so CPA and CVR stay comparable
+      // with what Meta and TikTok report. The money truth is net_revenue.
+      const { rows } = await client.query(`select orders, round(cpa,4) cpa from ad_creative_roas_daily where utm_content='hook_ref'`);
+      expect(Number(rows[0].orders)).toBe(3);
+      expect(Number(rows[0].cpa)).toBeCloseTo(50 / 3, 4);
+    });
+
+    it("still refuses an order in which no money was ever taken", async () => {
+      const { rows } = await client.query(`select orders from ad_creative_roas_daily where utm_content='hook_ref'`);
+      expect(Number(rows[0].orders), "payment_failed must stay out").toBe(3);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // THE TWO SIDES OF THE JOIN WERE NORMALISED DIFFERENTLY
+  // -------------------------------------------------------------------------
+
+  describe("a tag spelled in mixed case still matches its spend", () => {
+    // parseAdTagsFromUrl reads the tags back out of the ad's destination URL
+    // and lowercases every value, so ad_spend_daily.utm_content is always
+    // lowercase. The ORDER side stores what the browser saw, untouched. An ad
+    // built by hand in Meta Ads Manager with `utm_content=Hook_A` therefore
+    // produced a spend row keyed `hook_a` against orders keyed `Hook_A`, the
+    // join found nothing, and that ad reported ROAS 0.00 with its revenue in
+    // none of the blind-spot views either.
+    beforeAll(async () => {
+      await reset();
+      await addSpend([{ platform: "facebook", ad_id: "mc1", stat_date: D, utm_content: "hook_case", utm_campaign: "camp_case", spend: 50, clicks: 100, impressions: 2000 }]);
+      await addOrder({ order_id: "upper", amount_paid: 100, created_at: T, last_utm_source: "Facebook", last_utm_campaign: "Camp_Case", last_utm_content: "Hook_Case" });
+      await addOrder({ order_id: "shouty", amount_paid: 100, created_at: T, last_utm_source: "FACEBOOK", last_utm_campaign: "CAMP_CASE", last_utm_content: "HOOK_CASE" });
+      await addOrder({ order_id: "lower", amount_paid: 100, created_at: T, last_utm_source: "facebook", last_utm_campaign: "camp_case", last_utm_content: "hook_case" });
+    });
+
+    it("collapses every spelling into one creative row and matches the spend", async () => {
+      const { rows } = await client.query(`select utm_content, orders, net_revenue, round(roas,4) roas from ad_creative_roas_daily where platform='facebook'`);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].utm_content).toBe("hook_case");
+      expect(Number(rows[0].orders)).toBe(3);
+      expect(Number(rows[0].net_revenue)).toBe(300);
+      expect(Number(rows[0].roas)).toBe(6); // 300 / 50
+    });
+
+    it("does the same at the campaign grain", async () => {
+      const { rows } = await client.query(`select utm_campaign, orders, net_revenue from ad_campaign_daily where platform='facebook'`);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].utm_campaign).toBe("camp_case");
+      expect(Number(rows[0].net_revenue)).toBe(300);
+    });
+
+    it("leaves nothing behind in the unattributed view", async () => {
+      const { rows } = await client.query(`select coalesce(sum(net_revenue),0) leaked from ad_revenue_unattributed`);
+      expect(Number(rows[0].leaked)).toBe(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // THE SALE LANDS THE DAY AFTER THE CLICK
+  // -------------------------------------------------------------------------
+
+  describe("revenue on a day the ad did not spend", () => {
+    // Revenue arrives on the day of the ORDER; spend on the day of the CLICK.
+    // They are routinely different days — a click at 23:00 that converts at
+    // 00:30, an ad paused mid-flight that keeps converting, or the offset
+    // between the ad account's reporting day and UTC. A LEFT join from spend
+    // had no row to attach that revenue to and dropped it silently, so an ad
+    // returning 4x reported ROAS 0.00 and, because Winners and Losers are
+    // ranked by ROAS, was presented to the owner as the store's worst ad.
+    beforeAll(async () => {
+      await reset();
+      await addSpend([{ platform: "reddit", ad_id: "lag", stat_date: "2026-08-20", utm_content: "lag_hook", utm_campaign: "lag_c", spend: 100, clicks: 200, impressions: 5000 }]);
+      await addOrder({
+        order_id: "lagged", amount_paid: 400, created_at: "2026-08-21T10:00:00Z",
+        last_utm_source: "reddit", last_utm_campaign: "lag_c", last_utm_content: "lag_hook",
+      });
+    });
+
+    it("keeps the sale at the creative grain, on its own day", async () => {
+      const { rows } = await client.query(
+        `select stat_date::text, spend, orders, net_revenue, roas from ad_creative_roas_daily where utm_content='lag_hook' order by stat_date`,
+      );
+      expect(rows).toHaveLength(2);
+      expect(Number(rows[0].spend)).toBe(100);
+      expect(Number(rows[0].net_revenue)).toBe(0);
+      expect(Number(rows[1].spend)).toBe(0);
+      expect(Number(rows[1].net_revenue)).toBe(400);
+    });
+
+    it("reports ROAS as unknown on a day with no spend, never as a division by zero", async () => {
+      const { rows } = await client.query(
+        `select roas, cpa, ctr, cpc, cpm, cvr from ad_creative_roas_daily where utm_content='lag_hook' and spend = 0`,
+      );
+      for (const key of ["roas", "cpa", "ctr", "cpc", "cpm", "cvr"]) {
+        expect(rows[0][key], `${key} on a no-spend day`).toBeNull();
+      }
+    });
+
+    it("keeps it at the campaign grain too", async () => {
+      const { rows } = await client.query(
+        `select coalesce(sum(spend),0) spend, coalesce(sum(net_revenue),0) revenue from ad_campaign_daily where utm_campaign='lag_c'`,
+      );
+      expect(Number(rows[0].spend)).toBe(100);
+      expect(Number(rows[0].revenue)).toBe(400);
+    });
+
+    it("agrees with the platform grain, which already full-joined", async () => {
+      const creative = await client.query(`select coalesce(sum(net_revenue),0) r from ad_creative_roas_daily where platform='reddit'`);
+      const platform = await client.query(`select coalesce(sum(net_revenue),0) r from ad_platform_daily where platform='reddit'`);
+      expect(Number(creative.rows[0].r)).toBe(Number(platform.rows[0].r));
+    });
+
+    it("sums to the truth across the window: 400 against 100 is 4x", async () => {
+      const { rows } = await client.query(
+        `select sum(spend) spend, sum(net_revenue) revenue from ad_creative_roas_daily where utm_content='lag_hook'`,
+      );
+      expect(Number(rows[0].revenue) / Number(rows[0].spend)).toBe(4);
     });
   });
 
@@ -404,5 +565,85 @@ describeDb("the ROAS views, run against a real Postgres", () => {
     expect(Number(rows[0].cpc)).toBeCloseTo(2, 9); // 100/50
     expect(Number(rows[0].cpm)).toBeCloseTo(4, 9); // 100/25000*1000
     expect(Number(rows[0].ctr)).toBeCloseTo(0.002, 9); // 50/25000
+  });
+
+  // ---------------------------------------------------------------------------
+  // ONE ORDER IS ONE CHANNEL'S REVENUE.
+  //
+  // marketing-source.ts decides a single primary channel per order precisely so
+  // "$150 of campaign revenue AND $150 of automation revenue AND $150
+  // recovered" cannot happen. The email dashboard honours it. These views did
+  // not mention it, so an ad click that did not convert followed weeks later by
+  // a campaign-email click that did was counted in full on BOTH tabs — and with
+  // a 30-day attribution window that is the ordinary repeat purchase, not a
+  // corner case. Live budget decisions were made on the inflated ROAS.
+  // ---------------------------------------------------------------------------
+  describe("revenue another channel has already claimed", () => {
+    beforeEach(reset);
+
+    it.each([
+      ["a campaign email", "campaign"],
+      ["an automation", "automation"],
+      ["cart recovery", "cart_recovery"],
+    ])("is not also counted as ad revenue when %s owns the order", async (_label, kind) => {
+      await addSpend([{ platform: "tiktok", ad_id: "a1", stat_date: D, spend: 50, utm_source: "tiktok", utm_campaign: "launch", utm_content: "hook_a" }]);
+      await addOrder({
+        order_id: "o1", amount_paid: 150, created_at: T, marketing_source_kind: kind,
+        last_utm_source: "tiktok", last_utm_campaign: "launch", last_utm_content: "hook_a",
+      });
+
+      const { rows } = await client.query("select coalesce(sum(net_revenue),0)::float8 as revenue from ad_revenue_daily");
+      expect(rows[0].revenue).toBe(0);
+    });
+
+    it("still counts an order the ads pipeline owns", async () => {
+      await addOrder({
+        order_id: "o1", amount_paid: 150, created_at: T, marketing_source_kind: "ad",
+        last_utm_source: "tiktok", last_utm_campaign: "launch", last_utm_content: "hook_a",
+      });
+
+      const { rows } = await client.query("select coalesce(sum(net_revenue),0)::float8 as revenue from ad_revenue_daily");
+      expect(rows[0].revenue).toBe(150);
+    });
+
+    it("still counts an order with no stamp at all, so nothing is lost while it backfills", async () => {
+      await addOrder({
+        order_id: "o1", amount_paid: 150, created_at: T,
+        last_utm_source: "tiktok", last_utm_campaign: "launch", last_utm_content: "hook_a",
+      });
+
+      const { rows } = await client.query("select coalesce(sum(net_revenue),0)::float8 as revenue from ad_revenue_daily");
+      expect(rows[0].revenue).toBe(150);
+    });
+
+    it("still counts an ambassador-attributed order, which is left as an owner decision", async () => {
+      // The rule ranks a typed referral code above an ad touch, but the
+      // ambassador's commission is a separate ledger and an ad that paid for
+      // the click onto their link produced a real ad-driven sale. Which side
+      // carries the revenue is a tagging-policy call, not one for a view.
+      await addOrder({
+        order_id: "o1", amount_paid: 150, created_at: T, marketing_source_kind: "ambassador",
+        last_utm_source: "tiktok", last_utm_campaign: "launch", last_utm_content: "hook_a",
+      });
+
+      const { rows } = await client.query("select coalesce(sum(net_revenue),0)::float8 as revenue from ad_revenue_daily");
+      expect(rows[0].revenue).toBe(150);
+    });
+
+    it("keeps the ROAS honest end to end: $50 spend, one campaign-owned order, no revenue", async () => {
+      await addSpend([{ platform: "tiktok", ad_id: "a1", stat_date: D, spend: 50, utm_source: "tiktok", utm_campaign: "launch", utm_content: "hook_a" }]);
+      await addOrder({
+        order_id: "o1", amount_paid: 150, created_at: T, marketing_source_kind: "campaign",
+        last_utm_source: "tiktok", last_utm_campaign: "launch", last_utm_content: "hook_a",
+      });
+
+      const { rows } = await client.query(
+        "select spend::float8 as spend, net_revenue::float8 as net_revenue, roas::float8 as roas from ad_creative_roas_daily",
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0].spend).toBe(50);
+      expect(rows[0].net_revenue).toBe(0);
+      expect(rows[0].roas, "3.0 before the fix — three times the truth").toBe(0);
+    });
   });
 });

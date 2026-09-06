@@ -21,11 +21,27 @@ import { PLACEHOLDER_IMAGE_PATHS, resolveProductImage } from "@/lib/product-imag
  * grey placeholders would be worse than the empty rectangle it replaced.
  */
 
-export type StackImage = { src: string; alt: string };
+/**
+ * A photograph, and NOTHING THAT NAMES IT.
+ *
+ * This carried `alt: product.name`, from a time when /wholesale was one public
+ * page among many and the catalogue was public too. Closing the default in
+ * access-policy.ts put every product behind an account and left /wholesale
+ * exempt — recruitment cannot sit behind a login — so this alt became the one
+ * place a compound name still reached an anonymous reader. Measured on the
+ * harness build: "BPC-157 10mg" and "Bacteriostatic Water 30ml" in the HTML of
+ * a page served to anyone, on a store whose entire catalogue is gated.
+ *
+ * The name is removed from the TYPE rather than from the call site, so it
+ * cannot come back by someone helpfully restoring an alt attribute. The
+ * photographs themselves stay: their URLs are opaque storage UUIDs that name
+ * nothing, and the composition is the page's whole visual language.
+ */
+export type StackImage = { src: string };
 
 /** Photographs only — a placeholder is not product imagery and must not stack. */
 export function selectStackImages(
-  products: { name: string; image?: string | null; coverImage?: string | null }[],
+  products: { image?: string | null; coverImage?: string | null }[],
   limit = 3,
 ): StackImage[] {
   const seen = new Set<string>();
@@ -36,7 +52,7 @@ export function selectStackImages(
     if (PLACEHOLDER_IMAGE_PATHS.includes(src)) continue;
     if (seen.has(src)) continue;
     seen.add(src);
-    picked.push({ src, alt: product.name });
+    picked.push({ src });
     if (picked.length >= limit) break;
   }
 
@@ -70,12 +86,15 @@ export function WholesaleVialStack({ images, priority = false }: { images: Stack
         </div>
       ) : null}
 
-      {/* Foreground. The only layer that carries alt text — the others are
-          decorative duplicates of products named elsewhere on the page. */}
+      {/* Foreground. It carries a BRAND description, not a product's name:
+          this page is public and the catalogue is not, so naming the compound
+          here would publish exactly what the account wall withholds. The
+          composition is decorative — the page's meaning is in its copy — so a
+          brand-level alt is the accurate one as well as the safe one. */}
       <div className="absolute bottom-0 left-1/2 h-[84%] w-[62%] -translate-x-1/2 drop-shadow-[0_30px_60px_rgba(0,0,0,0.85)]">
         <Image
           src={front.src}
-          alt={front.alt}
+          alt="Vanta Labs research vials"
           fill
           sizes="(max-width: 640px) 236px, (max-width: 1024px) 285px, 347px"
           className="object-contain"

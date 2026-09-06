@@ -562,8 +562,37 @@ describe("the CSRF origin check covers every cookie-authenticated write", () => 
     ["/api/cart", "cart mutations"],
     ["/api/coupons", "coupon validation"],
     ["/api/catalog", "subscribe-and-save"],
+    // Added later, under its own prefix, and therefore outside a list this
+    // block's own heading calls exhaustive. /api/ads authenticates the SAME
+    // admin cookie /api/admin does, which is what makes a cross-origin POST
+    // forgeable at all: the browser attaches it.
+    ["/api/ads", "admin ads writes, on the same admin cookie"],
   ])("%s is origin-checked — %s", (prefix) => {
     expect(listed).toContain(`"${prefix}"`);
+  });
+
+  it("names every API root that authenticates the admin COOKIE", () => {
+    // Derived from the routes rather than from a second hand-kept list, so a
+    // new cookie-authenticated root cannot be added without appearing here.
+    const roots = new Set<string>();
+    const apiRoot = join(process.cwd(), "src", "app", "api");
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) { walk(path); continue; }
+        if (entry.name !== "route.ts") continue;
+        const src = readFileSync(path, "utf8");
+        if (!/verifyAdminSessionFromCookie|requireAdminSession/.test(src)) continue;
+        const root = path.slice(apiRoot.length + 1).split(/[\\/]/)[0];
+        if (root) roots.add(`/api/${root}`);
+      }
+    };
+    walk(apiRoot);
+
+    expect(roots.size, "the walk found no admin-cookie routes at all").toBeGreaterThan(0);
+    for (const root of roots) {
+      expect(listed, `${root} authenticates the admin cookie and is not origin-checked`).toContain(`"${root}"`);
+    }
   });
 
   it("leaves the self-authenticating server-to-server routes out of it", () => {

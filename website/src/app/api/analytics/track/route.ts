@@ -9,6 +9,30 @@ const insertAnalyticsEvent = createOptionalColumnInserter(async (row) =>
   supabaseAdmin.from("website_analytics_events").insert(row),
 );
 
+// REVENUE MAY NOT BE POSTED HERE, AND `purchase` WAS ON THIS LIST.
+//
+// This route is unauthenticated by design — it is named in PUBLIC_PREFIXES so a
+// signed-out ad click is still counted — and it writes with the service-role
+// key into `website_analytics_events`: the SAME table payment-webhook.ts writes
+// REAL settled sales into, carrying utm_source, utm_medium, utm_campaign and an
+// event_payload with the order id and amount paid. Grouping those purchase rows
+// by campaign is, in that file's own words, the whole purpose of writing them.
+//
+// So accepting `purchase` from an anonymous body made attributed revenue
+// attacker-writable and indistinguishable from a real order. Proved on the
+// harness with no cookie: POST {"eventType":"purchase","payload":{"value":99999}}
+// answered 200 and landed a purchase row. The per-session cap does not help —
+// sessionId comes from the same body, so rotating it costs nothing.
+//
+// The sibling public relay already states the rule for itself
+// (api/ads/funnel-event/route.ts): "Purchase is not accepted here at all — it is
+// derived from the order's own settled payment state, which is the only place
+// revenue may come from." This route now says the same.
+//
+// Nothing legitimate is lost: no client code dispatches a purchase through
+// `vanta:analytics`, and recordAnalyticsPurchase in payment-webhook.ts writes
+// the real row directly. A browser-side purchase signal, if one is ever wanted
+// for a pixel, needs its own event type so reporting can tell the two apart.
 const ALLOWED_EVENTS = new Set([
   "session_start",
   "page_view",
@@ -16,7 +40,6 @@ const ALLOWED_EVENTS = new Set([
   "remove_from_cart",
   "update_cart_quantity",
   "begin_checkout",
-  "purchase",
 ]);
 
 function normalizePath(path: unknown) {

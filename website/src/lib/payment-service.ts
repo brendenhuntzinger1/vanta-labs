@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { randomUUID } from "crypto";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { reserveInventoryForOrder, releaseInventoryForOrder, describeUnavailable, DEFAULT_RESERVATION_MINUTES, MANUAL_RESERVATION_MINUTES } from "@/lib/inventory-reservation";
@@ -166,6 +167,89 @@ export async function createCheckoutSession(
  const idempotencyKey = typeof payload.idempotencyKey === "string" && payload.idempotencyKey.trim()
    ? payload.idempotencyKey.trim().slice(0, 64)
    : null;
+ // ONE PLACE THAT RESUMES AN ORDER THAT ALREADY EXISTS.
+ //
+ // Two paths reach "this submit already has an order": the lookup below, before
+ // the insert, and returnExistingByIdempotency after a unique-index collision.
+ // They used to answer differently — the first minted a fresh processor session
+ // and returned a working card URL, the second returned `hostedCheckoutUrl: ""`
+ // — so which one a shopper hit decided whether they could pay. An empty URL is
+ // read by the checkout page as "we couldn't reach the payment provider", so
+ // the second path was a dead end wearing a success response.
+ //
+ // Both call this now, so a resumed order always comes back with a session the
+ // shopper can actually use.
+ type ExistingOrderRow = {
+   order_id: unknown;
+   order_number: unknown;
+   payment_id: unknown;
+   payment_method: unknown;
+   amount_paid: unknown;
+   card_processing_fee: unknown;
+   card_processing_fee_percent: unknown;
+   payment_status: unknown;
+ };
+ const resumeExistingOrder = async (existing: ExistingOrderRow) => {
+   const existingIsManual = isManualPaymentMethod(getPaymentMethodById(paymentMethods, String(existing.payment_method ?? "")));
+   let existingHostedUrl = "";
+   let existingPaymentId = existing.payment_id ? String(existing.payment_id) : "";
+   if (!existingIsManual) {
+     try {
+       const resumed = await provider.createCheckoutSession({
+         orderId: String(existing.order_id),
+         customerEmail: payload.customer.email,
+         amount: Math.round(Number(existing.amount_paid ?? 0) * 100),
+         currency: payload.currency ?? "USD",
+         metadata: { orderId: String(existing.order_id), orderNumber: String(existing.order_number) },
+       });
+       existingHostedUrl = resumed.hostedCheckoutUrl ?? "";
+
+       // THE RESUMED SESSION IS THE ONE THAT WILL BE PAID — record it.
+       //
+       // This mints a NEW processor session so the shopper gets a working card
+       // iframe. Keeping only its URL left the order row pointing at the
+       // ABANDONED session from the first attempt, and with a stale id
+       // reconcileVeyraPendingPayments polls the wrong session: the old one
+       // reports `expired`, a member of DEAD_SESSION_STATUSES, so a genuinely
+       // paid order would be marked payment_failed and its stock released —
+       // worse than the stranded order the reconciler exists to rescue.
+       if (resumed.paymentId && resumed.paymentId !== existingPaymentId) {
+         existingPaymentId = resumed.paymentId;
+         const { error: resumeIdError } = await supabaseAdmin
+           .from("orders")
+           .update({ payment_id: resumed.paymentId, updated_at: new Date().toISOString() })
+           // Never move the pointer on an order that has already settled: its
+           // payment_id is the session that actually paid.
+           .eq("order_id", String(existing.order_id))
+           .neq("payment_status", "paid");
+         if (resumeIdError) {
+           console.error("Unable to persist resumed payment session id for order", existing.order_id, resumeIdError);
+         }
+       }
+     } catch {
+       existingHostedUrl = "";
+     }
+   }
+   return {
+     orderId: String(existing.order_id),
+     orderNumber: String(existing.order_number),
+     status: "pending_payment" as const,
+     total: Number(existing.amount_paid ?? finalTotal),
+     subtotal,
+     shipping,
+     discountAmount,
+     paymentMethod: String(existing.payment_method ?? selectedMethod.id),
+     isManualPayment: existingIsManual,
+     cardProcessingFee: Number(existing.card_processing_fee ?? 0),
+     cardProcessingFeePercent: Number(existing.card_processing_fee_percent ?? 0),
+     // The resumed session when one was minted above, otherwise whatever the
+     // order already carried. Returning the superseded id would report a session
+     // the shopper is not being sent to.
+     paymentId: existingPaymentId || String(existing.order_id),
+     hostedCheckoutUrl: existingHostedUrl,
+   };
+ };
+
  if (idempotencyKey) {
    try {
      const { data: existing } = await supabaseAdmin
@@ -175,68 +259,7 @@ export async function createCheckoutSession(
        .not("payment_status", "in", "(canceled,cancelled,payment_failed)")
        .maybeSingle();
      if (existing) {
-       const existingIsManual = isManualPaymentMethod(getPaymentMethodById(paymentMethods, String(existing.payment_method ?? "")));
-       let existingHostedUrl = "";
-       let existingPaymentId = existing.payment_id ? String(existing.payment_id) : "";
-       if (!existingIsManual) {
-         try {
-           const resumed = await provider.createCheckoutSession({
-             orderId: String(existing.order_id),
-             customerEmail: payload.customer.email,
-             amount: Math.round(Number(existing.amount_paid ?? 0) * 100),
-             currency: payload.currency ?? "USD",
-             metadata: { orderId: String(existing.order_id), orderNumber: String(existing.order_number) },
-           });
-           existingHostedUrl = resumed.hostedCheckoutUrl ?? "";
-
-           // THE RESUMED SESSION IS THE ONE THAT WILL BE PAID — record it.
-           //
-           // This branch mints a NEW processor session so the shopper gets a
-           // working card iframe, but only its URL was kept: the order row went
-           // on pointing at the ABANDONED session from the first attempt.
-           //
-           // With a stale id on the row, reconcileVeyraPendingPayments polls the
-           // wrong session. The old one reports `expired`, which is a member of
-           // DEAD_SESSION_STATUSES, so a genuinely paid order would be marked
-           // payment_failed and its stock released — worse than the stranded
-           // order the reconciler exists to rescue. Reachable whenever the first
-           // response is lost in transit after the server committed, which is
-           // precisely what the idempotency key is for.
-           if (resumed.paymentId && resumed.paymentId !== existingPaymentId) {
-             existingPaymentId = resumed.paymentId;
-             const { error: resumeIdError } = await supabaseAdmin
-               .from("orders")
-               .update({ payment_id: resumed.paymentId, updated_at: new Date().toISOString() })
-               // Never move the pointer on an order that has already settled:
-               // its payment_id is the session that actually paid.
-               .eq("order_id", String(existing.order_id))
-               .neq("payment_status", "paid");
-             if (resumeIdError) {
-               console.error("Unable to persist resumed payment session id for order", existing.order_id, resumeIdError);
-             }
-           }
-         } catch {
-           existingHostedUrl = "";
-         }
-       }
-       return {
-         orderId: String(existing.order_id),
-         orderNumber: String(existing.order_number),
-         status: "pending_payment",
-         total: Number(existing.amount_paid ?? finalTotal),
-         subtotal,
-         shipping,
-         discountAmount,
-         paymentMethod: String(existing.payment_method ?? selectedMethod.id),
-         isManualPayment: existingIsManual,
-         cardProcessingFee: Number(existing.card_processing_fee ?? 0),
-         cardProcessingFeePercent: Number(existing.card_processing_fee_percent ?? 0),
-         // The resumed session when one was minted above, otherwise whatever the
-         // order already carried. Returning the superseded id here would report a
-         // session the shopper is not being sent to.
-         paymentId: existingPaymentId || String(existing.order_id),
-         hostedCheckoutUrl: existingHostedUrl,
-       };
+       return await resumeExistingOrder(existing);
      }
    } catch {
      // Column missing or lookup failed — proceed to create normally.
@@ -283,30 +306,39 @@ export async function createCheckoutSession(
  // A unique-index violation on idempotency_key means a truly-simultaneous
  // duplicate submit beat us to the insert — return that order rather than
  // erroring, so the user's retry lands on their real (single) order.
- const returnExistingByIdempotency = async () => {
-   if (!idempotencyKey) return null;
+ // THE SAME FILTER THE PRE-INSERT LOOKUP USES, AND IT HAS TO BE THE SAME.
+ //
+ // This read had no status filter while the one at the top of the function
+ // deliberately skips canceled/failed orders, and the two disagreeing is the
+ // whole bug. The unique index on idempotency_key covers EVERY row, dead ones
+ // included, so a retry after a cancelled first attempt found nothing at the
+ // top, proceeded, and collided on the insert — landing here, which handed the
+ // DEAD order back as `status: "pending_payment"` with `hostedCheckoutUrl: ""`.
+ //
+ // Reproduced against the harness: first attempt creates an order; the order is
+ // cancelled (exactly what payment-service does when the provider throws); the
+ // retry answers 200 success:true with the same order id and an empty URL. The
+ // checkout page reads an empty URL as "we couldn't reach the payment
+ // provider… please try again", KEEPING the same key on purpose so a retry can
+ // resume — so every further click reproduces it identically and the shopper
+ // cannot reach a card form again without a full page reload.
+ //
+ // Resurrecting a dead order is never the right answer, so this now looks only
+ // for a LIVE one. When the key is held solely by a dead row the caller retries
+ // under a derived key instead — see the duplicate branch below.
+ const DEAD_ORDER_STATUSES = "(canceled,cancelled,payment_failed)";
+ const returnExistingByIdempotency = async (key: string | null = idempotencyKey) => {
+   if (!key) return null;
    const { data: existing } = await supabaseAdmin
      .from("orders")
      .select("order_id, order_number, payment_id, payment_method, amount_paid, card_processing_fee, card_processing_fee_percent, payment_status")
-     .eq("idempotency_key", idempotencyKey)
+     .eq("idempotency_key", key)
+     .not("payment_status", "in", DEAD_ORDER_STATUSES)
      .maybeSingle();
    if (!existing) return null;
-   const existingIsManual = isManualPaymentMethod(getPaymentMethodById(paymentMethods, String(existing.payment_method ?? "")));
-   return {
-     orderId: String(existing.order_id),
-     orderNumber: String(existing.order_number),
-     status: "pending_payment" as const,
-     total: Number(existing.amount_paid ?? finalTotal),
-     subtotal,
-     shipping,
-     discountAmount,
-     paymentMethod: String(existing.payment_method ?? selectedMethod.id),
-     isManualPayment: existingIsManual,
-     cardProcessingFee: Number(existing.card_processing_fee ?? 0),
-     cardProcessingFeePercent: Number(existing.card_processing_fee_percent ?? 0),
-     paymentId: String(existing.payment_id ?? existing.order_id),
-     hostedCheckoutUrl: "",
-   };
+   // Resumed through the shared helper, so this path hands back a card session
+   // the shopper can use instead of an empty URL the page reads as an outage.
+   return resumeExistingOrder(existing);
  };
 
  // CLAIM THE REDEMPTION BEFORE THE ORDER EXISTS.
@@ -382,10 +414,93 @@ export async function createCheckoutSession(
    }
  }
 
- const insertOutcome = await insertOrderRow(orderRow);
+ let insertOutcome = await insertOrderRow(orderRow);
  if (insertOutcome.status === "duplicate") {
    const dup = await returnExistingByIdempotency();
-   if (dup) return dup;
+   if (dup) {
+     // A LIVE order already holds this key, so this really is a duplicate
+     // submit and that order is the answer. Hand back what THIS attempt
+     // claimed under its own (now phantom) order id first — the live order
+     // holds its own claims, and leaving these held would spend a limited
+     // promotion slot and a one-time gift on an order that will never exist.
+     // Best-effort: both age out on their own, and neither may delay the
+     // shopper's answer.
+     if (quote.appliedPromotionId && quote.appliedPromotionLimits) {
+       await releasePromotionRedemption(orderId).catch(() => {});
+     }
+     if (quote.appliedOffer) {
+       await releaseCustomerOffer(orderId).catch(() => {});
+     }
+     return dup;
+   }
+
+   // THE KEY IS HELD ONLY BY A DEAD ORDER. GIVE THE SHOPPER A NEW ONE.
+   //
+   // This is the case the pre-insert lookup was reaching for when it skipped
+   // canceled and failed rows: a first attempt that died deserves a real second
+   // attempt. The unique index does not share that view, so the retry has to
+   // arrive under a different key.
+   //
+   // Derived from the DEAD order's id rather than randomly, so it is stable:
+   // a shopper double-clicking the retry produces the same derived key twice,
+   // the second collides, and by then the row holding it is LIVE — so the
+   // filtered read above returns it and the second click is idempotent, exactly
+   // as the first submit is. Hashed so the column never sees an unbounded
+   // concatenation.
+   //
+   // AND IT CHAINS, because one dead attempt is not the only number there is.
+   //
+   // Derived from the FIRST dead order alone the derived key was a CONSTANT:
+   // once a second attempt also died, that key was held by a dead row too, the
+   // live-only read above filtered it out, and there was no third key. Every
+   // click after that threw "Unable to create order record" — and the checkout
+   // page keeps the same idempotency key across failures on purpose, so only a
+   // full page reload escaped it. Two dead attempts is an ordinary evening: two
+   // thin stock lines removed one at a time, a tender shortfall then a fixed
+   // basket, or a two-minute processor outage spanning two clicks. So the
+   // derivation walks — each dead row in the chain derives the next key from
+   // itself — and attempt N lands on a key nothing holds.
+   const MAX_DEAD_ATTEMPT_HOPS = 12;
+   let chainKey: string | null = idempotencyKey;
+   for (let hop = 0; hop < MAX_DEAD_ATTEMPT_HOPS && chainKey; hop += 1) {
+     const holder: { order_id?: unknown } | null = (await supabaseAdmin
+       .from("orders")
+       .select("order_id")
+       .eq("idempotency_key", chainKey)
+       .maybeSingle()).data;
+     // Nothing holds it any more — the row was deleted between the collision
+     // and this read. Retrying the plain insert is the whole answer.
+     if (!holder?.order_id) break;
+
+     const derivedKey = `r_${createHash("sha256")
+       .update(`${chainKey}|${String(holder.order_id)}`)
+       .digest("hex")
+       .slice(0, 48)}`;
+     orderRow.full.idempotency_key = derivedKey;
+     insertOutcome = await insertOrderRow(orderRow);
+     if (insertOutcome.status !== "duplicate") break;
+
+     // The retry itself is being repeated — the shopper clicked twice, or the
+     // first retry's response was lost. The derived key is stable, so the row
+     // holding it may be the LIVE order the previous retry created, and handing
+     // that back is precisely the idempotent answer. Release what this attempt
+     // claimed under its own phantom order id first, as above.
+     const retried = await returnExistingByIdempotency(derivedKey);
+     if (retried) {
+       if (quote.appliedPromotionId && quote.appliedPromotionLimits) {
+         await releasePromotionRedemption(orderId).catch(() => {});
+       }
+       if (quote.appliedOffer) {
+         await releaseCustomerOffer(orderId).catch(() => {});
+       }
+       return retried;
+     }
+
+     // Held by a DEAD row as well, so this attempt is no better off than the
+     // last. Hop: the next key derives from the row that just refused us.
+     chainKey = derivedKey;
+   }
+
  }
  if (insertOutcome.status !== "inserted") {
    console.error("Unable to create order record", insertOutcome.status === "error" ? insertOutcome.error : "duplicate");
@@ -400,7 +515,15 @@ export async function createCheckoutSession(
    if (quote.appliedOffer) {
      await releaseCustomerOffer(orderId);
    }
-   throw new Error("Unable to create order record");
+   // A DEAD END DESERVES A WAY OUT. This string reaches the shopper verbatim
+   // (safe-error.ts passes it: no vendor token, no technical pattern, short),
+   // and "Unable to create order record" told them nothing they could act on
+   // while the page held the same idempotency key across every further click.
+   throw new Error(
+     insertOutcome.status === "duplicate"
+       ? "We could not start a new payment for this basket. Please refresh this page and place your order again."
+       : "Unable to create order record",
+   );
  }
 
  const { payload: orderItemsPayload, error: itemInsertError } = await insertOrderItems(

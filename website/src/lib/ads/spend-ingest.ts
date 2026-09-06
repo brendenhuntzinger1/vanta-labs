@@ -1,6 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { checkRateLimit } from "@/lib/rate-limit";
 import {
   WINDSOR_CONNECTORS,
   fetchConnectorSpend,
@@ -101,6 +102,8 @@ export type ConnectorOutcome = {
   /** Rows the platform reported with no readable creative tag. Spend we can see
    *  but cannot tie to revenue — worth surfacing, never worth hiding. */
   untagged: number;
+  /** Duplicate (platform, ad_id, stat_date) pairs summed before the write. */
+  merged: number;
   error?: string;
 };
 
@@ -156,7 +159,7 @@ export async function runSpendIngest(deps: {
   let totalSpend = 0;
 
   for (const connector of connectors) {
-    const outcome: ConnectorOutcome = { connector, status: "ok", rows: 0, written: 0, rejected: 0, untagged: 0 };
+    const outcome: ConnectorOutcome = { connector, status: "ok", rows: 0, written: 0, rejected: 0, untagged: 0, merged: 0 };
 
     const fetched = await fetchConnectorSpend({
       connector,
@@ -167,7 +170,19 @@ export async function runSpendIngest(deps: {
     });
 
     if (!fetched.ok) {
-      outcomes.push({ ...outcome, status: "failed", error: fetched.error });
+      // A PLATFORM NOBODY HAS CONNECTED IS SKIPPED, NOT FAILED.
+      //
+      // Windsor answers a hard error for a connector with no attached account —
+      // "No snapchat account for user … was found" — so a platform detached for
+      // ordinary marketing reasons would otherwise report a failed connector on
+      // every nightly run, for as long as it stayed detached. An operator
+      // learns to ignore a signal that is always red, which costs them the one
+      // that means the feed is down.
+      outcomes.push({
+        ...outcome,
+        status: fetched.notConnected ? "skipped" : "failed",
+        error: fetched.error,
+      });
       continue;
     }
 
@@ -175,15 +190,67 @@ export async function runSpendIngest(deps: {
     outcome.rejected = fetched.rejections.length;
     outcome.untagged = fetched.rows.filter((r) => !r.utmContent && r.spend > 0).length;
 
-    for (let i = 0; i < fetched.rows.length; i += CHUNK_SIZE) {
-      const slice = fetched.rows.slice(i, i + CHUNK_SIZE);
+    // ONE ROW PER (platform, ad_id, stat_date), BECAUSE THE UPSERT DEMANDS IT.
+    //
+    // The write is `insert … on conflict (platform, ad_id, stat_date) do update`
+    // per chunk, and Postgres refuses a statement that presents the same
+    // conflict target twice: SQLSTATE 21000, "ON CONFLICT DO UPDATE command
+    // cannot affect row a second time". The rows go to the database exactly as
+    // fetched, with no de-duplication anywhere in between — and a duplicate pair
+    // is routine, because the fetch asks for a URL dimension: one ad running two
+    // creatives or two landing URLs on one day comes back as two rows.
+    //
+    // One such pair aborted the CHUNK, which broke the loop, which failed the
+    // whole connector for the run — dropping its entire trailing window with a
+    // message that reads like a write failure. Summed here instead, which is
+    // exactly the aggregation Windsor would have done had the URL dimension not
+    // been requested. The last-seen labels win; the tags are the same for any
+    // pair that shares a key.
+    const merged = new Map<string, typeof fetched.rows[number]>();
+    for (const row of fetched.rows) {
+      const key = `${row.platform}\u0000${row.adId}\u0000${row.statDate}`;
+      const seen = merged.get(key);
+      if (!seen) {
+        merged.set(key, { ...row });
+        continue;
+      }
+      seen.spend += row.spend;
+      seen.impressions += row.impressions;
+      seen.clicks += row.clicks;
+      if (row.platformConversions !== null) {
+        seen.platformConversions = (seen.platformConversions ?? 0) + row.platformConversions;
+      }
+      if (row.platformConversionValue !== null) {
+        seen.platformConversionValue = (seen.platformConversionValue ?? 0) + row.platformConversionValue;
+      }
+      // A LATER row that carries a tag beats an earlier one that does not: an
+      // untagged variant must not erase the tag the pair does have.
+      seen.utmContent = row.utmContent ?? seen.utmContent;
+      seen.utmCampaign = row.utmCampaign ?? seen.utmCampaign;
+      seen.campaignId = row.campaignId ?? seen.campaignId;
+      seen.campaignName = row.campaignName ?? seen.campaignName;
+      seen.adgroupId = row.adgroupId ?? seen.adgroupId;
+      seen.adgroupName = row.adgroupName ?? seen.adgroupName;
+      seen.adName = row.adName ?? seen.adName;
+      seen.landingUrl = row.landingUrl ?? seen.landingUrl;
+    }
+    const writable = [...merged.values()];
+    outcome.merged = fetched.rows.length - writable.length;
+
+    for (let i = 0; i < writable.length; i += CHUNK_SIZE) {
+      const slice = writable.slice(i, i + CHUNK_SIZE);
       const { error } = await deps.upsert(slice.map(toDbRow));
       if (error) {
         // A write failure is reported against the connector rather than thrown.
         // The next run re-fetches the same window and tries again, which is the
         // whole reason the window is trailing.
         outcome.status = "failed";
-        outcome.error = error.code === "42P01" ? "ad_spend_daily does not exist — apply ads-spend-roas.sql" : error.message;
+        outcome.error = error.code === "42P01"
+          ? "ad_spend_daily does not exist — apply ads-spend-roas.sql"
+          // The SQLSTATE travels, so 21000 (a duplicate conflict target that
+          // survived the merge above) is distinguishable from a transient write
+          // failure in the operator alert.
+          : `${error.message}${error.code ? ` [${error.code}]` : ""}`;
         break;
       }
       outcome.written += slice.length;
@@ -209,10 +276,15 @@ export async function runSpendIngest(deps: {
   // One connector failing must NOT throw: Snapchat's grant expiring cannot be
   // allowed to discard Meta's numbers, and that partial state is reported in
   // `connectors` for the dashboard to show.
-  const failed = outcomes.filter((o) => o.status === "failed");
-  if (outcomes.length > 0 && failed.length === outcomes.length) {
+  // Skipped connectors are excluded from BOTH sides of this test. A store that
+  // has detached three of its four platforms and has one healthy feed is not
+  // having an incident, and one that has detached ALL of them is not either —
+  // it has simply stopped advertising, which the dashboard already says.
+  const attempted = outcomes.filter((o) => o.status !== "skipped");
+  const failed = attempted.filter((o) => o.status === "failed");
+  if (attempted.length > 0 && failed.length === attempted.length) {
     throw new Error(
-      `ad spend ingest failed on every connector (${failed.length}/${outcomes.length}): ` +
+      `ad spend ingest failed on every connected platform (${failed.length}/${attempted.length}): ` +
         failed.map((f) => `${f.connector}: ${f.error ?? "unknown"}`).join("; "),
     );
   }
@@ -232,7 +304,43 @@ export async function runSpendIngest(deps: {
  * so running it more often than nightly is harmless and running it less often
  * only means coarser freshness.
  */
+/**
+ * The freshness gate keys off rows that were successfully WRITTEN, which means
+ * it cannot engage while the feed is broken.
+ *
+ * readLastIngestedAt returns the newest `ingested_at` in ad_spend_daily, so a
+ * run that writes nothing leaves the gate permanently disarmed. That is not
+ * hypothetical — it is the live state of this store: Windsor currently answers
+ * every connector with a plan-limit notice in place of data, every row is
+ * rejected, nothing is written, and the job throws. vercel.json runs the sweep
+ * every thirty minutes, so the six-hour interval this file exists to enforce
+ * becomes 192 Windsor calls a day, and the cron_sweep_failed alert (which had
+ * no dedupe window, unlike the timeout alert fifteen lines above it) becomes
+ * 48 criticals and 48 operator emails a day. That is one standing problem, not
+ * forty-eight.
+ *
+ * So the interval is enforced on ATTEMPTS as well as on writes, through the
+ * store's own rate limiter rather than a new table. A failing feed now backs
+ * off exactly as a healthy one does, and an operator pressing refresh still
+ * bypasses both gates with `force`.
+ */
+const ATTEMPT_BUCKET = "ads-spend-ingest";
+
 export async function ingestAdSpend(options: { force?: boolean } = {}): Promise<SpendIngestResult> {
+  if (!options.force) {
+    const attempt = await checkRateLimit(ATTEMPT_BUCKET, 1, MIN_HOURS_BETWEEN_RUNS * 3600);
+    if (!attempt.allowed) {
+      return {
+        ran: false,
+        connectors: [],
+        totalWritten: 0,
+        totalSpend: 0,
+        reason:
+          `last ATTEMPT was under ${MIN_HOURS_BETWEEN_RUNS}h ago (retry in ${attempt.retryAfterSeconds}s); `
+          + "the interval is enforced on attempts so a failing feed backs off like a healthy one",
+      };
+    }
+  }
   return runSpendIngest({
     apiKey: process.env.WINDSOR_API_KEY,
     now: new Date(),

@@ -24,13 +24,34 @@ const nextConfig: NextConfig = {
       process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.NEXT_PUBLIC_BUILD_ID ?? "local",
   },
   images: {
-    // Pin the image optimizer to the CDNs we actually serve product/COA images
-    // from (Supabase Storage + our image CDN) instead of a wildcard host. A
-    // wildcard turns the optimizer into an open image proxy (SSRF / bandwidth
-    // abuse); these patterns cover every real image source.
+    // ONE HOST: THE STORAGE PROJECT THIS DEPLOYMENT ACTUALLY USES.
+    //
+    // This said `**.supabase.co` and `**.cloudfront.net`, above a comment
+    // explaining that a wildcard "turns the optimizer into an open image proxy
+    // (SSRF / bandwidth abuse)". Both patterns ARE wildcards in the way that
+    // matters: anyone can create a Supabase project or a CloudFront
+    // distribution in a couple of minutes, so
+    // /_next/image?url=https://attacker.cloudfront.net/… fetched and re-served
+    // arbitrary content through this domain, on Vercel's image optimizer, billed
+    // to this account.
+    //
+    // Checked before narrowing rather than assumed: all 42 rows in
+    // product_images are on the configured Supabase host, and the string
+    // "cloudfront" appears nowhere in this repository except the line that was
+    // allowing it. So the second pattern permitted a class of abuse in exchange
+    // for nothing at all.
+    //
+    // Derived from NEXT_PUBLIC_SUPABASE_URL so it follows the project rather
+    // than being a second copy of it. The wildcard remains ONLY as the fallback
+    // for a build with no Supabase URL configured — a local or preview build —
+    // because an empty remotePatterns list breaks every remote image, which is
+    // a worse failure than the one being closed.
     remotePatterns: [
-      { protocol: "https", hostname: "**.supabase.co" },
-      { protocol: "https", hostname: "**.cloudfront.net" },
+      (() => {
+        const configured = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+        const hostname = configured ? (() => { try { return new URL(configured).hostname; } catch { return null; } })() : null;
+        return { protocol: "https" as const, hostname: hostname ?? "**.supabase.co" };
+      })(),
     ],
   },
 };

@@ -262,7 +262,14 @@ export default async function RootLayout({
             misdirected password-reset link must be carried to the reset form
             before the gate can hold them on a page that has no such form. */}
         <RecoveryLinkCatcher />
-        <CartProvider>
+        {/* signedIn, because this provider lives ABOVE the changing segment and
+            therefore does not remount when someone signs in. Every config it
+            prices with is fetched in a mount effect, and on the sign-in portal
+            every one of those endpoints answers 401 — so without this prop the
+            cart kept its built-in defaults for the whole page session and
+            showed $15 shipping on a store that ships free. See the header on
+            CartProvider in components/cart-context.tsx. */}
+        <CartProvider signedIn={signedIn}>
           <Suspense fallback={null}>
             <SiteAnalyticsTracker />
           </Suspense>

@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { TurnstileWidget } from "@/components/turnstile-widget";
 import { resolveSignupOutcome, SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-signup-outcome";
-import { classifyAuthReturn, deadAuthLinkMessage, type AuthReturn } from "@/lib/auth-link-fragment";
+import { deadAuthLinkMessage, readOAuthCallbackFragment, type OAuthCallbackReturn } from "@/lib/auth-link-fragment";
 import { safeInternalPath } from "@/lib/internal-path";
 import { signInFailureMessage } from "@/lib/sign-in-failure-message";
 import {
@@ -29,6 +29,30 @@ const OTP_RESEND_COOLDOWN_SECONDS = 45;
 // is approved — otherwise the "Text me a code" button returns a Twilio error to
 // real shoppers. Flip to true once Twilio approves the account, then redeploy.
 const PHONE_LOGIN_ENABLED = false;
+
+// THE AMBASSADOR COOKIE, READ THE WAY THIS CODEBASE READS BROWSER FACTS.
+//
+// `/r/<code>` sets `vl_referral_code` and then bounces the visitor at the
+// access wall, so by the time they reach this form the `?ref=` that carried the
+// attribution is long gone and the cookie is the only surviving record of whose
+// link they followed. It cannot be read during SSR, and it never changes within
+// a page load, so there is nothing to subscribe to — exactly the shape
+// `useApplePayOffered` already uses.
+const REFERRAL_COOKIE_KEY = "vl_referral_code";
+const subscribeNever = () => () => {};
+const getServerReferralCookie = () => "";
+const readReferralCookie = () => {
+  try {
+    const raw = document.cookie
+      .split("; ")
+      .find((entry) => entry.startsWith(`${REFERRAL_COOKIE_KEY}=`))
+      ?.split("=")[1];
+    return raw ? decodeURIComponent(raw) : "";
+  } catch {
+    // No cookie access: signup simply carries no referral, as before.
+    return "";
+  }
+};
 
 // PORTAL IS THE FIRST SCREEN, AND THE ONLY ONE MOST VISITORS SEE.
 //
@@ -88,6 +112,48 @@ export function AccountAuthForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const referralCodeFromUrl = searchParams.get("ref") ?? "";
+  // ---------------------------------------------------------------------
+  // THE AMBASSADOR'S OWN LINK CARRIES NO ?ref, AND AFTER THE WALL NOTHING DOES.
+  //
+  // `?ref=` was the only source of a referral at signup. Two changes removed
+  // every way for it to arrive:
+  //
+  //   * The shared link is /r/<code> (admin/partners builds it), and that route
+  //     puts the code in the vl_referral_code COOKIE and redirects to
+  //     /products. It never puts ?ref on a URL.
+  //   * The wall then rewrites even a hand-made ?ref out of the top level.
+  //     Measured: GET /products?ref=EXPLICIT15&ttclid=abc answers
+  //     location: /account/login?next=%2Fproducts%3Fref%3DEXPLICIT15%26ttclid%3Dabc
+  //     — the whole query buried inside `next`, where nothing reads it.
+  //
+  // So a new customer following an ambassador's link and being made to create
+  // an account signed up with no referred_by_code at all: awardReferralSignupBonus
+  // never fired, the customer never got the 100-point welcome bonus (real money
+  // at checkout) and the ambassador never got their referral bonus. Both awards
+  // are attempted at this one moment and guarded by a points_ledger lookup, so
+  // nothing backfills them — the loss was permanent and silent on every
+  // referred signup.
+  //
+  // The cookie is the thing the ambassador's link actually sets, so that is
+  // what this reads, with ?ref still winning when present. cart-context.tsx
+  // discovers the code exactly this way for the cart.
+  //
+  // DELIBERATELY NOT USED TO CHOOSE THE FORM'S MODE (see initialMode below).
+  // An explicit ?ref in the address bar is an invitation to JOIN and opens the
+  // signup form; a thirty-day cookie is not, and treating it as one would send
+  // every returning customer who ever followed an ambassador link to a signup
+  // form instead of the sign-in they asked for.
+  //
+  // Read through useSyncExternalStore, matching useApplePayOffered: the cookie
+  // is a browser fact that cannot exist during SSR, and this is how the rest of
+  // this codebase reads one without a hydration mismatch or a cascading render.
+  const referralCodeFromCookie = useSyncExternalStore(
+    subscribeNever,
+    readReferralCookie,
+    getServerReferralCookie,
+  );
+  /** What the new account should be attributed to. The URL wins; the cookie is the fallback. */
+  const referralCodeForSignup = referralCodeFromUrl || referralCodeFromCookie;
   const nextPath = safeNextPath(searchParams.get("next"));
   // A referral link is an invitation to JOIN, so it opens the signup form
   // directly. A verification return has an account already and must not be
@@ -160,9 +226,33 @@ export function AccountAuthForm() {
   // getSession() falls back to whatever supabase-js kept in localStorage — so
   // the page signed the visitor in as whoever last used the browser. Only a
   // fragment that actually carries a token counts. See lib/auth-link-fragment.
-  const [authReturn] = useState<AuthReturn>(() => {
+  //
+  // READ WITH readOAuthCallbackFragment, NOT classifyAuthReturn, AND THE
+  // DIFFERENCE IS AN ACCOUNT TAKEOVER ON A SHARED BROWSER.
+  //
+  // classifyAuthReturn answers "does this URL LOOK like a return from an auth
+  // link", accepting access_token OR refresh_token. The effect below then asked
+  // supabase.auth.getSession() for the tokens — a PROXY question, and the wrong
+  // one. supabase-js's _isImplicitGrantCallback ignores refresh_token entirely,
+  // so `#refresh_token=anything` reads as a session here and as no callback at
+  // all there; supabase-js falls through to _recoverAndRefresh() and
+  // getSession() hands back whatever is in localStorage — the PREVIOUS
+  // customer's live session on a shared machine. Posting that to
+  // /api/auth/session mints an httpOnly cookie for the wrong person, and the
+  // server cannot tell: the token is genuine, so GoTrue verifies it happily.
+  //
+  // This is the same defect, one file over, that /account/auth/callback was
+  // rewritten to close — and readOAuthCallbackFragment's own header describes
+  // it. The callback stopped asking the proxy question; this page had not.
+  //
+  // So the tokens come from the fragment and client storage is never consulted
+  // for identity. Both halves are required, because half a session is exactly
+  // the shape of the bypass. Classified ONCE, at first render, before
+  // supabase-js can consume the fragment (its client is lazily constructed on
+  // first `supabase.auth` access, which happens later, inside the effect).
+  const [authReturn] = useState<OAuthCallbackReturn>(() => {
     if (typeof window === "undefined") return { kind: "none" };
-    return classifyAuthReturn(window.location.hash);
+    return readOAuthCallbackFragment(window.location.hash);
   });
   const [arrivedFromEmailLink] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -217,14 +307,26 @@ export function AccountAuthForm() {
 
 
   // A shopper who clicked the confirmation link in Supabase's built-in
-  // verification email lands back here with a session already established
-  // by the Supabase client (it reads the token from the URL fragment) -
+  // verification email lands back here with the session in the URL fragment —
   // finish signing them in by setting our own httpOnly session cookie.
   //
-  // Gated to verification returns ONLY. The Supabase client also keeps a
-  // long-lived copy of past sessions in localStorage, and running this on
-  // every visit made the login page silently re-establish that session and
-  // bounce straight to the home page — the shopper never saw the form.
+  // RUNS ONLY WHEN THE FRAGMENT ITSELF CARRIED BOTH TOKENS, AND USES THOSE.
+  // Two earlier versions of this gate were not enough, and each failure was the
+  // same one: the page signing a visitor in as whoever last used the browser.
+  //
+  //   `?verified=1`               a query param is typed, shared, bookmarked and
+  //                               re-opened; on any of those the fragment is
+  //                               empty and getSession() answered from
+  //                               localStorage.
+  //   classifyAuthReturn + getSession()
+  //                               a fragment carrying only `refresh_token`
+  //                               reads as a session here and as no callback at
+  //                               all to supabase-js, which then answers from
+  //                               localStorage just the same.
+  //
+  // Both are closed by asking the real question instead of a proxy for it:
+  // WHICH TOKENS ARRIVED IN THIS URL. Client storage is never consulted for
+  // identity, so there is nothing for a stale session to be read out of.
   useEffect(() => {
     if (!isVerificationReturn) {
       return;
@@ -233,12 +335,19 @@ export function AccountAuthForm() {
     let active = true;
 
     (async () => {
-      const { data } = await supabase.auth.getSession();
-      const accessToken = data.session?.access_token;
-      const refreshToken = data.session?.refresh_token ?? null;
-      const user = data.session?.user;
+      // FROM THE FRAGMENT, NEVER FROM STORAGE. See the comment on `authReturn`
+      // above: getSession() here was the shared-browser hole.
+      const { accessToken, refreshToken } = authReturn;
 
-      if (!accessToken || !user) {
+      // Verified against GoTrue with THIS token, rather than read off whatever
+      // session the client happens to hold. getUser(jwt) sends the token and
+      // touches no storage, so an expired or forged fragment simply yields no
+      // user and nothing is established.
+      const { data, error: userError } = await supabase.auth.getUser(accessToken);
+      const user = data?.user;
+
+      if (userError || !user) {
+        if (active) setError(deadAuthLinkMessage());
         return;
       }
 
@@ -289,7 +398,7 @@ export function AccountAuthForm() {
     return () => {
       active = false;
     };
-  }, [router, nextPath, isVerificationReturn]);
+  }, [router, nextPath, isVerificationReturn, authReturn]);
 
   // Tick down the "Text me a code" cooldown once per second.
   useEffect(() => {
@@ -358,7 +467,7 @@ export function AccountAuthForm() {
           password,
           fullName: fullName.trim(),
           businessType,
-          referredByCode: referralCodeFromUrl || "",
+          referredByCode: referralCodeForSignup || "",
           captchaToken: captchaToken ?? "",
           nextPath,
           marketingOptIn,
@@ -398,7 +507,7 @@ export function AccountAuthForm() {
             business_type: businessType,
             age_confirmed_21: true,
             research_use_only_agreed: true,
-            referred_by_code: referralCodeFromUrl || undefined,
+            referred_by_code: referralCodeForSignup || undefined,
           },
           emailRedirectTo: getEmailRedirectUrl(`/account/login?verified=1&next=${encodeURIComponent(nextPath)}`),
           captchaToken: captchaToken ?? undefined,
@@ -680,8 +789,8 @@ export function AccountAuthForm() {
         // a referred visitor is one tap from the door that used to drop this —
         // costing her the welcome points and the ambassador the referral bonus,
         // silently, with a success screen either way and no repair path.
-        if (referralCodeFromUrl) {
-          window.sessionStorage.setItem("vl-oauth-referral", referralCodeFromUrl);
+        if (referralCodeForSignup) {
+          window.sessionStorage.setItem("vl-oauth-referral", referralCodeForSignup);
         } else {
           window.sessionStorage.removeItem("vl-oauth-referral");
         }

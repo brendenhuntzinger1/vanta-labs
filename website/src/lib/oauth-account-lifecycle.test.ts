@@ -165,7 +165,14 @@ describe("the signup message covers the customer who has no password", () => {
 
 describe("referral attribution survives a provider sign-in", () => {
   it("is carried across the round trip", () => {
-    expect(form).toContain('window.sessionStorage.setItem("vl-oauth-referral", referralCodeFromUrl)');
+    // referralCodeForSignup, not referralCodeFromUrl. ?ref= was the only source
+    // and it stopped arriving: the ambassador's shared link is /r/<code>, which
+    // puts the code in the vl_referral_code COOKIE and redirects, and the wall
+    // buries even a hand-made ?ref inside ?next=. The form now resolves the URL
+    // parameter first and the cookie second, so the code reaching the provider
+    // round trip is the one the ambassador's own link actually set.
+    expect(form).toContain('window.sessionStorage.setItem("vl-oauth-referral", referralCodeForSignup)');
+    expect(form).toContain("const referralCodeForSignup = referralCodeFromUrl || referralCodeFromCookie");
     expect(callback).toContain('sessionStorage.getItem("vl-oauth-referral")');
     expect(callback).toContain("oauthReferralCode: signIn.referralCode");
   });

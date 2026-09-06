@@ -147,7 +147,14 @@ export async function checkRateLimit(
   try {
     // 1. RECORD FIRST. This is the whole of the concurrency fix: a burst is
     //    counted before any member of it asks how big the burst is.
-    const { error: insertError } = await supabaseAdmin.from("rate_limit_hits").insert({ bucket });
+    //
+    //    The id comes back because a REFUSED request has to take its own hit
+    //    away again — see the over-limit branch below.
+    const { data: inserted, error: insertError } = await supabaseAdmin
+      .from("rate_limit_hits")
+      .insert({ bucket })
+      .select("id")
+      .maybeSingle();
     if (insertError) {
       return await degrade("insert", insertError.message ?? String(insertError));
     }
@@ -165,11 +172,53 @@ export async function checkRateLimit(
     }
 
     if ((count ?? 0) > limit) {
-      // Hold the bucket for exactly the window the caller is being told to wait,
-      // so every request until then is refused without another round trip.
-      deniedUntil.set(bucket, now + windowSeconds * 1000);
+      // A REFUSAL IS NOT CONSUMPTION, AND COUNTING IT LOCKED PEOPLE OUT FOR EVER.
+      //
+      // The hit inserted a moment ago stays in the table unless it is removed,
+      // so every refused request pushed the trailing window forward from the
+      // moment of that refusal. The bucket therefore never drained while anyone
+      // kept trying — and the person most likely to keep trying is the customer
+      // whose reset email went to spam and who is now clicking "Send reset
+      // link" again. Since the store requires an account to see anything at
+      // all, that customer is locked out of the whole site with no self-service
+      // way back.
+      //
+      // The in-process `deniedUntil` memo hid this in development and not in
+      // production: it is per-instance and evaporates on cold start, which on
+      // serverless is most requests, so most refusals reached the insert.
+      //
+      // Removing our own hit restores the documented meaning of the limit —
+      // `limit` requests SERVED per window — and takes nothing away from
+      // brute-force resistance, because an attempt that reaches a handler is
+      // still counted. Only the ones this function turned away stop counting.
+      if (inserted?.id !== undefined) {
+        const { error: undoError } = await supabaseAdmin.from("rate_limit_hits").delete().eq("id", inserted.id);
+        if (undoError) {
+          // Not fatal: the window drains 15 minutes later than it should. Worth
+          // knowing about, never worth failing the request over.
+          console.error("[rate-limit] could not withdraw a refused request's hit", bucket, undoError.message);
+        }
+      }
+
+      // WHEN THE BUCKET ACTUALLY FREES UP, rather than a fresh full window from
+      // now. The oldest surviving hit is the one whose expiry re-opens the
+      // bucket, so that is both the hold and the honest Retry-After. A blanket
+      // `now + windowSeconds` told a customer to wait fifteen minutes when the
+      // real answer was often seconds.
+      const { data: oldest } = await supabaseAdmin
+        .from("rate_limit_hits")
+        .select("created_at")
+        .eq("bucket", bucket)
+        .gt("created_at", windowStart)
+        .order("created_at", { ascending: true })
+        .limit(1);
+      const oldestAt = oldest?.[0]?.created_at ? Date.parse(String(oldest[0].created_at)) : now;
+      const freeAt = (Number.isFinite(oldestAt) ? oldestAt : now) + windowSeconds * 1000;
+      const retryAfterSeconds = Math.max(1, Math.min(windowSeconds, Math.ceil((freeAt - now) / 1000)));
+
+      deniedUntil.set(bucket, freeAt);
       pruneDeniedBuckets(now);
-      return { allowed: false, retryAfterSeconds: windowSeconds };
+      return { allowed: false, retryAfterSeconds };
     }
 
     // Under the limit: drop any expired hold rather than leaving it to the

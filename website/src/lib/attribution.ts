@@ -137,6 +137,38 @@ function readParamAnyCase(params: URLSearchParams, key: string): string | null {
  * still recorded ALONGSIDE a real touch as context, and every page view keeps
  * its referrer in `website_analytics_events` regardless.
  */
+/**
+ * A campaign tag, normalised the way the SPEND side normalises it.
+ *
+ * BOTH SIDES OF THE JOIN HAVE TO COME FROM ONE RULE, and only one of them did.
+ * ads/utm.ts states the contract in its own header — "the code that WRITES
+ * those tags and the code that READS them back have to agree exactly, and the
+ * only way to guarantee that is for both to be this module" — and the spend
+ * side honours it: parseAdTagsFromUrl trims, lowercases and rejects unexpanded
+ * platform macros before a row reaches ad_spend_daily. The revenue side stored
+ * whatever the URL carried: `normalizeValue` strips control characters,
+ * collapses whitespace and truncates, and does not lowercase.
+ *
+ * So an ad tagged `?utm_content=Hook_A` — a capital letter is all it takes, and
+ * a hand-built link or a platform macro produces them routinely — recorded
+ * `Hook_A` against the order and `hook_a` against the spend, and the two never
+ * joined: that creative showed spend with zero revenue, and the sale showed as
+ * unattributed. The ROAS views were taught to `lower()` on read, which fixes
+ * the join for rows already stored; this fixes what is stored.
+ *
+ * Not `toSafeTag`: this is a READ of what an ad actually carried, and rewriting
+ * a customer's tag into a different string would invent a join key. Trim,
+ * lowercase, and drop an unsubstituted macro — exactly the spend side's `read`.
+ */
+function normalizeCampaignTag(value: unknown): string | null {
+  const normalized = normalizeValue(value);
+  if (!normalized) return null;
+  const lowered = normalized.toLowerCase();
+  // An unexpanded platform macro is not a value. Same test the spend side uses.
+  if (/[{}<>]|^__.*__$/.test(lowered)) return null;
+  return lowered;
+}
+
 export function parseAttributionTouch(input: {
   search: string;
   pathname?: string | null;
@@ -146,11 +178,11 @@ export function parseAttributionTouch(input: {
   const params = new URLSearchParams(input.search ?? "");
 
   const touch: AttributionTouch = {
-    utmSource: readParam(params, "utm_source"),
-    utmMedium: readParam(params, "utm_medium"),
-    utmCampaign: readParam(params, "utm_campaign"),
-    utmContent: readParam(params, "utm_content"),
-    utmTerm: readParam(params, "utm_term"),
+    utmSource: normalizeCampaignTag(params.get("utm_source")),
+    utmMedium: normalizeCampaignTag(params.get("utm_medium")),
+    utmCampaign: normalizeCampaignTag(params.get("utm_campaign")),
+    utmContent: normalizeCampaignTag(params.get("utm_content")),
+    utmTerm: normalizeCampaignTag(params.get("utm_term")),
     ttclid: readParam(params, "ttclid"),
     fbclid: readParam(params, "fbclid"),
     gclid: readParam(params, "gclid"),
@@ -258,11 +290,13 @@ export function sanitizeAttributionRecord(raw: unknown, now: Date): AttributionR
     const t = value as Record<string, unknown>;
     const parsedAt = Date.parse(String(t.at ?? ""));
     const touch: AttributionTouch = {
-      utmSource: normalizeValue(t.utmSource),
-      utmMedium: normalizeValue(t.utmMedium),
-      utmCampaign: normalizeValue(t.utmCampaign),
-      utmContent: normalizeValue(t.utmContent),
-      utmTerm: normalizeValue(t.utmTerm),
+      // The same rule the capture uses — this path re-validates a payload the
+      // client sent, so it must not be the looser of the two.
+      utmSource: normalizeCampaignTag(t.utmSource),
+      utmMedium: normalizeCampaignTag(t.utmMedium),
+      utmCampaign: normalizeCampaignTag(t.utmCampaign),
+      utmContent: normalizeCampaignTag(t.utmContent),
+      utmTerm: normalizeCampaignTag(t.utmTerm),
       ttclid: normalizeValue(t.ttclid),
       fbclid: normalizeValue(t.fbclid),
       gclid: normalizeValue(t.gclid),
