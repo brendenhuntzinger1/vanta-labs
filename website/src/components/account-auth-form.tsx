@@ -1136,7 +1136,7 @@ export function AccountAuthForm() {
               setError(null);
               setMode("login");
             }}
-            className="vl-focus-ring -my-2.5 inline-flex min-h-6 items-center rounded-[6px] py-2.5 font-medium text-white/85 underline underline-offset-4 decoration-white/25 transition-colors duration-200 hover:text-white hover:decoration-white/60"
+            className="vl-focus-ring -my-3 inline-flex min-h-6 items-center rounded-[6px] py-3 font-medium text-white/85 underline underline-offset-4 decoration-white/25 transition-colors duration-200 hover:text-white hover:decoration-white/60"
           >
             Sign in with email
           </button>
@@ -1577,7 +1577,7 @@ export function AccountAuthForm() {
             /* min-h-6 keeps this signup/sign-in toggle at a 24px tap target.
                It reads as inline text, but it is the entry point to creating an
                account and was 21px tall. inline-flex holds it in the sentence. */
-            className="vl-focus-ring -my-2.5 inline-flex min-h-6 items-center rounded-[6px] py-2.5 font-medium text-white/85 underline underline-offset-4 decoration-white/25 transition-colors duration-200 hover:text-white hover:decoration-white/60"
+            className="vl-focus-ring -my-3 inline-flex min-h-6 items-center rounded-[6px] py-3 font-medium text-white/85 underline underline-offset-4 decoration-white/25 transition-colors duration-200 hover:text-white hover:decoration-white/60"
           >
             {mode === "signup" ? "Sign in" : "Create an account"}
           </button>
