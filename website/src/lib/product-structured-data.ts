@@ -37,7 +37,7 @@
 
 import { breadcrumbList as crumbsToSchema } from "@/lib/breadcrumbs";
 import type { Product, ProductDose } from "@/lib/catalog-types";
-import type { ShippingConfig } from "@/lib/shipping";
+import { isFreeShippingSitewide, type ShippingConfig } from "@/lib/shipping";
 
 /**
  * Days from delivery within which a return must be REQUESTED. Mirrors the
@@ -106,9 +106,14 @@ export function merchantReturnPolicy() {
  * and maxValue <flat fee> is the honest statement of both ends.
  */
 export function shippingDetails(config: ShippingConfig) {
+  // With free shipping sitewide on, BOTH ends of that range are zero: there is
+  // no subtotal at which checkout charges the flat fee, so quoting it here
+  // would advertise a rate the store does not charge — the overstatement
+  // direction, but a false one either way.
+  const sitewide = isFreeShippingSitewide(config);
   const zones: Array<{ country: (typeof SHIPPABLE_COUNTRIES)[number]; fee: number }> = [
-    { country: "US", fee: config.domesticFee },
-    { country: "CA", fee: config.northAmericaFee },
+    { country: "US", fee: sitewide ? 0 : config.domesticFee },
+    { country: "CA", fee: sitewide ? 0 : config.northAmericaFee },
   ];
 
   return zones

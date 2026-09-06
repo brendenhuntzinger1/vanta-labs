@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCartCurrency, useCart } from "@/components/cart-context";
 import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { readAttributionForCheckout } from "@/lib/attribution-client";
-import { calculateShipping, isDomesticCountry, isShippingWaived } from "@/lib/shipping";
+import { calculateShipping, isDomesticCountry, isFreeShippingSitewide, isShippingWaived } from "@/lib/shipping";
 import { resolveSalesTax } from "@/lib/sales-tax";
 import { useApplePayOffered } from "@/components/use-apple-pay-offered";
 import { useOfferQuote } from "@/lib/offer-quote";
@@ -841,7 +841,11 @@ export default function CheckoutPage() {
       <div className="flex justify-between"><span className="text-white/45">Subtotal</span><span className="text-white/80 tabular-nums" data-testid="summary-subtotal">{formatCartCurrency(shownSubtotal)}</span></div>
       <div className="flex justify-between">
         <span className="text-white/45">Shipping</span>
-        <span className="text-white/80 tabular-nums" data-testid="summary-shipping">{shownShipping === 0 && memberFreeShipping ? "Free (member)" : shownShipping === 0 ? "Free" : formatCartCurrency(shownShipping)}</span>
+        {/* "(member)" names the PERK as the reason. With free shipping sitewide
+            on, the reason is the store's own giveaway that every shopper gets,
+            so crediting the plan for it would tell a paying member their
+            subscription bought them something it did not. */}
+        <span className="text-white/80 tabular-nums" data-testid="summary-shipping">{shownShipping === 0 && memberFreeShipping && !isFreeShippingSitewide(shippingConfig) ? "Free (member)" : shownShipping === 0 ? "Free" : formatCartCurrency(shownShipping)}</span>
       </div>
       {shippingProtectionFee > 0 ? (
         <div className="flex justify-between"><span className="text-white/45">Shipping protection</span><span className="text-white/80 tabular-nums">+{formatCartCurrency(shippingProtectionFee)}</span></div>
@@ -1169,9 +1173,17 @@ export default function CheckoutPage() {
 
               <p className="mt-4 flex items-center gap-2 text-[11px] text-white/35">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3.5 w-3.5 flex-shrink-0" aria-hidden><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z" strokeLinejoin="round" /><circle cx="7" cy="17" r="1.5" /><circle cx="17.5" cy="17" r="1.5" /></svg>
-                {isDomesticCountry(form.country)
-                  ? `Standard secure shipping — free at ${formatCartCurrency(shippingConfig.freeShippingThreshold)}+, otherwise ${formatCartCurrency(shippingConfig.domesticFee)}.`
-                  : `Secure Canada shipping — free at ${formatCartCurrency(shippingConfig.northAmericaFreeShippingThreshold)}+, otherwise ${formatCartCurrency(shippingConfig.northAmericaFee)}.`}
+                {/* With free shipping sitewide on there is no threshold and no
+                    fallback rate left to quote, and quoting one here beside a
+                    $0 Shipping row is the exact disagreement this switch has to
+                    avoid. Same flag, same config object, as the fee itself. */}
+                {isFreeShippingSitewide(shippingConfig)
+                  ? (isDomesticCountry(form.country)
+                    ? "Standard secure shipping — free on every order."
+                    : "Secure Canada shipping — free on every order.")
+                  : isDomesticCountry(form.country)
+                    ? `Standard secure shipping — free at ${formatCartCurrency(shippingConfig.freeShippingThreshold)}+, otherwise ${formatCartCurrency(shippingConfig.domesticFee)}.`
+                    : `Secure Canada shipping — free at ${formatCartCurrency(shippingConfig.northAmericaFreeShippingThreshold)}+, otherwise ${formatCartCurrency(shippingConfig.northAmericaFee)}.`}
               </p>
 
               {/* Shipping protection lives HERE, next to shipping, and must stay

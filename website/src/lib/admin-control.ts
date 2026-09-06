@@ -867,6 +867,12 @@ export async function getShippingConfig(): Promise<ShippingConfig> {
       // would quintuple the order total. An explicit 0 is honored and simply
       // makes protection free.
       protectionPercent: percent(shipping.protection_percent, DEFAULT_SHIPPING_CONFIG.protectionPercent ?? 0),
+      // FREE SHIPPING SITEWIDE. Strict `=== true`, like every other boolean in
+      // this module: anything else — unset, blank, a legacy string, a stored
+      // false — means the store keeps charging by the thresholds above. Only a
+      // real stored `true` ships everything free, because the failure mode in
+      // the other direction is giving away shipping on every order at once.
+      freeShippingSitewide: shipping.free_shipping_sitewide === true,
     };
   } catch {
     return DEFAULT_SHIPPING_CONFIG;

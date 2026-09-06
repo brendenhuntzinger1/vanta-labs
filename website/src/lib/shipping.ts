@@ -48,6 +48,26 @@ export interface ShippingConfig {
    * default instead of pricing protection at NaN.
    */
   protectionPercent?: number;
+  /**
+   * FREE SHIPPING SITEWIDE — the Control Center switch that makes shipping $0
+   * on every order, whatever the subtotal and whatever the zone.
+   *
+   * It rides this object rather than living beside the surfaces that render it
+   * for the same reason the fees and the protection rate do: the cart preview,
+   * the checkout preview and the authoritative server total (quote-order.ts)
+   * are handed ONE config and call ONE formula, so the switch cannot be on for
+   * the shopper and off for the card — the mismatch a shopper would meet as
+   * "Altered total detected" rather than as a wrong fee.
+   *
+   * It is a change to the LIST PRICE of shipping, not a grant: it is
+   * deliberately not part of ShippingWaivers below, so a coupon, a membership
+   * plan or a bulk tier is never credited with a waiver it did not make.
+   *
+   * Optional, and read through isFreeShippingSitewide(), so a payload from an
+   * older deploy (or a cached /api/catalog/promotions response) reads as OFF
+   * rather than as undefined — a missing flag must never start shipping free.
+   */
+  freeShippingSitewide?: boolean;
 }
 
 export const DEFAULT_SHIPPING_CONFIG: ShippingConfig = {
@@ -58,6 +78,9 @@ export const DEFAULT_SHIPPING_CONFIG: ShippingConfig = {
   internationalFee: INTERNATIONAL_SHIPPING_FEE,
   internationalFreeShippingThreshold: INTERNATIONAL_FREE_SHIPPING_THRESHOLD,
   protectionPercent: SHIPPING_PROTECTION_PERCENT,
+  // OFF by default: the threshold below is the store's standing rule, and it
+  // stays the standing rule until an admin deliberately switches this on.
+  freeShippingSitewide: false,
 };
 
 const DOMESTIC_COUNTRY_NAMES = new Set([
@@ -133,12 +156,32 @@ export function isShippingWaived(waivers: ShippingWaivers): boolean {
   return Boolean(waivers.bulkSavingsTier || waivers.memberFreeShipping || waivers.couponFreeShipping);
 }
 
+/**
+ * Is the store shipping everything free right now?
+ *
+ * One predicate, exported, because a dozen surfaces need the answer — the
+ * charge, both progress bars, the checkout shipping-method line, the offers
+ * bar, the product-page bundle badges, the structured data. Written as an
+ * explicit `=== true` so an absent flag (an older stored config, a cached API
+ * payload from a previous deploy) reads as OFF instead of as truthy-undefined.
+ */
+export function isFreeShippingSitewide(config: ShippingConfig = DEFAULT_SHIPPING_CONFIG): boolean {
+  return config.freeShippingSitewide === true;
+}
+
 export function calculateShipping(
   subtotal: number,
   country?: string | null,
   config: ShippingConfig = DEFAULT_SHIPPING_CONFIG,
 ): number {
   if (subtotal <= 0) return 0;
+
+  // FREE SHIPPING SITEWIDE, ahead of every zone and every threshold. This is
+  // the whole switch: one return, inside the one formula both the preview and
+  // the authoritative total call, so cart, checkout, the payment
+  // authorization, orders.shipping_amount, the confirmation email and the
+  // admin order page cannot disagree about it.
+  if (isFreeShippingSitewide(config)) return 0;
 
   const zone = resolveShippingZone(country);
   if (zone === "domestic") {
