@@ -132,7 +132,18 @@ export function AccountAuthForm() {
   // Ticking it is what puts someone in marketing_subscribers. Not ticking it
   // costs them nothing — entry never depends on it, see canEnter below.
   const [marketingOptIn, setMarketingOptIn] = useState(false);
-  const [rememberMe, setRememberMe] = useState(true);
+  // OFF BY DEFAULT, LIKE THE BOX ABOVE IT AND FOR THE SAME REASON.
+  //
+  // This was `useState(true)`, with no comment, directly beneath a marketing
+  // box whose `false` carries a paragraph explaining why consent has to be
+  // asked for rather than assumed. Staying signed in for thirty days is the
+  // same shape of decision: nobody is harmed by being asked, and someone on a
+  // shared machine — a lab bench, a clinic front desk, the population this
+  // store actually sells to — is harmed by not being.
+  //
+  // Ticked by default it is not a choice, it is a notice. The owner hit this
+  // himself: signed in for weeks without ever having clicked anything.
+  const [rememberMe, setRememberMe] = useState(false);
   // Purely presentational: toggles the password field between text and
   // password. Never touches what is submitted.
   const [showPassword, setShowPassword] = useState(false);
@@ -251,7 +262,11 @@ export function AccountAuthForm() {
         const sessionResponse = await fetch("/api/auth/session", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ accessToken, refreshToken, rememberMe: true }),
+          // NOT `true`. This is the hop that completes an emailed confirmation
+          // link; there is no checkbox on it and the visitor has been asked
+          // nothing, so the safe reading of silence is a session that ends with
+          // the browser. They can tick the box on their next sign-in.
+          body: JSON.stringify({ accessToken, refreshToken, rememberMe: false }),
         });
         const sessionJson = await sessionResponse.json();
         if (!sessionResponse.ok || !sessionJson.success) {
@@ -657,6 +672,9 @@ export function AccountAuthForm() {
         // kinds of thing: one is a representation the visitor must make to
         // enter, the other is permission they may withhold and still enter.
         window.sessionStorage.setItem("vl-oauth-marketing", marketingConsent ? "true" : "false");
+        // Third marker, same journey. Without it the callback had nothing to
+        // read and defaulted every provider sign-in to thirty days.
+        window.sessionStorage.setItem("vl-oauth-remember", rememberMe ? "true" : "false");
         // The ambassador who sent them. `?ref=` opens SIGNUP mode and signup
         // mode puts "Continue with Google" directly under the submit button, so
         // a referred visitor is one tap from the door that used to drop this —
@@ -790,6 +808,27 @@ export function AccountAuthForm() {
             />
             <span>
               I agree to receive Vanta Labs emails, product updates and offers
+              <span className="ml-1.5 text-white/35">(optional)</span>
+            </span>
+          </label>
+
+          {/* ON THE PORTAL, BECAUSE THE PORTAL IS WHERE GOOGLE IS.
+              This control existed only on the email and create-account forms,
+              so anyone taking the fastest door never saw it — and the callback
+              sent `rememberMe: true` regardless, on the reasoning that
+              "a visitor who chose a provider account is asking that browser to
+              remember them". That is a decision made on the visitor's behalf
+              and then described as theirs. Here it is a question, asked once,
+              before either door. */}
+          <label className="vl-portal-row vl-portal-row-optional">
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(event) => setRememberMe(event.target.checked)}
+              className="vl-auth-check mt-0.5"
+            />
+            <span>
+              Keep me signed in on this device
               <span className="ml-1.5 text-white/35">(optional)</span>
             </span>
           </label>

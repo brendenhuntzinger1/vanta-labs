@@ -15,9 +15,19 @@ export async function POST(request: Request) {
     // hour. Without it the cookie holds a JWT that expires long before the
     // cookie does and nothing can renew it — see lib/auth-cookie.ts.
     const refreshToken = typeof body?.refreshToken === "string" ? body.refreshToken : null;
-    // Default to remembering (persistent cookie); an explicit `false` makes it
-    // a session-only cookie that clears when the browser closes.
-    const rememberMe = body?.rememberMe !== false;
+    // SILENCE IS NOT A REQUEST TO BE REMEMBERED.
+    //
+    // This read `body?.rememberMe !== false`, so a caller that simply did not
+    // mention it got a thirty-day cookie. Two callers did exactly that and
+    // neither had asked the visitor anything: the password-reset form (someone
+    // who just followed an emailed link) and the partner application. The
+    // provider callback was worse — it sent a hardcoded `true`.
+    //
+    // Strict `=== true`, the same rule this file already applies to
+    // oauthAttested and oauthMarketingOptIn a few lines down. A missing field
+    // now means a session cookie that ends with the browser, which is the
+    // answer that cannot hurt anyone on a shared machine.
+    const rememberMe = body?.rememberMe === true;
     // Set by the OAuth callback, and only there. Email signup records the same
     // two representations through /api/auth/signup before the account exists.
     const oauthAttested = body?.oauthAttested === true;
