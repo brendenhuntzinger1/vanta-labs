@@ -5,9 +5,25 @@ import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { WholesaleForm } from "@/components/wholesale-form";
 import { WholesaleVialStack, selectStackImages } from "@/components/wholesale-vial-stack";
 import { getCatalogProducts } from "@/lib/catalog";
+import { getAuthenticatedUser } from "@/lib/auth-session";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import Image from "next/image";
+
+// PER-VISITOR, BECAUSE THE COMPOSITION BELOW READS THE CATALOGUE.
+//
+// The vial stacks are assembled from real product photography, and an <Image>
+// src is a real product-image storage URL. That makes this page — which sits
+// OUTSIDE the login wall so a prospective wholesale buyer can reach it — a way
+// for an unauthenticated visitor or crawler to DISCOVER product imagery the
+// wall otherwise withholds. Stripping the compound NAME from the alt text (done
+// separately) stops a name leaking, but the URL itself is still catalogue data
+// the owner asked not to hand out before login ("Do not expose real product
+// imagery before login"). So the catalogue is read only for a signed-in
+// requester; cookies() already opts this route into dynamic rendering, and
+// force-dynamic states it outright so the signed-out (image-free) render can
+// never be statically cached and then served to a customer, or vice versa.
+export const dynamic = "force-dynamic";
 
 /**
  * Wholesale — an enquiry page, not a price sheet.
@@ -67,10 +83,17 @@ const SECONDARY_CTA =
   "vl-focus-ring inline-flex items-center justify-center rounded-xl border border-white/15 px-8 py-4 text-xs uppercase tracking-[0.18em] text-white/70 transition hover:border-white/35 hover:text-white";
 
 export default async function WholesalePage() {
-  // Real photography from the catalogue. If none of it is usable the stack
-  // returns nothing and the hero falls back to type, rather than showing a
-  // rack of placeholders.
-  const products = await getCatalogProducts().catch(() => []);
+  // Real photography from the catalogue, BUT ONLY FOR A SIGNED-IN VISITOR. Each
+  // <Image> the stack renders carries a real product-image storage URL, so
+  // emitting the stack to an unauthenticated request would publish product
+  // imagery from a page that lives outside the login wall. So the catalogue is
+  // read only when the requester is authenticated; signed out (a prospective
+  // buyer, a crawler, a link-preview bot — all identical here, no user-agent
+  // test) the stack gets no images and the hero falls back to the typographic
+  // mark below. A logged-in customer sees the composition exactly as before. If
+  // none of the photography is usable the stack also returns nothing.
+  const user = await getAuthenticatedUser().catch(() => null);
+  const products = user ? await getCatalogProducts().catch(() => []) : [];
   const heroImages = selectStackImages(products, 3);
   const bulkImages = selectStackImages(products.slice().reverse(), 3);
 
