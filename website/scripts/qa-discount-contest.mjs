@@ -166,6 +166,32 @@ try {
     }));
   });
 
+  // THE DRAWER, WITH A PROMOTION LIVE — the surface the first pass missed.
+  await page.goto(`${BASE}/cart`, { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(3500);
+  const cartText0 = await cartText(page);
+  check(/Referral Code/i.test(cartText0),
+    "the CART PAGE still offers the referral field while a promotion runs",
+    cartText0.slice(0, 300));
+  check(!/cannot be combined|discounts pause/i.test(cartText0),
+    "the cart page no longer says codes cannot be combined with the promotion");
+
+  await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(2500);
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll("button,a")]
+      .find((x) => /cart/i.test(x.getAttribute("aria-label") ?? "") || /^\s*cart\s*$/i.test(x.textContent ?? ""));
+    if (b) b.click();
+  });
+  await page.waitForTimeout(3000);
+  const drawer = await cartText(page);
+  check(/referral or coupon code/i.test(drawer),
+    "the CART DRAWER offers the codes panel while a promotion runs",
+    drawer.slice(0, 500));
+  check(!/discounts pause while this promotion/i.test(drawer),
+    "the drawer no longer claims referral discounts pause during a promotion");
+  await page.screenshot({ path: `/tmp/claude-0/-home-user-vanta-labs/84ac5876-420b-575f-8024-1f79b193b56a/scratchpad/drawer-promo-${process.env.QA_VIEWPORT ?? "desktop"}.png`, fullPage: true });
+
   await page.goto(`${BASE}/checkout`, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(4000);
   // The codes live behind a "Referral, coupon, or rewards points?" disclosure.

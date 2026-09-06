@@ -90,6 +90,74 @@ describe("CART-05 — applying one kind of code never removes the other", () => 
   });
 });
 
+// EVERY SURFACE THAT TAKES A CODE, NOT JUST THE ONE THAT HOLDS THE STATE.
+//
+// The refusals lived on the PAGES, and the first pass of this change fixed the
+// cart page and the checkout page while missing cart-drawer.tsx entirely — which
+// hid BOTH fields for the whole of every non-stacking promotion, on the surface
+// where most shoppers enter a code at all. Nothing failed; it was found by
+// driving a browser. A source guard over one file cannot catch a fourth file, so
+// this enumerates all four and will fail the day a fifth appears with the same
+// gate.
+describe("CART-05b — no code-entry surface closes itself during a promotion", () => {
+  /**
+   * Source with comments removed.
+   *
+   * The guards below assert that certain COPY and certain GATES are gone from
+   * the shipped surfaces. Each of those files now carries a comment explaining
+   * what was removed and why — quoting the old wording verbatim, which is what
+   * makes the comment useful — so a naive substring check fails on the
+   * explanation rather than on the behaviour. Strip comments and the guard
+   * measures the code.
+   *
+   * `//` is only treated as a comment at the start of a line (after
+   * whitespace), so a "https://…" inside a string is left alone.
+   */
+  const stripComments = (source: string) => source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^[ \t]*\/\/.*$/gm, "");
+
+  const SURFACES = [
+    ["the cart drawer", "components/cart-drawer.tsx"],
+    ["the cart page", "app/cart/cart-client.tsx"],
+    ["the checkout page", "app/checkout/page.tsx"],
+    ["the cart context", "components/cart-context.tsx"],
+  ] as const;
+
+  it.each(SURFACES)("%s never says a code cannot be combined with a promotion", (_label, path) => {
+    const source = stripComments(read(path));
+    expect(source).not.toContain("cannot be combined with this");
+    expect(source).not.toContain("cannot be combined with the");
+    expect(source).not.toContain("discounts pause while this promotion");
+    expect(source).not.toContain("Remove it to use a coupon instead");
+  });
+
+  it.each(SURFACES)("%s does not gate a code field on a promotion being absent", (_label, path) => {
+    const source = stripComments(read(path));
+    // `isBuy3Get1FreeActive` / `isBuy3Get1FreeEligible` may still be READ (the
+    // drawer announces the promotion, the checkout labels the discount) — what
+    // must never come back is a branch that swaps a code input out for a
+    // refusal, which is what each of these shapes was.
+    for (const gate of [
+      "!isBuy3Get1FreeActive || activePromotionAllowsCoupon",
+      "!isBuy3Get1FreeEligible || activePromotionAllowsCoupon",
+      "isBuy3Get1FreeActive && !activePromotionAllowsCoupon",
+      "isBuy3Get1FreeEligible && !activePromotionAllowsCoupon",
+      "buy3Get1FreeDiscount > 0 && !activePromotionAllowsCoupon",
+    ]) {
+      expect(source, `${path} still gates a code field on \`${gate}\``).not.toContain(gate);
+    }
+  });
+
+  it("the two remove controls are told apart by their accessible name", () => {
+    // Both read "Remove code" and could never both be on screen before this
+    // change, so one name was enough. Now they can.
+    const checkout = read("app/checkout/page.tsx");
+    expect(checkout).toContain('aria-label="Remove referral code"');
+    expect(checkout).toContain('aria-label="Remove coupon code"');
+  });
+});
+
 describe("CART-07 — an unknown referral code is not called 'not active'", () => {
   it("the validate route distinguishes unknown from inactive", () => {
     const route = read("app/api/catalog/referral/validate/route.ts");

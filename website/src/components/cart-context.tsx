@@ -20,7 +20,7 @@ import { calculateShipping, DEFAULT_SHIPPING_CONFIG, isShippingWaived, type Ship
 import { DEFAULT_SALES_TAX_CONFIG, type SalesTaxConfig } from "@/lib/sales-tax";
 import type { MembershipTierSummary } from "@/lib/member-pricing";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
-import { describeCouponOutcome, resolveCartDiscount, type CouponOutcome, type DiscountCandidate, type PriceControllingDiscount } from "@/lib/discount-resolution";
+import { cartPromoCandidates, describeCouponOutcome, resolveCartDiscount, type CouponOutcome, type PriceControllingDiscount } from "@/lib/discount-resolution";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 import { referralAppliedMessage, referralCartStatus, referralQualifies, referralShortfall } from "@/lib/referral-qualification";
 import { REFERRAL_PROGRAM_PAUSED_MESSAGE, referralProgramAllowsCodes, referralProgramIsOff } from "@/lib/referral-program-gate";
@@ -1133,39 +1133,32 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // other, so this returns a LIST — bundle first, because a strict `>` on both
   // sides makes the first entry win an exact tie, and resolveCustomerDiscount
   // pushes bundle before referral.
-  const promoDiscounts = useMemo(() => {
-    const candidates: DiscountCandidate[] = [];
-    if (buy3Get1FreeDiscount > 0) {
-      candidates.push({ type: "buy3get1" as const, amount: buy3Get1FreeDiscount });
-    }
-    // Belt and braces against the single frame between the config landing
-    // "off" and the clearing effect below running: the cart must never price a
-    // referral the server is about to refuse, not even once.
-    if (referralDetails && isReferralValid(referralDetails) && referralProgramAllowsCodes(referralProgramEnabled)) {
+  const promoDiscounts = useMemo(
+    () => cartPromoCandidates({
+      promotionDiscount: buy3Get1FreeDiscount,
+      // Belt and braces against the single frame between the config landing
+      // "off" and the clearing effect below running: the cart must never price
+      // a referral the server is about to refuse, not even once.
+      //
       // THE AMBASSADOR'S OWN RATE, resolved when the code was applied by the
       // same resolveAmbassadorCustomerDiscount the server uses, with the live
-      // program default as the fallback for anyone who has no override.
-      //
-      // This used to read the program-wide percent directly, on the reasoning
-      // that a live value cannot go stale. It cannot — but it was never her
-      // number: a 15% ambassador's customers were quoted the program's 10%
-      // while checkout charged 15%.
-      //
-      // Below the minimum qualifying order the server gives no referral
-      // discount either (quote-order.ts gates on the SAME referralQualifies
-      // rule this line uses), so the referral does not compete until the basket
-      // qualifies. It no longer REFUSES the order — that hard block turned an
-      // ambassador's link into a checkout blocker — which is why the cart must
-      // now say what is actually true: see referralMeetsMinimum below.
-      if (referralQualifies(subtotal, referralMinimumOrder)) {
-        candidates.push({
-          type: "referral" as const,
-          amount: discountBase * (referralDetails.customerDiscountPercent / 100),
-        });
-      }
-    }
-    return candidates;
-  }, [buy3Get1FreeDiscount, referralDetails, discountBase, subtotal, referralMinimumOrder, referralProgramEnabled]);
+      // program default as the fallback for anyone who has no override. This
+      // used to read the program-wide percent, so a 15% ambassador's customers
+      // were quoted the program's 10% while checkout charged 15%.
+      referralPercent: referralDetails
+        && isReferralValid(referralDetails)
+        && referralProgramAllowsCodes(referralProgramEnabled)
+        ? referralDetails.customerDiscountPercent
+        : 0,
+      // Below the minimum the server gives no referral discount either
+      // (quote-order gates on this SAME referralQualifies rule), so the referral
+      // does not compete until the basket qualifies. It is still attached, and
+      // still earns the ambassador commission — see referralMeetsMinimum below.
+      referralQualifies: referralQualifies(subtotal, referralMinimumOrder),
+      discountBase,
+    }),
+    [buy3Get1FreeDiscount, referralDetails, discountBase, subtotal, referralMinimumOrder, referralProgramEnabled],
+  );
 
 
   // The elite "Exclusive Buy In Bulk Savings" benefit cannot stack with

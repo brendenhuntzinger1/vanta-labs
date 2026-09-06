@@ -359,6 +359,80 @@ describe("stacking, and only where it is switched on", () => {
     expect(quoted.referral?.code).toBe(CODE);
   });
 
+  // A PROMOTION'S OWN FLAG LICENSES A COUPON ON TOP OF *THAT PROMOTION*.
+  //
+  // It is not a store-wide stacking switch, and it must not become one by
+  // accident. This combination was unreachable until the referral+coupon throw
+  // was removed: a promotion carrying stackWithCoupon, a referral worth MORE
+  // than the promotion, and a coupon. If the promotion's permission leaks onto
+  // the winner, the shopper gets referral + coupon together — two discounts,
+  // licensed by a promotion that lost and gave them nothing.
+  it("does not let a LOSING promotion's stackWithCoupon licence the coupon onto the referral", async () => {
+    // 4 x $40 = $160. Buy 3 Get 1 frees one unit ($40) and permits stacking.
+    // The 40% referral is worth $64 and beats it.
+    promotionState.promotions = [promotion("buy-3-get-1-free", { stackWithCoupon: true })];
+    ambassador.customer_discount_percent = 40;
+    couponState.value = 20;
+
+    const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }], withReferral: true, withCoupon: true });
+
+    // The referral alone — NOT $64 + $20, and not $40 + $20.
+    expect(quoted.discountAmount).toBe(64);
+    expect(quoted.discountLabel).toBe("40% referral");
+    expect(quoted.couponCode).toBeNull();
+    expect(quoted.appliedPromotionId).toBeNull();
+    // And the ambassador is still attributed, as always.
+    expect(quoted.referral?.code).toBe(CODE);
+  });
+
+  it("gives the promotion+coupon package when it beats the referral outright", async () => {
+    // THE CASE THAT MAKES "only stack if the promotion won on its own" WRONG.
+    // 4 x $40 = $160. Buy 3 Get 1 frees one unit ($40) and permits a coupon;
+    // with a $30 coupon that package is worth $70. A 40% referral is worth $64.
+    // The package is the better authorised offer and the shopper gets it —
+    // ranking the promotion's bare $40 against the referral would hand them
+    // $64 and quietly withhold $6 the store had already authorised.
+    promotionState.promotions = [promotion("buy-3-get-1-free", { stackWithCoupon: true })];
+    ambassador.customer_discount_percent = 40;
+    couponState.value = 30;
+
+    const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }], withReferral: true, withCoupon: true });
+
+    expect(quoted.discountAmount).toBe(70);
+    expect(quoted.couponCode).toBe("SAVE");
+    expect(quoted.appliedPromotionId).toBe("buy-3-get-1-free");
+    expect(quoted.referral?.code).toBe(CODE);
+  });
+
+  it("still stacks the coupon when the promotion that permits it actually wins", async () => {
+    // Same promotion, but now the referral is small enough to lose, so the
+    // permission belongs to the offer the shopper is actually getting.
+    promotionState.promotions = [promotion("buy-3-get-1-free", { stackWithCoupon: true })];
+    ambassador.customer_discount_percent = 5; // $8 — loses to the $40 free unit
+    couponState.value = 20;
+
+    const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }], withReferral: true, withCoupon: true });
+
+    expect(quoted.discountAmount).toBe(60); // $40 promotion + $20 coupon
+    expect(quoted.couponCode).toBe("SAVE");
+    expect(quoted.appliedPromotionId).toBe("buy-3-get-1-free");
+    expect(quoted.referral?.code).toBe(CODE);
+  });
+
+  it("lets the store-wide switch stack onto whichever candidate wins, promotion or not", async () => {
+    // The ADMIN switch is deliberately broader than a promotion's own flag: it
+    // says "coupons stack", full stop. A referral winning is still stacked on.
+    promotionState.allowCouponStacking = true;
+    promotionState.promotions = [promotion("buy-3-get-1-free")];
+    ambassador.customer_discount_percent = 40; // $64 beats the $40 free unit
+    couponState.value = 20;
+
+    const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }], withReferral: true, withCoupon: true });
+
+    expect(quoted.discountAmount).toBe(84); // $64 referral + $20 coupon
+    expect(quoted.couponCode).toBe("SAVE");
+  });
+
   it("keeps a promotion and a referral exclusive even while coupon stacking is on", async () => {
     // Coupon stacking says nothing about the promotion/referral contest: those
     // two still compete, and only the better one is given.

@@ -116,8 +116,31 @@ export interface OrderInputs {
   personalDiscountAmount?: number;
   /** The personal ambassador discount percent, for labeling only. */
   personalDiscountPercent?: number;
-  /** Admin: may a coupon combine with a referral/bundle? */
+  /**
+   * THE STORE-WIDE switch (`coupons.allow_stacking`): a coupon adds on top of
+   * whatever else wins, whatever that is. Deliberately broad — the admin has
+   * said "coupons stack", full stop.
+   *
+   * NOT the place for a promotion's own stackWithCoupon flag; that is
+   * `promotionStacksCoupon` below, and conflating the two is a money bug.
+   */
   allowCouponStacking: boolean;
+  /**
+   * THIS PROMOTION says a coupon may be added on top of IT.
+   *
+   * A narrower licence than the store-wide switch, and it has to stay narrow.
+   * It used to be OR-ed into allowCouponStacking by the caller, which was
+   * harmless only while a promotion and a referral could never both price an
+   * order — a coupon could only ever land on the promotion that permitted it.
+   * Once the referral was allowed to beat a promotion, the same OR let a
+   * promotion that LOST licence a coupon on top of the REFERRAL: four $40
+   * units against a stacking Buy 3 Get 1 (worth $40) with a 40% ambassador
+   * code (worth $64) and a $20 coupon paid out $84 — two discounts, authorised
+   * by an offer the shopper did not receive.
+   *
+   * So it is applied only when the bundle is the winning candidate.
+   */
+  promotionStacksCoupon?: boolean;
   /**
    * What to call the coupon-slot value when it wins. Defaults to "Coupon". The
    * checkout fills that slot with a one-time gift's percentage when it is
@@ -231,13 +254,39 @@ export function resolveCustomerDiscount(
 
   // The single best discount among every competing candidate, ranked by what
   // each is actually worth beyond any bundle pricing already granted.
+  // TWO LICENCES, TWO SHAPES.
+  //
+  // The store-wide switch is broad: the coupon is added to whatever wins, so it
+  // leaves the contest and is applied afterwards. A PROMOTION'S own licence is
+  // narrow — "a coupon may ride on THIS promotion" — so the promotion and the
+  // coupon become ONE PACKAGE that competes as a single candidate.
+  //
+  // Gating the narrow licence on "did the promotion win the coupon-less
+  // contest" is the obvious fix and it is wrong, because it is circular:
+  // whether the promotion wins depends on whether the coupon is riding on it.
+  // A $40 promotion permitting a $30 coupon is worth $70 against a $64
+  // referral, and the shopper is entitled to the $70 — gating on the bare $40
+  // hands them $64 and quietly withholds an offer the store authorised.
+  const globalStack = inputs.allowCouponStacking && couponEnabled;
+  const promotionPackage = !globalStack
+    && (inputs.promotionStacksCoupon ?? false)
+    && couponEnabled
+    && bundleBucket > 0;
+
   const candidates: DiscountBreakdown[] = [];
-  if (bundleBucket > 0) candidates.push({ amount: bundleBucket, components: bundleComponents, label: bundleLabel });
+  if (promotionPackage) {
+    candidates.push({
+      amount: bundleBucket + inputs.couponDiscount,
+      components: [...bundleComponents, "coupon"],
+      label: `${bundleLabel} + ${couponSuffix}`,
+    });
+  } else if (bundleBucket > 0) {
+    candidates.push({ amount: bundleBucket, components: bundleComponents, label: bundleLabel });
+  }
   if (referralBucket > 0) candidates.push({ amount: referralBucket, components: ["referral"], label: `${inputs.referralPercent}% referral` });
   if (membershipAmount > 0) candidates.push({ amount: membershipAmount, components: ["membership"], label: "Membership pricing" });
   if (bulkAmount > 0) candidates.push({ amount: bulkAmount, components: [], label: "Bulk savings" });
   if (personalAmount > 0) candidates.push({ amount: personalAmount, components: [], label: inputs.personalDiscountPercent ? `Ambassador ${inputs.personalDiscountPercent}% off` : "Ambassador discount" });
-  if (couponEnabled && !inputs.allowCouponStacking) candidates.push({ amount: inputs.couponDiscount, components: ["coupon"], label: couponLabel });
 
   let best: DiscountBreakdown = { amount: 0, components: [], label: "None" };
   let bestEffective = 0;
@@ -249,13 +298,24 @@ export function resolveCustomerDiscount(
     }
   }
 
-  // When stacking is enabled, a coupon adds on top of the best promo.
-  if (inputs.allowCouponStacking && couponEnabled) {
+  if (globalStack) {
     return {
       amount: round(Math.min(subtotal, compete(best.amount + inputs.couponDiscount))),
       components: [...best.components, "coupon"],
       label: best.amount > 0 ? `${best.label} + ${couponSuffix}` : couponLabel,
     };
+  }
+
+  // The coupon ALSO stands alone, ranked LAST so an exact tie goes to the offer
+  // the shopper did not have to type. It competes even when a package above
+  // already contains it: those are two arrangements of the same code and only
+  // one of them can win.
+  if (couponEnabled) {
+    const couponEffective = compete(inputs.couponDiscount);
+    if (couponEffective > bestEffective) {
+      best = { amount: inputs.couponDiscount, components: ["coupon"], label: couponLabel };
+      bestEffective = couponEffective;
+    }
   }
 
   return { amount: round(Math.min(subtotal, bestEffective)), components: best.components, label: best.label };

@@ -104,7 +104,6 @@ export function CartDrawer() {
     clearCouponCode,
     isApplyingCoupon,
     isBuy3Get1FreeEligible,
-    activePromotionAllowsCoupon,
     buy3Get1UntilNextFree,
     activePromotionName,
     activePromotionMessage,
@@ -491,7 +490,7 @@ export function CartDrawer() {
                 <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.04] p-4">
                   <p className="text-sm font-semibold text-emerald-300">{activePromotionName ?? "Promotion"} — active</p>
                   <p className="mt-1.5 text-xs text-zinc-400">
-                    {activePromotionMessage ?? "Your lowest-priced eligible items are discounted."} Referral discounts pause while this promotion applies.
+                    {activePromotionMessage ?? "Your lowest-priced eligible items are discounted."} If a referral or promo code saves you more, we&apos;ll use that instead.
                   </p>
                 </div>
               ) : null}
@@ -582,93 +581,95 @@ export function CartDrawer() {
               ) : null}
 
               {/* Referral & coupon — collapsed by default */}
-              {/* Hidden while a promotion is running ONLY because the server
-                  refuses a code alongside one. When stacking is permitted —
-                  by the admin's coupon policy or by the promotion itself —
-                  quote-order accepts both, so the shopper must be able to
-                  enter one. */}
-              {!isBuy3Get1FreeEligible || activePromotionAllowsCoupon ? (
-                <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02]">
-                  <button
-                    type="button"
-                    onClick={() => setCodesOpen((o) => !o)}
-                    aria-expanded={codesOpen}
-                    className="vl-focus-ring flex w-full items-center justify-between px-4 py-3.5 text-left"
-                  >
-                    <span className="text-sm text-zinc-300">Have a referral or coupon code?</span>
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={`h-4 w-4 text-zinc-500 transition-transform duration-300 ${codesOpen ? "rotate-180" : ""}`}><path d="m6 9 6 6 6-6" /></svg>
-                  </button>
-                  <Collapse open={codesOpen}>
-                    <div className="space-y-4 px-4 pb-4">
-                      <div>
-                        <label className="mb-1.5 block text-[10px] uppercase tracking-[0.24em] text-zinc-500">Referral code</label>
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            value={effectiveReferralInput}
-                            onChange={(event) => setReferralInput(event.target.value)}
-                            placeholder="VANTA10"
-                            className="vl-input flex-1 px-4 py-2.5 text-sm"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => applyReferralCode(effectiveReferralInput)}
-                            disabled={isApplyingReferral}
-                            className="vl-focus-ring rounded-xl border border-white/[0.12] bg-white/[0.04] px-4 text-xs font-semibold uppercase tracking-wide text-zinc-200 transition hover:bg-white/[0.08] disabled:opacity-50"
-                          >
-                            {isApplyingReferral ? "…" : "Apply"}
-                          </button>
-                        </div>
-                        {referralSuccess ? <p className="mt-1.5 text-xs text-emerald-400">{referralSuccess}</p> : null}
-                        {referralError ? <p className="mt-1.5 text-xs text-rose-400">{referralError}</p> : null}
-                        {referralStatusText ? (
-                          <p className="mt-1.5 flex items-start justify-between gap-2 text-xs text-zinc-400">
-                            {/* The non-qualifying sentence is a full line of prose, not a name and
-                                a percentage. At 390px it wraps, and without flex-shrink-0 the
-                                Remove button was squeezed onto its own wrapped characters. */}
-                            <span className={referralNeedsMoreToQualify ? "text-amber-300/80" : undefined}>{referralStatusText}</span>
-                            <button type="button" onClick={clearReferralCode} className="flex-shrink-0 text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
-                          </p>
-                        ) : null}
+              {/* NEVER HIDDEN. The server no longer refuses a code alongside a
+                  promotion — a coupon and a referral both COMPETE with it and
+                  the largest saving wins — so there is nothing left for this
+                  gate to protect the shopper from.
+                  It was the last of four places that closed the code fields
+                  during a promotion, and the most costly: the drawer is where
+                  most shoppers enter a code at all, so for the whole of every
+                  promotion an ambassador's customer had nowhere to put the
+                  code and the ambassador was attributed nothing. */}
+              <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02]">
+                <button
+                  type="button"
+                  onClick={() => setCodesOpen((o) => !o)}
+                  aria-expanded={codesOpen}
+                  className="vl-focus-ring flex w-full items-center justify-between px-4 py-3.5 text-left"
+                >
+                  <span className="text-sm text-zinc-300">Have a referral or coupon code?</span>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={`h-4 w-4 text-zinc-500 transition-transform duration-300 ${codesOpen ? "rotate-180" : ""}`}><path d="m6 9 6 6 6-6" /></svg>
+                </button>
+                <Collapse open={codesOpen}>
+                  <div className="space-y-4 px-4 pb-4">
+                    <div>
+                      <label className="mb-1.5 block text-[10px] uppercase tracking-[0.24em] text-zinc-500">Referral code</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={effectiveReferralInput}
+                          onChange={(event) => setReferralInput(event.target.value)}
+                          placeholder="VANTA10"
+                          className="vl-input flex-1 px-4 py-2.5 text-sm"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => applyReferralCode(effectiveReferralInput)}
+                          disabled={isApplyingReferral}
+                          className="vl-focus-ring rounded-xl border border-white/[0.12] bg-white/[0.04] px-4 text-xs font-semibold uppercase tracking-wide text-zinc-200 transition hover:bg-white/[0.08] disabled:opacity-50"
+                        >
+                          {isApplyingReferral ? "…" : "Apply"}
+                        </button>
                       </div>
-
-                      <div>
-                        <label className="mb-1.5 block text-[10px] uppercase tracking-[0.24em] text-zinc-500">Coupon code</label>
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            value={effectiveCouponInput}
-                            onChange={(event) => setCouponInput(event.target.value)}
-                            placeholder="LAUNCH"
-                            className="vl-input flex-1 px-4 py-2.5 text-sm"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => applyCouponCode(effectiveCouponInput)}
-                            disabled={isApplyingCoupon}
-                            className="vl-focus-ring rounded-xl border border-white/[0.12] bg-white/[0.04] px-4 text-xs font-semibold uppercase tracking-wide text-zinc-200 transition hover:bg-white/[0.08] disabled:opacity-50"
-                          >
-                            {isApplyingCoupon ? "…" : "Apply"}
-                          </button>
-                        </div>
-                        {shownCouponOutcome ? (
-                          <p className={`mt-1.5 text-xs ${shownCouponOutcome.controlsPrice ? "text-emerald-400" : "text-amber-300/90"}`}>
-                            {shownCouponOutcome.message}
-                          </p>
-                        ) : null}
-                        {couponError ? <p className="mt-1.5 text-xs text-rose-400">{couponError}</p> : null}
-                        {couponDetails ? (
-                          <p className="mt-1.5 flex items-center justify-between text-xs text-zinc-400">
-                            {/* Offer size shown only while the coupon controls the price. */}
-                            <span>{shownCouponOutcome?.controlsPrice ? couponHeadline(couponDetails, formatCartCurrency) : couponDetails.code}</span>
-                            <button type="button" onClick={clearCouponCode} className="text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
-                          </p>
-                        ) : null}
-                      </div>
+                      {referralSuccess ? <p className="mt-1.5 text-xs text-emerald-400">{referralSuccess}</p> : null}
+                      {referralError ? <p className="mt-1.5 text-xs text-rose-400">{referralError}</p> : null}
+                      {referralStatusText ? (
+                        <p className="mt-1.5 flex items-start justify-between gap-2 text-xs text-zinc-400">
+                          {/* The non-qualifying sentence is a full line of prose, not a name and
+                              a percentage. At 390px it wraps, and without flex-shrink-0 the
+                              Remove button was squeezed onto its own wrapped characters. */}
+                          <span className={referralNeedsMoreToQualify ? "text-amber-300/80" : undefined}>{referralStatusText}</span>
+                          <button type="button" onClick={clearReferralCode} className="flex-shrink-0 text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
+                        </p>
+                      ) : null}
                     </div>
-                  </Collapse>
-                </div>
-              ) : null}
+
+                    <div>
+                      <label className="mb-1.5 block text-[10px] uppercase tracking-[0.24em] text-zinc-500">Coupon code</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={effectiveCouponInput}
+                          onChange={(event) => setCouponInput(event.target.value)}
+                          placeholder="LAUNCH"
+                          className="vl-input flex-1 px-4 py-2.5 text-sm"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => applyCouponCode(effectiveCouponInput)}
+                          disabled={isApplyingCoupon}
+                          className="vl-focus-ring rounded-xl border border-white/[0.12] bg-white/[0.04] px-4 text-xs font-semibold uppercase tracking-wide text-zinc-200 transition hover:bg-white/[0.08] disabled:opacity-50"
+                        >
+                          {isApplyingCoupon ? "…" : "Apply"}
+                        </button>
+                      </div>
+                      {shownCouponOutcome ? (
+                        <p className={`mt-1.5 text-xs ${shownCouponOutcome.controlsPrice ? "text-emerald-400" : "text-amber-300/90"}`}>
+                          {shownCouponOutcome.message}
+                        </p>
+                      ) : null}
+                      {couponError ? <p className="mt-1.5 text-xs text-rose-400">{couponError}</p> : null}
+                      {couponDetails ? (
+                        <p className="mt-1.5 flex items-center justify-between text-xs text-zinc-400">
+                          {/* Offer size shown only while the coupon controls the price. */}
+                          <span>{shownCouponOutcome?.controlsPrice ? couponHeadline(couponDetails, formatCartCurrency) : couponDetails.code}</span>
+                          <button type="button" onClick={clearCouponCode} className="text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                </Collapse>
+              </div>
 
               {/* Shipping protection — one compact row, details on demand */}
               {subtotal > 0 ? (

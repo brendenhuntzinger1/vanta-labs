@@ -1012,7 +1012,13 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     bulkSavingsAmount: bulkSavingsResult.amount,
     personalDiscountAmount,
     personalDiscountPercent: referralProgram.personalDiscountPercent,
-    allowCouponStacking: couponPolicy.allowStacking || promotionAllowsCouponStacking,
+    // TWO LICENCES, PASSED SEPARATELY. These used to be OR-ed together here,
+    // which made a promotion's own stackWithCoupon behave like the store-wide
+    // switch — and once a referral could beat a promotion, a LOSING promotion's
+    // permission stacked a coupon onto the referral. See promotionStacksCoupon
+    // in profit-engine.ts.
+    allowCouponStacking: couponPolicy.allowStacking,
+    promotionStacksCoupon: promotionAllowsCouponStacking,
     commissionPercent: 0,
     processingFeePercent: 0,
     shippingCollected: 0,
