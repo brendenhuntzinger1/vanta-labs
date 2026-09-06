@@ -275,6 +275,9 @@ export async function createCheckoutSession(
    // The Buy X Get Y promotion this order redeemed, if any. Usage limits are
    // counted from it, so it has to be written on the order that used it.
    promotionId: quote.appliedPromotionId,
+   // Internal only — insertOrderRow turns this into the owner's
+   // below-floor notice and never writes it to a column.
+   profitFloor: quote.profitFloor,
  });
 
  // A unique-index violation on idempotency_key means a truly-simultaneous

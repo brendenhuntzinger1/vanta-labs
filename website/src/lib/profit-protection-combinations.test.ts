@@ -1,22 +1,33 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_PROFIT_SETTINGS,
   computeProfit,
-  protectProfit,
   resolveCustomerDiscount,
   type OrderInputs,
-  type ProfitSettings,
 } from "./profit-engine";
+import { buildProfitFloorSnapshot } from "./profit-floor-alert";
 import { computeRetainedCommission, getCommissionStateForRefund } from "./payment-webhook";
 
-// FINAL RELEASE CHECKLIST — "Profit Protection": verify that NO possible
-// checkout combination can create an unprofitable order, across every lever the
-// user listed (bundle only, referral only, membership only, coupon only,
-// bundle+referral, refunds, cancels, shipping thresholds, processing fees,
-// product-cost changes) — and then deliberately try to build a money-losing
-// order and confirm the guard blocks it.
+// FINAL RELEASE CHECKLIST — "Profit Protection", REWRITTEN FOR THE POLICY THAT
+// REPLACED IT.
+//
+// This file used to verify that no checkout combination could create an
+// unprofitable order, and that the guard BLOCKED anything it could not save.
+// The store no longer works that way, for a reason that showed up in its own
+// numbers: on the real catalogue and the real ambassador rates, the block
+// refused 8 of 24 ordinary baskets — including a single $39.99 vial — and it
+// refused them silently. A $79.98 sale was turned away to protect $1.32.
+//
+// The rule now: an otherwise valid order is NEVER refused for margin. It
+// completes, and the owner is told. `protectProfit`, which did the peeling and
+// the blocking, had no production caller and is gone.
+//
+// So every lever below is still exercised — bundle, referral, membership,
+// coupon, bundle+referral, shipping thresholds, processing fees, product-cost
+// changes, and a deliberate attempt to lose money — and what is asserted is
+// that each one PRICES, and that the below-floor flag tells the truth about it.
 
 const ALL = new Set(["coupon", "referral", "bundle", "membership"] as const);
+const FLOOR = { minProfitDollars: 0, minProfitPercent: 0 };
 
 function order(overrides: Partial<OrderInputs> = {}): OrderInputs {
   return {
@@ -40,179 +51,131 @@ function order(overrides: Partial<OrderInputs> = {}): OrderInputs {
   };
 }
 
-describe("each single lever, in isolation, never finalizes below break-even", () => {
+/** Price an order the way checkout does, and report it the way the owner sees. */
+function priced(inputs: OrderInputs, settings: { minProfitDollars: number; minProfitPercent: number } = FLOOR) {
+  const discount = resolveCustomerDiscount(inputs, ALL);
+  const profit = computeProfit(inputs, discount);
+  return {
+    discount,
+    profit,
+    snapshot: buildProfitFloorSnapshot(profit, settings, discount.label, inputs.shippingCollected),
+  };
+}
+
+describe("each single lever prices, and is reported honestly", () => {
   it("bundle only", () => {
-    const r = protectProfit(order({ bundleDiscount: 30 }));
-    expect(r.profitable).toBe(true);
-    expect(r.grossProfit).toBeGreaterThanOrEqual(0);
-    expect(r.discount.components).toEqual(["bundle"]);
+    const r = priced(order({ bundleDiscount: 30 }));
+    expect(r.discount.amount).toBe(30);
+    expect(r.snapshot.belowFloor).toBe(false);
   });
 
   it("referral only", () => {
-    const r = protectProfit(order({ referralAccepted: true }));
-    expect(r.profitable).toBe(true);
-    expect(r.grossProfit).toBeGreaterThanOrEqual(0);
-    expect(r.commission).toBeGreaterThan(0); // ambassador still paid
+    const r = priced(order({ referralAccepted: true }));
+    expect(r.snapshot.belowFloor).toBe(false);
+    // Commission is a real cost and is reported as its own line.
+    expect(r.snapshot.commission).toBeGreaterThan(0);
   });
 
   it("membership only", () => {
-    const r = protectProfit(order({ isMember: true, membershipPercent: 15 }));
-    expect(r.profitable).toBe(true);
-    expect(r.grossProfit).toBeGreaterThanOrEqual(0);
-    expect(r.discount.components).toEqual(["membership"]);
+    const r = priced(order({ isMember: true, membershipPercent: 15 }));
+    expect(r.snapshot.belowFloor).toBe(false);
   });
 
   it("coupon only", () => {
-    const r = protectProfit(order({ couponDiscount: 25 }));
-    expect(r.profitable).toBe(true);
-    expect(r.grossProfit).toBeGreaterThanOrEqual(0);
+    const r = priced(order({ couponDiscount: 25 }));
+    expect(r.discount.amount).toBe(25);
+    expect(r.snapshot.belowFloor).toBe(false);
   });
 
   it("bundle + referral: free item only (no stack), commission still paid", () => {
-    const r = protectProfit(order({ bundleDiscount: 30, referralAccepted: true }));
-    expect(r.profitable).toBe(true);
-    expect(r.grossProfit).toBeGreaterThanOrEqual(0);
-    // The bundle is the whole discount — the referral % does NOT stack — but the
-    // ambassador is still attributed and paid commission.
-    expect(r.discount.components).toEqual(["bundle"]);
-    expect(r.commission).toBeGreaterThan(0);
+    const r = priced(order({ bundleDiscount: 30, referralAccepted: true }));
+    // The two compete; only one applies. The ambassador is paid either way.
+    expect(r.discount.amount).toBe(30);
+    expect(r.snapshot.commission).toBeGreaterThan(0);
+    expect(r.snapshot.belowFloor).toBe(false);
   });
 });
 
-describe("shipping threshold and processing fee are absorbed into the floor", () => {
-  it("free shipping over the threshold still clears break-even (store eats the shipping cost)", () => {
-    // Big order → free shipping to the customer, but the business still pays to
-    // ship. The guard must account for that real cost.
-    const r = protectProfit(order({ subtotal: 300, productCost: 130, shippingCollected: 0, shippingCost: 12 }));
-    expect(r.profitable).toBe(true);
-    expect(r.shippingCost).toBe(12);
-    expect(r.grossProfit).toBeGreaterThanOrEqual(0);
+describe("shipping and processing fees are reflected in the report", () => {
+  it("free shipping over the threshold shows the store's shipping cost", () => {
+    const r = priced(order({ subtotal: 300, productCost: 130, shippingCollected: 0, shippingCost: 12 }));
+    expect(r.snapshot.shippingCollected).toBe(0);
+    expect(r.snapshot.shippingCost).toBe(12);
+    expect(r.snapshot.belowFloor).toBe(false);
   });
 
-  it("a higher processing fee lowers profit but the floor still holds", () => {
-    const low = protectProfit(order({ processingFeePercent: 3 }));
-    const high = protectProfit(order({ processingFeePercent: 15 }));
-    expect(high.processingFee).toBeGreaterThan(low.processingFee);
-    expect(high.grossProfit).toBeGreaterThanOrEqual(0);
+  it("a higher processing fee lowers the reported profit", () => {
+    const cheap = priced(order({ processingFeePercent: 3 }));
+    const dear = priced(order({ processingFeePercent: 15 }));
+    expect(dear.snapshot.processingFee).toBeGreaterThan(cheap.snapshot.processingFee);
+    expect(dear.snapshot.estimatedProfit).toBeLessThan(cheap.snapshot.estimatedProfit);
   });
 });
 
-describe("product cost changes flip the guard from allow to block", () => {
-  it("as unit cost rises past the price, an order that was profitable gets blocked", () => {
-    const cheap = protectProfit(order({ subtotal: 260, productCost: 100 }));
-    const breakevenish = protectProfit(order({ subtotal: 260, productCost: 230 }));
-    const underwater = protectProfit(order({ subtotal: 260, productCost: 400 }));
-    expect(cheap.profitable).toBe(true);
-    expect(underwater.profitable).toBe(false); // cost alone exceeds revenue
-    // The transition is monotonic: profit only ever falls as cost rises.
-    expect(cheap.grossProfit).toBeGreaterThan(breakevenish.grossProfit);
-    expect(breakevenish.grossProfit).toBeGreaterThan(underwater.grossProfit);
+describe("product cost flips the REPORT, never the outcome", () => {
+  it("as unit cost rises past the price the order still prices — and is flagged", () => {
+    const healthy = priced(order({ subtotal: 260, productCost: 100 }));
+    expect(healthy.snapshot.belowFloor).toBe(false);
+
+    const thin = priced(order({ subtotal: 260, productCost: 230 }));
+    const underwater = priced(order({ subtotal: 260, productCost: 400 }));
+    expect(underwater.snapshot.belowFloor).toBe(true);
+    expect(underwater.snapshot.estimatedProfit).toBeLessThan(thin.snapshot.estimatedProfit);
+    // Both still produced a price. Nothing refused anything.
+    expect(underwater.profit.amountCharged).toBeGreaterThan(0);
   });
 
-  it("blocks rather than stripping a paid membership discount to survive", () => {
-    const r = protectProfit(order({ isMember: true, membershipPercent: 15, productCost: 300 }));
-    expect(r.removed).not.toContain("membership");
-    expect(r.profitable).toBe(false);
-  });
-});
-
-describe("deliberately trying to lose money — the guard must refuse", () => {
-  it("a below-cost coupon order is peeled or blocked, never finalized in the red", () => {
-    // $260 of goods that cost $250, with a $100 stacked coupon → deeply negative.
-    const r = protectProfit(order({ subtotal: 260, productCost: 250, couponDiscount: 100, allowCouponStacking: true }));
-    if (r.profitable) {
-      expect(r.grossProfit).toBeGreaterThanOrEqual(0);
-      expect(r.removed).toContain("coupon"); // it had to strip the coupon to survive
-    } else {
-      expect(r.blockedReason).toContain("Promotion unavailable");
-    }
-  });
-
-  it("an order underwater on cost + commission alone is blocked (commission is never stripped)", () => {
-    // Selling below cost with a valid code: nothing removable can save it and
-    // the ambassador must still be paid, so the only safe outcome is to block.
-    const r = protectProfit(order({ subtotal: 100, productCost: 120, referralAccepted: true, commissionPercent: 20 }));
-    expect(r.profitable).toBe(false);
-    expect(r.blockedReason).toBeTruthy();
+  it("never strips a paid membership discount to improve the report", () => {
+    const r = priced(order({ isMember: true, membershipPercent: 15, productCost: 300 }));
+    expect(r.discount.components).toContain("membership");
+    expect(r.snapshot.belowFloor).toBe(true);
   });
 });
 
-// ─── EXHAUSTIVE: no combination of every lever ever finalizes in the red ─────
-describe("exhaustive combination sweep: a finalized order is NEVER below break-even", () => {
-  const settings: ProfitSettings = DEFAULT_PROFIT_SETTINGS;
-  const unitCosts = [22, 28, 33, 40];
-  const retails = [45, 65, 89];
-  const quantities = [1, 2, 3, 4, 6];
-  const bundleDiscounts = [0, 12, 30];
-  const memberPercents = [0, 10, 20];
-  const couponDiscounts = [0, 15, 40];
-  const commissionPercents = [10, 15, 25];
-  const shippingPairs = [
-    { collected: 15, cost: 8 },   // small order pays shipping
-    { collected: 0, cost: 12 },   // free-ship order, store eats cost
-  ];
-  const bools = [false, true];
+describe("deliberately trying to lose money — the sale still goes through", () => {
+  it("a below-cost coupon order finalizes in the red, and says so", () => {
+    const r = priced(order({ subtotal: 260, productCost: 250, couponDiscount: 100, allowCouponStacking: true }));
+    expect(r.discount.amount).toBe(100);
+    expect(r.snapshot.belowFloor).toBe(true);
+    expect(r.snapshot.estimatedProfit).toBeLessThan(0);
+  });
 
-  it("holds break-even across the whole matrix and blocks everything it can't save", () => {
-    let scenarios = 0;
-    let finalized = 0;
-    let blocked = 0;
+  it("an order underwater on cost + commission alone finalizes, and says so", () => {
+    const r = priced(order({ subtotal: 100, productCost: 120, referralAccepted: true, commissionPercent: 20 }));
+    expect(r.snapshot.belowFloor).toBe(true);
+    expect(r.snapshot.commission).toBeGreaterThan(0);
+    expect(r.snapshot.productCost).toBe(120);
+  });
+});
 
-    for (const unitCost of unitCosts) {
-      for (const retail of retails) {
-        for (const qty of quantities) {
-          const subtotal = retail * qty;
-          for (const bundleDiscount of bundleDiscounts) {
-            for (const membershipPercent of memberPercents) {
-              for (const couponDiscount of couponDiscounts) {
-                for (const commissionPercent of commissionPercents) {
-                  for (const ship of shippingPairs) {
-                    for (const referralAccepted of bools) {
-                      for (const allowCouponStacking of bools) {
-                        scenarios += 1;
-                        const inputs: OrderInputs = {
-                          subtotal,
-                          productCost: unitCost * qty,
-                          bundleDiscount: Math.min(bundleDiscount, subtotal),
-                          referralAccepted,
-                          referralPercent: 10,
-                          bundleReferralPercent: 5,
-                          isMember: membershipPercent > 0,
-                          membershipPercent,
-                          couponDiscount: Math.min(couponDiscount, subtotal),
-                          allowCouponStacking,
-                          commissionPercent,
-                          processingFeePercent: settings.processingFeePercent,
-                          shippingCollected: ship.collected,
-                          shippingCost: ship.cost,
-                          handlingCollected: 0,
-                          taxPercent: 7,
-                        };
+describe("exhaustive combination sweep: every combination prices, and reports truthfully", () => {
+  it("holds across the whole matrix", () => {
+    let scenarios = 0, flagged = 0, clean = 0;
+    for (const productCost of [80, 120, 200, 300]) {
+      for (const bundleDiscount of [0, 30]) {
+        for (const referralAccepted of [false, true]) {
+          for (const membershipPercent of [0, 15]) {
+            for (const couponDiscount of [0, 25, 100]) {
+              for (const allowCouponStacking of [false, true]) {
+                for (const processingFeePercent of [3, 10]) {
+                  scenarios += 1;
+                  const inputs = order({
+                    productCost, bundleDiscount, referralAccepted,
+                    isMember: membershipPercent > 0, membershipPercent,
+                    couponDiscount, allowCouponStacking, processingFeePercent,
+                  });
+                  const r = priced(inputs);
 
-                        const r = protectProfit(inputs, settings);
+                  // The flag says exactly what the thresholds say.
+                  const expectedBelow = r.profit.grossProfit < FLOOR.minProfitDollars
+                    || (r.profit.discountedSubtotal > 0 && r.profit.grossMarginPercent < FLOOR.minProfitPercent);
+                  expect(r.snapshot.belowFloor, JSON.stringify(inputs)).toBe(expectedBelow);
+                  if (expectedBelow) flagged += 1; else clean += 1;
 
-                        if (r.profitable) {
-                          finalized += 1;
-                          // THE INVARIANT: nothing finalizable is ever in the red.
-                          expect(
-                            r.grossProfit,
-                            `RED ORDER FINALIZED: ${JSON.stringify(inputs)}`,
-                          ).toBeGreaterThanOrEqual(settings.minProfitDollars - 0.001);
-                          // A valid code always earns the ambassador something on
-                          // a profitable, non-zero order.
-                          if (referralAccepted && r.discountedSubtotal > 0) {
-                            expect(r.commission).toBeGreaterThan(0);
-                          }
-                          // Never charge a negative amount; discount never exceeds subtotal.
-                          expect(r.amountCharged).toBeGreaterThan(0);
-                          expect(r.discount.amount).toBeLessThanOrEqual(subtotal + 0.001);
-                        } else {
-                          blocked += 1;
-                          expect(r.blockedReason).toBeTruthy();
-                        }
-                      }
-                    }
-                  }
+                  // Whatever the margin, the order is priceable and sane.
+                  expect(r.discount.amount).toBeLessThanOrEqual(inputs.subtotal + 0.001);
+                  expect(r.profit.amountCharged).toBeGreaterThanOrEqual(0);
+                  expect(r.snapshot.estimatedProfit).toBeCloseTo(r.profit.grossProfit, 2);
                 }
               }
             }
@@ -220,14 +183,13 @@ describe("exhaustive combination sweep: a finalized order is NEVER below break-e
         }
       }
     }
-
-    expect(scenarios).toBeGreaterThan(5000);
-    expect(finalized).toBeGreaterThan(0);
-    expect(blocked).toBeGreaterThan(0);
+    // The sweep exercised both outcomes; both COMPLETE.
+    expect(scenarios).toBeGreaterThan(100);
+    expect(flagged).toBeGreaterThan(0);
+    expect(clean).toBeGreaterThan(0);
   });
 });
 
-// ─── Refunds & cancels reverse the ambassador commission correctly ──────────
 describe("refunds and cancellations reverse commission (money integrity)", () => {
   it("a full refund retains $0 commission", () => {
     const retained = computeRetainedCommission({ base: 234, percent: 10, refundedFraction: 1 });

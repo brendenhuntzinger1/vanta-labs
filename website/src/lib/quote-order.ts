@@ -26,7 +26,8 @@ import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { isApprovedAmbassadorCustomer } from "@/lib/ambassador-status";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
 import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getShippingConfig, getReferralProgramConfig, getCouponPolicyConfig, getProfitSettings } from "@/lib/admin-control";
-import { computeProfit, meetsFloor, resolveCustomerDiscount, type DiscountComponent } from "@/lib/profit-engine";
+import { computeProfit, resolveCustomerDiscount, type DiscountComponent } from "@/lib/profit-engine";
+import { alertIfBelowProfitFloor, buildProfitFloorSnapshot, type ProfitFloorSnapshot } from "@/lib/profit-floor-alert";
 import { calculateCardProcessingFee, getPaymentMethodById, isManualPaymentMethod, type PaymentMethodConfig } from "@/lib/payment-methods";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -153,6 +154,13 @@ export interface QuoteResult {
   taxAmount: number;
   referral: ValidatedReferral | null;
   couponCode: string | null;
+  /**
+   * What this order clears against the owner's configured floor.
+   *
+   * INTERNAL. Carried so the order lane can raise an alert once an order id
+   * exists; no checkout surface renders it and nothing in it is customer-safe.
+   */
+  profitFloor: ProfitFloorSnapshot;
   isBuy3Get1Active: boolean;
   /**
    * The one-time offer this quote priced a free unit for, if any.
@@ -1207,12 +1215,25 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   });
   const taxAmount = taxQuote.amount;
 
-  // PROFIT GUARD — never let this pricing combination complete below the store's
-  // configured floor (default: never negative). Uses the shared profit-engine
-  // math so checkout and the engine can never disagree. Ambassador commission is
-  // a real cost here, but it is NOT a customer discount — it's computed
-  // separately on the discounted subtotal. Product cost falls back to the
-  // worst-case unit cost until real per-SKU costs are entered.
+  // PROFIT FLOOR — MEASURED, REPORTED, NEVER ENFORCED AGAINST THE CUSTOMER.
+  //
+  // This block used to end in `throw new Error("Promotion unavailable on this
+  // order.")`, refusing a real sale over numbers the shopper cannot see, with a
+  // message naming a promotion that was usually not the cause. On this store's
+  // own catalogue and its own ambassador rates that refused 8 of 24 ordinary
+  // baskets — a single $39.99 vial among them — and it did so SILENTLY: no
+  // alert, no counter, no record that the sale had been attempted.
+  //
+  // The owner's rule is now: never reject an otherwise valid order for margin;
+  // complete it and tell me. So the same arithmetic runs, unchanged, and its
+  // result leaves as `profitFloor` on the quote. insertOrderRow raises the
+  // alert once the order exists and has an id — see profit-floor-alert.ts.
+  //
+  // Uses the shared profit-engine math so checkout and the engine can never
+  // disagree. Ambassador commission is a real cost here, but it is NOT a
+  // customer discount — it's computed separately on the discounted subtotal.
+  // Product cost falls back to the worst-case unit cost until real per-SKU
+  // costs are entered.
   const profitSettings = await getProfitSettings();
   // Price the guard with the EFFECTIVE commission that will actually be recorded
   // (an unlocked ambassador on a performance tier earns more than their stored
@@ -1221,7 +1242,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // Only a QUALIFYING referral will accrue commission, so only a qualifying one
   // may be charged for it here. Reserving a phantom commission on a basket that
   // will never earn one tightens the break-even floor for no reason and can
-  // refuse the order outright with "Promotion unavailable on this order."
+  // overstate the cost of a basket that will never earn one.
   let guardCommissionPercent = 0;
   if (referral && referralQualifiesForDiscount) {
     try {
@@ -1293,9 +1314,14 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     },
     { amount: discountAmount, components: [], label: "resolved" },
   );
-  if (!meetsFloor(guardProfit, profitSettings)) {
-    throw new Error("Promotion unavailable on this order.");
-  }
+  // NOT A GATE. The snapshot travels with the quote so the order lane can tell
+  // the owner about it; nothing here can stop the sale.
+  const profitFloor = buildProfitFloorSnapshot(
+    guardProfit,
+    profitSettings,
+    customerDiscount.label,
+    shipping,
+  );
 
   const totalBeforePoints = roundMoney(subtotal + shipping + taxAmount - discountAmount);
 
@@ -1466,6 +1492,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     taxAmount,
     referral,
     couponCode: couponCodeForOrder,
+    profitFloor,
     // "A free/reduced-price item promotion PRICED this order" — which is what
     // this flag has always claimed and, until the referral was allowed to beat
     // a promotion, was the same thing as "a promotion was available". It is
@@ -1539,6 +1566,8 @@ export interface OrderRowInput {
   storeCreditRedeemedCents: number;
   taxRatePercent: number;
   taxState: string | null;
+  /** Internal margin snapshot from the quote, for the below-floor notice. */
+  profitFloor?: ProfitFloorSnapshot | null;
   /** Buy X Get Y promotion that priced the order, if any. */
   promotionId?: string | null;
   /** Extra columns (e.g. checkout_channel) that live on the newer-column row. */
@@ -1550,6 +1579,16 @@ export interface OrderRowDraft {
   full: Record<string, unknown>;
   /** The original column set — the pre-migration fallback. */
   base: Record<string, unknown>;
+  /**
+   * What this order clears against the owner's floor — NOT a column.
+   *
+   * It rides on the draft rather than being a second argument to
+   * insertOrderRow so a lane cannot forget it: both live order lanes build
+   * their row here and insert it there, so threading it through the object
+   * they already pass is the only way that stays true when a third lane
+   * appears. insertOrderRow strips it; it never reaches the database.
+   */
+  profitFloor?: ProfitFloorSnapshot | null;
 }
 
 export function buildOrderRow(input: OrderRowInput): OrderRowDraft {
@@ -1630,7 +1669,7 @@ export function buildOrderRow(input: OrderRowInput): OrderRowDraft {
   const baseWithoutIdempotency = { ...baseOrderRow };
   delete baseWithoutIdempotency.idempotency_key;
 
-  return { full: orderRowWithContact, base: baseWithoutIdempotency };
+  return { full: orderRowWithContact, base: baseWithoutIdempotency, profitFloor: input.profitFloor ?? null };
 }
 
 export type OrderInsertOutcome =
@@ -1707,6 +1746,8 @@ function missingColumnFrom(error: { code?: string; message?: string } | null): s
  * a caller should DO about a duplicate differs by lane.
  */
 export async function insertOrderRow(draft: OrderRowDraft): Promise<OrderInsertOutcome> {
+  // `draft.full` is columns only; the margin snapshot lives beside it on the
+  // draft and is deliberately not spread in here.
   const row: Record<string, unknown> = { ...draft.full };
   const dropped: string[] = [];
   let lastError: { code?: string; message?: string } | null = null;
@@ -1715,6 +1756,14 @@ export async function insertOrderRow(draft: OrderRowDraft): Promise<OrderInsertO
     const { error } = await supabaseAdmin.from("orders").insert(row);
 
     if (!error) {
+      // THE ORDER IS IN. Everything below reports; nothing below refuses.
+      //
+      // Both live lanes reach the database through here, so this is the one
+      // place a below-floor sale can be recorded exactly once and with an id
+      // to name. It is awaited but cannot throw (see alertIfBelowProfitFloor),
+      // because a missing notice must never undo a sale already made.
+      await alertIfBelowProfitFloor(String(draft.full.order_id ?? ""), draft.profitFloor);
+
       const lostIntegrityColumns = dropped.filter((column) => ORDER_INTEGRITY_COLUMNS.has(column));
       if (lostIntegrityColumns.length > 0) {
         // The order was taken. Somebody has to know it was taken without its
