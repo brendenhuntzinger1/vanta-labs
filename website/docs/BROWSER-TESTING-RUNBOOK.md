@@ -329,10 +329,22 @@ https.
 So put TLS in front of BOTH, and point the app at the https Supabase:
 
 ```bash
-# in the audit scratch dir, or anywhere you keep key.pem/cert.pem
-node tls-proxy.mjs           # https://127.0.0.1:3443  -> 127.0.0.1:3000
-node gotrue-tls-proxy.mjs    # https://127.0.0.1:54443 -> 127.0.0.1:54321
+cd website
+node scripts/tls-proxy.mjs           # https://127.0.0.1:3443  -> 127.0.0.1:3000
+node scripts/gotrue-tls-proxy.mjs    # https://127.0.0.1:54443 -> 127.0.0.1:54321
 ```
+
+Both are checked in and generate their own self-signed pair on first run
+(shared, under `$TMPDIR/vanta-harness-certs`). They used to live in a scratch
+directory, which meant they vanished with the container and this section
+pointed at files that no longer existed — a rediscovery every session.
+
+**The GoTrue proxy is not only a browser concern.** `supabaseAdmin` reads the
+same `NEXT_PUBLIC_SUPABASE_URL`, so with nothing listening on 54443 every
+*server-side* write fails inside a best-effort try/catch: tracking pixels still
+return their image, redirects still redirect, and nothing is recorded. That
+looks exactly like a broken feature. If a write-behind-a-catch appears not to
+work, check this proxy is up before you touch the code.
 
 ```
 NEXT_PUBLIC_SUPABASE_URL=https://127.0.0.1:54443

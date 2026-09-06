@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { verifyCampaignRecipient } from "@/lib/email/campaign-links";
+import { stampCampaignEngagement } from "@/lib/email/engagement";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +39,11 @@ export async function GET(request: NextRequest) {
     } catch {
       // Never worth failing the image over.
     }
+    // The same open in the one table that lists every send, whatever channel
+    // sent it. Narrowed to this recipient: a campaign's reference_id is shared
+    // by every row it fanned out to, and stamping all of them because one
+    // person opened would report a 100% open rate.
+    await stampCampaignEngagement("opened", campaignId, email);
   }
 
   return new NextResponse(PIXEL, {

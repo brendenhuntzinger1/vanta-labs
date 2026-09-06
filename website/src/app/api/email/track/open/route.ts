@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { stampCartRecoveryEngagement } from "@/lib/email/engagement";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,10 @@ export async function GET(request: NextRequest) {
     } catch {
       // Non-fatal - the pixel still needs to render.
     }
+    // ...and again in email_send_log, which is the one table that lists every
+    // send the system makes. Cart-recovery opens were recorded here alone for
+    // six weeks, which is why they appeared nowhere the owner looks.
+    await stampCartRecoveryEngagement("opened", id);
   }
 
   return new NextResponse(TRANSPARENT_PIXEL, {

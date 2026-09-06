@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { recordSystemAlert } from "@/lib/monitoring";
+import { mirrorEngagementToChannel, stampSendLogEngagementByMessageId } from "@/lib/email/engagement";
 
 /**
  * E-08 — THE BOUNCE/COMPLAINT LOOP.
@@ -35,12 +36,22 @@ import { recordSystemAlert } from "@/lib/monitoring";
  * was "something bounced", and a sender with no bounces was indistinguishable
  * from a webhook that was never configured. See email-delivery-event-log.sql.
  */
+/**
+ * `opened` and `clicked` suppress nothing either, and they are the reason a
+ * provider webhook is worth more than a bounce feed. Our own pixel only sees
+ * the messages we built a pixel into; the provider sees every message it sent,
+ * including the ones GoTrue mails on our behalf. Parsing them was the missing
+ * half — until this, `email.opened` fell through to `ignored` below, so
+ * switching the provider's open tracking on would have recorded nothing.
+ */
 export type DeliveryEventKind =
   | "delivered"
   | "hard_bounce"
   | "soft_bounce"
   | "complaint"
   | "delayed"
+  | "opened"
+  | "clicked"
   | "ignored";
 
 export interface DeliveryEvent {
@@ -88,6 +99,12 @@ function parseResend(body: Record<string, unknown>): DeliveryEvent[] {
   if (type === "email.delivery_delayed") {
     return [{ email, kind: "delayed", providerMessageId, rawType: type }];
   }
+  if (type === "email.opened") {
+    return [{ email, kind: "opened", providerMessageId, rawType: type }];
+  }
+  if (type === "email.clicked") {
+    return [{ email, kind: "clicked", providerMessageId, rawType: type }];
+  }
   if (type === "email.bounced") {
     const bounce = (data.bounce ?? {}) as Record<string, unknown>;
     const severity = str(bounce.type).toLowerCase();
@@ -123,6 +140,10 @@ function parseSendgrid(events: Array<Record<string, unknown>>): DeliveryEvent[] 
 
     if (name === "delivered") {
       parsed.push({ email, kind: "delivered", providerMessageId, rawType: name });
+    } else if (name === "open") {
+      parsed.push({ email, kind: "opened", providerMessageId, rawType: name });
+    } else if (name === "click") {
+      parsed.push({ email, kind: "clicked", providerMessageId, rawType: name });
     } else if (name === "deferred") {
       parsed.push({ email, kind: "delayed", providerMessageId, rawType: name });
     } else if (name === "spamreport") {
@@ -171,6 +192,8 @@ export function parseDeliveryEvents(body: unknown): DeliveryEvent[] {
 export interface DeliveryEventOutcome {
   suppressed: number;
   ignored: number;
+  /** Opens and clicks joined back to the send that produced them. */
+  engaged: number;
   /** True when a write failed, so the route can ask the provider to retry. */
   writeFailed: boolean;
 }
@@ -343,7 +366,7 @@ async function softBounceRunExceeded(email: string): Promise<boolean> {
 }
 
 export async function applyDeliveryEvents(events: DeliveryEvent[]): Promise<DeliveryEventOutcome> {
-  const outcome: DeliveryEventOutcome = { suppressed: 0, ignored: 0, writeFailed: false };
+  const outcome: DeliveryEventOutcome = { suppressed: 0, ignored: 0, engaged: 0, writeFailed: false };
 
   for (const event of events) {
     // RECORD FIRST, ACT SECOND — and record EVERY event, including the ones
@@ -356,6 +379,28 @@ export async function applyDeliveryEvents(events: DeliveryEvent[]): Promise<Deli
     // stop a bounce being suppressed, which is the thing that protects the
     // sending domain.
     await recordDeliveryEvent(event, false).catch(() => {});
+
+    // AN OPEN OR A CLICK IS THE ONLY REASON MOST OF THIS MAIL IS SENT, so it is
+    // joined straight back to the send that produced it rather than left as a
+    // row in the event log nothing reads. The provider's message id is the join
+    // — every marketing send has recorded one since 2026-09-04 — and a send
+    // that carries none (an auth mail GoTrue sent, or anything older than that
+    // date) simply cannot be matched. That is a gap in coverage, not an error:
+    // the event row above still proves the mail was opened.
+    if (event.kind === "opened" || event.kind === "clicked") {
+      const identity = event.providerMessageId
+        ? await stampSendLogEngagementByMessageId({
+          kind: event.kind,
+          providerMessageId: event.providerMessageId,
+        }).catch(() => null)
+        : null;
+      if (identity) {
+        outcome.engaged += 1;
+        await mirrorEngagementToChannel({ kind: event.kind, identity }).catch(() => {});
+      }
+      outcome.ignored += 1;
+      continue;
+    }
 
     // A SOFT BOUNCE THAT KEEPS REPEATING IS NOT SOFT.
     //
