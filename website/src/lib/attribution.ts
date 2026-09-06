@@ -160,7 +160,13 @@ function readParamAnyCase(params: URLSearchParams, key: string): string | null {
  * a customer's tag into a different string would invent a join key. Trim,
  * lowercase, and drop an unsubstituted macro — exactly the spend side's `read`.
  */
-function normalizeCampaignTag(value: unknown): string | null {
+// Exported because the analytics WRITE path needs the identical rule: the
+// browser tracker posts `params.get("utm_content")` straight to
+// /api/analytics/track without going through parseAttributionTouch, so without
+// this the same campaign lands in website_analytics_events under whatever case
+// the URL carried while order_attribution holds the lowercased form — the two
+// halves of the funnel report then group the same creative separately.
+export function normalizeCampaignTag(value: unknown): string | null {
   const normalized = normalizeValue(value);
   if (!normalized) return null;
   const lowered = normalized.toLowerCase();
@@ -373,4 +379,129 @@ export function toAnalyticsAttribution(record: AttributionRecord | null | undefi
     utm_campaign: record?.last?.utmCampaign ?? null,
     visitor_id: record?.visitorId ?? null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// CARRYING THE AD PARAMETERS ACROSS AN INTERNAL REDIRECT.
+//
+// THE BUG THIS EXISTS TO FIX. The store is closed by default (see
+// lib/access-policy.ts), so a paid click on /products/<slug>?utm_source=tiktok&…
+// never renders that page: middleware answers 307 to
+// /account/login?next=%2Fproducts%2F<slug>%3Futm_source%3Dtiktok%26… — the whole
+// query string percent-encoded INSIDE one `next` parameter. The portal's own
+// URL therefore has exactly one parameter on it, named `next`, and
+// `new URLSearchParams(window.location.search).get("utm_source")` is null.
+//
+// Both halves of the attribution system read that search string and only that
+// search string, so both recorded nothing:
+//
+//   * website_analytics_events got the landing page_view with every utm column
+//     NULL, while page_url held the tags in plain sight, encoded.
+//   * vl_attribution in localStorage got {"first":null,"last":null} — so the
+//     record that later becomes order_attribution had no touch to carry.
+//
+// Measured on the harness before the fix, for a click carrying utm_source,
+// utm_medium, utm_campaign, utm_content and ttclid: five parameters in, zero
+// stored. A visitor who bounced at the portal — most of a cold paid click —
+// was indistinguishable from organic traffic, and the ad that was billed for
+// them could not be told apart from one that produced nothing.
+//
+// WHY THE COPY LIVES HERE AND NOT IN THE TRACKER. The alternative was to teach
+// the browser tracker to unwrap `next` and read the tags out of it. That would
+// have been a SECOND way to answer "what campaign is this?", diverging from
+// parseAttributionTouch the first time either changed, and it would still leave
+// every server-side reader of the URL blind. Restoring the parameters onto the
+// redirect itself means there is still exactly one reader: whatever is on the
+// query string. The tracker, the pixels and any future server-side consumer all
+// see a normal tagged URL and need no knowledge of the wall at all.
+//
+// IT MIRRORS parseAttributionTouch DELIBERATELY, key for key and casing rule
+// for casing rule, because a parameter this copies that the parser does not
+// read is dead weight, and one the parser reads that this drops is the very bug
+// above. The two lists (UTM_KEYS, CLICK_ID_KEYS) are shared, so adding a
+// platform stays one entry in one place.
+//
+// SAFETY. Values here are attacker-authored — anyone can hand-build a URL:
+//
+//   * Nothing this copies can change WHERE the visitor is sent. Callers set the
+//     destination themselves; this only ever adds query parameters to a URL the
+//     caller already decided on, so it cannot create an open redirect.
+//   * Every value goes through normalizeValue: control characters stripped
+//     (they would otherwise ride into a Location header), whitespace collapsed,
+//     length capped at MAX_VALUE_LENGTH.
+//   * An existing value is never overwritten. That makes the copy idempotent —
+//     applying it twice is applying it once — so a refresh, a back/forward, or
+//     two redirect hops in sequence cannot compound or corrupt what is there.
+//     It also settles precedence: a parameter already on the destination was
+//     put there deliberately and outranks one being carried in.
+// ---------------------------------------------------------------------------
+
+/** The parameters worth carrying, in the canonical spelling they are stored
+ *  under. Sourced from the same two lists the parser reads. */
+export const AD_LANDING_PARAM_KEYS: readonly string[] = [...UTM_KEYS, ...CLICK_ID_KEYS];
+
+/**
+ * Copy ad parameters from `from` onto `to`, and report how many were carried.
+ *
+ * Only the keys above, only when absent from `to`, only after normalisation.
+ *
+ * NORMALISED WITH THE PARSER'S OWN RULES, NOT A SECOND SET. A UTM tag goes
+ * through normalizeCampaignTag and a click id through normalizeValue, exactly
+ * as parseAttributionTouch reads them, so what this writes onto a redirect is
+ * character-for-character what the parser would have produced had the visitor
+ * reached the page directly. Two consequences worth stating:
+ *
+ *   * `?utm_content=Hook_A` leaves here as `hook_a`. That is the join key both
+ *     sides of the ROAS report agree on — and it also fixes the tracker, which
+ *     posts `params.get("utm_content")` RAW to website_analytics_events without
+ *     going through the parser at all. Before, the analytics row said `Hook_A`
+ *     and the order row said `hook_a`, and the two did not join.
+ *   * An unexpanded platform macro (`{{campaign.name}}`, `__CAMPAIGN__`) is
+ *     dropped rather than carried, so it never reaches a URL or a column. It
+ *     was never a value; the parser would have rejected it on arrival.
+ *
+ * `ScCid` is matched case-insensitively for the reason readParamAnyCase gives:
+ * Snapchat sends it as `ScCid`, `sccid` and `SCCID` depending on the surface
+ * that built the link. It is written back under the canonical spelling, so
+ * whatever casing arrives, one spelling leaves.
+ */
+export function copyAdParams(from: URLSearchParams, to: URLSearchParams): number {
+  let copied = 0;
+
+  for (const key of AD_LANDING_PARAM_KEYS) {
+    // ALREADY THERE? THEN LEAVE IT — asked the same way the value will be READ.
+    //
+    // `to.has(key)` was the obvious spelling and was wrong twice, in opposite
+    // directions, because it asks a narrower question than the parser does:
+    //
+    //   * CASING. has() is case-sensitive, so a destination already carrying
+    //     `sccid=…` did not look like it had ScCid, the copy ran anyway, and
+    //     the URL ended up with BOTH spellings — where readParamAnyCase then
+    //     preferred the one just copied in. That is the overwrite this rule
+    //     exists to prevent, performed by the check meant to prevent it.
+    //   * EMPTINESS. has() is true for `utm_source=` with no value, so an empty
+    //     parameter on the destination suppressed a real incoming tag, and the
+    //     parser then read null for a visit that genuinely carried one.
+    //
+    // Reading it through the same accessor settles both: a destination "has" a
+    // parameter only when it holds a value the parser would actually use.
+    const existing = key === "ScCid" ? readParamAnyCase(to, key) : readParam(to, key);
+    if (existing) continue;
+
+    // Read and normalise exactly as parseAttributionTouch does for this key:
+    // campaign tags through normalizeCampaignTag (trim, lowercase, drop an
+    // unexpanded macro), click ids through normalizeValue, and only ScCid
+    // case-insensitively — the one key whose casing is not dependable.
+    const value = (UTM_KEYS as readonly string[]).includes(key)
+      ? normalizeCampaignTag(from.get(key))
+      : key === "ScCid"
+        ? readParamAnyCase(from, key)
+        : readParam(from, key);
+    if (!value) continue;
+
+    to.set(key, value);
+    copied += 1;
+  }
+
+  return copied;
 }

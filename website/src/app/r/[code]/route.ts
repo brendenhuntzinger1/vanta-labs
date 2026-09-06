@@ -5,7 +5,7 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { resolveReferralCode } from "@/lib/referral-code-service";
 import { hasAnalyticsConsent } from "@/lib/cookie-consent-server";
 import { safeInternalPath } from "@/lib/internal-path";
-import { CLICK_ID_KEYS, UTM_KEYS } from "@/lib/attribution";
+import { copyAdParams } from "@/lib/attribution";
 
 const REFERRAL_COOKIE_NAME = "vl_referral_code";
 const REFERRAL_COOKIE_MAX_AGE = 60 * 60 * 24 * 30;
@@ -35,12 +35,17 @@ export async function GET(request: Request, context: { params: Promise<{ code: s
   // widely shared link redirecting to an internal path: only the campaign tags
   // and the platforms' click ids this store already knows how to read travel,
   // and an explicit `next` that carries its own value for one of them keeps it.
-  for (const key of [...UTM_KEYS, ...CLICK_ID_KEYS]) {
-    const value = url.searchParams.get(key);
-    if (value && !destination.searchParams.has(key)) {
-      destination.searchParams.set(key, value);
-    }
-  }
+  //
+  // THE ALLOWLIST LOOP THAT USED TO SIT HERE IS NOW copyAdParams, WHICH IS THE
+  // SAME COPY THE ACCESS WALL PERFORMS. It was written here first, inline, and
+  // a second copy of it then appeared in middleware.ts for the wall — two
+  // implementations of "carry an ad's tags across a redirect" that would drift
+  // apart the first time either changed. They already differed: this one read
+  // each key case-exactly and forwarded the raw value, so Snapchat's `SCCID`
+  // and `sccid` spellings were missed and a tag reached the destination without
+  // the normalisation parseAttributionTouch applies when it reads it back.
+  // One function now answers for both hops, and it mirrors the parser.
+  copyAdParams(url.searchParams, destination.searchParams);
 
   const response = NextResponse.redirect(destination);
 
