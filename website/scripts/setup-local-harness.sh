@@ -170,6 +170,7 @@ for f in referral-orders-commission-lifecycle referral-orders-manual-review-stat
   marketing-frequency-guard \
   auth-user-by-email \
   bxgy-promotions bxgy-redemption-claims coupon-redeem-rpc \
+  tender-hold-claim \
   membership-pending-tier-change \
   order-attribution ads-system ads-spend-roas; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
@@ -292,6 +293,16 @@ check "reserve_inventory enforces untracked-but-stocked (inventory-enforce-posit
   "select coalesce(bool_or(prosrc like '%inventory_quantity > 0%'), false) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='reserve_inventory';"
 check "admin_ops_summary sums NET revenue, not gross amount_paid (admin-dashboard-rollups.sql)" \
   "select coalesce(bool_or(prosrc like '%refund_amount%'), false) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='admin_ops_summary';"
+
+# tender-hold-claim.sql (2026-09-06). tender-reservation.ts falls back to the
+# pre-lock write-then-validate algorithm when these functions are absent, and
+# that fallback is SILENT except for one console.warn. So a harness without them
+# cannot tell the atomic hold from the racy one — a browser check of "two tabs,
+# one balance" would exercise the algorithm the migration exists to replace.
+check "claim_store_credit_hold takes an advisory lock (tender-hold-claim.sql)" \
+  "select coalesce(bool_or(prosrc like '%pg_advisory_xact_lock%'), false) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='claim_store_credit_hold';"
+check "claim_points_hold takes an advisory lock (tender-hold-claim.sql)" \
+  "select coalesce(bool_or(prosrc like '%pg_advisory_xact_lock%'), false) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='claim_points_hold';"
 
 if [ "$parity_failures" -ne 0 ]; then
   echo ""

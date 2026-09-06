@@ -178,7 +178,9 @@ describe("one store-credit balance, two checkouts", () => {
     // Same contract the processor-failure path has (G-03): the shopper is told
     // no order was placed, so there must not be one — nor a hold on the stock
     // it would have shipped.
-    harness.db.injectFailure({ table: "store_credit_ledger", op: "insert", times: 1 });
+    // The claim is one locked function in the database now, so the failure to
+    // inject is the RPC's — the ledger insert lives inside it.
+    harness.db.injectFailure({ table: "rpc:claim_store_credit_hold", op: "rpc", times: 1 });
 
     const { status } = await postCheckout();
 
