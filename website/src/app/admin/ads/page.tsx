@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getAdsDashboard, type CreativeRow } from "@/lib/ads/dashboard-data";
-import { getSpendDashboard, type SpendDashboard } from "@/lib/ads/spend-dashboard";
+import { TABLE_LIMIT, getSpendDashboard, type SpendDashboard } from "@/lib/ads/spend-dashboard";
 import { AdsSectionTabs } from "@/components/ads-section-tabs";
 import { AdsTrackingHealth } from "@/components/ads-tracking-health";
 import { SnapTrackingHealth } from "@/components/snap-tracking-health";
@@ -39,121 +39,247 @@ function Panel({ title, subtitle, children, action }: {
 }
 
 /**
- * Spend beside revenue, per platform.
+ * ── THE SPEND PANELS ──
  *
- * The one panel that answers "which platform is working" without needing every
- * ad tagged, which is why it leads. Its three empty states are deliberately
- * different sentences: no migration, no feed, and no spend are three different
- * problems with three different fixes, and a single "no data" would send the
- * owner looking in the wrong place.
+ * Read top to bottom the page answers, in order: how much did I spend, what did
+ * it earn, which platform is working, which campaign, which ad, and what am I
+ * not measuring. Anything that needs a second click is a level of detail below
+ * something already on screen.
+ *
+ * Two rules run through all of it.
+ *
+ * **Recorded data always beats a configuration hint.** An earlier version checked
+ * `feedConfigured` before checking whether any rows existed, so a deployment
+ * holding real spend but no API key hid $205 of it behind "no spend feed" while
+ * the panel beside it reported a percentage of that same spend. Empty states are
+ * for when there is genuinely nothing to show; when rows exist they render, with
+ * a warning if they can no longer refresh.
+ *
+ * **Our numbers and the platforms' numbers never share a column.** `Purchases`
+ * is our paid-order count. `Platform` is what the ad platform claims under its
+ * own attribution model. They will disagree, and the disagreement is usually the
+ * most informative thing on the page — so it is shown, not resolved.
  */
-function PlatformRoas({ s }: { s: SpendDashboard }) {
-  // ORDER MATTERS, and getting it wrong is not cosmetic. This used to check
-  // `feedConfigured` BEFORE checking whether any rows existed, so a deployment
-  // holding real spend but no API key hid $205 of recorded spend behind "no
-  // spend feed" — the dashboard's own untagged panel was meanwhile reporting a
-  // percentage OF that spend, on the same screen. Recorded data always wins over
-  // a configuration hint; the hints are for when there is genuinely nothing to
-  // show. Caught in the browser, not by a test.
+
+/** Colour only the number that means "this made money". */
+function roasClass(roas: number | null): string {
+  if (roas === null) return "text-white/40";
+  return roas >= 1 ? "text-emerald-300" : "text-red-300";
+}
+
+/** The headline. Everything the owner needs before scrolling. */
+function Headline({ s }: { s: SpendDashboard }) {
+  const cells: [string, string, string?][] = [
+    ["Spend", money(s.totals.spend)],
+    ["Revenue", money(s.totals.revenue), "attributed, net of refunds"],
+    ["ROAS", ratio(s.totals.roas)],
+    ["Purchases", String(s.totals.orders), "our paid orders"],
+    ["CPA", s.totals.cpa === null ? "—" : money(s.totals.cpa)],
+    ["CTR", pct(s.totals.ctr)],
+  ];
+  return (
+    <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      {cells.map(([label, value, note]) => (
+        <div key={label} className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
+          <dt className="text-[10px] uppercase tracking-[0.16em] text-white/35">{label}</dt>
+          <dd className={`mt-1 text-xl ${label === "ROAS" ? roasClass(s.totals.roas) : "text-white"}`}>{value}</dd>
+          {note ? <dd className="mt-0.5 text-[10px] leading-4 text-white/25">{note}</dd> : null}
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** Shared column set for the three ROAS tables, so they read identically. */
+type MetricRow = {
+  spend: number;
+  revenue: number;
+  orders: number;
+  platformConversions: number | null;
+  ctr: number | null;
+  cpc: number | null;
+  cpm: number | null;
+  cvr: number | null;
+  cpa: number | null;
+  roas: number | null;
+};
+
+function MetricTable<T extends MetricRow>({
+  rows, label, name, sub, empty, compact = false,
+}: {
+  rows: T[];
+  label: string;
+  name: (row: T) => React.ReactNode;
+  sub?: (row: T) => React.ReactNode;
+  empty: React.ReactNode;
+  /**
+   * Drop the diagnostic rates, keeping money and ROAS.
+   *
+   * For the half-width Winners/Losers panels. At full column count they need
+   * ~48rem, so in a two-column grid ROAS — the entire point of the panel —
+   * scrolled off the right edge and the reader saw CTR instead. A panel whose
+   * headline number is off-screen is not at-a-glance.
+   */
+  compact?: boolean;
+}) {
+  if (rows.length === 0) return <Empty>{empty}</Empty>;
+  const headers = compact
+    ? [label, "Spend", "Revenue", "Purch.", "CPA", "ROAS"]
+    : [label, "Spend", "Revenue", "Purch.", "Platform", "CTR", "CVR", "CPC", "CPM", "CPA", "ROAS"];
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-left text-xs" style={{ minWidth: compact ? "24rem" : "48rem" }}>
+        <thead>
+          <tr className="text-[10px] uppercase tracking-[0.14em] text-white/35">
+            {headers.map((h) => (
+              <th key={h} className="pb-2 pr-4 font-medium whitespace-nowrap">{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="text-white/75">
+          {rows.map((r, i) => (
+            <tr key={i} className="border-t border-white/[0.06]">
+              <td className="py-2.5 pr-4 text-white">
+                {name(r)}
+                {sub ? <span className="block text-[10px] text-white/35">{sub(r)}</span> : null}
+              </td>
+              <td className="py-2.5 pr-4 whitespace-nowrap">{money(r.spend)}</td>
+              <td className="py-2.5 pr-4 whitespace-nowrap">{money(r.revenue)}</td>
+              <td className="py-2.5 pr-4">{r.orders}</td>
+              {compact ? null : (
+                <>
+                  {/* The platform's own count, under its own attribution model.
+                      Kept visually quieter than ours because ours is what ROAS uses. */}
+                  <td className="py-2.5 pr-4 text-white/40">{r.platformConversions ?? "—"}</td>
+                  <td className="py-2.5 pr-4 whitespace-nowrap">{pct(r.ctr)}</td>
+                  <td className="py-2.5 pr-4 whitespace-nowrap">{pct(r.cvr)}</td>
+                  <td className="py-2.5 pr-4 whitespace-nowrap">{r.cpc === null ? "—" : money(r.cpc)}</td>
+                  <td className="py-2.5 pr-4 whitespace-nowrap">{r.cpm === null ? "—" : money(r.cpm)}</td>
+                </>
+              )}
+              <td className="py-2.5 pr-4 whitespace-nowrap">{r.cpa === null ? "—" : money(r.cpa)}</td>
+              <td className={`py-2.5 pr-4 font-medium ${roasClass(r.roas)}`}>{ratio(r.roas)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * The empty state, which is three different problems with three different fixes.
+ *
+ * ORDER MATTERS. Rows are checked before configuration, so recorded spend is
+ * never hidden behind a setup hint — see the note at the top of this section.
+ */
+function SpendEmptyState({ s }: { s: SpendDashboard }) {
   if (!s.schemaReady) {
-    return <Empty>Apply <code className="font-mono text-white/60">src/lib/sql/ads-spend-roas.sql</code> to create the spend table and ROAS views.</Empty>;
-  }
-  if (s.platforms.length === 0) {
-    return !s.feedConfigured ? (
+    return (
       <Empty>
-        No spend feed. Set <code className="font-mono text-white/60">WINDSOR_API_KEY</code> and the nightly job will pull
-        Meta, TikTok, Reddit and Snapchat spend into <code className="font-mono text-white/60">ad_spend_daily</code>.
+        Apply <code className="font-mono text-white/60">src/lib/sql/ads-spend-roas.sql</code> to create the spend table
+        and ROAS views.
       </Empty>
-    ) : (
+    );
+  }
+  if (!s.feedConfigured) {
+    return (
       <Empty>
-        Feed is configured but has pulled nothing yet
-        {s.lastIngestedAt ? ` (last run ${s.lastIngestedAt.slice(0, 16).replace("T", " ")} UTC)` : " — it has never run"}.
-        No spend on any platform in the last {s.windowDays} days.
+        No spend feed. Set <code className="font-mono text-white/60">WINDSOR_API_KEY</code> and the nightly job will
+        pull Meta, TikTok, Reddit and Snapchat spend into{" "}
+        <code className="font-mono text-white/60">ad_spend_daily</code>.
+      </Empty>
+    );
+  }
+  return (
+    <Empty>
+      Feed is configured but has pulled nothing yet
+      {s.lastIngestedAt ? ` (last run ${s.lastIngestedAt.slice(0, 16).replace("T", " ")} UTC)` : " — it has never run"}.
+      No spend on any platform in the last {s.windowDays} days.
+    </Empty>
+  );
+}
+
+/** Rows exist but nothing will refresh them. Showing the numbers without saying
+ *  so would present a frozen snapshot as current. */
+function StaleFeedNotice({ s }: { s: SpendDashboard }) {
+  if (s.feedConfigured || s.platforms.length === 0) return null;
+  return (
+    <p className="mt-3 rounded-xl border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.05] px-3 py-2 text-[11px] leading-5 text-white/60">
+      These figures will not update: <code className="font-mono text-white/80">WINDSOR_API_KEY</code> is unset, so the
+      nightly job cannot fetch spend. What is shown is whatever last landed.
+    </p>
+  );
+}
+
+/**
+ * The two blind spots, stated as amounts.
+ *
+ * A ROAS table that quietly covers 40% of spend is worse than one that says
+ * which 60% is missing, so both gaps are quantified against the totals they are
+ * missing from.
+ */
+function BlindSpots({ s }: { s: SpendDashboard }) {
+  const spendShare = s.totals.spend > 0 ? s.untaggedSpend / s.totals.spend : null;
+  const revenueShare = s.totals.revenue > 0 ? s.unattributedRevenueTotal / s.totals.revenue : null;
+
+  if (s.untaggedSpend === 0 && s.unattributedRevenueTotal === 0) {
+    return (
+      <Empty>
+        Nothing is unmeasured: every ad that spent carries a readable{" "}
+        <code className="font-mono text-white/60">utm_content</code>, and every attributed order names one.
       </Empty>
     );
   }
 
   return (
-    <>
-      <div className="overflow-x-auto">
-      <table className="w-full min-w-[40rem] text-left text-xs">
-        <thead>
-          <tr className="text-[10px] uppercase tracking-[0.14em] text-white/35">
-            {["Platform", "Spend", "Revenue", "Orders", "CTR", "CPA", "ROAS"].map((h) => (
-              <th key={h} className="pb-2 pr-4 font-medium">{h}</th>
+    <div className="space-y-4">
+      {s.untaggedSpend > 0 ? (
+        <div>
+          <p className="text-xs text-white/60">
+            <span className="text-white">{money(s.untaggedSpend)}</span>
+            {spendShare === null ? null : <> — {pct(spendShare)} of spend</>} cannot be matched to revenue: these ads
+            carry no creative tag. Counted in the platform table above; absent from the ad table.
+          </p>
+          <ul className="mt-2 space-y-1.5 text-xs">
+            {s.untagged.slice(0, 6).map((u) => (
+              <li key={`${u.platform}:${u.adId}`} className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2">
+                <span className="min-w-0 truncate text-white/70">
+                  <span className="capitalize text-white/50">{u.platform}</span> · {u.adName ?? u.adId}
+                </span>
+                <span className="flex shrink-0 items-center gap-3">
+                  <span className="font-mono text-[10px] text-white/30">{u.reason.replace(/_/g, " ")}</span>
+                  <span className="text-white/80">{money(u.spend)}</span>
+                </span>
+              </li>
             ))}
-          </tr>
-        </thead>
-        <tbody className="text-white/75">
-          {s.platforms.map((p) => (
-            <tr key={p.platform} className="border-t border-white/[0.06]">
-              <td className="py-2.5 pr-4 capitalize text-white">{p.platform}</td>
-              <td className="py-2.5 pr-4">{money(p.spend)}</td>
-              <td className="py-2.5 pr-4">{money(p.revenue)}</td>
-              <td className="py-2.5 pr-4">{p.orders}</td>
-              <td className="py-2.5 pr-4">{pct(p.ctr)}</td>
-              <td className="py-2.5 pr-4">{p.cpa === null ? "—" : money(p.cpa)}</td>
-              {/* Profitability is the one number worth colouring: above 1.0 the
-                  platform returned more than it cost. */}
-              <td className={`py-2.5 pr-4 font-medium ${p.roas === null ? "text-white/40" : p.roas >= 1 ? "text-emerald-300" : "text-red-300"}`}>
-                {ratio(p.roas)}
-              </td>
-            </tr>
-          ))}
-          <tr className="border-t border-white/20 font-medium text-white">
-            <td className="py-2.5 pr-4">All</td>
-            <td className="py-2.5 pr-4">{money(s.totals.spend)}</td>
-            <td className="py-2.5 pr-4">{money(s.totals.revenue)}</td>
-            <td className="py-2.5 pr-4">{s.totals.orders}</td>
-            <td className="py-2.5 pr-4">{pct(s.totals.ctr)}</td>
-            <td className="py-2.5 pr-4">{s.totals.cpa === null ? "—" : money(s.totals.cpa)}</td>
-            <td className="py-2.5 pr-4">{ratio(s.totals.roas)}</td>
-          </tr>
-        </tbody>
-        </table>
-      </div>
-      {/* Rows exist but nothing will refresh them. Showing the numbers without
-          saying so would present a frozen snapshot as current. */}
-      {!s.feedConfigured ? (
-        <p className="mt-3 rounded-xl border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.05] px-3 py-2 text-[11px] leading-5 text-white/60">
-          These figures will not update: <code className="font-mono text-white/80">WINDSOR_API_KEY</code> is unset, so the
-          nightly job cannot fetch spend. What is shown is whatever last landed.
-        </p>
+          </ul>
+        </div>
       ) : null}
-    </>
-  );
-}
 
-/** Spend that cannot be tied to revenue, and why. The size of the blind spot is
- *  part of the report — a ROAS table that quietly covers 40% of spend is worse
- *  than one that says so. */
-function UntaggedSpend({ s }: { s: SpendDashboard }) {
-  if (!s.schemaReady || s.untagged.length === 0) {
-    return <Empty>Every ad that spent carries a readable <code className="font-mono text-white/60">utm_content</code>.</Empty>;
-  }
-  const share = s.totals.spend > 0 ? s.untaggedSpend / s.totals.spend : null;
-  return (
-    <>
-      <p className="mb-3 text-xs text-white/60">
-        <span className="text-white">{money(s.untaggedSpend)}</span>
-        {share === null ? null : <> — {pct(share)} of all spend</>} cannot be matched to revenue, because these ads carry
-        no creative tag. Their spend is counted above; their sales are not.
-      </p>
-      <ul className="space-y-2 text-xs">
-        {s.untagged.slice(0, 10).map((u) => (
-          <li key={`${u.platform}:${u.adId}`} className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5">
-            <span className="min-w-0 truncate text-white/70">
-              <span className="capitalize text-white/50">{u.platform}</span> · {u.adName ?? u.adId}
-              {u.campaignName ? <span className="text-white/35"> · {u.campaignName}</span> : null}
-            </span>
-            <span className="flex shrink-0 items-center gap-3">
-              <span className="font-mono text-[10px] text-white/30">{u.reason.replace(/_/g, " ")}</span>
-              <span className="text-white/80">{money(u.spend)}</span>
-            </span>
-          </li>
-        ))}
-      </ul>
-    </>
+      {s.unattributedRevenueTotal > 0 ? (
+        <div>
+          <p className="text-xs text-white/60">
+            <span className="text-white">{money(s.unattributedRevenueTotal)}</span>
+            {revenueShare === null ? null : <> — {pct(revenueShare)} of revenue</>} names a platform but no ad, so it
+            counts toward platform ROAS and toward no single creative.
+          </p>
+          <ul className="mt-2 space-y-1.5 text-xs">
+            {s.unattributedRevenue.slice(0, 4).map((u) => (
+              <li key={`${u.platform}:${u.utmCampaign ?? ""}`} className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2">
+                <span className="min-w-0 truncate text-white/70">
+                  <span className="capitalize text-white/50">{u.platform}</span>
+                  {u.utmCampaign ? ` · ${u.utmCampaign}` : " · no campaign tag"}
+                </span>
+                <span className="shrink-0 text-white/80">
+                  {money(u.revenue)} <span className="text-white/35">({u.orders})</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -258,55 +384,106 @@ export default async function AdsDashboardPage() {
       </Panel>
 
       <Panel
-        title="What each platform earned"
-        subtitle={`last ${spend.windowDays} days · spend from the platforms, revenue from paid orders, last-touch`}
+        title={`Advertising, last ${spend.windowDays} days`}
+        subtitle="spend from the ad platforms · revenue from our own paid orders, last-touch, net of refunds"
       >
-        <PlatformRoas s={spend} />
+        {spend.platforms.length === 0 ? <SpendEmptyState s={spend} /> : <Headline s={spend} />}
+        <StaleFeedNotice s={spend} />
         <p className="mt-3 text-[11px] leading-5 text-white/30">
-          Revenue is this store&apos;s own attributed revenue, net of refunds — not the platforms&apos; conversion
-          reporting. The two disagree by design: each platform counts conversions under its own attribution model, and
-          blending them would pick a winner arbitrarily.
+          Revenue and ROAS use this store&apos;s own attributed orders, never the platforms&apos; conversion reporting.
+          The two disagree by design — each platform counts under its own attribution model — so the platforms&apos; own
+          count sits in its own column below rather than being blended in.
         </p>
       </Panel>
 
+      {spend.platforms.length > 0 ? (
+        <>
+          <Panel title="By platform" subtitle="which channel is working — needs only utm_source, so it works before per-ad tagging does">
+            <MetricTable
+              rows={spend.platforms}
+              label="Platform"
+              name={(p) => <span className="capitalize">{p.platform}</span>}
+              empty="No spend on any platform in this window."
+            />
+          </Panel>
+
+          <Panel title="By campaign" subtitle="keyed on utm_campaign from the ad's landing URL, not the platform's campaign name">
+            <MetricTable
+              rows={spend.campaigns}
+              label="Campaign"
+              name={(c) => c.utmCampaign}
+              sub={(c) => <span className="capitalize">{c.platform}</span>}
+              empty={
+                <>
+                  No campaign carries a <code className="font-mono text-white/60">utm_campaign</code> tag yet.
+                </>
+              }
+            />
+          </Panel>
+
+          <div className="grid gap-5 xl:grid-cols-2">
+            <Panel title="Winners" subtitle="best ROAS among ads that spent">
+              <MetricTable
+                rows={spend.winners}
+                label="Ad"
+                compact
+                name={(c) => c.utmContent}
+                sub={(c) => (
+                  <span className="capitalize">
+                    {c.platform}
+                    {c.ads > 1 ? ` · ${c.ads} ads` : ""}
+                  </span>
+                )}
+                empty={
+                  <>
+                    No ad has both spent and carried a <code className="font-mono text-white/60">utm_content</code> tag.
+                  </>
+                }
+              />
+            </Panel>
+
+            <Panel title="Losers" subtitle="worst ROAS among ads that spent">
+              <MetricTable
+                rows={spend.losers}
+                label="Ad"
+                compact
+                name={(c) => c.utmContent}
+                sub={(c) => <span className="capitalize">{c.platform}</span>}
+                empty="Not enough tagged ads to rank a worst yet."
+              />
+            </Panel>
+          </div>
+        </>
+      ) : null}
+
       <div className="grid gap-5 lg:grid-cols-2">
-        <Panel title="Best and worst ads" subtitle="ranked by ROAS among ads that spent, tagged ads only">
-          {spend.creatives.length === 0 ? (
-            <Empty>
-              No ad has both spent and carried a creative tag yet. Tag each ad&apos;s landing URL with{" "}
-              <code className="font-mono text-white/60">utm_content</code> and per-ad ROAS appears here.
-            </Empty>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[32rem] text-left text-xs">
-                <thead>
-                  <tr className="text-[10px] uppercase tracking-[0.14em] text-white/35">
-                    {["Creative", "Platform", "Spend", "Revenue", "CPA", "ROAS"].map((h) => (
-                      <th key={h} className="pb-2 pr-4 font-medium">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="text-white/75">
-                  {spend.creatives.slice(0, 10).map((c) => (
-                    <tr key={`${c.platform}:${c.utmContent}`} className="border-t border-white/[0.06]">
-                      <td className="py-2.5 pr-4 text-white">{c.utmContent}</td>
-                      <td className="py-2.5 pr-4 capitalize text-white/50">{c.platform}</td>
-                      <td className="py-2.5 pr-4">{money(c.spend)}</td>
-                      <td className="py-2.5 pr-4">{money(c.revenue)}</td>
-                      <td className="py-2.5 pr-4">{c.cpa === null ? "—" : money(c.cpa)}</td>
-                      <td className={`py-2.5 pr-4 font-medium ${c.roas === null ? "text-white/40" : c.roas >= 1 ? "text-emerald-300" : "text-red-300"}`}>
-                        {ratio(c.roas)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+        {/* Says the real count, and says so only when rows were actually
+            dropped — "at most N shown" when N is all of them reads as a
+            truncation that did not happen. */}
+        <Panel
+          title="Every tagged ad"
+          subtitle={
+            spend.creatives.length >= TABLE_LIMIT
+              ? `ranked by ROAS · top ${TABLE_LIMIT} of more`
+              : `ranked by ROAS · ${spend.creatives.length} tagged ${spend.creatives.length === 1 ? "ad" : "ads"}`
+          }
+        >
+          <MetricTable
+            rows={spend.creatives}
+            label="Ad"
+            name={(c) => c.utmContent}
+            sub={(c) => <span className="capitalize">{c.platform}</span>}
+            empty={
+              <>
+                No ad has both spent and carried a creative tag yet. Tag each ad&apos;s landing URL with{" "}
+                <code className="font-mono text-white/60">utm_content</code> and per-ad ROAS appears here.
+              </>
+            }
+          />
         </Panel>
 
-        <Panel title="Unmeasurable spend" subtitle="ads whose sales cannot be traced back to them">
-          <UntaggedSpend s={spend} />
+        <Panel title="What is not measured" subtitle="the size of this page's blind spot, stated rather than hidden">
+          <BlindSpots s={spend} />
         </Panel>
       </div>
 

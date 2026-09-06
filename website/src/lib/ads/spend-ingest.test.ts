@@ -177,7 +177,7 @@ describe("reading tags back off an ad the platform reported", () => {
     expect(parseAdTagsFromUrl("https://x.test/?utm_content=hook%20a!").utmContent).toBeNull();
   });
 
-  it("returns nulls for no URL at all, which is Reddit and Snapchat every time", () => {
+  it("returns nulls for no URL at all, which is Snapchat every time", () => {
     expect(parseAdTagsFromUrl(null).utmContent).toBeNull();
     expect(parseAdTagsFromUrl("").utmContent).toBeNull();
     expect(parseAdTagsFromUrl("not a url").utmContent).toBeNull();
@@ -187,29 +187,6 @@ describe("reading tags back off an ad the platform reported", () => {
 // -----------------------------------------------------------------------------
 // The spend feed
 // -----------------------------------------------------------------------------
-
-describe("field maps match what each connector actually exposes", () => {
-  it("asks Meta for link_url and TikTok for landing_page_url", () => {
-    expect(fieldsFor("facebook")).toContain("link_url");
-    expect(fieldsFor("facebook")).toContain("adset_id");
-    expect(fieldsFor("tiktok")).toContain("landing_page_url");
-    expect(fieldsFor("tiktok")).toContain("adgroup_id");
-  });
-
-  it("asks Reddit and Snapchat for no URL, because they expose none", () => {
-    expect(fieldsFor("reddit").some((f) => f.includes("url"))).toBe(false);
-    expect(fieldsFor("snapchat").some((f) => f.includes("url"))).toBe(false);
-    expect(fieldsFor("snapchat")).toContain("adsquad_id");
-  });
-
-  it("always asks for the common eight", () => {
-    for (const c of ["facebook", "tiktok", "reddit", "snapchat"] as const) {
-      for (const f of ["date", "campaign", "campaign_id", "ad_id", "ad_name", "spend", "clicks", "impressions"]) {
-        expect(fieldsFor(c), `${c} missing ${f}`).toContain(f);
-      }
-    }
-  });
-});
 
 describe("numbers — unreadable is null, never zero", () => {
   it("reads the shapes a platform actually sends", () => {
@@ -455,8 +432,11 @@ describe("toDbRow", () => {
       adgroupId: "g1",
       adgroupName: "Broad",
       adName: "Hook A",
-      landingUrl: "https://x.test/?utm_content=hook_a",
+      landingUrl: "https://x.test/?utm_content=hook_a&utm_campaign=launch",
       utmContent: "hook_a",
+      utmCampaign: "launch",
+      platformConversions: 3,
+      platformConversionValue: 120,
       spend: 1.5,
       impressions: 10,
       clicks: 2,
@@ -472,6 +452,9 @@ describe("toDbRow", () => {
       adgroup_name: "Broad",
       ad_name: "Hook A",
       utm_content: "hook_a",
+      utm_campaign: "launch",
+      platform_conversions: 3,
+      platform_conversion_value: 120,
       spend: 1.5,
       impressions: 10,
       clicks: 2,
@@ -542,17 +525,20 @@ describe("runSpendIngest", () => {
     expect(result.totalWritten).toBe(1);
   });
 
-  it("reports an unapplied migration in the words that fix it", async () => {
-    const result = await runSpendIngest({
-      apiKey: "k",
-      now: new Date("2026-09-06T00:00:00Z"),
-      upsert: async () => ({ error: { code: "42P01", message: 'relation "ad_spend_daily" does not exist' } }),
-      connectors: ["facebook"],
-      fetchImpl: (async () =>
-        jsonResponse({ data: [{ date: "2026-09-05", ad_id: "f1", spend: "1.00" }] })) as unknown as typeof fetch,
-    });
-    expect(result.connectors[0].status).toBe("failed");
-    expect(result.connectors[0].error).toContain("ads-spend-roas.sql");
+  it("reports an unapplied migration in the words that fix it, loudly", async () => {
+    // Every connector failing is an incident: it throws so the cron sweep's
+    // recordSystemAlert path fires, rather than returning an empty result that
+    // reads exactly like "no spend yet".
+    await expect(
+      runSpendIngest({
+        apiKey: "k",
+        now: new Date("2026-09-06T00:00:00Z"),
+        upsert: async () => ({ error: { code: "42P01", message: 'relation "ad_spend_daily" does not exist' } }),
+        connectors: ["facebook"],
+        fetchImpl: (async () =>
+          jsonResponse({ data: [{ date: "2026-09-05", ad_id: "f1", spend: "1.00" }] })) as unknown as typeof fetch,
+      }),
+    ).rejects.toThrow(/ads-spend-roas\.sql/);
   });
 
   it("skips a fetch when the stored data is still fresh", async () => {

@@ -1,34 +1,41 @@
 -- =============================================================================
--- AD SPEND AND ROAS — the missing half of the ads system.
+-- AD SPEND AND ROAS — the layer that lets revenue be compared against cost.
 --
 -- `ads-system.sql` built `ad_performance_daily`, which holds spend beside
--- site-side revenue per CREATIVE. It has never held a row, because nothing in
--- the codebase writes it and its `creative_id` foreign key requires a creative
--- designed inside this system. Ads that already run on the four live platforms
--- have no creative row, so there was nowhere for their spend to land at all.
+-- site-side revenue per CREATIVE. It never held a row, because nothing wrote it
+-- and its `creative_id` foreign key requires a creative designed inside this
+-- system. Ads already running on the four live platforms have no creative row,
+-- so their spend had nowhere to land at all.
 --
--- This file adds the layer underneath: raw per-ad daily spend keyed by the
--- platform's OWN ids, with no dependency on `ad_creatives`. That makes spend
--- storable on day one, and revenue joins onto it through UTM tags rather than
--- through a foreign key.
+-- This is the layer underneath: raw per-ad daily spend keyed by the platform's
+-- OWN ids, with no dependency on `ad_creatives`. Revenue joins to it through UTM
+-- tags rather than through a foreign key.
 --
--- THREE THINGS ARE DELIBERATE.
+-- FIVE THINGS ARE DELIBERATE.
 --
 -- 1. REVENUE IS A VIEW, NOT A TABLE. A revenue table needs a sync job, and a
---    sync job can double-count, lag, or silently stop. Derived straight from
---    `orders` on every read, revenue cannot drift from the money record — and
---    a refund issued three weeks later corrects the original day's ROAS by
---    itself, with nothing to re-run.
+--    sync job can double-count, lag, or silently stop. Derived from `orders` on
+--    every read, revenue cannot drift from the money record — and a refund
+--    issued three weeks later corrects the original day's ROAS by itself.
 --
--- 2. SPEND IS A TABLE, because it is not ours. It comes from four platforms
---    over a network, gets restated for days afterwards, and must survive a
---    failed fetch without losing what already landed.
+-- 2. SPEND IS A TABLE, because it is not ours. It arrives from four platforms
+--    over a network, gets restated for days, and must survive a failed fetch
+--    without losing what already landed.
 --
--- 3. PLATFORM-LEVEL ROAS WORKS WITH ZERO SETUP. Per-ad ROAS needs every ad
---    tagged with `utm_content`; platform-level ROAS needs only `utm_source`,
---    which the platforms' own auto-tagging and any sane campaign URL already
---    carry. The owner gets a usable answer before the tagging discipline is
---    complete, instead of an empty dashboard until it is.
+-- 3. SPEND IS AGGREGATED TO THE JOIN GRAIN BEFORE REVENUE IS JOINED. This is
+--    the single most important rule in the file and section 4 explains what it
+--    prevents. Every ROAS view below is `spend grouped to grain X` LEFT JOIN
+--    `revenue grouped to grain X`, one row to one row, never a fan-out.
+--
+-- 4. PLATFORM-REPORTED CONVERSIONS ARE KEPT SEPARATE and are never mixed into
+--    ROAS. Each platform counts conversions under its own attribution model
+--    (view-through windows, cross-device, its own idea of a purchase) and they
+--    will disagree with ours. Storing both and labelling them makes the
+--    disagreement visible instead of arbitrary.
+--
+-- 5. PLATFORM-LEVEL ROAS WORKS WITH NO TAGGING AT ALL. Per-ad ROAS needs every
+--    ad tagged with `utm_content`; platform-level needs only `utm_source`. The
+--    owner gets a usable answer before the tagging discipline is complete.
 --
 -- Purely additive. Nothing here modifies orders, payments or any commerce path.
 -- Safe to run more than once.
@@ -39,13 +46,14 @@
 -- -----------------------------------------------------------------------------
 
 -- Spend arrives labelled by connector (`facebook`); tags arrive labelled by
--- whatever went in the URL (`meta`, `Facebook`, `fb`). Joining those two
--- directly is the single most likely way for this system to report a real
--- campaign as unattributed, so the mapping is a function rather than a join
--- condition repeated in three views.
+-- whatever went into the URL (`meta`, `Facebook`, `fb`). Joining those directly
+-- is the most likely way for this system to report a real campaign as
+-- unattributed, so the mapping is a function rather than a join condition
+-- repeated in four views. Mirrored by adPlatformKey() in src/lib/ads/utm.ts,
+-- and spend-aggregate.test.ts pins the two together key for key.
 --
--- An unrecognised source is returned lowercased rather than mapped to null: an
--- unknown platform is a fact worth seeing in the output, not a row to discard.
+-- An unrecognised source is lowercased and returned rather than mapped to null:
+-- an unknown platform is a fact worth seeing, not a row to discard.
 create or replace function public.ad_platform_key(raw text)
 returns text
 language sql
@@ -85,17 +93,24 @@ create table if not exists public.ad_spend_daily (
   adgroup_name    text,
   ad_name         text,
 
-  -- The ad's destination, and the creative tag parsed out of it. Only Meta and
-  -- TikTok expose a landing URL through the connector; Reddit and Snapchat do
-  -- not, so this is null for those and per-ad revenue there depends on the tag
-  -- being discoverable another way. Null means "we could not read it", never
-  -- "there wasn't one".
+  -- The ad's destination, and the tags parsed out of it. Meta, TikTok and
+  -- Reddit all expose a landing URL through the connector; Snapchat does not,
+  -- so these stay null there and its ads must be NAMED for their tag instead.
+  -- Null means "we could not read it", never "there wasn't one".
   landing_url     text,
   utm_content     text,
+  utm_campaign    text,
 
   spend           numeric(12,2) not null default 0,
   impressions     bigint not null default 0,
   clicks          bigint not null default 0,
+
+  -- THE PLATFORM'S OWN CONVERSION COUNT, never mixed into our ROAS. See the
+  -- header, point 4. Nullable on purpose: 0 means the platform reported zero
+  -- conversions, null means it reported none at all (no pixel, or the field is
+  -- unavailable), and those must stay distinguishable.
+  platform_conversions      bigint,
+  platform_conversion_value numeric(12,2),
 
   -- Stored rather than assumed. Reddit reports USD explicitly; the others
   -- report in the ad account's currency, and a mixed-currency sum presented as
@@ -106,36 +121,57 @@ create table if not exists public.ad_spend_daily (
   ingested_at     timestamptz not null default now(),
 
   -- The platform's own identity for the row. An ingest that re-fetches the same
-  -- day — which it does, every night, because platforms restate — updates in
+  -- day — which it does on every run, because platforms restate — updates in
   -- place instead of adding a second row. Doubled spend is the characteristic
   -- failure of ad reporting pipelines and this key is what forecloses it.
   primary key (platform, ad_id, stat_date)
 );
 
+-- Added separately so an existing table gains them without a rebuild.
+alter table public.ad_spend_daily
+  add column if not exists utm_campaign              text,
+  add column if not exists platform_conversions      bigint,
+  add column if not exists platform_conversion_value numeric(12,2);
+
 create index if not exists ad_spend_daily_date_idx on public.ad_spend_daily (stat_date desc);
 create index if not exists ad_spend_daily_platform_date_idx on public.ad_spend_daily (platform, stat_date desc);
 create index if not exists ad_spend_daily_utm_content_idx on public.ad_spend_daily (utm_content) where utm_content is not null;
+create index if not exists ad_spend_daily_utm_campaign_idx on public.ad_spend_daily (utm_campaign) where utm_campaign is not null;
 
 comment on table public.ad_spend_daily is
-  'Raw per-ad daily spend pulled from the ad platforms. Keyed by the platform''s own ad id so it needs no creative row to exist. Upserted on re-fetch; never appended.';
+  'Raw per-ad daily spend from the ad platforms. Keyed by the platform''s own ad id so it needs no creative row. Upserted on re-fetch; never appended. stat_date is the ad account''s reporting day - see ad_revenue_daily for the timezone note.';
 
 -- -----------------------------------------------------------------------------
 -- 3. Revenue — derived from the money record, never stored
 -- -----------------------------------------------------------------------------
 
 -- LAST TOUCH, matching how every ad platform reports, so the numbers beside
--- each other are answering the same question. First touch is available on
--- `order_attribution` for the different question of what FINDS customers.
+-- each other answer the same question. First touch stays on `order_attribution`
+-- for the different question of what FINDS customers; mixing the two in one
+-- number is how a channel gets credited twice.
 --
--- `payment_status = 'paid'` is load-bearing and not a tidy-up. `amount_paid`
--- is non-zero on failed and cancelled orders in this database — 15 of them
+-- `payment_status = 'paid'` is load-bearing and not a tidy-up. `amount_paid` is
+-- non-zero on failed and cancelled orders in this database — 15 of them
 -- carrying $1,527 between them at the time of writing — so a sum without this
 -- filter reports revenue the store never took and inflates ROAS accordingly.
 --
--- A refund is subtracted on the ORDER's date, not the refund's. That is what
--- makes the ROAS of a given day's spend eventually correct rather than
--- perpetually optimistic: the day that bought the customer is the day that
--- should carry the reversal.
+-- A refund is subtracted on the ORDER's date, not the refund's, so the day that
+-- bought the customer carries its own reversal and its ROAS becomes eventually
+-- correct rather than permanently optimistic. Netted inside the sum, with no
+-- `gross_revenue` beside it: ledger-sql-parity.test.ts forbids any sum of
+-- amount_paid that does not net refund_amount in the same expression, and a
+-- gross figure sitting next to a net one is an invitation to chart the wrong
+-- one. NOT clamped at zero — an over-refunded order must stay negative or it
+-- disagrees with the ledger exactly where the store lost money.
+--
+-- TIMEZONE. Orders are bucketed by UTC day; `ad_spend_daily.stat_date` is the
+-- day the ad account reports in, which for these four accounts is not
+-- guaranteed to be UTC. A purchase near midnight can therefore land one day
+-- either side of the spend that produced it. That is a real limit and it is
+-- accepted rather than hidden: it moves single-day rows, and it does not move a
+-- 30-day total except at the two window edges, which is why the dashboard leads
+-- with a window total and treats the daily series as a trend rather than a
+-- ledger. Do not "fix" this by shifting one side without the other.
 create or replace view public.ad_revenue_daily
 with (security_invoker = true) as
 select
@@ -144,18 +180,8 @@ select
   oa.last_utm_source                             as utm_source,
   oa.last_utm_campaign                           as utm_campaign,
   oa.last_utm_content                            as utm_content,
-  count(*)                                         as orders,
-  coalesce(sum(o.refund_amount), 0)::numeric(12,2)  as refunds,
-  -- Netted inside the sum, and there is deliberately no `gross_revenue` column
-  -- beside it. `ledger-sql-parity.test.ts` forbids any sum of `amount_paid`
-  -- that does not net `refund_amount` in the SAME expression, because a gross
-  -- figure sitting next to a net one is an invitation to chart the wrong one —
-  -- and the wrong one always flatters. Refunds are exposed on their own, which
-  -- answers "how much came back" without offering an inflated revenue number.
-  --
-  -- NOT clamped at zero: `greatest(0, ...)` would report an over-refunded order
-  -- as $0 instead of negative, disagreeing with the ledger on exactly the orders
-  -- where the store lost money.
+  count(*)                                       as orders,
+  coalesce(sum(o.refund_amount), 0)::numeric(12,2) as refunds,
   coalesce(sum(o.amount_paid - o.refund_amount), 0)::numeric(12,2) as net_revenue
 from public.orders o
 join public.order_attribution oa on oa.order_id = o.order_id
@@ -166,84 +192,138 @@ group by 1, 2, 3, 4, 5;
 revoke all on public.ad_revenue_daily from anon, authenticated;
 
 comment on view public.ad_revenue_daily is
-  'Last-touch attributed revenue per day/platform/campaign/creative, derived live from orders. Paid orders only.';
+  'Last-touch attributed revenue per day/platform/campaign/creative, derived live from paid orders only. The finest grain; every ROAS view below re-groups it to its own grain before joining.';
 
 -- -----------------------------------------------------------------------------
--- 4. Per-ad ROAS — needs utm_content on every ad
+-- 4. ROAS at three grains — spend aggregated to the grain FIRST
 -- -----------------------------------------------------------------------------
 
--- Inner-joined on the tag, so this view contains exactly the ads whose spend
--- and revenue could actually be tied together. An ad missing from here is not
--- an ad that made nothing; it is an ad that is not tagged, and those two must
--- never render identically. `ad_spend_untagged` below names them explicitly.
-create or replace view public.ad_creative_roas_daily
+-- WHY EVERY VIEW BELOW STARTS WITH A GROUP BY, and what it prevents.
+--
+-- `ad_spend_daily` is one row per AD. `ad_revenue_daily` is one row per
+-- (platform, day, campaign, creative). Those grains are not the same, and
+-- joining them directly fans out: two ads sharing one `utm_content` on the same
+-- platform and day would EACH match the single revenue row, and summing the
+-- result reports that creative's revenue twice. Three ads, three times. The
+-- error scales with how sensibly the ads are tagged, so it would appear exactly
+-- when the tagging discipline started working.
+--
+-- The fix is structural rather than careful: reduce spend to precisely the
+-- revenue key, then join one row to one row. Applied identically at all three
+-- grains so none of them can drift into the fan-out.
+
+drop view if exists public.ad_creative_roas_daily cascade;
+drop view if exists public.ad_campaign_daily cascade;
+drop view if exists public.ad_platform_daily cascade;
+drop view if exists public.ad_spend_untagged cascade;
+drop view if exists public.ad_revenue_unattributed cascade;
+
+-- PER CREATIVE. Inner-joined on the tag, so this contains exactly the ads whose
+-- spend and revenue can be tied together. An ad missing from here is not an ad
+-- that made nothing; it is an ad that is not tagged, and `ad_spend_untagged`
+-- names those explicitly so the two never render alike.
+create view public.ad_creative_roas_daily
 with (security_invoker = true) as
+with spend as (
+  select
+    platform, stat_date, utm_content,
+    sum(spend)                     as spend,
+    sum(impressions)               as impressions,
+    sum(clicks)                    as clicks,
+    sum(platform_conversions)      as platform_conversions,
+    count(*)                       as ads,
+    min(ad_name)                   as ad_name,
+    min(campaign_name)             as campaign_name
+  from public.ad_spend_daily
+  where utm_content is not null
+  group by 1, 2, 3
+),
+revenue as (
+  select platform, stat_date, utm_content,
+         sum(orders) as orders, sum(net_revenue) as net_revenue, sum(refunds) as refunds
+  from public.ad_revenue_daily
+  where utm_content is not null
+  group by 1, 2, 3
+)
 select
-  s.platform,
-  s.stat_date,
-  s.utm_content,
-  s.ad_id,
-  s.ad_name,
-  s.campaign_name,
-  s.spend,
-  s.impressions,
-  s.clicks,
+  s.platform, s.stat_date, s.utm_content, s.ad_name, s.campaign_name, s.ads,
+  s.spend, s.impressions, s.clicks,
+  s.platform_conversions,
   coalesce(r.orders, 0)      as orders,
   coalesce(r.net_revenue, 0) as net_revenue,
-  case when s.impressions > 0 then s.clicks::numeric / s.impressions end as ctr,
-  case when s.clicks > 0 then s.spend / s.clicks end                    as cpc,
-  case when coalesce(r.orders, 0) > 0 then s.spend / r.orders end        as cpa,
-  case when s.spend > 0 then coalesce(r.net_revenue, 0) / s.spend end    as roas
-from public.ad_spend_daily s
-left join public.ad_revenue_daily r
-  on r.platform = s.platform
- and r.stat_date = s.stat_date
- and r.utm_content = s.utm_content
-where s.utm_content is not null;
+  coalesce(r.refunds, 0)     as refunds,
+  case when s.impressions > 0 then s.clicks::numeric / s.impressions end       as ctr,
+  case when s.clicks > 0 then s.spend / s.clicks end                           as cpc,
+  case when s.impressions > 0 then (s.spend / s.impressions) * 1000 end        as cpm,
+  case when s.clicks > 0 then coalesce(r.orders, 0)::numeric / s.clicks end    as cvr,
+  case when coalesce(r.orders, 0) > 0 then s.spend / r.orders end              as cpa,
+  case when s.spend > 0 then coalesce(r.net_revenue, 0) / s.spend end          as roas
+from spend s
+left join revenue r
+  on r.platform = s.platform and r.stat_date = s.stat_date and r.utm_content = s.utm_content;
 
 revoke all on public.ad_creative_roas_daily from anon, authenticated;
 
--- The ads that cannot be measured, and why. Kept as a view so the dashboard can
--- show the size of its own blind spot rather than quietly reporting a subset.
-create or replace view public.ad_spend_untagged
+-- PER CAMPAIGN. Both sides key on the UTM campaign tag, not on the platform's
+-- own campaign name. Those are different strings — one is typed into the URL,
+-- the other into the ad platform — and joining them would report every campaign
+-- as unattributed unless the owner happened to name them identically.
+create view public.ad_campaign_daily
 with (security_invoker = true) as
+with spend as (
+  select
+    platform, stat_date, utm_campaign,
+    sum(spend) as spend, sum(impressions) as impressions, sum(clicks) as clicks,
+    sum(platform_conversions) as platform_conversions,
+    min(campaign_name) as campaign_name
+  from public.ad_spend_daily
+  where utm_campaign is not null
+  group by 1, 2, 3
+),
+revenue as (
+  select platform, stat_date, utm_campaign,
+         sum(orders) as orders, sum(net_revenue) as net_revenue
+  from public.ad_revenue_daily
+  where utm_campaign is not null
+  group by 1, 2, 3
+)
 select
-  s.platform,
-  s.stat_date,
-  s.ad_id,
-  s.ad_name,
-  s.campaign_name,
-  s.landing_url,
-  s.spend,
-  case
-    when s.landing_url is null then 'no_landing_url_from_platform'
-    else 'landing_url_carries_no_utm_content'
-  end as reason
-from public.ad_spend_daily s
-where s.utm_content is null
-  and s.spend > 0;
+  s.platform, s.stat_date, s.utm_campaign, s.campaign_name,
+  s.spend, s.impressions, s.clicks, s.platform_conversions,
+  coalesce(r.orders, 0)      as orders,
+  coalesce(r.net_revenue, 0) as net_revenue,
+  case when s.impressions > 0 then s.clicks::numeric / s.impressions end       as ctr,
+  case when s.clicks > 0 then s.spend / s.clicks end                           as cpc,
+  case when s.impressions > 0 then (s.spend / s.impressions) * 1000 end        as cpm,
+  case when s.clicks > 0 then coalesce(r.orders, 0)::numeric / s.clicks end    as cvr,
+  case when coalesce(r.orders, 0) > 0 then s.spend / r.orders end              as cpa,
+  case when s.spend > 0 then coalesce(r.net_revenue, 0) / s.spend end          as roas
+from spend s
+left join revenue r
+  on r.platform = s.platform and r.stat_date = s.stat_date and r.utm_campaign = s.utm_campaign;
 
-revoke all on public.ad_spend_untagged from anon, authenticated;
+revoke all on public.ad_campaign_daily from anon, authenticated;
 
--- -----------------------------------------------------------------------------
--- 5. Platform ROAS — works with no tagging at all
--- -----------------------------------------------------------------------------
-
--- FULL OUTER JOIN, because both halves are informative on their own: spend with
--- no revenue is a platform losing money, and revenue with no spend is either
+-- PER PLATFORM. The one view that needs no tagging beyond `utm_source`, which
+-- is why the dashboard leads with it.
+--
+-- FULL OUTER JOIN, because both halves are informative alone: spend with no
+-- revenue is a platform losing money, and revenue with no spend is either
 -- organic traffic wearing a paid tag or — more usefully — a platform whose
 -- spend feed has stopped. An inner join would hide both.
-create or replace view public.ad_platform_daily
+create view public.ad_platform_daily
 with (security_invoker = true) as
 with spend as (
   select platform, stat_date,
-         sum(spend) as spend, sum(impressions) as impressions, sum(clicks) as clicks
+         sum(spend) as spend, sum(impressions) as impressions, sum(clicks) as clicks,
+         sum(platform_conversions) as platform_conversions,
+         sum(platform_conversion_value) as platform_conversion_value
   from public.ad_spend_daily
   group by 1, 2
 ),
 revenue as (
   select platform, stat_date,
-         sum(orders) as orders, sum(net_revenue) as net_revenue
+         sum(orders) as orders, sum(net_revenue) as net_revenue, sum(refunds) as refunds
   from public.ad_revenue_daily
   where platform is not null
   group by 1, 2
@@ -254,11 +334,17 @@ select
   coalesce(s.spend, 0)::numeric(12,2)       as spend,
   coalesce(s.impressions, 0)                as impressions,
   coalesce(s.clicks, 0)                     as clicks,
+  s.platform_conversions,
+  s.platform_conversion_value,
   coalesce(r.orders, 0)                     as orders,
   coalesce(r.net_revenue, 0)::numeric(12,2) as net_revenue,
-  case when coalesce(s.impressions, 0) > 0 then s.clicks::numeric / s.impressions end as ctr,
-  case when coalesce(r.orders, 0) > 0 then s.spend / r.orders end                     as cpa,
-  case when coalesce(s.spend, 0) > 0 then coalesce(r.net_revenue, 0) / s.spend end    as roas
+  coalesce(r.refunds, 0)::numeric(12,2)     as refunds,
+  case when coalesce(s.impressions, 0) > 0 then s.clicks::numeric / s.impressions end    as ctr,
+  case when coalesce(s.clicks, 0) > 0 then s.spend / s.clicks end                        as cpc,
+  case when coalesce(s.impressions, 0) > 0 then (s.spend / s.impressions) * 1000 end     as cpm,
+  case when coalesce(s.clicks, 0) > 0 then coalesce(r.orders, 0)::numeric / s.clicks end as cvr,
+  case when coalesce(r.orders, 0) > 0 then s.spend / r.orders end                        as cpa,
+  case when coalesce(s.spend, 0) > 0 then coalesce(r.net_revenue, 0) / s.spend end       as roas
 from spend s
 full outer join revenue r on r.platform = s.platform and r.stat_date = s.stat_date;
 
@@ -268,16 +354,53 @@ comment on view public.ad_platform_daily is
   'Spend beside attributed revenue per platform per day. The one view that answers "which platform is working" without requiring per-ad UTM tagging.';
 
 -- -----------------------------------------------------------------------------
+-- 5. The two blind spots, named rather than dropped
+-- -----------------------------------------------------------------------------
+
+-- SPEND WE CANNOT MEASURE: money went out against an ad carrying no readable
+-- creative tag. Its spend is still counted in the platform totals; only its
+-- sales cannot be traced. A ROAS table that quietly covers 60% of spend is
+-- worse than one that says which 40% is missing.
+create view public.ad_spend_untagged
+with (security_invoker = true) as
+select
+  platform, stat_date, ad_id, ad_name, campaign_name, landing_url, spend,
+  case
+    when landing_url is null then 'no_landing_url_from_platform'
+    else 'landing_url_carries_no_utm_content'
+  end as reason
+from public.ad_spend_daily
+where utm_content is null
+  and spend > 0;
+
+revoke all on public.ad_spend_untagged from anon, authenticated;
+
+-- REVENUE WE CANNOT PLACE: a paid order that names a platform but no creative,
+-- so it counts toward that platform's ROAS and toward nothing finer. Surfaced
+-- so the per-ad table's shortfall against the platform table has a stated cause
+-- rather than looking like arithmetic that does not add up.
+create view public.ad_revenue_unattributed
+with (security_invoker = true) as
+select
+  platform, stat_date, utm_source, utm_campaign,
+  sum(orders) as orders, sum(net_revenue) as net_revenue
+from public.ad_revenue_daily
+where utm_content is null
+group by 1, 2, 3, 4;
+
+revoke all on public.ad_revenue_unattributed from anon, authenticated;
+
+-- -----------------------------------------------------------------------------
 -- 6. Reddit and Snapchat click ids
 -- -----------------------------------------------------------------------------
 
 -- `order_attribution` carried ttclid, fbclid and gclid — TikTok, Meta, Google.
 -- Two of the four platforms actually being advertised on had nowhere to put
--- their click id, so the strongest available evidence of a paid click was being
+-- their click id, so the strongest available evidence of a paid click was
 -- dropped at the door. Reddit sends `rdt_cid`; Snapchat sends `ScCid`.
 --
--- Nullable, no default, no backfill. Metadata-only, so this is instant and safe
--- to run against a live table.
+-- Nullable, no default, no backfill: metadata-only, so this is instant and safe
+-- against a live table.
 alter table public.order_attribution
   add column if not exists first_rdt_cid text,
   add column if not exists last_rdt_cid  text,
@@ -298,25 +421,30 @@ create index if not exists order_attribution_last_sccid_idx
 -- 7. RLS — deny by default, matching ads-system.sql section 6
 -- -----------------------------------------------------------------------------
 
--- Same reasoning as `ads-system.sql`: this is spend, CPA and ROAS, and the
--- browser must never read it. RLS with no policy leaves only the service-role
--- key, and the revoke disarms Supabase's default grant to anon/authenticated
--- for databases where the default-privilege lockdown has not been applied.
+-- This is spend, CPA and ROAS: the browser must never read it. RLS with no
+-- policy leaves only the service-role key, and the revoke disarms Supabase's
+-- default grant to anon/authenticated for databases where the default-privilege
+-- lockdown has not been applied.
 --
--- The views above are `security_invoker` for the same reason spelled out there
--- at length: a view without it runs as its owner, the owner is exempt from its
--- own tables' RLS, and the result would be an unauthenticated read of the
--- store's entire ad spend.
+-- The views are `security_invoker` for the reason ads-system.sql spells out at
+-- length: a view without it runs as its owner, the owner is exempt from its own
+-- tables' RLS, and the result is an unauthenticated read of the store's entire
+-- ad spend.
 alter table public.ad_spend_daily enable row level security;
 revoke all on public.ad_spend_daily from anon, authenticated;
 
 -- -----------------------------------------------------------------------------
 -- 8. Verify
 -- -----------------------------------------------------------------------------
--- select platform, sum(spend) spend, sum(net_revenue) revenue,
---        round(avg(roas), 2) roas
---   from public.ad_platform_daily
---  where stat_date >= current_date - 30
+-- select platform, sum(spend) spend, sum(net_revenue) revenue
+--   from public.ad_platform_daily where stat_date >= current_date - 30
 --  group by 1 order by spend desc;
 --
+-- -- The fan-out guard: this must return zero rows. If it ever does not, a ROAS
+-- -- view is joining revenue to un-aggregated spend again.
+-- select platform, stat_date, utm_content, count(*)
+--   from public.ad_creative_roas_daily
+--  group by 1,2,3 having count(*) > 1;
+--
 -- select * from public.ad_spend_untagged order by spend desc limit 20;
+-- select * from public.ad_revenue_unattributed order by net_revenue desc limit 20;

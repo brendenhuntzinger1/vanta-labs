@@ -80,6 +80,9 @@ export function toDbRow(row: SpendRow): Record<string, unknown> {
     ad_name: row.adName,
     landing_url: row.landingUrl,
     utm_content: row.utmContent,
+    utm_campaign: row.utmCampaign,
+    platform_conversions: row.platformConversions,
+    platform_conversion_value: row.platformConversionValue,
     spend: row.spend,
     impressions: row.impressions,
     clicks: row.clicks,
@@ -189,6 +192,29 @@ export async function runSpendIngest(deps: {
 
     totalWritten += outcome.written;
     outcomes.push(outcome);
+  }
+
+  // EVERY CONNECTOR FAILING IS AN INCIDENT, AND IT MUST BE LOUD.
+  //
+  // Returning normally here was a real defect in the first version. A revoked
+  // API key, an expired Windsor grant or a DNS failure would mark all four
+  // connectors "failed" inside a result nobody reads, the sweep would record the
+  // job as successful, and the dashboard would show an empty table. "No spend
+  // yet" and "the feed has been broken for a week" looked identical — the exact
+  // failure this system is built to prevent, sitting in the system itself.
+  //
+  // Throwing routes it into the sweep's own alerting (recordSystemAlert →
+  // operator email), which is the only path that reaches a human.
+  //
+  // One connector failing must NOT throw: Snapchat's grant expiring cannot be
+  // allowed to discard Meta's numbers, and that partial state is reported in
+  // `connectors` for the dashboard to show.
+  const failed = outcomes.filter((o) => o.status === "failed");
+  if (outcomes.length > 0 && failed.length === outcomes.length) {
+    throw new Error(
+      `ad spend ingest failed on every connector (${failed.length}/${outcomes.length}): ` +
+        failed.map((f) => `${f.connector}: ${f.error ?? "unknown"}`).join("; "),
+    );
   }
 
   return {

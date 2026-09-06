@@ -1,0 +1,102 @@
+-- ============================================================================
+-- AD SPEND AND ROAS v2 — the fan-out fix, the campaign grain, and the
+-- platforms' own conversion counts.
+--
+-- APPLIED TO PRODUCTION 2026-09-06 as Supabase migration
+-- `ads_spend_roas_v2_grain_and_conversions`. Full DDL with reasoning is
+-- src/lib/sql/ads-spend-roas.sql, which was updated in place and remains the
+-- single source of truth for the current schema.
+--
+-- ----------------------------------------------------------------------------
+-- THE DEFECT THIS FIXES, AND WHY IT WOULD NEVER HAVE ANNOUNCED ITSELF.
+--
+-- v1's ROAS views joined `ad_spend_daily` (one row per AD) directly to
+-- `ad_revenue_daily` (one row per platform/day/campaign/creative). Those grains
+-- differ, so the join fanned out: N ads sharing one `utm_content` on one
+-- platform and day each matched the single revenue row, and summing the result
+-- reported that creative's revenue N times.
+--
+-- MEASURED, not reasoned about. Three ads tagged `hook_a`, two orders totalling
+-- $300 against $300 of spend. The v1 view returns:
+--
+--   rows_for_one_creative | spend | revenue
+--                       3 |   300 |     900
+--
+-- ROAS 3.0 against a truth of 1.0. Nothing would have failed — the dashboard
+-- would simply have shown numbers that were too good, and only once the owner
+-- started tagging ads properly, which is the entire point of the system. The
+-- error scales with how well the tagging works.
+--
+-- THE FIX IS STRUCTURAL, not careful: every ROAS view now reduces spend to
+-- exactly the revenue key in a CTE before joining, one row to one row. Applied
+-- identically at all three grains so none can drift back.
+-- src/lib/sql/ads-roas-views-executed.test.ts runs the shipped file against a
+-- real Postgres and asserts the fan-out guard returns zero duplicate rows.
+--
+-- ----------------------------------------------------------------------------
+-- ALSO IN THIS MIGRATION.
+--
+--   * ad_spend_daily.utm_campaign — parsed from the ad's landing URL, so
+--     campaign ROAS keys on the TAG rather than on the platform's own campaign
+--     name. Those are different strings (one typed into a URL, one into the ad
+--     platform) and joining them would report every campaign as unattributed.
+--   * ad_spend_daily.platform_conversions / platform_conversion_value — what
+--     the platform itself claims, under its own attribution model. Stored beside
+--     ours and NEVER mixed into ROAS, CPA or CVR, which are computed only from
+--     paid orders. Nullable on purpose: "reported zero" and "no pixel at all"
+--     are different facts and the dashboard renders them differently.
+--   * ad_campaign_daily — the missing middle grain.
+--   * ad_revenue_unattributed — revenue that names a platform but no creative,
+--     so the per-ad table's shortfall against the platform table has a stated
+--     cause rather than looking like arithmetic that does not add up.
+--   * CPM and CVR added at all three grains.
+--
+-- ----------------------------------------------------------------------------
+-- WHY IT WAS SAFE TO DEPLOY.
+--
+--   * Three nullable columns added to ad_spend_daily (metadata-only, no
+--     rewrite, no backfill), one index, and five views dropped and recreated.
+--   * WRITES TO NO EXISTING TABLE, and reads `orders` only through a view.
+--   * The views had no consumer in production at apply time: the code that
+--     reads them was on an unmerged branch. Dropping and recreating them could
+--     not affect a live read.
+--   * getSpendDashboard degrades cleanly on absence (42P01 via safeSelect).
+--
+-- ----------------------------------------------------------------------------
+-- VERIFIED AFTER APPLYING.
+--
+--   * All seven objects present with the expected column lists; snapshot
+--     regenerated into production-schema.json in the same commit.
+--   * 17 SQL-executed assertions against a real Postgres: the fan-out guard,
+--     the paid-order filter, refund netting (including a negative over-refund),
+--     cross-platform / cross-campaign / cross-creative leakage, the blind-spot
+--     views, upsert idempotency, and re-running the whole shipped file twice
+--     with identical results.
+--   * Seeded known arithmetic end to end on the harness. Every rendered figure
+--     matched a hand calculation: $350 spend, $590 revenue, ROAS 1.6857, CPA
+--     $87.50, CTR 1.714%, hook_a at 2 ads / $200 / $450 / ROAS 2.25, blind
+--     spots at $50 (14.29% of spend) and $100 (16.95% of revenue).
+--
+-- ----------------------------------------------------------------------------
+-- DEVIATION: the production run applied the same statements with the prose
+-- comments stripped. Nothing executable differs; the source file is the record.
+--
+-- Re-running this file is a no-op. It is recorded here, not re-executed.
+-- ============================================================================
+
+-- Verify:
+--
+-- -- The fan-out guard. Must return zero rows, forever.
+-- select platform, stat_date, utm_content, count(*)
+--   from public.ad_creative_roas_daily
+--  group by 1,2,3 having count(*) > 1;
+--
+-- select column_name from information_schema.columns
+--  where table_schema='public' and table_name='ad_spend_daily'
+--    and column_name in ('utm_campaign','platform_conversions','platform_conversion_value');
+-- Expect three rows.
+--
+-- select table_name from information_schema.tables
+--  where table_schema='public' and table_name in
+--    ('ad_campaign_daily','ad_revenue_unattributed');
+-- Expect two rows.

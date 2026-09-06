@@ -39,20 +39,42 @@
     "inverse",
     "reverted_by"
   ],
-  "ad_creative_roas_daily": [
+  "ad_campaign_daily": [
     "platform",
     "stat_date",
-    "utm_content",
-    "ad_id",
-    "ad_name",
+    "utm_campaign",
     "campaign_name",
     "spend",
     "impressions",
     "clicks",
+    "platform_conversions",
     "orders",
     "net_revenue",
     "ctr",
     "cpc",
+    "cpm",
+    "cvr",
+    "cpa",
+    "roas"
+  ],
+  "ad_creative_roas_daily": [
+    "platform",
+    "stat_date",
+    "utm_content",
+    "ad_name",
+    "campaign_name",
+    "ads",
+    "spend",
+    "impressions",
+    "clicks",
+    "platform_conversions",
+    "orders",
+    "net_revenue",
+    "refunds",
+    "ctr",
+    "cpc",
+    "cpm",
+    "cvr",
     "cpa",
     "roas"
   ],
@@ -210,9 +232,15 @@
     "spend",
     "impressions",
     "clicks",
+    "platform_conversions",
+    "platform_conversion_value",
     "orders",
     "net_revenue",
+    "refunds",
     "ctr",
+    "cpc",
+    "cpm",
+    "cvr",
     "cpa",
     "roas"
   ],
@@ -261,6 +289,14 @@
     "refunds",
     "net_revenue"
   ],
+  "ad_revenue_unattributed": [
+    "platform",
+    "stat_date",
+    "utm_source",
+    "utm_campaign",
+    "orders",
+    "net_revenue"
+  ],
   "ad_spend_daily": [
     "platform",
     "ad_id",
@@ -277,7 +313,10 @@
     "clicks",
     "currency",
     "source",
-    "ingested_at"
+    "ingested_at",
+    "utm_campaign",
+    "platform_conversions",
+    "platform_conversion_value"
   ],
   "ad_spend_untagged": [
     "platform",
