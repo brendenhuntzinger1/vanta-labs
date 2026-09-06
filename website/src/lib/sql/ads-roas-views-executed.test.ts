@@ -229,6 +229,93 @@ describeDb("the ROAS views, run against a real Postgres", () => {
   });
 
   // -------------------------------------------------------------------------
+  // A REFUND CHANGES THE STATUS, AND THE STATUS FILTER HAD NOT BEEN TOLD
+  // -------------------------------------------------------------------------
+
+  describe("an order that took money and then gave some back", () => {
+    // payment-webhook.ts moves a refunded order OUT of 'paid': 'refunded' on a
+    // full refund, and 'partially_refunded' when the cumulative refund is less
+    // than amount_paid (two-step refunds — goods, then shipping — are ordinary
+    // practice here). `payment_status = 'paid'` was the whole filter, so the
+    // moment any money went back the order left every ROAS view: a PARTIAL
+    // refund dropped the WHOLE order's revenue although the store kept most of
+    // it, and a FULL refund deleted the evidence rather than showing it,
+    // because `refunds` went to zero as well.
+    beforeAll(async () => {
+      await reset();
+      await addSpend([{ platform: "reddit", ad_id: "rr", stat_date: D, utm_content: "hook_ref", utm_campaign: "c", spend: 50, clicks: 10, impressions: 500 }]);
+      const attribution = { last_utm_source: "reddit", last_utm_campaign: "c", last_utm_content: "hook_ref" };
+      await addOrder({ order_id: "kept-all", payment_status: "paid", amount_paid: 100, created_at: T, ...attribution });
+      await addOrder({ order_id: "kept-most", payment_status: "partially_refunded", amount_paid: 100, refund_amount: 30, created_at: T, ...attribution });
+      await addOrder({ order_id: "kept-none", payment_status: "refunded", amount_paid: 100, refund_amount: 100, created_at: T, ...attribution });
+      await addOrder({ order_id: "never-paid", payment_status: "payment_failed", amount_paid: 100, created_at: T, ...attribution });
+    });
+
+    it("keeps the money the store actually kept", async () => {
+      const { rows } = await client.query(`select orders, net_revenue, refunds from ad_creative_roas_daily where utm_content='hook_ref'`);
+      // 100 + (100-30) + (100-100) = 170. Under the old filter this was 100 —
+      // the partial refund's $70 vanished with it.
+      expect(Number(rows[0].net_revenue)).toBe(170);
+      expect(Number(rows[0].refunds)).toBe(130);
+    });
+
+    it("still counts a refunded order as the conversion the ad produced", async () => {
+      // Which is how the platforms count it, so CPA and CVR stay comparable
+      // with what Meta and TikTok report. The money truth is net_revenue.
+      const { rows } = await client.query(`select orders, round(cpa,4) cpa from ad_creative_roas_daily where utm_content='hook_ref'`);
+      expect(Number(rows[0].orders)).toBe(3);
+      expect(Number(rows[0].cpa)).toBeCloseTo(50 / 3, 4);
+    });
+
+    it("still refuses an order in which no money was ever taken", async () => {
+      const { rows } = await client.query(`select orders from ad_creative_roas_daily where utm_content='hook_ref'`);
+      expect(Number(rows[0].orders), "payment_failed must stay out").toBe(3);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // THE TWO SIDES OF THE JOIN WERE NORMALISED DIFFERENTLY
+  // -------------------------------------------------------------------------
+
+  describe("a tag spelled in mixed case still matches its spend", () => {
+    // parseAdTagsFromUrl reads the tags back out of the ad's destination URL
+    // and lowercases every value, so ad_spend_daily.utm_content is always
+    // lowercase. The ORDER side stores what the browser saw, untouched. An ad
+    // built by hand in Meta Ads Manager with `utm_content=Hook_A` therefore
+    // produced a spend row keyed `hook_a` against orders keyed `Hook_A`, the
+    // join found nothing, and that ad reported ROAS 0.00 with its revenue in
+    // none of the blind-spot views either.
+    beforeAll(async () => {
+      await reset();
+      await addSpend([{ platform: "facebook", ad_id: "mc1", stat_date: D, utm_content: "hook_case", utm_campaign: "camp_case", spend: 50, clicks: 100, impressions: 2000 }]);
+      await addOrder({ order_id: "upper", amount_paid: 100, created_at: T, last_utm_source: "Facebook", last_utm_campaign: "Camp_Case", last_utm_content: "Hook_Case" });
+      await addOrder({ order_id: "shouty", amount_paid: 100, created_at: T, last_utm_source: "FACEBOOK", last_utm_campaign: "CAMP_CASE", last_utm_content: "HOOK_CASE" });
+      await addOrder({ order_id: "lower", amount_paid: 100, created_at: T, last_utm_source: "facebook", last_utm_campaign: "camp_case", last_utm_content: "hook_case" });
+    });
+
+    it("collapses every spelling into one creative row and matches the spend", async () => {
+      const { rows } = await client.query(`select utm_content, orders, net_revenue, round(roas,4) roas from ad_creative_roas_daily where platform='facebook'`);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].utm_content).toBe("hook_case");
+      expect(Number(rows[0].orders)).toBe(3);
+      expect(Number(rows[0].net_revenue)).toBe(300);
+      expect(Number(rows[0].roas)).toBe(6); // 300 / 50
+    });
+
+    it("does the same at the campaign grain", async () => {
+      const { rows } = await client.query(`select utm_campaign, orders, net_revenue from ad_campaign_daily where platform='facebook'`);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].utm_campaign).toBe("camp_case");
+      expect(Number(rows[0].net_revenue)).toBe(300);
+    });
+
+    it("leaves nothing behind in the unattributed view", async () => {
+      const { rows } = await client.query(`select coalesce(sum(net_revenue),0) leaked from ad_revenue_unattributed`);
+      expect(Number(rows[0].leaked)).toBe(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // LEAKAGE
   // -------------------------------------------------------------------------
 
