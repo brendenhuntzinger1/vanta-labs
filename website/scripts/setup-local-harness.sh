@@ -347,6 +347,19 @@ check "anon and authenticated hold no table SELECT grant (revoke-anon-table-acce
 check "every public view is security_invoker (a view otherwise reads past RLS)" \
   "select not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('v','m') and (c.reloptions is null or not ('security_invoker=true' = any(c.reloptions))));"
 
+# harness-seed.sql applies with `|| true`, so a seed that ROLLS BACK leaves the
+# harness with whatever catalogue it had before and says nothing. That is not
+# hypothetical: the file deleted `orders` and `ambassadors` without first
+# deleting order_attribution, referral_orders, commissions and the rest of their
+# FK children — tables that arrive in migrations applied ABOVE it — so the very
+# first statement failed on any harness that had ever recorded a campaign touch
+# or an affiliate order, and every browser verification afterwards ran against a
+# stale catalogue. Assert the seed's own shapes rather than its exit code.
+check "the seed applied: six synthetic products" \
+  "select count(*) = 6 from public.products;"
+check "product images point at a file that exists in public/" \
+  "select not exists (select 1 from public.products where image_url like '/img/%') and not exists (select 1 from public.product_images where image_url like '/img/%');"
+
 if [ "$parity_failures" -ne 0 ]; then
   echo ""
   echo "!!  $parity_failures parity check(s) failed. The harness does NOT match production."

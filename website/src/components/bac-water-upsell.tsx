@@ -30,22 +30,42 @@ function fetchBacWater(): Promise<Product | null> {
   if (!pendingFetch) {
     pendingFetch = fetch("/api/catalog/bac-water", { cache: "no-store" })
       .then(async (response) => {
-        if (!response.ok) return null;
+        // A REFUSAL IS NOT AN ANSWER, AND MUST NOT BE CACHED AS ONE.
+        //
+        // /api/catalog/bac-water is behind the account wall, and this module
+        // cache is process-wide for the page session. So one anonymous call —
+        // which the root layout used to make on the sign-in portal, before
+        // anybody had an account — resolved to null, latched `cachedOffer`, and
+        // the upsell then never appeared for the rest of that session no matter
+        // how many times the (now signed-in) shopper opened the cart. `throw`
+        // rather than `return null`: the catch below clears the pending promise
+        // so the next mount asks again.
+        if (!response.ok) throw new Error(`bac-water read refused: ${response.status}`);
         const result = await response.json() as { success: boolean; product?: Product };
         return result.success && result.product ? result.product : null;
       })
-      .catch(() => null)
       .then((product) => {
         cachedOffer = product;
+        pendingFetch = null;
         return product;
+      })
+      .catch(() => {
+        // Nothing cached, nothing latched: a later mount retries.
+        pendingFetch = null;
+        return null;
       });
   }
   return pendingFetch;
 }
 
 function useBacWaterProduct() {
+  const { signedIn } = useCart();
   const [product, setProduct] = useState<Product | null>(cachedOffer ?? null);
   useEffect(() => {
+    // The endpoint is behind the account wall. Asking anyway put a 401 in the
+    // console of the sign-in portal and, before the cache stopped latching a
+    // refusal, cost the upsell for the whole page session.
+    if (!signedIn) return;
     let cancelled = false;
     fetchBacWater().then((fetched) => {
       if (!cancelled) setProduct(fetched);
@@ -53,7 +73,7 @@ function useBacWaterProduct() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [signedIn]);
   return product;
 }
 

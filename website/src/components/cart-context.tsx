@@ -166,6 +166,8 @@ type CartContextValue = {
   activePromotionName: string | null;
   /** That promotion permits a coupon code on top of it. */
   activePromotionAllowsCoupon: boolean;
+  /** Whether the viewer has an account session. Every gated read hangs off it. */
+  signedIn: boolean;
   /** What it did, in one sentence: "Buy 2 Get 1 Free applied — 1 item free." */
   activePromotionMessage: string | null;
   /** The nudge: "Add 1 more item to unlock an item free." */
@@ -470,6 +472,15 @@ export function CartProvider({ children, signedIn = false }: { children: React.R
 
   useEffect(() => {
     (async () => {
+      // NOTHING TO ASK FOR WHILE SIGNED OUT. Every one of these five endpoints
+      // is behind the account wall, so a signed-out page — the sign-in portal
+      // itself, which is now the first screen of almost every visit — fired
+      // five requests it knew would be refused, and put five 401s in the
+      // console of the page a new customer sees first. `signedIn` is already a
+      // dependency (the config has to be re-read the moment a session appears),
+      // so this costs nothing and skips work that could never succeed.
+      if (!signedIn) return;
+
       try {
         const response = await fetch("/api/account/me", { cache: "no-store" });
         if (!response.ok) return;
@@ -508,6 +519,15 @@ export function CartProvider({ children, signedIn = false }: { children: React.R
 
   useEffect(() => {
     (async () => {
+      // NOTHING TO ASK FOR WHILE SIGNED OUT. Every one of these five endpoints
+      // is behind the account wall, so a signed-out page — the sign-in portal
+      // itself, which is now the first screen of almost every visit — fired
+      // five requests it knew would be refused, and put five 401s in the
+      // console of the page a new customer sees first. `signedIn` is already a
+      // dependency (the config has to be re-read the moment a session appears),
+      // so this costs nothing and skips work that could never succeed.
+      if (!signedIn) return;
+
       try {
         const response = await fetch("/api/account/ambassador-discount", { cache: "no-store" });
         if (!response.ok) return;
@@ -532,6 +552,15 @@ export function CartProvider({ children, signedIn = false }: { children: React.R
     const email = knownEmail.trim().toLowerCase();
     let cancelled = false;
     (async () => {
+      // NOTHING TO ASK FOR WHILE SIGNED OUT. Every one of these five endpoints
+      // is behind the account wall, so a signed-out page — the sign-in portal
+      // itself, which is now the first screen of almost every visit — fired
+      // five requests it knew would be refused, and put five 401s in the
+      // console of the page a new customer sees first. `signedIn` is already a
+      // dependency (the config has to be re-read the moment a session appears),
+      // so this costs nothing and skips work that could never succeed.
+      if (!signedIn) return;
+
       // No email yet (or one cleared): back to the store-wide list. Same
       // reference when it is already empty, so this cannot loop.
       if (!email || !email.includes("@")) {
@@ -563,6 +592,15 @@ export function CartProvider({ children, signedIn = false }: { children: React.R
 
   useEffect(() => {
     (async () => {
+      // NOTHING TO ASK FOR WHILE SIGNED OUT. Every one of these five endpoints
+      // is behind the account wall, so a signed-out page — the sign-in portal
+      // itself, which is now the first screen of almost every visit — fired
+      // five requests it knew would be refused, and put five 401s in the
+      // console of the page a new customer sees first. `signedIn` is already a
+      // dependency (the config has to be re-read the moment a session appears),
+      // so this costs nothing and skips work that could never succeed.
+      if (!signedIn) return;
+
       try {
         const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
         if (!response.ok) return;
@@ -612,6 +650,15 @@ export function CartProvider({ children, signedIn = false }: { children: React.R
 
   useEffect(() => {
     (async () => {
+      // NOTHING TO ASK FOR WHILE SIGNED OUT. Every one of these five endpoints
+      // is behind the account wall, so a signed-out page — the sign-in portal
+      // itself, which is now the first screen of almost every visit — fired
+      // five requests it knew would be refused, and put five 401s in the
+      // console of the page a new customer sees first. `signedIn` is already a
+      // dependency (the config has to be re-read the moment a session appears),
+      // so this costs nothing and skips work that could never succeed.
+      if (!signedIn) return;
+
       try {
         const response = await fetch("/api/catalog/bulk-savings-config", { cache: "no-store" });
         if (!response.ok) return;
@@ -2077,6 +2124,7 @@ export function CartProvider({ children, signedIn = false }: { children: React.R
     buy3Get1UntilNextFree,
     activePromotionName,
     activePromotionAllowsCoupon,
+    signedIn,
     activePromotionMessage,
     promotionProgressMessage,
     availablePromotions,

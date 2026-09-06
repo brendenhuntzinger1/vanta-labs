@@ -85,6 +85,28 @@ describe("the cart refetches its configuration when the viewer signs in", () => 
     expect(deps?.[1]).toContain("signedIn");
   });
 
+  it.each([
+    ["the shipping config and promotions", '"/api/catalog/promotions"'],
+    ["the member/points/store-credit state", '"/api/account/me"'],
+    ["the ambassador discount", '"/api/account/ambassador-discount"'],
+    ["the bulk savings config", '"/api/catalog/bulk-savings-config"'],
+    ["the promotion eligibility check", '"/api/catalog/promotions/eligibility"'],
+  ])("%s is not requested at all while signed out", (_label, endpoint) => {
+    // All five are behind the account wall, so a signed-out page — the sign-in
+    // portal itself, which is the first screen of almost every visit now —
+    // fired five requests it knew would be refused and put five 401s in the
+    // console of the page a new customer sees first. Measured in the browser
+    // before the guard: 5 of them on /account/login.
+    const at = cart.indexOf(endpoint);
+    expect(at, `${endpoint} must still be fetched here`).toBeGreaterThan(-1);
+    const effectStart = cart.lastIndexOf("(async () => {", at);
+    expect(effectStart, `no effect body found around ${endpoint}`).toBeGreaterThan(-1);
+    expect(
+      cart.slice(effectStart, at),
+      `${endpoint} is requested before anyone could be signed in`,
+    ).toContain("if (!signedIn) return;");
+  });
+
   it("does not remount the provider to solve it, which would empty the cart", () => {
     // A key={signedIn} on CartProvider would refetch by throwing the shopper's
     // basket away. The prop exists precisely so the state survives.
