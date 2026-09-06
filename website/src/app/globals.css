@@ -1161,182 +1161,24 @@ body[data-welcome-offer="true"] .vl2-nav {
   color: var(--graphite-300);
 }
 
-/* ------------------------------------------------------------------ */
-/*  AGE GATE — the storefront is inert until someone confirms.          */
-/*                                                                     */
+/* THE AGE GATE'S CSS IS GONE, AND SO IS THE COMMENTARY THAT OUTLIVED IT.
 
-/*  constant "false" — every document, every request, no exceptions —   */
-/*  and components/age-gate.tsx flips it to "true" in memory once all   */
-/*  four attestations are made. It is never persisted, so there is no   */
-/*  such thing as a document that arrives already verified.             */
-/*                                                                     */
-/*  These rules exist because the gate is a client component: React     */
-/*  cannot mount it until hydration, and on a slow connection the store */
-/*  behind it was scrollable in the meantime. Keyed off the attribute,  */
-/*  they apply the moment this stylesheet does — which is also the      */
-/*  first moment anything is painted at all.                            */
-/*                                                                     */
-/*  Both are keyed off an EXPLICIT "true"/"false", never the absence of */
-/*  the attribute, so nothing can hide the gate by accident. With       */
-/*  JavaScript disabled the attribute stays "false" and the gate stays  */
-/*  up: the failure mode is a locked store, never an open one.          */
-/* ------------------------------------------------------------------ */
+   Twenty-five rules were deleted with components/age-gate.tsx; 176 lines of
+   prose explaining them were not, and prose with no rule under it is worse
+   than nothing. It opened "AGE GATE — the storefront is inert until someone
+   confirms", which stopped being true the day the gate was removed, and it
+   described a scroll lock, an inert shield, an opaque field and a z-index
+   100 overlay that no longer exist anywhere in this file.
 
-/* The scroll lock is otherwise applied by an effect, which cannot run until
-   hydration — on a slow connection the store scrolled behind the overlay in
-   the meantime.
-
-   `overflow: hidden` alone is NOT a scroll lock on iOS. WebKit still scrolls
-   the document underneath a fixed overlay, so a tap inside the gate could drag
-   the storefront up behind it and land the visitor somewhere down the home
-   page. Pinning both elements to the viewport is what actually holds it: with
-   height fixed and overflow hidden on BOTH html and body there is nothing left
-   to scroll. Released the moment the attribute flips to "true". */
-
-/* The gate itself is the one thing that may scroll — it is taller than a phone
-   screen — and it needs momentum scrolling of its own on iOS. */
-
-/* COVER THE VISUAL VIEWPORT, NOT THE LAYOUT ONE.
-   `fixed inset-0` sizes against the LAYOUT viewport. In an in-app webview the
-   toolbar collapses as you interact and the VISUAL viewport grows past it,
-   leaving a strip at the bottom that the overlay never covered — the home page
-   showing through the moment you tapped an attestation. 100dvh follows the
-   viewport as it changes; the vh line before it is the fallback for anything
-   that does not know dvh. */
-
-/* AN OPAQUE FIELD THAT EXISTS BEFORE THE STOREFRONT DOES, AND IS BIGGER THAN
-   THE SCREEN CAN GET.
-
-   This is what replaces `visibility: hidden` (see the note below), and it has
-   to answer the two things hiding gave us for free:
-
-     * FIRST PAINT. HTML streams, and the storefront markup arrives BEFORE the
-       gate — the gate is rendered after {children}. A browser paints what it
-       has, so on a slow connection there is a window where the store is on
-       screen and the overlay has not been parsed yet. `visibility: hidden`
-       never had that window: it applied from the stylesheet, which is in the
-       head, so it was in force before the first box was laid out. A rule on
-       the ROOT element has the same property — `html` exists before anything
-       inside it — so the screen is opaque from the first paint rather than
-       from whenever the gate arrives.
-     * SHORTER THAN THE SCREEN, OR OFFSET FROM IT. `fixed inset-0` sizes
-       against the LAYOUT viewport, and in an in-app webview the VISUAL
-       viewport moves relative to it: a toolbar retracts, a keyboard opens, a
-       rubber-band scroll drags it. The overlay is then short by however far
-       the two have drifted, which is the strip the owner saw the home page
-       through. `inset: -50%` makes this field twice the screen in both
-       dimensions, so no drift of that kind uncovers any part of it.
-
-   z-index 99 because the gate is 100 and nothing else in the codebase goes
-   above 70 — so this sits under the gate and over the entire store. It paints
-   over the storefront WITHOUT taking it out of the render tree, which is the
-   whole point: a covered page is still a rendered page, and Google indexes
-   what it renders. */
-
-/* THE STOREFRONT IS COVERED AND INERT. IT USED TO BE INVISIBLE AS WELL, AND
-   THAT COST MORE THAN IT WAS WORTH.
-
-   The rule here was `visibility: hidden` on everything but the gate, on the
-   reasoning that a fixed overlay can fail: in the TikTok and Instagram
-   webviews the toolbars resize the visual viewport as you interact, and the
-   overlay could be left momentarily shorter than the screen. The owner
-   reported exactly that — tapping an attestation flashed the home page's hero
-   vial out from behind the gate. "Covering can fail. Hiding cannot."
-
-   That was true, and the note above it — "the markup stays in the document, so
-   crawlers still receive the real page" — turned out to be half the story.
-   The markup does stay. The RENDERED page does not, and Google renders. What
-   its renderer saw, measured against production on 2026-09-03:
-
-       /                    2552 words in the HTML ->  115 rendered
-       /products            7330 words in the HTML ->  115 rendered
-       /products/bpc-157    2033 words in the HTML ->  115 rendered
-
-   The same 115 words every time: this gate. Every URL on the site rendered
-   identically, so Google was asked to index thirty-eight copies of one page.
-   Thirteen of them came back "Crawled - currently not indexed", which is the
-   bucket for pages judged not worth adding.
-
-   So the storefront is covered rather than hidden, and the two specific ways
-   covering failed are each answered directly:
-
-     * SHORTER THAN THE SCREEN, OR OFFSET FROM IT — the overlay is sized to
-       `100lvh` as well, the viewport at its maximum, and an opaque field on
-       the ROOT element now sits over the whole store, half a viewport past
-       every edge, from the first paint. Between them a toolbar retracting, a
-       keyboard opening or a rubber-band scroll cannot uncover a strip
-       anywhere, and neither can HTML that streams the store in before the
-       gate. See the two rules above.
-     * THE HERO VIAL SPECIFICALLY — that was never really a covering failure.
-       A playing video is promoted to its own compositing layer and on iOS that
-       layer paints through anything, `visibility: hidden` included; it has its
-       own targeted fix below (`display: none`), added after this rule, and
-       that fix does not depend on this one.
-
-   What has NOT changed: nothing can be browsed, scrolled, tapped OR REACHED BY
-   THE KEYBOARD. The overlay is opaque (bg-[#0a0908]), fixed, and at z-index
-   100 — the highest in the codebase, and the only one above 99 — so nothing
-   can paint over it. The scroll lock above pins html and body.
-   `pointer-events: none` below keeps a tap off the storefront, and the store
-   is wrapped in an `inert` shield (see age-gate.tsx) so it is out of the tab
-   order too — hiding did that for free, covering does not, and Tab walked
-   into the footer the first time this rule was tried without it. With
-   JavaScript disabled the attribute stays "false", the shield is still in the
-   server's HTML, and the gate stays up. The failure mode is still a locked
-   store.
-
-   <script> and the diagnostics panel are exempt for the same reasons as
-   before: one must keep running, the other exists to be readable exactly when
-   entry is misbehaving. */
-
-/* A PLAYING VIDEO IS NOT COVERED BY `visibility: hidden` IN WEBKIT.
-   It is promoted to its own compositing layer, and on iOS that layer paints
-   through an ancestor's visibility. The result, reported from a phone: ticking
-   an age-gate checkbox made the hero vial appear over the gate — because the
-   tap that ticked the box was also the first user gesture, which is what
-   unblocks autoplay (see components/hero-video.tsx).
-
-   `display: none` removes the element from the render tree altogether, so
-   there is no layer left to escape. The video is restored the instant the
-   attribute flips, and hero-video.tsx starts playback then. No layout shift:
-   the element is absolutely positioned inside .vl2-hero, which keeps its own
-   background. */
-
-/* THE APP'S OWN TOOLBARS SIT ON TOP OF THE PAGE.
-   Safari insets the page for its chrome. The TikTok and Instagram webviews do
-   not always do the same — their top and bottom bars overlay the viewport. The
-   gate is a full-screen fixed panel whose entry buttons live at the BOTTOM of a
-   tall card, so without an inset those buttons can sit underneath the app's own
-   bar, where a tap never reaches them. That reads exactly like "it won't let me
-   sign in": the gate is complete, the button is enabled, and tapping does
-   nothing because the tap is landing on TikTok's toolbar.
-
-   env(safe-area-inset-*) is 0 where there is nothing to avoid, so this costs a
-   normal browser nothing. The extra 1.5rem at the bottom is for in-app bars,
-   which the safe-area inset does not describe. */
-
-/* THE WAY OUT OF THE GATE IS ALWAYS ON SCREEN.
-   The gate scrolls internally, and the card is taller than an in-app browser's
-   viewport, so "Create account / Sign in" and "Continue as guest" sat below the
-   fold — enabled and unreachable unless the visitor guessed to scroll. Sticking
-   them to the bottom of the scroller means they are visible at any height, on
-   any device, without shortening the card or dropping anything from it.
-
-   The backdrop is what keeps the attestation text from showing through as it
-   scrolls underneath. */
-/* NOT STICKY, DELIBERATELY.
-   These buttons were pinned to the bottom of the gate's scroller so they could
-   not sit below the fold on a short in-app viewport. That cured one problem and
-   caused a worse one: a sticky bar is painted OVER whatever scrolls beneath it,
-   and it landed across the middle of the attestation list — so a tap aimed at
-   the second or third row activated "Create account / Sign in" instead of the
-   checkbox. Measured, not theorised: elementFromPoint on row 2's centre
-   returned the button.
-
-   A hijacked control is far worse than a scroll. The gate is a scrolling panel
-   and always has been; the buttons sit at the end of it, reachable the ordinary
-   way, and nothing overlays anything. */
-
+   One paragraph of it was worth keeping, because it is the argument for the
+   whole current design: the old gate COVERED the storefront rather than
+   withholding it, and Google renders what it covers. Measured against
+   production on 2026-09-03 — / was 2,552 words of HTML rendering to 115,
+   /products 7,330 to 115, /products/bpc-157 2,033 to 115: the same 115
+   words every time, which were the gate's own. Thirty-eight URLs rendered
+   identically, and thirteen came back "Crawled - currently not indexed".
+   Hiding is not withholding, and that is why the wall is in middleware now.
+   See lib/access-policy.ts. */
 /* ------------------------------------------------------------------ */
 /*  THE GATE IS PART OF THE STORE, NOT A NOTICE IN FRONT OF IT.        */
 /*                                                                    */
@@ -4716,10 +4558,12 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
 .vl-offer-modal-scrim {
   position: fixed;
   inset: 0;
-  /* ABOVE THE HEADER, BENEATH THE AGE GATE. The nav is z-50 and the app's fixed
+  /* ABOVE THE HEADER AND THE APP'S OWN BARS. The nav is z-50 and the fixed
      bottom bars are z-40/50, so this has to clear them or it opens underneath
-     the furniture. The gate is z-[100] and must stay on top of everything: a
-     promotion may never be the thing between a visitor and the attestation. */
+     the furniture. It used to also say "beneath the age gate at z-[100]";
+     there is no gate to sit beneath any more, and nothing in this file goes
+     above 90. Access is decided in middleware now, before a document exists,
+     so a promotion can never be the thing between a visitor and the wall. */
   z-index: 90;
   display: flex;
   align-items: center;

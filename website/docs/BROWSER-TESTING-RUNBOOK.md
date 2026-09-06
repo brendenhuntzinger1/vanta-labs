@@ -454,9 +454,20 @@ SMTP_PORT=2525
 SMTP_SECURE=false
 SMTP_USER=harness
 SMTP_PASSWORD=harness
+EMAIL_FROM=Vanta Labs <no-reply@vantalabsresearch.com>       # required; see below
 MARKETING_POSTAL_ADDRESS=1 Harness Way, Testville CA 90000   # CAN-SPAM; required
 EMAIL_CAPTURE_DIR=/tmp/vanta-qa
 ```
+
+**`EMAIL_FROM` was missing from this block and it is not optional.** The SMTP
+provider needs a host, a user, a password AND a from address
+(`providers/smtp.ts:24-27` reads `SMTP_FROM ?? EMAIL_FROM`), and without it every
+send fails with *"SMTP is not configured. Set the SMTP host, user, password, and
+from address."* — a message that names four things while three of them are set.
+The failure is quiet in exactly the wrong way: signup answers 200, the order is
+created and paid, and only the server log says no mail left. Symptom to
+recognise: `captured-emails.jsonl` does not exist at all after a run that should
+have written to it.
 
 It speaks enough SMTP for nodemailer, accepts any credentials, delivers nothing,
 and appends each message to the **same** `captured-emails.jsonl` the noop
