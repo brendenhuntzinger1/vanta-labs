@@ -265,8 +265,7 @@ remotely. What IS externally verifiable is whether the endpoint is configured at
 all: 503 means `EMAIL_WEBHOOK_SECRET` is unset, 401 means it is set and
 rejecting. Owner action: confirm the signing secret in Vercel → Production.
 
-Every `rls_enabled_no_policy` advisory (63 tables) is INFO and is the intended
-posture: RLS on with no policies is deny-all for `anon` and `authenticated`, and
+Every `rls_enabled_no_policy` advisory is INFO and is the intended posture: RLS on with no policies is deny-all for `anon` and `authenticated`, and
 the app reaches those tables through the service role only.
 
 ---

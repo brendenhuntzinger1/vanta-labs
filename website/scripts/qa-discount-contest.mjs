@@ -137,6 +137,57 @@ try {
     [EMAIL, PASSWORD, JSON.stringify({ full_name: "Contest Shopper", role: "customer" })],
   );
 
+  // ---------------------------------------------------------------------
+  // THE FIXTURES THIS CONTEST IS ABOUT, SEEDED RATHER THAN ASSUMED.
+  //
+  // Every check below is arithmetic on two specific numbers: a 40% coupon
+  // beating a 15% referral, and then the referral taking over when the coupon
+  // is removed. The script assumed ROBIN15 and SAVE40 already existed. Neither
+  // is created by setup-local-harness.sh (which seeds EXPLICIT15, INHERITME and
+  // HOLDPROBE) nor by qa:seed (QAAMB, QAAPPLY), so /r/ROBIN15 resolved nothing
+  // — and an unknown code deliberately sets NO cookie, which is correct — so
+  // the first check failed and all ten after it cascaded off it. A suite whose
+  // fixtures are somebody else's seed is a suite that reports on whatever
+  // happens to be in the database.
+  //
+  // Written with the same partners+ambassadors shared-id shape production
+  // always has (see qa-seed-roles.mjs): the referral-code service, checkout and
+  // commission accrual all read `ambassadors`, and seeding one alone
+  // manufactures a state production cannot be in.
+  // ---------------------------------------------------------------------
+  const ambEmail = "robin.contest@example.test";
+  const ambUser = (await q(
+    `insert into auth.users (email, encrypted_password, raw_user_meta_data, raw_app_meta_data, email_confirmed_at, created_at)
+     values ($1, $2, $3, '{"role":"customer"}', now(), now())
+     on conflict (email) do update set email_confirmed_at = now()
+     returning id`,
+    [ambEmail, PASSWORD, JSON.stringify({ full_name: "Robin Vega", role: "customer" })],
+  )).rows[0].id;
+  const partnerId = (await q(
+    `insert into partners (auth_user_id, name, email, referral_code, status, approved_at)
+     values ($1, 'Robin Vega', $2, 'ROBIN15', 'approved', now())
+     on conflict (referral_code) do update
+       set auth_user_id = excluded.auth_user_id, email = excluded.email,
+           status = 'approved', approved_at = now()
+     returning id`,
+    [ambUser, ambEmail],
+  )).rows[0].id;
+  await q(
+    `insert into ambassadors (id, auth_user_id, name, email, referral_code, status, approved_at,
+                              commission_percent, customer_discount_percent)
+     values ($1, $2, 'Robin Vega', $3, 'ROBIN15', 'approved', now(), 15, 15)
+     on conflict (id) do update
+       set auth_user_id = excluded.auth_user_id, email = excluded.email,
+           referral_code = excluded.referral_code, status = 'approved',
+           approved_at = now(), commission_percent = 15, customer_discount_percent = 15`,
+    [partnerId, ambUser, ambEmail],
+  );
+  await q(
+    `insert into coupons (code, discount_type, discount_value, active)
+     values ('SAVE40', 'percent', 40, true)
+     on conflict (code) do update set discount_type = 'percent', discount_value = 40, active = true`,
+  );
+
   const ctx = await browser.newContext({ ignoreHTTPSErrors: true,  ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
   const page = await ctx.newPage();
 
@@ -258,11 +309,23 @@ try {
   const discount = await savedRow(page);
   // 2 x $89.00 = $178.00 list, of which the 2-unit "Bundle & Save" tier has
   // already granted $8.90 inside the $169.10 subtotal. Every candidate competes
-  // on what it saves BEYOND that, so the 40% coupon ($71.20) shows as $62.30.
-  check(/Promo code SAVE40\s*\n?\s*−?-?\$62\.30/.test(text) || /Promo code SAVE40/.test(text),
+  // on what it saves BEYOND that, so the coupon reaches the summary as its
+  // $62.30 remainder.
+  //
+  // "YOU SAVED" IS THE WHOLE SAVING NOW, AND THAT IS THE POINT OF b1620fc.
+  //
+  // This expected $62.30 — the remainder alone — which was the number the row
+  // showed before that commit and the reason a correct total read as a wrong
+  // one: "$8.90 was simply named on no row, on any surface". The row now says
+  // $71.20, and the line beneath it says why: "Bundle & Save already took $8.90
+  // off the prices above — $71.20 off in total." Asserting the old figure would
+  // pin the defect rather than the fix.
+  check(/Promo code SAVE40/.test(text),
     "the discount line names the winning offer");
-  check(discount === "-$62.30" || discount === "$62.30",
-    "exactly the larger discount comes off — the 40% coupon, net of bundle pricing",
+  check(/Bundle & Save already took \$8\.90 off the prices above/.test(text),
+    "the bundle credit the discount was netted against is named, not silently absorbed");
+  check(discount === "-$71.20" || discount === "$71.20",
+    "exactly the larger discount comes off — the 40% coupon, and the row states the whole saving",
     `read ${JSON.stringify(discount)} from the totals`);
 
   // --- remove the coupon ---------------------------------------------------
@@ -284,12 +347,17 @@ try {
     `cookie is now ${JSON.stringify(cookieAfterRemoval)}`);
 
   const backToReferral = await savedRow(page);
-  // Her 15% of $178.00 is $26.70, less the $8.90 already granted = $17.80.
-  check(backToReferral === "-$17.80" || backToReferral === "$17.80",
+  // Her 15% of $178.00 is $26.70, of which $8.90 is the bundle tier and $17.80
+  // the referral's own remainder. Same reasoning as above: the row states the
+  // whole saving against list, so it reads $26.70 and the note beneath it
+  // accounts for the $8.90.
+  check(backToReferral === "-$26.70" || backToReferral === "$26.70",
     "the referral takes over the discount once the coupon is gone",
     `read ${JSON.stringify(backToReferral)}`);
 
-  await page.screenshot({ path: `/tmp/claude-0/-home-user-vanta-labs/84ac5876-420b-575f-8024-1f79b193b56a/scratchpad/contest-${process.env.QA_VIEWPORT ?? "desktop"}.png`, fullPage: true });
+  // A screenshot path from whichever session last edited this file is not a
+  // path on anybody else's machine; write beside the other QA output instead.
+  await page.screenshot({ path: `${process.env.QA_LOG_DIR ?? "/tmp/vanta-qa"}/contest-${process.env.QA_VIEWPORT ?? "desktop"}.png`, fullPage: true });
 
   await ctx.close();
 } finally {

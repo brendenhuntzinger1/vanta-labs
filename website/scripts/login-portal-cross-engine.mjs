@@ -158,6 +158,12 @@ console.log(`\n================ ${ENGINE.toUpperCase()} — ${BASE}/account/logi
 
 for (const [label, ua, viewport] of CASES) {
   const ctx = await browser.newContext({
+    // The harness is sometimes fronted by tls-proxy.mjs with a self-signed
+    // pair — the configuration WebKit needs before it will store the Secure
+    // session cookie at all. Without this every navigation to the https port
+    // fails and the run reports ten "navigation failed" findings against a
+    // portal that is fine. Inert on http, and loopback only either way.
+    ignoreHTTPSErrors: true,
     ...(ua ? { userAgent: ua } : {}),
     viewport,
     // Firefox does not implement Playwright's mobile emulation.
