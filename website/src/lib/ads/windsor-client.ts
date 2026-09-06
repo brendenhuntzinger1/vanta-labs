@@ -308,7 +308,39 @@ export function normalizeSpendRow(
 
 export type FetchOutcome =
   | { ok: true; rows: SpendRow[]; rejections: RowRejection[] }
-  | { ok: false; error: string };
+  /**
+   * `notConnected` separates "this platform is not attached to the Windsor
+   * account" from "the feed is broken", and the two need opposite responses.
+   * See isNotConnectedResponse.
+   */
+  | { ok: false; error: string; notConnected?: boolean };
+
+/**
+ * Windsor saying "this platform is not attached to your account".
+ *
+ * A DISCONNECTED PLATFORM IS NOT A BROKEN FEED, AND THE COST OF CONFUSING THEM
+ * IS A PERMANENT FALSE ALARM. Verified live on 2026-09-06, minutes after
+ * Snapchat was detached from this store's Windsor account:
+ *
+ *     No snapchat account for user … was found, add your accounts at
+ *     https://onboard.windsor.ai?datasource=snapchat
+ *
+ * That is an ERROR, not an empty result — so every nightly run would have
+ * reported a failed connector for as long as the platform stayed detached, and
+ * an operator would learn to ignore the one signal that says the feed is down.
+ *
+ * WINDSOR_CONNECTORS deliberately still lists snapchat. Detaching a platform is
+ * an ordinary marketing decision and is usually temporary; reattaching it must
+ * not require a deploy. A connector nobody has connected is simply skipped, and
+ * starts working again the moment an account appears behind it.
+ *
+ * Matched on the message rather than the status code, because the status is
+ * Windsor's to change and the sentence is what identifies the condition.
+ */
+function isNotConnectedResponse(detail: string): boolean {
+  return /no\s+\w+\s+account for user/i.test(detail)
+    || /onboard\.windsor\.ai\?datasource=/i.test(detail);
+}
 
 /**
  * Fetch one connector's daily spend for a date range.
@@ -348,12 +380,29 @@ export async function fetchConnectorSpend(input: {
     } catch {
       /* a body we cannot read is still an HTTP status worth reporting */
     }
+    if (isNotConnectedResponse(detail)) {
+      return { ok: false, notConnected: true, error: `${input.connector} is not connected to this Windsor account` };
+    }
     return { ok: false, error: `HTTP ${response.status}${detail ? `: ${detail}` : ""}` };
+  }
+
+  // READ THE BODY AS TEXT FIRST, then parse. A body can only be read once, and
+  // Windsor's detached-account message arrives as a bare sentence — not JSON —
+  // sometimes under a 200. Parsing first threw that away as "response was not
+  // JSON", which is true and useless.
+  let bodyText: string;
+  try {
+    bodyText = await response.text();
+  } catch (error) {
+    return { ok: false, error: `response body unreadable: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  if (isNotConnectedResponse(bodyText)) {
+    return { ok: false, notConnected: true, error: `${input.connector} is not connected to this Windsor account` };
   }
 
   let payload: unknown;
   try {
-    payload = await response.json();
+    payload = JSON.parse(bodyText);
   } catch (error) {
     return { ok: false, error: `response was not JSON: ${error instanceof Error ? error.message : String(error)}` };
   }
@@ -364,7 +413,14 @@ export async function fetchConnectorSpend(input: {
     : Array.isArray((payload as { data?: unknown })?.data)
       ? (payload as { data: unknown[] }).data
       : null;
-  if (!raw) return { ok: false, error: "response carried no data array" };
+  // A JSON-shaped variant of the same message (e.g. {"error": "No … account
+  // for user …"}) — the text check above covers the bare-sentence form.
+  if (!raw) {
+    if (isNotConnectedResponse(JSON.stringify(payload ?? ""))) {
+      return { ok: false, notConnected: true, error: `${input.connector} is not connected to this Windsor account` };
+    }
+    return { ok: false, error: "response carried no data array" };
+  }
 
   const rows: SpendRow[] = [];
   const rejections: RowRejection[] = [];

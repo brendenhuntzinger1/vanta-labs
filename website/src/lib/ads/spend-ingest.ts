@@ -170,7 +170,19 @@ export async function runSpendIngest(deps: {
     });
 
     if (!fetched.ok) {
-      outcomes.push({ ...outcome, status: "failed", error: fetched.error });
+      // A PLATFORM NOBODY HAS CONNECTED IS SKIPPED, NOT FAILED.
+      //
+      // Windsor answers a hard error for a connector with no attached account —
+      // "No snapchat account for user … was found" — so a platform detached for
+      // ordinary marketing reasons would otherwise report a failed connector on
+      // every nightly run, for as long as it stayed detached. An operator
+      // learns to ignore a signal that is always red, which costs them the one
+      // that means the feed is down.
+      outcomes.push({
+        ...outcome,
+        status: fetched.notConnected ? "skipped" : "failed",
+        error: fetched.error,
+      });
       continue;
     }
 
@@ -264,10 +276,15 @@ export async function runSpendIngest(deps: {
   // One connector failing must NOT throw: Snapchat's grant expiring cannot be
   // allowed to discard Meta's numbers, and that partial state is reported in
   // `connectors` for the dashboard to show.
-  const failed = outcomes.filter((o) => o.status === "failed");
-  if (outcomes.length > 0 && failed.length === outcomes.length) {
+  // Skipped connectors are excluded from BOTH sides of this test. A store that
+  // has detached three of its four platforms and has one healthy feed is not
+  // having an incident, and one that has detached ALL of them is not either —
+  // it has simply stopped advertising, which the dashboard already says.
+  const attempted = outcomes.filter((o) => o.status !== "skipped");
+  const failed = attempted.filter((o) => o.status === "failed");
+  if (attempted.length > 0 && failed.length === attempted.length) {
     throw new Error(
-      `ad spend ingest failed on every connector (${failed.length}/${outcomes.length}): ` +
+      `ad spend ingest failed on every connected platform (${failed.length}/${attempted.length}): ` +
         failed.map((f) => `${f.connector}: ${f.error ?? "unknown"}`).join("; "),
     );
   }
