@@ -249,6 +249,64 @@ export function resolveRefundOutcome(input: {
   return { isRefundEvent: true, isChargeback, isFullRefund, paymentStatus, recordedRefundAmount, refundedFraction, shouldRestock: isFullRefund };
 }
 
+// ---------------------------------------------------------------------------
+// ONE REFUND, APPLIED ONCE — EVEN WHEN IT ARRIVES TWICE UNDER TWO NAMES.
+//
+// The only replay guard on the refund branch short-circuits on a FULLY terminal
+// order, and `partially_refunded` is deliberately excluded so a later FULL
+// refund can still complete the restock and the reversals. That leaves the
+// partial path with no guard at all, and this file already documents the
+// delivery pattern that exploits it: "VeyraGate remaps its internal `charge.*`
+// to `payment.*` for merchants, but a subscription that includes '*' surfaces
+// the UNMAPPED internal name — and the live endpoint for this store subscribes
+// to both". getOrderStatusForEventType maps `refund.completed` AND
+// `charge.refunded` to "refunded", the two deliveries carry two envelope ids,
+// so claimEvent does not dedupe them, and the amounts ACCUMULATE off the order
+// row:
+//
+//   a genuine $60 refund on a $200 order, delivered twice, records $120;
+//   a third delivery records $180 and reverses the ambassador's whole
+//   commission; a fourth flips the order to 'refunded', which restocks the
+//   entire order, returns every redeemed point and all store credit, and
+//   revokes the membership — for a customer who was refunded $60 and kept the
+//   goods.
+//
+// The successful-charge side has had an exactly-once handle for this since
+// paid_side_effects_at. This is that handle for a refund, keyed on the REFUND
+// rather than on the delivery that carried it.
+//
+// WHAT IDENTIFIES A REFUND, in order of preference:
+//
+//   1. the refund/charge object's own id. Two deliveries of one refund carry
+//      the same object; two genuine refunds carry two, so a real two-step
+//      refund (goods, then shipping) still applies both.
+//   2. failing that, the order, the amount and the processor's own event
+//      timestamp. `created_at` is stamped on the underlying event, so the two
+//      deliveries share it while two separate refunds do not.
+//
+// AND WHEN NEITHER EXISTS, THIS RETURNS NULL AND NOTHING IS DEDUPED. That is
+// today's behaviour exactly. A key of "order plus amount" alone would be the
+// one dangerous shortcut here: two honest $30 refunds on one order are ordinary,
+// and swallowing the second would keep a customer's money.
+// ---------------------------------------------------------------------------
+export function refundApplicationKey(input: {
+  orderId: string;
+  refundEventAmount: number;
+  objectId?: string | null;
+  createdAt?: string | null;
+}): string | null {
+  const objectId = String(input.objectId ?? "").trim();
+  if (objectId) return `refund:${input.orderId}:${objectId}`;
+
+  const createdAt = String(input.createdAt ?? "").trim();
+  if (!createdAt) return null;
+
+  const amount = Number(input.refundEventAmount);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+
+  return `refund:${input.orderId}:${createdAt}:${amount.toFixed(2)}`;
+}
+
 export function getCommissionStateForRefund(currentStatus: string | null | undefined): CommissionState {
   const normalizedStatus = (currentStatus ?? "pending").toLowerCase();
 
@@ -335,6 +393,13 @@ function normalizeOrderPayload(payload: string) {
   return JSON.parse(payload) as {
     orderId?: string;
     type?: string;
+    /** The envelope's own id. Differs per DELIVERY, so it identifies nothing. */
+    id?: string;
+    /** The processor's timestamp for the underlying event, not for the delivery. */
+    created_at?: string;
+    /** Some gateways name the refund at the top level. Read if present. */
+    refundId?: string;
+    refund_id?: string;
     paymentId?: string;
     status?: string;
     customer?: {
@@ -373,11 +438,16 @@ function normalizeOrderPayload(payload: string) {
       amount_cents?: number;
       amount_charged_cents?: number;
       amount_captured_cents?: number;
+      /** The charge/refund object's own id — the same across two deliveries. */
+      id?: string;
+      refund_id?: string;
       object?: {
         metadata?: { order_id?: string; veyragate_session_id?: string };
         amount_cents?: number;
         amount_charged_cents?: number;
         amount_captured_cents?: number;
+        id?: string;
+        refund_id?: string;
       };
     };
   };
@@ -1997,6 +2067,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     } satisfies WebhookEventState;
   }
 
+  // Set inside the try when this delivery takes the exactly-once claim for a
+  // partial refund, so the catch below can hand it back on a failed run exactly
+  // as it hands back the event claim.
+  let refundClaimKey: string | null = null;
+
   try {
   // AN EVENT THAT NAMES NO ORDER MUST NOT CREATE ONE.
   //
@@ -2175,6 +2250,50 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       status: priorPaymentStatus as OrderStatus,
       providerStatus: eventPayload.status ?? eventPayload.type ?? "unknown",
     } satisfies WebhookEventState;
+  }
+
+  // ONE REFUND IS APPLIED ONCE. See refundApplicationKey above for why the
+  // FULLY_TERMINAL check just above cannot cover this: a partial refund leaves
+  // the order 'partially_refunded' on purpose, so a second delivery of the SAME
+  // refund runs the whole block again and the amount accumulates.
+  //
+  // Scoped to exactly the accumulating case — a refund event carrying a
+  // positive amount that is not a chargeback. A chargeback is always full, so
+  // its replay lands on 'refunded' and the terminal check has it; an amount-less
+  // refund is applied as full, likewise.
+  const refundEventAmountForKey = Number(eventPayload.amount ?? 0);
+  if (nextStatus === "refunded"
+      && !(eventPayload.type ?? "").startsWith("chargeback")
+      && refundEventAmountForKey > 0) {
+    const candidateKey = refundApplicationKey({
+      orderId,
+      refundEventAmount: refundEventAmountForKey,
+      objectId: eventPayload.data?.object?.refund_id
+        ?? eventPayload.data?.refund_id
+        ?? eventPayload.refundId
+        ?? eventPayload.refund_id
+        ?? eventPayload.data?.object?.id
+        ?? eventPayload.data?.id
+        ?? null,
+      createdAt: eventPayload.created_at ?? null,
+    });
+    if (candidateKey) {
+      // The same claim mechanism the event itself uses: a completed or in-flight
+      // claim refuses, a stranded one older than STALE_CLAIM_MS is reclaimed so
+      // a crashed run still gets retried.
+      const mine = await claimEvent(candidateKey, orderId, nextStatus);
+      if (!mine) {
+        await markEventProcessed(eventId, orderId, (priorPaymentStatus ?? nextStatus) as OrderStatus);
+        return {
+          duplicate: false,
+          eventId,
+          orderId,
+          status: (priorPaymentStatus ?? nextStatus) as OrderStatus,
+          providerStatus: eventPayload.status ?? eventPayload.type ?? "unknown",
+        } satisfies WebhookEventState;
+      }
+      refundClaimKey = candidateKey;
+    }
   }
 
   // Money fields are DB-authoritative: they were computed and persisted at
@@ -3165,6 +3284,12 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     }
   }
 
+  // Close the refund's own claim before the event's, so a crash between the two
+  // leaves the refund claim STRANDED rather than completed — and a stranded
+  // claim is reclaimable, which is the safe direction.
+  if (refundClaimKey) {
+    await markEventProcessed(refundClaimKey, orderId, nextStatus);
+  }
   await markEventProcessed(eventId, orderId, nextStatus);
 
   return {
@@ -3178,6 +3303,14 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     // Processing failed after the event was claimed. Release the claim so the
     // processor's retry can reprocess it instead of being skipped as a
     // duplicate, then rethrow so the caller returns a non-2xx and retries.
+    //
+    // The refund's exactly-once claim goes back for the same reason: this run
+    // applied nothing it can be held to, and leaving the claim standing would
+    // make the processor's retry look like a replay of a refund that never
+    // landed.
+    if (refundClaimKey) {
+      await releaseEvent(refundClaimKey).catch(() => {});
+    }
     await releaseEvent(eventId).catch(() => {});
     throw processingError;
   }
