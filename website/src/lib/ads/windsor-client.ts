@@ -36,7 +36,7 @@
  * that is testable without a network.
  */
 
-import { adPlatformKey, parseAdTagsFromUrl } from "./utm";
+import { adPlatformKey, isSafeTag, parseAdTagsFromUrl } from "./utm";
 
 export const WINDSOR_ENDPOINT = "https://connectors.windsor.ai";
 
@@ -260,6 +260,24 @@ export function normalizeSpendRow(
   const landingUrl = map.destinationUrl ? toText(r[map.destinationUrl], 2048) : null;
   const tags = parseAdTagsFromUrl(landingUrl);
 
+  // THE DOCUMENTED CONVENTION, IMPLEMENTED. See the FieldMap note above: a
+  // connector that exposes no landing URL (Snapchat) can only be attributed to
+  // a creative by NAMING the ad for its utm_content. That instruction has been
+  // in this file since it was written and nothing acted on it, so every
+  // Snapchat dollar was permanently untagged — the worst of both, because an
+  // owner reading the comment would believe the convention worked.
+  //
+  // ONLY WHEN THE NAME IS ALREADY A VALID TAG. `isSafeTag`, not `toSafeTag`: a
+  // name that has to be MANGLED into a tag ("Snap Video 3 — Winter") is a name,
+  // not a deliberate tag, and coercing it would invent a join key that matches
+  // no revenue. That would be worse than untagged: it turns invisible spend
+  // into a creative row that looks like a failing ad. An operator who follows
+  // the convention writes `hook_a` and it works; one who does not stays in the
+  // untagged panel, which is honest.
+  const nameAsTag = !landingUrl && !tags.utmContent && isSafeTag(toText(r.ad_name))
+    ? toText(r.ad_name)
+    : null;
+
   return {
     ok: true,
     row: {
@@ -272,7 +290,7 @@ export function normalizeSpendRow(
       adgroupName: toText(r[map.adgroupName]),
       adName: toText(r.ad_name),
       landingUrl,
-      utmContent: tags.utmContent,
+      utmContent: tags.utmContent ?? nameAsTag,
       utmCampaign: tags.utmCampaign,
       // Missing impressions and clicks are normal on a day with no delivery, so
       // they floor at 0; conversions stay null when unreported, because "the

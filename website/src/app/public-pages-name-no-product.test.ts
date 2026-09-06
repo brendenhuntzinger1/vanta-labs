@@ -110,14 +110,79 @@ describe("no public page renders product names from the catalogue", () => {
     expect(PUBLIC_PAGES).toContain("/contact");
   });
 
-  it.each(PUBLIC_PAGES)("%s does not render a catalogue product's name", (route) => {
+  /**
+   * The page AND the components it composes itself from.
+   *
+   * Reading page.tsx alone is how the second leak survived this suite: the
+   * offending string was `placeholder="e.g. BPC-157, TB-500"` in
+   * wholesale-form.tsx, a component the page imports. It was in the HTML served
+   * with no cookie at all —
+   *
+   *     $ curl -s .../wholesale | grep -o '.\{80\}BPC-157.\{60\}'
+   *     ...<input id="wholesale-products" placeholder="e.g. BPC-157, TB-500" ...
+   *
+   * — and both are real catalogue rows. One import hop covers every component
+   * these pages actually use; a page that reaches deeper for a product name
+   * would have to route it through a prop, which the `.name` assertions below
+   * still catch at the page.
+   */
+  function sourcesFor(route: string): Array<{ label: string; text: string }> {
     const segments = route.split("/").filter(Boolean);
-    const source = code(readFileSync(join(APP, ...segments, "page.tsx"), "utf8"));
+    const pagePath = join(APP, ...segments, "page.tsx");
+    const raw = readFileSync(pagePath, "utf8");
+    const sources = [{ label: `${route} (page.tsx)`, text: code(raw) }];
 
-    // Reading the catalogue for PHOTOGRAPHY is fine — the URLs are opaque. What
-    // must never appear on a public page is a product's name being rendered.
-    expect(source, `${route} renders product.name`).not.toMatch(/\{\s*product\.name\s*\}/);
-    expect(source, `${route} renders p.name`).not.toMatch(/\{\s*p\.name\s*\}/);
-    expect(source, `${route} passes a product name as alt`).not.toMatch(/alt=\{[^}]*\.name[^}]*\}/);
+    for (const match of raw.matchAll(/from\s+"@\/components\/([A-Za-z0-9._-]+)"/g)) {
+      for (const ext of [".tsx", ".ts"]) {
+        try {
+          const componentPath = join(process.cwd(), "src/components", `${match[1]}${ext}`);
+          sources.push({ label: `${route} (${match[1]}${ext})`, text: code(readFileSync(componentPath, "utf8")) });
+          break;
+        } catch {
+          /* not this extension */
+        }
+      }
+    }
+    return sources;
+  }
+
+  /**
+   * Names from the store's own seeded catalogue, read out of harness-seed.sql
+   * rather than typed here — a hardcoded list would go stale the first time a
+   * product is added, which is precisely the failure this file exists to stop.
+   */
+  const CATALOGUE_NAMES = [...readFileSync(join(process.cwd(), "src/lib/sql/harness-seed.sql"), "utf8")
+    .matchAll(/values\s*\('[0-9a-f-]+','[a-z0-9-]+','([^']+)'/gi)]
+    .map((match) => match[1])
+    .filter((name) => name.length >= 4);
+
+  it("knows some catalogue names to look for, so the scan cannot pass vacuously", () => {
+    expect(CATALOGUE_NAMES.length).toBeGreaterThan(2);
+  });
+
+  it.each(PUBLIC_PAGES)("%s does not render a catalogue product's name", (route) => {
+    for (const { label, text } of sourcesFor(route)) {
+      // Reading the catalogue for PHOTOGRAPHY is fine — the URLs are opaque.
+      // What must never appear on a public page is a product's name.
+      expect(text, `${label} renders product.name`).not.toMatch(/\{\s*product\.name\s*\}/);
+      expect(text, `${label} renders p.name`).not.toMatch(/\{\s*p\.name\s*\}/);
+      expect(text, `${label} passes a product name as alt`).not.toMatch(/alt=\{[^}]*\.name[^}]*\}/);
+    }
+  });
+
+  it.each(PUBLIC_PAGES)("%s does not spell one out as a literal either", (route) => {
+    for (const { label, text } of sourcesFor(route)) {
+      for (const name of CATALOGUE_NAMES) {
+        // The name, and its bare compound without the strength — "BPC-157" is
+        // what identifies the product; "10mg" is not.
+        for (const needle of [name, name.replace(/\s+\d+\s*(mg|ml|mcg|iu)\b/i, "")]) {
+          if (needle.length < 4) continue;
+          expect(
+            text.toLowerCase(),
+            `${label} spells out the catalogue name "${needle}"`,
+          ).not.toContain(needle.toLowerCase());
+        }
+      }
+    }
   });
 });

@@ -102,6 +102,8 @@ export type ConnectorOutcome = {
   /** Rows the platform reported with no readable creative tag. Spend we can see
    *  but cannot tie to revenue — worth surfacing, never worth hiding. */
   untagged: number;
+  /** Duplicate (platform, ad_id, stat_date) pairs summed before the write. */
+  merged: number;
   error?: string;
 };
 
@@ -157,7 +159,7 @@ export async function runSpendIngest(deps: {
   let totalSpend = 0;
 
   for (const connector of connectors) {
-    const outcome: ConnectorOutcome = { connector, status: "ok", rows: 0, written: 0, rejected: 0, untagged: 0 };
+    const outcome: ConnectorOutcome = { connector, status: "ok", rows: 0, written: 0, rejected: 0, untagged: 0, merged: 0 };
 
     const fetched = await fetchConnectorSpend({
       connector,
@@ -176,15 +178,67 @@ export async function runSpendIngest(deps: {
     outcome.rejected = fetched.rejections.length;
     outcome.untagged = fetched.rows.filter((r) => !r.utmContent && r.spend > 0).length;
 
-    for (let i = 0; i < fetched.rows.length; i += CHUNK_SIZE) {
-      const slice = fetched.rows.slice(i, i + CHUNK_SIZE);
+    // ONE ROW PER (platform, ad_id, stat_date), BECAUSE THE UPSERT DEMANDS IT.
+    //
+    // The write is `insert … on conflict (platform, ad_id, stat_date) do update`
+    // per chunk, and Postgres refuses a statement that presents the same
+    // conflict target twice: SQLSTATE 21000, "ON CONFLICT DO UPDATE command
+    // cannot affect row a second time". The rows go to the database exactly as
+    // fetched, with no de-duplication anywhere in between — and a duplicate pair
+    // is routine, because the fetch asks for a URL dimension: one ad running two
+    // creatives or two landing URLs on one day comes back as two rows.
+    //
+    // One such pair aborted the CHUNK, which broke the loop, which failed the
+    // whole connector for the run — dropping its entire trailing window with a
+    // message that reads like a write failure. Summed here instead, which is
+    // exactly the aggregation Windsor would have done had the URL dimension not
+    // been requested. The last-seen labels win; the tags are the same for any
+    // pair that shares a key.
+    const merged = new Map<string, typeof fetched.rows[number]>();
+    for (const row of fetched.rows) {
+      const key = `${row.platform}\u0000${row.adId}\u0000${row.statDate}`;
+      const seen = merged.get(key);
+      if (!seen) {
+        merged.set(key, { ...row });
+        continue;
+      }
+      seen.spend += row.spend;
+      seen.impressions += row.impressions;
+      seen.clicks += row.clicks;
+      if (row.platformConversions !== null) {
+        seen.platformConversions = (seen.platformConversions ?? 0) + row.platformConversions;
+      }
+      if (row.platformConversionValue !== null) {
+        seen.platformConversionValue = (seen.platformConversionValue ?? 0) + row.platformConversionValue;
+      }
+      // A LATER row that carries a tag beats an earlier one that does not: an
+      // untagged variant must not erase the tag the pair does have.
+      seen.utmContent = row.utmContent ?? seen.utmContent;
+      seen.utmCampaign = row.utmCampaign ?? seen.utmCampaign;
+      seen.campaignId = row.campaignId ?? seen.campaignId;
+      seen.campaignName = row.campaignName ?? seen.campaignName;
+      seen.adgroupId = row.adgroupId ?? seen.adgroupId;
+      seen.adgroupName = row.adgroupName ?? seen.adgroupName;
+      seen.adName = row.adName ?? seen.adName;
+      seen.landingUrl = row.landingUrl ?? seen.landingUrl;
+    }
+    const writable = [...merged.values()];
+    outcome.merged = fetched.rows.length - writable.length;
+
+    for (let i = 0; i < writable.length; i += CHUNK_SIZE) {
+      const slice = writable.slice(i, i + CHUNK_SIZE);
       const { error } = await deps.upsert(slice.map(toDbRow));
       if (error) {
         // A write failure is reported against the connector rather than thrown.
         // The next run re-fetches the same window and tries again, which is the
         // whole reason the window is trailing.
         outcome.status = "failed";
-        outcome.error = error.code === "42P01" ? "ad_spend_daily does not exist — apply ads-spend-roas.sql" : error.message;
+        outcome.error = error.code === "42P01"
+          ? "ad_spend_daily does not exist — apply ads-spend-roas.sql"
+          // The SQLSTATE travels, so 21000 (a duplicate conflict target that
+          // survived the merge above) is distinguishable from a transient write
+          // failure in the operator alert.
+          : `${error.message}${error.code ? ` [${error.code}]` : ""}`;
         break;
       }
       outcome.written += slice.length;

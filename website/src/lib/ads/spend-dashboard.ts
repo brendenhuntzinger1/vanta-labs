@@ -104,12 +104,30 @@ const DEFAULT_WINDOW_DAYS = 30;
  *  silently. */
 export const TABLE_LIMIT = 25;
 
+/**
+ * The first day of an INCLUSIVE window of `windowDays` days.
+ *
+ * `windowDays - 1`, because the reads compare a DATE with `>=` and today is one
+ * of the days. Without it "last 30 days" spanned 31 distinct dates — every
+ * total on the page was a day wider than its own label, which on a dashboard
+ * that drives spend decisions is a number that quietly does not mean what it
+ * says.
+ */
 function since(windowDays: number): string {
-  return new Date(Date.now() - windowDays * 86_400_000).toISOString().slice(0, 10);
+  return new Date(Date.now() - Math.max(0, windowDays - 1) * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** Today, as the reads' upper bound: a future-dated reporting row from a
+ *  platform in a leading timezone must not enter the window unnoticed. */
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 export async function getSpendDashboard(windowDays = DEFAULT_WINDOW_DAYS): Promise<SpendDashboard> {
   const from = since(windowDays);
+  // Bounded at both ends. See since() — the window is inclusive of today, and a
+  // platform reporting a day ahead of UTC must not silently widen it.
+  const to = today();
 
   const [platformRes, campaignRes, creativeRes, untaggedRes, unattributedRes, freshnessRes] = await Promise.all([
     // PAGED, every one of them. PostgREST caps a select at 1000 rows and says
@@ -119,11 +137,11 @@ export async function getSpendDashboard(windowDays = DEFAULT_WINDOW_DAYS): Promi
     // nine creatives per platform — and the two figures it would truncate,
     // untagged spend and unattributed revenue, exist precisely to state the size
     // of the blind spot.
-    safeSelectAll<Record<string, unknown>>("ad_platform_daily", "*", (q) => q.gte("stat_date", from)),
-    safeSelectAll<Record<string, unknown>>("ad_campaign_daily", "*", (q) => q.gte("stat_date", from)),
-    safeSelectAll<Record<string, unknown>>("ad_creative_roas_daily", "*", (q) => q.gte("stat_date", from)),
-    safeSelectAll<Record<string, unknown>>("ad_spend_untagged", "*", (q) => q.gte("stat_date", from)),
-    safeSelectAll<Record<string, unknown>>("ad_revenue_unattributed", "*", (q) => q.gte("stat_date", from)),
+    safeSelectAll<Record<string, unknown>>("ad_platform_daily", "*", (q) => q.gte("stat_date", from).lte("stat_date", to)),
+    safeSelectAll<Record<string, unknown>>("ad_campaign_daily", "*", (q) => q.gte("stat_date", from).lte("stat_date", to)),
+    safeSelectAll<Record<string, unknown>>("ad_creative_roas_daily", "*", (q) => q.gte("stat_date", from).lte("stat_date", to)),
+    safeSelectAll<Record<string, unknown>>("ad_spend_untagged", "*", (q) => q.gte("stat_date", from).lte("stat_date", to)),
+    safeSelectAll<Record<string, unknown>>("ad_revenue_unattributed", "*", (q) => q.gte("stat_date", from).lte("stat_date", to)),
     safeSelect<Record<string, unknown>>("ad_spend_daily", "ingested_at", (q) =>
       q.order("ingested_at", { ascending: false }).limit(1),
     ),

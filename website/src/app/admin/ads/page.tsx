@@ -20,7 +20,16 @@ export const dynamic = "force-dynamic";
  * visible, deliberate act rather than a surprise.
  */
 
-const money = (n: number) => `$${n.toFixed(2)}`;
+// NEGATIVE MONEY IS REACHABLE HERE AND MUST NOT READ AS "$-12.50".
+//
+// net_revenue is `sum(amount_paid - refund_amount)` and is deliberately not
+// clamped at zero — "an over-refunded order must stay negative or it disagrees
+// with the ledger exactly where the store lost money" — so any day whose
+// refunds exceed its takings is negative. Intl puts the sign before the symbol,
+// which is the accounting convention, and adds the thousands separators the
+// hand-rolled formatter never had ($12340.00).
+const MONEY = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+const money = (n: number) => MONEY.format(n);
 const pct = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(2)}%`);
 const ratio = (n: number | null) => (n === null ? "—" : n.toFixed(2));
 
@@ -28,7 +37,14 @@ function Panel({ title, subtitle, children, action }: {
   title: string; subtitle?: string; children: React.ReactNode; action?: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-white/[0.07] bg-[#141414] p-5">
+    // `min-w-0` IS LOAD-BEARING, NOT COSMETIC. A grid item's min-width defaults to
+    // `auto`, which resolves to its min-content contribution — and the min-content
+    // of the tables inside is their 48rem min-width, not 0. So below 1024px the
+    // section grew to fit the table, the inner `overflow-x-auto` never became a
+    // scroller, and `body { overflow-x: clip }` then made the cut-off columns
+    // permanently unreachable: on a phone the ROAS numbers past the third column
+    // could not be read at all.
+    <section className="min-w-0 rounded-2xl border border-white/[0.07] bg-[#141414] p-5">
       <header className="mb-4 flex items-start justify-between gap-4">
         <div>
           <h2 className="text-sm font-medium uppercase tracking-[0.14em] text-white/70">{title}</h2>

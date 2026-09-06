@@ -92,7 +92,15 @@ export function AdUrlBuilder({ siteUrl, products }: { siteUrl: string; products:
             id="ad-url-campaign"
             className={field}
             value={campaign}
-            onChange={(e) => setCampaign(toSafeTag(e.target.value) ?? e.target.value.toLowerCase())}
+            // NOT ON EVERY KEYSTROKE. toSafeTag strips trailing separators, so
+            // sanitising as the operator types deleted the "_" the instant it
+            // was typed: "hook_a" came out "hooka", "black_friday_v2" came out
+            // "blackfridayv2", and a pasted "hook-a" was silently rewritten to
+            // "hook_a" although isSafeTag accepts both. The result is an ad
+            // built with a tag the operator did not choose, which is exactly
+            // how spend lands in the untagged panel.
+            onChange={(e) => setCampaign(e.target.value)}
+            onBlur={(e) => setCampaign(toSafeTag(e.target.value) ?? e.target.value.trim().toLowerCase())}
             placeholder="launch"
           />
         </div>
@@ -103,7 +111,8 @@ export function AdUrlBuilder({ siteUrl, products }: { siteUrl: string; products:
             id="ad-url-content"
             className={field}
             value={content}
-            onChange={(e) => setContent(toSafeTag(e.target.value) ?? e.target.value.toLowerCase())}
+            onChange={(e) => setContent(e.target.value)}
+            onBlur={(e) => setContent(toSafeTag(e.target.value) ?? e.target.value.trim().toLowerCase())}
             placeholder="hook_a"
           />
         </div>
