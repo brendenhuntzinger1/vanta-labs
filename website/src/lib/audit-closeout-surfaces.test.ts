@@ -149,6 +149,26 @@ describe("CART-05b — no code-entry surface closes itself during a promotion", 
     }
   });
 
+  // THE COMPONENT'S ARGUMENTS ARE NOT COVERED BY THE PARITY SUITE.
+  //
+  // cart-server-discount-parity.test.ts calls resolveCartDiscount directly, so
+  // it proves the RULEBOOK matches the server while saying nothing about what
+  // cart-context.tsx actually hands it. That gap let the split stacking flags
+  // silently revert to the old OR after they had been written once — caught by
+  // a review bot, not by 8,431 tests. Passing the OR as `allowCouponStacking`
+  // makes the cart add a losing promotion's coupon to whichever candidate won,
+  // while the server competes the promotion+coupon package: two different
+  // totals, which the checkout refuses as "Altered total detected".
+  it("the cart hands the rulebook the SPLIT stacking flags, never the OR", () => {
+    const source = stripComments(read("components/cart-context.tsx"));
+    // The store-wide switch alone, and the promotion's licence as its own input.
+    expect(source).toContain("allowCouponStacking: couponStackingEnabled");
+    expect(source).toContain("promotionStacksCoupon,");
+    // The OR is a DISPLAY value (it drives the coupon's outcome sentence) and
+    // must never be the pricing input again.
+    expect(source).not.toContain("allowCouponStacking: activePromotionAllowsCoupon");
+  });
+
   it("the two remove controls are told apart by their accessible name", () => {
     // Both read "Remove code" and could never both be on screen before this
     // change, so one name was enough. Now they can.

@@ -1026,12 +1026,26 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // when it is on the server accepts a coupon the cart still declines, which
   // costs a discount rather than a sale and is unchanged from before.
   //
-  // THE ONE AUTHORITATIVE COUPON-STACKING ANSWER, and the exact expression
-  // quote-order.ts passes to resolveCustomerDiscount:
-  //   couponPolicy.allowStacking || promotionAllowsCouponStacking
-  // Either the admin allows it store-wide, or this promotion allows it.
-  const activePromotionAllowsCoupon = couponStackingEnabled
-    || (activePromotion?.promotion.stackWithCoupon ?? false);
+  // TWO LICENCES, KEPT APART — as quote-order.ts now keeps them apart.
+  //
+  // This was ONE value, the OR of the store-wide switch and the promotion's own
+  // flag, passed to resolveCartDiscount as `allowCouponStacking`. That was safe
+  // only while a promotion and a referral could never both price a basket: the
+  // coupon could only ever land on the promotion that permitted it. Once they
+  // compete, the OR lets a promotion that LOSES licence a coupon on top of the
+  // winner — see promotionStacksCoupon in profit-engine.ts.
+  //
+  // The store-wide switch still adds the coupon to whatever wins. The
+  // promotion's own licence instead makes "promotion + coupon" one candidate
+  // that competes, which is what resolveCartDiscount now does with these two.
+  const promotionStacksCoupon = activePromotion?.promotion.stackWithCoupon ?? false;
+  /**
+   * Something permits a coupon alongside whatever else is running.
+   *
+   * A DISPLAY question, not a pricing one — it drives the coupon's outcome
+   * sentence and nothing else. The two pricing inputs are the split pair above.
+   */
+  const activePromotionAllowsCoupon = couponStackingEnabled || promotionStacksCoupon;
   /** "Buy 2 Get 1 Free applied — 1 item free." */
   const activePromotionMessage = activePromotion?.application.message ?? null;
 
@@ -1196,10 +1210,15 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       memberPricingAmount,
       ambassadorPersonalAmount,
       couponDiscountAmount,
-      allowCouponStacking: activePromotionAllowsCoupon,
+      // THE SPLIT PAIR, NOT THE OR. Passing the OR here as
+      // `allowCouponStacking` is the divergence this file's comment above
+      // describes: the server would compete a losing promotion's package while
+      // the cart added its coupon to whichever candidate won.
+      allowCouponStacking: couponStackingEnabled,
+      promotionStacksCoupon,
       promos: promoDiscounts,
     }),
-    [subtotal, quantityBundleSavings, bulkSavingsResult.amount, memberPricingAmount, ambassadorPersonalAmount, couponDiscountAmount, activePromotionAllowsCoupon, promoDiscounts],
+    [subtotal, quantityBundleSavings, bulkSavingsResult.amount, memberPricingAmount, ambassadorPersonalAmount, couponDiscountAmount, couponStackingEnabled, promotionStacksCoupon, promoDiscounts],
   );
 
   const bestDiscount = cartDiscount.best;
