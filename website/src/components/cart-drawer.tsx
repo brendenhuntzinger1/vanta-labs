@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import { formatCartCurrency, useCart, getShippingProgress } from "@/components/cart-context";
+import { isFreeShippingSitewide } from "@/lib/shipping";
 import { bundleDiscountRate, getBundleDiscountedLineTotal, getNextBundleTier } from "@/lib/bundle-pricing";
 import { bestPaidTier, computeCartMembershipValue } from "@/lib/member-pricing";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
@@ -117,7 +118,17 @@ export function CartDrawer() {
   } = useCart();
 
   const freeShipThreshold = shippingConfig.freeShippingThreshold;
-  const shippingProgress = getShippingProgress(subtotal, freeShipThreshold);
+  // Free shipping sitewide (Control Center → Shipping). Read through the shared
+  // predicate so the drawer's words and the fee quote-order.ts charges come from
+  // one flag on one config object.
+  const freeShipSitewide = isFreeShippingSitewide(shippingConfig);
+  const shippingProgress = getShippingProgress(subtotal, freeShipThreshold, freeShipSitewide);
+  // The store's standing shipping promise, in one place: the drawer states it
+  // twice (the totals footnote and the Apple Pay note) and the two must not
+  // drift apart.
+  const freeShipSentence = freeShipSitewide
+    ? "Free shipping on every order."
+    : `Free shipping over ${formatCartCurrency(freeShipThreshold)}.`;
 
   // THE FREE GIFT WAITING FOR THIS BROWSER, if any.
   //
@@ -366,7 +377,10 @@ export function CartDrawer() {
                         <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-gold)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4"><path d="M20 6 9 17l-5-5" /></svg>
                       </span>
                       <div className="min-w-0">
-                        <p className="text-sm font-semibold text-white">Free shipping unlocked</p>
+                        {/* "Unlocked" means the basket earned it. With free
+                            shipping sitewide on there was nothing to unlock,
+                            and /cart says so for the same basket. */}
+                        <p className="text-sm font-semibold text-white">{freeShipSitewide ? "Free shipping on every order" : "Free shipping unlocked"}</p>
                         <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
                           <div className="h-full rounded-full" style={{ width: "100%", background: "linear-gradient(90deg, rgba(199, 174, 94,0.6), var(--accent-gold))" }} />
                         </div>
@@ -836,7 +850,7 @@ export function CartDrawer() {
                   <span className="text-[2rem] font-semibold leading-none tracking-tight text-white tabular-nums" data-testid="cart-total">{formatCartCurrency(shownTotal)}</span>
                 </div>
                 <p className="mt-3 text-[11px] leading-relaxed text-zinc-600">
-                  Shipping &amp; sales tax are calculated from your address at payment. Free shipping over {formatCartCurrency(freeShipThreshold)}. Card payments carry a small processing fee, shown at checkout.
+                  Shipping &amp; sales tax are calculated from your address at payment. {freeShipSentence} Card payments carry a small processing fee, shown at checkout.
                 </p>
               </div>
             </div>
@@ -862,7 +876,7 @@ export function CartDrawer() {
                 </svg>
                 <span>
                   Apple Pay adds <span className="text-zinc-300">sales tax</span> and shipping from your delivery address, so your final total there may be higher.
-                  {" "}Free shipping over {formatCartCurrency(freeShipThreshold)}.
+                  {" "}{freeShipSentence}
                 </span>
               </p>
             ) : (

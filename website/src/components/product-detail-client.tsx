@@ -13,6 +13,7 @@ import { SubscribeSave } from "@/components/subscribe-save";
 import { bundleDiscountRate, getBundleDiscountedLineTotal, DEFAULT_BUNDLE_CONFIG, type BundleConfig } from "@/lib/bundle-pricing";
 import type { Product, ProductDose, ProductFaqItem } from "@/lib/catalog-types";
 import { isBacWater } from "@/lib/bac-water";
+import { isFreeShippingSitewide } from "@/lib/shipping";
 import { MAX_UNITS_PER_ORDER_LINE } from "@/lib/purchase-limits";
 // Free-shipping threshold comes from the shared shipping module so the "Free
 // Ship" badge can never disagree with what checkout actually charges.
@@ -915,7 +916,10 @@ export function ProductDetailClient({
                     const exceedsStock = option.quantity > maxSelectableQuantity;
                     const rate = bundleDiscountRate(option.quantity, bundleConfig);
                     const lineTotal = getBundleDiscountedLineTotal(unitPrice, option.quantity, bundleConfig);
-                    const freeShip = lineTotal >= shippingConfig.freeShippingThreshold;
+                    // Every tier ships free once the sitewide switch is on, so
+                    // the badge follows the charge rather than the threshold
+                    // the charge is no longer using.
+                    const freeShip = isFreeShippingSitewide(shippingConfig) || lineTotal >= shippingConfig.freeShippingThreshold;
                     return (
                       <button
                         key={option.quantity}

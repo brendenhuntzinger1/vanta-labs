@@ -340,3 +340,66 @@ describe("the shipping protection rate", () => {
     expect(calculateShippingProtectionFee(80, percent)).toBeCloseTo(8, 2);
   });
 });
+
+describe("free shipping sitewide", () => {
+  // The one Control Center switch that gives shipping away on EVERY order at
+  // once. Its failure mode is asymmetric: reading a stored value as ON when it
+  // is not costs the store real money on every basket, while reading it as OFF
+  // costs nothing but a switch that appears not to have taken. So the reader is
+  // strict `=== true` and everything else — unset, blank, "true" as a string,
+  // a legacy row — is OFF.
+
+  it("is off when nothing is stored, so the thresholds keep applying", async () => {
+    const { getShippingConfig } = await mod();
+    const config = await getShippingConfig();
+    expect(config.freeShippingSitewide).toBe(false);
+    expect(config.freeShippingThreshold).toBe(200);
+  });
+
+  it("is on when the owner actually switched it on", async () => {
+    state.rows = [control("shipping", "free_shipping_sitewide", true)];
+    const { getShippingConfig } = await mod();
+    expect((await getShippingConfig()).freeShippingSitewide).toBe(true);
+  });
+
+  it("is off again once the owner switches it back off", async () => {
+    state.rows = [control("shipping", "free_shipping_sitewide", false)];
+    const { getShippingConfig } = await mod();
+    expect((await getShippingConfig()).freeShippingSitewide).toBe(false);
+  });
+
+  describe("stays off for anything that is not a real stored true", () => {
+    for (const stored of ["true", "TRUE", "1", 1, "yes", "on", "", "   ", "false", null, "abc"]) {
+      it(JSON.stringify(stored), async () => {
+        state.rows = [control("shipping", "free_shipping_sitewide", stored)];
+        const { getShippingConfig } = await mod();
+        expect((await getShippingConfig()).freeShippingSitewide).toBe(false);
+      });
+    }
+  });
+
+  it("survives a database failure switched OFF, never on", async () => {
+    // An unreadable config must not start shipping every order free. It also
+    // must match what /api/catalog/promotions falls back to for the client, or
+    // the preview and the charge disagree for the length of the outage.
+    state.throwOnRead = true;
+    const { getShippingConfig } = await mod();
+    expect((await getShippingConfig()).freeShippingSitewide).toBe(false);
+  });
+
+  it("overrides the thresholds the owner also configured", async () => {
+    // The reader and the pricer together, the same pairing the protection rate
+    // test above makes: a store with a $1000 bar and a $45 flat rate still
+    // ships free while the switch is on.
+    state.rows = [
+      control("shipping", "free_shipping_sitewide", true),
+      control("shipping", "flat_rate", "45"),
+      control("shipping", "free_shipping_threshold", "1000"),
+    ];
+    const { getShippingConfig } = await mod();
+    const { calculateShipping } = await import("@/lib/shipping");
+    const config = await getShippingConfig();
+    expect(config.domesticFee).toBe(45);
+    expect(calculateShipping(10, "United States", config)).toBe(0);
+  });
+});

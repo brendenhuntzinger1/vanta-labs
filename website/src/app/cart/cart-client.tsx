@@ -12,6 +12,7 @@ import { CHECKOUT_SHORT, DESTINATIONS_SENTENCE, FULFILMENT_SENTENCE, FULFILMENT_
 import { cartTotalLabel, pendingChargeNotice } from "@/lib/cart-total-disclosure";
 import type { CardProcessingFeeConfig } from "@/lib/payment-methods";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
+import { isFreeShippingSitewide } from "@/lib/shipping";
 import { useOfferQuote } from "@/lib/offer-quote";
 
 /**
@@ -219,7 +220,11 @@ export function CartPageClient() {
 
   const effectiveReferralInput = referralInput || referralCode || "";
   const freeShipThreshold = shippingConfig.freeShippingThreshold;
-  const shippingProgress = getShippingProgress(subtotal, freeShipThreshold);
+  // Free shipping sitewide (Control Center → Shipping) — the same flag the
+  // drawer and quote-order.ts read, so this page cannot advertise a threshold
+  // the checkout is no longer applying.
+  const freeShipSitewide = isFreeShippingSitewide(shippingConfig);
+  const shippingProgress = getShippingProgress(subtotal, freeShipThreshold, freeShipSitewide);
 
   return (
     <div className="min-h-screen bg-[#0b0b0b] text-white">
@@ -349,7 +354,7 @@ export function CartPageClient() {
               <div className="mt-5 border border-white/10 p-4">
                 {shippingProgress.isEligibleForFreeShipping ? (
                   <div>
-                    <p className="text-sm text-[color:var(--accent-gold)]">Free shipping unlocked</p>
+                    <p className="text-sm text-[color:var(--accent-gold)]">{freeShipSitewide ? "Free shipping on every order" : "Free shipping unlocked"}</p>
                     <div className="mt-3 h-[2px] w-full bg-[color:var(--accent-gold)]/40" />
                   </div>
                 ) : (
@@ -476,7 +481,9 @@ export function CartPageClient() {
             <ul className="mt-5 space-y-1.5 border-t border-white/10 pt-4 text-xs leading-5 text-white/45">
               <li>{DESTINATIONS_SENTENCE}</li>
               <li>
-                Free shipping on orders over {formatCartCurrency(freeShipThreshold)}.
+                {freeShipSitewide
+                  ? "Free shipping on every order — no minimum."
+                  : `Free shipping on orders over ${formatCartCurrency(freeShipThreshold)}.`}
               </li>
               <li>{FULFILMENT_SENTENCE}</li>
               <li>{TRACKING_SENTENCE}</li>
