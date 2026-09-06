@@ -20,14 +20,33 @@ import { credentialStatus, sendServerEvents } from "@/lib/ads/tiktok-events-api"
  * not accepted here at all — it is derived from the order's own settled payment
  * state, which is the only place revenue may come from.
  *
+ * THE RESPONSE SAYS NOTHING ABOUT THE CATALOGUE, ON PURPOSE. This endpoint is
+ * public and the storefront it measures is behind the login wall, so the reply
+ * must not become a way to see behind that wall. An earlier version answered
+ * `{sent:true,…,totalOverridden}` on a catalogue match and
+ * `{sent:false,reason:"no line matched a catalogue product"}` on a miss — which
+ * is an anonymous oracle twice over: probe a slug and the body tells you whether
+ * it is a real product, and vary a claimed checkout total and `totalOverridden`
+ * flips at the real price, so both the compound list AND its prices are
+ * recoverable without an account. The relay still does all of that work
+ * internally (TikTok must receive accurate events), but every path now returns
+ * the SAME opaque acknowledgement, so an anonymous caller learns nothing it did
+ * not already send. The one caller (lib/ads/relay-client.ts) is fire-and-forget
+ * and never reads the body, so uniformity costs it nothing.
+ *
  * It never fails loudly. A measurement relay returning an error to a product
  * page would trade a reporting gap for a broken page, which is the wrong way
  * round.
  */
+
+// The single answer every outcome returns — match, miss, not-configured, or
+// internal error alike. Carries no catalogue signal by construction.
+const ACK = { received: true } as const;
+
 export async function POST(request: Request) {
   try {
     if (!credentialStatus().configured) {
-      return NextResponse.json({ sent: false, reason: "events api not configured" }, { status: 200 });
+      return NextResponse.json(ACK, { status: 200, headers: { "cache-control": "no-store" } });
     }
 
     const ip = getRequestIpAddress(request) ?? "unknown";
@@ -56,7 +75,7 @@ export async function POST(request: Request) {
       ),
     ];
     if (slugs.length === 0) {
-      return NextResponse.json({ sent: false, reason: "no products named" }, { status: 200 });
+      return NextResponse.json(ACK, { status: 200, headers: { "cache-control": "no-store" } });
     }
 
     // The catalogue is the price authority. sale_price_cents wins when set,
@@ -88,10 +107,12 @@ export async function POST(request: Request) {
     );
 
     if (!decision.ok) {
-      return NextResponse.json({ sent: false, reason: decision.reason }, { status: 200 });
+      return NextResponse.json(ACK, { status: 200, headers: { "cache-control": "no-store" } });
     }
 
-    const outcome = await sendServerEvents([
+    // Fire-and-forget: the delivery outcome is deliberately not surfaced (that
+    // was half the oracle). We still await so a thrown error hits the catch.
+    await sendServerEvents([
       {
         event: decision.event,
         eventId: decision.eventId,
@@ -113,17 +134,11 @@ export async function POST(request: Request) {
       },
     ]);
 
-    return NextResponse.json(
-      {
-        sent: true,
-        delivered: outcome.delivered,
-        tiktokCode: outcome.tiktokCode,
-        totalOverridden: decision.totalOverridden,
-      },
-      { status: 200, headers: { "cache-control": "no-store" } },
-    );
+    // Uniform ack — outcome.delivered / decision.totalOverridden are NOT
+    // returned, or they would re-open the price/existence oracle this closes.
+    return NextResponse.json(ACK, { status: 200, headers: { "cache-control": "no-store" } });
   } catch {
     // Never surface a measurement failure to a shopper's page.
-    return NextResponse.json({ sent: false, reason: "relay unavailable" }, { status: 200 });
+    return NextResponse.json(ACK, { status: 200, headers: { "cache-control": "no-store" } });
   }
 }

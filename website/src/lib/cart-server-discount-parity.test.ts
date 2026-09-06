@@ -612,7 +612,13 @@ describe("a free-shipping coupon zeroes shipping on both sides", () => {
     // cartShippingLineLabel only says "Free" for a zero something decided; a
     // coupon-waived zero used to fall through to the not-priced-yet placeholder.
     const drawer = read("src/components/cart-drawer.tsx");
-    const call = drawer.slice(drawer.indexOf("cartShippingLineLabel({"), drawer.indexOf("format: formatCartCurrency"));
+    // Both ends of the slice are anchored to THIS call. Searching the whole file
+    // for the closing marker assumed no other `format: formatCartCurrency`
+    // appeared earlier, and the first one that did (bundleCreditNote, above the
+    // summary) silently sliced this assertion down to the empty string — which
+    // `toContain` then failed on, but a weaker matcher would have passed.
+    const callStart = drawer.indexOf("cartShippingLineLabel({");
+    const call = drawer.slice(callStart, drawer.indexOf("format: formatCartCurrency", callStart));
     expect(call).toContain("Boolean(couponDetails?.freeShipping)");
     expect(call).toContain("memberFreeShipping");
     expect(call).toContain("bulkSavingsTierReached");

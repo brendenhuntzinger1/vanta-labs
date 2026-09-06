@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatCartCurrency, getShippingProgress, useCart, type CartItem } from "@/components/cart-context";
-import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
+import { bundleDiscountRate, getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
+import { bundleCreditNote } from "@/lib/discount-resolution";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
 import { CHECKOUT_SHORT, DESTINATIONS_SENTENCE, FULFILMENT_SENTENCE, FULFILMENT_SHORT, TRACKING_SENTENCE } from "@/lib/trust-claims";
@@ -74,6 +75,7 @@ export function CartPageClient() {
     shippingProtectionFee,
     shippingProtectionPercent,
     couponCode,
+    bundleSavings,
   } = useCart();
 
   // A ONE-TIME GIFT, IF THIS BROWSER IS HOLDING ONE.
@@ -106,6 +108,18 @@ export function CartPageClient() {
   const shownTotal = offerQuote ? offerQuote.expectedTotal : total;
   // The server's label travels with the server's amount — see cart-drawer.
   const shownDiscountLabel = offerQuote?.discountLabel ?? appliedDiscountLabel ?? offerQuote?.offer?.description ?? "Discount";
+  // WHY THE DISCOUNT ROW IS SMALLER THAN THE FREE ITEM.
+  //
+  // resolveCartDiscount ranks candidates on what they save BEYOND the
+  // quantity-bundle pricing already inside `subtotal`, so a $14.99 free item on
+  // a basket earning $4.50 of Bundle & Save reaches this page as $10.49 — and
+  // the $4.50 appeared on no row. Reported from a phone as "something is off",
+  // and it was: not the total, the account of it.
+  const bundleNote = bundleCreditNote({
+    bundleSavings,
+    discountAmount: shownDiscount,
+    format: formatCartCurrency,
+  });
   const giftLines = offerQuote?.giftLines ?? [];
   const offerShortfall = pendingOffer ? Math.max(0, pendingOffer.minSubtotalCents / 100 - subtotal) : 0;
 
@@ -324,7 +338,22 @@ export function CartPageClient() {
                         <span className="min-w-6 text-center tabular-nums">{item.quantity}</span>
                         <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="inline-flex h-11 w-11 items-center justify-center text-base" aria-label="Increase quantity">+</button>
                       </div>
-                      <p className="text-base text-white sm:text-lg">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig))}</p>
+                      {/* THE BUNDLE DISCOUNT, WHERE IT HAPPENS. The drawer has
+                          always struck through the full total beside the tier
+                          price; this page printed the discounted figure alone,
+                          so a shopper on the 5% two-unit tier saw a subtotal
+                          $4.50 below the prices they remembered and nothing
+                          anywhere saying why. Same disclosure, same numbers,
+                          both surfaces. */}
+                      <div className="text-right">
+                        {bundleDiscountRate(item.quantity, bundleConfig) > 0 ? (
+                          <p className="text-xs text-white/40 line-through tabular-nums">{formatCartCurrency(item.price * item.quantity)}</p>
+                        ) : null}
+                        <p className="text-base text-white sm:text-lg tabular-nums">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig))}</p>
+                        {bundleDiscountRate(item.quantity, bundleConfig) > 0 ? (
+                          <p className="text-[11px] font-medium text-[color:var(--accent-gold)]">Bundle &amp; Save {Math.round(bundleDiscountRate(item.quantity, bundleConfig) * 100)}%</p>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                 );
@@ -424,9 +453,16 @@ export function CartPageClient() {
                 <span>{formatCartCurrency(shownShipping)}</span>
               </div>
               {shownDiscount > 0 ? (
-                <div className="flex justify-between text-emerald-300">
-                  <span>{shownDiscountLabel}</span>
-                  <span>-{formatCartCurrency(shownDiscount)}</span>
+                <div className="text-emerald-300">
+                  <div className="flex justify-between">
+                    <span>{shownDiscountLabel}</span>
+                    <span>-{formatCartCurrency(shownDiscount)}</span>
+                  </div>
+                  {/* The other half of the saving, which used to be stated
+                      nowhere. See bundleCreditNote. */}
+                  {bundleNote ? (
+                    <p className="mt-1 text-xs leading-5 text-emerald-300/70" data-testid="bundle-credit-note">{bundleNote}</p>
+                  ) : null}
                 </div>
               ) : null}
               {shippingProtectionFee > 0 ? (

@@ -151,6 +151,18 @@ type CartContextValue = {
   /** Admin-configured protection rate (Control Center -> Shipping). */
   shippingProtectionPercent: number;
   discountAmount: number;
+  /**
+   * Dollars the quantity "Bundle & Save" tiers already granted INSIDE
+   * `subtotal` — 0 when bundle stacking is on and the tiers are not netted
+   * against anything.
+   *
+   * Exposed so a summary can say so. `discountAmount` is the winner AFTER
+   * resolveCartDiscount netted it against this (one discount per order, best
+   * wins, judged on what it saves beyond the bundle), which is why a $14.99
+   * free item can print as "-$10.49": the other $4.50 is in the line prices and
+   * was, until this, named on no surface at all.
+   */
+  bundleSavings: number;
   /** Customer-facing name of the applied discount (null when none). */
   appliedDiscountLabel: string | null;
   /** True when the system auto-selected the best available discount. */
@@ -2099,6 +2111,7 @@ export function CartProvider({ children, signedIn = false }: { children: React.R
     setPointsToRedeem,
     itemCount,
     subtotal,
+    bundleSavings: quantityBundleSavings,
     shipping,
     taxAmount,
     salesTaxConfig,

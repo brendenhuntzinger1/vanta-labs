@@ -149,3 +149,36 @@ export async function resolveBacWaterProduct(
   }
   return null;
 }
+
+/**
+ * WHAT THE CART'S BAC WATER CHECKBOX SAYS ABOUT ITS OWN STATE.
+ *
+ * The control is a toggle: ticked means "this size is in your cart", and
+ * unticking removes it. It rendered one set of words for both states — "Add
+ * 10 mL BAC Water   +$14.99" — so a shopper who already had the bottle saw a
+ * ticked box under the heading "Complete your order", offering to add the thing
+ * sitting in the line above it, at a price prefixed with a plus. Reported from
+ * a phone as looking like a double charge, which is exactly what it looks like.
+ *
+ * Ticked, the money is already in the subtotal, so the plus goes and the label
+ * states the fact instead of repeating the offer. The action a tick performs is
+ * unchanged; only its description of itself is.
+ */
+export function bacWaterCheckboxCopy(input: {
+  sizeLabel: string;
+  displayPrice: string;
+  inCart: boolean;
+}): { label: string; price: string; ariaLabel: string } {
+  if (input.inCart) {
+    return {
+      label: `${input.sizeLabel} BAC Water — in your cart`,
+      price: input.displayPrice,
+      ariaLabel: `Remove ${input.sizeLabel} BAC Water from your order`,
+    };
+  }
+  return {
+    label: `Add ${input.sizeLabel} BAC Water`,
+    price: `+${input.displayPrice}`,
+    ariaLabel: `Add ${input.sizeLabel} BAC Water to your order`,
+  };
+}
