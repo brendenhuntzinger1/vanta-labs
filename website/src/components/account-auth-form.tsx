@@ -952,6 +952,42 @@ export function AccountAuthForm() {
             />
             <span>I understand products are offered exclusively for research use</span>
           </label>
+
+          {/* THE THIRD BOX SITS WITH THE OTHER TWO, AND IS STILL VISIBLY NOT
+              ONE OF THEM.
+
+              Position is the owner's call and this is where he wants it. The
+              dashed rule and the OPTIONAL tag are not: they are what keep the
+              tick worth having.
+
+              Ticking this writes marketing_emails = true, which is the column
+              marketing-broadcast.ts selects on when it sends commercial email.
+              A tick collected from someone who believed it was a condition of
+              entry is not consent under UK/EU GDPR — consent has to be freely
+              given and unambiguous, and "it looked required" is neither. It
+              also does not work: the people who had no way to decline are the
+              ones who press the spam button, and that is charged against this
+              sending domain, so it lands on the order confirmations and
+              shipping notices too.
+
+              So the row is genuinely optional, genuinely off until someone
+              turns it on, and says so in a tag small enough to stay out of the
+              way and legible enough to be read. canEnter never looks at it —
+              see the comment above it. */}
+          <label className="vl-portal-row vl-portal-row-optional">
+            <input
+              type="checkbox"
+              checked={marketingOptIn}
+              onChange={(event) => setMarketingOptIn(event.target.checked)}
+              className="vl-auth-check mt-0.5"
+            />
+            <span>
+              I agree to receive Vanta Labs emails, product updates and offers
+              <span className="ml-1.5 align-[0.09em] text-[0.625rem] font-medium uppercase tracking-[0.14em] text-white/50">
+                optional
+              </span>
+            </span>
+          </label>
         </div>
 
         {error ? (
@@ -1106,65 +1142,37 @@ export function AccountAuthForm() {
           </button>
         </p>
 
-        {/* THE TWO OPTIONAL BOXES, IN THEIR OWN GROUP AT THE FOOT OF THE CARD.
-            They were directly beneath the two required ones, which made four
-            near-identical rows the visitor had to read and sort before they
-            could see a way in — and buried the fast path under the fold on a
-            phone. They are still on THIS screen, still ticked before either
-            door is taken, and still read at the moment startOAuth fires, so
-            what a visitor can consent to has not changed. What changed is that
-            a favour is no longer standing in the queue in front of a
-            condition of entry.
+        {/* THE SESSION PREFERENCE, BELOW BOTH DOORS.
 
-            Kept together, below both doors and above the terms line, because
-            neither belongs to one door: the marketing tick and the session
-            length apply whether the visitor leaves through Google or through
-            email. Both remain OFF until someone turns them on. */}
+            It stays down here because it is not a statement about the visitor
+            or a permission they grant — it is a setting for this browser, and
+            it is the one row on the card that changes nothing except how long
+            the cookie lasts. It sits below both doors rather than beside
+            either, because it applies whichever one they take.
+
+            ON THE PORTAL AT ALL, BECAUSE THE PORTAL IS WHERE GOOGLE IS. This
+            control existed only on the email and create-account forms, so
+            anyone taking the fastest door never saw it — and the callback sent
+            `rememberMe: true` regardless, on the reasoning that "a visitor who
+            chose a provider account is asking that browser to remember them".
+            That is a decision made on the visitor's behalf and then described
+            as theirs. Here it is a question, asked once, reaching both doors,
+            and off until someone turns it on. */}
         <div className="mt-7 border-t border-white/[0.06] pt-6">
-          <p className="text-center text-[0.6875rem] font-medium uppercase tracking-[0.2em] text-white/50">
-            Optional
-          </p>
-
-          <div className="mt-3 space-y-2.5">
-            {/* Visually set apart from the two required rows above, because it
-                is a different kind of statement and the difference should be
-                legible before it is read. Those are conditions of entry; this
-                one is a favour, and marking it optional in the label is the
-                honest way to ask for it. */}
-            <label className="vl-portal-row vl-portal-row-optional">
-              <input
-                type="checkbox"
-                checked={marketingOptIn}
-                onChange={(event) => setMarketingOptIn(event.target.checked)}
-                className="vl-auth-check mt-0.5"
-              />
-              <span>
-                I agree to receive Vanta Labs emails, product updates and offers
-                <span className="ml-1.5 text-white/35">(optional)</span>
+          <label className="vl-portal-row vl-portal-row-optional">
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(event) => setRememberMe(event.target.checked)}
+              className="vl-auth-check mt-0.5"
+            />
+            <span>
+              Keep me signed in on this device
+              <span className="ml-1.5 align-[0.09em] text-[0.625rem] font-medium uppercase tracking-[0.14em] text-white/50">
+                optional
               </span>
-            </label>
-
-            {/* ON THE PORTAL, BECAUSE THE PORTAL IS WHERE GOOGLE IS.
-                This control existed only on the email and create-account forms,
-                so anyone taking the fastest door never saw it — and the callback
-                sent `rememberMe: true` regardless, on the reasoning that
-                "a visitor who chose a provider account is asking that browser to
-                remember them". That is a decision made on the visitor's behalf
-                and then described as theirs. Here it is a question, asked once,
-                and it reaches both doors. */}
-            <label className="vl-portal-row vl-portal-row-optional">
-              <input
-                type="checkbox"
-                checked={rememberMe}
-                onChange={(event) => setRememberMe(event.target.checked)}
-                className="vl-auth-check mt-0.5"
-              />
-              <span>
-                Keep me signed in on this device
-                <span className="ml-1.5 text-white/35">(optional)</span>
-              </span>
-            </label>
-          </div>
+            </span>
+          </label>
         </div>
 
         <p className="mt-6 text-center text-[0.75rem] leading-5 text-white/35">

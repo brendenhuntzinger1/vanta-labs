@@ -281,7 +281,15 @@ describe("the portal gates on the attestations, never on the marketing box", () 
   });
 
   it("labels the marketing box as optional, in the label itself", () => {
-    expect(portal).toContain("(optional)");
+    // The marker used to read "(optional)" in parentheses at the label's own
+    // size. It is now a small uppercase tag, which is a presentation change and
+    // nothing else: what this test exists to hold is that the word is IN the
+    // label a visitor reads, not only in a class name or a heading somewhere
+    // else on the card. That matters most now the box sits directly beneath the
+    // two that genuinely gate entry.
+    const marketingAt = code(portal).indexOf("I agree to receive Vanta Labs emails");
+    expect(marketingAt).toBeGreaterThan(-1);
+    expect(code(portal).slice(marketingAt, marketingAt + 400).toLowerCase()).toContain("optional");
     expect(portal).toContain("vl-portal-row-optional");
   });
 
@@ -411,15 +419,69 @@ describe("the portal makes the fastest path the obvious one", () => {
     return i;
   };
 
-  it("puts only the two entry conditions in front of the provider button", () => {
-    // The optional pair are a favour and a preference. Neither gates entry, so
-    // neither may stand between a visitor and the door — that is what pushed
-    // Google under the fold. They are still on this screen, below.
+  it("keeps the two entry conditions in front of the provider button", () => {
     const google = at('startOAuth("google")');
     expect(at("I confirm I am 21 years of age or older")).toBeLessThan(google);
     expect(at("I understand products are offered exclusively for research use")).toBeLessThan(google);
-    expect(at("I agree to receive Vanta Labs emails, product updates and offers")).toBeGreaterThan(google);
+    // The session preference is a setting for this browser, not a statement or
+    // a permission, so it stays below both doors.
     expect(at("Keep me signed in on this device")).toBeGreaterThan(google);
+  });
+
+  // ---------------------------------------------------------------------
+  // THE THIRD BOX SITS WITH THE FIRST TWO. IT MUST NOT PASS FOR ONE.
+  //
+  // Its position in the stack is the owner's call and it has moved before. What
+  // cannot move with it is the difference between a condition of entry and a
+  // permission the visitor may withhold and still get in — because ticking this
+  // box writes marketing_emails, the column marketing-broadcast.ts selects on
+  // when it sends commercial email. A tick collected from someone who believed
+  // it was required is not consent under UK/EU GDPR, and it is not even useful:
+  // the people who had no way to decline are the ones who press the spam
+  // button, and that is charged against the domain that also sends the order
+  // confirmations.
+  //
+  // So this pins the three things that keep it honest wherever it sits: the
+  // gate ignores it, it looks different from the boxes that do gate, and it
+  // says so in words.
+  // ---------------------------------------------------------------------
+  it("keeps the marketing box distinguishable from the two that gate entry", () => {
+    const marketing = at("I agree to receive Vanta Labs emails, product updates and offers");
+    const rowStart = rendered.lastIndexOf("<label", marketing);
+    const rowClass = rendered.slice(rowStart, marketing);
+
+    // Dashed and quieter — the difference is legible before the label is read.
+    expect(rowClass, "the marketing row is styled as a required one").toContain(
+      "vl-portal-row vl-portal-row-optional",
+    );
+
+    // The two that DO gate carry the plain row class and no modifier.
+    for (const required of [
+      "I confirm I am 21 years of age or older",
+      "I understand products are offered exclusively for research use",
+    ]) {
+      const at2 = at(required);
+      const cls = rendered.slice(rendered.lastIndexOf("<label", at2), at2);
+      expect(cls, `${required} should not be styled optional`).not.toContain("vl-portal-row-optional");
+    }
+
+    // And it is marked in words, close enough to the label to belong to it.
+    const tag = rendered.slice(marketing, marketing + 400);
+    expect(tag.toLowerCase(), "the marketing row carries no optional marker").toContain("optional");
+  });
+
+  it("never lets the marketing box become a condition of entry", () => {
+    // The load-bearing rule, restated here because the box now sits directly
+    // beneath the two that ARE conditions: entry is computed from those two
+    // alone, and the controls it gates never consult the marketing state.
+    expect(code(form)).toContain("const canEnter = ageConfirmed && researchUseAgreed;");
+    expect(code(form)).not.toMatch(/canEnter\s*=\s*[^;]*marketingOptIn/);
+    expect(rendered).toContain("disabled={oauthPending !== null || !canEnter}");
+    expect(rendered).toContain("disabled={!canEnter}");
+    expect(rendered).not.toMatch(/disabled=\{[^}]*marketingOptIn/);
+    // And it is never pre-ticked, which is the other way a tick stops meaning
+    // anything.
+    expect(code(form)).toContain("const [marketingOptIn, setMarketingOptIn] = useState(false);");
   });
 
   it("orders the card: confirm, Google, or, create, sign in", () => {
@@ -505,8 +567,17 @@ describe("the portal makes the fastest path the obvious one", () => {
       return Number(m![1]);
     };
 
-    for (const label of ["Confirm to continue", "Fast, secure access", "Optional"]) {
+    for (const label of ["Confirm to continue", "Fast, secure access"]) {
       expect(opacityOf(label), `${label} is below the contrast floor`).toBeGreaterThanOrEqual(50);
+    }
+
+    // The two "optional" tags are inline <span>s on their rows rather than
+    // headings, and they are the smallest type on the card — 10px — so they are
+    // exactly where an unreadable marker would hide. Same floor applies.
+    const tags = [...rendered.matchAll(/text-\[0\.625rem\][^"]*text-white\/(\d+)"[^>]*>\s*optional/g)];
+    expect(tags.length, "expected an inline optional tag on each optional row").toBe(2);
+    for (const m of tags) {
+      expect(Number(m[1]), "an optional tag is below the contrast floor").toBeGreaterThanOrEqual(50);
     }
 
     // The "or" rule is the one exemption, and only because it is decoration:
