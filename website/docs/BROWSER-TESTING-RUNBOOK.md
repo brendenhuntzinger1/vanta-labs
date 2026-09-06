@@ -715,6 +715,31 @@ wait the window out.
 
 ## Shim limitations to work around
 
+- **Ad attribution captures NOTHING until you turn analytics on, and the
+  harness ships it off.** `.env.local` and `.env.test.local` both carry
+  `NEXT_PUBLIC_ENABLE_ANALYTICS=false`, and site-analytics-tracker.tsx gates the
+  whole capture on `NODE_ENV === "production" || that flag`. The harness runs
+  `NODE_ENV=test`, so on the default configuration a visit with a full set of
+  UTM tags and a click id writes no `vl_attribution`, no
+  `website_analytics_events` row and no `order_attribution` — and every
+  assertion about campaign attribution passes vacuously by measuring an empty
+  store.
+
+  To verify anything in the ads or affiliate-attribution path:
+
+      # in website/.env.local AND website/.env.test.local
+      NEXT_PUBLIC_ENABLE_ANALYTICS=true
+      npm run harness:build && npm run harness:start   # it is a build-time inline
+
+  Consent is a second gate and is the product's rule, not a harness quirk:
+  accept the cookie banner (or the capture correctly writes nothing). With both
+  in place, `?utm_source=TikTok&utm_content=Hook_A` stores `tiktok` / `hook_a`
+  — lowercased to match the spend side of the join — with the click id kept
+  verbatim.
+
+  Set it back to `false` when you are done, or the next run of an unrelated
+  journey carries analytics traffic it did not ask for.
+
 - **Embedded selects** (`select=a,b,rel(x,y)`) ARE implemented, as of
   2026-08-28. Both directions work — a child array (`orders` →
   `order_items(...)`), a parent object (`customer_memberships` →
