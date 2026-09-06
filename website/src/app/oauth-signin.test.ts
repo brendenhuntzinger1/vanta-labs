@@ -291,10 +291,26 @@ describe("the portal gates on the attestations, never on the marketing box", () 
     expect(portal).toContain("I agree to receive Vanta Labs emails, product updates and offers");
   });
 
-  it("shows the title, the access line and the terms line", () => {
-    expect(portal).toContain("Research Access Portal");
-    expect(portal).toContain("Access is limited to verified account holders.");
-    expect(portal).toContain("By continuing, you agree to our");
+  // ASSERTED AGAINST THE STRIPPED SLICE, NOT THE RAW ONE.
+  //
+  // The comment above this heading quotes the copy it replaced, verbatim, to
+  // record why it changed — and `portal` is the raw file, so a toContain() on
+  // the old wording passed off that comment for one release. A rendered string
+  // has to be asserted somewhere comments cannot reach.
+  const renderedPortal = code(portal);
+
+  it("names the destination, not the checkpoint, and says how long it takes", () => {
+    // "Research Access Portal / Access is limited to verified account holders."
+    // told a first-time visitor they were not on a list and there was a
+    // process. The process is one tap of Google; they left before finding out.
+    expect(renderedPortal).toContain("Access Vanta Labs");
+    expect(renderedPortal).toContain("Sign in in seconds to continue.");
+    expect(renderedPortal).not.toContain("Research Access Portal");
+    expect(renderedPortal).not.toContain("Access is limited to verified account holders.");
+  });
+
+  it("shows the terms line", () => {
+    expect(renderedPortal).toContain("By continuing, you agree to our");
     expect(portal).toContain("/legal/terms");
     expect(portal).toContain("/legal/privacy");
   });
@@ -357,7 +373,7 @@ describe("the portal gates on the attestations, never on the marketing box", () 
     expect(lib).toContain("buildAuthCookieValue(accessToken: string, rememberMe = false");
   });
 
-  it("gives the provider buttons full width and equal weight", () => {
+  it("gives the provider buttons full width and a 56px target", () => {
     expect(portal).toContain("vl-oauth-btn-lg");
     const css = read("src/app/globals.css");
     expect(css).toMatch(/\.vl-oauth-btn-lg \{[^}]*width: 100%/);
@@ -366,6 +382,151 @@ describe("the portal gates on the attestations, never on the marketing box", () 
 
   it("keeps a keyboard-visible focus state on the rows", () => {
     expect(read("src/app/globals.css")).toContain(".vl-portal-row:focus-within");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE FASTEST DOOR HAS TO LOOK LIKE THE FASTEST DOOR.
+//
+// The bounce this screen produces is not caused by the gate; it is caused by
+// the gate LOOKING like paperwork. Measured on the local harness at 390x844,
+// the version these tests replaced put "Continue with Google" at y=708 with
+// its bottom edge at 764 — below the fold of any real handset once browser
+// chrome and the in-flow consent bar are counted — behind four checkbox rows,
+// and gave it exactly the same visual weight as the form button below it.
+//
+// What follows pins the three things that fixed it, because every one of them
+// is the kind of detail a later tidy-up removes without noticing: the order of
+// the card, the weight of the provider button against the email one, and the
+// fact that only the two REQUIRED boxes stand in front of the door.
+// ---------------------------------------------------------------------------
+describe("the portal makes the fastest path the obvious one", () => {
+  const portal = form.slice(form.indexOf('if (mode === "portal")'), form.indexOf("const isSendCodeAction"));
+  const rendered = code(portal);
+  const css = read("src/app/globals.css");
+
+  const at = (needle: string) => {
+    const i = rendered.indexOf(needle);
+    expect(i, `expected the portal to render ${JSON.stringify(needle)}`).toBeGreaterThan(-1);
+    return i;
+  };
+
+  it("puts only the two entry conditions in front of the provider button", () => {
+    // The optional pair are a favour and a preference. Neither gates entry, so
+    // neither may stand between a visitor and the door — that is what pushed
+    // Google under the fold. They are still on this screen, below.
+    const google = at('startOAuth("google")');
+    expect(at("I confirm I am 21 years of age or older")).toBeLessThan(google);
+    expect(at("I understand products are offered exclusively for research use")).toBeLessThan(google);
+    expect(at("I agree to receive Vanta Labs emails, product updates and offers")).toBeGreaterThan(google);
+    expect(at("Keep me signed in on this device")).toBeGreaterThan(google);
+  });
+
+  it("orders the card: confirm, Google, or, create, sign in", () => {
+    const confirm = at("Confirm to continue");
+    const badge = at("Fastest option");
+    const google = at('startOAuth("google")');
+    const note = at("Fast, secure access");
+    const create = at("Create an account");
+    const signIn = at("Sign in with email");
+
+    expect(confirm).toBeLessThan(badge);
+    expect(badge).toBeLessThan(google);
+    expect(google).toBeLessThan(note);
+    expect(note).toBeLessThan(create);
+    expect(create).toBeLessThan(signIn);
+  });
+
+  it("marks the provider button as the fastest option, and means it", () => {
+    // The claim is allowed here only because it is literally true: two taps,
+    // nothing typed, and the same session the email form produces.
+    expect(rendered).toContain("Fastest option");
+    expect(rendered).toContain("Fast, secure access — no lengthy signup.");
+    expect(rendered).toContain('id="vl-fastest-label"');
+    expect(rendered).toContain('id="vl-fastest-note"');
+    // Both are wired to the button, so the marker is not purely decorative to
+    // a screen reader that never sees the layout.
+    expect(rendered).toContain('aria-describedby="vl-fastest-label vl-fastest-note"');
+  });
+
+  it("drops the marker and its promise with the button they describe", () => {
+    // A "Fastest option" pill over an empty space, or a claim about Google on
+    // a card with no Google button, is the same class of dead furniture the
+    // provider guards already exist to prevent.
+    for (const needle of ["Fastest option", "Fast, secure access", 'id="vl-fastest-note"']) {
+      const guard = rendered.lastIndexOf("isGoogleSignInEnabled()", at(needle));
+      expect(guard, `${needle} renders outside isGoogleSignInEnabled()`).toBeGreaterThan(-1);
+    }
+  });
+
+  it("gives the provider button more weight than the email one", () => {
+    // Two identical-looking doors is not a recommendation, it is a comparison
+    // the visitor has to run themselves.
+    expect(rendered).toContain("vl-oauth-btn-primary");
+    expect(rendered).toContain("vl-auth-submit-quiet");
+    expect(css).toContain(".vl-oauth-btn-primary {");
+    expect(css).toContain(".vl-auth-submit-quiet {");
+    // The lift must beat .vl-oauth-btn-lg's own hover, which it can only do on
+    // source order at equal specificity.
+    expect(css.indexOf(".vl-oauth-btn-primary")).toBeGreaterThan(css.indexOf(".vl-oauth-btn-lg:hover"));
+    expect(css.indexOf(".vl-auth-submit-quiet")).toBeGreaterThan(css.indexOf(".vl-auth-submit:hover"));
+  });
+
+  it("keeps the Google mark unmodified inside the louder button", () => {
+    // Brand guidelines require the four colours; a recoloured mark is what
+    // fails a provider review.
+    for (const hex of ["#4285F4", "#34A853", "#FBBC05", "#EA4335"]) {
+      expect(rendered).toContain(hex);
+    }
+  });
+
+  it("draws the bolt rather than borrowing a font glyph", () => {
+    // An emoji renders differently on every platform and reads as promotional
+    // on a card whose whole value is looking considered. currentColor also
+    // survives Windows high contrast, which drops background-image glyphs.
+    expect(rendered).toContain('className="vl-fastest-badge"');
+    expect(css).toContain(".vl-fastest-badge {");
+    expect(portal).not.toContain("⚡");
+  });
+
+  it("keeps the instruction text above the WCAG AA floor for this card", () => {
+    // Composited against the auth card (~rgb(19,20,24)) the muted whites are:
+    //   white/30 2.69:1 · white/35 3.22:1 · white/40 3.83:1 · white/45 4.52:1
+    //   white/50 5.30:1 · white/55 6.17:1
+    // AA wants 4.5:1 and 11px uppercase is not large text, so /50 is the first
+    // step with margin. The label this replaced was white/40 — a fail — which
+    // is exactly the kind of thing a restyle carries forward by accident.
+    const opacityOf = (label: string) => {
+      const at = rendered.indexOf(label);
+      expect(at, `expected the portal to render ${JSON.stringify(label)}`).toBeGreaterThan(-1);
+      const tag = rendered.lastIndexOf("<p", at);
+      const m = /text-white\/(\d+)/.exec(rendered.slice(tag, at));
+      expect(m, `no text-white/NN on the element carrying ${JSON.stringify(label)}`).not.toBeNull();
+      return Number(m![1]);
+    };
+
+    for (const label of ["Confirm to continue", "Fast, secure access", "Optional"]) {
+      expect(opacityOf(label), `${label} is below the contrast floor`).toBeGreaterThanOrEqual(50);
+    }
+
+    // The "or" rule is the one exemption, and only because it is decoration:
+    // its container is aria-hidden and it states nothing the layout does not.
+    const orAt = rendered.indexOf(">or<");
+    expect(rendered.lastIndexOf('aria-hidden="true"', orAt)).toBeGreaterThan(-1);
+  });
+
+  it("names the door the sign-in link actually opens", () => {
+    // "Sign in" beside a Google button that also signs you in sent returning
+    // provider customers to a password form they never set a password for.
+    expect(rendered).toContain("Sign in with email");
+  });
+
+  it("cites only controls that are on the screen when it refuses", () => {
+    // The refusal names "both statements above", and after the reorder there
+    // are exactly two rows above the button. An error pointing at boxes that
+    // are somewhere else is how a gate starts feeling broken.
+    expect(rendered).toContain("Please confirm both statements above to continue.");
+    expect(rendered).not.toContain("first two statements");
   });
 });
 
