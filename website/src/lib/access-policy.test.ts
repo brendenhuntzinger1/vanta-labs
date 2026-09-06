@@ -141,6 +141,63 @@ describe("the exemptions, each of which has to earn its place", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// A PUBLIC PAGE WHOSE FORM IS WALLED IS NOT A PUBLIC PAGE.
+//
+// The list named /contact, /wholesale and /ambassador and stopped there, so the
+// endpoints those pages POST to stayed closed. Driven signed out in Chromium
+// against the production build, before this fix:
+//
+//   POST /api/contact          401   {"error":"Sign in to continue"}
+//   POST /api/wholesale        401   same
+//   POST /api/analytics/track  401   fired after consent, on every page
+//
+// Each one is dead for precisely the audience its page exists to serve. The
+// analytics beacon is the costly one: an ad click arrives at a gated page, the
+// wall forwards it to /account/login carrying the ttclid, and the pageview the
+// campaign was billed for is the one that never lands.
+// ---------------------------------------------------------------------------
+describe("the endpoints the public pages call are public too", () => {
+  it.each([
+    ["/api/contact", "the contact form on the public /contact page"],
+    ["/api/wholesale", "the enquiry form on the public /wholesale page"],
+    ["/api/analytics/track", "the pageview beacon, on every page, for visitors with no account"],
+    ["/api/ads/funnel-event", "the server-side leg of the same ad events the pixel reports"],
+  ])("%s is public — %s", (path) => {
+    expect(isPublicPath(path)).toBe(true);
+  });
+
+  it("opens those four and nothing next to them", () => {
+    // Named one at a time rather than by group, because /api/ads and
+    // /api/analytics are not otherwise public: the neighbours read the session
+    // or drive the ad account's purchase reporting.
+    for (const neighbour of [
+      "/api/ads/campaigns",
+      "/api/ads/purchase-event/abc",
+      "/api/ads/tracking-health",
+      "/api/ads/reddit-match-keys",
+      "/api/ads/tiktok-test-event",
+      "/api/analytics/export",
+    ]) {
+      expect(requiresAccount(neighbour), `${neighbour} must stay gated`).toBe(true);
+    }
+  });
+
+  it("keeps the catalog endpoints that were gated before the default closed", () => {
+    // /api/catalog and /api/coa were the ONLY API prefixes gated before this
+    // change, and the store ran that way. Nothing here is a candidate for
+    // reopening on the grounds that a public page happens to mount a component
+    // that calls it.
+    for (const path of [
+      "/api/catalog/promotions", "/api/catalog/bac-water", "/api/catalog/welcome-offer",
+      "/api/catalog/referral/validate", "/api/catalog/bulk-savings-config",
+      "/api/coa/abc/file", "/api/storefront/offers", "/api/offer/status",
+    ]) {
+      expect(requiresAccount(path), `${path} must stay gated`).toBe(true);
+    }
+  });
+});
+
 describe("the deliberate cost of closing the default", () => {
   it("puts the home page and the research library behind the wall", () => {
     // Recorded as a test rather than a comment because it is the one

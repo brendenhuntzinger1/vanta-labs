@@ -125,6 +125,40 @@ export const PUBLIC_PREFIXES = [
   "/api/email",
   "/api/unsubscribe",
 
+  // ---- WHAT THE PUBLIC PAGES ABOVE ACTUALLY CALL.
+  //
+  // This list named the PAGES and forgot the endpoints behind them, and the
+  // justifications above are what make that a bug rather than an oversight:
+  // /contact is public because "someone locked out of their own account is
+  // exactly the person who needs the contact form", and its form POSTs to
+  // /api/contact, which answered 401. Driven in a real browser, signed out:
+  //
+  //   POST /api/contact          401   the contact form is dead
+  //   POST /api/wholesale        401   the enquiry form is dead
+  //   POST /api/analytics/track  401   every signed-out pageview unrecorded
+  //
+  // The third is the expensive one. Nearly all traffic here is paid, and an ad
+  // click lands on a page the wall forwards to /account/login carrying its
+  // ttclid — so the pageview that the campaign is billed for was the one being
+  // dropped. The relay beside it reports the same events to TikTok server-side.
+  //
+  // None of these is a hole opened for convenience. Every one was public before
+  // the default was closed, and every one defends itself: contact and wholesale
+  // with a honeypot, a minimum fill time and three submissions per IP per
+  // window; analytics with 120/minute per session, 600/minute per IP and an
+  // 8 KB payload cap; the relay with 240/minute per IP, prices re-read from the
+  // catalogue rather than the request, and purchase events refused outright.
+  // Its own header already says it "is a public endpoint, so it is written as
+  // though the caller is hostile".
+  //
+  // Named one at a time, never "/api/ads" or "/api/analytics" wholesale:
+  // /api/ads also holds campaigns, tracking-health and the purchase relay, and
+  // those read the session.
+  "/api/contact",
+  "/api/wholesale",
+  "/api/analytics/track",
+  "/api/ads/funnel-event",
+
   // ---- The referral link. A visitor following an ambassador's link has never
   // been here; /r/[code] sets the attribution cookie and redirects, and it has
   // to run BEFORE the wall or the ambassador loses the credit. ----
