@@ -167,15 +167,22 @@ describe("the gate fails closed and locks the page behind it", () => {
       expect(gate, `${shopper} must never be exempt from the gate`)
         .not.toMatch(new RegExp(`STAFF_ONLY[^\\]]*${shopper}`));
     }
-    // There are exactly TWO other exemptions, and each has its own justification
-    // and its own tests. What matters here is that a further list cannot appear
-    // unnoticed — this count is the tripwire, so raising it is a deliberate act.
+    // There are exactly THREE other exemptions, and each has its own
+    // justification and its own tests. What matters here is that a further list
+    // cannot appear unnoticed — this count is the tripwire, so raising it is a
+    // deliberate act.
+    //
+    // Raised from 4 to 5 on 2026-09-06 for PASSWORD_RECOVERY, deliberately: the
+    // gate was covering /account/reset-password, so an emailed reset link
+    // landed on a password form that could not be clicked. Reproduced in the
+    // browser, and pinned behaviourally in
+    // age-gate-password-recovery.test.ts.
     const exemptionLists = gate.match(/^const [A-Z_]+ = \[[^\]]*\];$/gm) ?? [];
     const routeLists = exemptionLists.filter((line) => line.includes('"/'));
     expect(
       routeLists.length,
       `unexpected route list in age-gate.tsx:\n${routeLists.join("\n")}`,
-    ).toBe(4); // STAFF_ONLY, PAYMENT_AND_RECEIPT, COLLECTS_ITS_OWN_ATTESTATION, NEVER_A_DESTINATION
+    ).toBe(5); // STAFF_ONLY, PAYMENT_AND_RECEIPT, COLLECTS_ITS_OWN_ATTESTATION, PASSWORD_RECOVERY, NEVER_A_DESTINATION
   });
 
   it("exempts the sign-in screen ONLY while the portal still asks the same two things", () => {
