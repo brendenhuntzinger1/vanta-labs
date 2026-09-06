@@ -1,6 +1,6 @@
 import "server-only";
 
-import { safeSelect } from "./dashboard-data";
+import { safeSelect, safeSelectAll } from "./dashboard-data";
 import { ingestAdSpend } from "./spend-ingest";
 import {
   aggregateCampaigns,
@@ -85,11 +85,18 @@ export async function getSpendDashboard(windowDays = DEFAULT_WINDOW_DAYS): Promi
   const from = since(windowDays);
 
   const [platformRes, campaignRes, creativeRes, untaggedRes, unattributedRes, freshnessRes] = await Promise.all([
-    safeSelect<Record<string, unknown>>("ad_platform_daily", "*", (q) => q.gte("stat_date", from)),
-    safeSelect<Record<string, unknown>>("ad_campaign_daily", "*", (q) => q.gte("stat_date", from)),
-    safeSelect<Record<string, unknown>>("ad_creative_roas_daily", "*", (q) => q.gte("stat_date", from)),
-    safeSelect<Record<string, unknown>>("ad_spend_untagged", "*", (q) => q.gte("stat_date", from)),
-    safeSelect<Record<string, unknown>>("ad_revenue_unattributed", "*", (q) => q.gte("stat_date", from)),
+    // PAGED, every one of them. PostgREST caps a select at 1000 rows and says
+    // so only in a header supabase-js does not surface, so an unpaged read of a
+    // per-day-per-creative view returns a prefix and the sums below present that
+    // prefix as a total. Four platforms over thirty days crosses 1000 at about
+    // nine creatives per platform — and the two figures it would truncate,
+    // untagged spend and unattributed revenue, exist precisely to state the size
+    // of the blind spot.
+    safeSelectAll<Record<string, unknown>>("ad_platform_daily", "*", (q) => q.gte("stat_date", from)),
+    safeSelectAll<Record<string, unknown>>("ad_campaign_daily", "*", (q) => q.gte("stat_date", from)),
+    safeSelectAll<Record<string, unknown>>("ad_creative_roas_daily", "*", (q) => q.gte("stat_date", from)),
+    safeSelectAll<Record<string, unknown>>("ad_spend_untagged", "*", (q) => q.gte("stat_date", from)),
+    safeSelectAll<Record<string, unknown>>("ad_revenue_unattributed", "*", (q) => q.gte("stat_date", from)),
     safeSelect<Record<string, unknown>>("ad_spend_daily", "ingested_at", (q) =>
       q.order("ingested_at", { ascending: false }).limit(1),
     ),
