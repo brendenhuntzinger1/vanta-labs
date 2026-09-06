@@ -85,7 +85,21 @@ begin;
 --
 -- Table-level REVOKE also removes column-level grants, which is what these
 -- are. Done as a loop rather than 340 statements so it cannot drift out of
--- date, and restricted to ordinary tables so views and sequences are untouched.
+-- date.
+--
+-- VIEWS ARE IN THE SWEEP NOW, and they are the relkind where a lost grant is
+-- hardest to see. This loop used to be restricted to `('r','p')` — ordinary and
+-- partitioned tables — on the reasoning that views and sequences should be left
+-- alone. But a view is a readable object with its own grants, and one that is
+-- recreated (which `create or replace view` cannot avoid whenever a column is
+-- dropped or reordered) takes a fresh SELECT grant for anon from Supabase's
+-- platform default-privilege entry. Nothing here would have taken it back, and
+-- a view over a table whose RLS is doing the work reads straight past it unless
+-- it was also declared security_invoker.
+--
+-- Every view in this schema is read by the server through the service role, so
+-- there is nothing for anon or authenticated to lose. Sequences stay out: they
+-- are not readable objects and nothing here reads one.
 -- ---------------------------------------------------------------------------
 do $$
 declare r record;
@@ -94,7 +108,7 @@ begin
     select c.relname
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
-    where n.nspname = 'public' and c.relkind in ('r', 'p')
+    where n.nspname = 'public' and c.relkind in ('r', 'p', 'v', 'm')
   loop
     execute format('revoke select on public.%I from anon, authenticated', r.relname);
   end loop;

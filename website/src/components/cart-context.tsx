@@ -904,7 +904,23 @@ export function CartProvider({ children, signedIn = false }: { children: React.R
     return () => {
       cancelled = true;
     };
-  }, [isHydrated, referralCode, referralDetails, referralProgramEnabled]);
+    // `signedIn` IS A DEPENDENCY BECAUSE THE FIRST ATTEMPT USUALLY 401s.
+    //
+    // /api/catalog/referral/validate is behind the wall, and this provider
+    // mounts on the sign-in portal, so an ambassador's visitor validates their
+    // code before they have an account: the fetch throws, the catch sets
+    // referralDetails to null, and none of the other deps ever moves again.
+    // What the shopper then saw was the code sitting in the box with no
+    // ambassador name, no discount line — and a CLEAR button beside it. Press
+    // it and `vl_referral_code` is expired outright, which costs the ambassador
+    // the sale they made AND the rest of their thirty-day window: the exact
+    // failure this file's own note calls "the single most expensive line this
+    // change removes", reintroduced through a different door.
+    //
+    // referralProgramEnabled does move when the promotions read succeeds after
+    // sign-in, so this would recover by that route today. Naming signedIn makes
+    // it explicit rather than a chain through another effect's state.
+  }, [isHydrated, referralCode, referralDetails, referralProgramEnabled, signedIn]);
 
   // A DEFINITE "OFF" CLEARS THE CODE, AND ONLY A DEFINITE ONE.
   //

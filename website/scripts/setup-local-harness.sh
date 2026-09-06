@@ -176,6 +176,31 @@ for f in referral-orders-commission-lifecycle referral-orders-manual-review-stat
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
 done
 
+# ---------------------------------------------------------------------------
+# SECURITY POSTURE — the layer the harness used to have none of.
+#
+# The harness applied 65 of the repository's SQL files and none of the fifteen
+# security ones. So the default browser-verification target had 1 policy in the
+# whole public schema, no anon table grants in either direction, and no catalog
+# gate: an engineer could verify the storefront wall in the browser exactly as
+# CLAUDE.md instructs and learn nothing whatever about the layer the gate commit
+# calls the only one that cannot be bypassed.
+#
+# Concretely, this is why a collision between two lockdown migrations — both
+# creating a policy of the same name, so whichever ran second aborted its whole
+# transaction and left the anon grants in place — survived to a pre-launch
+# audit. Applied here, it would have failed the parity check on the first run.
+#
+# Order matters: policies reference current_auth_role(), and the catalog gate
+# replaces the public catalog policies the revoke file also touches.
+echo "==> security posture (RLS, policies, grants — the layer under test)"
+for f in rls-enforce-all-tables orders-rls partner-portal-rls affiliate-program-rls \
+         fulfillment-rls-hardening products-hide-cost-columns-from-public \
+         product-doses-hide-cost-columns-from-public rpc-execute-lockdown \
+         admin-control-current-view gate-catalog-behind-account revoke-anon-table-access; do
+  [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
+done
+
 echo "==> revenue rollups (net revenue definition — must apply AFTER parity columns)"
 $PSQL -q -f "$HERE/src/lib/sql/admin-dashboard-rollups.sql"         >>/tmp/vl-schema.log 2>&1 || true
 $PSQL -q -f "$HERE/src/lib/sql/admin-partner-rollups.sql"           >>/tmp/vl-schema.log 2>&1 || true
@@ -303,6 +328,24 @@ check "claim_store_credit_hold takes an advisory lock (tender-hold-claim.sql)" \
   "select coalesce(bool_or(prosrc like '%pg_advisory_xact_lock%'), false) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='claim_store_credit_hold';"
 check "claim_points_hold takes an advisory lock (tender-hold-claim.sql)" \
   "select coalesce(bool_or(prosrc like '%pg_advisory_xact_lock%'), false) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='claim_points_hold';"
+
+# THE SECURITY LAYER, ASSERTED RATHER THAN ASSUMED.
+#
+# Each of these three is a real production-shaped failure that the harness could
+# not previously see, and each is one query:
+#
+#   * a table nobody remembered to name in the RLS sweep (ambassador_wallet_ledger
+#     was exactly that: a real table carrying user_id, amount_cents and a
+#     free-text note, in no RLS statement anywhere in the repo);
+#   * an anon SELECT grant left standing by an aborted lockdown transaction;
+#   * a view without security_invoker, which runs as its owner and therefore
+#     reads straight past the RLS on the table underneath it.
+check "every public table has RLS enabled (rls-enforce-all-tables.sql)" \
+  "select not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and not c.relrowsecurity);"
+check "anon and authenticated hold no table SELECT grant (revoke-anon-table-access.sql)" \
+  "select not exists (select 1 from information_schema.role_table_grants where table_schema='public' and grantee in ('anon','authenticated'));"
+check "every public view is security_invoker (a view otherwise reads past RLS)" \
+  "select not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('v','m') and (c.reloptions is null or not ('security_invoker=true' = any(c.reloptions))));"
 
 if [ "$parity_failures" -ne 0 ]; then
   echo ""

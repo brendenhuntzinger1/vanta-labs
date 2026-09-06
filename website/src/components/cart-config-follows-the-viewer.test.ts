@@ -72,6 +72,19 @@ describe("the cart refetches its configuration when the viewer signs in", () => 
     expect(deps?.[1], `${endpoint} still has a mount-only effect, so a shopper who signs in keeps the defaults`).toContain("signedIn");
   });
 
+  it("the referral code is revalidated too, so the ambassador's discount appears", () => {
+    // The same 401, with a sharper cost. An unresolved code renders with no
+    // ambassador name and no discount, next to a CLEAR button that expires
+    // vl_referral_code — so a shopper who reasonably concludes the code failed
+    // destroys the attribution for that sale and for the rest of the thirty-day
+    // window.
+    const at = cart.indexOf("validateReferralCodeClient(referralCode)");
+    expect(at, "the referral code must still be validated in the provider").toBeGreaterThan(-1);
+    const deps = cart.slice(at).match(/\n\s*\}, \[([^\]]*)\]\);/);
+    expect(deps).not.toBeNull();
+    expect(deps?.[1]).toContain("signedIn");
+  });
+
   it("does not remount the provider to solve it, which would empty the cart", () => {
     // A key={signedIn} on CartProvider would refetch by throwing the shopper's
     // basket away. The prop exists precisely so the state survives.
