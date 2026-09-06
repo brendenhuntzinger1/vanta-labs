@@ -128,6 +128,33 @@ jobs:
       # (lib/e2e/suite-database.ts) and drop it first, so they never share
       # tables and never touch anything they did not name. The URL is refused by
       # those suites if it names a harness database, which this one is not.
+      # THE SUPABASE ROLES, BECAUSE THE MIGRATIONS UNDER TEST NAME THEM.
+      #
+      # Four SQL suites apply a real migration file unmodified — that is the
+      # point of them, never a copy — and those files carry the grant/revoke
+      # statements that keep the anon key out of the tables. A bare postgres:16
+      # container has no `anon`, `authenticated` or `service_role`, so every one
+      # of them died in beforeAll with `role "anon" does not exist`:
+      #
+      #   bxgy-redemption-claims, customer-offers,
+      #   marketing-frequency-guard, tender-hold-claim
+      #
+      # It reads as four failing suites rather than as a missing role, and it is
+      # why these pass locally: scripts/setup-local-harness.sh creates the three
+      # roles as its first act, and CI had no equivalent.
+      #
+      # Roles are CLUSTER-wide, not per-database, so creating them once here
+      # covers every database the suites create for themselves
+      # (lib/e2e/suite-database.ts makes one per suite). NOLOGIN and unprivileged
+      # — they exist to be the SUBJECT of a grant, never to connect.
+      - name: Supabase roles the migrations grant to
+        run: |
+          psql "postgres://postgres@127.0.0.1:5432/postgres" -v ON_ERROR_STOP=1 <<'SQL'
+          do $$ begin create role anon nologin noinherit; exception when duplicate_object then null; end $$;
+          do $$ begin create role authenticated nologin noinherit; exception when duplicate_object then null; end $$;
+          do $$ begin create role service_role nologin noinherit bypassrls; exception when duplicate_object then null; end $$;
+          SQL
+
       - name: Tests
         env:
           VANTA_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
