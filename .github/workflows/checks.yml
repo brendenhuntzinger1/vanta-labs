@@ -67,8 +67,29 @@ jobs:
       - name: Install
         run: npm ci
 
-      # Verified 2026-09-06: 8445 tests pass with NO env files present, which is
-      # the state a fresh CI checkout is in. Nothing here needs a secret, and
+      # THE SUITE SPAWNS A LANGUAGE SERVER, SO ONE HAS TO BE THERE.
+      #
+      # typescript-lsp-runs.test.ts takes the command out of the Claude Code
+      # plugin manifest, spawns exactly that, and speaks LSP to it — it is
+      # checking that the declared server actually starts and resolves the
+      # WORKSPACE TypeScript rather than its own bundled copy. A developer
+      # container gets the binary from .claude/hooks/session-start.sh; a CI
+      # runner starts bare, so without this the first run of this workflow
+      # failed with `spawn typescript-language-server ENOENT`.
+      #
+      # Installing it rather than excluding the file, so CI keeps the check
+      # instead of quietly dropping the one test that proves the plugin config
+      # works.
+      #
+      # @5 IS NOT OPTIONAL. Bare `npm install -g typescript` now resolves to
+      # TypeScript 7 — the native port — which ships tsc.js and no
+      # lib/tsserver.js, so it cannot back a language server at all. Installing
+      # it looks like a fix and changes nothing. (Same warning as CLAUDE.md.)
+      - name: Developer tooling the suite spawns
+        run: npm install -g typescript-language-server typescript@5
+
+      # Verified 2026-09-06: the suite passes with NO env files present, which
+      # is the state a fresh CI checkout is in. Nothing here needs a secret, and
       # nothing here should — a test that needs production credentials is a test
       # that cannot run on a pull request from a fork.
       - name: Tests
