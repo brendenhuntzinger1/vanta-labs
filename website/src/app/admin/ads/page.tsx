@@ -239,8 +239,8 @@ function StaleFeedNotice({ s }: { s: SpendDashboard }) {
     );
   }
 
-  const lastRun = s.lastIngestedAt ? Date.parse(s.lastIngestedAt) : NaN;
-  if (Number.isNaN(lastRun)) {
+  const hours = s.lastIngestedAgeHours;
+  if (hours === null) {
     return (
       <p className="mt-3 rounded-xl border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.05] px-3 py-2 text-[11px] leading-5 text-white/60">
         The key is configured but no spend has ever landed. Check the sweep&apos;s ad_spend_ingest job.
@@ -248,7 +248,6 @@ function StaleFeedNotice({ s }: { s: SpendDashboard }) {
     );
   }
 
-  const hours = Math.floor((Date.now() - lastRun) / 3_600_000);
   if (hours < STALE_AFTER_HOURS) return null;
 
   return (

@@ -56,7 +56,16 @@ describe("the shared ambassador link puts the code in a cookie, not the URL", ()
 
 describe("signup attributes to the cookie when the URL has no ref", () => {
   it("reads vl_referral_code in the form", () => {
-    expect(form).toContain('entry.startsWith("vl_referral_code=")');
+    expect(form).toContain('const REFERRAL_COOKIE_KEY = "vl_referral_code"');
+    expect(form).toContain("entry.startsWith(`${REFERRAL_COOKIE_KEY}=`)");
+  });
+
+  it("reads it as a browser fact, not with a setState in an effect", () => {
+    // The cookie cannot exist during SSR and never changes within a page load,
+    // so it is read the way useApplePayOffered reads platform support. Setting
+    // state from an effect instead is a cascading render the compiler refuses.
+    expect(form).toContain("useSyncExternalStore(");
+    expect(form).toContain("readReferralCookie");
   });
 
   it("prefers ?ref= and falls back to the cookie", () => {

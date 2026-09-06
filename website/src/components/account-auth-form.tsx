@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -29,6 +29,30 @@ const OTP_RESEND_COOLDOWN_SECONDS = 45;
 // is approved — otherwise the "Text me a code" button returns a Twilio error to
 // real shoppers. Flip to true once Twilio approves the account, then redeploy.
 const PHONE_LOGIN_ENABLED = false;
+
+// THE AMBASSADOR COOKIE, READ THE WAY THIS CODEBASE READS BROWSER FACTS.
+//
+// `/r/<code>` sets `vl_referral_code` and then bounces the visitor at the
+// access wall, so by the time they reach this form the `?ref=` that carried the
+// attribution is long gone and the cookie is the only surviving record of whose
+// link they followed. It cannot be read during SSR, and it never changes within
+// a page load, so there is nothing to subscribe to — exactly the shape
+// `useApplePayOffered` already uses.
+const REFERRAL_COOKIE_KEY = "vl_referral_code";
+const subscribeNever = () => () => {};
+const getServerReferralCookie = () => "";
+const readReferralCookie = () => {
+  try {
+    const raw = document.cookie
+      .split("; ")
+      .find((entry) => entry.startsWith(`${REFERRAL_COOKIE_KEY}=`))
+      ?.split("=")[1];
+    return raw ? decodeURIComponent(raw) : "";
+  } catch {
+    // No cookie access: signup simply carries no referral, as before.
+    return "";
+  }
+};
 
 // PORTAL IS THE FIRST SCREEN, AND THE ONLY ONE MOST VISITORS SEE.
 //
@@ -120,21 +144,14 @@ export function AccountAuthForm() {
   // every returning customer who ever followed an ambassador link to a signup
   // form instead of the sign-in they asked for.
   //
-  // Read in an effect rather than during render: the value is never rendered,
-  // only submitted, so there is nothing to mismatch at hydration and nothing to
-  // gain from reading it earlier.
-  const [referralCodeFromCookie, setReferralCodeFromCookie] = useState("");
-  useEffect(() => {
-    try {
-      const raw = document.cookie
-        .split("; ")
-        .find((entry) => entry.startsWith("vl_referral_code="))
-        ?.split("=")[1];
-      if (raw) setReferralCodeFromCookie(decodeURIComponent(raw));
-    } catch {
-      /* no cookie access: signup simply carries no referral, as before */
-    }
-  }, []);
+  // Read through useSyncExternalStore, matching useApplePayOffered: the cookie
+  // is a browser fact that cannot exist during SSR, and this is how the rest of
+  // this codebase reads one without a hydration mismatch or a cascading render.
+  const referralCodeFromCookie = useSyncExternalStore(
+    subscribeNever,
+    readReferralCookie,
+    getServerReferralCookie,
+  );
   /** What the new account should be attributed to. The URL wins; the cookie is the fallback. */
   const referralCodeForSignup = referralCodeFromUrl || referralCodeFromCookie;
   const nextPath = safeNextPath(searchParams.get("next"));

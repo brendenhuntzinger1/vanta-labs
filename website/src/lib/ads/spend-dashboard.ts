@@ -49,6 +49,14 @@ export type SpendDashboard = {
   feedConfigured: boolean;
   /** When spend was last pulled, or null if never. */
   lastIngestedAt: string | null;
+  /**
+   * How old that pull is, in whole hours — null when nothing has ever landed.
+   *
+   * Derived here rather than in the page because the page renders it, and
+   * reading the clock during render is exactly the impurity the React compiler
+   * refuses. Freshness is a property of the data, so it travels with it.
+   */
+  lastIngestedAgeHours: number | null;
   windowDays: number;
 
   /** The headline. Everything the owner needs before scrolling. */
@@ -151,11 +159,17 @@ export async function getSpendDashboard(windowDays = DEFAULT_WINDOW_DAYS): Promi
   const half = Math.floor(ranked.length / 2);
   const cut = Math.min(5, half);
 
+  const lastIngestedAt = (freshnessRes.rows[0]?.ingested_at as string | undefined) ?? null;
+  const lastIngestedMs = lastIngestedAt ? Date.parse(lastIngestedAt) : NaN;
+
   return {
     schemaReady: !platformRes.missing,
     schemaError: [platformRes.error, campaignRes.error, creativeRes.error, untaggedRes.error].find(Boolean) ?? null,
     feedConfigured: Boolean(process.env.WINDSOR_API_KEY?.trim()),
-    lastIngestedAt: (freshnessRes.rows[0]?.ingested_at as string | undefined) ?? null,
+    lastIngestedAt,
+    lastIngestedAgeHours: Number.isNaN(lastIngestedMs)
+      ? null
+      : Math.max(0, Math.floor((Date.now() - lastIngestedMs) / 3_600_000)),
     windowDays,
 
     totals: { ...parts, ...ratios(parts), platformConversions },
