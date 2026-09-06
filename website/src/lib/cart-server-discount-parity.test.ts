@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveCartDiscount, type DiscountType } from "@/lib/discount-resolution";
+import { cartPromoCandidates, resolveCartDiscount, type DiscountCandidate } from "@/lib/discount-resolution";
 import { resolveCustomerDiscount, type OrderInputs } from "@/lib/profit-engine";
 
 // ---------------------------------------------------------------------------
@@ -25,8 +25,7 @@ import { resolveCustomerDiscount, type OrderInputs } from "@/lib/profit-engine";
 //
 // THE FIX. The cart's candidate assembly was lifted out of the component into
 // resolveCartDiscount, and the coupon competes on its own footing instead of
-// behind the promo. Bundle-over-referral STAYS, because the server suppresses
-// the referral bucket outright when a bundle is present.
+// behind the promo.
 //
 // Why it had to move rather than just be corrected in place: the assembly lived
 // inline in a React component, so nothing could import it, so nothing could
@@ -35,9 +34,18 @@ import { resolveCustomerDiscount, type OrderInputs } from "@/lib/profit-engine";
 // mirrored copy cannot catch a change in the original. Both sides of the
 // comparison below now run production code.
 //
-// Referral and coupon are still excluded from the same scenario on purpose:
-// applying either clears the other in cart state (cart-context.tsx), so a
-// combination the UI cannot produce would prove nothing.
+// EVERY COMBINATION IS NOW REACHABLE, AND THAT IS THE SECOND HALF OF THIS FILE.
+// This suite used to exclude referral-with-coupon on the stated grounds that
+// "applying either clears the other in cart state, so a combination the UI
+// cannot produce would prove nothing". The premise was true and it was the bug:
+// the cart destroyed a shopper's referral attribution to make room for a promo
+// code, and quote-order threw if both ever arrived together anyway. Neither
+// happens now — both codes are held, both compete, the larger saving wins — so
+// the pairs that used to be unreachable are the ones most worth pinning, and
+// they are in REACHABLE below.
+//
+// Bundle-over-referral has gone the same way: a promotion no longer suppresses
+// a referral outright (`!isBundle && hasReferral`), it competes with one.
 // ---------------------------------------------------------------------------
 
 const ALL = new Set(["coupon", "referral", "bundle", "membership"] as const);
@@ -54,7 +62,10 @@ interface Scenario {
   couponDiscount?: number;
   bulkSavings?: number;
   personalDiscount?: number;
+  /** The store-wide `coupons.allow_stacking` switch. */
   allowCouponStacking?: boolean;
+  /** This promotion's own stackWithCoupon flag — a NARROWER licence. */
+  promotionStacksCoupon?: boolean;
 }
 
 function serverAmount(s: Scenario): number {
@@ -73,6 +84,7 @@ function serverAmount(s: Scenario): number {
     bulkSavingsAmount: s.bulkSavings ?? 0,
     personalDiscountAmount: s.personalDiscount ?? 0,
     allowCouponStacking: s.allowCouponStacking ?? false,
+    promotionStacksCoupon: s.promotionStacksCoupon ?? false,
     commissionPercent: 0,
     processingFeePercent: 0,
     shippingCollected: 0,
@@ -84,6 +96,33 @@ function serverAmount(s: Scenario): number {
 }
 
 /**
+ * The cart's candidates — THE PRODUCTION FUNCTION, not a copy.
+ *
+ * This helper used to rebuild the component's assembly by hand, and that made
+ * this whole suite blind to the half of the change that lives in
+ * cart-context.tsx. Three separate mutations of the component — reverting
+ * promoDiscounts to a single early-returned candidate, restoring the coupon
+ * zeroing, dropping the winner's label from the referral sentence — each left
+ * all 8,594 tests green. A mirrored copy cannot catch a change in the original;
+ * that is the exact lesson at the top of discount-resolution.ts, and this file
+ * had learned it for resolveCartDiscount and not for the candidate list.
+ *
+ * cartPromoCandidates is now what cart-context.tsx calls, so reverting the
+ * component's assembly fails here.
+ */
+function cartPromos(s: Scenario): DiscountCandidate[] {
+  const fullSubtotal = s.subtotal + (s.quantityBundleSavings ?? 0);
+  return cartPromoCandidates({
+    promotionDiscount: s.buy3Get1 ?? 0,
+    referralPercent: s.referralPercent ?? 0,
+    // Every scenario here is a basket that qualifies; the below-minimum case is
+    // a referralPercent of 0, which is what the component passes for it.
+    referralQualifies: true,
+    discountBase: fullSubtotal,
+  });
+}
+
+/**
  * The REAL cart resolver. No longer a mirror: resolveCartDiscount is the exact
  * function cart-context.tsx calls, so a change to the cart's assembly changes
  * this test's result too. That is the whole point — the previous version of
@@ -91,13 +130,6 @@ function serverAmount(s: Scenario): number {
  * caught the divergence it was written to police.
  */
 function cartAmount(s: Scenario): number {
-  const promo: { type: DiscountType; amount: number } | null =
-    (s.buy3Get1 ?? 0) > 0
-      ? { type: "buy3get1", amount: s.buy3Get1 ?? 0 }
-      : s.referralPercent
-        ? { type: "referral", amount: (s.subtotal + (s.quantityBundleSavings ?? 0)) * (s.referralPercent / 100) }
-        : null;
-
   return resolveCartDiscount({
     subtotal: s.subtotal,
     quantityBundleSavings: s.quantityBundleSavings ?? 0,
@@ -106,7 +138,8 @@ function cartAmount(s: Scenario): number {
     ambassadorPersonalAmount: s.personalDiscount ?? 0,
     couponDiscountAmount: s.couponDiscount ?? 0,
     allowCouponStacking: s.allowCouponStacking ?? false,
-    promo,
+    promotionStacksCoupon: s.promotionStacksCoupon ?? false,
+    promos: cartPromos(s),
   }).amount;
 }
 
@@ -142,6 +175,7 @@ function serverReferralWon(s: Scenario): boolean {
     bulkSavingsAmount: s.bulkSavings ?? 0,
     personalDiscountAmount: s.personalDiscount ?? 0,
     allowCouponStacking: s.allowCouponStacking ?? false,
+    promotionStacksCoupon: s.promotionStacksCoupon ?? false,
     commissionPercent: 0,
     processingFeePercent: 0,
     shippingCollected: 0,
@@ -154,12 +188,6 @@ function serverReferralWon(s: Scenario): boolean {
 }
 
 function cartReferralWon(s: Scenario): boolean {
-  const promo: { type: DiscountType; amount: number } | null =
-    (s.buy3Get1 ?? 0) > 0
-      ? { type: "buy3get1", amount: s.buy3Get1 ?? 0 }
-      : s.referralPercent
-        ? { type: "referral", amount: (s.subtotal + (s.quantityBundleSavings ?? 0)) * (s.referralPercent / 100) }
-        : null;
   const resolved = resolveCartDiscount({
     subtotal: s.subtotal,
     quantityBundleSavings: s.quantityBundleSavings ?? 0,
@@ -167,15 +195,18 @@ function cartReferralWon(s: Scenario): boolean {
     memberPricingAmount: s.memberPercent ? (s.subtotal + (s.quantityBundleSavings ?? 0)) * (s.memberPercent / 100) : 0,
     ambassadorPersonalAmount: s.personalDiscount ?? 0,
     couponDiscountAmount: s.couponDiscount ?? 0,
-    promo,
+    allowCouponStacking: s.allowCouponStacking ?? false,
+    promotionStacksCoupon: s.promotionStacksCoupon ?? false,
+    promos: cartPromos(s),
   });
   // The exact expression cart-context.tsx uses.
   return resolved.best?.type === "referral" && resolved.amount > 0;
 }
 
-// Referral and coupon are mutually exclusive in cart state — applying either
-// clears the other (cart-context.tsx:1059 and :1144) — so no scenario here
-// carries both. A combination the UI cannot produce proves nothing.
+// Every one of these is a state the UI can actually produce. The referral +
+// coupon and referral + promotion rows are new: the cart used to delete one
+// code to make room for the other, and the checkout threw if both arrived
+// anyway.
 const REACHABLE: Scenario[] = [
   { name: "nothing applied", subtotal: 120 },
   { name: "coupon alone", subtotal: 120, couponDiscount: 15 },
@@ -193,7 +224,21 @@ const REACHABLE: Scenario[] = [
   { name: "bundle alone", subtotal: 300, buy3Get1: 25 },
   { name: "bundle vs a bigger member discount", subtotal: 300, buy3Get1: 20, memberPercent: 15 },
   { name: "bundle vs bulk", subtotal: 600, buy3Get1: 30, bulkSavings: 90 },
-  { name: "bundle beats the referral it suppresses", subtotal: 300, buy3Get1: 60, referralPercent: 10 },
+  { name: "bundle beats a smaller referral", subtotal: 300, buy3Get1: 60, referralPercent: 10 },
+  // --- combinations the cart used to make unreachable by deleting a code ---
+  { name: "referral beats a smaller coupon", subtotal: 200, referralPercent: 25, couponDiscount: 20 },
+  { name: "coupon beats a smaller referral", subtotal: 200, referralPercent: 25, couponDiscount: 80 },
+  { name: "referral and coupon worth exactly the same", subtotal: 200, referralPercent: 10, couponDiscount: 20 },
+  { name: "referral beats a smaller promotion", subtotal: 160, buy3Get1: 40, referralPercent: 40 },
+  { name: "promotion, referral and coupon all at once", subtotal: 300, buy3Get1: 45, referralPercent: 10, couponDiscount: 60 },
+  { name: "referral plus a stacking coupon", subtotal: 200, referralPercent: 25, couponDiscount: 20, allowCouponStacking: true },
+  { name: "promotion plus a stacking coupon, referral present", subtotal: 300, buy3Get1: 45, referralPercent: 5, couponDiscount: 30, allowCouponStacking: true },
+  { name: "referral and coupon on a quantity-bundled subtotal", subtotal: 270, quantityBundleSavings: 30, referralPercent: 10, couponDiscount: 25 },
+  // --- a promotion's OWN stacking licence is narrower than the admin switch ---
+  { name: "stacking promotion wins, so its coupon licence applies", subtotal: 300, buy3Get1: 90, referralPercent: 10, couponDiscount: 25, promotionStacksCoupon: true },
+  { name: "stacking promotion LOSES, so its licence does not follow the referral", subtotal: 300, buy3Get1: 30, referralPercent: 40, couponDiscount: 25, promotionStacksCoupon: true },
+  { name: "stacking promotion package versus a much larger coupon alone", subtotal: 300, buy3Get1: 20, couponDiscount: 80, promotionStacksCoupon: true },
+  { name: "the admin switch stacks onto a referral the promotion lost to", subtotal: 300, buy3Get1: 30, referralPercent: 40, couponDiscount: 25, allowCouponStacking: true },
   { name: "quantity bundle already in the subtotal", subtotal: 270, quantityBundleSavings: 30, memberPercent: 10 },
   { name: "quantity bundle swallows a small coupon", subtotal: 270, quantityBundleSavings: 30, couponDiscount: 12 },
   { name: "quantity bundle beaten by a large coupon", subtotal: 270, quantityBundleSavings: 30, couponDiscount: 90 },
@@ -219,7 +264,8 @@ describe("what the shopper is shown is what the card is charged", () => {
   });
 
   it.each([
-    ["a Buy-3-Get-1 bundle suppresses it outright", { name: "x", subtotal: 300, buy3Get1: 60, referralPercent: 10 } as Scenario],
+    ["a bigger Buy-3-Get-1 bundle outbids it", { name: "x", subtotal: 300, buy3Get1: 60, referralPercent: 10 } as Scenario],
+    ["a bigger coupon outbids it", { name: "x", subtotal: 200, referralPercent: 5, couponDiscount: 40 } as Scenario],
     ["a bigger membership discount beats it", { name: "x", subtotal: 200, memberPercent: 20, referralPercent: 5 } as Scenario],
     ["quantity-bundle pricing competes it to exactly zero", { name: "x", subtotal: 190, quantityBundleSavings: 10, referralPercent: 5 } as Scenario],
     ["a commission-only ambassador gives 0%", { name: "x", subtotal: 200, referralPercent: 0 } as Scenario],
@@ -234,6 +280,61 @@ describe("what the shopper is shown is what the card is charged", () => {
       expect(cartAmount(scenario)).toBeLessThanOrEqual(scenario.subtotal);
       expect(serverAmount(scenario)).toBeGreaterThanOrEqual(0);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A PROMOTION'S STACKING LICENCE IS NOT THE ADMIN'S STACKING SWITCH.
+//
+// `stackWithCoupon` says "a coupon may ride on THIS promotion". It was OR-ed
+// into the store-wide switch on both sides, which was harmless only while a
+// promotion and a referral could never both price a basket. Once they compete,
+// the same OR let a promotion that LOST authorise a coupon on top of the
+// REFERRAL — two discounts, licensed by an offer the shopper never received.
+// Pinned by value here, not only by parity, so both sides moving together in
+// the wrong direction still fails.
+// ---------------------------------------------------------------------------
+describe("a losing promotion does not lend its coupon licence to the winner", () => {
+  const LOSER: Scenario = {
+    name: "x", subtotal: 300, buy3Get1: 30, referralPercent: 40, couponDiscount: 25,
+    promotionStacksCoupon: true,
+  };
+
+  it("gives the referral alone — not the referral plus the coupon", () => {
+    // 40% of $300 = $120 beats the $30 promotion. The coupon competes and
+    // loses; it must not be added on top.
+    expect(serverAmount(LOSER)).toBe(120);
+    expect(cartAmount(LOSER)).toBe(120);
+  });
+
+  it("still stacks when the promotion that permits it actually wins", () => {
+    const WINNER: Scenario = { ...LOSER, buy3Get1: 90, referralPercent: 10 };
+    // $90 promotion beats the $30 referral, so its licence applies: $90 + $25.
+    expect(serverAmount(WINNER)).toBe(115);
+    expect(cartAmount(WINNER)).toBe(115);
+  });
+
+  it("gives the promotion+coupon PACKAGE when it beats the referral", () => {
+    // THE CASE THAT MAKES "gate the licence on the winner" WRONG.
+    //
+    // A $30 promotion permitting a $25 coupon is worth $55. A 15% referral on
+    // $300 is worth $45. Ranking the promotion's bare $30 against the $45
+    // referral hands the shopper $45 and silently withholds $10 the store had
+    // authorised — so the promotion and its coupon compete as ONE candidate.
+    const PACKAGE: Scenario = {
+      name: "x", subtotal: 300, buy3Get1: 30, referralPercent: 15, couponDiscount: 25,
+      promotionStacksCoupon: true,
+    };
+    expect(serverAmount(PACKAGE)).toBe(55);
+    expect(cartAmount(PACKAGE)).toBe(55);
+  });
+
+  it("leaves the store-wide switch as broad as it always was", () => {
+    // The ADMIN switch is deliberately unconditional: a referral winning is
+    // still stacked on. Narrowing this would be its own regression.
+    const ADMIN: Scenario = { ...LOSER, promotionStacksCoupon: false, allowCouponStacking: true };
+    expect(serverAmount(ADMIN)).toBe(145); // $120 referral + $25 coupon
+    expect(cartAmount(ADMIN)).toBe(145);
   });
 });
 

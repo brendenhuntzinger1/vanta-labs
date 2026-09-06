@@ -80,7 +80,7 @@ function cartDiscount(subtotal: number, ambassadorRate: unknown = MIZZY.customer
     memberPricingAmount: 0,
     ambassadorPersonalAmount: 0,
     couponDiscountAmount: 0,
-    promo: { type: "referral", amount: subtotal * (percent / 100) },
+    promos: [{ type: "referral", amount: subtotal * (percent / 100) }],
   }).amount;
 }
 

@@ -90,8 +90,17 @@ describe("the cart carries the referral master switch", () => {
   it("gates the code's PRICE, not only its display", () => {
     // Both must be present: hiding the sentence while still pricing the
     // referral is the exact defect this work started from.
-    expect(code).toMatch(/isReferralValid\(referralDetails\) && referralProgramAllowsCodes/);
-    expect(code).toMatch(/referralDetails && referralProgramAllowsCodes/);
+    //
+    // Matched on whitespace-collapsed source. The pricing gate is one
+    // expression whose formatting is not the thing under test — it wrapped
+    // across three lines when the candidate assembly moved into
+    // cartPromoCandidates, and a newline between `referralDetails` and `&&`
+    // failed this guard while the rule it protects was untouched. Asserting
+    // the rule, not the line breaks.
+    const flat = code.replace(/\s+/g, " ");
+    expect(flat).toMatch(/isReferralValid\(referralDetails\) && referralProgramAllowsCodes/);
+    expect(flat).toMatch(/referralDetails && isReferralValid\(referralDetails\)/);
+    expect(flat).toMatch(/referralDetails && referralProgramAllowsCodes/);
   });
 });
 

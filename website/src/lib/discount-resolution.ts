@@ -61,11 +61,35 @@ export interface CartDiscountInputs {
    */
   allowCouponStacking?: boolean;
   /**
-   * The Buy-3-Get-1 free item, or a valid referral — never both, and never
-   * alongside the coupon. A bundle suppresses the referral outright, matching
-   * `!isBundle && hasReferral` in profit-engine's resolveCustomerDiscount.
+   * THIS PROMOTION says a coupon may ride on IT — narrower than the store-wide
+   * switch above, and it must stay narrower.
+   *
+   * The cart used to OR the two together into `allowCouponStacking`, exactly as
+   * quote-order did, and it was harmless only while a promotion and a referral
+   * could never both price a basket. Now that they compete, a promotion that
+   * LOSES must not licence a coupon on top of the winner: the shopper would be
+   * previewed two discounts and charged one, or (with both sides leaking
+   * equally) simply given a discount the store never authorised.
+   *
+   * Applied only when the bundle is the winning candidate, matching
+   * `promotionStacksCoupon` in profit-engine's resolveCustomerDiscount.
    */
-  promo: DiscountCandidate | null;
+  promotionStacksCoupon?: boolean;
+  /**
+   * The Buy-X-Get-Y free item AND a valid referral — both, when both are live.
+   *
+   * THIS WAS `promo: DiscountCandidate | null`, "one or the other", because
+   * resolveCustomerDiscount zeroed the referral whenever a promotion was
+   * present (`!isBundle && hasReferral`). It no longer does: a promotion and a
+   * referral are two candidates that compete on savings like everything else,
+   * so the cart has to rank both or it would preview a promotion on a basket
+   * the server prices with the referral.
+   *
+   * Order matters on an exact tie. Both sides pick with a strict `>`, so the
+   * candidate listed FIRST wins one; resolveCustomerDiscount pushes bundle
+   * before referral, so a caller must too.
+   */
+  promos: DiscountCandidate[];
 }
 
 export interface CartDiscountResult {
@@ -83,12 +107,60 @@ export interface CartDiscountResult {
  * resolveCustomerDiscount. With no bundle savings it is the identity, so an
  * ordinary cart is unaffected.
  */
+/**
+ * The cart's promotion/referral candidate list — lifted out of the component
+ * for the same reason `resolveCartDiscount` was.
+ *
+ * A DECISION INSIDE A REACT COMPONENT IS A DECISION NOTHING CAN IMPORT, SO
+ * NOTHING CAN TEST IT, SO ITS COPIES DRIFT. That sentence is already at the top
+ * of this file, and the parity suite it produced still could not see this list:
+ * the suite rebuilt the assembly by hand, so all three of the cart's changes —
+ * a LIST of candidates instead of an early return on the bundle, a coupon that
+ * is no longer zeroed when a referral is present, and the winner's label
+ * threaded into the referral sentence — could each be reverted with 8,594 tests
+ * green. Verified by mutation, three ways, zero failures.
+ *
+ * cart-context.tsx calls this and the parity suite calls this, so the cart's
+ * candidates are now the same object on both sides of the comparison.
+ *
+ * ORDER IS THE TIE-BREAK. Bundle first, then referral, matching the order
+ * `resolveCustomerDiscount` pushes them: both sides pick with a strict `>`, so
+ * on an exact tie the first entry wins, and whether the REFERRAL won is what
+ * decides if store credit and points may be spent.
+ */
+export function cartPromoCandidates(input: {
+  /** The Buy-X-Get-Y discount pricing this cart, or 0. */
+  promotionDiscount: number;
+  /**
+   * The referral's percentage, or 0 when there is no usable code. Already
+   * resolved to the AMBASSADOR'S own rate by resolveAmbassadorCustomerDiscount.
+   */
+  referralPercent: number;
+  /**
+   * The basket clears the programme minimum. Below it the server gives no
+   * referral discount either, so the referral does not compete — it stays
+   * attached for attribution, which is not this function's business.
+   */
+  referralQualifies: boolean;
+  /** Retail subtotal at full (pre-quantity-bundle) prices. */
+  discountBase: number;
+}): DiscountCandidate[] {
+  const candidates: DiscountCandidate[] = [];
+  if (input.promotionDiscount > 0) {
+    candidates.push({ type: "buy3get1", amount: input.promotionDiscount });
+  }
+  if (input.referralPercent > 0 && input.referralQualifies) {
+    candidates.push({ type: "referral", amount: input.discountBase * (input.referralPercent / 100) });
+  }
+  return candidates;
+}
+
 export function resolveCartDiscount(inputs: CartDiscountInputs): CartDiscountResult {
   const round = (value: number) => Math.round(value * 100) / 100;
   const alreadyGranted = Math.max(0, inputs.quantityBundleSavings);
   const compete = (raw: number) => Math.max(0, round(raw - alreadyGranted));
 
-  const stacking = inputs.allowCouponStacking === true && inputs.couponDiscountAmount > 0;
+  const couponPresent = inputs.couponDiscountAmount > 0;
 
   // Candidates at their RAW value. `compete` is applied when they are ranked,
   // exactly as resolveCustomerDiscount does it — the distinction matters only
@@ -104,17 +176,26 @@ export function resolveCartDiscount(inputs: CartDiscountInputs): CartDiscountRes
   // server as "referral". Same amount, but whether the REFERRAL won decides
   // whether store credit and points may be spent, so the two totals diverged
   // and every such checkout was refused as an altered total.
+  // TWO LICENCES, TWO SHAPES — the server's model exactly (see
+  // resolveCustomerDiscount). The store-wide switch takes the coupon OUT of the
+  // contest and adds it to whatever wins. A promotion's own licence instead
+  // makes "promotion + coupon" ONE candidate, because gating that licence on
+  // the promotion winning without the coupon is circular: a $40 promotion
+  // permitting a $30 coupon is worth $70 against a $64 referral, and the
+  // shopper is entitled to the $70.
+  const globalStack = inputs.allowCouponStacking === true && couponPresent;
+  const promotionPackage = !globalStack
+    && inputs.promotionStacksCoupon === true
+    && couponPresent
+    && inputs.promos.some((p) => p.type === "buy3get1" && p.amount > 0);
+
   const rawCandidates: DiscountCandidate[] = [
-    ...(inputs.promo ? [{ type: inputs.promo.type, amount: inputs.promo.amount }] : []),
+    ...inputs.promos.map((promo) => (promotionPackage && promo.type === "buy3get1"
+      ? { type: promo.type, amount: promo.amount + inputs.couponDiscountAmount }
+      : { type: promo.type, amount: promo.amount })),
     { type: "member_pricing", amount: inputs.memberPricingAmount },
     { type: "bulk_savings", amount: inputs.bulkSavingsAmount },
     { type: "ambassador_personal", amount: inputs.ambassadorPersonalAmount },
-    // With stacking ON the coupon is not a competitor — it is added on top of
-    // whatever wins — so it must not also stand in the contest, or it would
-    // beat the promotion it is about to be added to and be counted once
-    // instead of twice. resolveCustomerDiscount excludes it for exactly this
-    // reason (`couponEnabled && !inputs.allowCouponStacking`).
-    ...(stacking ? [] : [{ type: "coupon" as const, amount: inputs.couponDiscountAmount }]),
   ];
 
   // Ranked on what each saves BEYOND the bundle pricing already in `subtotal`,
@@ -129,7 +210,7 @@ export function resolveCartDiscount(inputs: CartDiscountInputs): CartDiscountRes
     }
   }
 
-  if (stacking) {
+  if (globalStack) {
     // `best?.amount ?? 0` is the server's zero sentinel: when nothing clears
     // the bundle savings on its own, the coupon is added to 0 rather than to a
     // promotion that is worth nothing here. Getting this wrong quoted $15 off a
@@ -141,6 +222,16 @@ export function resolveCartDiscount(inputs: CartDiscountInputs): CartDiscountRes
       best: best ?? { type: "coupon", amount: inputs.couponDiscountAmount },
       amount: round(Math.min(inputs.subtotal, stacked)),
     };
+  }
+
+  // The coupon ALSO stands alone, ranked LAST so an exact tie goes to the offer
+  // the shopper did not have to type — the server's tie-break too.
+  if (couponPresent) {
+    const couponEffective = compete(inputs.couponDiscountAmount);
+    if (couponEffective > bestEffective) {
+      best = { type: "coupon", amount: inputs.couponDiscountAmount };
+      bestEffective = couponEffective;
+    }
   }
 
   return { best, amount: round(Math.min(inputs.subtotal, bestEffective)) };

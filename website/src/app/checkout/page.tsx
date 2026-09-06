@@ -241,9 +241,6 @@ export default function CheckoutPage() {
     applyCouponCode,
     clearCouponCode,
     isApplyingCoupon,
-    isBuy3Get1FreeActive,
-    activePromotionName,
-    activePromotionAllowsCoupon,
     isSignedIn,
     isHydrated,
     pointsBalance,
@@ -1257,66 +1254,68 @@ export default function CheckoutPage() {
                   {/* Referral */}
                   <div>
                     <p className="mb-2 text-[10px] uppercase tracking-[0.24em] text-white/35">Referral code</p>
-                    {isBuy3Get1FreeActive ? (
-                      <p className="rounded-xl border border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5 text-xs text-white/55">
-                        {activePromotionName ?? "A promotion"} is active — referral discounts can&apos;t be combined
-                        with it.
-                      </p>
-                    ) : (
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={effectiveReferralInput}
-                          onChange={(event) => setReferralInput(event.target.value)}
-                          aria-label="Referral code"
-                          placeholder="VANTA10"
-                          autoCapitalize="characters"
-                          className="w-full flex-1 rounded-xl border border-white/[0.10] bg-black/30 px-4 py-3 text-[16px] text-white outline-none transition placeholder:text-white/25 focus:border-white/40 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.05)]"
-                        />
-                        <button type="button" onClick={() => applyReferralCode(effectiveReferralInput)} disabled={isApplyingReferral} className="vl-focus-ring flex-shrink-0 rounded-xl border border-white/[0.12] bg-white/[0.04] px-5 text-xs font-semibold uppercase tracking-wide text-white/80 transition hover:bg-white/[0.08] disabled:opacity-50">
-                          {isApplyingReferral ? "…" : "Apply"}
-                        </button>
-                      </div>
-                    )}
+                    {/* THE FIELD IS ALWAYS OPEN.
+                        It used to be replaced, while any promotion ran, by
+                        "<promotion> is active — referral discounts can't be
+                        combined with it." A shopper on an ambassador's link
+                        therefore had nowhere to put the code for the whole of
+                        every promotion, so no attribution reached the order and
+                        the ambassador earned nothing on sales they had made.
+                        A referral now competes with the promotion; whichever
+                        saves more prices the order, and referralStatusText says
+                        which won. */}
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={effectiveReferralInput}
+                        onChange={(event) => setReferralInput(event.target.value)}
+                        aria-label="Referral code"
+                        placeholder="VANTA10"
+                        autoCapitalize="characters"
+                        className="w-full flex-1 rounded-xl border border-white/[0.10] bg-black/30 px-4 py-3 text-[16px] text-white outline-none transition placeholder:text-white/25 focus:border-white/40 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.05)]"
+                      />
+                      <button type="button" onClick={() => applyReferralCode(effectiveReferralInput)} disabled={isApplyingReferral} className="vl-focus-ring flex-shrink-0 rounded-xl border border-white/[0.12] bg-white/[0.04] px-5 text-xs font-semibold uppercase tracking-wide text-white/80 transition hover:bg-white/[0.08] disabled:opacity-50">
+                        {isApplyingReferral ? "…" : "Apply"}
+                      </button>
+                    </div>
                     {referralSuccess ? <p className="mt-2 text-xs text-emerald-300">{referralSuccess}</p> : null}
                     {referralError ? <p className="mt-2 text-xs text-rose-300">{referralError}</p> : null}
                     {referralStatusText ? <p className={`mt-2 text-xs ${referralNeedsMoreToQualify ? "text-amber-300/80" : "text-white/45"}`}>{referralStatusText}</p> : null}
-                    {referralCode && !isBuy3Get1FreeActive ? (
-                      <button type="button" onClick={() => { clearReferralCode(); setReferralInput(""); }} className="vl-focus-ring mt-2 text-xs text-white/35 transition hover:text-white">Remove code</button>
+                    {referralCode ? (
+                      <button type="button" aria-label="Remove referral code" onClick={() => { clearReferralCode(); setReferralInput(""); }} className="vl-focus-ring mt-2 text-xs text-white/35 transition hover:text-white">Remove code</button>
                     ) : null}
                   </div>
 
                   {/* Coupon */}
                   <div>
                     <p className="mb-2 text-[10px] uppercase tracking-[0.24em] text-white/35">Coupon code</p>
-                    {isBuy3Get1FreeActive && !activePromotionAllowsCoupon ? (
-                      <p className="rounded-xl border border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5 text-xs text-white/55">
-                        {activePromotionName ?? "A promotion"} is active — coupons can&apos;t be combined with it.
-                      </p>
-                    ) : referralCode && !activePromotionAllowsCoupon ? (
-                      /* quote-order refuses referral + coupon only while
-                         stacking is off (`!couponPolicy.allowStacking`). With
-                         it on the server applies both, so the field stays open
-                         and the preview matches the charge. */
-                      <p className="rounded-xl border border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5 text-xs text-white/55">
-                        A referral code is applied. Remove it to use a coupon instead.
-                      </p>
-                    ) : (
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={effectiveCouponInput}
-                          onChange={(event) => setCouponInput(event.target.value)}
-                          aria-label="Coupon code"
-                          placeholder="SAVE10"
-                          autoCapitalize="characters"
-                          className="w-full flex-1 rounded-xl border border-white/[0.10] bg-black/30 px-4 py-3 text-[16px] text-white outline-none transition placeholder:text-white/25 focus:border-white/40 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.05)]"
-                        />
-                        <button type="button" onClick={() => applyCouponCode(effectiveCouponInput)} disabled={isApplyingCoupon} className="vl-focus-ring flex-shrink-0 rounded-xl border border-white/[0.12] bg-white/[0.04] px-5 text-xs font-semibold uppercase tracking-wide text-white/80 transition hover:bg-white/[0.08] disabled:opacity-50">
-                          {isApplyingCoupon ? "…" : "Apply"}
-                        </button>
-                      </div>
-                    )}
+                    {/* ALWAYS OPEN, FOR THE SAME REASON.
+                        Two refusals used to live here — one for a live
+                        promotion, one reading "A referral code is applied.
+                        Remove it to use a coupon instead." Both mirrored throws
+                        in quote-order that no longer exist. The second was the
+                        expensive one: it told a shopper, in writing, that the
+                        way to use their promo code was to delete the
+                        ambassador's, and deleting it expired a 30-day
+                        attribution cookie.
+                        A coupon now competes with the referral and with the
+                        promotion. shownCouponOutcome below names the winner
+                        when the code loses, so nothing is claimed that the
+                        total does not show. */}
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={effectiveCouponInput}
+                        onChange={(event) => setCouponInput(event.target.value)}
+                        aria-label="Coupon code"
+                        placeholder="SAVE10"
+                        autoCapitalize="characters"
+                        className="w-full flex-1 rounded-xl border border-white/[0.10] bg-black/30 px-4 py-3 text-[16px] text-white outline-none transition placeholder:text-white/25 focus:border-white/40 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.05)]"
+                      />
+                      <button type="button" onClick={() => applyCouponCode(effectiveCouponInput)} disabled={isApplyingCoupon} className="vl-focus-ring flex-shrink-0 rounded-xl border border-white/[0.12] bg-white/[0.04] px-5 text-xs font-semibold uppercase tracking-wide text-white/80 transition hover:bg-white/[0.08] disabled:opacity-50">
+                        {isApplyingCoupon ? "…" : "Apply"}
+                      </button>
+                    </div>
                     {shownCouponOutcome ? (
                       <p className={`mt-2 text-xs ${shownCouponOutcome.controlsPrice ? "text-emerald-300" : "text-amber-300/90"}`}>
                         {shownCouponOutcome.message}
@@ -1334,7 +1333,7 @@ export default function CheckoutPage() {
                         was typed before a promotion loaded, must never leave the
                         shopper stuck behind a code the order cannot carry. */}
                     {couponCode ? (
-                      <button type="button" onClick={() => { clearCouponCode(); setCouponInput(""); }} className="vl-focus-ring mt-2 text-xs text-white/35 transition hover:text-white">Remove code</button>
+                      <button type="button" aria-label="Remove coupon code" onClick={() => { clearCouponCode(); setCouponInput(""); }} className="vl-focus-ring mt-2 text-xs text-white/35 transition hover:text-white">Remove code</button>
                     ) : null}
                   </div>
 

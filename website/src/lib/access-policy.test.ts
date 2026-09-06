@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { NextRequest } from "next/server";
+
+import { middleware as runMiddleware } from "../../middleware";
 import { isPublicPath, requiresAccount, PUBLIC_EXACT, PUBLIC_PREFIXES } from "@/lib/access-policy";
 
 // ---------------------------------------------------------------------------
@@ -194,6 +197,120 @@ describe("the endpoints the public pages call are public too", () => {
       "/api/coa/abc/file", "/api/storefront/offers", "/api/offer/status",
     ]) {
       expect(requiresAccount(path), `${path} must stay gated`).toBe(true);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// EVERY PAGE AN AUTH EMAIL CAN LAND ON MUST BE REACHABLE. INHERITED, NOT LOST.
+//
+// main added this rule against the AGE GATE (age-gate-auth-landings.test.ts)
+// after a real incident: a link emailed to set a password opened in a fresh tab,
+// the gate rendered because sessionStorage was empty, and the gate's primary
+// button is router.push("/account/login") — so the recipient was carried off
+// the page the email had sent them to. An affiliate applicant was stuck in that
+// loop for eight days.
+//
+// This branch deletes the gate, so that file goes with it — but the RULE has to
+// survive the merge, and it matters MORE here, not less. The gate was a CSS
+// overlay a determined visitor could scroll past; the wall is a 307 they
+// cannot. A landing path this policy forgets is not "covered", it is gone.
+//
+// THE LIST IS DERIVED, NOT COPIED — main's design, kept exactly. A hand-written
+// list has to be remembered by whoever adds the next auth email, which is the
+// failure being guarded against. Add an email whose link lands somewhere gated
+// and this fails on that path without anyone having to think of it.
+// ---------------------------------------------------------------------------
+describe("the wall never blocks a page an auth email links to", () => {
+  const read = (file: string) => readFileSync(join(process.cwd(), file), "utf8");
+
+  const SOURCES_THAT_BUILD_AUTH_LANDINGS = [
+    "src/app/auth/confirm/route.ts",
+    "src/app/api/auth/password-reset/route.ts",
+    "src/app/api/auth/resend-confirmation/route.ts",
+    "src/app/api/account/email-change/route.ts",
+    "src/lib/partner-portal.ts",
+  ];
+
+  function authLandingPathsIn(source: string): string[] {
+    const found = new Set<string>();
+    for (const match of source.matchAll(/\$\{[^}]*\}(\/[A-Za-z0-9/_-]+)/g)) {
+      const path = match[1];
+      // API endpoints are not documents; the wall answers them 401 and no
+      // emailed link points a human at one.
+      if (path.startsWith("/api/")) continue;
+      // /r/<code> is the referral shortlink: it resolves the code, sets the
+      // attribution cookie and redirects INTO the storefront. It is public in
+      // its own right, and where it sends people is exactly what the wall is
+      // for.
+      if (path === "/r" || path.startsWith("/r/")) continue;
+      found.add(path);
+    }
+    return [...found];
+  }
+
+  const AUTH_LANDINGS = [
+    ...new Set(SOURCES_THAT_BUILD_AUTH_LANDINGS.flatMap((f) => authLandingPathsIn(read(f)))),
+  ].sort();
+
+  it("finds the landing paths at all (the extraction itself must not rot)", () => {
+    // If a refactor changes how these URLs are built, the regex could silently
+    // match nothing and every assertion below would vacuously pass.
+    expect(AUTH_LANDINGS).toContain("/account/reset-password");
+    expect(AUTH_LANDINGS).toContain("/account/login");
+    expect(AUTH_LANDINGS.length).toBeGreaterThanOrEqual(3);
+  });
+
+  // TWO KINDS OF LANDING, AND ONLY ONE OF THEM HAS TO BE PUBLIC.
+  //
+  // Under the age gate every landing had to be exempt, because the gate's
+  // primary button navigated the recipient AWAY and the context they were sent
+  // was destroyed. The wall does not do that: it redirects to sign-in carrying
+  // the full destination in ?next=, so a landing that is merely a DESTINATION
+  // survives being gated — the ambassador approval email points at
+  // /account/ambassador, and an ambassador has an account by definition.
+  //
+  // What cannot survive is a landing whose fragment IS the credential. A
+  // reset link carries `#access_token=…&type=recovery`; fragments do not
+  // survive a redirect to a different page, so gating that path destroys the
+  // one-time token. Those must be public, and are named explicitly rather than
+  // inferred, because getting this wrong is silent.
+  const CREDENTIAL_BEARING = ["/account/reset-password", "/auth/confirm", "/account/login"];
+
+  it.each(CREDENTIAL_BEARING)("%s carries a credential in its fragment, so it must be public", (pathname) => {
+    expect(
+      isPublicPath(pathname),
+      `${pathname} is where a one-time auth token lands. A fragment does not `
+        + `survive a redirect, so gating this path destroys the token and the `
+        + `recipient has no way back.`,
+    ).toBe(true);
+  });
+
+  it.each(AUTH_LANDINGS)("%s either needs no account, or keeps its destination", async (pathname) => {
+    if (isPublicPath(pathname)) return;
+
+    // Gated is allowed ONLY if nothing is lost: the wall must send them to
+    // sign-in with the exact destination, query string and all, preserved.
+    const search = pathname === "/account/settings" ? "?email_changed=1" : "";
+    const response = await runMiddleware(
+      new NextRequest(`https://www.vantalabsresearch.com${pathname}${search}`, { method: "GET" }),
+    );
+    expect(response.status, `${pathname} must redirect rather than refuse`).toBe(307);
+    const location = new URL(response.headers.get("location") ?? "", "https://www.vantalabsresearch.com");
+    expect(location.pathname).toBe("/account/login");
+    expect(
+      location.searchParams.get("next"),
+      `${pathname} is where an emailed auth link lands. It may require an `
+        + `account — but then the wall has to carry the destination, or the `
+        + `recipient signs in and is dropped somewhere they were not sent.`,
+    ).toBe(`${pathname}${search}`);
+  });
+
+  it("still gates everything the wall actually exists for", () => {
+    // The exemptions must never widen into the storefront. If this goes red,
+    // the wall has been defeated rather than corrected.
+    for (const shopfront of ["/", "/products", "/products/bac-water", "/cart", "/coa-library", "/membership"]) {
+      expect(requiresAccount(shopfront), `${shopfront} must stay behind the wall`).toBe(true);
     }
   });
 });
