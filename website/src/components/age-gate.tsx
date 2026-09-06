@@ -195,7 +195,34 @@ const COLLECTS_ITS_OWN_ATTESTATION = ["/account/login"];
 // /account/reset-password is the only surface that can give them one — so a
 // gate here made the whole invite path a dead end, which is the shape of the
 // ZAIN incident recorded in lib/auth-link-fragment.ts.
-const PASSWORD_RECOVERY = ["/account/reset-password", "/account/forgot-password"];
+// The other landings in this list were found by the derived test that came out
+// of the same incident (age-gate-auth-landings.test.ts), which reads the paths
+// straight out of the routes that build them rather than trusting anyone to
+// remember. Each is the destination of a transactional email and each was
+// covered by the gate for the same reason:
+//
+//   /account/settings    — where the email-change confirmation lands.
+//   /account/ambassador  — the dashboard link in the approval email.
+//   /partner/pending     — the "application received" link, which is Ava's own
+//                          cohort: an applicant emailed a status page and shown
+//                          an age gate over it instead.
+//
+// The three account paths sit behind a session already, and anyone holding one
+// attested at sign-up — recorded on the account as age_confirmed_21 with a
+// timestamp, which is strictly stronger evidence than this gate's unrecorded,
+// forgotten-on-the-next-document answer. So exempting them removes nothing.
+//
+// Deliberately these paths and no wider. /account is NOT exempt as a prefix, so
+// a future page under it is gated until someone makes the same argument for it
+// explicitly. (Matching is exact-or-`/`-delimited, per `matches` below, so
+// /account/reset-password-x is not exempt either.)
+const EMAILED_AUTH_LANDINGS = [
+  "/account/reset-password",
+  "/account/forgot-password",
+  "/account/settings",
+  "/account/ambassador",
+  "/partner/pending",
+];
 
 // WHERE A VISITOR LANDS AFTER CLEARING THE GATE.
 //
@@ -331,7 +358,7 @@ export function isVerifiedForDocument(input: {
     matches(STAFF_ONLY) ||
     matches(PAYMENT_AND_RECEIPT) ||
     matches(COLLECTS_ITS_OWN_ATTESTATION) ||
-    matches(PASSWORD_RECOVERY)
+    matches(EMAILED_AUTH_LANDINGS)
   );
 }
 

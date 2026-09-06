@@ -172,7 +172,7 @@ describe("the gate fails closed and locks the page behind it", () => {
     // cannot appear unnoticed — this count is the tripwire, so raising it is a
     // deliberate act.
     //
-    // Raised from 4 to 5 on 2026-09-06 for PASSWORD_RECOVERY, deliberately: the
+    // Raised from 4 to 5 on 2026-09-06 for EMAILED_AUTH_LANDINGS, deliberately: the
     // gate was covering /account/reset-password, so an emailed reset link
     // landed on a password form that could not be clicked. Reproduced in the
     // browser, and pinned behaviourally in
@@ -182,7 +182,7 @@ describe("the gate fails closed and locks the page behind it", () => {
     expect(
       routeLists.length,
       `unexpected route list in age-gate.tsx:\n${routeLists.join("\n")}`,
-    ).toBe(5); // STAFF_ONLY, PAYMENT_AND_RECEIPT, COLLECTS_ITS_OWN_ATTESTATION, PASSWORD_RECOVERY, NEVER_A_DESTINATION
+    ).toBe(5); // STAFF_ONLY, PAYMENT_AND_RECEIPT, COLLECTS_ITS_OWN_ATTESTATION, EMAILED_AUTH_LANDINGS, NEVER_A_DESTINATION
   });
 
   it("exempts the sign-in screen ONLY while the portal still asks the same two things", () => {
