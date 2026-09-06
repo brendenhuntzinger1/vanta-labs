@@ -399,24 +399,24 @@ describe("checkout refuses a referral code that should not apply", () => {
     expect(String(orders[0].referral_code)).toBe(CODE);
   });
 
-  // THE PROFIT GUARD IS NOW CHARGED FOR THE COMMISSION, BECAUSE IT WILL BE PAID.
+  // A THIN MARGIN IS THE OWNER'S PROBLEM, NOT THE SHOPPER'S.
   //
-  // THIS TEST HAS INVERTED, AND THE INVERSION IS THE POINT. It used to assert
-  // that a thin-margin below-minimum cart went THROUGH, because reserving a
-  // commission that would never be paid made the break-even floor strictly
-  // harsher than reality and refused sales that were actually profitable.
+  // This test has now been three things, and the history is the point.
   //
-  // With the minimum removed there is no such thing as a referred order that
-  // cannot earn. Every referred cart owes a real commission, so charging the
-  // floor for it is now correct, and a cart whose margin genuinely cannot carry
-  // both the discount and the commission must be refused rather than sold at a
-  // loss. The fixture is deliberately extreme — 95% COGS, a $95.00 unit cost on
-  // a $99.99 price — so this pins the guard, not the catalogue.
+  //   1. It asserted the cart went THROUGH, because a below-minimum referral
+  //      earned nothing and reserving that phantom commission against the floor
+  //      made it strictly harsher than reality.
+  //   2. Removing the qualifying minimum made every referred cart owe a real
+  //      commission, so the floor started refusing thin-margin referred carts
+  //      outright — briefly the correct reading of the guard as it then stood.
+  //   3. The floor has since LOST ITS VETO (profit-floor-alert.ts): it keeps its
+  //      settings, alerts the owner, and never refuses the customer. So the
+  //      answer is back to "the sale completes", for a better reason than in (1).
   //
-  // What has NOT changed, and is asserted below: the identical cart WITHOUT a
-  // code still goes through. The refusal must come from the referral economics,
-  // never from the guard misreading an ordinary sale.
-  it("refuses a thin-margin referred cart that cannot carry the commission", async () => {
+  // Which means the removal of the minimum costs no sales at all. The fixture is
+  // deliberately extreme — 95% COGS, a $95.00 unit cost on a $99.99 price — so
+  // this pins the guard's behaviour rather than anything about the catalogue.
+  it("sells a thin-margin referred cart rather than refusing it", async () => {
     harness.reset();
     seedStore(harness.db, [
       { slug: SLUG, name: "Alpha Peptide 10mg", priceCents: 9999, inventory: 40, unitCostCents: 9500, weightOz: 0.4 },
@@ -425,9 +425,15 @@ describe("checkout refuses a referral code that should not apply", () => {
 
     const result = await checkoutWithCode(CODE, 1);
 
-    expect(result.status).toBe(400);
-    expect(String(result.body.error ?? "")).toMatch(/promotion unavailable/i);
-    expect(harness.db.tables.get("orders") ?? []).toHaveLength(0);
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(String(result.body.error ?? "")).not.toMatch(/promotion unavailable/i);
+
+    const orders = harness.db.tables.get("orders") ?? [];
+    expect(orders).toHaveLength(1);
+    // The shopper still gets the discount the cart promised her, and the
+    // ambassador still gets the attribution — the thin margin changes neither.
+    expect(Number(orders[0].discount_amount)).toBeGreaterThan(0);
+    expect(String(orders[0].referral_code)).toBe(CODE);
   });
 
   it("still sells that same thin-margin cart at full price with no code", async () => {
