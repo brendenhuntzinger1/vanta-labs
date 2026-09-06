@@ -158,6 +158,72 @@ const PAYMENT_AND_RECEIPT = ["/checkout/pay", "/pay", "/order-confirmation"];
 // own.
 const COLLECTS_ITS_OWN_ATTESTATION = ["/account/login"];
 
+// THE PASSWORD-RECOVERY SURFACES, WHERE THE GATE WAS A DEAD END.
+//
+// Found in production, 2026-09-06, on the affiliate applicant
+// ava.mci.media@gmail.com. She clicked a valid reset link, GoTrue verified it,
+// /account/reset-password served 200 with a live recovery session — and she
+// never set a password. Instead: her old password (invalid_credentials), the
+// same link again (403, already spent), and finally a second signup attempt
+// (422, email_exists). Four links over eight days, and `auth.users.updated_at`
+// never once advanced past a login.
+//
+// The reset form was never the problem — it renders "Choose a new password"
+// for precisely that arrival. The gate landed on top of it. Reproduced in the
+// browser against a real GoTrue session: elementFromPoint() at the centre of
+// the "Update password" button returns the age gate, not the button. The form
+// is in the DOM and unreachable.
+//
+// It is worst for exactly the people it catches. Confirmation is scoped to one
+// visit (sessionStorage, see below), and a link clicked from a mail client
+// opens a FRESH TAB — so an emailed recovery link is the first document of a
+// new visit essentially every time. This was not an edge case; it was what
+// resetting a password did.
+//
+// Exempting these removes no age assurance, by the same argument as the
+// payment pages and the sign-in screen: neither page shows a compound, a price
+// or a batch result, which are the things the gate stands in front of. A
+// visitor who sets a password here still meets the gate the moment they go
+// anywhere that does.
+//
+// /account/forgot-password is included for the same reason and the same
+// arrival: it is the other half of the same flow, it is where the reset page's
+// own expired-link panel sends people, and it shows a single email field.
+//
+// The invite path rides on this too. createPartnerInvite ->
+// inviteUserByEmail creates an ambassador with NO password, and
+// /account/reset-password is the only surface that can give them one — so a
+// gate here made the whole invite path a dead end, which is the shape of the
+// ZAIN incident recorded in lib/auth-link-fragment.ts.
+// The other landings in this list were found by the derived test that came out
+// of the same incident (age-gate-auth-landings.test.ts), which reads the paths
+// straight out of the routes that build them rather than trusting anyone to
+// remember. Each is the destination of a transactional email and each was
+// covered by the gate for the same reason:
+//
+//   /account/settings    — where the email-change confirmation lands.
+//   /account/ambassador  — the dashboard link in the approval email.
+//   /partner/pending     — the "application received" link, which is Ava's own
+//                          cohort: an applicant emailed a status page and shown
+//                          an age gate over it instead.
+//
+// The three account paths sit behind a session already, and anyone holding one
+// attested at sign-up — recorded on the account as age_confirmed_21 with a
+// timestamp, which is strictly stronger evidence than this gate's unrecorded,
+// forgotten-on-the-next-document answer. So exempting them removes nothing.
+//
+// Deliberately these paths and no wider. /account is NOT exempt as a prefix, so
+// a future page under it is gated until someone makes the same argument for it
+// explicitly. (Matching is exact-or-`/`-delimited, per `matches` below, so
+// /account/reset-password-x is not exempt either.)
+const EMAILED_AUTH_LANDINGS = [
+  "/account/reset-password",
+  "/account/forgot-password",
+  "/account/settings",
+  "/account/ambassador",
+  "/partner/pending",
+];
+
 // WHERE A VISITOR LANDS AFTER CLEARING THE GATE.
 //
 // The home page, unless they are standing on one of a fixed, hard-coded list of
@@ -291,7 +357,8 @@ export function isVerifiedForDocument(input: {
     sessionConfirmed ||
     matches(STAFF_ONLY) ||
     matches(PAYMENT_AND_RECEIPT) ||
-    matches(COLLECTS_ITS_OWN_ATTESTATION)
+    matches(COLLECTS_ITS_OWN_ATTESTATION) ||
+    matches(EMAILED_AUTH_LANDINGS)
   );
 }
 
