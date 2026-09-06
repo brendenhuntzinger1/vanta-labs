@@ -11,7 +11,7 @@ import { bestPaidTier, computeCartMembershipValue } from "@/lib/member-pricing";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { cartShippingLineLabel } from "@/lib/cart-shipping-line";
 import { useOfferQuote } from "@/lib/offer-quote";
-import { couponHeadline, couponOutcomeAgainstQuote } from "@/lib/discount-resolution";
+import { bundleCreditNote, couponHeadline, couponOutcomeAgainstQuote } from "@/lib/discount-resolution";
 import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
 import { ExpressApplePayButton } from "@/components/express-apple-pay-button";
 import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
@@ -85,6 +85,7 @@ export function CartDrawer() {
     shipping,
     discountAmount,
     appliedDiscountLabel,
+    bundleSavings,
     autoBestDiscountApplied,
     total,
     referralCode,
@@ -214,6 +215,15 @@ export function CartDrawer() {
   // a promo code for a figure that is actually the gift's, or a code the
   // order will not even record.
   const shownDiscountLabel = offerQuote?.discountLabel ?? appliedDiscountLabel ?? offerQuote?.offer?.description ?? "Discount";
+  // WHY THE DISCOUNT ROW CAN BE SMALLER THAN THE FREE ITEM ABOVE IT.
+  // resolveCartDiscount nets the winner against the quantity-bundle savings
+  // already inside `subtotal`; this sentence names that half. See
+  // bundleCreditNote.
+  const bundleNote = bundleCreditNote({
+    bundleSavings,
+    discountAmount: shownDiscount,
+    format: formatCartCurrency,
+  });
   // And the quote outranks the client's guess about a typed code — see
   // couponOutcomeAgainstQuote.
   const shownCouponOutcome = couponOutcomeAgainstQuote({
@@ -836,9 +846,16 @@ export function CartDrawer() {
                     </dd>
                   </div>
                   {shownDiscount > 0 ? (
-                    <div className="flex justify-between text-emerald-400" data-testid="cart-discount">
-                      <dt>{shownDiscountLabel}</dt>
-                      <dd className="tabular-nums">−{formatCartCurrency(shownDiscount)}</dd>
+                    <div className="text-emerald-400" data-testid="cart-discount">
+                      <div className="flex justify-between">
+                        <dt>{shownDiscountLabel}</dt>
+                        <dd className="tabular-nums">−{formatCartCurrency(shownDiscount)}</dd>
+                      </div>
+                      {/* The saving the subtotal already absorbed, which the row
+                          above is netted against. See bundleCreditNote. */}
+                      {bundleNote ? (
+                        <p className="mt-1 text-[11px] leading-4 text-emerald-300/70" data-testid="bundle-credit-note">{bundleNote}</p>
+                      ) : null}
                     </div>
                   ) : null}
                   {shippingProtectionFee > 0 ? (

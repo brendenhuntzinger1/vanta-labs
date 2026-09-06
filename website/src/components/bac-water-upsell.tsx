@@ -6,6 +6,7 @@ import { useCart } from "@/components/cart-context";
 import type { Product } from "@/lib/catalog-types";
 import {
   bacWaterAddOptions,
+  bacWaterCheckboxCopy,
   getBacWaterDoseOffers,
   isBacWater,
   isFeaturedBacWaterOffer,
@@ -278,6 +279,14 @@ export function BacWaterCartCheckboxes() {
       <div className="mt-2.5 space-y-2">
         {offers.map((offer) => {
           const inCart = items.some((item) => item.key === offer.cartKey);
+          // A ticked box saying "Add" beside "+$14.99", above a cart line for
+          // the same bottle at the same price, reads as a second charge. See
+          // bacWaterCheckboxCopy.
+          const copy = bacWaterCheckboxCopy({
+            sizeLabel: offer.sizeLabel,
+            displayPrice: offer.displayPrice,
+            inCart,
+          });
           return (
             <label key={offer.cartKey} className="flex cursor-pointer items-center justify-between gap-3">
               <span className="flex items-center gap-2.5">
@@ -292,11 +301,11 @@ export function BacWaterCartCheckboxes() {
                     }
                   }}
                   className="h-4 w-4 accent-[color:var(--accent-gold)]"
-                  aria-label={`Add ${offer.sizeLabel} BAC Water`}
+                  aria-label={copy.ariaLabel}
                 />
-                <span className="text-sm text-white">Add {offer.sizeLabel} BAC Water</span>
+                <span className="text-sm text-white">{copy.label}</span>
               </span>
-              <span className="whitespace-nowrap text-sm text-[#a3a3a3]">+{offer.displayPrice}</span>
+              <span className={`whitespace-nowrap text-sm ${inCart ? "text-[#6f6f6f]" : "text-[#a3a3a3]"}`}>{copy.price}</span>
             </label>
           );
         })}

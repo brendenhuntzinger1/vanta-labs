@@ -373,3 +373,35 @@ export function describeCouponOutcome(input: {
     message: `${code} accepted — but it doesn't lower the total on this order.`,
   };
 }
+
+/**
+ * THE SAVINGS THE SUBTOTAL ALREADY SWALLOWED.
+ *
+ * `resolveCartDiscount` ranks every candidate on what it saves BEYOND the
+ * quantity-bundle pricing baked into the line prices — `compete()` above — so
+ * the number that reaches the summary row is the winner's REMAINDER, not its
+ * worth. On a basket earning $4.50 of Bundle & Save, a promotion worth $14.99
+ * prints as "Buy 2 Get 1 Free  -$10.49" beside a free item priced $14.99, and
+ * the missing $4.50 is stated nowhere on the page: it is inside a subtotal the
+ * shopper has no reason to read as discounted.
+ *
+ * That is a disclosure gap, not an arithmetic one. The total is the server's
+ * total and stays untouched — payment-service.ts refuses anything below it.
+ * This sentence sits under the discount row and names the half that was silent,
+ * so the two halves add up to the free item on the page as well as in the till.
+ *
+ * Returns null when there is nothing to reconcile: no bundle pricing in the
+ * subtotal, or no order-level discount that was netted against it (bundle
+ * pricing alone is already disclosed line by line, beside the price it moved).
+ */
+export function bundleCreditNote(input: {
+  /** Dollars the quantity-bundle tiers granted inside the displayed subtotal. */
+  bundleSavings: number;
+  /** The discount row's amount — the winner AFTER `compete()` netted it down. */
+  discountAmount: number;
+  format: (value: number) => string;
+}): string | null {
+  if (!(input.bundleSavings > 0) || !(input.discountAmount > 0)) return null;
+  const total = Math.round((input.bundleSavings + input.discountAmount) * 100) / 100;
+  return `Bundle & Save already took ${input.format(input.bundleSavings)} off the prices above — ${input.format(total)} off in total.`;
+}

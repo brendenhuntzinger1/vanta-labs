@@ -4,13 +4,13 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCartCurrency, useCart } from "@/components/cart-context";
-import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
+import { bundleDiscountRate, getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { readAttributionForCheckout } from "@/lib/attribution-client";
 import { calculateShipping, isDomesticCountry, isFreeShippingSitewide, isShippingWaived } from "@/lib/shipping";
 import { resolveSalesTax } from "@/lib/sales-tax";
 import { useApplePayOffered } from "@/components/use-apple-pay-offered";
 import { useOfferQuote } from "@/lib/offer-quote";
-import { couponHeadline, couponOutcomeAgainstQuote } from "@/lib/discount-resolution";
+import { bundleCreditNote, couponHeadline, couponOutcomeAgainstQuote } from "@/lib/discount-resolution";
 import { CHECKOUT_SHORT, COA_SHORT, FULFILMENT_SHORT, TESTING_SHORT, trustPoints } from "@/lib/trust-claims";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { pointsToDollars } from "@/lib/points-math";
@@ -224,6 +224,7 @@ export default function CheckoutPage() {
     subtotal,
     discountAmount,
     appliedDiscountLabel,
+    bundleSavings,
     autoBestDiscountApplied,
     referralCode,
     referralStatusText,
@@ -476,6 +477,14 @@ export default function CheckoutPage() {
   const shownDiscountLabel = ambassadorDiscountApplied
     ? `Ambassador ${ambassadorDiscountPercent}% off`
     : (offerQuote?.discountLabel ?? appliedDiscountLabel ?? offerQuote?.offer?.description ?? "Discount");
+  // resolveCartDiscount nets the winner against the quantity-bundle savings
+  // already inside `subtotal`, so the row above can read less than the free item
+  // it is named for. This sentence names the other half. See bundleCreditNote.
+  const bundleNote = bundleCreditNote({
+    bundleSavings,
+    discountAmount: shownDiscount,
+    format: formatCartCurrency,
+  });
   const giftLines = offerQuote?.giftLines ?? [];
 
   // WHAT IS POSTED MUST BE WHAT WAS SHOWN.
@@ -489,7 +498,12 @@ export default function CheckoutPage() {
   // is claimed here.
   const postedTotal = offerQuote ? offerQuote.expectedTotal : total;
   const finalTotal = offerQuote ? offerQuote.finalTotal : clientFinalTotal;
-  const totalSaved = shownDiscount + shownStoreCredit + shownPointsDiscount;
+  // BUNDLE PRICING IS A SAVING, AND THIS LINE USED TO LEAVE IT OUT. The
+  // quantity tiers come off inside the line prices before anything competes, so
+  // a five-vial order that saved $4.50 on the tiers and $10.49 on the promotion
+  // reported "You saved $10.49" — understating the shopper's own order by every
+  // dollar Bundle & Save had granted them.
+  const totalSaved = Math.round((shownDiscount + bundleSavings + shownStoreCredit + shownPointsDiscount) * 100) / 100;
 
   // Load the configured payment methods + card fee, and default to the first
   // recommended (no-fee) method.
@@ -859,7 +873,11 @@ export default function CheckoutPage() {
         <div className="flex justify-between"><span className="text-white/45">Sales tax</span><span className="text-white/30">Enter address</span></div>
       ) : null}
       {shownDiscount > 0 ? (
-        <div className="flex justify-between text-emerald-300" data-testid="summary-discount"><span>{shownDiscountLabel}</span><span className="tabular-nums">−{formatCartCurrency(shownDiscount)}</span></div>
+        <div className="text-emerald-300" data-testid="summary-discount">
+          <div className="flex justify-between"><span>{shownDiscountLabel}</span><span className="tabular-nums">−{formatCartCurrency(shownDiscount)}</span></div>
+          {/* The saving the subtotal already absorbed. See bundleCreditNote. */}
+          {bundleNote ? <p className="mt-1 text-xs leading-4 text-emerald-300/70" data-testid="bundle-credit-note">{bundleNote}</p> : null}
+        </div>
       ) : null}
       {shownStoreCredit > 0 ? (
         <div className="flex justify-between text-emerald-300" data-testid="summary-store-credit"><span>Member store credit</span><span className="tabular-nums">−{formatCartCurrency(shownStoreCredit)}</span></div>
@@ -893,7 +911,15 @@ export default function CheckoutPage() {
           <button type="button" onClick={() => { haptic(12); removeFromCart(item.key); }} className="vl-focus-ring rounded px-1 py-1 text-xs text-white/35 transition hover:text-rose-300" aria-label={`Remove ${item.name} from cart`}>Remove</button>
         </div>
       </div>
-      <p className="text-sm text-white/75 tabular-nums">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig))}</p>
+      {/* Struck-through full total when a quantity tier moved this line, as the
+          drawer does. Printing only the tier price left the subtotal lower than
+          the prices the shopper remembered, with nothing saying why. */}
+      <div className="text-right">
+        {bundleDiscountRate(item.quantity, bundleConfig) > 0 ? (
+          <p className="text-[11px] text-white/35 line-through tabular-nums">{formatCartCurrency(item.price * item.quantity)}</p>
+        ) : null}
+        <p className="text-sm text-white/75 tabular-nums">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig))}</p>
+      </div>
     </div>
   ));
 

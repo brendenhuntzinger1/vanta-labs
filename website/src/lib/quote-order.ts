@@ -1487,9 +1487,20 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // never derive a money row of its own. Shipping and sales tax are deliberately
   // absent: they are appended by the wallet's address callback, from the
   // amount authority's response, once a destination exists.
+  //
+  // BUNDLE PRICING GETS ITS OWN ROW, at full retail above it. `subtotal` has the
+  // quantity tiers already inside it and `discountAmount` is the winner AFTER
+  // being netted against them, so the old pair — bundled subtotal, netted
+  // discount — put a shopper's own savings in neither row: a $14.99 free item
+  // showed as "Buy 2 Get 1 Free  -$10.49" under a subtotal $4.50 lower than the
+  // prices on the product pages, with the $4.50 named nowhere. The rows still
+  // sum to exactly the same charge; they just say where all of it went.
   const displayLineItems: QuoteDisplayLineItem[] = [
-    { label: "Subtotal", amountCents: Math.round(subtotal * 100) },
+    { label: "Subtotal", amountCents: Math.round((quantityBundleSavings > 0 ? fullSubtotal : subtotal) * 100) },
   ];
+  if (quantityBundleSavings > 0) {
+    displayLineItems.push({ label: "Bundle & Save", amountCents: -Math.round(quantityBundleSavings * 100) });
+  }
   if (discountAmount > 0) {
     displayLineItems.push({
       label: customerDiscount.label || "Discount",
