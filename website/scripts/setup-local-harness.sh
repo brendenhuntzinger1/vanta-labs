@@ -169,6 +169,7 @@ for f in referral-orders-commission-lifecycle referral-orders-manual-review-stat
          email-delivery-event-log email-lifecycle-2026-09-04 payment-failure-detail \
   marketing-frequency-guard \
   auth-user-by-email \
+  bxgy-promotions bxgy-redemption-claims coupon-redeem-rpc \
   membership-pending-tier-change \
   order-attribution ads-system ads-spend-roas; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
