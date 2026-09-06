@@ -55,3 +55,70 @@ describe("funnel-event returns a uniform, catalogue-blind acknowledgement", () =
     expect(code).toContain("decideRelay");
   });
 });
+
+// ---------------------------------------------------------------------------
+// AND THE TIMING MUST NOT ANSWER EITHER.
+//
+// Uniform bodies closed half of it. The handler still AWAITED sendServerEvents,
+// and that call only happens when a line matched the catalogue — so a real slug
+// replied a TikTok round trip later than an unknown one and the same
+// enumeration was available with a stopwatch. Both gates are open in production
+// (credentialStatus().configured, then serverAdsReportingAllowed()), so that is
+// where it was reachable; the harness denies at the second gate and cannot
+// reproduce it, which is why this is pinned at the source.
+//
+// BOUNDED AT BOTH ENDS ON PURPOSE. "The catalogue read appears somewhere after
+// after(" is satisfied by a file that awaits it first and reads it again later.
+// What has to be true is that NO catalogue work sits on the response path at
+// all: nothing before after( opens, and everything inside it.
+// ---------------------------------------------------------------------------
+describe("funnel-event answers before it touches the catalogue", () => {
+  const CATALOGUE_WORK = ['.from("products")', "decideRelay(", "sendServerEvents("];
+
+  // The handler only — imports name sendServerEvents and decideRelay at the top
+  // of the file, and an import is not the response path.
+  const handlerAt = code.indexOf("export async function POST");
+  const afterOpens = code.indexOf("after(", handlerAt);
+
+  /** The matching close of the after() call, found by counting, not guessed. */
+  const closeOf = (open: number) => {
+    let depth = 0;
+    for (let i = open; i < code.length; i += 1) {
+      if (code[i] === "(") depth += 1;
+      else if (code[i] === ")") {
+        depth -= 1;
+        if (depth === 0) return i;
+      }
+    }
+    return -1;
+  };
+  const afterCloses = closeOf(code.indexOf("(", afterOpens));
+
+  it("defers the catalogue work with after(), not a bare floating promise", () => {
+    expect(code).toContain('import { NextResponse, after } from "next/server"');
+    expect(handlerAt, "could not find the POST handler").toBeGreaterThan(-1);
+    expect(afterOpens, "the handler no longer schedules anything with after()").toBeGreaterThan(handlerAt);
+    expect(afterCloses, "could not find the end of the after() callback").toBeGreaterThan(afterOpens);
+  });
+
+  it("does no catalogue work before the reply is scheduled", () => {
+    for (const needle of CATALOGUE_WORK) {
+      const first = code.indexOf(needle, handlerAt);
+      expect(first, `expected the handler to still do ${needle}`).toBeGreaterThan(-1);
+      expect(first, `${needle} runs on the response path, so its latency is an oracle`).toBeGreaterThan(afterOpens);
+      expect(first, `${needle} escaped the after() callback`).toBeLessThan(afterCloses);
+    }
+  });
+
+  it("never awaits the relay on the response path", () => {
+    const responsePath = code.slice(handlerAt, afterOpens);
+    expect(responsePath).not.toContain("sendServerEvents");
+    expect(responsePath).not.toContain("decideRelay");
+    expect(responsePath).not.toContain('.from("products")');
+    expect(responsePath).not.toContain("await supabaseAdmin");
+  });
+
+  it("still returns the same opaque ack after scheduling", () => {
+    expect(code.slice(afterCloses)).toContain("NextResponse.json(ACK");
+  });
+});

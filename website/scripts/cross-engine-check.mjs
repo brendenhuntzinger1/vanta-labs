@@ -56,15 +56,65 @@ const CASES = [
 ];
 const ROUTES = ["/products", "/cart", "/research", "/contact", "/legal/privacy"];
 
+/**
+ * Optional credentials for a signed-in walk of the storefront. Without them the
+ * gated routes cannot be measured at all, and the run says so.
+ */
+const SIGNIN_EMAIL = process.env.QA_SIGNIN_EMAIL || "";
+const SIGNIN_PASSWORD = process.env.QA_SIGNIN_PASSWORD || "";
+
 const findings = [];
 
+/**
+ * GET PAST THE FRONT DOOR, WHICHEVER DOOR IS THERE.
+ *
+ * This used to tick every checkbox and press "Continue as guest" — the age-gate
+ * modal, which no longer exists. What replaced it is a server-side wall
+ * (lib/access-policy.ts), so every route below now answers 307 to
+ * /account/login and the five "storefront" measurements were five measurements
+ * of the login portal, all reporting no overflow. A layout check that measures
+ * the same screen five times and calls it the catalogue is worse than no check.
+ *
+ * Signing in is OPT-IN through QA_SIGNIN_EMAIL / QA_SIGNIN_PASSWORD, so the
+ * script stays read-only and production-safe by default; without them it says
+ * plainly that the routes are walled rather than pretending to have seen them.
+ */
 async function clearGate(page) {
-  const boxes = page.locator('input[type="checkbox"]');
-  const n = await boxes.count();
-  for (let i = 0; i < n; i++) await boxes.nth(i).check({ force: true, timeout: 5000 }).catch(() => {});
+  // The legacy age gate, still handled in case an older deployment is targeted.
   const guest = page.getByRole("button", { name: /continue as guest/i }).first();
-  await guest.scrollIntoViewIfNeeded().catch(() => {});
-  return guest.click({ timeout: 9000 }).then(() => true).catch(() => false);
+  if (await guest.count().then((n) => n > 0).catch(() => false)) {
+    const boxes = page.locator('input[type="checkbox"]');
+    const n = await boxes.count();
+    for (let i = 0; i < n; i++) await boxes.nth(i).check({ force: true, timeout: 5000 }).catch(() => {});
+    await guest.scrollIntoViewIfNeeded().catch(() => {});
+    return guest.click({ timeout: 9000 }).then(() => true).catch(() => false);
+  }
+
+  if (!SIGNIN_EMAIL) return "walled";
+
+  // The portal shows no email field until "Sign in with email" is pressed.
+  await page.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded", timeout: 70000 }).catch(() => {});
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    if (await page.$("form input[type=email]")) break;
+    await page.evaluate(() => {
+      const b = [...document.querySelectorAll("button")]
+        .find((x) => x.textContent.trim() === "Sign in with email");
+      if (b) b.click();
+    });
+    await page.waitForTimeout(700);
+  }
+  if (!(await page.$("form input[type=email]"))) return false;
+  await page.fill("form input[type=email]", SIGNIN_EMAIL);
+  await page.fill("form input[type=password]", SIGNIN_PASSWORD);
+  await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().includes("/api/auth/session") && r.request().method() === "POST",
+      { timeout: 25000 },
+    ).catch(() => null),
+    page.click("form button[type=submit]"),
+  ]);
+  await page.waitForTimeout(1500);
+  return (await page.context().cookies()).some((c) => c.name === "vl_session_token");
 }
 
 /** Layout facts only. Anything here reproduces across engines if it is real. */
@@ -114,9 +164,15 @@ for (const [label, ua, viewport] of CASES) {
   try {
     await page.goto(BASE + "/", { waitUntil: "domcontentloaded", timeout: 70000 });
     await page.waitForTimeout(3000);
-    if (!(await clearGate(page))) {
-      console.log("  age gate could not be cleared");
-      findings.push(`${ENGINE}/${label}: age gate not clearable`);
+    const entry = await clearGate(page);
+    if (entry === "walled") {
+      // Not a finding: it is the wall doing its job. It IS a coverage gap, and
+      // saying so is the difference between this run and a silent false pass.
+      console.log("  NOT SIGNED IN — gated routes below are the login portal, not the storefront");
+      console.log("  (set QA_SIGNIN_EMAIL / QA_SIGNIN_PASSWORD to measure them)");
+    } else if (!entry) {
+      console.log("  could not get past the front door");
+      findings.push(`${ENGINE}/${label}: could not sign in or clear the gate`);
     }
     await page.waitForTimeout(3000);
     for (const route of ROUTES) {

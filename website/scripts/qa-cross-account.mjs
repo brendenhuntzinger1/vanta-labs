@@ -229,11 +229,21 @@ try {
   console.log("\n5. Guest reach\n");
 
   {
-    // /api/cart/restore IS deliberately unauthenticated: it backs the "return
-    // to your cart" link in a recovery email, which the recipient follows
-    // signed out. So the test is not "does a guest get a cart" — that is the
-    // feature — it is whether the id is a CAPABILITY or a HANDLE, and whether
-    // answering it discloses anything beyond the basket.
+    // /api/cart/restore IS NO LONGER REACHABLE SIGNED OUT, and this block used
+    // to assume it was. The store closed its default (lib/access-policy.ts), so
+    // an anonymous caller now gets 401 whatever id it names — which made the
+    // first assertion below VACUOUS (a 401 body contains neither the victim's
+    // email nor their name, so "discloses the basket but not who it belongs to"
+    // passed while nothing was disclosed at all, including the basket) and the
+    // second one wrong (it wanted 404 and read the wall's 401 as a defect).
+    //
+    // The recovery email links to /cart/restore?id=…, so the recipient signs in
+    // and the wall carries them back with the id intact — verified: `next`
+    // preserves the query string. The question worth asking is therefore the
+    // cross-account one: with a SESSION in hand, can one customer read another
+    // customer's basket, and does the answer name them?
+    //
+    // So the probes below run as a DIFFERENT signed-in customer.
     //
     // abandoned_carts.id is gen_random_uuid(), so it is not enumerable, and
     // getAbandonedCartById selects `email` and `customer_name` while the route
@@ -247,22 +257,31 @@ try {
     )).rows[0].id;
 
     const res = await fetch(`${BASE}/api/cart/restore?id=${cartId}`, {
-      headers: { Origin: BASE },
+      headers: { Origin: BASE, Cookie: attacker },
       redirect: "manual",
     });
     const body = await res.text();
-    record(!body.includes(VICTIM) && !body.includes("QA Victim"),
-      "GET /api/cart/restore discloses the basket but not who it belongs to",
-      `HTTP ${res.status} returned the victim's email or name alongside the items`);
+    record(res.status === 200 && body.includes("BPC-157") && !body.includes(VICTIM) && !body.includes("QA Victim"),
+      "GET /api/cart/restore returns the basket and names nobody",
+      `HTTP ${res.status}: ${body.slice(0, 120)}`);
 
-    // A guessed id must not be answerable, and must not distinguish "no such
-    // cart" from "someone else's cart" — both are the same 404.
+    // A guessed id must not be answerable. 404 rather than 403 is deliberate:
+    // the id is a capability, and "that cart is not yours" would itself be a
+    // fact about a cart the caller has not proven anything about.
     const guessed = await fetch(`${BASE}/api/cart/restore?id=00000000-0000-4000-8000-0000000000ff`, {
-      headers: { Origin: BASE }, redirect: "manual",
+      headers: { Origin: BASE, Cookie: attacker }, redirect: "manual",
     });
     record(guessed.status === 404,
       "GET /api/cart/restore answers 404 for an id that names no cart",
       `HTTP ${guessed.status} for a made-up cart id`);
+
+    // And the wall still stands in front of it for someone with no account.
+    const anon = await fetch(`${BASE}/api/cart/restore?id=${cartId}`, {
+      headers: { Origin: BASE }, redirect: "manual",
+    });
+    record(anon.status === 401,
+      "GET /api/cart/restore is closed to a caller with no account",
+      `HTTP ${anon.status} for an anonymous caller`);
 
     await q("delete from abandoned_carts where session_id = 'qa-victim-session'").catch(() => {});
   }

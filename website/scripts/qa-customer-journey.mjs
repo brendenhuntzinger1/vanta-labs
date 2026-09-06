@@ -67,6 +67,53 @@ function section(title) {
  */
 const SKIP = (reason) => ({ __skip: reason });
 
+/**
+ * OPEN THE CREATE-ACCOUNT FORM FROM THE PORTAL.
+ *
+ * The first screen is no longer a form. It is the access portal: two required
+ * attestations and two doors ("Continue with Google", "Create an account"),
+ * and BOTH doors are `disabled={!canEnter}` until the 21+ and research-use
+ * boxes are ticked. Clicking a disabled button does nothing at all, so the old
+ * three lines — goto, click "Create an account", fill the name field — sat on
+ * the portal and timed out at `page.fill`, thirty seconds later, with a message
+ * about a selector rather than about the gate. Every signup-dependent step in
+ * this harness failed behind it, which is most of the journey.
+ *
+ * Only the two REQUIRED boxes are ticked. The other two rows are marked
+ * `vl-portal-row-optional` — marketing consent and "keep me signed in" — and
+ * ticking those would quietly opt every synthetic account into marketing and
+ * make the email assertions measure a list this harness created.
+ */
+async function openSignupForm(page) {
+  await page.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".vl-portal-row", { timeout: 15000 });
+
+  const requiredBoxes = () =>
+    page.$$(".vl-portal-row:not(.vl-portal-row-optional) input[type=checkbox]");
+  const createEnabled = () => page.$$eval("button", (btns) =>
+    btns.some((b) => b.textContent.trim() === "Create an account" && !b.disabled));
+
+  // Retried for the same reason the age gate was: a tick that lands before
+  // hydration flips the DOM and not React, and the button is the only true
+  // signal that the state took.
+  for (let attempt = 0; attempt < 5 && !(await createEnabled()); attempt += 1) {
+    for (const box of await requiredBoxes()) {
+      if (!(await box.isChecked())) await box.click({ timeout: 5000 }).catch(() => {});
+    }
+    if (await createEnabled()) break;
+    await page.waitForTimeout(800);
+  }
+  if (!(await createEnabled())) {
+    throw new Error("the portal's Create an account button never enabled after ticking both attestations");
+  }
+
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === "Create an account");
+    if (b) b.click();
+  });
+  await page.waitForSelector("form input[type=email]", { timeout: 15000 });
+}
+
 async function step(name, fn) {
   try {
     const detail = await fn();
@@ -167,16 +214,56 @@ async function ensureSignedOut(context) {
 
 async function signIn(page, email, password) {
   await page.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(1000);
+  await page.waitForSelector("form, .vl-portal-row", { timeout: 15000 }).catch(() => {});
 
-  // An already-signed-in visitor is forwarded away from the login page, so
+  // An already-signed-in visitor is forwarded AWAY from the login page, so
   // there is no form to fill. Waiting 30s for one that will never exist turns a
   // healthy redirect into a spurious failure.
-  const form = await page.$("form input[type=email]");
-  if (!form) return { alreadySignedIn: true, landedOn: new URL(page.url()).pathname };
+  //
+  // TESTED ON THE URL, NOT ON THE ABSENCE OF A FIELD, AND THAT DISTINCTION IS
+  // THE WHOLE BUG THIS FIXES. The first screen is now the access portal, which
+  // deliberately shows no email or password field until "Sign in with email" is
+  // pressed — so "no email input" became true for every signed-OUT visitor too.
+  // This helper answered `alreadySignedIn` for all of them, filled nothing,
+  // submitted nothing, and every step after it failed on a missing cookie. A
+  // sign-in that never happened must not be able to report itself as a sign-in
+  // that was not needed.
+  if (!/\/account\/login/.test(new URL(page.url()).pathname)) {
+    return { alreadySignedIn: true, landedOn: new URL(page.url()).pathname };
+  }
+
+  const hasField = async () => (await page.$("form input[type=email]")) !== null;
+  for (let attempt = 0; attempt < 5 && !(await hasField()); attempt += 1) {
+    // Not gated on the attestations: a returning customer made those when the
+    // account was created, so this door is open to them unconditionally.
+    await page.evaluate(() => {
+      const b = [...document.querySelectorAll("button")]
+        .find((x) => x.textContent.trim() === "Sign in with email");
+      if (b) b.click();
+    });
+    await page.waitForTimeout(700);
+  }
+  if (!(await hasField())) throw new Error("the portal never opened the email sign-in form");
 
   await page.fill("form input[type=email]", email);
   await page.fill("form input[type=password]", password);
+
+  // TICK "KEEP ME SIGNED IN", BECAUSE SECTION 5 IS ABOUT WHAT THAT BOX DOES.
+  //
+  // It used to default to ticked and the form sent `rememberMe: true`
+  // regardless; the portal work made it an explicit, unticked choice — someone
+  // signing in on a shared machine should not be remembered for thirty days
+  // without being asked. Correct, and it means a harness that never ticks it
+  // gets a browser-session cookie and reports "cookie lasts 0 days, not 30"
+  // as though the 30-day session were broken. Ticking it is what makes the
+  // rest of section 5 measure the feature it names.
+  await page.evaluate(() => {
+    const label = [...document.querySelectorAll("label")]
+      .find((l) => /Keep me signed in on this device/.test(l.textContent || ""));
+    const box = label?.querySelector('input[type=checkbox]');
+    if (box && !box.checked) box.click();
+  });
+
   await page.click("form button[type=submit]");
   await page.waitForTimeout(3000);
   return { alreadySignedIn: false };
@@ -330,40 +417,51 @@ async function main() {
   });
   const page = await context.newPage();
 
-  // ---- 1. Visit and age gate -------------------------------------------
-  section("1. Visit -> age gate -> browse");
+  // ---- 1. Visit and the access wall -------------------------------------
+  //
+  // THIS SECTION USED TO TEST AN AGE GATE. There is no longer one to test: the
+  // modal that covered the storefront with CSS was replaced by a server-side
+  // wall (lib/access-policy.ts), which is a stronger control and a different
+  // screen. Leaving the old steps in place would have failed forever on "no age
+  // gate was shown", which is the correct behaviour of the current product.
+  section("1. Visit -> access wall");
 
-  await step("age gate blocks a first visit and can be passed", async () => {
-    const shown = await passAgeGate(page);
-    assert(shown, "no age gate was shown on a fresh context");
-    const stillGated = await page.$("[role=dialog]");
-    assert(!stillGated, "age gate did not clear after accepting");
-    return "gate shown, accepted, cleared";
+  await step("a fresh visitor is held at the access portal", async () => {
+    const res = await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+    assert(/\/account\/login/.test(new URL(page.url()).pathname),
+      `a signed-out visit to / landed on ${new URL(page.url()).pathname}, not the portal`);
+    assert(res.status() < 400, `the portal answered ${res.status()}`);
+    const text = await page.evaluate(() => document.body.innerText);
+    assert(/21 years of age or older/i.test(text), "the portal did not ask for the 21+ attestation");
+    assert(/research use/i.test(text), "the portal did not ask for the research-use attestation");
+    return "held at the portal, both attestations asked";
   });
 
-  await step("catalogue browses and a product page renders", async () => {
-    await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(1500);
-    const links = await page.$$eval('a[href^="/products/"]', (as) => as.map((a) => a.getAttribute("href")));
-    assert(links.length > 0, "no product links on /products");
-    await page.goto(`${BASE}${links[0]}`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(1500);
-    const body = await page.evaluate(() => document.body.innerText);
-    assert(body.length > 400, "product page rendered almost nothing");
-    return `browsed ${links.length} products, opened ${links[0]}`;
+  await step("the catalogue is closed, and closed identically for a real and a fake slug", async () => {
+    // The wall must not become an enumeration oracle: a product that exists and
+    // one that does not have to produce the same answer, or the catalogue is
+    // recoverable from a word list without an account.
+    const probe = async (path) => {
+      const r = await page.request.get(`${BASE}${path}`, { maxRedirects: 0 });
+      return { status: r.status(), location: r.headers()["location"] ?? "" };
+    };
+    const list = await probe("/products");
+    assert(list.status === 307 || list.status === 308, `/products answered ${list.status}`);
+
+    const real = await probe("/products/bpc-157");
+    const fake = await probe("/products/definitely-not-a-product-9f3a");
+    assert(real.status === fake.status,
+      `a real slug answered ${real.status} and an unknown one ${fake.status}`);
+    assert(real.location.replace("bpc-157", "X") === fake.location.replace("definitely-not-a-product-9f3a", "X"),
+      "the redirect target differed between a real slug and an unknown one");
+    return `both answered ${real.status} to the portal`;
   });
 
   // ---- 2. Create account ------------------------------------------------
   section("2. Create account");
 
   await step("signup form rejects a weak password before submitting", async () => {
-    await page.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(800);
-    await page.evaluate(() => {
-      const b = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === "Create an account");
-      if (b) b.click();
-    });
-    await page.waitForTimeout(600);
+    await openSignupForm(page);
     await page.fill('form input[type="text"]', NAME);
     await page.fill("form input[type=email]", `weak.${stamp}@example.test`);
     await page.fill("form input[type=password]", "short");
@@ -408,13 +506,7 @@ async function main() {
   });
 
   await step("new customer signs up", async () => {
-    await page.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(800);
-    await page.evaluate(() => {
-      const b = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === "Create an account");
-      if (b) b.click();
-    });
-    await page.waitForTimeout(600);
+    await openSignupForm(page);
     await page.fill('form input[type="text"]', NAME);
     await page.fill("form input[type=email]", EMAIL);
     await page.fill("form input[type=password]", PASSWORD);
@@ -431,13 +523,7 @@ async function main() {
 
   await step("double-submitting signup does not create a second account", async () => {
     const email = `dbl.${stamp}@example.test`;
-    await page.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(800);
-    await page.evaluate(() => {
-      const b = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === "Create an account");
-      if (b) b.click();
-    });
-    await page.waitForTimeout(600);
+    await openSignupForm(page);
     await page.fill('form input[type="text"]', "Double Click");
     await page.fill("form input[type=email]", email);
     await page.fill("form input[type=password]", PASSWORD);
@@ -456,13 +542,7 @@ async function main() {
   });
 
   await step("signing up again with the same address does not leak that it exists", async () => {
-    await page.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(800);
-    await page.evaluate(() => {
-      const b = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === "Create an account");
-      if (b) b.click();
-    });
-    await page.waitForTimeout(600);
+    await openSignupForm(page);
     await page.fill('form input[type="text"]', NAME);
     await page.fill("form input[type=email]", EMAIL);
     await page.fill("form input[type=password]", PASSWORD);
@@ -620,6 +700,21 @@ async function main() {
     return "account renders the signed-in customer";
   });
 
+  await step("catalogue browses and a product page renders once signed in", async () => {
+    // Moved here from section 1: the catalogue is behind the wall now, so this
+    // can only be true after a session exists. Running it before sign-in was
+    // asserting the old open-storefront behaviour.
+    await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(1500);
+    const links = await page.$$eval('a[href^="/products/"]', (as) => as.map((a) => a.getAttribute("href")));
+    assert(links.length > 0, "no product links on /products for a signed-in customer");
+    await page.goto(`${BASE}${links[0]}`, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(1500);
+    const body = await page.evaluate(() => document.body.innerText);
+    assert(body.length > 400, "product page rendered almost nothing");
+    return `browsed ${links.length} products, opened ${links[0]}`;
+  });
+
   await step("a profile edit persists across a reload", async () => {
     const newName = `Journey Renamed ${stamp}`;
     await page.goto(`${BASE}/account/settings`, { waitUntil: "domcontentloaded" });
@@ -763,41 +858,92 @@ async function main() {
     return "cart holds the item";
   });
 
-  await step("a guest cart survives signing in", async () => {
-    // The real scenario from the checklist: shop as a guest, THEN log in. The
-    // classic regression is that authenticating resets client state and the
-    // shopper silently loses everything they picked before signing in.
-    const guest = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
-    const g = await guest.newPage();
-    await passAgeGate(g);
+  await step("the cart needs no hard refresh to price a customer who just signed in", async () => {
+    // THIS STEP USED TO BE "a guest cart survives signing in", and there are no
+    // guests any more: /products answers 307 to the portal, so a signed-out
+    // visitor cannot build a cart to carry across a sign-in. The step failed on
+    // a missing product link, which reads like a broken catalogue and is the
+    // wall working.
+    //
+    // What replaces it is the regression that DOES live on this path.
+    // CartProvider is mounted above the changing route segment (see
+    // app/layout.tsx), so it does NOT remount when someone signs in — and every
+    // pricing config it fetches on mount answers 401 on the portal. The cart
+    // therefore kept its built-in anonymous defaults for the whole page
+    // session, showing $15 shipping on a store that ships free, until the
+    // customer happened to reload.
+    //
+    // The assertion needs no knowledge of the live config, which is the point:
+    // whatever the correct numbers are, the numbers a customer sees WITHOUT a
+    // reload must be the numbers they see WITH one. Any difference is the stale
+    // client state, and it is what the audit means by "a customer must never
+    // require a hard refresh to receive the correct pricing or shipping".
+    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const p = await ctx.newPage();
 
-    await g.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
-    await g.waitForTimeout(1500);
-    const href = await g.$eval('a[href^="/products/"]', (a) => a.getAttribute("href"));
-    await g.goto(`${BASE}${href}`, { waitUntil: "domcontentloaded" });
-    await g.waitForTimeout(2000);
-    await g.evaluate(() => {
+    // Arrive the way a paid click does: ask for the catalogue, meet the portal.
+    await p.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
+    assert(/\/account\/login/.test(new URL(p.url()).pathname),
+      "the wall did not hold a signed-out visitor asking for /products");
+
+    await signIn(p, EMAIL, PASSWORD);
+    assert(await sessionCookie(ctx), "could not sign in for the cart-refresh check");
+
+    // CLIENT-SIDE FROM HERE. A page.goto is a fresh document, which remounts
+    // CartProvider and papers over the exact bug this step exists to catch.
+    // Dispatched in the page rather than through page.click, and that is not a
+    // shortcut: at phone width the catalogue link lives inside a collapsed menu,
+    // so Playwright's actionability check waits 30s for something that is
+    // deliberately not visible. A click event on the anchor still runs next/link's
+    // own handler, which is the client-side navigation this step needs — and a
+    // full page.goto would remount CartProvider and hide the very bug.
+    const clickTo = async (selector) => {
+      await p.waitForSelector(selector, { state: "attached", timeout: 20000 });
+      await p.evaluate((sel) => document.querySelector(sel)?.click(), selector);
+      await p.waitForTimeout(2500);
+    };
+    await clickTo('a[href="/products"]');
+    const href = await p.$eval('a[href^="/products/"]', (a) => a.getAttribute("href"));
+    await clickTo(`a[href="${href}"]`);
+    await p.evaluate(() => {
       const b = [...document.querySelectorAll("button")]
         .find((x) => /add to cart|add to bag/i.test(x.textContent || "") && !x.disabled);
       if (b) b.click();
     });
-    await g.waitForTimeout(2500);
+    await p.waitForTimeout(2500);
+    await clickTo('a[href="/cart"]');
+    await p.waitForTimeout(2000);
 
-    await g.goto(`${BASE}/cart`, { waitUntil: "domcontentloaded" });
-    await g.waitForTimeout(2000);
-    const asGuest = await g.evaluate(() => document.body.innerText);
-    assert(!/your cart is empty/i.test(asGuest), "the guest cart was empty before signing in");
+    /** The three summary rows, read by their labels. */
+    const summary = () => p.evaluate(() => {
+      const rows = {};
+      for (const el of document.querySelectorAll("div, li")) {
+        const spans = el.querySelectorAll(":scope > span");
+        if (spans.length !== 2) continue;
+        const label = (spans[0].textContent || "").trim().toLowerCase();
+        const value = (spans[1].textContent || "").trim();
+        if (/^(subtotal|shipping|total)/.test(label) && /\$|free|calculated/i.test(value)) {
+          rows[label.split("(")[0].trim()] = value;
+        }
+      }
+      return { rows, empty: /your cart is empty/i.test(document.body.innerText) };
+    });
 
-    await signIn(g, EMAIL, PASSWORD);
-    await g.goto(`${BASE}/cart`, { waitUntil: "domcontentloaded" });
-    await g.waitForTimeout(2500);
-    const afterLogin = await g.evaluate(() => document.body.innerText);
-    const signedIn = Boolean(await sessionCookie(guest));
-    await guest.close();
+    const beforeReload = await summary();
+    assert(!beforeReload.empty, "the cart was empty after adding an item");
+    assert(Object.keys(beforeReload.rows).length > 0, "no summary rows were readable on /cart");
 
-    assert(signedIn, "the guest could not sign in");
-    assert(!/your cart is empty/i.test(afterLogin), "signing in emptied the guest's cart");
-    return "guest added an item, signed in, cart survived";
+    await p.reload({ waitUntil: "domcontentloaded" });
+    await p.waitForTimeout(2500);
+    const afterReload = await summary();
+    await ctx.close();
+
+    const differing = Object.keys({ ...beforeReload.rows, ...afterReload.rows })
+      .filter((k) => beforeReload.rows[k] !== afterReload.rows[k])
+      .map((k) => `${k}: ${beforeReload.rows[k] ?? "-"} -> ${afterReload.rows[k] ?? "-"}`);
+    assert(differing.length === 0,
+      `a hard refresh changed what the cart charges: ${differing.join("; ")}`);
+    return `same summary before and after a reload (${Object.entries(afterReload.rows).map(([k, v]) => `${k} ${v}`).join(", ")})`;
   });
 
   await step("checkout keeps the session and knows the customer", async () => {

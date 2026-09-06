@@ -270,10 +270,34 @@ async function passAgeGate(page) {
   return true;
 }
 
+/**
+ * Sign in through the access portal, which is the only door there is now.
+ *
+ * This used to `return` silently when no email field was on screen, on the
+ * assumption that meant "already signed in". The first screen is the portal
+ * and it shows no email field until "Sign in with email" is pressed, so that
+ * silent return became the normal path for every signed-OUT caller: the
+ * ambassador steps reported "the ambassador could not sign in" and the CSRF
+ * probes measured an unauthenticated request. A helper that gives up quietly
+ * makes the steps after it lie about what they measured.
+ */
 async function signIn(page, email, password) {
   await page.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(1000);
-  if (!(await page.$("form input[type=email]"))) return;
+  await page.waitForSelector("form, .vl-portal-row", { timeout: 15000 }).catch(() => {});
+  // Forwarded away: there is nothing to fill and nothing wrong.
+  if (!/\/account\/login/.test(new URL(page.url()).pathname)) return;
+
+  const hasField = async () => (await page.$("form input[type=email]")) !== null;
+  for (let attempt = 0; attempt < 5 && !(await hasField()); attempt += 1) {
+    await page.evaluate(() => {
+      const b = [...document.querySelectorAll("button")]
+        .find((x) => x.textContent.trim() === "Sign in with email");
+      if (b) b.click();
+    });
+    await page.waitForTimeout(700);
+  }
+  if (!(await hasField())) throw new Error("the portal never opened the email sign-in form");
+
   await page.fill("form input[type=email]", email);
   await page.fill("form input[type=password]", password);
   await page.click("form button[type=submit]");
@@ -311,8 +335,16 @@ async function main() {
 
   await step("signup cannot be used to flood one mailbox", async () => {
     const email = `spam.${stamp}@example.test`;
+    // ageConfirmed / researchUseOnly ARE REQUIRED, AND WITHOUT THEM THIS PROVED
+    // NOTHING. The route refuses a signup that does not carry both (see
+    // api/auth/signup/route.ts), and that refusal is a 400 raised BEFORE the
+    // rate limiter is consulted. So all ten requests came back 400, the limiter
+    // was never exercised, and the step failed with "10 rapid signups were
+    // never throttled" — a true statement about a flood that never reached the
+    // thing it was meant to flood.
     const out = await hammer(page, "/api/auth/signup",
-      { email, password: "HarnessPass123!", fullName: "Spam Probe", businessType: "lab" }, 10,
+      { email, password: "HarnessPass123!", fullName: "Spam Probe", businessType: "lab",
+        ageConfirmed: true, researchUseOnly: true }, 10,
       ["signup-ip:%", `signup-email:${email}`]);
     if (out.failedOpen) return SKIP("the limiter failed open — UNENFORCED in this run, not proven");
     const created = await q("select count(*)::int as n from auth.users where email = $1", [email]);
@@ -382,8 +414,33 @@ async function main() {
   // ---- CSRF -------------------------------------------------------------
   section("2. Cross-site request forgery");
 
+  // THE CSRF PROBES NEED A SESSION.
+  //
+  // middleware.ts checks the account wall (401) BEFORE the Origin check (403),
+  // which is the right order — but it means an unauthenticated cross-origin
+  // POST answers 401 and says nothing at all about CSRF. Both steps below read
+  // as failures for that reason and neither was measuring the guard. Signed in,
+  // the cookie is attached and the Origin check is the thing that answers.
+  const csrfCtx = await newContext();
+  const csrfPage = await csrfCtx.newPage();
+  await signIn(csrfPage, "qa.verified@example.test", "HarnessPass123!");
+  // SENT AS AN EXPLICIT HEADER, NOT LEFT TO THE COOKIE JAR.
+  //
+  // page.request shares the browser context's cookies in principle, and in
+  // practice these probes kept arriving at the wall unauthenticated — 401,
+  // which is the wall answering, not the Origin check. Verified against the
+  // running server with curl: the same POST carrying vl_session_token and
+  // Origin: https://evil.example answers 403 "Invalid request origin", so the
+  // guard is intact and it was the probe that was anonymous. Carrying the
+  // cookie by hand is what makes these two steps measure CSRF at all.
+  const csrfCookieHeader = await csrfCtx.cookies().then((all) => {
+    const c = all.find((x) => x.name === "vl_session_token");
+    return c ? `${c.name}=${c.value}` : "";
+  });
+
   await step("a cross-site POST to an authenticated API is rejected", async () => {
-    const res = await page.evaluate(async (base) => {
+    if (!csrfCookieHeader) return SKIP("could not sign in, so this proves nothing about CSRF");
+    const res = await csrfPage.evaluate(async (base) => {
       // Origin is set by the browser and cannot be spoofed from script, so this
       // is exercised through the request context with an explicit foreign one.
       const r = await fetch(`${base}/api/account/preferences`, {
@@ -395,8 +452,8 @@ async function main() {
       return r.status;
     }, BASE);
     // Same-origin from the page is allowed; the foreign-origin case is below.
-    const foreign = await page.request.post(`${BASE}/api/account/preferences`, {
-      headers: { "Content-Type": "application/json", Origin: "https://evil.example" },
+    const foreign = await csrfPage.request.post(`${BASE}/api/account/preferences`, {
+      headers: { "Content-Type": "application/json", Origin: "https://evil.example", Cookie: csrfCookieHeader },
       data: { marketingEmails: true },
     });
     assert(foreign.status() === 403,
@@ -409,10 +466,11 @@ async function main() {
       "/api/account/preferences", "/api/auth/session", "/api/admin/auth/login",
       "/api/membership/cancel", "/api/partner/referral-code",
     ];
+    if (!csrfCookieHeader) return SKIP("could not sign in, so this proves nothing about CSRF");
     const bad = [];
     for (const path of probes) {
-      const res = await page.request.post(`${BASE}${path}`, {
-        headers: { "Content-Type": "application/json", Origin: "https://evil.example" },
+      const res = await csrfPage.request.post(`${BASE}${path}`, {
+        headers: { "Content-Type": "application/json", Origin: "https://evil.example", Cookie: csrfCookieHeader },
         data: {},
       });
       if (res.status() !== 403) bad.push(`${path} -> ${res.status()}`);
@@ -420,6 +478,8 @@ async function main() {
     assert(!bad.length, `not CSRF-guarded: ${bad.join(", ")}`);
     return `${probes.length} prefixes all 403`;
   });
+
+  await csrfCtx.close();
 
   // ---- Injection --------------------------------------------------------
   section("3. Script injected through a profile field");

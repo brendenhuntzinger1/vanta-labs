@@ -125,8 +125,30 @@ const PROTECTED_API_PARTNER = apiRoutes.filter((r) => r.url.startsWith("/api/par
   && !INTENTIONALLY_PUBLIC.has(r.url));
 const PROTECTED_PAGES_ADMIN = pageRoutes.filter((r) => r === "/admin" || r.startsWith("/admin/"));
 const PROTECTED_PAGES_ACCOUNT = pageRoutes.filter((r) => r.startsWith("/account/")
-  // The unauthenticated entry points.
-  && !["/account/login", "/account/forgot-password", "/account/reset-password"].includes(r));
+  // The unauthenticated entry points, and they are the SAME four the wall
+  // itself exempts (lib/access-policy.ts, PUBLIC_PREFIXES).
+  //
+  // /account/auth/callback was missing here, and its absence cost this harness
+  // its most valuable property: a clean run. Every run reported
+  //
+  //     guest (1):  200 GET /account/auth/callback — guest must be bounced
+  //
+  // which is not a defect. That page is where Google and Apple RETURN, so a
+  // guest reaching it is the entire point; gating it would bounce every OAuth
+  // sign-in back to the form it just came from. It holds no catalogue and no
+  // account data of its own — oauth-signin.test.ts pins exactly that — and it
+  // establishes nothing on its own say-so: the token it receives is verified
+  // against GoTrue by /api/auth/session before any cookie is written.
+  //
+  // A permanent known-false finding is worse than no finding, because the next
+  // real one arrives as "2 findings" and reads as the same noise.
+  //
+  // Kept as a literal list rather than imported from access-policy.ts ON
+  // PURPOSE: this harness is only worth running while its expectations are
+  // INDEPENDENT of the code under test. Import them and a route wrongly made
+  // public stops being probed instead of being reported.
+  && !["/account/login", "/account/forgot-password", "/account/reset-password",
+       "/account/auth/callback"].includes(r));
 
 // ---------------------------------------------------------------------------
 // Roles

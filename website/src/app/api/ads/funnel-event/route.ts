@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getRequestIpAddress } from "@/lib/admin-auth";
 import { checkRateLimit } from "@/lib/rate-limit";
@@ -33,6 +33,23 @@ import { credentialStatus, sendServerEvents } from "@/lib/ads/tiktok-events-api"
  * the SAME opaque acknowledgement, so an anonymous caller learns nothing it did
  * not already send. The one caller (lib/ads/relay-client.ts) is fire-and-forget
  * and never reads the body, so uniformity costs it nothing.
+ *
+ * AND IT SAYS NOTHING WITH ITS TIMING EITHER. Making every body identical only
+ * closed half the oracle. The relay AWAITED the TikTok call, and that call only
+ * happens when a line matched the catalogue — so a real slug answered a TikTok
+ * round trip later than an unknown one, and the same enumeration was available
+ * to anyone with a stopwatch. In production both gates are open
+ * (`credentialStatus().configured` and `serverAdsReportingAllowed()`), which is
+ * exactly where it mattered; the harness cannot reproduce it because the second
+ * gate denies outside a production deployment, so this one is reasoned from the
+ * code rather than measured locally, and closed the same way regardless.
+ *
+ * Everything that touches the catalogue therefore runs in `after()`: the reply
+ * is sent first, and the lookup, the pricing decision and the delivery all
+ * happen behind it. The response time now depends on the rate limiter and the
+ * request body alone — neither of which knows what is in the catalogue. It is
+ * also simply faster for the shopper whose page fired the relay, which used to
+ * wait on TikTok for nothing.
  *
  * It never fails loudly. A measurement relay returning an error to a product
  * page would trade a reporting gap for a broken page, which is the wrong way
@@ -78,61 +95,71 @@ export async function POST(request: Request) {
       return NextResponse.json(ACK, { status: 200, headers: { "cache-control": "no-store" } });
     }
 
-    // The catalogue is the price authority. sale_price_cents wins when set,
-    // exactly as the storefront resolves it.
-    const catalog = new Map<string, CatalogEntry>();
-    const { data: products } = await supabaseAdmin
-      .from("products")
-      .select("slug, name, price_cents, sale_price_cents")
-      .in("slug", slugs);
-    for (const row of (products ?? []) as {
-      slug?: string;
-      name?: string | null;
-      price_cents?: number | null;
-      sale_price_cents?: number | null;
-    }[]) {
-      if (!row.slug) continue;
-      const cents = Number(row.sale_price_cents) > 0 ? Number(row.sale_price_cents) : Number(row.price_cents ?? 0);
-      catalog.set(row.slug, { slug: row.slug, name: row.name ?? null, price: cents / 100 });
-    }
+    // Read off the request before the response is sent; `request` is not
+    // something to reach into from a deferred callback.
+    const userAgent = request.headers.get("user-agent");
+    const ttclid =
+      typeof body.ttclid === "string" && body.ttclid.trim() ? body.ttclid.trim().slice(0, 260) : null;
+    const pageUrl = typeof body.pageUrl === "string" ? body.pageUrl.slice(0, 1200) : undefined;
+    const lines = Array.isArray(body.lines) ? body.lines : [];
+    const event = String(body.event ?? "");
+    const eventId = String(body.eventId ?? "");
+    const claimedTotal = body.claimedTotal;
 
-    const decision = decideRelay(
-      {
-        event: String(body.event ?? ""),
-        eventId: String(body.eventId ?? ""),
-        lines: Array.isArray(body.lines) ? body.lines : [],
-        claimedTotal: body.claimedTotal,
-      },
-      catalog,
-    );
+    // EVERYTHING BELOW TOUCHES THE CATALOGUE, SO NONE OF IT MAY HAPPEN BEFORE
+    // THE REPLY. See the header: awaiting it made the response time itself an
+    // existence oracle. `after` also keeps the work reliable on Vercel, which a
+    // bare un-awaited promise would not.
+    after(async () => {
+      try {
+        // The catalogue is the price authority. sale_price_cents wins when set,
+        // exactly as the storefront resolves it.
+        const catalog = new Map<string, CatalogEntry>();
+        const { data: products } = await supabaseAdmin
+          .from("products")
+          .select("slug, name, price_cents, sale_price_cents")
+          .in("slug", slugs);
+        for (const row of (products ?? []) as {
+          slug?: string;
+          name?: string | null;
+          price_cents?: number | null;
+          sale_price_cents?: number | null;
+        }[]) {
+          if (!row.slug) continue;
+          const cents = Number(row.sale_price_cents) > 0 ? Number(row.sale_price_cents) : Number(row.price_cents ?? 0);
+          catalog.set(row.slug, { slug: row.slug, name: row.name ?? null, price: cents / 100 });
+        }
 
-    if (!decision.ok) {
-      return NextResponse.json(ACK, { status: 200, headers: { "cache-control": "no-store" } });
-    }
+        const decision = decideRelay({ event, eventId, lines, claimedTotal }, catalog);
+        if (!decision.ok) return;
 
-    // Fire-and-forget: the delivery outcome is deliberately not surfaced (that
-    // was half the oracle). We still await so a thrown error hits the catch.
-    await sendServerEvents([
-      {
-        event: decision.event,
-        eventId: decision.eventId,
-        occurredAt: new Date(),
-        user: {
-          // The click id is the strongest match signal available for a visitor
-          // who has not identified themselves. Null for organic traffic, and
-          // null is the correct answer there — never substitute anything.
-          ttclid: typeof body.ttclid === "string" && body.ttclid.trim() ? body.ttclid.trim().slice(0, 260) : null,
-          ip,
-          userAgent: request.headers.get("user-agent"),
-        },
-        properties: {
-          contents: decision.contents,
-          currency: "USD",
-          value: decision.value,
-        },
-        pageUrl: typeof body.pageUrl === "string" ? body.pageUrl.slice(0, 1200) : undefined,
-      },
-    ]);
+        await sendServerEvents([
+          {
+            event: decision.event,
+            eventId: decision.eventId,
+            occurredAt: new Date(),
+            user: {
+              // The click id is the strongest match signal available for a
+              // visitor who has not identified themselves. Null for organic
+              // traffic, and null is the correct answer there — never
+              // substitute anything.
+              ttclid,
+              ip,
+              userAgent,
+            },
+            properties: {
+              contents: decision.contents,
+              currency: "USD",
+              value: decision.value,
+            },
+            pageUrl,
+          },
+        ]);
+      } catch {
+        // A measurement failure is a measurement failure. It has already been
+        // acknowledged to the page and there is nobody left to tell.
+      }
+    });
 
     // Uniform ack — outcome.delivered / decision.totalOverridden are NOT
     // returned, or they would re-open the price/existence oracle this closes.

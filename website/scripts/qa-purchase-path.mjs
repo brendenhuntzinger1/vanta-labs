@@ -323,6 +323,95 @@ async function sellableCartItem() {
   return null;
 }
 
+/**
+ * A CONFIRMED CUSTOMER, BECAUSE THE STORE NO LONGER HAS GUESTS.
+ *
+ * This harness was written when the catalogue was open and checkout was
+ * reachable signed out. It is not: access-policy.ts closed the default, so
+ * /products, /cart and /checkout all answer 307 to the portal for anyone
+ * without a session. What that did to this file is worse than a failure — the
+ * first step could not find a product link, `create-session` answered 401, and
+ * TEN of the eighteen steps reported SKIP: "no order to settle". The receipt
+ * test, the exactly-one-confirmation test and the webhook-retry idempotency
+ * test — the reasons this harness exists — had stopped running, and the run
+ * still printed a tidy summary.
+ *
+ * So the shopper signs in first. The account is created and confirmed in SQL
+ * (the signup path has its own coverage in qa-customer-journey.mjs, and mailing
+ * a confirmation link here would only test the mailer), and the SIGN-IN is
+ * driven through the real portal, because that is the screen every customer now
+ * meets and a programmatic cookie would skip it.
+ */
+async function createConfirmedCustomer(email, password, fullName) {
+  await q(
+    `insert into auth.users (email, encrypted_password, raw_user_meta_data, raw_app_meta_data,
+                             email_confirmed_at, created_at)
+     values ($1, $2, $3, '{"role":"customer"}'::jsonb, now(), now())
+     on conflict (email) do update
+       set encrypted_password = excluded.encrypted_password,
+           email_confirmed_at = now()`,
+    [email, password, JSON.stringify({ full_name: fullName, role: "customer" })],
+  );
+}
+
+/**
+ * Sign in through the portal exactly as a returning customer does.
+ *
+ * The first screen is the access portal and carries no email field at all —
+ * "Sign in with email" opens the form. That button is deliberately NOT gated on
+ * the two attestations (a returning customer made them when they signed up), so
+ * nothing is ticked here; ticking would prove the wrong thing.
+ */
+async function attemptSignIn(page, email, password) {
+  await page.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector("form, .vl-portal-row", { timeout: 15000 });
+
+  // The portal is the normal entry. A context arriving with a message from an
+  // email link opens on the form already, so opening it is best-effort.
+  const hasField = async () => (await page.$("form input[type=email]")) !== null;
+  for (let attempt = 0; attempt < 5 && !(await hasField()); attempt += 1) {
+    await page.evaluate(() => {
+      const b = [...document.querySelectorAll("button")]
+        .find((x) => x.textContent.trim() === "Sign in with email");
+      if (b) b.click();
+    });
+    await page.waitForTimeout(600);
+  }
+  if (!(await hasField())) throw new Error("the portal never opened the email sign-in form");
+
+  await page.fill("form input[type=email]", email);
+  await page.fill("form input[type=password]", password);
+
+  // WAIT FOR THE RESPONSE THAT WRITES THE COOKIE, NOT FOR A CLOCK OR A PROBE.
+  //
+  // A first attempt polled /api/account/me from inside the page. That races the
+  // navigation the form performs on success: the fetch can be issued before the
+  // Set-Cookie lands, and the execution context is torn down underneath it, so
+  // a sign-in that worked reported as one that had not. The cookie is the thing
+  // every other step here depends on, so the cookie is what this returns.
+  await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().includes("/api/auth/session") && r.request().method() === "POST",
+      { timeout: 25000 },
+    ).catch(() => null),
+    page.click("form button[type=submit]"),
+  ]);
+  await page.waitForTimeout(1500);
+  return (await page.context().cookies()).some((c) => c.name === "vl_session_token");
+}
+
+/**
+ * The same thing, for the steps that require it to have worked. Kept separate
+ * because one step SHOULD be refused — an unconfirmed address must not sign in
+ * — and a helper that throws would turn that correct refusal into a failure.
+ */
+async function signInThroughPortal(page, email, password) {
+  if (!(await attemptSignIn(page, email, password))) {
+    const text = await page.evaluate(() => document.body.innerText.slice(0, 200));
+    throw new Error(`sign-in did not establish a session: ${text}`);
+  }
+}
+
 async function main() {
   const CHROME = process.env.QA_CHROMIUM
     ?? ["/opt/pw-browsers/chromium-1194/chrome-linux/chrome", "/opt/pw-browsers/chromium/chrome-linux/chrome"]
@@ -331,23 +420,26 @@ async function main() {
   const context = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
   const page = await context.newPage();
 
-  const GUEST_EMAIL = `guest.${stamp}@example.test`;
+  const GUEST_EMAIL = `shopper.${stamp}@example.test`;
+  const SHOPPER_PASSWORD = "HarnessPass123!";
   const PAY_EVENT_ID = `qa_evt_${randomUUID()}`;
 
-  // ---- 1. Guest checkout -------------------------------------------------
-  section("1. Guest checkout");
+  // ---- 1. Checkout -------------------------------------------------------
+  section("1. Signed-in checkout");
 
-  await step("a guest can shop and reach checkout without an account", async () => {
+  await step("a customer can sign in, shop and reach checkout", async () => {
+    await createConfirmedCustomer(GUEST_EMAIL, SHOPPER_PASSWORD, "Harness Shopper");
+    await signInThroughPortal(page, GUEST_EMAIL, SHOPPER_PASSWORD);
     await passAgeGate(page);
     const product = await addFirstProductToCart(page);
-    assert(product, "could not add a product to the cart as a guest");
+    assert(product, "could not add a product to the cart");
 
     await page.goto(`${BASE}/checkout`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(3000);
-    assert(!/\/account\/login/.test(page.url()), "checkout forced a guest to sign in");
+    assert(!/\/account\/login/.test(page.url()), "checkout bounced a signed-in customer back to the portal");
     const text = await page.evaluate(() => document.body.innerText);
     assert(!/your cart is empty/i.test(text), "the cart was empty at checkout");
-    return `added ${product}, reached checkout as a guest`;
+    return `signed in, added ${product}, reached checkout`;
   });
 
   await step("checkout refuses an order with the compliance boxes unticked", async () => {
@@ -608,13 +700,8 @@ async function main() {
 
     const ctx = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const p = await ctx.newPage();
+    await signInThroughPortal(p, GUEST_EMAIL, "HarnessPass123!");
     await passAgeGate(p);
-    await p.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
-    await p.waitForTimeout(1000);
-    await p.fill("form input[type=email]", GUEST_EMAIL);
-    await p.fill("form input[type=password]", "HarnessPass123!");
-    await p.click("form button[type=submit]");
-    await p.waitForTimeout(3500);
 
     await p.goto(`${BASE}/account/orders`, { waitUntil: "domcontentloaded" });
     await p.waitForTimeout(3000);
@@ -647,12 +734,7 @@ async function main() {
     const ctx = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const p = await ctx.newPage();
     await passAgeGate(p);
-    await p.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
-    await p.waitForTimeout(1000);
-    await p.fill("form input[type=email]", `claim.${stamp}@example.test`);
-    await p.fill("form input[type=password]", "HarnessPass123!");
-    await p.click("form button[type=submit]");
-    await p.waitForTimeout(3500);
+    await attemptSignIn(p, `claim.${stamp}@example.test`, "HarnessPass123!");
     await p.goto(`${BASE}/account/orders`, { waitUntil: "domcontentloaded" });
     await p.waitForTimeout(2500);
     const text = await p.evaluate(() => document.body.innerText);
@@ -680,12 +762,7 @@ async function main() {
     const ctx = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const p = await ctx.newPage();
     await passAgeGate(p);
-    await p.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
-    await p.waitForTimeout(1000);
-    await p.fill("form input[type=email]", MEMBER_EMAIL);
-    await p.fill("form input[type=password]", "HarnessPass123!");
-    await p.click("form button[type=submit]");
-    await p.waitForTimeout(3500);
+    await attemptSignIn(p, MEMBER_EMAIL, "HarnessPass123!");
     const signedIn = (await ctx.cookies()).some((c) => c.name === "vl_session_token");
     if (!signedIn) { await ctx.close(); return SKIP("could not sign the customer in"); }
 
@@ -751,12 +828,7 @@ async function main() {
     const ctx = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const p = await ctx.newPage();
     await passAgeGate(p);
-    await p.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
-    await p.waitForTimeout(1000);
-    await p.fill("form input[type=email]", MEMBER_EMAIL);
-    await p.fill("form input[type=password]", "HarnessPass123!");
-    await p.click("form button[type=submit]");
-    await p.waitForTimeout(3500);
+    await attemptSignIn(p, MEMBER_EMAIL, "HarnessPass123!");
 
     await p.goto(`${BASE}/order-confirmation/${encodeURIComponent(signedInOrder)}`, { waitUntil: "domcontentloaded" });
     await p.waitForTimeout(3000);
@@ -786,21 +858,28 @@ async function main() {
     const tab1 = await ctx.newPage();
     await passAgeGate(tab1);
 
-    // Tab 1: an UNVERIFIED customer gets as far as checkout with a cart.
+    // TAB 1: AN UNVERIFIED ACCOUNT DOES NOT GET INTO THE STORE AT ALL.
+    //
+    // This step used to shop and reach checkout here, on the assumption that an
+    // unverified customer could browse. The wall requires a VERIFIED session
+    // (middleware.ts, sessionIsVerified), so /products answers 307 and there is
+    // no product link to click — which failed as "could not find a product
+    // link" and read like a broken catalogue. That refusal is the product
+    // working, so it is now the first assertion rather than the failure.
+    //
+    // WHAT IS *NOT* ASSERTED HERE, AND WHY. "An unconfirmed account cannot sign
+    // in" is a GoTrue rule, and gotrue-shim.mjs says in its own header that it
+    // does not implement email confirmation — it mints a token for anybody with
+    // the right password. Asserting the refusal here would fail against the
+    // harness while production, where GoTrue holds that gate, is fine: a
+    // harness limitation reported as a product defect. The app-side control
+    // that IS testable — an unconfirmed address cannot claim somebody's orders
+    // — is proven in section 3 above (ownershipEmail in lib/order-ownership).
+    // So this step stays on the ground it can actually stand on: signed out,
+    // the catalogue is closed; confirmed, the same person shops.
     await tab1.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
     await tab1.waitForTimeout(1500);
-    const href = await tab1.$eval('a[href^="/products/"]', (a) => a.getAttribute("href"));
-    await tab1.goto(`${BASE}${href}`, { waitUntil: "domcontentloaded" });
-    await tab1.waitForTimeout(2000);
-    await tab1.evaluate(() => {
-      const b = [...document.querySelectorAll("button")]
-        .find((x) => /add to cart|add to bag/i.test(x.textContent || "") && !x.disabled);
-      if (b) b.click();
-    });
-    await tab1.waitForTimeout(2000);
-    await tab1.goto(`${BASE}/checkout`, { waitUntil: "domcontentloaded" });
-    await tab1.waitForTimeout(2500);
-    const checkoutReachable = !/\/account\/login/.test(tab1.url());
+    const walledBefore = /\/account\/login/.test(tab1.url());
 
     // Tab 2: the same person follows the confirmation link from their email.
     const tab2 = await ctx.newPage();
@@ -810,20 +889,25 @@ async function main() {
     const confirmed = (await q("select email_confirmed_at from auth.users where id = $1", [row.id]))
       .rows[0].email_confirmed_at;
 
-    // Back to tab 1: the cart and the page must have survived.
+    // Back to tab 1: now verified, the same person shops and keeps the basket.
     await tab1.bringToFront();
+    await tab1.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
+    await tab1.waitForTimeout(2000);
+    const product = await addFirstProductToCart(tab1);
+
     await tab1.goto(`${BASE}/cart`, { waitUntil: "domcontentloaded" });
     await tab1.waitForTimeout(2500);
     const cartText = await tab1.evaluate(() => document.body.innerText);
-    const cartSurvived = !/your cart is empty/i.test(cartText);
+    const cartHolds = !/your cart is empty/i.test(cartText);
 
     await tab2.close();
     await ctx.close();
 
-    assert(checkoutReachable, "an unverified customer could not reach checkout at all");
+    assert(walledBefore, "a signed-out visitor reached the catalogue");
     assert(confirmed, "the second tab did not verify the account");
-    assert(cartSurvived, "verifying in another tab emptied the cart in the checkout tab");
-    return "checkout survived a verification in another tab";
+    assert(product, "a verified customer could not add a product after confirming in another tab");
+    assert(cartHolds, "the cart was empty after confirming in another tab");
+    return "walled before, shopping after — verification in tab 2 opened tab 1";
   });
 
   await step("returning to the original tab picks the verification up", async () => {
@@ -865,12 +949,11 @@ async function main() {
     // where they were refused before verification — is also fine. What is NOT
     // fine is the customer being stuck: verified elsewhere and still locked out
     // of the tab they started in. That is the assertion.
-    const stillOnLogin = Boolean(await tab1.$("form input[type=email]"));
+    const stillOnLogin = /\/account\/login/.test(tab1.url());
     if (stillOnLogin) {
-      await tab1.fill("form input[type=email]", email);
-      await tab1.fill("form input[type=password]", "HarnessPass123!");
-      await tab1.click("form button[type=submit]");
-      await tab1.waitForTimeout(3500);
+      // attemptSignIn re-opens the portal's email form, which the tab is now
+      // sitting in front of rather than the form it used to show directly.
+      await attemptSignIn(tab1, email, "HarnessPass123!");
     }
 
     const signedIn = (await ctx.cookies()).some((c) => c.name === "vl_session_token");
