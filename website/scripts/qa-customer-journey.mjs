@@ -411,7 +411,7 @@ async function main() {
   })();
 
   const browser = await chromium.launch(CHROME ? { executablePath: CHROME } : {});
-  const context = await browser.newContext({
+  const context = await browser.newContext({ ignoreHTTPSErrors: true, 
     viewport: { width: 1280, height: 900 },
     extraHTTPHeaders: { "x-real-ip": CLIENT_IP },
   });
@@ -878,7 +878,7 @@ async function main() {
     // reload must be the numbers they see WITH one. Any difference is the stale
     // client state, and it is what the audit means by "a customer must never
     // require a hard refresh to receive the correct pricing or shipping".
-    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true,  extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const p = await ctx.newPage();
 
     // Arrive the way a paid click does: ask for the catalogue, meet the portal.
@@ -914,17 +914,31 @@ async function main() {
     await clickTo('a[href="/cart"]');
     await p.waitForTimeout(2000);
 
-    /** The three summary rows, read by their labels. */
+    /**
+     * The money rows, keyed by what they MEAN rather than by their exact words.
+     *
+     * A first version matched /^(subtotal|shipping|total)/ on the label. The
+     * cart's shipping row is labelled "Estimated shipping", so it matched
+     * nothing — and shipping is the row the stale-config bug actually moved
+     * ($15 anonymous default on a store that ships free). The check passed on
+     * the subtotal alone and would not have seen the regression it exists for.
+     */
     const summary = () => p.evaluate(() => {
+      const key = (label) => {
+        if (/subtotal/.test(label)) return "subtotal";
+        if (/shipping protection/.test(label)) return "shipping protection";
+        if (/shipping/.test(label)) return "shipping";
+        if (/total/.test(label)) return "total";
+        return null;
+      };
       const rows = {};
       for (const el of document.querySelectorAll("div, li")) {
         const spans = el.querySelectorAll(":scope > span");
         if (spans.length !== 2) continue;
         const label = (spans[0].textContent || "").trim().toLowerCase();
         const value = (spans[1].textContent || "").trim();
-        if (/^(subtotal|shipping|total)/.test(label) && /\$|free|calculated/i.test(value)) {
-          rows[label.split("(")[0].trim()] = value;
-        }
+        const k = key(label);
+        if (k && /\$|free|calculated/i.test(value)) rows[k] = value;
       }
       return { rows, empty: /your cart is empty/i.test(document.body.innerText) };
     });
@@ -932,6 +946,8 @@ async function main() {
     const beforeReload = await summary();
     assert(!beforeReload.empty, "the cart was empty after adding an item");
     assert(Object.keys(beforeReload.rows).length > 0, "no summary rows were readable on /cart");
+    assert("shipping" in beforeReload.rows,
+      `the shipping row was not readable, so the row the stale-config bug moves went unchecked (read: ${Object.keys(beforeReload.rows).join(", ") || "none"})`);
 
     await p.reload({ waitUntil: "domcontentloaded" });
     await p.waitForTimeout(2500);
@@ -1076,7 +1092,7 @@ async function main() {
     // The opposite of the reload case above. Arriving with no recovery session
     // at all — an expired link, or someone who just typed the URL — must not
     // offer a no-current-password form, and must say why.
-    const other = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const other = await browser.newContext({ ignoreHTTPSErrors: true,  extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const o = await other.newPage();
     await passAgeGate(o);
     await o.goto(`${BASE}/account/reset-password`, { waitUntil: "domcontentloaded" });
@@ -1203,7 +1219,7 @@ async function main() {
   section("11. Mobile");
 
   await step("the whole signed-in journey works at 390x844 with no sideways scroll", async () => {
-    const mobile = await browser.newContext({ viewport: MOBILE, isMobile: true, hasTouch: true, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const mobile = await browser.newContext({ ignoreHTTPSErrors: true,  viewport: MOBILE, isMobile: true, hasTouch: true, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const m = await mobile.newPage();
     await passAgeGate(m);
     await signIn(m, EMAIL, NEW_PASSWORD);
@@ -1224,7 +1240,7 @@ async function main() {
   section("12. A second device");
 
   await step("signing in on a second device does not disturb the first", async () => {
-    const second = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const second = await browser.newContext({ ignoreHTTPSErrors: true,  extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const s = await second.newPage();
     await passAgeGate(s);
     await signIn(s, EMAIL, NEW_PASSWORD);
@@ -1241,7 +1257,7 @@ async function main() {
   await step("a password reset elsewhere does not silently leave a stale session usable", async () => {
     // Policy question, so this REPORTS rather than asserts a direction: what
     // matters is that the behaviour is known and deliberate, not accidental.
-    const second = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const second = await browser.newContext({ ignoreHTTPSErrors: true,  extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const s = await second.newPage();
     await passAgeGate(s);
     await signIn(s, EMAIL, NEW_PASSWORD);
@@ -1450,7 +1466,7 @@ async function main() {
     // somebody else is in the account. /account/reset-password already revoked
     // other sessions; settings did not, so the same act had two different
     // security outcomes depending on which page you did it from.
-    const other = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const other = await browser.newContext({ ignoreHTTPSErrors: true,  extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const o = await other.newPage();
     await passAgeGate(o);
     await signIn(o, EMAIL, THIRD_PASSWORD);
@@ -1661,7 +1677,7 @@ async function main() {
   section("16. In-app browser");
 
   await step("sign-in works when localStorage throws, as it does in some webviews", async () => {
-    const webview = await browser.newContext({
+    const webview = await browser.newContext({ ignoreHTTPSErrors: true, 
       userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 "
         + "(KHTML, like Gecko) Mobile/15E148 Instagram 300.0.0.0",
       viewport: MOBILE,

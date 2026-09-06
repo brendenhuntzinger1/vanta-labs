@@ -175,7 +175,11 @@ const CLIENT_IP = (() => {
  * address. Assigned in main(); declared here because the helper closes over it.
  */
 let browser;
-const newContext = (extra = {}) => browser.newContext({
+// TLS-tolerant, because the harness is sometimes fronted by tls-proxy.mjs
+// with a self-signed pair — the configuration WebKit needs before it will
+// store the Secure session cookie at all (BROWSER-TESTING-RUNBOOK §5c).
+// Loopback only; it can reach nothing else.
+const newContext = (extra = {}) => browser.newContext({ ignoreHTTPSErrors: true,
   ...extra,
   extraHTTPHeaders: { "x-real-ip": CLIENT_IP, ...(extra.extraHTTPHeaders ?? {}) },
 });

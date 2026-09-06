@@ -28,6 +28,7 @@
 //   ENGINE=firefox VIEWPORT=375 node scripts/qa-cross-engine-journey.mjs
 // ---------------------------------------------------------------------------
 
+import { randomBytes } from "node:crypto";
 import * as pw from "playwright-core";
 
 const BASE = process.env.QA_BASE_URL || "http://127.0.0.1:3000";
@@ -67,6 +68,28 @@ const VIEWPORTS = {
 };
 const ONLY = process.env.VIEWPORT;
 
+/**
+ * A CLIENT IP THIS RUN HAS TO ITSELF.
+ *
+ * Every context here shares one loopback address otherwise, so a second run
+ * inside the limiter's window arrives at a bucket the first one spent: the
+ * journey then collects 429s and the console-error check reports them as a
+ * site defect. 100.64.0.0/10 is carrier-grade NAT — never routable — and three
+ * random octets give ~16 million addresses. The same reasoning as
+ * qa-customer-journey.mjs and qa-purchase-path.mjs, which were given their own
+ * addresses for exactly this.
+ */
+/**
+ * FRESH PER VIEWPORT, not per process. One address for all three viewports left
+ * the third one arriving at a bucket the first two had spent, so the journey
+ * collected 429s and the console-error check reported the limiter working as a
+ * site defect.
+ */
+const clientIp = () => {
+  const [a, b, c] = randomBytes(3);
+  return `100.${64 + (a % 64)}.${b}.${(c % 254) + 1}`;
+};
+
 const results = [];
 let failures = 0;
 
@@ -98,6 +121,12 @@ async function run(name, viewport) {
   const browser = await launcher.launch(LAUNCH);
   const ctx = await browser.newContext({
     viewport,
+    extraHTTPHeaders: { "x-real-ip": clientIp() },
+    // The TLS-fronted harness serves a self-signed pair. Needed for WebKit,
+    // which refuses to store the Secure session cookie over plain http and
+    // therefore cannot be certified on the http port at all — see
+    // docs/BROWSER-TESTING-RUNBOOK.md §5c. Inert on http.
+    ignoreHTTPSErrors: true,
     // Firefox does not implement Playwright's mobile emulation.
     ...(viewport.width < 500 && ENGINE !== "firefox" ? { isMobile: true, hasTouch: true } : {}),
   });
@@ -192,14 +221,35 @@ async function run(name, viewport) {
         over: de.scrollWidth > vw + 1,
         by: de.scrollWidth - vw,
         empty: /your cart is empty/i.test(text),
+        // The word the cart uses for its own number, and the sentence beneath
+        // it. "Estimated total" plus a named pending charge is what makes a
+        // later increase honest rather than a surprise.
+        // NOT the first label containing "total" — that is "Subtotal", which
+        // matched and made the disclosure check read the wrong row.
+        totalLabel: ([...document.querySelectorAll("div, li")]
+          .map((el) => el.querySelectorAll(":scope > span"))
+          .filter((sp) => sp.length === 2
+            && /total/i.test(sp[0].textContent || "")
+            && !/subtotal/i.test(sp[0].textContent || ""))
+          .map((sp) => (sp[0].textContent || "").trim())[0]) || "",
+        pendingNotice: (text.match(/[^.\n]*(service fee|sales tax is calculated)[^.\n]*\./i) || [""])[0].trim(),
         // The summary rows, read by label, so the numbers can be compared with
         // the ones checkout shows.
+        // Keyed by MEANING, not by wording: the cart says "Estimated shipping"
+        // and checkout says "Shipping", so matching the literal label compares
+        // the two screens on the subtotal alone and misses the row that
+        // free-shipping-sitewide actually moves.
         rows: [...document.querySelectorAll("div, li")].reduce((acc, el) => {
           const spans = el.querySelectorAll(":scope > span");
           if (spans.length !== 2) return acc;
-          const label = (spans[0].textContent || "").trim().toLowerCase().split("(")[0].trim();
+          const label = (spans[0].textContent || "").trim().toLowerCase();
           const value = (spans[1].textContent || "").trim();
-          if (/^(subtotal|shipping|total)/.test(label) && /\$|free|calculated/i.test(value)) acc[label] = value;
+          const key = /subtotal/.test(label) ? "subtotal"
+            : /shipping protection/.test(label) ? "shipping protection"
+            : /shipping/.test(label) ? "shipping"
+            : /total/.test(label) ? "total"
+            : null;
+          if (key && /\$|free|calculated/i.test(value)) acc[key] = value;
           return acc;
         }, {}),
       };
@@ -220,12 +270,21 @@ async function run(name, viewport) {
         by: de.scrollWidth - vw,
         len: text.trim().length,
         hasEmail: Boolean(document.querySelector('input[type=email]')),
+        // Keyed by MEANING, not by wording: the cart says "Estimated shipping"
+        // and checkout says "Shipping", so matching the literal label compares
+        // the two screens on the subtotal alone and misses the row that
+        // free-shipping-sitewide actually moves.
         rows: [...document.querySelectorAll("div, li")].reduce((acc, el) => {
           const spans = el.querySelectorAll(":scope > span");
           if (spans.length !== 2) return acc;
-          const label = (spans[0].textContent || "").trim().toLowerCase().split("(")[0].trim();
+          const label = (spans[0].textContent || "").trim().toLowerCase();
           const value = (spans[1].textContent || "").trim();
-          if (/^(subtotal|shipping|total)/.test(label) && /\$|free|calculated/i.test(value)) acc[label] = value;
+          const key = /subtotal/.test(label) ? "subtotal"
+            : /shipping protection/.test(label) ? "shipping protection"
+            : /shipping/.test(label) ? "shipping"
+            : /total/.test(label) ? "total"
+            : null;
+          if (key && /\$|free|calculated/i.test(value)) acc[key] = value;
           return acc;
         }, {}),
       };
@@ -234,16 +293,37 @@ async function run(name, viewport) {
       !checkout.bounced && !checkout.over && checkout.len > 400 && checkout.hasEmail,
       checkout.bounced ? "bounced to the portal" : checkout.over ? `+${checkout.by}px` : `${checkout.len} chars`);
 
-    // THE ONE COMPARISON THAT MATTERS ON THIS SCREEN. A cart and a checkout that
-    // disagree about the subtotal is the shape of every pricing bug this store
-    // has had; the shipping row is where free-shipping-sitewide shows up.
-    const differ = ["subtotal", "shipping", "total"]
+    // THE ONE COMPARISON THAT MATTERS ON THIS SCREEN.
+    //
+    // Subtotal and shipping must match exactly: nothing legitimately moves
+    // between the two screens, and a disagreement there is the shape of every
+    // pricing bug this store has had. Shipping in particular is where
+    // free-shipping-sitewide shows up, and where the stale-config bug lived.
+    //
+    // THE TOTAL IS ALLOWED TO GROW, BUT ONLY IF THE CART SAID SO. A card
+    // service fee depends on the payment method, which is not chosen until
+    // checkout, so lib/cart-total-disclosure.ts renames the cart's number
+    // "Estimated total" and prints a sentence naming what is still to come.
+    // That is a deliberate, disclosed design, not drift — but an UNDISCLOSED
+    // difference is exactly the "Final total $344.96 became $355.31" defect
+    // that disclosure exists to prevent, so the test demands the disclosure.
+    const exact = ["subtotal", "shipping"]
       .filter((k) => cart.rows[k] && checkout.rows[k] && cart.rows[k] !== checkout.rows[k])
       .map((k) => `${k}: cart ${cart.rows[k]} vs checkout ${checkout.rows[k]}`);
-    const compared = ["subtotal", "shipping", "total"].filter((k) => cart.rows[k] && checkout.rows[k]);
-    record(`${tag}: the cart and checkout quote the same money`,
-      compared.length > 0 && differ.length === 0,
-      differ.length ? differ.join("; ") : compared.length ? `${compared.join(", ")} agree` : "no comparable rows on both screens");
+    const comparedExact = ["subtotal", "shipping"].filter((k) => cart.rows[k] && checkout.rows[k]);
+    record(`${tag}: the cart and checkout agree on subtotal and shipping`,
+      comparedExact.length > 0 && exact.length === 0,
+      exact.length ? exact.join("; ") : `${comparedExact.join(", ")} agree`);
+
+    const totalsMatch = cart.rows.total && checkout.rows.total && cart.rows.total === checkout.rows.total;
+    const estimateDisclosed = /estimated total/i.test(cart.totalLabel) && cart.pendingNotice.length > 0;
+    record(`${tag}: any change to the total between cart and checkout was disclosed on the cart`,
+      Boolean(totalsMatch || (cart.rows.total && checkout.rows.total && estimateDisclosed)),
+      totalsMatch
+        ? `both quote ${cart.rows.total}`
+        : cart.rows.total && checkout.rows.total
+          ? `cart ${cart.rows.total} (${cart.totalLabel || "no label"}) -> checkout ${checkout.rows.total}; notice: ${cart.pendingNotice.slice(0, 90) || "NONE"}`
+          : "no total row on one of the screens");
 
     record(`${tag}: no console errors across the journey`, consoleErrors.length === 0,
       consoleErrors.slice(0, 2).join(" | "));

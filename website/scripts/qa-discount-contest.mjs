@@ -55,14 +55,23 @@ async function passAgeGate(page) {
 
 async function login(page, email, password) {
   await page.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(1500);
-  // The email/password form is behind the "Sign in" choice; the landing state
-  // offers Google and account creation first.
-  await page.$$eval("button", (bs) => {
-    const b = bs.find((x) => /^sign in$/i.test((x.textContent ?? "").trim()));
-    if (b) b.click();
-  });
-  await page.waitForTimeout(1500);
+  await page.waitForSelector("form, .vl-portal-row", { timeout: 15000 }).catch(() => {});
+  // The email/password form is behind a door on the portal, and that door is
+  // labelled "Sign in with email". This matched /^sign in$/ — the old wording —
+  // so the click found nothing, the form never opened, and page.fill timed out
+  // thirty seconds later complaining about a selector rather than about the
+  // button. Retried because a click that lands before hydration does nothing.
+  for (let attempt = 0; attempt < 5 && !(await page.$("form input[type=email]")); attempt += 1) {
+    await page.evaluate(() => {
+      const b = [...document.querySelectorAll("button")]
+        .find((x) => x.textContent.trim() === "Sign in with email");
+      if (b) b.click();
+    });
+    await page.waitForTimeout(700);
+  }
+  if (!(await page.$("form input[type=email]"))) {
+    throw new Error("the portal never opened the email sign-in form");
+  }
   await page.fill("input[type=email]", email);
   await page.fill("input[type=password]", password);
   // The SUBMIT button, not the tab that revealed the form — both read "Sign
@@ -128,7 +137,7 @@ try {
     [EMAIL, PASSWORD, JSON.stringify({ full_name: "Contest Shopper", role: "customer" })],
   );
 
-  const ctx = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+  const ctx = await browser.newContext({ ignoreHTTPSErrors: true,  ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
   const page = await ctx.newPage();
 
   await passAgeGate(page);
