@@ -316,6 +316,69 @@ describeDb("the ROAS views, run against a real Postgres", () => {
   });
 
   // -------------------------------------------------------------------------
+  // THE SALE LANDS THE DAY AFTER THE CLICK
+  // -------------------------------------------------------------------------
+
+  describe("revenue on a day the ad did not spend", () => {
+    // Revenue arrives on the day of the ORDER; spend on the day of the CLICK.
+    // They are routinely different days — a click at 23:00 that converts at
+    // 00:30, an ad paused mid-flight that keeps converting, or the offset
+    // between the ad account's reporting day and UTC. A LEFT join from spend
+    // had no row to attach that revenue to and dropped it silently, so an ad
+    // returning 4x reported ROAS 0.00 and, because Winners and Losers are
+    // ranked by ROAS, was presented to the owner as the store's worst ad.
+    beforeAll(async () => {
+      await reset();
+      await addSpend([{ platform: "reddit", ad_id: "lag", stat_date: "2026-08-20", utm_content: "lag_hook", utm_campaign: "lag_c", spend: 100, clicks: 200, impressions: 5000 }]);
+      await addOrder({
+        order_id: "lagged", amount_paid: 400, created_at: "2026-08-21T10:00:00Z",
+        last_utm_source: "reddit", last_utm_campaign: "lag_c", last_utm_content: "lag_hook",
+      });
+    });
+
+    it("keeps the sale at the creative grain, on its own day", async () => {
+      const { rows } = await client.query(
+        `select stat_date::text, spend, orders, net_revenue, roas from ad_creative_roas_daily where utm_content='lag_hook' order by stat_date`,
+      );
+      expect(rows).toHaveLength(2);
+      expect(Number(rows[0].spend)).toBe(100);
+      expect(Number(rows[0].net_revenue)).toBe(0);
+      expect(Number(rows[1].spend)).toBe(0);
+      expect(Number(rows[1].net_revenue)).toBe(400);
+    });
+
+    it("reports ROAS as unknown on a day with no spend, never as a division by zero", async () => {
+      const { rows } = await client.query(
+        `select roas, cpa, ctr, cpc, cpm, cvr from ad_creative_roas_daily where utm_content='lag_hook' and spend = 0`,
+      );
+      for (const key of ["roas", "cpa", "ctr", "cpc", "cpm", "cvr"]) {
+        expect(rows[0][key], `${key} on a no-spend day`).toBeNull();
+      }
+    });
+
+    it("keeps it at the campaign grain too", async () => {
+      const { rows } = await client.query(
+        `select coalesce(sum(spend),0) spend, coalesce(sum(net_revenue),0) revenue from ad_campaign_daily where utm_campaign='lag_c'`,
+      );
+      expect(Number(rows[0].spend)).toBe(100);
+      expect(Number(rows[0].revenue)).toBe(400);
+    });
+
+    it("agrees with the platform grain, which already full-joined", async () => {
+      const creative = await client.query(`select coalesce(sum(net_revenue),0) r from ad_creative_roas_daily where platform='reddit'`);
+      const platform = await client.query(`select coalesce(sum(net_revenue),0) r from ad_platform_daily where platform='reddit'`);
+      expect(Number(creative.rows[0].r)).toBe(Number(platform.rows[0].r));
+    });
+
+    it("sums to the truth across the window: 400 against 100 is 4x", async () => {
+      const { rows } = await client.query(
+        `select sum(spend) spend, sum(net_revenue) revenue from ad_creative_roas_daily where utm_content='lag_hook'`,
+      );
+      expect(Number(rows[0].revenue) / Number(rows[0].spend)).toBe(4);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // LEAKAGE
   // -------------------------------------------------------------------------
 

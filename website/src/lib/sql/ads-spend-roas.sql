@@ -280,21 +280,46 @@ revenue as (
   where utm_content is not null
   group by 1, 2, 3
 )
+-- FULL JOIN, for the same reason the platform grain below already uses one:
+-- BOTH HALVES ARE INFORMATIVE ALONE, and a LEFT join from spend threw one of
+-- them away silently.
+--
+-- Revenue arrives on the day of the ORDER; spend on the day of the CLICK. They
+-- are routinely different days — a click at 23:00 that converts at 00:30, an ad
+-- paused mid-flight that keeps converting, or simply the offset between the ad
+-- account's reporting day and UTC. Every one of those produced a revenue row
+-- with no spend row to join to, and a LEFT join from spend dropped it.
+--
+-- Measured on the harness: $100 spent on 2026-08-20 on `lag_hook`, one $400
+-- order attributed to it on 2026-08-21. The platform grain showed both days
+-- correctly. This view showed ONE row — spend 100, revenue 0, ROAS 0.000 — and
+-- the $400 appeared nowhere. Because the dashboard ranks Winners and Losers by
+-- ROAS, that ad was listed as the store's worst performer while actually
+-- returning 4x, which is a decision-grade error: the owner kills it.
+--
+-- Keys are coalesced so a revenue-only row still carries its platform, day and
+-- tag. Spend-derived columns stay null on such a row and every ratio is already
+-- guarded, so ROAS on a no-spend day is null rather than a division by zero.
 select
-  s.platform, s.stat_date, s.utm_content, s.ad_name, s.campaign_name, s.ads,
-  s.spend, s.impressions, s.clicks,
+  coalesce(s.platform, r.platform)     as platform,
+  coalesce(s.stat_date, r.stat_date)   as stat_date,
+  coalesce(s.utm_content, r.utm_content) as utm_content,
+  s.ad_name, s.campaign_name, s.ads,
+  coalesce(s.spend, 0)       as spend,
+  coalesce(s.impressions, 0) as impressions,
+  coalesce(s.clicks, 0)      as clicks,
   s.platform_conversions,
   coalesce(r.orders, 0)      as orders,
   coalesce(r.net_revenue, 0) as net_revenue,
   coalesce(r.refunds, 0)     as refunds,
-  case when s.impressions > 0 then s.clicks::numeric / s.impressions end       as ctr,
-  case when s.clicks > 0 then s.spend / s.clicks end                           as cpc,
-  case when s.impressions > 0 then (s.spend / s.impressions) * 1000 end        as cpm,
-  case when s.clicks > 0 then coalesce(r.orders, 0)::numeric / s.clicks end    as cvr,
-  case when coalesce(r.orders, 0) > 0 then s.spend / r.orders end              as cpa,
-  case when s.spend > 0 then coalesce(r.net_revenue, 0) / s.spend end          as roas
+  case when coalesce(s.impressions, 0) > 0 then s.clicks::numeric / s.impressions end       as ctr,
+  case when coalesce(s.clicks, 0) > 0 then s.spend / s.clicks end                           as cpc,
+  case when coalesce(s.impressions, 0) > 0 then (s.spend / s.impressions) * 1000 end        as cpm,
+  case when coalesce(s.clicks, 0) > 0 then coalesce(r.orders, 0)::numeric / s.clicks end    as cvr,
+  case when coalesce(r.orders, 0) > 0 and coalesce(s.spend, 0) > 0 then s.spend / r.orders end as cpa,
+  case when coalesce(s.spend, 0) > 0 then coalesce(r.net_revenue, 0) / s.spend end          as roas
 from spend s
-left join revenue r
+full join revenue r
   on r.platform = s.platform and r.stat_date = s.stat_date and r.utm_content = s.utm_content;
 
 revoke all on public.ad_creative_roas_daily from anon, authenticated;
@@ -322,19 +347,27 @@ revenue as (
   where utm_campaign is not null
   group by 1, 2, 3
 )
+-- FULL JOIN for the same reason as the creative grain above: an order placed
+-- the day after the click had no spend row to join to and vanished.
 select
-  s.platform, s.stat_date, s.utm_campaign, s.campaign_name,
-  s.spend, s.impressions, s.clicks, s.platform_conversions,
+  coalesce(s.platform, r.platform)         as platform,
+  coalesce(s.stat_date, r.stat_date)       as stat_date,
+  coalesce(s.utm_campaign, r.utm_campaign) as utm_campaign,
+  s.campaign_name,
+  coalesce(s.spend, 0)       as spend,
+  coalesce(s.impressions, 0) as impressions,
+  coalesce(s.clicks, 0)      as clicks,
+  s.platform_conversions,
   coalesce(r.orders, 0)      as orders,
   coalesce(r.net_revenue, 0) as net_revenue,
-  case when s.impressions > 0 then s.clicks::numeric / s.impressions end       as ctr,
-  case when s.clicks > 0 then s.spend / s.clicks end                           as cpc,
-  case when s.impressions > 0 then (s.spend / s.impressions) * 1000 end        as cpm,
-  case when s.clicks > 0 then coalesce(r.orders, 0)::numeric / s.clicks end    as cvr,
-  case when coalesce(r.orders, 0) > 0 then s.spend / r.orders end              as cpa,
-  case when s.spend > 0 then coalesce(r.net_revenue, 0) / s.spend end          as roas
+  case when coalesce(s.impressions, 0) > 0 then s.clicks::numeric / s.impressions end       as ctr,
+  case when coalesce(s.clicks, 0) > 0 then s.spend / s.clicks end                           as cpc,
+  case when coalesce(s.impressions, 0) > 0 then (s.spend / s.impressions) * 1000 end        as cpm,
+  case when coalesce(s.clicks, 0) > 0 then coalesce(r.orders, 0)::numeric / s.clicks end    as cvr,
+  case when coalesce(r.orders, 0) > 0 and coalesce(s.spend, 0) > 0 then s.spend / r.orders end as cpa,
+  case when coalesce(s.spend, 0) > 0 then coalesce(r.net_revenue, 0) / s.spend end          as roas
 from spend s
-left join revenue r
+full join revenue r
   on r.platform = s.platform and r.stat_date = s.stat_date and r.utm_campaign = s.utm_campaign;
 
 revoke all on public.ad_campaign_daily from anon, authenticated;

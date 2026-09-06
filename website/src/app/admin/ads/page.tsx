@@ -205,12 +205,57 @@ function SpendEmptyState({ s }: { s: SpendDashboard }) {
 
 /** Rows exist but nothing will refresh them. Showing the numbers without saying
  *  so would present a frozen snapshot as current. */
+/**
+ * THE WARNING HAD TO BE ABLE TO FIRE FOR THE FAILURE THAT ACTUALLY HAPPENS.
+ *
+ * This tested one thing: whether WINDSOR_API_KEY is set. That is the failure
+ * nobody has — a missing key is noticed on the day it is configured. The one
+ * that happens is a key that IS set while the feed has stopped delivering: a
+ * revoked ad-account grant, an expired Windsor connection, a plan limit. On
+ * 2026-09-06 the live account was returning an account notice instead of data
+ * on all four connectors, with the key perfectly present.
+ *
+ * In that state this panel showed whatever last landed, with no indication that
+ * it was old — which is the same figure a genuinely quiet week produces. So it
+ * now also states the AGE of the newest row it has.
+ *
+ * The threshold is derived from the machinery, not picked: the sweep runs every
+ * 30 minutes (vercel.json) and the ingest self-limits to one fetch every
+ * MIN_HOURS_BETWEEN_RUNS = 6, so anything past a day is several missed windows
+ * and cannot be normal. It reports hours, so the operator can see the
+ * difference between "an hour late" and "four days dead".
+ */
+const STALE_AFTER_HOURS = 24;
+
 function StaleFeedNotice({ s }: { s: SpendDashboard }) {
-  if (s.feedConfigured || s.platforms.length === 0) return null;
+  if (s.platforms.length === 0) return null;
+
+  if (!s.feedConfigured) {
+    return (
+      <p className="mt-3 rounded-xl border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.05] px-3 py-2 text-[11px] leading-5 text-white/60">
+        These figures will not update: <code className="font-mono text-white/80">WINDSOR_API_KEY</code> is unset, so the
+        nightly job cannot fetch spend. What is shown is whatever last landed.
+      </p>
+    );
+  }
+
+  const lastRun = s.lastIngestedAt ? Date.parse(s.lastIngestedAt) : NaN;
+  if (Number.isNaN(lastRun)) {
+    return (
+      <p className="mt-3 rounded-xl border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.05] px-3 py-2 text-[11px] leading-5 text-white/60">
+        The key is configured but no spend has ever landed. Check the sweep&apos;s ad_spend_ingest job.
+      </p>
+    );
+  }
+
+  const hours = Math.floor((Date.now() - lastRun) / 3_600_000);
+  if (hours < STALE_AFTER_HOURS) return null;
+
   return (
     <p className="mt-3 rounded-xl border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.05] px-3 py-2 text-[11px] leading-5 text-white/60">
-      These figures will not update: <code className="font-mono text-white/80">WINDSOR_API_KEY</code> is unset, so the
-      nightly job cannot fetch spend. What is shown is whatever last landed.
+      <strong className="text-white/80">These figures are {hours} hours old.</strong> The key is set, so the feed is
+      answering with something the ingest will not accept — a revoked ad-account grant, an expired Windsor connection or
+      a plan limit. Spend since then is missing from every number on this page.
     </p>
   );
 }
