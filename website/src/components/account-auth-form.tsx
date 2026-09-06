@@ -88,6 +88,55 @@ export function AccountAuthForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const referralCodeFromUrl = searchParams.get("ref") ?? "";
+  // ---------------------------------------------------------------------
+  // THE AMBASSADOR'S OWN LINK CARRIES NO ?ref, AND AFTER THE WALL NOTHING DOES.
+  //
+  // `?ref=` was the only source of a referral at signup. Two changes removed
+  // every way for it to arrive:
+  //
+  //   * The shared link is /r/<code> (admin/partners builds it), and that route
+  //     puts the code in the vl_referral_code COOKIE and redirects to
+  //     /products. It never puts ?ref on a URL.
+  //   * The wall then rewrites even a hand-made ?ref out of the top level.
+  //     Measured: GET /products?ref=EXPLICIT15&ttclid=abc answers
+  //     location: /account/login?next=%2Fproducts%3Fref%3DEXPLICIT15%26ttclid%3Dabc
+  //     — the whole query buried inside `next`, where nothing reads it.
+  //
+  // So a new customer following an ambassador's link and being made to create
+  // an account signed up with no referred_by_code at all: awardReferralSignupBonus
+  // never fired, the customer never got the 100-point welcome bonus (real money
+  // at checkout) and the ambassador never got their referral bonus. Both awards
+  // are attempted at this one moment and guarded by a points_ledger lookup, so
+  // nothing backfills them — the loss was permanent and silent on every
+  // referred signup.
+  //
+  // The cookie is the thing the ambassador's link actually sets, so that is
+  // what this reads, with ?ref still winning when present. cart-context.tsx
+  // discovers the code exactly this way for the cart.
+  //
+  // DELIBERATELY NOT USED TO CHOOSE THE FORM'S MODE (see initialMode below).
+  // An explicit ?ref in the address bar is an invitation to JOIN and opens the
+  // signup form; a thirty-day cookie is not, and treating it as one would send
+  // every returning customer who ever followed an ambassador link to a signup
+  // form instead of the sign-in they asked for.
+  //
+  // Read in an effect rather than during render: the value is never rendered,
+  // only submitted, so there is nothing to mismatch at hydration and nothing to
+  // gain from reading it earlier.
+  const [referralCodeFromCookie, setReferralCodeFromCookie] = useState("");
+  useEffect(() => {
+    try {
+      const raw = document.cookie
+        .split("; ")
+        .find((entry) => entry.startsWith("vl_referral_code="))
+        ?.split("=")[1];
+      if (raw) setReferralCodeFromCookie(decodeURIComponent(raw));
+    } catch {
+      /* no cookie access: signup simply carries no referral, as before */
+    }
+  }, []);
+  /** What the new account should be attributed to. The URL wins; the cookie is the fallback. */
+  const referralCodeForSignup = referralCodeFromUrl || referralCodeFromCookie;
   const nextPath = safeNextPath(searchParams.get("next"));
   // A referral link is an invitation to JOIN, so it opens the signup form
   // directly. A verification return has an account already and must not be
@@ -401,7 +450,7 @@ export function AccountAuthForm() {
           password,
           fullName: fullName.trim(),
           businessType,
-          referredByCode: referralCodeFromUrl || "",
+          referredByCode: referralCodeForSignup || "",
           captchaToken: captchaToken ?? "",
           nextPath,
           marketingOptIn,
@@ -441,7 +490,7 @@ export function AccountAuthForm() {
             business_type: businessType,
             age_confirmed_21: true,
             research_use_only_agreed: true,
-            referred_by_code: referralCodeFromUrl || undefined,
+            referred_by_code: referralCodeForSignup || undefined,
           },
           emailRedirectTo: getEmailRedirectUrl(`/account/login?verified=1&next=${encodeURIComponent(nextPath)}`),
           captchaToken: captchaToken ?? undefined,
@@ -723,8 +772,8 @@ export function AccountAuthForm() {
         // a referred visitor is one tap from the door that used to drop this —
         // costing her the welcome points and the ambassador the referral bonus,
         // silently, with a success screen either way and no repair path.
-        if (referralCodeFromUrl) {
-          window.sessionStorage.setItem("vl-oauth-referral", referralCodeFromUrl);
+        if (referralCodeForSignup) {
+          window.sessionStorage.setItem("vl-oauth-referral", referralCodeForSignup);
         } else {
           window.sessionStorage.removeItem("vl-oauth-referral");
         }
