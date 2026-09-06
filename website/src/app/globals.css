@@ -2814,6 +2814,94 @@ select.vl-auth-field {
 }
 
 /* ---------------------------------------------------------------------------
+   PORTAL: THE FASTEST DOOR, LIT
+   ---------------------------------------------------------------------------
+   On the portal the provider button and "Create an account" used to carry the
+   same visual weight, so the screen offered two equal choices and made the
+   visitor decide between them. That is the wrong job for a front door: one of
+   these takes two taps and no typing, and the other is a form. This modifier
+   says which is which BEFORE either label is read.
+
+   It is a lift, not a colour change: a slightly brighter glass surface, an
+   ivory rim, and a gold-tinted pool of shadow underneath. The Google mark
+   keeps its own four colours untouched, as the brand guidelines require.
+   Placed after .vl-oauth-btn-lg so its hover state wins on source order at
+   equal specificity.
+
+   THE IVORY RIM AND THE GOLD HOVER ARE BOTH DELIBERATE, AND BOTH MOVED HERE.
+   This section's header states the rule: champagne is for small accents, the
+   PRIMARY ACTION IS IVORY. .vl-oauth-btn's own comment adds that provider
+   buttons get no gold on hover because they are "the alternative route they
+   are". On the portal that stopped being true — this button IS the primary
+   action now — so the ivory rim and the gold hover follow the role, exactly
+   as the rule describes, and .vl-auth-submit-quiet below gives up the gold in
+   the same move. This is the rule applied, not an exception carved out of it;
+   the pair only makes sense read together. */
+.vl-oauth-btn-primary {
+  border-color: rgba(226, 214, 190, 0.34);
+  background: rgba(255, 255, 255, 0.095);
+  color: #f6f4ef;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.15),
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 14px 32px -18px rgba(199, 174, 94, 0.42);
+}
+
+.vl-oauth-btn-primary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.13);
+  border-color: rgba(199, 174, 94, 0.55);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(199, 174, 94, 0.14),
+    0 18px 38px -18px rgba(199, 174, 94, 0.5);
+}
+
+/* THE MARKER ABOVE IT.
+   A pill, not a sticker: 10px uppercase in the house gold, on the same faint
+   gold wash the confirmed checkbox rows use, at a weight that reads as a label
+   on the composition rather than a promotion inside it. The bolt is drawn in
+   currentColor so Windows high contrast recolours it with the text instead of
+   dropping it, which is what happens to a background-image glyph. */
+.vl-fastest-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4375rem;
+  padding: 0.3125rem 0.6875rem;
+  border-radius: 999px;
+  border: 1px solid rgba(199, 174, 94, 0.28);
+  background: var(--accent-gold-soft);
+  color: var(--accent-gold);
+  font-size: 0.625rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+/* THE QUIETER SECOND DOOR.
+   "Create an account" keeps the full width and the 54px target — it is a real
+   choice, not a footnote — but steps back from the ivory rim so the hierarchy
+   between it and the provider button above is legible at a glance rather than
+   only on hover. Everything else about .vl-auth-submit still applies. */
+.vl-auth-submit-quiet {
+  border-color: rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.028);
+  color: rgba(246, 244, 239, 0.9);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.32);
+}
+
+.vl-auth-submit-quiet:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 1px 2px rgba(0, 0, 0, 0.32);
+}
+
+/* ---------------------------------------------------------------------------
    PORTAL: CHECKBOX ROWS WHERE THE WHOLE ROW IS THE TARGET
    ---------------------------------------------------------------------------
    Each row is a <label> wrapping its own input, so every pixel of it toggles
