@@ -521,12 +521,34 @@ describe("the portal makes the fastest path the obvious one", () => {
     expect(rendered).toContain("Sign in with email");
   });
 
-  it("cites only controls that are on the screen when it refuses", () => {
-    // The refusal names "both statements above", and after the reorder there
-    // are exactly two rows above the button. An error pointing at boxes that
-    // are somewhere else is how a gate starts feeling broken.
+  it("cites only controls that are on the screen in the refusal it cannot currently reach", () => {
+    // HONEST ABOUT WHAT THIS COVERS. Both call-to-action buttons carry a real
+    // `disabled` attribute, so a browser dispatches no click and this branch
+    // never runs — verified in the harness: clicking either while unticked
+    // produces no [role=alert]. The string is a fallback for the day the gate
+    // becomes a click-time refusal instead of a disabled attribute, and this
+    // asserts only that its wording still matches the card. It is NOT evidence
+    // that a visitor is ever told why the button is dim; the label above the
+    // rows is what does that job today.
     expect(rendered).toContain("Please confirm both statements above to continue.");
+    // "the first two statements" was true of a card with four rows above the
+    // button. There are two now, and a refusal that miscounts the screen is
+    // how a gate starts feeling broken.
     expect(rendered).not.toContain("first two statements");
+  });
+
+  it("does not dim the only door on the card when no provider is configured", () => {
+    // The quiet treatment ranks "Create an account" BELOW the provider button.
+    // Switch every provider off — one env var away, which is the whole point of
+    // lib/oauth-providers.ts — and the provider group disappears, leaving a
+    // deliberately-dimmed sole call to action with nothing to be ranked below.
+    const at = rendered.indexOf("vl-auth-submit-quiet");
+    expect(at, "expected the demotion to still be applied").toBeGreaterThan(-1);
+    const guard = rendered.lastIndexOf("hasAnyOAuthProvider()", at);
+    expect(guard, "vl-auth-submit-quiet is applied unconditionally").toBeGreaterThan(-1);
+    // and the guard is the ternary on the className itself, not the distant one
+    // that opens the provider block
+    expect(rendered.slice(guard, at)).toMatch(/^hasAnyOAuthProvider\(\)\s*\?\s*"$/);
   });
 });
 

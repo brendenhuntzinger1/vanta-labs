@@ -1065,7 +1065,16 @@ export function AccountAuthForm() {
             setMode("signup");
           }}
           disabled={!canEnter}
-          className="vl-auth-submit vl-auth-submit-quiet vl-focus-ring w-full"
+          /* QUIET ONLY WHILE THERE IS SOMETHING LOUDER TO BE QUIET AGAINST.
+             The demotion exists to rank this against the provider button above
+             it. Switch every provider off — one env var away, and the exact
+             thing lib/oauth-providers.ts exists to make survivable — and the
+             divider, the marker and the button all disappear, leaving this as
+             the ONLY door on the screen, deliberately dimmed, with nothing on
+             the card it could be ranked below. A sole call to action styled as
+             a runner-up reads as disabled or broken, which is a worse front
+             door than the one this change set out to fix. */
+          className={`vl-auth-submit vl-focus-ring w-full ${hasAnyOAuthProvider() ? "vl-auth-submit-quiet" : ""}`}
         >
           Create an account
         </button>
