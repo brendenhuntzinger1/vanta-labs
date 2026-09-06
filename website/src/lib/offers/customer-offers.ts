@@ -142,9 +142,25 @@ export const OFFER_CATALOG = {
     minSubtotalCents: 3500,
     ttlDays: 30,
   },
+  winback_60_free_shipping_10: {
+    label: "Free shipping + 10% off",
+    reward: { kind: "free_shipping_percent", percent: 10 } as OfferReward,
+    // Same ceiling logic as the other shipping gift: below $200 the customer
+    // gets both halves, above it only the percentage bites.
+    minSubtotalCents: 3500,
+    ttlDays: 30,
+  },
   winback_60_bac_water_10: {
     label: "10% off + free BAC water",
     reward: { kind: "free_product_percent", productSlug: "bacteriostatic-water", percent: 10 } as OfferReward,
+    // The vial is cheap, so the percentage is the real gift here; the floor
+    // is the same half-a-vial the other discount gifts use.
+    minSubtotalCents: 3500,
+    ttlDays: 30,
+  },
+  winback_60_bac_water_15: {
+    label: "15% off + free BAC water",
+    reward: { kind: "free_product_percent", productSlug: "bacteriostatic-water", percent: 15 } as OfferReward,
     // The vial is cheap, so the percentage is the real gift here; the floor
     // is the same half-a-vial the other discount gifts use.
     minSubtotalCents: 3500,
