@@ -154,7 +154,8 @@ describe("the fallback the pages render when config is unreachable", () => {
     expect(FALLBACK_PROGRAM_TERMS.customerDiscountPercent).toBe(10);
     expect(FALLBACK_PROGRAM_TERMS.personalDiscountPercent).toBe(20);
     expect(FALLBACK_PROGRAM_TERMS.commissionHoldDays).toBe(30);
-    expect(FALLBACK_PROGRAM_TERMS.minimumQualifyingOrder).toBe(100);
+    // 0 = no qualifying minimum; see referral-minimum-removal.test.ts.
+    expect(FALLBACK_PROGRAM_TERMS.minimumQualifyingOrder).toBe(0);
     expect(FALLBACK_PROGRAM_TERMS.minimumPayoutThreshold).toBe(100);
   });
 });

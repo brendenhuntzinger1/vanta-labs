@@ -2,6 +2,7 @@ import type { EmailTemplate } from "@/lib/email/types";
 import { formatDisplayDate } from "@/lib/format-date";
 import { DEFAULT_CARD_PROCESSING_FEE } from "@/lib/payment-methods";
 import { DEFAULT_COMMISSION_HOLD_DAYS } from "@/lib/referral-config";
+import { hasMinimumQualifyingOrder } from "@/lib/referral-qualification";
 import {
   DEFAULT_AMBASSADOR_COMMISSION_PERCENT,
   DEFAULT_AMBASSADOR_PERSONAL_DISCOUNT_PERCENT,
@@ -940,7 +941,14 @@ export function ambassadorApprovedTemplate(input: {
   // braces for the same parser reason as campaignTemplate.)
   const name = escapeHtml(input.name);
   const code = input.referralCode ? escapeHtml(input.referralCode) : null;
-  const minimumQualifying = typeof input.minimumQualifyingOrder === "number" && Number.isFinite(input.minimumQualifyingOrder) && input.minimumQualifyingOrder > 0
+  // Asked through hasMinimumQualifyingOrder rather than a local `> 0` so the
+  // email and the money agree by construction: a stored value the checkout
+  // treats as no gate can never be described here as one. This template already
+  // omitted the clause correctly and is the precedent the recruitment pages
+  // were brought in line with; it is on the shared rule now so all three move
+  // together.
+  const minimumQualifying = typeof input.minimumQualifyingOrder === "number"
+    && hasMinimumQualifyingOrder(input.minimumQualifyingOrder)
     ? ` of $${Math.round(input.minimumQualifyingOrder)} or more`
     : "";
   // Derived from dashboardUrl when no siteUrl is given: the dashboard already
