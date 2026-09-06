@@ -1,6 +1,7 @@
 import "server-only";
 
 import { sendEmail } from "@/lib/email/send";
+import { safeInternalPath } from "@/lib/internal-path";
 import { claimAuthEmailSend, recordAuthEmailAttempt, releaseAuthEmailClaim } from "@/lib/auth-email-audit";
 import type { AuthEmailKind } from "@/lib/auth-email-audit";
 import { accountConfirmationResendTemplate } from "@/lib/email/templates";
@@ -166,6 +167,22 @@ export async function fallBackToSupabaseConfirmation(email: string, providerErro
  * identically whether or not this did anything, so there is no outcome worth
  * reporting upward.
  */
+/**
+ * The `next` a caller buried inside its post-confirmation redirect.
+ *
+ * Both signup paths build `<site>/account/login?verified=1&next=<encoded>` and
+ * hand it over as one string. Reading it back keeps this function's signature
+ * (and its four existing callers) unchanged while letting the branded link
+ * carry the same destination the fallback link does.
+ */
+function nextFromRedirect(redirectTo: string): string {
+  try {
+    return safeInternalPath(new URL(redirectTo).searchParams.get("next"), "/account");
+  } catch {
+    return "/account";
+  }
+}
+
 export async function sendBrandedConfirmationResend(
   email: string,
   redirectTo: string,
@@ -223,7 +240,13 @@ export async function sendBrandedConfirmationResend(
     confirmUrl: brandedConfirmUrl({
       hashedToken: link.data.properties.hashed_token,
       type: link.data.properties.verification_type ?? "magiclink",
-      next: "/account",
+      // WHERE THE CUSTOMER ASKED TO GO, read back out of the redirect the caller
+      // already validated. `redirectTo` reaches them only through
+      // fallbackActionLink — the branded hop is the link every customer gets —
+      // so hardcoding "/account" here discarded a destination the caller had
+      // gone to the trouble of validating and threading through. Re-validated
+      // rather than trusted: this string ends up in a link in an email.
+      next: nextFromRedirect(redirectTo),
       fallbackActionLink: link.data.properties.action_link,
     }),
   });

@@ -291,6 +291,17 @@ export async function GET(request: Request) {
       context: Object.fromEntries(
         failed.map(([name, result]) => [JOBS[name].label, describeError((result as PromiseRejectedResult).reason)]),
       ),
+      // ONE STANDING PROBLEM IS NOT FORTY-EIGHT CRITICALS.
+      //
+      // This alert had no dedupe window while the timeout alert fifteen lines
+      // above it has one, and for the identical reason. The sweep runs every
+      // thirty minutes, so a job that is failing for a durable cause — a
+      // provider plan limit, a revoked grant, a broken migration — wrote 48
+      // unresolved criticals and sent 48 operator emails a day, burying the
+      // genuine ones underneath. The same window as the timeout alert: long
+      // enough to stop a storm, short enough that a problem persisting across a
+      // working day is raised again.
+      dedupeWindowMs: SWEEP_TIMEOUT_ALERT_DEDUPE_MS,
     });
   }
 

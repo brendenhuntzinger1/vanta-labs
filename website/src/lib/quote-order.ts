@@ -563,6 +563,39 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       ? catalogProduct?.doses?.find((dose) => dose.id === variantId)
       : catalogProduct?.doses?.find((dose) => dose.isDefault) ?? catalogProduct?.doses?.[0];
 
+    // A DOSE THAT NO LONGER EXISTS IS A REFUSAL, NOT A FALLBACK.
+    //
+    // The `?? default` on the line above applies only when the cart named NO
+    // dose at all. A cart that names one which no longer resolves lands here
+    // with `selectedDose === undefined`, and everything downstream then quietly
+    // treated it as the default dose:
+    //
+    //   price      falls back to baseProduct.price, which for a dosed product
+    //              IS the default dose's price — so a 5mg line is charged at
+    //              the 10mg price, or vice versa, under a different SKU.
+    //   id         passes `slug::<dead dose id>` through untouched into
+    //              order_items.product_id, which is what parseOrderItemRef
+    //              splits to decide which row inventory moves on — so the line
+    //              takes NO hold on any real row.
+    //
+    // This is not an exotic state. getCatalogProducts filters product_doses on
+    // is_enabled, so an admin disabling a strength in the Control Center — a
+    // routine act when one goes out of production — removes it from every cart
+    // that already holds it. Those carts live in localStorage, so the shopper
+    // meets it on their next visit, sees the stale price rendered from their own
+    // cart, and is refused by the underpayment guard with "your total has been
+    // updated. Please refresh this page" — which changes nothing, because the
+    // stale line is still in their storage. The only escape is working out
+    // unaided that the item must be removed and re-added.
+    //
+    // Refusing by name gives them the sentence that actually helps, and matches
+    // how the stock guards a few lines below already speak.
+    if (variantId && !selectedDose) {
+      throw new Error(
+        `That size of ${baseProduct.name} is no longer available. Please remove it from your cart and choose another size.`,
+      );
+    }
+
     const baseUnitPrice = selectedDose
       ? parseProductPrice(selectedDose.salePrice ?? selectedDose.price)
       : baseProduct.price;
@@ -1305,6 +1338,12 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       // Nothing is let through by this: express/authorize re-quotes in "full"
       // mode with the real address, and THAT is the authoritative guard. An
       // order that genuinely loses money on goods alone still fails here.
+      //
+      // AND THE ALERT MUST READ THE SAME QUOTE THE GUARD DOES. The wallet lane
+      // used to hand the address-less quote's snapshot to the below-floor
+      // notice, which measured every express order as if shipping cost nothing
+      // — so a genuinely loss-making one raised no notice at all. It now passes
+      // quoteFull.profitFloor, the quote this paragraph calls authoritative.
       shippingCost: destinationKnown ? profitSettings.shippingCostPerOrder : 0,
       handlingCollected: 0,
       // Effective rate actually applied to this destination (0 when the

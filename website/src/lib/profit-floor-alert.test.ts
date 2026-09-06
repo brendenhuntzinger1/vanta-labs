@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultBxgyPromotions } from "@/lib/bxgy-config";
 import type { BxgyPromotion } from "@/lib/bxgy-engine";
@@ -41,6 +43,9 @@ const ambassador = vi.hoisted(() => ({
 const promotionState = vi.hoisted(() => ({ promotions: [] as BxgyPromotion[], allowCouponStacking: false }));
 const couponState = vi.hoisted(() => ({ value: 0, code: "SAVE" }));
 /** Production has every profit key blank, so these are the coded defaults. */
+/** The sitewide free-shipping switch. Live in this store, and the case where
+ *  the address-less wallet quote is the OPTIMISTIC one. */
+const shippingState = { freeShippingSitewide: false };
 const profitState = vi.hoisted(() => ({
   minProfitDollars: 0, minProfitPercent: 0, worstCaseUnitCost: 33,
   processingFeePercent: 8, shippingCostPerOrder: 6,
@@ -105,7 +110,7 @@ vi.mock("@/lib/admin-control", async () => {
     }),
     getBulkSavingsControlConfig: async () => ({ enabled: false, tier1Threshold: 300, tier1Percent: 5, tier2Threshold: 800, tier2Percent: 12 }),
     getSalesTaxSettings: async () => ({ nexusStates: [], rateOverrides: {}, provider: "builtin", taxjarApiKey: "", avalaraLicenseKey: "" }),
-    getShippingConfig: async () => ({ domesticFee: 15, freeShippingThreshold: 200, internationalFee: 25, internationalFreeShippingThreshold: 400, handlingFeeRate: 0 }),
+    getShippingConfig: async () => ({ domesticFee: 15, freeShippingThreshold: 200, internationalFee: 25, internationalFreeShippingThreshold: 400, handlingFeeRate: 0, freeShippingSitewide: shippingState.freeShippingSitewide }),
     getCardProcessingFeeConfig: async () => ({ enabled: false, percentage: 0, label: "Service Fee", noticeText: "" }),
     getReferralProgramConfig: async () => ({ enabled: true, discountPercent: 10, bundleReferralPercent: 5, personalDiscountPercent: 0, defaultCommissionPercent: 10, commissionsPaused: false }),
     getCouponPolicyConfig: async () => ({ couponsEnabled: true, allowStacking: promotionState.allowCouponStacking }),
@@ -166,6 +171,7 @@ async function quote(input: { items: Array<{ id: string; quantity: number }>; wi
 
 beforeEach(() => {
   vi.resetModules();
+  shippingState.freeShippingSitewide = false;
   alerts.length = 0;
   ambassador.customer_discount_percent = 15;
   ambassador.commission_percent = 20;
@@ -204,6 +210,79 @@ describe("a below-floor order completes", () => {
     expect(quoted.profitFloor?.belowFloor).toBe(true);
     expect(quoted.profitFloor?.estimatedProfit).toBeLessThan(0);
     expect(quoted.profitFloor?.estimatedProfit).toBeGreaterThan(-5);
+  });
+
+  // -------------------------------------------------------------------------
+  // THE ALERT MUST MEASURE THE ORDER THAT IS ACTUALLY CHARGED.
+  //
+  // The wallet lane prices twice: once with no address ("address_optional",
+  // for the sheet) and once with the real one ("full", which is what settles).
+  // address_optional sets destinationKnown = false, which zeroes BOTH shipping
+  // legs and the tax rate in the figures the profit snapshot is built from —
+  // deliberately and correctly, because comparing a shipping COST against
+  // revenue that excludes the shipping FEE makes every thin cart look like a
+  // loss.
+  //
+  // express/authorize handed THAT snapshot to the below-floor notice, so every
+  // Apple Pay order was assessed as if shipping cost the store nothing, and a
+  // genuinely loss-making one produced no notice at all. The two quotes below
+  // are the same basket; the address-less one must read better than the real
+  // one by exactly the shipping cost, which is what makes picking the wrong one
+  // silent.
+  // -------------------------------------------------------------------------
+  const bothQuotes = async () => {
+    const { quoteOrder } = await import("@/lib/quote-order");
+    const basket = { items: [{ id: "ghrp-2", quantity: 2 }], customer: CUSTOMER, referralCode: "ROBIN15" };
+    const addressLess = await quoteOrder({
+      ...basket,
+      customer: { ...CUSTOMER, country: "" },
+      mode: "address_optional",
+    } as never);
+    const full = await quoteOrder({ ...basket, mode: "full" } as never);
+    return {
+      addressLess: Number(addressLess.profitFloor?.estimatedProfit ?? 0),
+      full: Number(full.profitFloor?.estimatedProfit ?? 0),
+    };
+  };
+
+  it("the two quotes disagree about the margin, so which one is measured matters", async () => {
+    const { addressLess, full } = await bothQuotes();
+    expect(addressLess).not.toBeCloseTo(full, 2);
+  });
+
+  it("with free shipping sitewide ON — the live setting — the address-less quote is the OPTIMISTIC one", async () => {
+    // The fee is 0 either way, so the only moving part is the store's own
+    // shipping COST, which the address-less quote does not charge. Every Apple
+    // Pay order was therefore assessed as if delivery were free to the store,
+    // and a genuinely loss-making one raised no notice at all.
+    shippingState.freeShippingSitewide = true;
+
+    const { addressLess, full } = await bothQuotes();
+
+    expect(addressLess).toBeGreaterThan(full);
+    expect(addressLess - full).toBeCloseTo(profitState.shippingCostPerOrder, 2);
+  });
+
+  it("with the switch OFF the error runs the other way, which is why direction is not the point", async () => {
+    // The fee ($15) exceeds the cost ($6), so dropping both legs makes the
+    // address-less quote PESSIMISTIC and the notice fires on orders that are
+    // fine. Wrong in both configurations; the fix is to measure the quote that
+    // actually settles, not to pick whichever error is currently benign.
+    const { addressLess, full } = await bothQuotes();
+    expect(addressLess).toBeLessThan(full);
+  });
+
+  it("express/authorize records the FULL quote's floor, not the address-less one", () => {
+    // A source assertion because the route is one line of plumbing between two
+    // quotes that both exist a few lines above it, and the wrong one is
+    // indistinguishable at runtime from the right one until a real order loses
+    // money in silence.
+    const route = readFileSync(
+      join(process.cwd(), "src/app/api/checkout/express/authorize/route.ts"),
+      "utf8",
+    ).replace(/^\s*\/\/.*$/gm, " ");
+    expect(route).toContain("profitFloor: quoteFull.profitFloor");
+    expect(route).not.toContain("profitFloor: quoteA.profitFloor");
   });
 
   it("never throws for margin, at any depth of loss", async () => {

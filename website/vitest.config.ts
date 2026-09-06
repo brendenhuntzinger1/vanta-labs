@@ -13,7 +13,23 @@ export default defineConfig({
     // silently inflated the gate counts the whole project reports against.
     // Keep the defaults (node_modules, dist, build output) and add the two
     // scratch directories, so the comment over there is now true.
-    exclude: [...configDefaults.exclude, "scratchpad/**", "scratch-verify/**"],
+    //
+    // The throwaway-probe NAMES are here for the same reason, one layer over.
+    // .gitignore now hides `__verify_*`, `__probe_*`, `__scratch_*` and
+    // `zz-verify-*` under src/ — but vitest does not read .gitignore, so a
+    // gitignored probe sitting beside the code it measures is INVISIBLE to git
+    // and still joins the suite. That is strictly worse than the scratchpad
+    // case it repeats: `git status` says clean while the gate count is wrong.
+    // Two of these turned up during the 2026-09-06 audit.
+    exclude: [
+      ...configDefaults.exclude,
+      "scratchpad/**",
+      "scratch-verify/**",
+      "src/**/__verify_*",
+      "src/**/__probe_*",
+      "src/**/__scratch_*",
+      "src/**/zz-verify-*",
+    ],
   },
   resolve: {
     alias: {

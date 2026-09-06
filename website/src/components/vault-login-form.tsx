@@ -29,7 +29,11 @@ export function VaultLoginForm({ passcodeRequired }: { passcodeRequired: boolean
     const check = async () => {
       try {
         const res = await fetch("/api/admin/auth/session", { cache: "no-store" });
-        if (!cancelled && res.ok) {
+        // The probe answers 200 either way and says which in the body — a
+        // signed-out visitor is not an error, and reading `res.ok` for it put a
+        // 401 in the console on every anonymous visit to this page.
+        const json = (await res.json()) as { authenticated?: boolean };
+        if (!cancelled && json.authenticated === true) {
           setIsAuthenticated(true);
         }
       } catch {

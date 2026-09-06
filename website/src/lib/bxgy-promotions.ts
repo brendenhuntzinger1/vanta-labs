@@ -51,7 +51,13 @@
 //      reservation that could not be taken must not refuse a sale that was
 //      priced correctly moments earlier. The exposure is narrower than (2): the
 //      promotion was only offered because the count succeeded at quote time.
-//      Logged.
+//      Retried ONCE first, but only for a rejection refused at the edge (the
+//      "JWT issued at future" 401 this store sees ~36 times a day), which
+//      provably never ran and so cannot be claimed twice. If it still fails the
+//      order goes through UNCLAIMED — it counts against no cap and no
+//      per-customer limit — so this raises a `promotion_claim_unenforced`
+//      alert as well as logging, because a limit that is not being enforced is
+//      something the operator has to be able to see.
 //
 //   4. THE CLAIM ANSWERS FALSE (the database is fine; the limit is reached).
 //      The order is REFUSED with the same sentence the altered-total guard uses,
@@ -64,6 +70,8 @@
 // ---------------------------------------------------------------------------
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { isTransientAuthRejection } from "@/lib/inventory-reservation";
+import { recordSystemAlert } from "@/lib/monitoring";
 import { getHomepageControlConfig, upsertControlValue } from "@/lib/admin-control";
 import {
   BXGY_CONTROL_KEY,
@@ -99,6 +107,10 @@ export const REDEEMED_STATUSES = ["paid", "partially_refunded"] as const;
  * redemption for a day too.
  */
 export const CLAIM_HOLD_SECONDS = 15 * 60;
+/** Pause before the single retry of a claim refused at the edge. */
+const CLAIM_RETRY_DELAY_MS = 250;
+/** One alert per hour is enough to notice an outage; a burst is one incident. */
+const CLAIM_ALERT_DEDUPE_MS = 60 * 60 * 1000;
 export const MANUAL_CLAIM_HOLD_SECONDS = 24 * 60 * 60;
 
 /**
@@ -218,7 +230,7 @@ export interface ClaimRedemptionInput {
 export async function claimPromotionRedemption(input: ClaimRedemptionInput): Promise<boolean> {
   if (atomicLayerMissing) return true;
 
-  const { data, error } = await supabaseAdmin.rpc("bxgy_claim_redemption", {
+  const call = () => supabaseAdmin.rpc("bxgy_claim_redemption", {
     p_promotion_id: input.promotionId,
     p_order_id: input.orderId,
     p_customer_email: input.customerEmail ? input.customerEmail.trim().toLowerCase() : null,
@@ -227,12 +239,48 @@ export async function claimPromotionRedemption(input: ClaimRedemptionInput): Pro
     p_hold_seconds: input.holdSeconds ?? CLAIM_HOLD_SECONDS,
   });
 
+  // RETRIED ONCE ON THE ONE REJECTION THAT PROVABLY NEVER RAN.
+  //
+  // Case (3) above is deliberate and stays: a claim that cannot reach the
+  // database must not refuse a sale that was priced correctly moments earlier.
+  // But this store's production Supabase refuses roughly 0.1% of calls with a
+  // 401 "JWT issued at future" — 36 in one day across nine different tables and
+  // RPCs — and every one of those was a limited promotion granted without a
+  // claim row. A 401 is refused at the edge, so re-issuing it cannot claim
+  // twice; the inventory module retries the same class for the same reason.
+  // One retry, not a loop, matching rpcWithAuthRetry.
+  let { data, error } = await call();
+  if (error && isTransientAuthRejection(error)) {
+    await new Promise((resolve) => setTimeout(resolve, CLAIM_RETRY_DELAY_MS));
+    ({ data, error } = await call());
+  }
+
   if (error) {
     if (looksLikeMissingObjectError(error)) {
       noteMissingAtomicLayer("bxgy_claim_redemption", error);
       return true;
     }
+    // AND IT IS NO LONGER SILENT. The order is still allowed through, which is
+    // the documented rule, but a limited promotion has just been granted with
+    // no claim row: it does not count against the cap, and a "one per customer"
+    // promotion can be taken again by the same shopper. The only trace of that
+    // used to be a console.error nobody reads.
     console.error(`Unable to claim a redemption for promotion ${input.promotionId}`, error);
+    await recordSystemAlert({
+      type: "promotion_claim_unenforced",
+      severity: "warning",
+      message:
+        `A limited promotion (${input.promotionId}) was granted without a redemption claim: the claim RPC could not be `
+        + "reached. This order does not count against the promotion's cap or its per-customer limit.",
+      context: {
+        promotionId: input.promotionId,
+        orderId: input.orderId,
+        maxRedemptions: input.maxRedemptions,
+        perCustomerLimit: input.perCustomerLimit,
+        detail: error instanceof Error ? error.message : String((error as { message?: string })?.message ?? error),
+      },
+      dedupeWindowMs: CLAIM_ALERT_DEDUPE_MS,
+    }).catch(() => {});
     return true;
   }
   return data !== false;

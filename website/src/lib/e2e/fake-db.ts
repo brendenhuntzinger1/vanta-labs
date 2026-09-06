@@ -595,6 +595,47 @@ export class FakeDb {
         return { data: null, error: null };
       }
 
+      // The two atomic tender holds (src/lib/sql/tender-hold-claim.sql), modelled
+      // to the same arithmetic. The lock has nothing to do in a single-threaded
+      // fake, but the CHECK AND THE WRITE being one operation is exactly what
+      // these tests need to be about.
+      case "claim_store_credit_hold":
+      case "claim_points_hold": {
+        const isCredit = name === "claim_store_credit_hold";
+        const ledger = isCredit ? "store_credit_ledger" : "points_ledger";
+        const amountColumn = isCredit ? "amount_cents" : "amount";
+        const userId = String(args.p_user_id ?? "");
+        const orderId = String(args.p_order_id ?? "");
+        const reason = String(args.p_reason ?? "");
+        const wanted = Number(args.p_amount ?? 0);
+        const windowStart = args.p_window_start ? String(args.p_window_start) : null;
+        // Nothing to hold is not a refusal: the quote read the same absence.
+        if (!userId || !orderId || !(wanted > 0)) return { data: true, error: null };
+
+        const rows = this.table(ledger);
+        const held = rows
+          .filter((row) => String(row.order_id ?? "") === orderId && String(row.reason ?? "") === reason)
+          .reduce((sum, row) => sum + Math.abs(Number(row[amountColumn] ?? 0)), 0);
+        // Idempotent per order: a resubmit keeps its own hold.
+        if (held > 0) return { data: held >= wanted, error: null };
+
+        const balance = rows
+          .filter((row) => String(row.user_id ?? "") === userId
+            && (!windowStart || String(row.created_at ?? "") >= windowStart))
+          .reduce((sum, row) => sum + Number(row[amountColumn] ?? 0), 0);
+        if (balance < wanted) return { data: false, error: null };
+
+        rows.push({
+          id: `tender-${++this.idCounter}`,
+          user_id: userId,
+          [amountColumn]: -wanted,
+          reason,
+          order_id: orderId,
+          created_at: new Date().toISOString(),
+        });
+        return { data: true, error: null };
+      }
+
       case "redeem_coupon": {
         const coupon = this.table("coupons").find(
           (row) => String(row.code ?? "").toUpperCase() === String(args.p_code ?? "").toUpperCase(),

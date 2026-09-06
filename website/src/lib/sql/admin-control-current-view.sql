@@ -43,7 +43,27 @@ create index if not exists admin_audit_logs_control_current_idx
   on public.admin_audit_logs (target_table, target_id, created_at desc)
   where action = 'admin_control_upsert';
 
-create or replace view public.admin_control_current as
+-- SECURITY INVOKER, LIKE EVERY OTHER VIEW IN THIS SCHEMA.
+--
+-- A view created WITHOUT it runs as its OWNER, and the owner of a table is
+-- exempt from that table's RLS — so this view read admin_audit_logs straight
+-- through the deny-by-default policy protecting it. Its only protection was the
+-- one-shot revoke at the bottom of this file, and a revoke does not survive a
+-- DROP: `create or replace view` cannot drop or reorder columns, so any later
+-- change to the column list requires DROP VIEW, and the recreate takes a fresh
+-- SELECT grant from Supabase's platform default-privilege entry for anon. The
+-- store-wide sweep would not put it back either, because revoke-anon-table-access
+-- deliberately covers `relkind in ('r','p')` and never views.
+--
+-- What sat behind that: the live commercial configuration, read out of the audit
+-- log — ambassador commission percentages, the free-shipping threshold and flat
+-- rates, every /admin control setting — with no error and no log line.
+--
+-- getControlSnapshot reads this through the service role, which is BYPASSRLS,
+-- so nothing in the application changes. The seven ads views have carried this
+-- since they were written; this one was the only public view without it.
+create or replace view public.admin_control_current
+with (security_invoker = true) as
 select distinct on (target_table, target_id)
   id,
   target_table,

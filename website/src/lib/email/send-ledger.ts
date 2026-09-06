@@ -1,6 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { readAllRowsBounded } from "@/lib/supabase-page";
 
 /**
  * EVERY MESSAGE THE SYSTEM SENT, WHO GOT IT, AND WHAT THEY DID WITH IT.
@@ -68,6 +69,8 @@ export type SendLedgerRow = {
   delivered: boolean;
   bounced: boolean;
   complained: boolean;
+  /** The provider reported it could not send this one. Not a bounce, not silence. */
+  failed: boolean;
   deliveryEvidence: DeliveryEvidence;
   openedAt: string | null;
   clickedAt: string | null;
@@ -149,13 +152,43 @@ export function describeSendChannel(campaignType: string): string {
  * Auth mail deliberately does not, and the reason is worth keeping next to the
  * code: a remote image in a password reset is exactly the shape a phishing
  * filter scores against, and there is nothing to optimise in a message the
- * recipient asked for thirty seconds earlier. Everything else — campaigns,
- * automations, cart recovery — carries a first-party pixel, and once the
- * provider's open tracking is on it carries that too.
+ * recipient asked for thirty seconds earlier.
+ *
+ * BUT "EVERYTHING ELSE" WAS NOT TRUE, AND THIS FUNCTION SAID IT WAS.
+ *
+ * It answered `!campaignType.startsWith("auth:")`, and its own comment claimed
+ * campaigns, automations and cart recovery were the rest. Those three do carry
+ * a pixel; nothing else does. sendMarketingEmail only injects one when the
+ * caller supplies `openTrackingPixelUrl`, and exactly four senders do —
+ * campaign-sender, automations, cart-recovery and admin-cart-recovery. Every
+ * other marketing send (the coupon announcement, membership welcome, the
+ * back-in-stock notice and the rest) went into `openTracked` and could never
+ * come out of `opened`.
+ *
+ * So the panel built to end the "nobody opens our email" belief reported
+ * "Membership welcome — 0 of 40" and "0 of 41 opened", for messages that
+ * contain no pixel and generate no provider open event: the exact
+ * zero-over-untracked reading this file's header says it exists to replace.
+ *
+ * Listed explicitly, matching the four senders. A channel added tomorrow reads
+ * as UNTRACKED until someone puts a pixel in it and adds it here — which is the
+ * safe direction: "we do not measure this" is a true statement, and "0 opens"
+ * is not.
  */
 export function channelHasOpenTracking(campaignType: string): boolean {
-  return !String(campaignType ?? "").startsWith("auth:");
+  const type = String(campaignType ?? "");
+  if (type === "campaign" || type === "affiliate_campaign") return true;
+  if (type.startsWith("cart_recovery_")) return true;
+  if (type.startsWith("automation:")) return true;
+  return false;
 }
+
+/**
+ * Ceiling on ONE ledger page's delivery-event scan. Far above what a page of
+ * sends can legitimately match; it exists so a runaway read cannot be silently
+ * half-answered into a "no word yet".
+ */
+const DELIVERY_EVENT_SCAN_CAP = 100_000;
 
 type DeliveryRow = { provider_message_id: string | null; recipient_email: string | null; kind: string; received_at: string };
 
@@ -170,16 +203,24 @@ type DeliveryRow = { provider_message_id: string | null; recipient_email: string
  * delivered" on the same row as "1 opened", which reads as a broken report and
  * is really just two events that were never reconciled.
  */
-function classify(kinds: Iterable<string>): { delivered: boolean; bounced: boolean; complained: boolean } {
+function classify(kinds: Iterable<string>): { delivered: boolean; bounced: boolean; complained: boolean; failed: boolean } {
   let delivered = false;
   let bounced = false;
   let complained = false;
+  // The provider tried and could not send. Reported as its own state because
+  // the alternative was to report it as SILENCE: `email.failed` used to parse
+  // to "ignored", classify to nothing, and render exactly like a message still
+  // in flight — so a permanently rejected signup confirmation showed "No word
+  // yet" beside a channel reading "0 of 1 delivered", with nothing saying why
+  // the customer never confirmed.
+  let failed = false;
   for (const kind of kinds) {
     if (kind === "delivered" || kind === "opened" || kind === "clicked") delivered = true;
     else if (kind === "hard_bounce" || kind === "soft_bounce") bounced = true;
     else if (kind === "complaint") complained = true;
+    else if (kind === "failed") failed = true;
   }
-  return { delivered, bounced, complained };
+  return { delivered, bounced, complained, failed };
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -234,11 +275,27 @@ export async function loadSendLedger(limit: number = LEDGER_LIMIT): Promise<Send
   const messageIds = Array.from(new Set(logs.map((row) => row.provider_message_id).filter((id): id is string => Boolean(id))));
   const byMessageId = new Map<string, string[]>();
   for (const ids of chunk(messageIds, 200)) {
-    const { data } = await supabaseAdmin
-      .from("email_delivery_events")
-      .select("provider_message_id, recipient_email, kind, received_at")
-      .in("provider_message_id", ids);
-    for (const row of (data ?? []) as DeliveryRow[]) {
+    // PAGED, AND ORDERED SO THE PAGES JOIN UP.
+    //
+    // PostgREST caps a single response at 1000 rows and does it silently — a
+    // valid array that simply stops, with no error and no flag — and the local
+    // PostgREST stand-in imposes no cap at all, so this cannot fail in the
+    // harness. An address on the list for a year accumulates delivered, opened
+    // and clicked rows per send, so one chunk of 200 asks for thousands. What
+    // was lost was arbitrary without an ORDER BY, and what it cost was the
+    // claim this panel was built to make: sends whose events fell off the end
+    // matched nothing and rendered "No word yet", which is the exact
+    // zero-over-untracked reading the ledger exists to end.
+    const { rows: events } = await readAllRowsBounded<DeliveryRow>(
+      (from, to) => supabaseAdmin
+        .from("email_delivery_events")
+        .select("provider_message_id, recipient_email, kind, received_at")
+        .in("provider_message_id", ids)
+        .order("received_at", { ascending: true })
+        .range(from, to),
+      { maxRows: DELIVERY_EVENT_SCAN_CAP, label: "send ledger message-id join" },
+    );
+    for (const row of events) {
       if (!row.provider_message_id) continue;
       const list = byMessageId.get(row.provider_message_id) ?? [];
       list.push(row.kind);
@@ -252,12 +309,31 @@ export async function loadSendLedger(limit: number = LEDGER_LIMIT): Promise<Send
     logs.filter((row) => !row.provider_message_id).map((row) => (row.recipient_email ?? "").trim().toLowerCase()).filter(Boolean),
   ));
   const byAddress = new Map<string, Array<{ kind: string; at: number }>>();
+  // BOUNDED IN TIME AS WELL AS PAGED. The only events that can ever match a
+  // send in this page are the ones near it (see the window below), so asking
+  // for every event ever recorded against 200 addresses was both the slow
+  // read and the one that overflowed. Two minutes of slack before the oldest
+  // send in the page mirrors the matching window used further down.
+  const oldestSentAtMs = logs.reduce((oldest, row) => {
+    const at = row.sent_at ? Date.parse(row.sent_at) : NaN;
+    return Number.isFinite(at) ? Math.min(oldest, at) : oldest;
+  }, Number.POSITIVE_INFINITY);
+  const eventFloorIso = Number.isFinite(oldestSentAtMs)
+    ? new Date(oldestSentAtMs - 2 * 60_000).toISOString()
+    : null;
   for (const emails of chunk(unmatchedEmails, 200)) {
-    const { data } = await supabaseAdmin
-      .from("email_delivery_events")
-      .select("provider_message_id, recipient_email, kind, received_at")
-      .in("recipient_email", emails);
-    for (const row of (data ?? []) as DeliveryRow[]) {
+    const { rows: events } = await readAllRowsBounded<DeliveryRow>(
+      (from, to) => {
+        let query = supabaseAdmin
+          .from("email_delivery_events")
+          .select("provider_message_id, recipient_email, kind, received_at")
+          .in("recipient_email", emails);
+        if (eventFloorIso) query = query.gte("received_at", eventFloorIso);
+        return query.order("received_at", { ascending: true }).range(from, to);
+      },
+      { maxRows: DELIVERY_EVENT_SCAN_CAP, label: "send ledger address join" },
+    );
+    for (const row of events) {
       const email = (row.recipient_email ?? "").trim().toLowerCase();
       const at = Date.parse(row.received_at);
       if (!email || !Number.isFinite(at)) continue;
@@ -298,6 +374,7 @@ export async function loadSendLedger(limit: number = LEDGER_LIMIT): Promise<Send
       delivered: verdict.delivered,
       bounced: verdict.bounced,
       complained: verdict.complained,
+      failed: verdict.failed,
       deliveryEvidence: evidence,
       openedAt: log.opened_at,
       clickedAt: log.clicked_at,

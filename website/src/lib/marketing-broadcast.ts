@@ -7,6 +7,33 @@ import { getSiteUrl } from "@/lib/env";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 import type { AdminCoupon } from "@/lib/admin-coupons";
 
+/**
+ * The broadcast list could not be read in full.
+ *
+ * Its own class so the caller can tell "we refused to send to part of the list"
+ * apart from an ordinary failure, and so nothing downstream mistakes it for the
+ * one condition the recipient read tolerates.
+ */
+export class SubscriberListIncomplete extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SubscriberListIncomplete";
+  }
+}
+
+/**
+ * The relation does not exist — the ONE thing the subscriber read tolerates.
+ *
+ * Codes only. A substring test on the table name would classify a broken index
+ * or a permission failure naming the table as "not created yet", which is how
+ * the refusal above came to be swallowed in the first place.
+ */
+function isMissingSubscribersTable(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: string }).code;
+  return code === "42P01" || code === "PGRST205";
+}
+
 // Emails of customers who opted into marketing (the "Marketing emails" toggle
 // on their account). Deduped and lowercased. Guests and opted-out customers
 // are excluded; unsubscribes are enforced separately by sendMarketingEmail's
@@ -53,10 +80,25 @@ export async function getMarketingRecipientEmails(): Promise<string[]> {
 
   // Union the email-keyed opt-in list (guests + at-checkout opt-ins). Best-
   // effort: if the table isn't present yet, fall back to account opt-ins only.
+  //
+  // THE REFUSAL USED TO THROW INTO THE CATCH THAT IGNORES IT.
+  //
+  // The truncation guard below and the bare `catch {}` were in the same try, so
+  // the line written to refuse a partial send was swallowed by the line written
+  // to tolerate a missing table — and so was any page error from
+  // readAllRowsBounded. A transient PostgREST failure on page two therefore
+  // returned the account-side opt-ins alone, silently dropping every guest and
+  // every at-checkout opt-in, and reported the broadcast to the operator as a
+  // clean run. The send-log dedup then treats those people as un-mailed next
+  // time, so it does not even reproduce from the outside.
+  //
+  // The catch now covers only the condition it documents. Everything else
+  // reaches the caller, exactly as the already-sent dedup read below does.
+  let subs: Array<{ email: string }> = [];
   try {
     // Paged: past the server's row cap an unpaged read silently returns a
     // short list, so the broadcast would skip subscribers without any error.
-    const { rows: subs, truncated } = await readAllRowsBounded<{ email: string }>(
+    const read = await readAllRowsBounded<{ email: string }>(
       (from, to) => supabaseAdmin
         .from("marketing_subscribers")
         .select("email")
@@ -65,18 +107,24 @@ export async function getMarketingRecipientEmails(): Promise<string[]> {
         .range(from, to),
       { maxRows: 500_000, label: "broadcast subscriber read" },
     );
-    // The catch below exists for "the table is not created yet". A read that
-    // came back SHORT is a different thing and must not be absorbed by it:
-    // this list decides who gets the mail (F-A-19).
-    if (truncated) {
-      throw new Error("Could not read the whole subscriber list; the broadcast was refused rather than sent to part of it.");
+    subs = read.rows;
+    // A read that came back SHORT is not "the table is not created yet": this
+    // list decides who gets the mail (F-A-19). Thrown OUTSIDE the try below so
+    // nothing can absorb it.
+    if (read.truncated) {
+      throw new SubscriberListIncomplete(
+        "Could not read the whole subscriber list; the broadcast was refused rather than sent to part of it.",
+      );
     }
-    for (const row of subs) {
-      const email = String(row.email ?? "").trim().toLowerCase();
-      if (email) emails.add(email);
-    }
-  } catch {
-    // marketing_subscribers not created yet — ignore.
+  } catch (error) {
+    if (!isMissingSubscribersTable(error)) throw error;
+    // marketing_subscribers not created yet — account opt-ins alone are the
+    // whole list, and that is a complete answer rather than a partial one.
+  }
+
+  for (const row of subs) {
+    const email = String(row.email ?? "").trim().toLowerCase();
+    if (email) emails.add(email);
   }
 
   return Array.from(emails);

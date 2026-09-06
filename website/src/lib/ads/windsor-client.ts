@@ -36,7 +36,7 @@
  * that is testable without a network.
  */
 
-import { adPlatformKey, parseAdTagsFromUrl } from "./utm";
+import { adPlatformKey, isSafeTag, parseAdTagsFromUrl } from "./utm";
 
 export const WINDSOR_ENDPOINT = "https://connectors.windsor.ai";
 
@@ -223,6 +223,32 @@ export function normalizeSpendRow(
 
   const adId = toText(r.ad_id, 128);
   if (!adId) return { ok: false, reason: "missing ad_id" };
+  // AN AD ID IS A TOKEN. A SENTENCE IN THIS FIELD IS THE FEED TALKING TO US.
+  //
+  // Windsor answers an account-level problem with HTTP 200 and a data array
+  // whose every TEXT field carries the SAME prose, and whose every numeric
+  // field is 0. Measured against the live account on 2026-09-06, all four
+  // connectors returned exactly this:
+  //
+  //   {"date":"2026-09-06",
+  //    "ad_id":"Uh-oh! You've connected more data sources than your Basic plan
+  //             allows. Upgrade here: https://onboard.windsor.ai/...",
+  //    "ad_name":<the same sentence>, "spend":0, "clicks":0, "impressions":0}
+  //
+  // Every check below passed on that row: the id was non-empty, the date
+  // parsed, and 0 is a perfectly good spend. So a 128-character prefix of an
+  // error message was about to be written into ad_spend_daily as an ad, the
+  // ingest was about to report `status: "ok"`, and the "every connector failed"
+  // alarm — the one added precisely so a broken feed could not read as a quiet
+  // one — was never going to fire, because nothing had failed.
+  //
+  // Whitespace is the discriminator, and it is exact rather than clever: Meta
+  // and TikTok ad ids are digit strings, Snapchat's are UUIDs and Reddit's are
+  // short alphanumerics with underscores. Not one platform's id can contain a
+  // space, so this rejects the notice and can never reject an ad.
+  if (/\s/.test(adId)) {
+    return { ok: false, reason: `ad_id is not an identifier: ${JSON.stringify(adId.slice(0, 160))}` };
+  }
 
   const statDate = toStatDate(r.date);
   if (!statDate) return { ok: false, reason: `unparseable date ${JSON.stringify(r.date)}` };
@@ -233,6 +259,24 @@ export function normalizeSpendRow(
 
   const landingUrl = map.destinationUrl ? toText(r[map.destinationUrl], 2048) : null;
   const tags = parseAdTagsFromUrl(landingUrl);
+
+  // THE DOCUMENTED CONVENTION, IMPLEMENTED. See the FieldMap note above: a
+  // connector that exposes no landing URL (Snapchat) can only be attributed to
+  // a creative by NAMING the ad for its utm_content. That instruction has been
+  // in this file since it was written and nothing acted on it, so every
+  // Snapchat dollar was permanently untagged — the worst of both, because an
+  // owner reading the comment would believe the convention worked.
+  //
+  // ONLY WHEN THE NAME IS ALREADY A VALID TAG. `isSafeTag`, not `toSafeTag`: a
+  // name that has to be MANGLED into a tag ("Snap Video 3 — Winter") is a name,
+  // not a deliberate tag, and coercing it would invent a join key that matches
+  // no revenue. That would be worse than untagged: it turns invisible spend
+  // into a creative row that looks like a failing ad. An operator who follows
+  // the convention writes `hook_a` and it works; one who does not stays in the
+  // untagged panel, which is honest.
+  const nameAsTag = !landingUrl && !tags.utmContent && isSafeTag(toText(r.ad_name))
+    ? toText(r.ad_name)
+    : null;
 
   return {
     ok: true,
@@ -246,7 +290,7 @@ export function normalizeSpendRow(
       adgroupName: toText(r[map.adgroupName]),
       adName: toText(r.ad_name),
       landingUrl,
-      utmContent: tags.utmContent,
+      utmContent: tags.utmContent ?? nameAsTag,
       utmCampaign: tags.utmCampaign,
       // Missing impressions and clicks are normal on a day with no delivery, so
       // they floor at 0; conversions stay null when unreported, because "the
@@ -264,7 +308,39 @@ export function normalizeSpendRow(
 
 export type FetchOutcome =
   | { ok: true; rows: SpendRow[]; rejections: RowRejection[] }
-  | { ok: false; error: string };
+  /**
+   * `notConnected` separates "this platform is not attached to the Windsor
+   * account" from "the feed is broken", and the two need opposite responses.
+   * See isNotConnectedResponse.
+   */
+  | { ok: false; error: string; notConnected?: boolean };
+
+/**
+ * Windsor saying "this platform is not attached to your account".
+ *
+ * A DISCONNECTED PLATFORM IS NOT A BROKEN FEED, AND THE COST OF CONFUSING THEM
+ * IS A PERMANENT FALSE ALARM. Verified live on 2026-09-06, minutes after
+ * Snapchat was detached from this store's Windsor account:
+ *
+ *     No snapchat account for user … was found, add your accounts at
+ *     https://onboard.windsor.ai?datasource=snapchat
+ *
+ * That is an ERROR, not an empty result — so every nightly run would have
+ * reported a failed connector for as long as the platform stayed detached, and
+ * an operator would learn to ignore the one signal that says the feed is down.
+ *
+ * WINDSOR_CONNECTORS deliberately still lists snapchat. Detaching a platform is
+ * an ordinary marketing decision and is usually temporary; reattaching it must
+ * not require a deploy. A connector nobody has connected is simply skipped, and
+ * starts working again the moment an account appears behind it.
+ *
+ * Matched on the message rather than the status code, because the status is
+ * Windsor's to change and the sentence is what identifies the condition.
+ */
+function isNotConnectedResponse(detail: string): boolean {
+  return /no\s+\w+\s+account for user/i.test(detail)
+    || /onboard\.windsor\.ai\?datasource=/i.test(detail);
+}
 
 /**
  * Fetch one connector's daily spend for a date range.
@@ -304,12 +380,29 @@ export async function fetchConnectorSpend(input: {
     } catch {
       /* a body we cannot read is still an HTTP status worth reporting */
     }
+    if (isNotConnectedResponse(detail)) {
+      return { ok: false, notConnected: true, error: `${input.connector} is not connected to this Windsor account` };
+    }
     return { ok: false, error: `HTTP ${response.status}${detail ? `: ${detail}` : ""}` };
+  }
+
+  // READ THE BODY AS TEXT FIRST, then parse. A body can only be read once, and
+  // Windsor's detached-account message arrives as a bare sentence — not JSON —
+  // sometimes under a 200. Parsing first threw that away as "response was not
+  // JSON", which is true and useless.
+  let bodyText: string;
+  try {
+    bodyText = await response.text();
+  } catch (error) {
+    return { ok: false, error: `response body unreadable: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  if (isNotConnectedResponse(bodyText)) {
+    return { ok: false, notConnected: true, error: `${input.connector} is not connected to this Windsor account` };
   }
 
   let payload: unknown;
   try {
-    payload = await response.json();
+    payload = JSON.parse(bodyText);
   } catch (error) {
     return { ok: false, error: `response was not JSON: ${error instanceof Error ? error.message : String(error)}` };
   }
@@ -320,7 +413,14 @@ export async function fetchConnectorSpend(input: {
     : Array.isArray((payload as { data?: unknown })?.data)
       ? (payload as { data: unknown[] }).data
       : null;
-  if (!raw) return { ok: false, error: "response carried no data array" };
+  // A JSON-shaped variant of the same message (e.g. {"error": "No … account
+  // for user …"}) — the text check above covers the bare-sentence form.
+  if (!raw) {
+    if (isNotConnectedResponse(JSON.stringify(payload ?? ""))) {
+      return { ok: false, notConnected: true, error: `${input.connector} is not connected to this Windsor account` };
+    }
+    return { ok: false, error: "response carried no data array" };
+  }
 
   const rows: SpendRow[] = [];
   const rejections: RowRejection[] = [];
@@ -328,6 +428,27 @@ export async function fetchConnectorSpend(input: {
     const outcome = normalizeSpendRow(input.connector, item);
     if (outcome.ok) rows.push(outcome.row);
     else rejections.push({ reason: outcome.reason, row: item });
+  }
+
+  // A QUIET DAY AND A BROKEN FEED ARE DIFFERENT ANSWERS.
+  //
+  // An empty `data` array is a real, ordinary result: the connector answered
+  // and there was no spend in the window. That stays `ok` with zero rows, and
+  // must, or a paused account would alarm every night.
+  //
+  // Rows that ARRIVED and were all refused is the opposite: the connector said
+  // something and none of it was ad data. That is the shape Windsor's
+  // account-level notice takes (see normalizeSpendRow above), and it is also
+  // what a schema change or a corrupted feed would look like. Reporting it as
+  // success is how a broken feed becomes an empty dashboard with no alert, so
+  // it is reported as a connector failure and carries the first reason
+  // verbatim — an operator reading this at 2am needs Windsor's own words, not
+  // "0 rows written".
+  if (rows.length === 0 && rejections.length > 0) {
+    return {
+      ok: false,
+      error: `${rejections.length} row(s) returned, none usable — ${rejections[0].reason}`,
+    };
   }
 
   return { ok: true, rows, rejections };

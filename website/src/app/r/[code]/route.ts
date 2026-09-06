@@ -5,6 +5,7 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { resolveReferralCode } from "@/lib/referral-code-service";
 import { hasAnalyticsConsent } from "@/lib/cookie-consent-server";
 import { safeInternalPath } from "@/lib/internal-path";
+import { CLICK_ID_KEYS, UTM_KEYS } from "@/lib/attribution";
 
 const REFERRAL_COOKIE_NAME = "vl_referral_code";
 const REFERRAL_COOKIE_MAX_AGE = 60 * 60 * 24 * 30;
@@ -19,6 +20,28 @@ export async function GET(request: Request, context: { params: Promise<{ code: s
   const rawNext = url.searchParams.get("next") || "/products";
   const safeNext = safeInternalPath(rawNext, "/products");
   const destination = new URL(safeNext, url.origin);
+
+  // AN AD THAT LANDS ON AN AMBASSADOR LINK KEPT ITS AMBASSADOR AND LOST ITS AD.
+  //
+  // This route redirects to a path with no query, so `?utm_source=meta&ttclid=…`
+  // on the incoming link died here. The click was written to partner_clicks —
+  // when the visitor had accepted analytics — but the LANDING page never saw
+  // the parameters, and the landing page is the only thing that writes the
+  // visitor's attribution touch. So an ambassador running paid traffic to their
+  // own link produced orders that read as organic: no spend joined to them, no
+  // ROAS, and the click id that Meta/TikTok's conversion API needs was gone.
+  //
+  // Forwarded by ALLOWLIST rather than wholesale, because this is a public,
+  // widely shared link redirecting to an internal path: only the campaign tags
+  // and the platforms' click ids this store already knows how to read travel,
+  // and an explicit `next` that carries its own value for one of them keeps it.
+  for (const key of [...UTM_KEYS, ...CLICK_ID_KEYS]) {
+    const value = url.searchParams.get(key);
+    if (value && !destination.searchParams.has(key)) {
+      destination.searchParams.set(key, value);
+    }
+  }
+
   const response = NextResponse.redirect(destination);
 
   // Resolve to the ambassador: a live code, OR an aliased OLD code that redirects

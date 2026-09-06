@@ -150,7 +150,22 @@ export function cartPromoCandidates(input: {
     candidates.push({ type: "buy3get1", amount: input.promotionDiscount });
   }
   if (input.referralPercent > 0 && input.referralQualifies) {
-    candidates.push({ type: "referral", amount: input.discountBase * (input.referralPercent / 100) });
+    // ROUNDED HERE, AS THE SERVER ROUNDS IT. profit-engine.ts's `pct()` is
+    // `round(subtotal * percent / 100)` and is applied BEFORE the candidate
+    // competes against the quantity-bundle savings; this kept the raw product
+    // and rounded only inside compete(), after subtracting them.
+    //
+    // Two roundings of the same number in different orders differ by a cent
+    // whenever the raw value lands on a half-cent. Driven over 200,000
+    // randomised baskets through both real modules, 76 disagreed — always by
+    // exactly one cent, always with the SERVER giving more, and never about
+    // WHICH discount won, which is the property that gates store credit and
+    // points. A preview a cent away from the charge is still a preview that
+    // does not match the charge.
+    candidates.push({
+      type: "referral",
+      amount: Math.round(input.discountBase * input.referralPercent) / 100,
+    });
   }
   return candidates;
 }

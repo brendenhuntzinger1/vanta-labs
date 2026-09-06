@@ -169,8 +169,35 @@ for f in referral-orders-commission-lifecycle referral-orders-manual-review-stat
          email-delivery-event-log email-lifecycle-2026-09-04 payment-failure-detail \
   marketing-frequency-guard \
   auth-user-by-email \
+  bxgy-promotions bxgy-redemption-claims coupon-redeem-rpc \
+  tender-hold-claim \
   membership-pending-tier-change \
   order-attribution ads-system ads-spend-roas; do
+  [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
+done
+
+# ---------------------------------------------------------------------------
+# SECURITY POSTURE — the layer the harness used to have none of.
+#
+# The harness applied 65 of the repository's SQL files and none of the fifteen
+# security ones. So the default browser-verification target had 1 policy in the
+# whole public schema, no anon table grants in either direction, and no catalog
+# gate: an engineer could verify the storefront wall in the browser exactly as
+# CLAUDE.md instructs and learn nothing whatever about the layer the gate commit
+# calls the only one that cannot be bypassed.
+#
+# Concretely, this is why a collision between two lockdown migrations — both
+# creating a policy of the same name, so whichever ran second aborted its whole
+# transaction and left the anon grants in place — survived to a pre-launch
+# audit. Applied here, it would have failed the parity check on the first run.
+#
+# Order matters: policies reference current_auth_role(), and the catalog gate
+# replaces the public catalog policies the revoke file also touches.
+echo "==> security posture (RLS, policies, grants — the layer under test)"
+for f in rls-enforce-all-tables orders-rls partner-portal-rls affiliate-program-rls \
+         fulfillment-rls-hardening products-hide-cost-columns-from-public \
+         product-doses-hide-cost-columns-from-public rpc-execute-lockdown \
+         admin-control-current-view gate-catalog-behind-account revoke-anon-table-access; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
 done
 
@@ -291,6 +318,47 @@ check "reserve_inventory enforces untracked-but-stocked (inventory-enforce-posit
   "select coalesce(bool_or(prosrc like '%inventory_quantity > 0%'), false) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='reserve_inventory';"
 check "admin_ops_summary sums NET revenue, not gross amount_paid (admin-dashboard-rollups.sql)" \
   "select coalesce(bool_or(prosrc like '%refund_amount%'), false) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='admin_ops_summary';"
+
+# tender-hold-claim.sql (2026-09-06). tender-reservation.ts falls back to the
+# pre-lock write-then-validate algorithm when these functions are absent, and
+# that fallback is SILENT except for one console.warn. So a harness without them
+# cannot tell the atomic hold from the racy one — a browser check of "two tabs,
+# one balance" would exercise the algorithm the migration exists to replace.
+check "claim_store_credit_hold takes an advisory lock (tender-hold-claim.sql)" \
+  "select coalesce(bool_or(prosrc like '%pg_advisory_xact_lock%'), false) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='claim_store_credit_hold';"
+check "claim_points_hold takes an advisory lock (tender-hold-claim.sql)" \
+  "select coalesce(bool_or(prosrc like '%pg_advisory_xact_lock%'), false) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='claim_points_hold';"
+
+# THE SECURITY LAYER, ASSERTED RATHER THAN ASSUMED.
+#
+# Each of these three is a real production-shaped failure that the harness could
+# not previously see, and each is one query:
+#
+#   * a table nobody remembered to name in the RLS sweep (ambassador_wallet_ledger
+#     was exactly that: a real table carrying user_id, amount_cents and a
+#     free-text note, in no RLS statement anywhere in the repo);
+#   * an anon SELECT grant left standing by an aborted lockdown transaction;
+#   * a view without security_invoker, which runs as its owner and therefore
+#     reads straight past the RLS on the table underneath it.
+check "every public table has RLS enabled (rls-enforce-all-tables.sql)" \
+  "select not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and not c.relrowsecurity);"
+check "anon and authenticated hold no table SELECT grant (revoke-anon-table-access.sql)" \
+  "select not exists (select 1 from information_schema.role_table_grants where table_schema='public' and grantee in ('anon','authenticated'));"
+check "every public view is security_invoker (a view otherwise reads past RLS)" \
+  "select not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('v','m') and (c.reloptions is null or not ('security_invoker=true' = any(c.reloptions))));"
+
+# harness-seed.sql applies with `|| true`, so a seed that ROLLS BACK leaves the
+# harness with whatever catalogue it had before and says nothing. That is not
+# hypothetical: the file deleted `orders` and `ambassadors` without first
+# deleting order_attribution, referral_orders, commissions and the rest of their
+# FK children — tables that arrive in migrations applied ABOVE it — so the very
+# first statement failed on any harness that had ever recorded a campaign touch
+# or an affiliate order, and every browser verification afterwards ran against a
+# stale catalogue. Assert the seed's own shapes rather than its exit code.
+check "the seed applied: six synthetic products" \
+  "select count(*) = 6 from public.products;"
+check "product images point at a file that exists in public/" \
+  "select not exists (select 1 from public.products where image_url like '/img/%') and not exists (select 1 from public.product_images where image_url like '/img/%');"
 
 if [ "$parity_failures" -ne 0 ]; then
   echo ""

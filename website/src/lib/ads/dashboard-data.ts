@@ -200,6 +200,56 @@ export async function safeSelect<T>(table: string, columns: string, build?: (q: 
   }
 }
 
+/**
+ * Every row, not the first thousand.
+ *
+ * PostgREST answers a select with at most `db-max-rows` (1000 on Supabase) and
+ * says so only in the Content-Range header, which supabase-js does not surface
+ * unless the caller asks for a count. So a read that outgrows the cap does not
+ * fail, does not warn, and returns a prefix — and the dashboard sums that prefix
+ * into numbers it presents as totals.
+ *
+ * That cap is reachable at ordinary scale. ad_creative_roas_daily is one row per
+ * (platform, day, creative): four platforms over a thirty-day window crosses
+ * 1000 at about nine creatives per platform. The reads it truncates are exactly
+ * the ones whose SUM is displayed — untagged spend and unattributed revenue,
+ * the two figures that exist to state the size of the blind spot — so the
+ * failure mode is a blind spot that reports itself as smaller than it is.
+ *
+ * Paged with .range() until a short page arrives. HARD_CAP is a backstop, not a
+ * limit anyone should hit; when it is reached `truncated` is set so the caller
+ * can say so rather than quietly under-report.
+ */
+const PAGE = 1000;
+const HARD_CAP = 50_000;
+
+/** The shape `build` receives — the same one safeSelect hands its callback. */
+function baseQuery(table: string, columns: string) {
+  return supabaseAdmin.from(table).select(columns);
+}
+
+export async function safeSelectAll<T>(
+  table: string,
+  columns: string,
+  build?: (q: ReturnType<typeof baseQuery>) => unknown,
+): Promise<QueryOutcome<T> & { truncated: boolean }> {
+  const rows: T[] = [];
+  for (let offset = 0; offset < HARD_CAP; offset += PAGE) {
+    const page = await safeSelect<T>(table, columns, (q) => {
+      const shaped = build ? (build(q) as typeof q) : q;
+      return shaped.range(offset, offset + PAGE - 1);
+    });
+    if (page.missing || page.error) {
+      return { rows, missing: page.missing, error: page.error, truncated: false };
+    }
+    rows.push(...page.rows);
+    if (page.rows.length < PAGE) {
+      return { rows, missing: false, error: null, truncated: false };
+    }
+  }
+  return { rows, missing: false, error: null, truncated: true };
+}
+
 export async function getAdsDashboard(): Promise<AdsDashboard> {
   const todayIso = new Date().toISOString().slice(0, 10);
 

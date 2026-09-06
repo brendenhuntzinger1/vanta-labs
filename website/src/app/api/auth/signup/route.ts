@@ -188,6 +188,7 @@ export async function POST(request: Request) {
       referredByCode,
       marketingOptIn,
       redirectTo: confirmationRedirect(nextPath),
+      nextPath,
     });
 
     if (outcome === "mint_failed") {
@@ -249,6 +250,17 @@ async function createAccountAndSend(input: {
   referredByCode: string;
   marketingOptIn: boolean;
   redirectTo: string;
+  /**
+   * Where the customer asked to land after confirming, already validated.
+   *
+   * `redirectTo` above only reaches them through `fallbackActionLink`, which is
+   * used solely when the branded hop cannot be built — so the destination they
+   * chose was validated, threaded through this route, and then discarded by a
+   * hardcoded "/account" in the link every customer actually receives. A
+   * shopper who was sent to sign up from a product page confirmed their address
+   * and landed on their account instead of the page they came from.
+   */
+  nextPath: string;
 }): Promise<SignupOutcome> {
   const { data, error } = await supabaseAdmin.auth.admin.generateLink({
     type: "signup",
@@ -340,7 +352,9 @@ async function createAccountAndSend(input: {
     confirmUrl: brandedConfirmUrl({
       hashedToken: data.properties.hashed_token,
       type: data.properties.verification_type ?? "signup",
-      next: "/account",
+      // The destination the customer asked for, re-validated here rather than
+      // trusted: this string ends up in a link in an email.
+      next: safeInternalPath(input.nextPath, "/account"),
       fallbackActionLink: data.properties.action_link,
     }),
   });
