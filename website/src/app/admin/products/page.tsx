@@ -338,7 +338,16 @@ export default function AdminProductsPage() {
           return;
         }
 
-        if (!res.ok) {
+        // 200 with `authenticated: false` is the signed-out answer; anything
+        // that is not an explicit yes is denied, so a malformed or failed
+        // response still sends the visitor back to the vault login.
+        const json = res.ok
+          ? ((await res.json().catch(() => null)) as { authenticated?: boolean } | null)
+          : null;
+        if (cancelled) {
+          return;
+        }
+        if (json?.authenticated !== true) {
           setAuthState("denied");
           router.replace("/vault");
           return;

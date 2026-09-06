@@ -130,6 +130,10 @@ describe("Windsor's account notice is never mistaken for ad data", () => {
   });
 
   it("the notice on EVERY connector throws, so the sweep alerts a human", async () => {
+    // "connected platform", not "connector": a platform detached from the
+    // Windsor account is skipped rather than attempted, so the incident rule
+    // counts only the ones that were actually tried. All four are attached
+    // here, and the count in the message says so.
     const written: Record<string, unknown>[] = [];
     await expect(
       runSpendIngest({
@@ -142,7 +146,7 @@ describe("Windsor's account notice is never mistaken for ad data", () => {
           return { error: null };
         },
       }),
-    ).rejects.toThrow(/failed on every connector/);
+    ).rejects.toThrow(/failed on every connected platform \(4\/4\)/);
     // And nothing reached the table.
     expect(written).toHaveLength(0);
   });
