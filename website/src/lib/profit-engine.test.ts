@@ -114,10 +114,25 @@ describe("discount composition rules", () => {
     expect(d.components).toEqual(["referral"]);
   });
 
-  it("bundle order + code → bundle discount only (referral % does NOT stack)", () => {
-    const d = resolveCustomerDiscount(makeOrder({ bundleDiscount: 20, referralAccepted: true }), ALL);
-    expect(d.amount).toBe(20); // Buy-3-Get-1 free item only; no referral % added on top
+  // A BUNDLE AND A REFERRAL COMPETE. THEY NEVER STACK, AND NEITHER IS SEEDED.
+  //
+  // This used to assert `bundleDiscount: 20, referralAccepted: true -> 20`
+  // under the heading "referral % does NOT stack". The no-stacking half is
+  // right and is still pinned by both cases below — one candidate wins, never
+  // two. The other half was a walkover: `!isBundle && hasReferral` zeroed the
+  // referral whatever it was worth, so a $26 referral lost to a $20 free item
+  // and the shopper was charged $6 more than the best offer the store had for
+  // them, on a page promising "whichever single discount saves you the most".
+  it("bundle order + code → the bundle, when the bundle is worth more", () => {
+    const d = resolveCustomerDiscount(makeOrder({ bundleDiscount: 40, referralAccepted: true }), ALL);
+    expect(d.amount).toBe(40); // 40 > 10% of 260; the free item alone, nothing added on top
     expect(d.components).toEqual(["bundle"]);
+  });
+
+  it("bundle order + code → the referral, when the referral is worth more", () => {
+    const d = resolveCustomerDiscount(makeOrder({ bundleDiscount: 20, referralAccepted: true }), ALL);
+    expect(d.amount).toBe(26); // 10% of 260 beats the $20 free item
+    expect(d.components).toEqual(["referral"]);
   });
 
   it("bundle order, no code → bundle discount only", () => {

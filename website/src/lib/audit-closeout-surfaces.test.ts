@@ -49,13 +49,132 @@ describe("CART-03 — the drawer says its total is not yet the card total", () =
   });
 });
 
-describe("CART-05 — a code that displaces the other kind says so", () => {
+// CART-05 USED TO ASSERT THE OPPOSITE, AND THE OPPOSITE WAS THE BUG.
+//
+// It required the cart to NAME the code it had just deleted — "Promo code X was
+// removed", "Referral code Y was removed" — on the premise that one code slot
+// existed and a shopper deserved to be told which code lost it. The premise was
+// wrong. Applying a promo code expired `vl_referral_code` outright, so a shopper
+// who arrived on an ambassador's link and then typed a public code destroyed the
+// attribution for that order and for the rest of the 30-day window. The
+// ambassador was paid nothing on a sale they had made, and the message that
+// satisfied this test was the only trace of it.
+//
+// Both codes are now held and COMPETE; the larger saving prices the order and
+// the loser is reported as accepted-but-not-applied. So the guard is inverted:
+// nothing may quietly take a code away, and the cookie may only be cleared by
+// the shopper asking for it.
+describe("CART-05 — applying one kind of code never removes the other", () => {
   const context = read("components/cart-context.tsx");
-  it("applying a referral names the promo code it removed", () => {
-    expect(context).toContain("Promo code ${displacedCoupon} was removed — promo codes can't be combined with a referral code.");
+
+  it("no branch displaces a coupon or a referral behind the shopper's back", () => {
+    expect(context).not.toContain("displacedCoupon");
+    expect(context).not.toContain("displacedReferral");
+    expect(context).not.toContain("can't be combined with a promo code");
+    expect(context).not.toContain("promo codes can't be combined with a referral code");
   });
-  it("applying a coupon (typed or restored) names the referral code it removed", () => {
-    expect(context.split("Referral code ${displacedReferral} was removed — it can't be combined with a promo code.").length - 1).toBe(2);
+
+  it("expires the referral cookie in exactly one place — the shopper removing the code", () => {
+    // `clearReferralCode` is the deliberate act: the shopper pressed Remove.
+    // Any second occurrence means some other path is expiring a 30-day
+    // attribution window as a side effect, which is what this file exists to
+    // stop happening again.
+    expect(context.split(`${"${REFERRAL_COOKIE_KEY}"}=; path=/; max-age=0`).length - 1).toBe(1);
+    const clearBody = context.slice(context.indexOf("const clearReferralCode ="));
+    expect(clearBody.slice(0, clearBody.indexOf("};"))).toContain("max-age=0");
+  });
+
+  it("refuses neither code while a promotion is running", () => {
+    expect(context).not.toContain("Referral codes cannot be combined with the");
+    expect(context).not.toContain("Coupon codes cannot be combined with the");
+  });
+});
+
+// EVERY SURFACE THAT TAKES A CODE, NOT JUST THE ONE THAT HOLDS THE STATE.
+//
+// The refusals lived on the PAGES, and the first pass of this change fixed the
+// cart page and the checkout page while missing cart-drawer.tsx entirely — which
+// hid BOTH fields for the whole of every non-stacking promotion, on the surface
+// where most shoppers enter a code at all. Nothing failed; it was found by
+// driving a browser. A source guard over one file cannot catch a fourth file, so
+// this enumerates all four and will fail the day a fifth appears with the same
+// gate.
+describe("CART-05b — no code-entry surface closes itself during a promotion", () => {
+  /**
+   * Source with comments removed.
+   *
+   * The guards below assert that certain COPY and certain GATES are gone from
+   * the shipped surfaces. Each of those files now carries a comment explaining
+   * what was removed and why — quoting the old wording verbatim, which is what
+   * makes the comment useful — so a naive substring check fails on the
+   * explanation rather than on the behaviour. Strip comments and the guard
+   * measures the code.
+   *
+   * `//` is only treated as a comment at the start of a line (after
+   * whitespace), so a "https://…" inside a string is left alone.
+   */
+  const stripComments = (source: string) => source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^[ \t]*\/\/.*$/gm, "");
+
+  const SURFACES = [
+    ["the cart drawer", "components/cart-drawer.tsx"],
+    ["the cart page", "app/cart/cart-client.tsx"],
+    ["the checkout page", "app/checkout/page.tsx"],
+    ["the cart context", "components/cart-context.tsx"],
+  ] as const;
+
+  it.each(SURFACES)("%s never says a code cannot be combined with a promotion", (_label, path) => {
+    const source = stripComments(read(path));
+    expect(source).not.toContain("cannot be combined with this");
+    expect(source).not.toContain("cannot be combined with the");
+    expect(source).not.toContain("discounts pause while this promotion");
+    expect(source).not.toContain("Remove it to use a coupon instead");
+  });
+
+  it.each(SURFACES)("%s does not gate a code field on a promotion being absent", (_label, path) => {
+    const source = stripComments(read(path));
+    // `isBuy3Get1FreeActive` / `isBuy3Get1FreeEligible` may still be READ (the
+    // drawer announces the promotion, the checkout labels the discount) — what
+    // must never come back is a branch that swaps a code input out for a
+    // refusal, which is what each of these shapes was.
+    for (const gate of [
+      "!isBuy3Get1FreeActive || activePromotionAllowsCoupon",
+      "!isBuy3Get1FreeEligible || activePromotionAllowsCoupon",
+      "isBuy3Get1FreeActive && !activePromotionAllowsCoupon",
+      "isBuy3Get1FreeEligible && !activePromotionAllowsCoupon",
+      "buy3Get1FreeDiscount > 0 && !activePromotionAllowsCoupon",
+    ]) {
+      expect(source, `${path} still gates a code field on \`${gate}\``).not.toContain(gate);
+    }
+  });
+
+  // THE COMPONENT'S ARGUMENTS ARE NOT COVERED BY THE PARITY SUITE.
+  //
+  // cart-server-discount-parity.test.ts calls resolveCartDiscount directly, so
+  // it proves the RULEBOOK matches the server while saying nothing about what
+  // cart-context.tsx actually hands it. That gap let the split stacking flags
+  // silently revert to the old OR after they had been written once — caught by
+  // a review bot, not by 8,431 tests. Passing the OR as `allowCouponStacking`
+  // makes the cart add a losing promotion's coupon to whichever candidate won,
+  // while the server competes the promotion+coupon package: two different
+  // totals, which the checkout refuses as "Altered total detected".
+  it("the cart hands the rulebook the SPLIT stacking flags, never the OR", () => {
+    const source = stripComments(read("components/cart-context.tsx"));
+    // The store-wide switch alone, and the promotion's licence as its own input.
+    expect(source).toContain("allowCouponStacking: couponStackingEnabled");
+    expect(source).toContain("promotionStacksCoupon,");
+    // The OR is a DISPLAY value (it drives the coupon's outcome sentence) and
+    // must never be the pricing input again.
+    expect(source).not.toContain("allowCouponStacking: activePromotionAllowsCoupon");
+  });
+
+  it("the two remove controls are told apart by their accessible name", () => {
+    // Both read "Remove code" and could never both be on screen before this
+    // change, so one name was enough. Now they can.
+    const checkout = read("app/checkout/page.tsx");
+    expect(checkout).toContain('aria-label="Remove referral code"');
+    expect(checkout).toContain('aria-label="Remove coupon code"');
   });
 });
 

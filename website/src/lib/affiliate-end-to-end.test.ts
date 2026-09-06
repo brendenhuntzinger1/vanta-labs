@@ -72,7 +72,7 @@ function cartShows(subtotal: number, rateFromRpc: unknown) {
     memberPricingAmount: 0,
     ambassadorPersonalAmount: 0,
     couponDiscountAmount: 0,
-    promo: qualifies ? { type: "referral", amount: subtotal * (percent / 100) } : null,
+    promos: qualifies ? [{ type: "referral", amount: subtotal * (percent / 100) }] : [],
   }).amount;
 }
 

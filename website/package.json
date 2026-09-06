@@ -17,7 +17,9 @@
     "qa:abuse": "node scripts/qa-abuse-and-roles.mjs",
     "qa:all": "npm run qa:seed && npm run qa:roles && npm run qa:crossaccount && npm run qa:journey && npm run qa:purchase && npm run qa:abuse",
     "qa:purchase": "node scripts/qa-purchase-path.mjs",
-    "qa:purchase:mobile": "QA_VIEWPORT=mobile node scripts/qa-purchase-path.mjs"
+    "qa:purchase:mobile": "QA_VIEWPORT=mobile node scripts/qa-purchase-path.mjs",
+    "qa:discounts": "node scripts/qa-discount-contest.mjs",
+    "qa:discounts:mobile": "QA_VIEWPORT=mobile node scripts/qa-discount-contest.mjs"
   },
   "dependencies": {
     "@basis-theory/basis-theory-js": "^4.30.2",

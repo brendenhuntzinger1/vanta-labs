@@ -452,10 +452,29 @@ describe("usage limits", () => {
 // ---------------------------------------------------------------------------
 
 describe("stacking rules", () => {
-  it("refuses a coupon alongside a promotion that does not allow one", async () => {
+  // THIS USED TO ASSERT A THROW: "Coupon codes cannot be combined with Buy 1
+  // Get 1 Free. Remove the coupon code to continue." Refusing the combination
+  // enforced nothing — resolveCustomerDiscount already gives exactly one
+  // discount — it just made the shopper pick between codes from an error
+  // message, without being told which was worth more.
+  it("competes a coupon against a promotion that does not allow stacking", async () => {
     promotionState.promotions = [promotion("buy-1-get-1-free")];
-    await expect(quote({ items: [{ id: "peptide-b", quantity: 4 }], couponCode: "SAVE30" }))
-      .rejects.toThrow(/cannot be combined with Buy 1 Get 1 Free/);
+    // 4 x $40: the promotion frees two units ($80) and beats the $30 coupon.
+    const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }], couponCode: "SAVE30" });
+    expect(quoted.discountAmount).toBe(80);
+    // The coupon lost, so it is not recorded and not redeemed.
+    expect(quoted.couponCode).toBeNull();
+  });
+
+  it("gives the coupon when it beats the promotion, and consumes no redemption", async () => {
+    promotionState.promotions = [promotion("buy-3-get-1-free")];
+    coupon.discountAmount = 70;
+    // 4 x $40: the promotion frees one unit ($40); the $70 coupon is worth more.
+    const quoted = await quote({ items: [{ id: "peptide-b", quantity: 4 }], couponCode: "SAVE30" });
+    expect(quoted.discountAmount).toBe(70);
+    expect(quoted.couponCode).toBe("SAVE30");
+    // A promotion that did not price the order must not be written to it.
+    expect(quoted.appliedPromotionId).toBeNull();
   });
 
   it("adds a coupon on top when the promotion allows stacking", async () => {
