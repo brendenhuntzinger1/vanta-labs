@@ -223,6 +223,32 @@ export function normalizeSpendRow(
 
   const adId = toText(r.ad_id, 128);
   if (!adId) return { ok: false, reason: "missing ad_id" };
+  // AN AD ID IS A TOKEN. A SENTENCE IN THIS FIELD IS THE FEED TALKING TO US.
+  //
+  // Windsor answers an account-level problem with HTTP 200 and a data array
+  // whose every TEXT field carries the SAME prose, and whose every numeric
+  // field is 0. Measured against the live account on 2026-09-06, all four
+  // connectors returned exactly this:
+  //
+  //   {"date":"2026-09-06",
+  //    "ad_id":"Uh-oh! You've connected more data sources than your Basic plan
+  //             allows. Upgrade here: https://onboard.windsor.ai/...",
+  //    "ad_name":<the same sentence>, "spend":0, "clicks":0, "impressions":0}
+  //
+  // Every check below passed on that row: the id was non-empty, the date
+  // parsed, and 0 is a perfectly good spend. So a 128-character prefix of an
+  // error message was about to be written into ad_spend_daily as an ad, the
+  // ingest was about to report `status: "ok"`, and the "every connector failed"
+  // alarm — the one added precisely so a broken feed could not read as a quiet
+  // one — was never going to fire, because nothing had failed.
+  //
+  // Whitespace is the discriminator, and it is exact rather than clever: Meta
+  // and TikTok ad ids are digit strings, Snapchat's are UUIDs and Reddit's are
+  // short alphanumerics with underscores. Not one platform's id can contain a
+  // space, so this rejects the notice and can never reject an ad.
+  if (/\s/.test(adId)) {
+    return { ok: false, reason: `ad_id is not an identifier: ${JSON.stringify(adId.slice(0, 160))}` };
+  }
 
   const statDate = toStatDate(r.date);
   if (!statDate) return { ok: false, reason: `unparseable date ${JSON.stringify(r.date)}` };
@@ -328,6 +354,27 @@ export async function fetchConnectorSpend(input: {
     const outcome = normalizeSpendRow(input.connector, item);
     if (outcome.ok) rows.push(outcome.row);
     else rejections.push({ reason: outcome.reason, row: item });
+  }
+
+  // A QUIET DAY AND A BROKEN FEED ARE DIFFERENT ANSWERS.
+  //
+  // An empty `data` array is a real, ordinary result: the connector answered
+  // and there was no spend in the window. That stays `ok` with zero rows, and
+  // must, or a paused account would alarm every night.
+  //
+  // Rows that ARRIVED and were all refused is the opposite: the connector said
+  // something and none of it was ad data. That is the shape Windsor's
+  // account-level notice takes (see normalizeSpendRow above), and it is also
+  // what a schema change or a corrupted feed would look like. Reporting it as
+  // success is how a broken feed becomes an empty dashboard with no alert, so
+  // it is reported as a connector failure and carries the first reason
+  // verbatim — an operator reading this at 2am needs Windsor's own words, not
+  // "0 rows written".
+  if (rows.length === 0 && rejections.length > 0) {
+    return {
+      ok: false,
+      error: `${rejections.length} row(s) returned, none usable — ${rejections[0].reason}`,
+    };
   }
 
   return { ok: true, rows, rejections };

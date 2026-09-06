@@ -159,6 +159,7 @@ export const PUBLIC_PREFIXES = [
   "/api/analytics/track",
   "/api/ads/funnel-event",
 
+
   // ---- The referral link. A visitor following an ambassador's link has never
   // been here; /r/[code] sets the attribution cookie and redirects, and it has
   // to run BEFORE the wall or the ambassador loses the credit. ----
@@ -198,5 +199,47 @@ export function isPublicPath(pathname: string) {
 /** The inverse, named for the thing it decides at the call site. */
 export function requiresAccount(pathname: string) {
   return !isPublicPath(pathname);
+}
+
+/**
+ * EXEMPT FROM THE CUSTOMER WALL, BUT NOT OPEN TO THE PUBLIC.
+ *
+ * These carry their OWN authentication boundary — admin session, partner
+ * session, an unguessable order id — which is exactly why they are on the
+ * public list: putting the customer gate in front of an admin login would lock
+ * the owner out of their own store.
+ *
+ * That made one predicate answer two different questions, and the second answer
+ * was wrong. `requiresAccount()` is also what decides which responses get
+ * `Cache-Control: private, no-store`, so every one of these emitted NO cache
+ * header at all: 7 partner routes and 76 of 84 admin routes, each of whose
+ * bodies depends on WHO asked. Nothing shared-caches them today, but the rule
+ * beside it says plainly that "nothing behind the wall is shared-cacheable",
+ * and these are behind a wall.
+ */
+export const SELF_AUTHENTICATING_PREFIXES = [
+  "/admin",
+  "/api/admin",
+  "/vault",
+  "/partner/login",
+  "/partner/pending",
+  "/partner/dashboard",
+  "/api/partner",
+];
+
+/**
+ * May this response be handed to a DIFFERENT requester than the one who asked?
+ *
+ * True only for what is genuinely anonymous: the marketing pages, the legal
+ * policies, the sign-in surface, static assets. Everything else — gated by the
+ * customer wall or by its own boundary — depends on the requester.
+ */
+export function isPerRequesterResponse(pathname: string) {
+  return (
+    requiresAccount(pathname)
+    || SELF_AUTHENTICATING_PREFIXES.some(
+      (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+    )
+  );
 }
 

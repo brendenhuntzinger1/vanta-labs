@@ -147,9 +147,29 @@ describe("the redesigned page is composed, not assembled from cards", () => {
     expect(stack).toMatch(/opacity-45|opacity-35/);
   });
 
-  it("gives decorative layers empty alt text and names only the foreground", () => {
+  it("gives every layer a decorative alt, and never a product's name", () => {
+    // THIS USED TO REQUIRE `alt={front.alt}`, i.e. the product's NAME on the
+    // foreground vial. That was right while the catalogue was public and the
+    // page named products in its own copy. It stopped being right the moment
+    // access-policy.ts closed the default: /wholesale is exempt from the
+    // account wall because recruitment cannot sit behind a login, so that alt
+    // became the last route by which a compound name reached an anonymous
+    // reader. Measured on the harness build, with no cookie:
+    //
+    //     alt="BPC-157 10mg"
+    //     alt="Bacteriostatic Water 30ml"
+    //
+    // The photographs stay — their URLs are opaque storage UUIDs that name
+    // nothing, and the composition is the page's whole visual language. The
+    // NAME is gone from the type, not just from the attribute, so it cannot
+    // return by someone helpfully restoring an alt.
     expect(stack).toContain('alt=""');
-    expect(stack).toContain("alt={front.alt}");
+    expect(stack).toContain('alt="Vanta Labs research vials"');
+    // The selector's own shape is asserted in
+    // app/public-pages-name-no-product.test.ts, which strips comments first —
+    // necessary there because the comment recording this fix quotes the very
+    // pattern being banned.
+    expect(stack).not.toMatch(/alt=\{[^}]*\.(alt|name)\}/);
   });
 
   it("has one accent treatment for calls to action, not a new one per section", () => {
