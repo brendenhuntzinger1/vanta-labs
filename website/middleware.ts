@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isPerRequesterResponse, requiresAccount } from "@/lib/access-policy";
+import { copyAdParams } from "@/lib/attribution";
 
 import {
   AUTH_COOKIE_NAME,
@@ -465,6 +466,40 @@ async function hasVerifiedSession(
   return isVerifiedAccessToken(tokens.accessToken);
 }
 
+// THE SIGN-IN URL A GUEST IS SENT TO, BUILT IN ONE PLACE.
+//
+// Two rules below divert a signed-out visitor to the portal — the /account
+// guard and the access wall — and both have to answer the same two questions
+// identically, because a paid click can arrive at either.
+//
+//   `next`      where to resume after signing in. The path plus the ORIGINAL
+//               query, so a campaign link resolves to what it pointed at.
+//               Re-validated by safeInternalPath on the form before it is used,
+//               which is what makes accepting it safe.
+//
+//   ad params   the utm_* tags and the platform click ids, copied back up to
+//               the top level ALONGSIDE `next`.
+//
+// The second is the fix for a silent attribution hole. Everything a paid click
+// carries used to survive only inside `next`, percent-encoded, where the one
+// thing that reads it — `new URLSearchParams(location.search)` in
+// site-analytics-tracker.tsx — cannot see it. The landing page_view was written
+// with every utm column NULL and the localStorage record with no touch at all,
+// so a visitor who bounced at the portal was stored as organic. See
+// lib/attribution.ts, which owns the copy and explains the safety argument.
+//
+// THE DESTINATION IS A CONSTANT AND NOTHING COPIED CAN MOVE IT. The pathname is
+// assigned here, not read from the request; copyAdParams only ever adds query
+// parameters. So no crafted parameter can turn this into an open redirect.
+function loginRedirectUrl(request: NextRequest, pathname: string) {
+  const login = request.nextUrl.clone();
+  login.pathname = "/account/login";
+  login.search = "";
+  login.searchParams.set("next", `${pathname}${request.nextUrl.search}`);
+  copyAdParams(request.nextUrl.searchParams, login.searchParams);
+  return login;
+}
+
 // A MEDIA FILE IS NOT A LANDING PAGE.
 //
 // Opening a .mp4 as a page gives you the browser's bare media viewer: the clip
@@ -782,11 +817,7 @@ export async function middleware(request: NextRequest) {
     && !PUBLIC_ACCOUNT_PATHS.has(pathname)
     && !(await sessionIsVerified())
   ) {
-    const login = request.nextUrl.clone();
-    login.pathname = "/account/login";
-    login.search = "";
-    login.searchParams.set("next", `${pathname}${request.nextUrl.search}`);
-    return finish(NextResponse.redirect(login, 307));
+    return finish(NextResponse.redirect(loginRedirectUrl(request, pathname), 307));
   }
 
   // A RENAMED PRODUCT KEEPS ITS OLD ADDRESS WORKING.
@@ -872,14 +903,14 @@ export async function middleware(request: NextRequest) {
     }
 
     // The query is carried into ?next= so a referral or campaign link resolves
-    // to what it pointed at once the visitor signs in. safeInternalPath on the
-    // login form is what makes accepting it safe — see lib/internal-path.ts —
-    // and the referral code itself is already in a cookie by this point, set
+    // to what it pointed at once the visitor signs in, and the ad parameters
+    // are copied back to the top level so the portal's own page view is
+    // attributable even if the visitor never signs in at all. Both are
+    // loginRedirectUrl's job — see the comment on it. safeInternalPath on the
+    // login form is what makes accepting `next` safe — see lib/internal-path.ts
+    // — and the referral code itself is already in a cookie by this point, set
     // by /r/[code] before it redirected here, so attribution survives the hop.
-    const login = request.nextUrl.clone();
-    login.pathname = "/account/login";
-    login.search = "";
-    login.searchParams.set("next", `${pathname}${request.nextUrl.search}`);
+    const login = loginRedirectUrl(request, pathname);
     // 307 and no-store: this answer depends on the requester's session, so it
     // must never be cached and handed to a different one.
     const response = NextResponse.redirect(login, 307);

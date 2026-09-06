@@ -4,6 +4,7 @@ import { getRequestIpAddress } from "@/lib/admin-auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { createOptionalColumnInserter } from "@/lib/analytics-column-fallback";
 import { customerSafeMessage } from "@/lib/safe-error";
+import { normalizeCampaignTag } from "@/lib/attribution";
 
 const insertAnalyticsEvent = createOptionalColumnInserter(async (row) =>
   supabaseAdmin.from("website_analytics_events").insert(row),
@@ -147,15 +148,34 @@ export async function POST(request: Request) {
         country: normalizeText(body.country, 80),
         city: normalizeText(body.city, 120),
         device_type: normalizeText(body.deviceType, 80),
-        utm_source: normalizeText(body.utmSource, 120),
-        utm_medium: normalizeText(body.utmMedium, 120),
-        utm_campaign: normalizeText(body.utmCampaign, 180),
+        // CAMPAIGN TAGS ARE THE JOIN KEY, SO THEY ARE STORED THE WAY THE JOIN
+        // EXPECTS THEM — normalizeCampaignTag, not normalizeText.
+        //
+        // The browser tracker reads these with a bare
+        // `params.get("utm_campaign")` and posts them RAW; it never goes
+        // through parseAttributionTouch, which is what lowercases the tags and
+        // rejects an unexpanded platform macro on the order side. So an ad
+        // tagged `?utm_content=Hook_A` wrote `Hook_A` here and `hook_a` to
+        // order_attribution, and ads-spend-roas.sql lower()s the order side on
+        // read — meaning the two halves of the same funnel grouped the same
+        // creative under two different keys, and `{{campaign.name}}` from a
+        // platform that failed to substitute its own macro was stored as
+        // though it were a campaign name.
+        //
+        // Normalised HERE rather than in the tracker because this is the one
+        // write path every client reaches, including a browser still running a
+        // cached bundle.
+        utm_source: normalizeCampaignTag(body.utmSource),
+        utm_medium: normalizeCampaignTag(body.utmMedium),
+        utm_campaign: normalizeCampaignTag(body.utmCampaign),
         event_payload: normalizePayload(body.payload),
         created_at: new Date().toISOString(),
       },
       {
-        utm_content: normalizeText(body.utmContent, 180),
-        utm_term: normalizeText(body.utmTerm, 180),
+        utm_content: normalizeCampaignTag(body.utmContent),
+        utm_term: normalizeCampaignTag(body.utmTerm),
+        // A click id is an opaque token the ad platform matches on, never a key
+        // we group by — lowercasing one would break the conversion API.
         ttclid: normalizeText(body.ttclid, 260),
       },
     );
