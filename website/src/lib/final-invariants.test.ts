@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  computeProfit,
   resolveCustomerDiscount,
-  protectProfit,
-  DEFAULT_PROFIT_SETTINGS,
   type OrderInputs,
 } from "@/lib/profit-engine";
+import { buildProfitFloorSnapshot } from "@/lib/profit-floor-alert";
 import { computeRetainedCommission, getCommissionStateForRefund } from "@/lib/payment-webhook";
 import { isValidPayoutMethod } from "@/lib/partner-portal";
 
@@ -70,25 +70,51 @@ describe("INVARIANT 4 — membership discounts don't stack incorrectly", () => {
   });
 });
 
-describe("INVARIANT 5 — coupons can't bypass profit protection", () => {
-  it("an absurd coupon on a thin-margin order is peeled or the order is blocked — never finalizes below break-even", () => {
-    const guarded = protectProfit(
-      { ...BASE, subtotal: 100, productCost: 60, couponDiscount: 95, processingFeePercent: 10 },
-      DEFAULT_PROFIT_SETTINGS,
-    );
-    if (guarded.profitable) {
-      expect(guarded.grossProfit).toBeGreaterThanOrEqual(DEFAULT_PROFIT_SETTINGS.minProfitDollars - 0.001);
-      // If it finalized, the money-losing coupon must have been removed.
-      expect(guarded.removed).toContain("coupon");
-    } else {
-      expect(guarded.blockedReason).toBeTruthy();
-    }
+// INVARIANT 5 CHANGED SIDES, DELIBERATELY.
+//
+// It read "coupons can't bypass profit protection" and asserted that an absurd
+// coupon on a thin-margin order was peeled or the order blocked. Neither
+// happens now: the store's rule is that a valid order is never refused for
+// margin, and `protectProfit` (which did the peeling) had no production caller
+// and has been removed.
+//
+// What must still hold is that the store is TOLD. A money-losing combination
+// prices, completes, and is flagged — with figures that reconcile.
+describe("INVARIANT 5 — a money-losing combination is reported, never refused", () => {
+  const SETTINGS = { minProfitDollars: 0, minProfitPercent: 0 };
+
+  it("flags an absurd coupon on a thin-margin order instead of peeling it", () => {
+    const inputs = { ...BASE, subtotal: 100, productCost: 60, couponDiscount: 95, processingFeePercent: 10 };
+    const discount = resolveCustomerDiscount(inputs, ALL);
+    const profit = computeProfit(inputs, discount);
+    const snapshot = buildProfitFloorSnapshot(profit, SETTINGS, discount.label, inputs.shippingCollected);
+
+    // The coupon is still in the price — nothing was removed for margin.
+    expect(discount.amount).toBe(95);
+    expect(snapshot.belowFloor).toBe(true);
+    expect(snapshot.estimatedProfit).toBeLessThan(0);
+    expect(snapshot.discountAmount).toBe(95);
   });
 
-  it("an order that loses money even at full price is blocked outright", () => {
-    const guarded = protectProfit({ ...BASE, subtotal: 50, productCost: 80 }, DEFAULT_PROFIT_SETTINGS);
-    expect(guarded.profitable).toBe(false);
-    expect(guarded.blockedReason).toBeTruthy();
+  it("flags an order that loses money even at full price", () => {
+    const inputs = { ...BASE, subtotal: 50, productCost: 80 };
+    const discount = resolveCustomerDiscount(inputs, ALL);
+    const snapshot = buildProfitFloorSnapshot(
+      computeProfit(inputs, discount), SETTINGS, discount.label, inputs.shippingCollected,
+    );
+
+    expect(snapshot.belowFloor).toBe(true);
+    expect(snapshot.estimatedProfit).toBeLessThan(0);
+  });
+
+  it("says nothing about a healthy order", () => {
+    const inputs = { ...BASE, subtotal: 300, productCost: 90 };
+    const discount = resolveCustomerDiscount(inputs, ALL);
+    const snapshot = buildProfitFloorSnapshot(
+      computeProfit(inputs, discount), SETTINGS, discount.label, inputs.shippingCollected,
+    );
+
+    expect(snapshot.belowFloor).toBe(false);
   });
 });
 

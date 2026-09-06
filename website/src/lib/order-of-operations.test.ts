@@ -140,32 +140,42 @@ describe("$200 merchandise, 15% customer discount, 20% commission", () => {
 });
 
 // ---------------------------------------------------------------------------
-// THE $100 BOUNDARY.
+// THE BOUNDARY THAT WAS REMOVED.
+//
+// This described a $100 gate: $99.99 discounted the shopper but paid the
+// ambassador nothing. The minimum is gone, so both sides of that sentence are
+// now yes. The $99.99 cart is kept as the case, because it is the one the old
+// gate rejected by a cent.
 // ---------------------------------------------------------------------------
 describe("the qualifying minimum", () => {
-  it("is $100 and is tested with >=", () => {
-    expect(DEFAULT_MINIMUM_QUALIFYING_ORDER).toBe(100);
-    expect(qualifies(99.99)).toBe(false);
+  it("is 0, so every basket size qualifies", () => {
+    expect(DEFAULT_MINIMUM_QUALIFYING_ORDER).toBe(0);
+    expect(qualifies(99.99)).toBe(true);
     expect(qualifies(100)).toBe(true);
+    expect(qualifies(0.01)).toBe(true);
   });
 
-  // The customer still saves below the threshold; only the commission is
-  // withheld. Two separate rules, and conflating them would either overpay the
-  // ambassador or silently stop discounting the shopper.
-  it("still discounts a $99.99 order while paying $0 commission", () => {
+  // The shopper's saving on a below-$100 cart is UNCHANGED by the removal —
+  // only the commission side moved. Conflating the two rules would either
+  // overpay the ambassador or silently stop discounting the shopper, so the
+  // discount figure is pinned here at the same $10.00 it has always been.
+  it("discounts a $99.99 order exactly as before, and now pays commission on it", () => {
     const discount = resolveCustomerDiscount(
       { ...CART, subtotal: 99.99, referralAccepted: true, referralPercent: 10 },
       ALL,
     ).amount;
     expect(discount).toBe(10); // 9.999 -> 10.00
-    expect(qualifies(99.99)).toBe(false);
+    expect(qualifies(99.99)).toBe(true);
   });
 
-  // A $104.97 cart nets $94.47 -- under $100 -- and still qualifies, because
-  // the gate reads the pre-discount figure.
+  // Retained from the gated era: eligibility reads the PRE-discount figure, so
+  // a cart is never disqualified by its own referral discount. Vacuous at a 0
+  // minimum, and kept because it is what would catch a future minimum being
+  // wired to the post-discount subtotal.
   it("does not let the discount disqualify a qualifying cart", () => {
     expect(qualifies(104.97)).toBe(true);
     expect(round(104.97 - 10.5)).toBe(94.47);
+    expect(qualifies(94.47)).toBe(true);
   });
 });
 
@@ -352,9 +362,13 @@ describe("scenario ledger — every column asserted", () => {
       expect: { discount: 15, merchandiseAfter: 135, taxable: 135, shipping: 15, commissionable: 135, commission: 20.25 },
     },
     {
-      name: "referral below the $100 minimum — $99.99",
+      // Was "referral below the $100 minimum", commissionable 0 / commission 0.
+      // With the minimum removed this small cart earns like any other: the
+      // commission base is still the DISCOUNTED merchandise subtotal, and still
+      // excludes shipping.
+      name: "small referred cart, no minimum to clear — $99.99",
       subtotal: 99.99, over: { referralAccepted: true, referralPercent: 10 }, commissionPct: 15,
-      expect: { discount: 10, merchandiseAfter: 89.99, taxable: 89.99, shipping: 15, commissionable: 0, commission: 0 },
+      expect: { discount: 10, merchandiseAfter: 89.99, taxable: 89.99, shipping: 15, commissionable: 89.99, commission: 13.5 },
     },
     {
       name: "coupon only — $200",

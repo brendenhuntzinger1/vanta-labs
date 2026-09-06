@@ -306,10 +306,20 @@ describe("SOT-08: one floor predicate, used by the live checkout", () => {
     expect(meetsFloor(breakdown(30, 100, 30), settings)).toBe(true);
   });
 
-  it("the live checkout calls it instead of restating it", () => {
+  it("the one caller calls it instead of restating it", () => {
+    // The live checkout used to call meetsFloor directly, to BLOCK. It no
+    // longer blocks — a below-floor order completes and the owner is told —
+    // so the predicate's caller moved to the module that builds that notice.
+    // What SOT-08 is really about is unchanged: one predicate, one home, never
+    // a second inlined copy of the two comparisons.
+    const alert = source("src/lib/profit-floor-alert.ts");
+    expect(alert).toContain("!meetsFloor(profit, settings)");
+    expect(alert).not.toContain("profit.grossMarginPercent < settings.minProfitPercent");
+
     const quote = source("src/lib/quote-order.ts");
-    expect(quote).toContain("if (!meetsFloor(guardProfit, profitSettings)) {");
-    expect(quote).not.toContain("guardProfit.grossMarginPercent < profitSettings.minProfitPercent");
+    expect(quote).not.toContain("grossMarginPercent < profitSettings.minProfitPercent");
+    // And the checkout no longer refuses anyone for margin.
+    expect(quote).not.toContain('throw new Error("Promotion unavailable on this order.")');
   });
 });
 

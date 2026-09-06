@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PROFIT_SETTINGS,
   computeProfit,
-  protectProfit,
   resolveCustomerDiscount,
   type OrderInputs,
 } from "./profit-engine";
+import { buildProfitFloorSnapshot } from "./profit-floor-alert";
 
 // Base order: 4 vials @ $65 retail, $30 cost each, no promos. Callers override.
 function makeOrder(overrides: Partial<OrderInputs> = {}): OrderInputs {
@@ -254,43 +254,37 @@ describe("ambassador commission", () => {
   });
 });
 
-describe("profit protection guardrail", () => {
-  it("lets a healthy order through untouched", () => {
-    const result = protectProfit(makeOrder({ referralAccepted: true }));
-    expect(result.profitable).toBe(true);
-    expect(result.removed).toEqual([]);
-  });
-
-  it("peels off the lowest-priority discount to keep the order out of the red", () => {
-    // High cost + a big stacked coupon drives the order negative; the guard
-    // removes the coupon (lowest priority) and the order is profitable again.
-    const result = protectProfit(
-      makeOrder({ productCost: 155, couponDiscount: 90, allowCouponStacking: true, referralAccepted: true }),
-    );
-    expect(result.profitable).toBe(true);
-    expect(result.removed).toContain("coupon");
-    expect(result.grossProfit).toBeGreaterThanOrEqual(0);
-  });
-
-  it("blocks an order that loses money even with every promo removed", () => {
-    // Selling 4 vials at $26 each ($104) that cost $33 each ($132) can never be
-    // profitable — no promo removal can save it, so it must be blocked.
-    const result = protectProfit(makeOrder({ subtotal: 104, productCost: 132 }));
-    expect(result.profitable).toBe(false);
-    expect(result.blockedReason).toContain("Promotion unavailable");
-  });
-
-  it("never removes a paid membership discount for margin", () => {
-    const result = protectProfit(makeOrder({ isMember: true, membershipPercent: 15, productCost: 130 }));
-    expect(result.removed).not.toContain("membership");
-  });
-});
+// THE GUARDRAIL BLOCK THAT WAS HERE IS GONE, WITH THE FEATURE IT TESTED.
+//
+// `protectProfit` peeled the lowest-priority discount off an unprofitable order
+// and, failing that, blocked it. Nothing in production ever called it — the
+// live floor check was a bare `meetsFloor` throw in quoteOrder — and the store's
+// policy is now that a thin order COMPLETES and raises an internal notice
+// instead. Peeling would also have broken the cart/checkout price agreement:
+// the browser cannot see COGS, so a server that quietly re-priced would be
+// refused by the anti-tamper guard as an altered total.
+//
+// What replaced it: buildProfitFloorSnapshot / alertIfBelowProfitFloor, tested
+// in profit-floor-alert.test.ts against the real quoteOrder.
+//
+// meetsFloor itself survives and is still tested below — it is the alerting
+// comparison now rather than the blocking one.
 
 // ─── EXHAUSTIVE SIMULATION ────────────────────────────────────────────────
-// Every combination of worst-case-ish costs, order sizes, and promos. The core
-// invariant: an order the engine marks `profitable` ALWAYS meets the floor, and
-// the engine never silently lets a losing order finalize.
-describe("simulation: no finalized order ever falls below the profit floor", () => {
+// Every combination of worst-case-ish costs, order sizes, and promos.
+//
+// The invariant used to be "an order the engine marks profitable ALWAYS meets
+// the floor, and the engine never silently lets a losing order finalize". The
+// second half is deliberately no longer true: a losing order DOES finalize now,
+// because refusing a real customer over margin was costing this store ordinary
+// affiliate sales, and the owner would rather be told than have the sale
+// blocked.
+//
+// So the matrix still runs at the same scale and now pins what replaced it:
+// the reported margin is arithmetically right, the below-floor flag agrees
+// exactly with the configured thresholds, and no combination can produce a
+// nonsense price. Nothing here can refuse an order.
+describe("simulation: every priced order is reported accurately against the floor", () => {
   const settings = DEFAULT_PROFIT_SETTINGS; // break-even floor (0% / $0), worst-case $33, 10% fee
   const unitCosts = [25, 27, 29, 31, 33]; // wholesale+fulfillment range
   const retails = [55, 65, 79];
@@ -336,30 +330,34 @@ describe("simulation: no finalized order ever falls below the profit floor", () 
                         taxPercent: 7,
                       };
 
-                      const result = protectProfit(inputs, settings);
+                      const discount = resolveCustomerDiscount(inputs, ALL);
+                      const result = computeProfit(inputs, discount);
+                      const snapshot = buildProfitFloorSnapshot(
+                        result,
+                        settings,
+                        discount.label,
+                        inputs.shippingCollected,
+                      );
 
-                      // THE INVARIANT: anything the engine says is finalizable
-                      // must clear both floors.
-                      if (result.profitable) {
-                        profitable += 1;
-                        expect(
-                          result.grossProfit,
-                          `profit ${result.grossProfit} < $${settings.minProfitDollars} for ${JSON.stringify(inputs)}`,
-                        ).toBeGreaterThanOrEqual(settings.minProfitDollars - 0.001);
-                        if (result.discountedSubtotal > 0) {
-                          expect(
-                            result.grossMarginPercent,
-                            `margin ${result.grossMarginPercent}% < ${settings.minProfitPercent}% for ${JSON.stringify(inputs)}`,
-                          ).toBeGreaterThanOrEqual(settings.minProfitPercent - 0.001);
-                        }
-                        // A profitable order never charges a negative amount.
-                        expect(result.amountCharged).toBeGreaterThan(0);
-                        // Discount never exceeds the subtotal.
-                        expect(result.discount.amount).toBeLessThanOrEqual(subtotal + 0.001);
-                      } else {
-                        blocked += 1;
-                        expect(result.blockedReason).toBeTruthy();
-                      }
+                      // THE INVARIANT: the flag says exactly what the two
+                      // configured thresholds say, and nothing else.
+                      const expectedBelow = result.grossProfit < settings.minProfitDollars
+                        || (result.discountedSubtotal > 0 && result.grossMarginPercent < settings.minProfitPercent);
+                      expect(
+                        snapshot.belowFloor,
+                        `flag disagreed with the thresholds for ${JSON.stringify(inputs)}`,
+                      ).toBe(expectedBelow);
+
+                      if (snapshot.belowFloor) blocked += 1; else profitable += 1;
+
+                      // Reported figures reconcile with the breakdown they came from.
+                      expect(snapshot.estimatedProfit).toBeCloseTo(result.grossProfit, 2);
+                      expect(snapshot.subtotal).toBeCloseTo(subtotal, 2);
+                      // No pricing combination charges a negative amount or
+                      // discounts more than the basket is worth — true whether
+                      // or not the order clears the floor.
+                      expect(result.amountCharged).toBeGreaterThanOrEqual(0);
+                      expect(result.discount.amount).toBeLessThanOrEqual(subtotal + 0.001);
                     }
                   }
                 }
@@ -370,7 +368,9 @@ describe("simulation: no finalized order ever falls below the profit floor", () 
       }
     }
 
-    // Sanity: the matrix actually ran at scale and exercised both outcomes.
+    // Sanity: the matrix ran at scale and produced both outcomes — orders that
+    // clear the floor and orders that do not. Both COMPLETE; only the notice
+    // differs.
     expect(scenarios).toBeGreaterThan(5000);
     expect(profitable).toBeGreaterThan(0);
     expect(blocked).toBeGreaterThan(0);
