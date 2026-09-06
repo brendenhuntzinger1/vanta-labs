@@ -57,4 +57,5 @@ next-env.d.ts
 # remembering to delete it.
 src/**/__verify_*
 src/**/__scratch_*
+src/**/__probe_*
 src/**/zz-verify-*
