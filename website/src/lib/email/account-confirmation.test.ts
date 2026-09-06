@@ -177,6 +177,63 @@ describe("POST /api/auth/signup", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// THE 21+ / RESEARCH-USE RECORD IS A RECORD OF A TICK, NOT OF A CODE PATH.
+//
+// The route wrote `age_confirmed_21: true` and `research_use_only_agreed: true`
+// into user_metadata for every account and read nothing from the body; the form
+// did not send them. Another file's comment asserted the route "can only run
+// once the form's two boxes are ticked", which was true of the form and not of
+// the route. Proved against the production build with one request:
+//
+//   POST /api/auth/signup {"email":…,"password":…,"fullName":"No Boxes"}
+//   → 200, and the stored row reads
+//     {"age_confirmed_21": true, "research_use_only_agreed": true}
+//
+// On a store that sells 21+ research-use-only material, a compliance record the
+// server writes on the customer's behalf is evidence of nothing.
+// ---------------------------------------------------------------------------
+describe("the 21+ and research-use representations", () => {
+  it("are read from the request rather than assumed", () => {
+    expect(ROUTE).toContain('(body as { ageConfirmed?: unknown })?.ageConfirmed === true');
+    expect(ROUTE).toContain('(body as { researchUseOnly?: unknown })?.researchUseOnly === true');
+  });
+
+  it("are strict-true, so a missing field or the string \"true\" is not a tick", () => {
+    // Same rule the OAuth path already applies to oauthAttested. A value that
+    // crosses a network boundary is never coerced into consent.
+    expect(ROUTE).not.toMatch(/ageConfirmed\s*=\s*Boolean\(/);
+    expect(ROUTE).not.toMatch(/researchUseOnly\s*=\s*Boolean\(/);
+  });
+
+  it("refuse the signup when either is missing", () => {
+    expect(ROUTE).toContain("if (!ageConfirmed || !researchUseOnly)");
+    expect(ROUTE).toContain("status: 400");
+  });
+
+  it("are checked before any account lookup, so the refusal is not an oracle", () => {
+    // A refusal that only happened for new addresses would confirm which
+    // addresses exist — the exact leak GENERIC_RESPONSE exists to prevent.
+    const guardAt = ROUTE.indexOf("if (!ageConfirmed || !researchUseOnly)");
+    const lookupAt = ROUTE.indexOf("createAccountAndSend(");
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(lookupAt).toBeGreaterThan(-1);
+    expect(guardAt).toBeLessThan(lookupAt);
+  });
+
+  it("carry the time they were made", () => {
+    // Two booleans with no date are not a record. The OAuth path already
+    // stamped one; the email path did not, so an email account's attestation
+    // had no time on it at all.
+    expect(ROUTE).toContain("attested_at: new Date().toISOString()");
+  });
+
+  it("are sent by the form that collects them", () => {
+    expect(FORM).toContain("ageConfirmed,");
+    expect(FORM).toContain("researchUseOnly: researchUseAgreed,");
+  });
+});
+
 describe("the signup form", () => {
   it("posts to the route", () => {
     expect(FORM).toContain('"/api/auth/signup"');
