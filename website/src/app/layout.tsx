@@ -6,7 +6,7 @@ import { CartDrawer } from "@/components/cart-drawer";
 import { BacWaterAddedPopup } from "@/components/bac-water-upsell";
 import { CartProvider } from "@/components/cart-context";
 import { SiteAnalyticsTracker } from "@/components/site-analytics-tracker";
-import { SiteFooter } from "@/components/site-footer";
+import { SiteFooterSlot } from "@/components/site-chrome-slot";
 import { CookieConsent } from "@/components/cookie-consent";
 import { CONSENT_COOKIE_NAME } from "@/lib/cookie-consent-server";
 import { EntryDiagnostics } from "@/components/entry-diagnostics";
@@ -291,7 +291,7 @@ export default async function RootLayout({
               routes it belongs on. */}
           <StorefrontOfferModal offers={offers} />
           {children}
-          <SiteFooter />
+          <SiteFooterSlot />
           {/* vl-bottom-bar lifts this out of the consent banner's way while
               the banner is on screen. Being fixed, the link cannot be
               scrolled clear, so without it the admin entry point is

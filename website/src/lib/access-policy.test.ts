@@ -229,6 +229,34 @@ describe("the policy is the only place the decision is made", () => {
     expect(mw).not.toContain("isGatedPath");
   });
 
+  it("keeps the storefront's own chrome off the front door", () => {
+    // The header was removed from the portal; the FOOTER was not, so under the
+    // gate sat a full storefront menu — All Products, COA Library, Cart — each
+    // of which bounces a signed-out visitor back to the page they are on, and
+    // each of which Next prefetched, collecting five 307s per load. Measured at
+    // 390x844: 2,294px of document for a gate that needs about 1,000.
+    const layout = readFileSync(join(process.cwd(), "src/app/layout.tsx"), "utf8");
+    expect(layout).toContain("<SiteFooterSlot />");
+    expect(layout).not.toContain("<SiteFooter />");
+    const slot = readFileSync(join(process.cwd(), "src/components/site-chrome-slot.tsx"), "utf8");
+    for (const route of ["/account/login", "/account/forgot-password", "/account/reset-password", "/account/auth/callback", "/auth/confirm"]) {
+      expect(slot, `${route} must be chromeless`).toContain(`"${route}"`);
+    }
+    // Not rendered, not hidden — the same distinction the whole access policy
+    // turns on. A CSS rule would leave the menu in the HTML.
+    expect(slot).toContain("return null;");
+    expect(slot).not.toMatch(/display\s*:\s*none/);
+  });
+
+  it("renders the footer exactly once everywhere it does belong", () => {
+    // /wholesale imported SiteFooter and the root layout rendered another, so
+    // the page shipped two. Measured in Chromium: 2 <footer> elements on
+    // /wholesale, 1 everywhere else.
+    const wholesale = readFileSync(join(process.cwd(), "src/app/wholesale/page.tsx"), "utf8");
+    expect(wholesale).not.toContain("<SiteFooter />");
+    expect(wholesale).not.toContain('from "@/components/site-footer"');
+  });
+
   it("no second access overlay has reappeared in the component tree", () => {
     // The store had two access systems and the older one protected nothing —
     // it rendered the storefront and covered it with CSS. One is the rule.

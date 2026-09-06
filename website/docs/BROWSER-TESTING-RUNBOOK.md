@@ -308,6 +308,52 @@ product page 500s.
 Put the same contents in **`.env.test.local`** (also gitignored). Keep
 `.env.local` too if you ever run `next dev`.
 
+### 5c. Run the whole harness over HTTPS, or WebKit reports a bug you do not have
+
+Two attributes make plain http lie to you, and they lie in opposite directions.
+
+**The session cookie is `Secure` in a production build.** WebKit refuses to
+store a Secure cookie delivered over http — correctly — so every authenticated
+assertion fails, in an engine, for a reason that does not exist in production.
+Chromium stores it anyway, because it treats `127.0.0.1` as a trustworthy
+origin. Read at face value that is "auth is broken in Safari".
+
+**The browser's Supabase client calls GoTrue directly.** Serve the app over
+https with `NEXT_PUBLIC_SUPABASE_URL` still on http and that call is MIXED
+CONTENT. WebKit blocks it outright — `Not allowed to request resource`, then
+`setSession` fails and the OAuth callback never signs anyone in — while
+Chromium again allows it for `127.0.0.1`. Read at face value that is "Google
+sign-in is broken in Safari". Neither is true: production's Supabase URL is
+https.
+
+So put TLS in front of BOTH, and point the app at the https Supabase:
+
+```bash
+# in the audit scratch dir, or anywhere you keep key.pem/cert.pem
+node tls-proxy.mjs           # https://127.0.0.1:3443  -> 127.0.0.1:3000
+node gotrue-tls-proxy.mjs    # https://127.0.0.1:54443 -> 127.0.0.1:54321
+```
+
+```
+NEXT_PUBLIC_SUPABASE_URL=https://127.0.0.1:54443
+```
+
+Then rebuild, and start the server with `NODE_TLS_REJECT_UNAUTHORIZED=0` so
+Node accepts the self-signed cert for its own server-side calls. Drive the
+browsers at `https://127.0.0.1:3443` with `ignoreHTTPSErrors: true`.
+
+**Use `127.0.0.1`, not `localhost`, in the browser.** `tls-proxy.mjs` forwards
+`Host: 127.0.0.1:3443`, and the CSRF check in middleware compares `Origin`
+against `proto://host`. Drive it at `https://localhost:3443` and every
+state-changing POST answers `403 Invalid request origin` — including
+`/api/auth/session`, so sign-in silently stops working.
+
+Measured with all of this in place: the OAuth callback state machine passes
+30/30 in Chromium and WebKit alike, and the five-engine matrix reports no
+engine-specific differences at all. Without it, WebKit "fails" the happy path
+and passes every refusal — which is exactly the shape of a real bug, and is not
+one.
+
 ### 6. Build and run — NOT dev
 
 ```bash
