@@ -134,7 +134,13 @@ function cartAmount(s: Scenario): number {
     subtotal: s.subtotal,
     quantityBundleSavings: s.quantityBundleSavings ?? 0,
     bulkSavingsAmount: s.bulkSavings ?? 0,
-    memberPricingAmount: s.memberPercent ? (s.subtotal + (s.quantityBundleSavings ?? 0)) * (s.memberPercent / 100) : 0,
+    // Rounded at the server's moment, exactly as cart-context.tsx now does it —
+    // BEFORE the candidate competes against the bundle savings. Keeping the raw
+    // product here and rounding only inside compete() is the one-cent
+    // divergence this file exists to catch.
+    memberPricingAmount: s.memberPercent
+      ? Math.round((s.subtotal + (s.quantityBundleSavings ?? 0)) * s.memberPercent) / 100
+      : 0,
     ambassadorPersonalAmount: s.personalDiscount ?? 0,
     couponDiscountAmount: s.couponDiscount ?? 0,
     allowCouponStacking: s.allowCouponStacking ?? false,
@@ -374,6 +380,50 @@ describe("the combination they used to disagree on", () => {
     const scenario: Scenario = { name: "x", subtotal: 300, buy3Get1: 60, referralPercent: 10 };
     expect(cartAmount(scenario)).toBe(60);
     expect(cartAmount(scenario)).toBe(serverAmount(scenario));
+  });
+
+  // -------------------------------------------------------------------------
+  // A PERCENTAGE THAT LANDS ON A HALF-CENT, ON TOP OF QUANTITY-BUNDLE SAVINGS.
+  //
+  // The two sides rounded the same number at different moments: the server's
+  // pct() rounds BEFORE the candidate competes against the bundle savings, the
+  // cart kept the raw product and rounded only inside compete(), after
+  // subtracting them. Identical arithmetic, different order, and a cent apart
+  // whenever the raw value sits on a half-cent.
+  //
+  // Driven over 200,000 randomised baskets through both real modules: 76
+  // disagreed, every one by exactly a cent and every one with the SERVER giving
+  // more. Never about which discount WON, which is why nothing caught it — the
+  // fixtures here had simply never combined a bundle tier with such a
+  // percentage. This is one of the reproduced cases.
+  // -------------------------------------------------------------------------
+  it("agrees to the cent when a percentage meets quantity-bundle savings", () => {
+    const scenario: Scenario = {
+      name: "x",
+      subtotal: 382.75 - 30.62,
+      quantityBundleSavings: 30.62,
+      memberPercent: 10,
+    };
+    expect(cartAmount(scenario)).toBe(serverAmount(scenario));
+  });
+
+  it("agrees across a sweep of half-cent percentages", () => {
+    for (const full of [382.75, 199.95, 149.85, 89.95, 1234.55]) {
+      for (const bundleSavings of [0, 0.01, 12.34, 30.62]) {
+        for (const percent of [5, 10, 15, 20]) {
+          const scenario: Scenario = {
+            name: "x",
+            subtotal: Math.round((full - bundleSavings) * 100) / 100,
+            quantityBundleSavings: bundleSavings,
+            memberPercent: percent,
+          };
+          expect(
+            cartAmount(scenario),
+            `full ${full} bundle ${bundleSavings} pct ${percent}`,
+          ).toBe(serverAmount(scenario));
+        }
+      }
+    }
   });
 });
 

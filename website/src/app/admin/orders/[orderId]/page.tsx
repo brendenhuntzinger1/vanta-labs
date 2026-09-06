@@ -8,6 +8,8 @@ import { PaymentOutcome } from "@/components/payment-status-badge";
 import { canManageRefunds, canViewProfit } from "@/lib/admin-roles";
 import { hasCapturedPayment } from "@/lib/ledger";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { buildOrderSummaryLines } from "@/lib/order-summary-breakdown";
+import { receiptAdjustmentsFromOrder } from "@/lib/email/order-confirmation-render";
 import { AdminOrderActions } from "@/components/admin-order-actions";
 import { AdminOrderTimeline } from "@/components/admin-order-timeline";
 import { AdminOrderProfitPanel } from "@/components/admin-order-profit-panel";
@@ -368,20 +370,61 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
           </section>
         ) : null}
 
+        {/*
+          THE SAME FUNCTION THE CUSTOMER'S RECEIPT USES, so the two cannot drift.
+
+          This panel used to render five hand-written rows — subtotal, discount,
+          shipping, tax, card fee — and then `Total charged` straight off
+          amount_paid. Four recorded columns were missing from it entirely:
+          shipping_protection_fee, handling_fee, store_credit_redeemed_cents and
+          points_redeemed. Every one of them exists on the row the page already
+          selects with `*`, and every one of them moves amount_paid, so the
+          lines did not sum to the total shown beneath them. On any order that
+          bought protection or spent a customer's balance, the operator looking
+          at a refund or a dispute was reading a breakdown that did not add up,
+          with nothing saying which term was missing.
+
+          buildOrderSummaryLines models all of them and keeps a residual line so
+          an unmodelled remainder is visible rather than absent. It is the same
+          function the confirmation page and the emailed receipt derive from, so
+          the admin view now agrees with what the customer was told, by
+          construction rather than by two lists being maintained in parallel.
+        */}
         <section className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] p-4 sm:p-5">
           <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-300">Charges</h2>
           <dl className="mt-3 space-y-1.5 text-sm">
-            <div className="flex justify-between"><dt className="text-zinc-400">Subtotal</dt><dd className="text-zinc-200 tabular-nums">{money(Number(data.subtotal ?? 0))}</dd></div>
-            {Number(data.discount_amount ?? 0) > 0 ? <div className="flex justify-between"><dt className="text-zinc-400">Discount</dt><dd className="text-zinc-200 tabular-nums">−{money(Number(data.discount_amount ?? 0))}</dd></div> : null}
-            <div className="flex justify-between"><dt className="text-zinc-400">Shipping</dt><dd className="text-zinc-200 tabular-nums">{money(Number(data.shipping_amount ?? 0))}</dd></div>
-            <div className="flex justify-between">
-              <dt className="text-zinc-400">
-                Sales tax
-                {data.tax_state ? <span className="text-zinc-500"> ({String(data.tax_state)}{Number(data.tax_rate_percent ?? 0) > 0 ? ` · ${Number(data.tax_rate_percent)}%` : ""})</span> : null}
-              </dt>
-              <dd className="text-zinc-200 tabular-nums">{money(Number(data.tax_amount ?? 0))}</dd>
-            </div>
-            {Number(data.card_processing_fee ?? 0) > 0 ? <div className="flex justify-between"><dt className="text-zinc-400">Card processing fee</dt><dd className="text-zinc-200 tabular-nums">{money(Number(data.card_processing_fee ?? 0))}</dd></div> : null}
+            {buildOrderSummaryLines({
+              total: Number(data.amount_paid ?? 0),
+              subtotal: Number(data.subtotal ?? 0),
+              shipping: Number(data.shipping_amount ?? 0),
+              handling: Number(data.handling_fee ?? 0),
+              tax: Number(data.tax_amount ?? 0),
+              discount: Number(data.discount_amount ?? 0),
+              shippingProtection: Number(data.shipping_protection_fee ?? 0),
+              cardProcessingFee: Number(data.card_processing_fee ?? 0),
+              creditsApplied: receiptAdjustmentsFromOrder(data).creditsApplied,
+              itemsTotal: (data.order_items ?? []).reduce(
+                (running: number, item: { line_total?: number | null }) => running + Number(item.line_total ?? 0),
+                0,
+              ),
+            }).map((line) => (
+              <div key={line.key} className="flex justify-between">
+                <dt className="text-zinc-400">
+                  {line.label}
+                  {/* The one annotation this panel has that the receipt does not:
+                      which state was charged, and at what rate. */}
+                  {line.key === "tax" && data.tax_state ? (
+                    <span className="text-zinc-500">
+                      {" "}({String(data.tax_state)}
+                      {Number(data.tax_rate_percent ?? 0) > 0 ? ` · ${Number(data.tax_rate_percent)}%` : ""})
+                    </span>
+                  ) : null}
+                </dt>
+                <dd className="text-zinc-200 tabular-nums">
+                  {line.amount < 0 ? `−${money(Math.abs(line.amount))}` : money(line.amount)}
+                </dd>
+              </div>
+            ))}
             <div className="flex justify-between border-t border-white/10 pt-1.5 font-semibold"><dt className="text-zinc-300">Total charged</dt><dd className="tabular-nums text-white">{money(Number(data.amount_paid ?? 0))}</dd></div>
           </dl>
         </section>

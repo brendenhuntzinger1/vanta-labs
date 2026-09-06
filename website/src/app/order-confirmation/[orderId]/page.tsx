@@ -14,6 +14,7 @@ import { TikTokPurchaseEvent } from "@/components/tiktok-purchase-event";
 import { buildAdvancedMatching } from "@/lib/ads/advanced-matching";
 import { displayOrderReference } from "@/lib/order-reference";
 import { buildOrderSummaryLines } from "@/lib/order-summary-breakdown";
+import { receiptAdjustmentsFromOrder } from "@/lib/email/order-confirmation-render";
 
 export const dynamic = "force-dynamic";
 
@@ -54,7 +55,7 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
   const [orderResult, paymentMethods, user, cardFeeConfig] = await Promise.all([
     supabaseAdmin
       .from("orders")
-      .select("order_id, order_number, subtotal, shipping_amount, handling_fee, tax_amount, discount_amount, shipping_protection_fee, card_processing_fee, amount_paid, payment_status, fulfillment_status, payment_method, customer_email, created_at, order_items(product_name, quantity, line_total)")
+      .select("order_id, order_number, subtotal, shipping_amount, handling_fee, tax_amount, discount_amount, shipping_protection_fee, card_processing_fee, store_credit_redeemed_cents, points_redeemed, amount_paid, payment_status, fulfillment_status, payment_method, customer_email, created_at, order_items(product_name, quantity, line_total)")
       .eq("order_id", orderId)
       .maybeSingle(),
     // Each keeps the failure behaviour it had when it was awaited alone: a
@@ -105,6 +106,15 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
     // protection" on every card order that declined cover.
     cardProcessingFee: Number(order.card_processing_fee ?? 0),
     cardFeeLabel: cardFeeConfig?.label,
+    // THE CUSTOMER'S OWN BALANCE, NAMED. These two columns were not selected at
+    // all, so the redeemed amount had no term to land in and fell into the
+    // residual: a $55 credit rendered "Adjustment −$55.00" while the SAME
+    // order's emailed receipt said "Credits applied −$55.00", because the email
+    // path reads them through receiptAdjustmentsFromOrder. Two receipts for one
+    // order disagreeing about what the money was, and "Adjustment" reads like a
+    // correction the store made rather than the customer spending their own
+    // credit. Same derivation as the email's, so the two cannot drift.
+    creditsApplied: receiptAdjustmentsFromOrder(order).creditsApplied,
     itemsTotal: items.reduce((running, item) => running + Number(item.line_total ?? 0), 0),
   });
 

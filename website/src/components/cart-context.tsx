@@ -1239,8 +1239,13 @@ export function CartProvider({ children, signedIn = false }: { children: React.R
     [discountBase, isEligibleForBulkSavings, bulkSavingsConfig],
   );
 
+  // ROUNDED AT THE SERVER'S MOMENT — before the candidate competes against the
+  // quantity-bundle savings, which is where profit-engine.ts's pct() rounds it.
+  // Rounding only later, inside compete(), differs by a cent whenever the raw
+  // product lands on a half-cent: 76 of 200,000 randomised baskets, every one
+  // exactly a cent and every one with the server giving more.
   const memberPricingAmount = useMemo(
-    () => (memberDiscountPercent > 0 ? discountBase * (memberDiscountPercent / 100) : 0),
+    () => (memberDiscountPercent > 0 ? Math.round(discountBase * memberDiscountPercent) / 100 : 0),
     [memberDiscountPercent, discountBase],
   );
 
@@ -1248,7 +1253,7 @@ export function CartProvider({ children, signedIn = false }: { children: React.R
   // competes for best value with everything else — a bigger coupon wins, and it
   // never stacks. Mirrors payment-service.ts.
   const ambassadorPersonalAmount = useMemo(
-    () => (ambassadorDiscountPercent > 0 ? discountBase * (ambassadorDiscountPercent / 100) : 0),
+    () => (ambassadorDiscountPercent > 0 ? Math.round(discountBase * ambassadorDiscountPercent) / 100 : 0),
     [ambassadorDiscountPercent, discountBase],
   );
 

@@ -917,6 +917,14 @@ export async function middleware(request: NextRequest) {
   const CSRF_PROTECTED_PREFIXES = [
     "/api/admin", "/api/account", "/api/auth", "/api/membership", "/api/partner",
     "/api/checkout", "/api/cart", "/api/coupons", "/api/catalog",
+    // /api/ads authenticates the SAME admin cookie /api/admin does
+    // (verifyAdminSessionFromCookie), which is exactly what makes a
+    // cross-origin POST forgeable: the browser attaches the cookie. It sat
+    // outside a list this comment calls exhaustive because it was added later,
+    // under a different prefix. Its POST fires a TikTok test conversion event,
+    // so the exposure is a nuisance rather than money — but "the only
+    // cookie-authenticated write not covered" is not a state to leave a list in.
+    "/api/ads",
   ];
   if (
     isStateChangingMethod(request.method) &&

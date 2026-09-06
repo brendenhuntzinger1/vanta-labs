@@ -66,10 +66,27 @@ export type OrderAmounts = {
    * module never invents a third name for a charge that already has one.
    */
   cardFeeLabel?: string;
+  /**
+   * `orders.store_credit_redeemed_cents` and `orders.points_redeemed`, both as
+   * DOLLARS and both positive — the non-cash tender the customer spent.
+   *
+   * THE PAGE USED TO SHOW THESE AS AN UNLABELLED "ADJUSTMENT". The confirmation
+   * page's query did not select the two columns, so the redeemed amount had no
+   * term to land in and fell into the residual: a $55 credit rendered as
+   * "Adjustment −$55.00" while the SAME order's emailed receipt said "Credits
+   * applied −$55.00", because receiptAdjustmentsFromOrder reads the columns the
+   * page did not. Two receipts for one order, disagreeing about what the money
+   * was — and "Adjustment" reads like a correction the store made rather than
+   * the customer's own balance being spent.
+   *
+   * Optional and defaulting to 0, so a caller that does not read the columns
+   * behaves exactly as before and the residual still explains the remainder.
+   */
+  creditsApplied?: number;
 };
 
 export type SummaryLine = {
-  key: "subtotal" | "discount" | "shipping" | "handling" | "protection" | "cardFee" | "adjustment" | "tax";
+  key: "subtotal" | "discount" | "shipping" | "handling" | "protection" | "cardFee" | "credits" | "adjustment" | "tax";
   label: string;
   /** Signed dollars. Credits are negative. */
   amount: number;
@@ -132,7 +149,13 @@ export function buildOrderSummaryLines(amounts: OrderAmounts): SummaryLine[] {
     });
   }
 
-  const accounted = subtotal - discount + shipping + handling + tax + protection + cardFee;
+  // The customer's own balance, spent. A credit, and named as one.
+  const credits = clean(amounts.creditsApplied);
+  if (credits > CENT) {
+    lines.push({ key: "credits", label: "Credits applied", amount: round2(-credits), tone: "credit" });
+  }
+
+  const accounted = subtotal - discount + shipping + handling + tax + protection + cardFee - credits;
   const residual = round2(total - accounted);
 
   if (residual > CENT) {
