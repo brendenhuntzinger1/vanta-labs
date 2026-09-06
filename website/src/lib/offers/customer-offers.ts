@@ -3,6 +3,7 @@ import "server-only";
 import crypto from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { redactEmailForLog } from "@/lib/log-redaction";
+import { BAC_WATER_SLUG } from "@/lib/bac-water";
 
 /**
  * One-time, per-customer offers.
@@ -142,9 +143,34 @@ export const OFFER_CATALOG = {
     minSubtotalCents: 3500,
     ttlDays: 30,
   },
+  winback_60_free_shipping_10: {
+    label: "Free shipping + 10% off",
+    reward: { kind: "free_shipping_percent", percent: 10 } as OfferReward,
+    // Same ceiling logic as the other shipping gift: below $200 the customer
+    // gets both halves, above it only the percentage bites.
+    minSubtotalCents: 3500,
+    ttlDays: 30,
+  },
   winback_60_bac_water_10: {
     label: "10% off + free BAC water",
-    reward: { kind: "free_product_percent", productSlug: "bacteriostatic-water", percent: 10 } as OfferReward,
+    // THE SLUG COMES FROM bac-water.ts, IT IS NOT TYPED HERE. quoteOrder
+    // resolves the gift with an exact `candidate.slug === offer.product_slug`
+    // and has no candidate-list fallback, so a stale literal does not degrade —
+    // the product half silently does not apply and only the percentage lands.
+    // That is exactly what happened: this entry still said
+    // "bacteriostatic-water" after rename-bac-water-slug.sql moved production
+    // to "bac-water", so the day-40 mail promised "a free BAC Water on us" and
+    // shipped none. The catalogue mock in offer-percent-competition.test.ts
+    // carried the same stale literal, so the suite stayed green throughout.
+    reward: { kind: "free_product_percent", productSlug: BAC_WATER_SLUG, percent: 10 } as OfferReward,
+    // The vial is cheap, so the percentage is the real gift here; the floor
+    // is the same half-a-vial the other discount gifts use.
+    minSubtotalCents: 3500,
+    ttlDays: 30,
+  },
+  winback_60_bac_water_15: {
+    label: "15% off + free BAC water",
+    reward: { kind: "free_product_percent", productSlug: BAC_WATER_SLUG, percent: 15 } as OfferReward,
     // The vial is cheap, so the percentage is the real gift here; the floor
     // is the same half-a-vial the other discount gifts use.
     minSubtotalCents: 3500,
