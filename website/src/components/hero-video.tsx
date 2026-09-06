@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useAccessGranted } from "@/components/age-gate";
 import { detectInAppBrowser } from "@/lib/in-app-browser";
 
 /**
@@ -58,11 +57,9 @@ export function HeroVideo({
   phoneSrc?: string;
   phonePoster?: string;
 }) {
-  const granted = useAccessGranted();
   const [settled, setSettled] = useState(false);
 
   useEffect(() => {
-    if (!granted) return;
     // A LATER TASK, deliberately: past the entry interaction, so nothing here
     // is part of the tap that let the visitor in.
     const t = setTimeout(() => setSettled(true), 0);
@@ -70,9 +67,9 @@ export function HeroVideo({
       clearTimeout(t);
       setSettled(false);
     };
-  }, [granted]);
+  }, []);
 
-  if (!granted || !settled) return null;
+  if (!settled) return null;
   return (
     <HeroVial
       className={className}

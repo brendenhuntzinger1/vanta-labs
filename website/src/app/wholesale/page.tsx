@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { pageMetadata } from "@/lib/page-metadata";
 import Link from "next/link";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
-import { SiteFooter } from "@/components/site-footer";
 import { WholesaleForm } from "@/components/wholesale-form";
 import { WholesaleVialStack, selectStackImages } from "@/components/wholesale-vial-stack";
 import { getCatalogProducts } from "@/lib/catalog";
@@ -297,7 +296,6 @@ export default async function WholesalePage() {
         </section>
       </main>
 
-      <SiteFooter />
     </div>
   );
 }

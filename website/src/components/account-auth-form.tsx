@@ -347,6 +347,14 @@ export function AccountAuthForm() {
           captchaToken: captchaToken ?? "",
           nextPath,
           marketingOptIn,
+          // SENT, BECAUSE THE ROUTE NOW RECORDS WHAT WAS SENT RATHER THAN A
+          // CONSTANT. These two are checked a few lines above before anything
+          // is submitted, so they are always true here — but the server writes
+          // the durable 21+/research-use record and had no way to know that.
+          // It refuses the signup without them now, which is what makes the
+          // record evidence of a tick rather than of a code path.
+          ageConfirmed,
+          researchUseOnly: researchUseAgreed,
         }),
       });
       const signupJson = await signupResponse.json().catch(() => null);

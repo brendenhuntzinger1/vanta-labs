@@ -308,6 +308,52 @@ product page 500s.
 Put the same contents in **`.env.test.local`** (also gitignored). Keep
 `.env.local` too if you ever run `next dev`.
 
+### 5c. Run the whole harness over HTTPS, or WebKit reports a bug you do not have
+
+Two attributes make plain http lie to you, and they lie in opposite directions.
+
+**The session cookie is `Secure` in a production build.** WebKit refuses to
+store a Secure cookie delivered over http — correctly — so every authenticated
+assertion fails, in an engine, for a reason that does not exist in production.
+Chromium stores it anyway, because it treats `127.0.0.1` as a trustworthy
+origin. Read at face value that is "auth is broken in Safari".
+
+**The browser's Supabase client calls GoTrue directly.** Serve the app over
+https with `NEXT_PUBLIC_SUPABASE_URL` still on http and that call is MIXED
+CONTENT. WebKit blocks it outright — `Not allowed to request resource`, then
+`setSession` fails and the OAuth callback never signs anyone in — while
+Chromium again allows it for `127.0.0.1`. Read at face value that is "Google
+sign-in is broken in Safari". Neither is true: production's Supabase URL is
+https.
+
+So put TLS in front of BOTH, and point the app at the https Supabase:
+
+```bash
+# in the audit scratch dir, or anywhere you keep key.pem/cert.pem
+node tls-proxy.mjs           # https://127.0.0.1:3443  -> 127.0.0.1:3000
+node gotrue-tls-proxy.mjs    # https://127.0.0.1:54443 -> 127.0.0.1:54321
+```
+
+```
+NEXT_PUBLIC_SUPABASE_URL=https://127.0.0.1:54443
+```
+
+Then rebuild, and start the server with `NODE_TLS_REJECT_UNAUTHORIZED=0` so
+Node accepts the self-signed cert for its own server-side calls. Drive the
+browsers at `https://127.0.0.1:3443` with `ignoreHTTPSErrors: true`.
+
+**Use `127.0.0.1`, not `localhost`, in the browser.** `tls-proxy.mjs` forwards
+`Host: 127.0.0.1:3443`, and the CSRF check in middleware compares `Origin`
+against `proto://host`. Drive it at `https://localhost:3443` and every
+state-changing POST answers `403 Invalid request origin` — including
+`/api/auth/session`, so sign-in silently stops working.
+
+Measured with all of this in place: the OAuth callback state machine passes
+30/30 in Chromium and WebKit alike, and the five-engine matrix reports no
+engine-specific differences at all. Without it, WebKit "fails" the happy path
+and passes every refusal — which is exactly the shape of a real bug, and is not
+one.
+
 ### 6. Build and run — NOT dev
 
 ```bash
@@ -408,9 +454,20 @@ SMTP_PORT=2525
 SMTP_SECURE=false
 SMTP_USER=harness
 SMTP_PASSWORD=harness
+EMAIL_FROM=Vanta Labs <no-reply@vantalabsresearch.com>       # required; see below
 MARKETING_POSTAL_ADDRESS=1 Harness Way, Testville CA 90000   # CAN-SPAM; required
 EMAIL_CAPTURE_DIR=/tmp/vanta-qa
 ```
+
+**`EMAIL_FROM` was missing from this block and it is not optional.** The SMTP
+provider needs a host, a user, a password AND a from address
+(`providers/smtp.ts:24-27` reads `SMTP_FROM ?? EMAIL_FROM`), and without it every
+send fails with *"SMTP is not configured. Set the SMTP host, user, password, and
+from address."* — a message that names four things while three of them are set.
+The failure is quiet in exactly the wrong way: signup answers 200, the order is
+created and paid, and only the server log says no mail left. Symptom to
+recognise: `captured-emails.jsonl` does not exist at all after a run that should
+have written to it.
 
 It speaks enough SMTP for nodemailer, accepts any credentials, delivers nothing,
 and appends each message to the **same** `captured-emails.jsonl` the noop

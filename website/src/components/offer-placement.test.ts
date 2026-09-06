@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { requiresAccount } from "@/lib/access-policy";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -195,14 +196,22 @@ describe("the popup is not a nag", () => {
     expect(modal).toMatch(/const open = Boolean\(/);
   });
 
-  it("never opens over the age gate", () => {
-    // The storefront is inert behind the gate, and a promotion may never be the
-    // thing between a visitor and the attestation.
-    expect(modal).toContain("useAccessGranted");
-    expect(modal).toMatch(/granted && isShoppingRoute\(pathname\)/);
+  it("cannot reach anyone who has not been admitted", () => {
+    // It used to subscribe to the old overlay's context and wait for it. That
+    // overlay is gone, and the guarantee is stronger without it: the modal only
+    // renders on shopping routes, and every shopping route now requires an
+    // account at the middleware, so an unadmitted visitor never receives the
+    // document this could mount in. Promotions leaking to signed-out visitors
+    // is exactly the defect that closed the default — see access-policy.ts.
+    expect(modal).toMatch(/isShoppingRoute\(pathname\)/);
+    expect(modal).not.toContain("useAccessGranted");
+    // And the routes it considers "shopping" must all be behind the wall.
+    for (const route of ["/", "/products", "/cart", "/checkout"]) {
+      expect(requiresAccount(route), `${route} must require an account`).toBe(true);
+    }
   });
 
-  it("does not touch the scroll the age gate already owns", () => {
+  it("does not write the body scroll lock", () => {
     // Two components writing body overflow is how a store ends up
     // permanently unscrollable. The card is centred and fixed; the page behind
     // it scrolling costs nothing.

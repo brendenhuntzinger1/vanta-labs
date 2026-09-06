@@ -102,6 +102,28 @@ export async function POST(request: Request) {
     const captchaToken = read("captchaToken");
     const nextPath = read("nextPath") || "/account";
     const marketingOptIn = (body as { marketingOptIn?: unknown })?.marketingOptIn === true;
+    // THE TWO REPRESENTATIONS THIS STORE CANNOT SELL WITHOUT, READ FROM THE
+    // REQUEST RATHER THAN ASSUMED.
+    //
+    // This route used to write `age_confirmed_21: true` and
+    // `research_use_only_agreed: true` into user_metadata for every account
+    // without reading anything from the body, and the form did not send them.
+    // The comment two files over said the route "can only run once the form's
+    // two boxes are ticked" — true of the form, and not true of the route.
+    // Proved against the production build with one request:
+    //
+    //   POST /api/auth/signup {"email":…,"password":…,"fullName":"No Boxes"}
+    //   → 200, and the row reads
+    //     {"age_confirmed_21": true, "research_use_only_agreed": true}
+    //
+    // So the durable record of a 21+ / research-use-only attestation was a
+    // constant the server wrote on the customer's behalf. It is evidence of
+    // nothing, which is the one thing a compliance record has to be.
+    //
+    // Strict `=== true`, like every other consent value that crosses a network
+    // boundary here: a missing field, a null or the string "true" is not a tick.
+    const ageConfirmed = (body as { ageConfirmed?: unknown })?.ageConfirmed === true;
+    const researchUseOnly = (body as { researchUseOnly?: unknown })?.researchUseOnly === true;
 
     // Shape checks only, and each one answers the same way a real attempt does
     // where it can. A password that is too short is the one exception: it is
@@ -114,6 +136,19 @@ export async function POST(request: Request) {
     if (password.length < 8) {
       return NextResponse.json(
         { success: false, error: "Password must be at least 8 characters." },
+        { status: 400 },
+      );
+    }
+    // Refused, not silently recorded as false. An account that reaches the
+    // catalogue without both representations is the hole this closes, and a
+    // caller that did not make them has not signed up.
+    //
+    // ANSWERED BEFORE ANY ACCOUNT LOOKUP, so it cannot be used to probe which
+    // addresses exist: the refusal is identical for a known and an unknown
+    // address, which is the property the generic response below protects.
+    if (!ageConfirmed || !researchUseOnly) {
+      return NextResponse.json(
+        { success: false, error: "Please confirm you are 21+ and agree these products are for laboratory research use only." },
         { status: 400 },
       );
     }
@@ -229,6 +264,12 @@ async function createAccountAndSend(input: {
         business_type: input.businessType,
         age_confirmed_21: true,
         research_use_only_agreed: true,
+        // The time the representations were made, which is what turns a pair
+        // of booleans into a record. The OAuth path already stamped one; the
+        // email path did not, so an email account's attestation had no date on
+        // it at all. Written here, at account creation, and never re-stamped —
+        // /api/auth/session leaves an already-attested account alone.
+        attested_at: new Date().toISOString(),
         ...(input.referredByCode ? { referred_by_code: input.referredByCode } : {}),
       },
     },

@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { NextRequest } from "next/server";
+
+import { middleware as runMiddleware } from "../../middleware";
 
 import {
   BAC_WATER_SLUG,
@@ -188,13 +191,22 @@ describe("the renamed product URL redirects rather than breaking", () => {
     expect(block.slice(0, 400)).toContain("308");
   });
 
-  it("runs BEFORE the catalog gate", () => {
+  // ORDER PROVEN BY RUNNING IT, NOT BY MEASURING WHERE THE TEXT SITS.
+  //
+  // This compared two indexOf positions in the source. It broke twice for the
+  // same reason: the gate's condition is not a stable string. First it returned
+  // -1 when the wall started verifying the session, and then a shortened anchor
+  // matched the requiresAccount() call inside finish() — which sits EARLIER in
+  // the file than the rename block, so the test failed while the behaviour it
+  // cares about was correct the whole time. Ask the middleware instead.
+  it("runs BEFORE the access boundary", async () => {
     // Gating first would send an old link to the login page with the dead slug
     // in ?next=, so the visitor would sign in and land on a 404.
-    const renameAt = code.indexOf("RENAMED_PRODUCT_SLUGS.has(pathname)");
-    const gateAt = code.indexOf("isGatedPath(pathname) &&");
-    expect(renameAt).toBeGreaterThan(-1);
-    expect(gateAt).toBeGreaterThan(-1);
-    expect(renameAt).toBeLessThan(gateAt);
+    const response = await runMiddleware(
+      new NextRequest("https://www.vantalabsresearch.com/products/bacteriostatic-water", { method: "GET" }),
+    );
+    expect(response.status).toBe(308);
+    expect(new URL(response.headers.get("location") ?? "", "https://www.vantalabsresearch.com").pathname)
+      .toBe("/products/bac-water");
   });
 });

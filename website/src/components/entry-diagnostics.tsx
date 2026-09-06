@@ -76,43 +76,9 @@ export function EntryDiagnostics() {
           return `top ${read("--sa-top")} bottom ${read("--sa-bottom")}`;
         })(),
       },
-      { k: "age attr", v: document.documentElement.getAttribute("data-age-verified") ?? "(absent)" },
-      {
-        k: "gate on screen",
-        v: (() => {
-          const g = document.querySelector("[data-age-gate]");
-          if (!g) return "no gate element";
-          const r = g.getBoundingClientRect();
-          return `${getComputedStyle(g).display !== "none" ? "yes" : "no"} · ${Math.round(r.width)}x${Math.round(r.height)} at y=${Math.round(r.top)}`;
-        })(),
-      },
-      {
-        k: "entry buttons",
-        v: (() => {
-          const btns = [...document.querySelectorAll("[data-age-gate] button")].filter((b) =>
-            /guest|sign in|create account/i.test(b.textContent ?? ""),
-          );
-          if (!btns.length) return "none found";
-          // Off the bottom of the viewport = a tap can never reach it. This is
-          // the failure an in-app browser's own toolbar produces.
-          return btns
-            .map((b) => {
-              const r = b.getBoundingClientRect();
-              const below = r.bottom > window.innerHeight;
-              return `${(b.textContent ?? "").trim().slice(0, 18)}: y=${Math.round(r.top)}-${Math.round(r.bottom)}${below ? " OFF-SCREEN" : ""}${(b as HTMLButtonElement).disabled ? " disabled" : ""}`;
-            })
-            .join(" | ");
-        })(),
-      },
       { k: "localStorage", v: probe(() => { window.localStorage.setItem("__vl", "1"); window.localStorage.removeItem("__vl"); return "writable"; }) },
       { k: "sessionStorage", v: probe(() => { window.sessionStorage.setItem("__vl", "1"); window.sessionStorage.removeItem("__vl"); return "writable"; }) },
       { k: "cookies", v: probe(() => (navigator.cookieEnabled ? "enabled" : "DISABLED")) },
-      { k: "age keys stored", v: probe(() => {
-        const ls = Object.keys(window.localStorage).filter((k) => /age|verif|gate/i.test(k));
-        const ss = Object.keys(window.sessionStorage).filter((k) => /age|verif|gate/i.test(k));
-        const ck = document.cookie.split(";").map((c) => c.trim()).filter((c) => /age|verif|gate/i.test(c));
-        return [...ls, ...ss, ...ck].join(", ") || "none";
-      }) },
       { k: "video element", v: (() => {
         const v = document.querySelector("video");
         if (!v) return "none on this page";

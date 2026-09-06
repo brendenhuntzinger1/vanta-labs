@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { NextRequest } from "next/server";
+
+import { middleware as runMiddleware } from "../../middleware";
 
 const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
 
@@ -98,12 +101,12 @@ describe("the gate is uniform: it never varies by who is asking", () => {
     // The gate region only. If a UA test ever appears between these two
     // markers, the wall has started varying by who is asking.
     const body = code(middleware);
-    const gate = body.slice(body.indexOf("const GATED_PREFIXES"), body.indexOf("function isGatedPath") + 400);
+    const gate = body.slice(body.indexOf("const PUBLIC_EXACT"), body.indexOf("function requiresAccount") + 400);
     for (const tell of CLOAKING_TELLS) {
       expect(gate, `the gate must not branch on ${tell}`).not.toMatch(tell);
     }
 
-    const enforcement = body.slice(body.indexOf("if (isGatedPath(pathname)"));
+    const enforcement = body.slice(body.indexOf('if (requiresAccount(pathname) && !request.cookies.get('));
     for (const tell of CLOAKING_TELLS) {
       expect(enforcement.slice(0, 1800), `enforcement must not branch on ${tell}`).not.toMatch(tell);
     }
@@ -122,31 +125,53 @@ describe("the gate is uniform: it never varies by who is asking", () => {
 });
 
 describe("middleware gates every shape of request to the catalog", () => {
-  it("gates the catalog, product pages, the catalog API and the COA library", () => {
-    for (const prefix of ["/products", "/coa-library", "/api/catalog", "/api/coa"]) {
-      expect(code(middleware), `${prefix} must be gated`).toContain(`"${prefix}"`);
-    }
-    expect(code(middleware)).toContain("GATED_PREFIXES");
+  // WHICH PATHS ARE GATED IS NO LONGER A LIST IN THIS FILE.
+  //
+  // It used to be: middleware named the closed prefixes and everything else was
+  // open, so these two tests read that list as text. The default is closed now,
+  // and the decision lives in lib/access-policy.ts where access-policy.test.ts
+  // exercises it directly — asking the real predicate about real paths beats
+  // asserting that a string appears in a source file. What stays here is the
+  // part that is genuinely about the middleware: the SHAPE of its refusal.
+  it("asks the one policy rather than keeping a second copy of the answer", () => {
+    expect(code(middleware)).toContain('from "@/lib/access-policy"');
+    expect(code(middleware)).toContain("requiresAccount(pathname)");
+    expect(code(middleware)).not.toContain("GATED_PREFIXES");
   });
 
-  it("matches a prefix and everything beneath it, so no product slug slips past", () => {
-    expect(code(middleware)).toMatch(/pathname === prefix \|\| pathname\.startsWith\(`\$\{prefix\}\/`\)/);
-  });
+  // THESE THREE WERE SOURCE-TEXT SLICES, AND THE SLICE BROKE BEFORE THE CODE
+  // DID. Each took `middleware.indexOf('if (requiresAccount(pathname) && !…')`
+  // and read the next N characters. When the gate's condition was rewritten to
+  // verify the session instead of counting the cookie, indexOf returned -1,
+  // slice(-1) returned the last character, and all three asserted against "\n".
+  // A test that cannot find what it is measuring should fail loudly, and this
+  // one did — but only by luck, because "\n" happens not to contain "401".
+  //
+  // So they run the real middleware now. No cookie means no network call
+  // (decodeAuthCookie returns null and the answer is known locally), so this
+  // stays a pure unit test while proving the behaviour rather than the spelling.
+  const ORIGIN = "https://www.vantalabsresearch.com";
+  const guest = (path: string) => runMiddleware(new NextRequest(`${ORIGIN}${path}`, { method: "GET" }));
 
-  it("refuses an API request rather than redirecting it", () => {
+  it("refuses an API request rather than redirecting it", async () => {
     // fetch() follows a 307 and would parse the login page as JSON.
-    const gate = middleware.slice(middleware.indexOf("if (isGatedPath(pathname)"));
-    expect(gate.slice(0, 700)).toContain("401");
+    const response = await guest("/api/catalog/products");
+    expect(response.status).toBe(401);
+    expect(response.headers.get("location")).toBeNull();
   });
 
-  it("carries the requested path into ?next= so referral and ad links survive", () => {
-    const gate = middleware.slice(middleware.indexOf("if (isGatedPath(pathname)"));
-    expect(gate.slice(0, 1400)).toContain('login.searchParams.set("next"');
+  it("carries the requested path into ?next= so referral and ad links survive", async () => {
+    const response = await guest("/products/glp-1?ttclid=abc123");
+    expect(response.status).toBe(307);
+    const location = new URL(response.headers.get("location") ?? "", ORIGIN);
+    expect(location.pathname).toBe("/account/login");
+    expect(location.searchParams.get("next")).toBe("/products/glp-1?ttclid=abc123");
   });
 
-  it("never lets a session-dependent redirect be cached and replayed", () => {
-    const gate = middleware.slice(middleware.indexOf("if (isGatedPath(pathname)"));
-    expect(gate.slice(0, 1600)).toContain('"Cache-Control", "no-store"');
+  it("never lets a session-dependent redirect be cached and replayed", async () => {
+    const response = await guest("/products");
+    expect(response.status).toBe(307);
+    expect(response.headers.get("cache-control")).toContain("no-store");
   });
 });
 
@@ -265,8 +290,8 @@ describe("row-level security is the boundary the app cannot bypass", () => {
 describe("the public brand surface is untouched", () => {
   it("does not gate the home page, research, or legal routes", () => {
     const gated = code(middleware).slice(
-      code(middleware).indexOf("const GATED_PREFIXES"),
-      code(middleware).indexOf("function isGatedPath"),
+      code(middleware).indexOf("const PUBLIC_EXACT"),
+      code(middleware).indexOf("function requiresAccount"),
     );
     for (const publicPath of ['"/research"', '"/legal"', '"/contact"', '"/membership"']) {
       expect(gated, `${publicPath} must stay public`).not.toContain(publicPath);

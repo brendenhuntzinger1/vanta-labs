@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { NextRequest } from "next/server";
 
@@ -122,38 +122,53 @@ async function redirectTarget(shape: RequestShape): Promise<string | null> {
 // ---------------------------------------------------------------------------
 describe("an in-app browser now keeps the home page, like everyone else", () => {
   for (const [app, ua] of Object.entries(IN_APP_AGENTS)) {
-    it(`leaves ${app} on "/"`, async () => {
-      const response = await middleware(request({ path: "/", ua }));
-      expect(response.status).not.toBe(307);
-      expect(response.headers.get("location")).toBeNull();
+    it(`answers ${app} exactly as it answers desktop Chrome`, async () => {
+      // "/" requires an account now, so everyone is sent to sign in. What must
+      // stay true — and is the only thing worth testing here — is that the
+      // answer does not depend on WHO is asking. A wall that varied by browser
+      // would be a cloak.
+      const inApp = await redirectTarget({ path: "/", ua });
+      const desktop = await redirectTarget({ path: "/", ua: REAL_BROWSER_AGENTS["chrome desktop"] });
+      expect(inApp).toContain("/account/login");
+      expect(inApp).toBe(desktop);
     });
   }
 
-  it("never sends an in-app visitor to the gated catalog", async () => {
-    // The specific regression this file exists to prevent now. A redirect to
-    // /products would immediately be re-redirected to /account/login, so a
-    // TikTok visitor's first screen would be a sign-in form.
+  it("never routes an in-app visitor through the catalog to get to sign-in", async () => {
+    // The regression this guards is a DOUBLE hop. A redirect to /products would
+    // immediately be re-redirected to /account/login, costing a second round
+    // trip on the slowest connections there are. One hop, straight to the door.
     for (const ua of Object.values(IN_APP_AGENTS)) {
-      const response = await middleware(request({ path: "/", ua }));
-      expect(response.headers.get("location") ?? "").not.toContain("/products");
-      expect(response.headers.get("location") ?? "").not.toContain("/account/login");
+      const target = await redirectTarget({ path: "/", ua });
+      expect(target).toContain("/account/login");
+      expect(target, "must not detour via the catalog").not.toContain("/products");
     }
   });
 
-  it("keeps the campaign query on the URL the visitor asked for", async () => {
-    // Nothing is rewritten, so ttclid and utm_* simply stay where they were.
-    // Attribution never had to survive a hop because there is no hop.
-    const response = await middleware(
-      request({ path: "/?ttclid=ABC123&utm_source=tiktok", ua: IN_APP_AGENTS.tiktok }),
+  it("carries the campaign query through the hop, so paid attribution survives", async () => {
+    // There IS a hop now, and this is the expensive one to get wrong: every
+    // click the store pays for arrives with a ttclid, and losing it on the way
+    // to the sign-in page means the conversion is never attributed to the ad
+    // that bought it. The whole original URL rides in ?next=.
+    const target = await redirectTarget({
+      path: "/?ttclid=ABC123&utm_source=tiktok",
+      ua: IN_APP_AGENTS.tiktok,
+    });
+    expect(target).toContain("/account/login");
+    const next = new URLSearchParams(target!.split("?")[1]).get("next");
+    expect(next, "the visitor's original URL must survive the redirect").toBe(
+      "/?ttclid=ABC123&utm_source=tiktok",
     );
-    expect(response.status).not.toBe(307);
   });
 
   it("treats an RSC navigation the same as a page load", async () => {
-    const response = await middleware(
-      request({ path: "/", ua: IN_APP_AGENTS.tiktok, document: false }),
-    );
-    expect(response.status).not.toBe(307);
+    // A client-side navigation fetches the flight payload rather than a
+    // document. If that shape were answered differently, the payload for a
+    // protected page would be served to someone the document is withheld from.
+    const asDocument = await redirectTarget({ path: "/", ua: IN_APP_AGENTS.tiktok });
+    const asPayload = await redirectTarget({ path: "/", ua: IN_APP_AGENTS.tiktok, document: false });
+    expect(asPayload).toContain("/account/login");
+    expect(asPayload).toBe(asDocument);
   });
 
   it("holds the replacement at null, so the rule cannot come back by accident", () => {
@@ -164,39 +179,47 @@ describe("an in-app browser now keeps the home page, like everyone else", () => 
 
 describe("every browser that can play the vial keeps it", () => {
   for (const [name, ua] of Object.entries(REAL_BROWSER_AGENTS)) {
-    it(`leaves ${name} on the home page`, async () => {
-      expect(await redirectTarget({ path: "/", ua })).toBeNull();
+    it(`answers ${name} with the same sign-in redirect as every other browser`, async () => {
+      expect(await redirectTarget({ path: "/", ua })).toContain("/account/login");
     });
 
-    it(`leaves ${name} on the home page even from a paid social link`, async () => {
-      // The classifier is the browser and nothing else. A ttclid says where a
-      // visitor came from, not what their browser can render — keying on it is
-      // what once cost a desktop Chrome visitor the hero.
-      expect(await redirectTarget({ path: "/?ttclid=ABC123", ua })).toBeNull();
+    it(`answers ${name} the same way from a paid social link`, async () => {
+      // A ttclid says where a visitor came from, not what their browser can
+      // render, and it is attacker-supplied. It must not move the answer.
+      const plain = await redirectTarget({ path: "/", ua });
+      const paid = await redirectTarget({ path: "/?ttclid=ABC123", ua });
+      expect(paid).toContain("/account/login");
+      // Same destination; only the carried ?next= differs, by the path asked for.
+      expect(paid?.split("?next=")[0]).toBe(plain?.split("?next=")[0]);
     });
   }
 
-  it("leaves a request with no user-agent alone", async () => {
-    // Unknown is not in-app. The failure mode is "keep the home page", which is
-    // the same downgrade a false positive would be, in the harmless direction.
-    expect(await redirectTarget({ path: "/" })).toBeNull();
+  it("answers a request with no user-agent identically", async () => {
+    // A crawler, a curl, a scanner. Unknown gets the same wall as everyone.
+    const anonymous = await redirectTarget({ path: "/" });
+    const desktop = await redirectTarget({ path: "/", ua: REAL_BROWSER_AGENTS["chrome desktop"] });
+    expect(anonymous).toContain("/account/login");
+    expect(anonymous).toBe(desktop);
   });
 });
 
 describe("no page is redirected on account of the browser", () => {
   // The in-app rule is gone entirely, so nothing is moved because of WHO is
-  // asking. These paths are ungated, and an in-app browser must reach every one
-  // of them exactly as any other browser does.
-  for (const path of [
-    "/cart",
-    "/checkout",
-    "/membership",
-    "/account/login",
-    "/legal/terms",
-    "/research",
-  ]) {
+  // asking. These paths must stay reachable without an account, and an in-app
+  // browser must reach every one of them exactly as any other browser does.
+  for (const path of ["/account/login", "/legal/terms", "/contact"]) {
     it(`leaves ${path} alone in an in-app browser`, async () => {
       expect(await redirectTarget({ path, ua: IN_APP_AGENTS.tiktok })).toBeNull();
+    });
+  }
+
+  // And these now require an account. Same answer for every browser.
+  for (const path of ["/cart", "/checkout", "/membership", "/research"]) {
+    it(`sends ${path} to sign in, identically for every browser`, async () => {
+      const inApp = await redirectTarget({ path, ua: IN_APP_AGENTS.tiktok });
+      const desktop = await redirectTarget({ path, ua: REAL_BROWSER_AGENTS["chrome desktop"] });
+      expect(inApp).toContain("/account/login");
+      expect(inApp).toBe(desktop);
     });
   }
 
@@ -227,6 +250,8 @@ describe("the media-file correction obeys the same rule", () => {
     // With the catalog gated there is no such destination, so the correction
     // has one answer for every browser — which is also one fewer way for this
     // file to develop a browser-dependent behaviour.
+    // The correction's own answer is "/". That "/" then requires an account
+    // like everything else, which is a separate hop and a separate rule.
     expect(
       await redirectTarget({ path: "/videos/vanta-labs-hero-opt.mp4", ua: IN_APP_AGENTS.tiktok }),
     ).toBe("/");
@@ -268,14 +293,15 @@ describe("the classifier is not duplicated", () => {
     }
   });
 
-  it("keeps the age gate's fallback in step with middleware", () => {
-    // The two used to name the same destination and now both name none. They
-    // are still meant to agree: if middleware ever stops redirecting in-app
-    // browsers and the gate keeps pushing them somewhere, a visitor gets moved
-    // by the client after the page is already on screen — the flash this whole
-    // mechanism was built to remove.
-    const gate = read("src/components/age-gate.tsx");
-    expect(gate).not.toContain("SOCIAL_DESTINATION");
+  it("has no second component left that could move a visitor after paint", () => {
+    // This used to pair middleware with the age gate, which held its own
+    // client-side destination: if the two disagreed, a visitor got moved by the
+    // client after the page was already on screen — the flash this whole
+    // mechanism exists to remove. That overlay is gone, so the pairing has one
+    // member. What is pinned now is that no replacement destination has come
+    // back, in middleware or anywhere else.
     expect(mw).toMatch(/const IN_APP_HOME_REPLACEMENT: string \| null = null;/);
+    const components = readdirSync(join(process.cwd(), "src/components"));
+    expect(components).not.toContain("age-gate.tsx");
   });
 });

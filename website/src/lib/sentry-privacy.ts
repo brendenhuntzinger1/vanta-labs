@@ -146,6 +146,23 @@ const PII_PATTERNS: Array<[RegExp, string]> = [
   [/\b(?:Bearer|Basic)\s+[\w.\-+/=]{8,}/gi, "[credential]"],
   [/\beyJ[\w.\-+/=]{20,}/g, "[jwt]"],
   [/\bsk_[A-Za-z0-9_]{8,}/g, "[secret-key]"],
+  // A REFRESH TOKEN IS NOT A JWT, AND THAT IS WHY THIS IS HERE.
+  //
+  // The OAuth callback lands with BOTH tokens in the URL FRAGMENT, and the
+  // browser SDK reports window.location.href and records a navigation
+  // breadcrumb to it. The `eyJ` rule above caught the access token by accident
+  // of its shape; a Supabase refresh token is an opaque string like
+  // `v1-refresh-...`, matches nothing, and went to Sentry verbatim. Run against
+  // this module's own scrubber, before this rule:
+  //
+  //   in   …/account/auth/callback#access_token=eyJ…&refresh_token=v1-refresh-…
+  //   out  …/account/auth/callback#access_token=[jwt]&refresh_token=v1-refresh-…
+  //
+  // A refresh token mints access tokens, so that is an account takeover for
+  // anyone who can read the project's error reports. Keyed on the PARAMETER
+  // NAME rather than the value's shape, because the shape is the provider's to
+  // change and the name is in the OAuth spec.
+  [/\b((?:access|refresh|provider|provider_refresh|id)_token)=[^&\s"'`#]+/gi, "$1=[redacted]"],
 ];
 
 /** Redact PII-shaped text anywhere in a string. */
@@ -166,6 +183,29 @@ export function scrubUrl(value: string): string {
     for (const key of [...url.searchParams.keys()]) {
       if (isSensitiveKey(key)) {
         url.searchParams.set(key, REDACTED);
+        touched = true;
+      }
+    }
+
+    // THE FRAGMENT IS A PARAMETER BAG TOO, AND IT IS THE ONE THAT CARRIES THE
+    // SESSION. Only searchParams was scrubbed, and an implicit-flow OAuth
+    // provider puts access_token and refresh_token after the `#` — where
+    // searchParams cannot see them. isSensitiveKey already matches anything
+    // containing "token"; it was simply never asked about the hash.
+    if (url.hash.length > 1) {
+      const fragment = new URLSearchParams(url.hash.slice(1));
+      let hashTouched = false;
+      for (const key of [...fragment.keys()]) {
+        if (isSensitiveKey(key)) {
+          fragment.set(key, REDACTED);
+          hashTouched = true;
+        }
+      }
+      if (hashTouched) {
+        // decodeURIComponent-free: URLSearchParams re-encodes, which is fine
+        // for a redacted value and keeps anything else byte-identical enough
+        // to be recognisable in a report.
+        url.hash = `#${fragment.toString()}`;
         touched = true;
       }
     }
