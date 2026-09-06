@@ -515,10 +515,31 @@ describe("the portal makes the fastest path the obvious one", () => {
     // A "Fastest option" pill over an empty space, or a claim about Google on
     // a card with no Google button, is the same class of dead furniture the
     // provider guards already exist to prevent.
+    //
+    // BOUNDED AT BOTH ENDS, AND THE UPPER BOUND IS THE WHOLE POINT.
+    //
+    // This asserted `lastIndexOf("isGoogleSignInEnabled()", at(needle)) > -1`,
+    // which only proves the guard token appears EARLIER in the slice than the
+    // needle. There is exactly one such token in the portal, so every string
+    // below it satisfied that — including the terms line at the very bottom of
+    // the card, ~3300 characters outside the branch. Moving the promise out of
+    // the guarded fragment, so it renders on a card with no Google button, kept
+    // the suite green: the exact regression named in the comment above shipped
+    // past its own test. Containment needs both ends.
+    const gStart = rendered.indexOf("isGoogleSignInEnabled() ? (");
+    expect(gStart, "the portal's Google guard is no longer a ternary").toBeGreaterThan(-1);
+    const gEnd = rendered.indexOf(") : null}", gStart);
+    expect(gEnd, "could not find the end of the Google guard's branch").toBeGreaterThan(gStart);
+
     for (const needle of ["Fastest option", "Fast, secure access", 'id="vl-fastest-note"']) {
-      const guard = rendered.lastIndexOf("isGoogleSignInEnabled()", at(needle));
-      expect(guard, `${needle} renders outside isGoogleSignInEnabled()`).toBeGreaterThan(-1);
+      const i = at(needle);
+      expect(i, `${needle} renders before the Google guard opens`).toBeGreaterThan(gStart);
+      expect(i, `${needle} renders outside the Google guard's branch`).toBeLessThan(gEnd);
     }
+
+    // And the branch really is the Google button's own, not some outer wrapper
+    // that happens to close later.
+    expect(rendered.slice(gStart, gEnd)).toContain('startOAuth("google")');
   });
 
   it("gives the provider button more weight than the email one", () => {
