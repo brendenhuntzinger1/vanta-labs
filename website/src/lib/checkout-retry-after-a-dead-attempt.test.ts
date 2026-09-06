@@ -225,3 +225,87 @@ describe("a shopper whose first checkout attempt died can still buy", () => {
     expect(String(orders.get(first.orderId)?.payment_status)).toBe("payment_failed");
   });
 });
+
+// ---------------------------------------------------------------------------
+// AND ONE DEAD ATTEMPT IS NOT THE ONLY NUMBER THERE IS.
+//
+// The first fix derived the retry key from the FIRST dead order alone, which
+// made it a constant. Once a SECOND attempt also died that key was held by a
+// dead row too, the live-only read filtered it out, and there was no third key:
+// attempt 3 and every click after it threw "Unable to create order record".
+//
+// Two dead attempts is an ordinary evening, not an edge case. A basket with two
+// thin stock lines fails on line 1, the shopper removes it and fails on line 2.
+// A tender shortfall cancels one attempt and a fixed basket cancels the next. A
+// two-minute processor outage spans two clicks. And the page keeps the same
+// idempotency key across failures on purpose, so nothing but a full reload got
+// the shopper out — most abandon instead.
+// ---------------------------------------------------------------------------
+describe("a shopper whose attempts keep dying", () => {
+  beforeEach(() => {
+    orders.clear();
+    keyIndex.clear();
+    providerCreateCheckoutSession.mockReset();
+    releasePromotionRedemption.mockClear();
+    releaseCustomerOffer.mockClear();
+    let n = 0;
+    providerCreateCheckoutSession.mockImplementation(async () => {
+      n += 1;
+      return { paymentId: `pay_${n}`, hostedCheckoutUrl: `https://pay.example/${n}` };
+    });
+  });
+
+  const kill = (orderId: string, status = "canceled") => {
+    orders.set(orderId, { ...orders.get(orderId)!, payment_status: status });
+  };
+
+  it("reaches a card form on the THIRD attempt, after two deaths", async () => {
+    const first = await buy();
+    kill(first.orderId);
+    const second = await buy();
+    kill(second.orderId);
+
+    const third = await buy();
+    expect(third.orderId).not.toBe(first.orderId);
+    expect(third.orderId).not.toBe(second.orderId);
+    expect(third.hostedCheckoutUrl, "an empty URL reads to the page as an outage").toBeTruthy();
+    expect(String(orders.get(third.orderId)?.payment_status)).toBe("pending_payment");
+  });
+
+  it("keeps working for a long unlucky run, one live order at the end", async () => {
+    // Eight consecutive deaths — far past anything a shopper would sit through,
+    // and the point is that the chain does not terminate at a fixed depth.
+    let last = await buy();
+    for (let i = 0; i < 8; i += 1) {
+      kill(last.orderId, i % 2 === 0 ? "canceled" : "payment_failed");
+      last = await buy();
+      expect(last.hostedCheckoutUrl, `attempt ${i + 2} must still reach a card form`).toBeTruthy();
+    }
+    const live = [...orders.values()].filter((o) => o.payment_status === "pending_payment");
+    expect(live, "exactly one attempt is alive at the end").toHaveLength(1);
+  });
+
+  it("is still idempotent at depth: a double-click on the third attempt opens no fourth order", async () => {
+    const first = await buy();
+    kill(first.orderId);
+    const second = await buy();
+    kill(second.orderId);
+
+    const third = await buy();
+    const again = await buy();
+    expect(again.orderId).toBe(third.orderId);
+    expect(again.hostedCheckoutUrl).toBeTruthy();
+    expect(orders.size, "two dead orders and one live one").toBe(3);
+  });
+
+  it("leaves both dead orders dead", async () => {
+    const first = await buy();
+    kill(first.orderId);
+    const second = await buy();
+    kill(second.orderId, "payment_failed");
+    await buy();
+
+    expect(String(orders.get(first.orderId)?.payment_status)).toBe("canceled");
+    expect(String(orders.get(second.orderId)?.payment_status)).toBe("payment_failed");
+  });
+});

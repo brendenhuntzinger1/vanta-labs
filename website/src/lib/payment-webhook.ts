@@ -2756,6 +2756,25 @@ export async function processPaymentWebhook(payload: string, signature: string, 
               + decrement.errors.join("; "),
             );
           }
+          // A DEGRADED FINALIZE LEAVES THIS ORDER'S HOLDS ACTIVE — and this
+          // lane, unlike the manual one above, never dropped them.
+          //
+          // The fallback has just moved the units off inventory_quantity
+          // directly; adjust_inventory_on_sale does not touch
+          // reserved_quantity, and expire_stale_reservations() skips paid
+          // orders on purpose. So the hold sat on reserved_quantity for good:
+          // the units were decremented AND permanently reserved, the storefront
+          // reports availability net of holds, and reserve_inventory() started
+          // refusing checkouts that many units early. It compounds with every
+          // such order, and the only trace is an 'inventory_rpc_failed' alert
+          // that says nothing about the stranded hold.
+          //
+          // Best-effort, exactly as in the manual lane: the same outage that
+          // degraded the finalize may refuse this too, and the sale is already
+          // recorded.
+          if (fin.degraded) {
+            await releaseInventoryForOrder(orderId).catch(() => {});
+          }
           stockCommitted = true;
         } catch (inventoryError) {
           console.error("Unable to decrement inventory for order", orderId, inventoryError);

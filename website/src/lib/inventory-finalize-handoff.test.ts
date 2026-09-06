@@ -42,8 +42,9 @@ const state: {
   sideEffectsClaimedAt: null,
 };
 
-const { legacyDecrement, holder } = vi.hoisted(() => ({
+const { legacyDecrement, releaseHolds, holder } = vi.hoisted(() => ({
   legacyDecrement: vi.fn(async () => ({ attempted: 1, failed: 0, errors: [] as string[] })),
+  releaseHolds: vi.fn(async () => {}),
   holder: {} as { finalizeResult: { ok: boolean; degraded: boolean; finalized: number } },
 }));
 
@@ -88,7 +89,7 @@ vi.mock("@/lib/inventory-fulfillment", async (importOriginal) => {
 });
 vi.mock("@/lib/inventory-reservation", () => ({
   finalizeInventoryForOrder: async () => holder.finalizeResult,
-  releaseInventoryForOrder: vi.fn(async () => {}),
+  releaseInventoryForOrder: releaseHolds,
 }));
 vi.mock("@/lib/ambassador-commission", () => ({
   getEffectiveCommissionPercent: vi.fn(async () => ({ percent: 15, tierName: null })),
@@ -307,6 +308,54 @@ describe("when there is no hold to finalize", () => {
     holder.finalizeResult = { ok: true, degraded: true, finalized: 1 };
     await deliver("evt-1");
     expect(legacyDecrement).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AND THE HOLD BEHIND THE FALLBACK IS DROPPED.
+//
+// The fallback moves units off inventory_quantity through
+// adjust_inventory_on_sale, which never touches reserved_quantity — and
+// expire_stale_reservations() skips paid orders by design. So a degraded
+// finalize on the CARD lane left the hold standing for good: the units were
+// decremented AND permanently reserved, and since the storefront reports
+// availability net of holds, real stock on the shelf became unsellable and
+// reserve_inventory() began refusing checkouts that many units early. It
+// compounds with every such order and the only alert raised says
+// 'inventory_rpc_failed', which is about the RPC and not the stranded hold.
+//
+// The manual-approval lane has released them since it was written. This lane
+// did not, and nothing connected the two.
+// ---------------------------------------------------------------------------
+describe("the holds behind a degraded fallback", () => {
+  it("are released, so the units are not decremented AND still reserved", async () => {
+    holder.finalizeResult = { ok: true, degraded: true, finalized: 0 };
+    await deliver("evt-1");
+    expect(legacyDecrement).toHaveBeenCalledTimes(1);
+    expect(releaseHolds).toHaveBeenCalledWith(ORDER_ID);
+  });
+
+  it("are released even when the degraded finalize moved some lines", async () => {
+    holder.finalizeResult = { ok: true, degraded: true, finalized: 1 };
+    await deliver("evt-1");
+    expect(releaseHolds).toHaveBeenCalledWith(ORDER_ID);
+  });
+
+  it("are LEFT ALONE on a healthy finalize, which consumed them itself", async () => {
+    // finalize_inventory_for_order marks its own reservations consumed. A
+    // release here would be a second write against rows that are already gone.
+    holder.finalizeResult = { ok: true, degraded: false, finalized: 1 };
+    await deliver("evt-1");
+    expect(releaseHolds).not.toHaveBeenCalled();
+  });
+
+  it("are LEFT ALONE when the fallback ran because there was simply no hold", async () => {
+    // An untracked item or a pre-migration order: nothing degraded, nothing
+    // held, nothing to release.
+    holder.finalizeResult = { ok: true, degraded: false, finalized: 0 };
+    await deliver("evt-1");
+    expect(legacyDecrement).toHaveBeenCalledTimes(1);
+    expect(releaseHolds).not.toHaveBeenCalled();
   });
 });
 

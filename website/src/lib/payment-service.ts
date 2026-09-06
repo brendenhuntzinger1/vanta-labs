@@ -447,39 +447,60 @@ export async function createCheckoutSession(
    // filtered read above returns it and the second click is idempotent, exactly
    // as the first submit is. Hashed so the column never sees an unbounded
    // concatenation.
-   const dead = idempotencyKey
-     ? (await supabaseAdmin
-         .from("orders")
-         .select("order_id")
-         .eq("idempotency_key", idempotencyKey)
-         .maybeSingle()).data
-     : null;
-   if (dead?.order_id) {
+   //
+   // AND IT CHAINS, because one dead attempt is not the only number there is.
+   //
+   // Derived from the FIRST dead order alone the derived key was a CONSTANT:
+   // once a second attempt also died, that key was held by a dead row too, the
+   // live-only read above filtered it out, and there was no third key. Every
+   // click after that threw "Unable to create order record" — and the checkout
+   // page keeps the same idempotency key across failures on purpose, so only a
+   // full page reload escaped it. Two dead attempts is an ordinary evening: two
+   // thin stock lines removed one at a time, a tender shortfall then a fixed
+   // basket, or a two-minute processor outage spanning two clicks. So the
+   // derivation walks — each dead row in the chain derives the next key from
+   // itself — and attempt N lands on a key nothing holds.
+   const MAX_DEAD_ATTEMPT_HOPS = 12;
+   let chainKey: string | null = idempotencyKey;
+   for (let hop = 0; hop < MAX_DEAD_ATTEMPT_HOPS && chainKey; hop += 1) {
+     const holder: { order_id?: unknown } | null = (await supabaseAdmin
+       .from("orders")
+       .select("order_id")
+       .eq("idempotency_key", chainKey)
+       .maybeSingle()).data;
+     // Nothing holds it any more — the row was deleted between the collision
+     // and this read. Retrying the plain insert is the whole answer.
+     if (!holder?.order_id) break;
+
      const derivedKey = `r_${createHash("sha256")
-       .update(`${idempotencyKey}|${String(dead.order_id)}`)
+       .update(`${chainKey}|${String(holder.order_id)}`)
        .digest("hex")
        .slice(0, 48)}`;
      orderRow.full.idempotency_key = derivedKey;
      insertOutcome = await insertOrderRow(orderRow);
+     if (insertOutcome.status !== "duplicate") break;
 
-     if (insertOutcome.status === "duplicate") {
-       // The retry itself is being repeated — the shopper clicked twice, or the
-       // first retry's response was lost. The derived key is stable, so the row
-       // holding it is the LIVE order the previous retry created, and handing
-       // that back is precisely the idempotent answer. Release what this
-       // attempt claimed under its own phantom order id first, as above.
-       const retried = await returnExistingByIdempotency(derivedKey);
-       if (retried) {
-         if (quote.appliedPromotionId && quote.appliedPromotionLimits) {
-           await releasePromotionRedemption(orderId).catch(() => {});
-         }
-         if (quote.appliedOffer) {
-           await releaseCustomerOffer(orderId).catch(() => {});
-         }
-         return retried;
+     // The retry itself is being repeated — the shopper clicked twice, or the
+     // first retry's response was lost. The derived key is stable, so the row
+     // holding it may be the LIVE order the previous retry created, and handing
+     // that back is precisely the idempotent answer. Release what this attempt
+     // claimed under its own phantom order id first, as above.
+     const retried = await returnExistingByIdempotency(derivedKey);
+     if (retried) {
+       if (quote.appliedPromotionId && quote.appliedPromotionLimits) {
+         await releasePromotionRedemption(orderId).catch(() => {});
        }
+       if (quote.appliedOffer) {
+         await releaseCustomerOffer(orderId).catch(() => {});
+       }
+       return retried;
      }
+
+     // Held by a DEAD row as well, so this attempt is no better off than the
+     // last. Hop: the next key derives from the row that just refused us.
+     chainKey = derivedKey;
    }
+
  }
  if (insertOutcome.status !== "inserted") {
    console.error("Unable to create order record", insertOutcome.status === "error" ? insertOutcome.error : "duplicate");
@@ -494,7 +515,15 @@ export async function createCheckoutSession(
    if (quote.appliedOffer) {
      await releaseCustomerOffer(orderId);
    }
-   throw new Error("Unable to create order record");
+   // A DEAD END DESERVES A WAY OUT. This string reaches the shopper verbatim
+   // (safe-error.ts passes it: no vendor token, no technical pattern, short),
+   // and "Unable to create order record" told them nothing they could act on
+   // while the page held the same idempotency key across every further click.
+   throw new Error(
+     insertOutcome.status === "duplicate"
+       ? "We could not start a new payment for this basket. Please refresh this page and place your order again."
+       : "Unable to create order record",
+   );
  }
 
  const { payload: orderItemsPayload, error: itemInsertError } = await insertOrderItems(
