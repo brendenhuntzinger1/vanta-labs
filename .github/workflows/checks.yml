@@ -1,0 +1,86 @@
+# ---------------------------------------------------------------------------
+# The checks that have to pass before anything reaches main.
+#
+# WHY THIS EXISTS. Until 2026-09-06 this repository had no CI at all — no
+# workflows, no pre-commit hook, nothing. Vercel builds and deploys on every
+# push to main regardless of whether the test suite passes, so the only thing
+# standing between a red suite and production was somebody remembering to run
+# `npx vitest` by hand.
+#
+# That mattered the same week. The age gate was covering /account/reset-password,
+# which made an emailed password link land on a form nobody could click. It cost
+# one affiliate applicant eight days and left an approved ambassador locked out
+# of his own dashboard. The regression tests written for it
+# (age-gate-password-recovery.test.ts, age-gate-auth-landings.test.ts) only
+# protect anything if something actually runs them.
+#
+# So: this runs them, on every pull request and every push to main.
+#
+# THIS IS HALF THE CONTROL. A workflow reports; it does not block. Turn on branch
+# protection for `main` and mark the `checks` job required, or a red run is just
+# a red X next to a commit that shipped anyway. That is a GitHub settings change
+# and cannot be made from this file.
+# ---------------------------------------------------------------------------
+
+name: Checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# A second push to the same branch makes the first run irrelevant. Cancel it
+# rather than paying for both and reading a stale answer.
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Tests, types and lint
+    runs-on: ubuntu-latest
+    # The suite is ~75s locally. This is a ceiling for a hang, not a target.
+    timeout-minutes: 20
+    defaults:
+      run:
+        # The app is the whole of website/; the repository root has no
+        # package.json and no node_modules.
+        working-directory: website
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the local and Vercel runtime. Pinned to a major rather than
+          # "latest" so a Node release cannot turn this red on its own.
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      # ci, not install: installs exactly the lockfile and fails if
+      # package.json and the lock have drifted apart.
+      - name: Install
+        run: npm ci
+
+      # Verified 2026-09-06: 8445 tests pass with NO env files present, which is
+      # the state a fresh CI checkout is in. Nothing here needs a secret, and
+      # nothing here should — a test that needs production credentials is a test
+      # that cannot run on a pull request from a fork.
+      - name: Tests
+        run: npx vitest run
+
+      - name: Types
+        run: npx tsc --noEmit
+
+      # Currently 0 errors and 58 warnings, so this passes on its exit code.
+      # Warnings are deliberately not fatal yet: making them so today would turn
+      # the build red on 58 pre-existing findings that have nothing to do with
+      # whatever change is being reviewed. Add --max-warnings 0 once they are
+      # cleared.
+      - name: Lint
+        run: npx eslint .
