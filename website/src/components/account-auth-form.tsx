@@ -1136,7 +1136,7 @@ export function AccountAuthForm() {
               setError(null);
               setMode("login");
             }}
-            className="vl-focus-ring inline-flex min-h-6 items-center rounded-[6px] font-medium text-white/85 underline underline-offset-4 decoration-white/25 transition-colors duration-200 hover:text-white hover:decoration-white/60"
+            className="vl-focus-ring -my-2.5 inline-flex min-h-6 items-center rounded-[6px] py-2.5 font-medium text-white/85 underline underline-offset-4 decoration-white/25 transition-colors duration-200 hover:text-white hover:decoration-white/60"
           >
             Sign in with email
           </button>
@@ -1177,9 +1177,9 @@ export function AccountAuthForm() {
 
         <p className="mt-6 text-center text-[0.75rem] leading-5 text-white/35">
           By continuing, you agree to our{" "}
-          <Link href="/legal/terms" className="underline underline-offset-2 decoration-white/20 transition-colors hover:text-white/60">Terms</Link>
+          <Link href="/legal/terms" className="py-3.5 underline underline-offset-2 decoration-white/20 transition-colors hover:text-white/60">Terms</Link>
           {" "}and{" "}
-          <Link href="/legal/privacy" className="underline underline-offset-2 decoration-white/20 transition-colors hover:text-white/60">Privacy Policy</Link>.
+          <Link href="/legal/privacy" className="py-3.5 underline underline-offset-2 decoration-white/20 transition-colors hover:text-white/60">Privacy Policy</Link>.
         </p>
       </div>
     );
@@ -1577,7 +1577,7 @@ export function AccountAuthForm() {
             /* min-h-6 keeps this signup/sign-in toggle at a 24px tap target.
                It reads as inline text, but it is the entry point to creating an
                account and was 21px tall. inline-flex holds it in the sentence. */
-            className="vl-focus-ring inline-flex min-h-6 items-center rounded-[6px] font-medium text-white/85 underline underline-offset-4 decoration-white/25 transition-colors duration-200 hover:text-white hover:decoration-white/60"
+            className="vl-focus-ring -my-2.5 inline-flex min-h-6 items-center rounded-[6px] py-2.5 font-medium text-white/85 underline underline-offset-4 decoration-white/25 transition-colors duration-200 hover:text-white hover:decoration-white/60"
           >
             {mode === "signup" ? "Sign in" : "Create an account"}
           </button>
