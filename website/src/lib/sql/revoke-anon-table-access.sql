@@ -135,6 +135,30 @@ drop policy if exists products_select_public on public.products;
 drop policy if exists product_doses_select_public on public.product_doses;
 drop policy if exists product_images_select_public on public.product_images;
 
+-- AND THE NAMES THIS FILE IS ABOUT TO CREATE, because it is not the only file
+-- that creates them.
+--
+-- gate-catalog-behind-account.sql also creates products_select_admin and
+-- product_doses_select_admin. Applying that file and then this one to a fresh
+-- database — a new staging project, a restore, a second store — failed here:
+--
+--   ERROR:  policy "products_select_admin" for table "products" already exists
+--   ERROR:  current transaction is aborted, commands ignored until end of...
+--
+-- and because the whole file is one transaction, EVERYTHING in it rolled back:
+-- the 340-grant revoke loop, the ALTER DEFAULT PRIVILEGES change that stops the
+-- next migration re-granting to the world, and product_images_select_admin. The
+-- database came up with anon holding every grant it had before — the exact
+-- state this file exists to end — while psql still exited 0, because the errors
+-- are per-statement.
+--
+-- Reproduced on a throwaway Postgres before writing this, and
+-- catalog-lockdown-sql-is-idempotent.test.ts now applies both files in both
+-- orders, twice each, against a real database.
+drop policy if exists products_select_admin on public.products;
+drop policy if exists product_doses_select_admin on public.product_doses;
+drop policy if exists product_images_select_admin on public.product_images;
+
 create policy products_select_admin on public.products
   for select using ((select public.current_auth_role()) = 'admin');
 
