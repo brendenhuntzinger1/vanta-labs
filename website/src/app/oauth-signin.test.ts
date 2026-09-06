@@ -310,12 +310,51 @@ describe("the portal gates on the attestations, never on the marketing box", () 
   it("makes the whole row a tap target, not just the box", () => {
     // Each row is a <label> wrapping its input. A bare checkbox is a 16px
     // target in a 300px row, and two of these are required to enter at all.
+    //
+    // FOUR ROWS, NOT THREE. "Keep me signed in on this device" joined them: it
+    // lived only on the email and create-account forms, so anyone taking the
+    // provider door never saw it — and the callback sent `rememberMe: true`
+    // regardless. A control the fastest door cannot reach is not a control.
     const rows = portal.match(/className="vl-portal-row/g) ?? [];
-    expect(rows.length).toBe(3);
+    expect(rows.length).toBe(4);
     const css = read("src/app/globals.css");
     expect(css).toContain(".vl-portal-row {");
     expect(css).toMatch(/\.vl-portal-row \{[^}]*min-height: 56px/);
     expect(css).toMatch(/\.vl-portal-row \{[^}]*cursor: pointer/);
+  });
+
+  it("asks about staying signed in, and does not assume the answer", () => {
+    // Two conditions of entry, and two optional favours. The optional pair are
+    // marked as such and neither may default to yes: nobody is harmed by being
+    // asked, and someone on a shared bench is harmed by not being.
+    expect(portal).toContain("Keep me signed in on this device");
+    const optional = portal.match(/vl-portal-row vl-portal-row-optional/g) ?? [];
+    expect(optional.length).toBe(2);
+
+    const form = read("src/components/account-auth-form.tsx");
+    expect(form).toContain("const [rememberMe, setRememberMe] = useState(false)");
+    expect(form).toContain("const [marketingOptIn, setMarketingOptIn] = useState(false)");
+    // The choice has to survive two external redirects to be worth making.
+    expect(form).toContain('window.sessionStorage.setItem("vl-oauth-remember"');
+  });
+
+  it("lets the provider path carry the answer rather than inventing one", () => {
+    const callback = read("src/app/account/auth/callback/page.tsx");
+    // Was a hardcoded `rememberMe: true`, justified as the visitor "asking that
+    // browser to remember them". They were asking to sign in with Google.
+    expect(callback).toContain("rememberMe: signIn.rememberMe");
+    expect(callback).not.toMatch(/rememberMe:\s*true/);
+    expect(callback).toContain('window.sessionStorage.getItem("vl-oauth-remember") === "true"');
+  });
+
+  it("treats a missing rememberMe as a no, server-side", () => {
+    // The route read `!== false`, so a caller that never mentioned it got
+    // thirty days. Two callers did exactly that — the password-reset form and
+    // the partner application — and neither had asked the visitor anything.
+    const route = read("src/app/api/auth/session/route.ts");
+    expect(route).toContain("const rememberMe = body?.rememberMe === true;");
+    const lib = read("src/lib/auth-session.ts");
+    expect(lib).toContain("buildAuthCookieValue(accessToken: string, rememberMe = false");
   });
 
   it("gives the provider buttons full width and equal weight", () => {

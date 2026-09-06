@@ -77,6 +77,8 @@ type PendingSignIn = {
   refreshToken: string;
   marketingOptIn: boolean;
   referralCode: string;
+  /** Whether the visitor asked to stay signed in on this device. */
+  rememberMe: boolean;
 };
 
 export default function OAuthCallbackPage() {
@@ -137,7 +139,14 @@ export default function OAuthCallbackPage() {
             // The fragment's tokens, not a re-read of client state.
             accessToken: signIn.accessToken,
             refreshToken: signIn.refreshToken,
-            rememberMe: true,
+            // WHAT THE VISITOR TICKED, NOT WHAT WE ASSUMED.
+            //
+            // This was a hardcoded `true`, justified as "a visitor who chose a
+            // provider account is asking that browser to remember them". They
+            // are not: they are asking to sign in with Google. The portal now
+            // carries the same checkbox the email form always had, and this is
+            // where its answer lands.
+            rememberMe: signIn.rememberMe,
             // What the visitor ticked — before the hand-off, or just now on the
             // re-ask below. The server writes it to user_metadata only when the
             // account does not already carry it, so a returning customer's
@@ -166,6 +175,7 @@ export default function OAuthCallbackPage() {
         try {
           window.sessionStorage.removeItem("vl-oauth-attested");
           window.sessionStorage.removeItem("vl-oauth-marketing");
+          window.sessionStorage.removeItem("vl-oauth-remember");
           window.sessionStorage.removeItem("vl-oauth-referral");
         } catch {
           /* storage unavailable: nothing was stored to clear */
@@ -224,18 +234,22 @@ export default function OAuthCallbackPage() {
 
       let attested = false;
       let marketingOptIn = false;
+      let rememberMe = false;
       let referralCode = "";
       try {
         attested = window.sessionStorage.getItem("vl-oauth-attested") === "true";
         // Read as a strict "true", so a missing key or any other value means no.
         // Silence must never be read as consent.
         marketingOptIn = window.sessionStorage.getItem("vl-oauth-marketing") === "true";
+        // Strict "true" for the same reason as the line above: a missing key
+        // means the visitor was not asked, and not being asked is not a yes.
+        rememberMe = window.sessionStorage.getItem("vl-oauth-remember") === "true";
         referralCode = window.sessionStorage.getItem("vl-oauth-referral") ?? "";
       } catch {
         /* storage unavailable — handled by the re-ask below, not by admitting */
       }
 
-      const signIn: PendingSignIn = { accessToken, refreshToken, marketingOptIn, referralCode };
+      const signIn: PendingSignIn = { accessToken, refreshToken, marketingOptIn, referralCode, rememberMe };
 
       // THE MARKER DID NOT SURVIVE, SO ASK AGAIN RATHER THAN ADMIT WITHOUT IT.
       //

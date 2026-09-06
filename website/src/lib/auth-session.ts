@@ -78,7 +78,7 @@ export const getAuthenticatedUser = cache(async () => {
  * the cookie keeps its previous shape and its previous one-hour ceiling, which
  * is precisely the bug. Every caller in this repo passes one.
  */
-export function buildAuthCookieValue(accessToken: string, rememberMe = true, refreshToken?: string | null) {
+export function buildAuthCookieValue(accessToken: string, rememberMe = false, refreshToken?: string | null) {
   return {
     name: AUTH_COOKIE_NAME,
     value: encodeAuthCookie({ accessToken, refreshToken: refreshToken ?? null, rememberMe }),
