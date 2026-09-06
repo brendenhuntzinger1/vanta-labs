@@ -3,20 +3,37 @@
  *
  * Meta, TikTok, Reddit and Snapchat are already connected and authenticated
  * through Windsor.ai, which normalises all four behind one REST endpoint. That
- * is the whole reason this file is ~200 lines instead of four API clients with
- * four OAuth dances, four pagination styles and four rate limiters.
+ * is why this file is one client rather than four, with four OAuth dances, four
+ * pagination styles and four rate limiters.
  *
- * THE FIELD NAMES BELOW WERE VERIFIED AGAINST THE LIVE API, not guessed. They
- * differ per connector in ways that are not predictable — TikTok exposes
- * `landing_page_url`, Meta calls the same thing `link_url`, and Reddit and
- * Snapchat expose no destination URL at all. Windsor rejects an unknown field
- * for some connectors and silently omits it for others, so a guessed name shows
- * up as a missing column rather than an error. If you add a field, confirm it
- * with the connector's own field list first.
+ * ══ EVERY FIELD NAME BELOW WAS READ BACK FROM THE LIVE API. ══
  *
- * WHAT THIS FILE DOES NOT DO: decide anything. It fetches and it normalises.
- * Windowing, idempotency and persistence are `spend-ingest.ts`, so all of that
- * is testable without a network.
+ * This is not a style note. Windsor does not reject an unknown field — it
+ * OMITS the column. A wrong name therefore produces a row that parses cleanly
+ * with that value silently null, forever, and the system reports itself
+ * healthy while ingesting incomplete data. The first version of this file had
+ * four such names:
+ *
+ *   tiktok   adgroup_id/adgroup_name  ->  ad_group_id/ad_group_name
+ *   reddit   adgroup_id/adgroup_name  ->  ad_group_id/ad_group_name
+ *   snapchat adsquad_id/adsquad_name  ->  ad_squad_id/ad_squad_name
+ *   reddit   (assumed no landing URL) ->  ad_click_url exists
+ *
+ * The Reddit one was the expensive mistake: believing it exposed no destination
+ * URL meant believing Reddit ads could never be auto-attributed to a creative,
+ * which is wrong and would have sent the owner off to hand-name every ad.
+ *
+ * So: NO GUESSED ALIASES, and no fallback chains. A fallback that tries three
+ * names and takes whichever answers is the same silent failure wearing a
+ * seatbelt — it hides which name was right. One verified name per field, pinned
+ * by windsor-fields.test.ts.
+ *
+ * TO ADD OR CHANGE A FIELD: call Windsor's own field list for that connector,
+ * confirm the id comes back, then change BOTH the map and the test.
+ *
+ * WHAT THIS FILE DOES NOT DO: decide anything. It fetches and normalises.
+ * Windowing, idempotency and persistence live in `spend-ingest.ts`, so all of
+ * that is testable without a network.
  */
 
 import { adPlatformKey, parseAdTagsFromUrl } from "./utm";
@@ -28,35 +45,89 @@ export const WINDSOR_CONNECTORS = ["facebook", "tiktok", "reddit", "snapchat"] a
 export type WindsorConnector = (typeof WINDSOR_CONNECTORS)[number];
 
 /**
- * Per-connector field names.
+ * Per-connector field names, all verified against the live API.
  *
- * `destinationUrl` is null where the connector has no such field. That is a
- * fact about the platform, not a gap to paper over: per-ad revenue on Reddit
- * and Snapchat depends on the tag being known some other way, and pretending
- * otherwise would produce silently unattributed spend.
+ * `destinationUrl: null` for Snapchat is a fact about the platform, not a gap to
+ * paper over: Snapchat exposes no landing URL through this connector, so its ads
+ * cannot be auto-attributed to a creative and must instead be NAMED for their
+ * `utm_content`. Saying so plainly is what lets the dashboard explain the blind
+ * spot rather than just showing a smaller number.
+ *
+ * `conversions` / `conversionValue` are the PLATFORM'S OWN counts. They are
+ * stored beside ours and never mixed into ROAS — each platform counts under its
+ * own attribution model and they will disagree with our order table.
  */
-type FieldMap = {
+export type FieldMap = {
   /** Ad group / ad set / ad squad — each platform's middle tier, whatever it calls it. */
-  adgroupId: string | null;
-  adgroupName: string | null;
+  adgroupId: string;
+  adgroupName: string;
+  /** The ad's destination URL, or null where the connector exposes none. */
   destinationUrl: string | null;
+  /** The platform's own purchase count. */
+  conversions: string;
+  /** The platform's own purchase value, or null where none is exposed. */
+  conversionValue: string | null;
 };
 
-const FIELDS: Record<WindsorConnector, FieldMap> = {
-  facebook: { adgroupId: "adset_id", adgroupName: "adset_name", destinationUrl: "link_url" },
-  tiktok: { adgroupId: "adgroup_id", adgroupName: "adgroup_name", destinationUrl: "landing_page_url" },
-  reddit: { adgroupId: "adgroup_id", adgroupName: "adgroup_name", destinationUrl: null },
-  snapchat: { adgroupId: "adsquad_id", adgroupName: "adsquad_name", destinationUrl: null },
+export const FIELDS: Record<WindsorConnector, FieldMap> = {
+  facebook: {
+    adgroupId: "adset_id",
+    adgroupName: "adset_name",
+    destinationUrl: "link_url",
+    conversions: "actions_purchase",
+    conversionValue: "action_values_purchase",
+  },
+  tiktok: {
+    adgroupId: "ad_group_id",
+    adgroupName: "ad_group_name",
+    destinationUrl: "landing_page_url",
+    conversions: "complete_payment",
+    // Windsor's own label for this id is "Purchase value (website)". The id
+    // reads like a rate; it is not. Verified from the connector's field list.
+    conversionValue: "total_complete_payment_rate",
+  },
+  reddit: {
+    adgroupId: "ad_group_id",
+    adgroupName: "ad_group_name",
+    destinationUrl: "ad_click_url",
+    // Click-attributed purchases only. Reddit reports click and view conversions
+    // separately (conversion_purchase_views is the other half); counting both
+    // would credit an impression nobody clicked, which is precisely the
+    // over-crediting this system exists to avoid.
+    conversions: "conversion_purchase_clicks",
+    conversionValue: "purchase_total_value",
+  },
+  snapchat: {
+    adgroupId: "ad_squad_id",
+    adgroupName: "ad_squad_name",
+    destinationUrl: null,
+    conversions: "conversion_purchases",
+    conversionValue: "conversion_purchases_value",
+  },
 };
 
 /** Fields every connector has. Verified present on all four. */
-const COMMON_FIELDS = ["date", "campaign", "campaign_id", "ad_id", "ad_name", "spend", "clicks", "impressions"];
+export const COMMON_FIELDS = [
+  "date",
+  "campaign",
+  "campaign_id",
+  "ad_id",
+  "ad_name",
+  "spend",
+  "clicks",
+  "impressions",
+] as const;
 
 export function fieldsFor(connector: WindsorConnector): string[] {
   const map = FIELDS[connector];
-  return [...COMMON_FIELDS, map.adgroupId, map.adgroupName, map.destinationUrl].filter(
-    (f): f is string => typeof f === "string",
-  );
+  return [
+    ...COMMON_FIELDS,
+    map.adgroupId,
+    map.adgroupName,
+    map.destinationUrl,
+    map.conversions,
+    map.conversionValue,
+  ].filter((f): f is string => typeof f === "string");
 }
 
 /** A normalised spend row, matching `ad_spend_daily` one-to-one. */
@@ -71,21 +142,24 @@ export type SpendRow = {
   adName: string | null;
   landingUrl: string | null;
   utmContent: string | null;
+  utmCampaign: string | null;
   spend: number;
   impressions: number;
   clicks: number;
+  /** The platform's own purchase count. Null means it reported none at all. */
+  platformConversions: number | null;
+  platformConversionValue: number | null;
   currency: string;
 };
 
 export type RowRejection = { reason: string; row: unknown };
 
 /**
- * Numbers arrive as strings, as nulls, as "0.00", and occasionally as
- * locale-formatted text.
+ * Numbers arrive as strings, as nulls, as "0.00", and occasionally with commas.
  *
- * A value that cannot be read becomes null, never 0. Zero is a real
- * measurement — an ad that spent nothing — and conflating "no spend" with "we
- * failed to parse the spend" is how a broken feed reads as a cheap campaign.
+ * A value that cannot be read becomes null, never 0. Zero is a real measurement
+ * — an ad that spent nothing — and conflating "no spend" with "we failed to
+ * parse the spend" is how a broken feed reads as a cheap campaign.
  */
 export function toNumber(raw: unknown): number | null {
   if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
@@ -118,14 +192,25 @@ function toText(raw: unknown, max = 512): string | null {
   return cleaned ? cleaned.slice(0, max) : null;
 }
 
+/** A count that must stay distinguishable from "not reported". */
+function toCount(raw: unknown): number | null {
+  const n = toNumber(raw);
+  if (n === null) return null;
+  return Math.max(0, Math.trunc(n));
+}
+
 /**
  * Turn one raw Windsor row into a `SpendRow`, or say why it cannot be.
  *
- * REJECTS RATHER THAN GUESSES. A row without an ad id or a readable date has no
- * primary key, so storing it would either fail or — worse, if a fallback were
- * invented — merge two different ads into one. A row whose spend will not parse
- * is rejected for the reason above. Rejections are returned, not thrown and not
- * logged-and-dropped, so the ingest can report how much it refused.
+ * REJECTS RATHER THAN GUESSES on the three fields that must be right: a row
+ * with no ad id has no primary key, a row with no readable date cannot be
+ * placed in time, and a row whose spend will not parse would understate cost.
+ * Everything else is optional and absent means absent — a connector that omits
+ * ad-group names or conversions still yields a usable spend row, because
+ * refusing the whole row would lose real money data over a missing label.
+ *
+ * Rejections are returned, not thrown and not logged-and-dropped, so the ingest
+ * can report how much it refused.
  */
 export function normalizeSpendRow(
   connector: WindsorConnector,
@@ -157,16 +242,21 @@ export function normalizeSpendRow(
       statDate,
       campaignId: toText(r.campaign_id, 128),
       campaignName: toText(r.campaign),
-      adgroupId: map.adgroupId ? toText(r[map.adgroupId], 128) : null,
-      adgroupName: map.adgroupName ? toText(r[map.adgroupName]) : null,
+      adgroupId: toText(r[map.adgroupId], 128),
+      adgroupName: toText(r[map.adgroupName]),
       adName: toText(r.ad_name),
       landingUrl,
       utmContent: tags.utmContent,
-      // Impressions and clicks missing is normal on a day with no delivery;
-      // spend missing is not, which is why only spend rejects the row.
+      utmCampaign: tags.utmCampaign,
+      // Missing impressions and clicks are normal on a day with no delivery, so
+      // they floor at 0; conversions stay null when unreported, because "the
+      // platform says zero purchases" and "the platform has no pixel" are
+      // different facts and the dashboard shows them differently.
       spend,
       impressions: Math.max(0, Math.trunc(toNumber(r.impressions) ?? 0)),
       clicks: Math.max(0, Math.trunc(toNumber(r.clicks) ?? 0)),
+      platformConversions: toCount(r[map.conversions]),
+      platformConversionValue: map.conversionValue ? toNumber(r[map.conversionValue]) : null,
       currency: options.currency ?? "USD",
     },
   };
@@ -196,7 +286,6 @@ export async function fetchConnectorSpend(input: {
   url.searchParams.set("date_from", input.dateFrom);
   url.searchParams.set("date_to", input.dateTo);
   url.searchParams.set("fields", fieldsFor(input.connector).join(","));
-  url.searchParams.set("_renderer", "json");
 
   let response: Response;
   try {
@@ -208,7 +297,7 @@ export async function fetchConnectorSpend(input: {
   if (!response.ok) {
     // The body carries Windsor's own explanation (an expired connector, a
     // revoked ad-account grant). Passing it through beats "HTTP 400", because
-    // the fix is different for each and an operator reads this at 2am.
+    // the fix differs for each and an operator reads this at 2am.
     let detail = "";
     try {
       detail = (await response.text()).slice(0, 500);
@@ -225,7 +314,7 @@ export async function fetchConnectorSpend(input: {
     return { ok: false, error: `response was not JSON: ${error instanceof Error ? error.message : String(error)}` };
   }
 
-  // Windsor returns `{ data: [...] }`; some connectors return a bare array.
+  // Windsor documents `{ data: [...] }`; a bare array is accepted too.
   const raw = Array.isArray(payload)
     ? payload
     : Array.isArray((payload as { data?: unknown })?.data)
