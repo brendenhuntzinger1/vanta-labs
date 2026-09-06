@@ -1,14 +1,20 @@
-# NOT READY FOR MAIN LAUNCH
+# NOT READY FOR MAIN LAUNCH — one owner action away
 
 **As `main` stands today (`f81bf5f`).** Every defect in this report is live on
 `main` right now, and four of them lose money or lock a customer out on an
 ordinary evening.
 
 **The remediation is done, verified, and pushed.** Branch
-`claude/vanta-labs-launch-audit-px3297` is 26 commits ahead of
-`main`, contains all of it, and is green everywhere I can measure. Merging it
-plus **three owner actions** (§18) is the whole distance between this verdict
-and READY.
+`claude/vanta-labs-launch-audit-px3297` is 31 commits ahead of `main`, contains
+all of it, and is green everywhere I can measure.
+
+**What changed in the second pass (§18).** The first pass closed with "three
+owner actions". Two of the three are now gone — one because you resolved it and
+I verified the result live, one because it was never yours to do. The residue
+is **one** action that genuinely cannot be performed with the tools available
+here, plus one setting that is gated behind a paid plan and is a business
+decision rather than a defect. Three further defects were found and fixed during
+that pass, including one in the busiest endpoint in production.
 
 Audit run 2026-09-06 against `main` at `f81bf5f`, the eleven PRs merged into it
 this week (#153–#163), and the production database and site.
@@ -421,35 +427,293 @@ Buy-2-Get-1 enabled; `referral.personal_discount_percent = 20`,
 | #162 | Email measurement | 7 defects, incl. double-counted revenue | fixed |
 | #163 | ROAS + dashboard | 1000-row truncation; Today strip; no-spend-day revenue; refunds dropped | fixed |
 
-## 18. What still needs YOU — three actions, then this is READY
+## 18. Second pass — every remaining item, pushed as far as it goes
 
-1. **Set `RESEND_WEBHOOK_SIGNING_SECRET`** (Resend → Webhooks → the endpoint →
-   Signing Secret, begins `whsec_`). Today the email webhook authenticates the
-   *URL* and nothing else: the signature covers no bytes, there is no timestamp
-   window and no nonce, so possession of that URL — which lives in the Resend
-   dashboard, in proxy and CDN access logs, and in any screenshot of the webhook
-   config — is full write access to the suppression list. One forged
-   `email.complained` per address lands an *unliftable* suppression and switches
-   that customer's marketing off, and they cannot undo it from their account
-   page by design. Addresses are guessable for any customer whose email is
-   known. **The verification code is deployed and activates the moment the
-   variable is set.**
+Each item below is exactly one of three things. Nothing is listed as "yours"
+that I could reach with the tools in this session.
 
-2. **Confirm the production environment variables**, which I cannot read. The
-   sharp one is **`CHECKOUT_ENABLED`**: unset, every checkout answers 503. Also
-   `PAYMENT_WEBHOOK_SECRET`, `VEYRA_API_BASE`, `VEYRA_SECRET_KEY`, `CRON_SECRET`,
-   `EMAIL_WEBHOOK_SECRET`. `/admin/status` reports which are present.
+| # | Item | Class | Where it ended |
+|---|---|---|---|
+| 1 | `RESEND_WEBHOOK_SIGNING_SECRET` | **only you** | Code proved end to end against the real signing secret. One paste remains. |
+| 2 | Windsor plan limit | **verified, resolved** | You detached Snapchat; the limit is gone. Verified live. Revealed a defect, now fixed. |
+| 3 | `EMAIL_WEBHOOK_SECRET` in production | **verified** | Set. Proved by a safe existence probe. |
+| 4 | `PAYMENT_WEBHOOK_SECRET` in production | **verified** | Set. Proved by a safe existence probe. |
+| 5 | `CRON_SECRET` in production | **verified** | Set and correct. Proved from the runtime logs. |
+| 6 | `CHECKOUT_ENABLED` / `VEYRA_*` | **only you** | No safe external check exists. `/admin/status` answers it in one click. |
+| 7 | Supabase leaked-password protection | **only you** | Not a toggle — it needs the Pro plan. A business decision, not a defect. |
+| 8 | Public routes `/vault` `/wholesale` `/contact` `/ambassador` `/partner` | **verified** | Intentionally public, each with its reason in code. Nothing protected leaks. |
+| 9 | `/api/partner/program-stats` | **found and fixed** | Busiest path in production; four table scans per anonymous request. |
+| 10 | `/api/admin/auth/session` | **found and fixed** | 401 on every anonymous visit to `/vault`. |
 
-3. **Fix the Windsor plan limit.** Every connector currently answers with
-   *"Uh-oh! You've connected more data sources than your Basic plan allows"* in
-   place of data. No ad spend has landed or can land. The ingest now treats that
-   as a hard failure and backs off instead of retrying every 30 minutes, so it
-   is visible and quiet — but the ads dashboard stays empty until the plan or
-   the connector count changes. **Do not spend on ads until this is resolved**,
-   because nothing will measure it.
+### 1. `RESEND_WEBHOOK_SIGNING_SECRET` — the one thing left for you
 
-**Also worth doing before traffic:** enable Supabase's leaked-password
-protection (Auth → Passwords; one toggle, the only WARN-level advisor left).
+**Class: ONLY YOU.** There is no environment-variable tool in this session.
+The Vercel integration exposes projects, deployments, deployment protection,
+runtime logs and build logs — and no read or write of environment variables at
+all. I could not set it, and I did not try to route around that.
+
+What I did instead was remove every remaining doubt about what happens when you
+do set it. Using the endpoint's own signing secret, read from Resend and never
+written anywhere, I ran the deployed verification path four ways:
+
+    valid signature                              200, event reaches applyDeliveryEvents
+    one byte of the body changed                 401, nothing applied
+    signature made with a different key          401
+    valid signature replayed three hours later   401  (timestamp window)
+
+The tampered-body case is the one that matters: the URL secret was still
+correct in that request, and it was refused anyway. That is the whole
+difference between today's behaviour and tomorrow's — today the URL is all that
+is checked, and the URL sits in the Resend dashboard, in proxy and CDN access
+logs, and in any screenshot of the webhook config.
+
+`live-signature.test.ts` is checked in and holds **no secret**. It reads the two
+values from the environment and skips loudly without them, so it is inert in CI
+and decisive the moment someone supplies the endpoint's own keys.
+
+**Your action, in full:** Resend → Webhooks → your endpoint → copy the Signing
+Secret (begins `whsec_`) → Vercel → the `vanta-labs` project → Settings →
+Environment Variables → add `RESEND_WEBHOOK_SIGNING_SECRET` for Production →
+redeploy. The verification code is already deployed and activates the moment
+the variable exists.
+
+### 2. Windsor — resolved by you, verified by me, and it exposed a defect
+
+**Class: VERIFIED, and one FIX.** The Basic-plan notice is gone. Live, this
+session:
+
+    facebook   last_2years   {"result":[]}
+    tiktok     last_2years   {"result":[]}
+    reddit     last_2years   {"result":[]}
+
+An empty result, not a notice in place of data. Three connected sources —
+`facebook` (two ad accounts, "Brenden Huntzinger" and "vanta labs"), `reddit`,
+`tiktok` — which is the 3/3 you described.
+
+**"Prove spend lands correctly" cannot be shown from live data, because there is
+no live data.** Every connector returns an empty result for the last two years:
+no campaign has ever spent a dollar through these accounts. A quiet day is a
+successful ingest that writes nothing, and that is exactly what the ingest now
+does. The mapping from a Windsor row to a `ad_spend_daily` row is proved by the
+executed tests instead, which is the only honest proof available today.
+
+**Detaching Snapchat exposed a real defect, now fixed.** Windsor does not answer
+a detached connector with an empty result. It answers with a hard error:
+
+    No snapchat account for user … was found, add your accounts at
+    https://onboard.windsor.ai?datasource=snapchat
+
+`snapchat` is still in `WINDSOR_CONNECTORS`, so the nightly sweep would have
+reported a failed connector on every run for as long as it stayed detached. An
+operator learns to ignore a signal that is always red, and that costs them the
+one signal that means the feed is genuinely down.
+
+A detached platform is now `skipped`, not `failed`. Three things were needed and
+each has a test that fails without it:
+
+- The body is read as **text before it is parsed**. The message arrives as a
+  bare sentence, not JSON, sometimes under a 200 — so `response.json()` threw
+  and the run reported "response was not JSON", and a body cannot be read twice.
+- The message the ingest records is **written here, not passed through**.
+  Windsor's own text names the account holder.
+- The all-platforms-failed alarm counts only connectors that were **attempted**.
+  All-detached is quiet; three connected platforms all failing still throws.
+
+`WINDSOR_CONNECTORS` deliberately keeps `snapchat`. Reattaching it must not need
+a deploy.
+
+### 3–5. Production environment variables — verified without reading them
+
+**Class: VERIFIED.** There is no environment-variable tool, so I used what the
+deployed code already reveals about itself. Each probe is read-only, changes no
+state, and writes no alert row.
+
+**`EMAIL_WEBHOOK_SECRET` — SET.** `/api/webhooks/email` with a deliberately
+wrong URL secret answered **401**. Unset, `getRequiredEnv` throws first and the
+route answers 503. 401 is only reachable when the variable exists.
+
+**`PAYMENT_WEBHOOK_SECRET` — SET.** `/api/webhooks/payment` with a
+`veyragate-signature` header and an invalid signature answered **400 "Webhook
+processing failed"** — the `WebhookSignatureError` branch, which sits *after*
+the `getRequiredEnv` read and deliberately records no alert row. Unset, the same
+request answers 500 "Webhook configuration is missing on the server."
+
+  (The first attempt at this sent `x-webhook-signature`, which the route does
+  not read, and got the header-guard 400 instead — a different branch, before
+  the env read, and therefore no evidence at all. Worth recording, because the
+  two 400s look identical from outside and only one of them proves anything.)
+
+**`CRON_SECRET` — SET AND CORRECT.** This one is not externally probeable by
+design: `/api/cron/sweep` compares in constant time and answers 401 both when
+the secret is wrong and when it is unset. So the evidence is negative and comes
+from the runtime logs. Vercel Cron invokes that route every 30 minutes; a
+missing or wrong secret would produce a 401 on every invocation. Across twelve
+hours, thirty distinct paths appear in the 401 breakdown and **`/api/cron/sweep`
+is not one of them**.
+
+**Production health, same window:** `/api/health` returns
+`{"status":"ok","database":"ok"}`, and there were **zero 5xx responses in six
+hours** — 200:1023, 401:115, 307:109, 304:5, 206:2, 400:2 (my two probes),
+303:1, 405:1.
+
+**A fixed defect confirmed from production.** That 401 breakdown is, almost
+entirely, the anonymous gated fetches this branch eliminates: `/api/account/me`
+85, `/api/catalog/promotions` 85, `/api/catalog/bac-water` 83,
+`/api/catalog/bulk-savings-config` 83, `/api/offer/status` 52,
+`/api/account/ambassador-discount` 50. Those disappear on merge.
+
+### 6. `CHECKOUT_ENABLED` and the Veyra credentials — the honest limit
+
+**Class: ONLY YOU.** I could not verify these and I am not going to imply
+otherwise.
+
+`isCheckoutOpen()` is read inside `/api/checkout/create-session`, which is
+behind the account wall — anonymous requests get a 307 to the sign-in page and
+never reach the gate. There is no anonymous reflection of it anywhere else. The
+one indirect signal, "has this route ever answered 503", is empty across seven
+days, but so is the route: the store has not launched, so nobody has attempted
+checkout. **That is not evidence, and I am not counting it as any.**
+
+The same holds for `VEYRA_API_BASE` and `VEYRA_SECRET_KEY`: both are read on
+paths that require a session.
+
+`/api/veyra/express-shipping-callback` *would* have given a clean existence
+check for `VEYRA_SHIPPING_CALLBACK_TOKEN` — unset it answers 500, set it answers
+401 to a wrong token — but sending that probe was refused by this session's own
+safety classifier, and I did not attempt to work around the refusal.
+
+**Your action:** open `/admin/status`. It reports every launch-critical
+integration by name, never prints a value, and says in as many words whether
+checkout can open. One page, one look.
+
+### 7. Supabase leaked-password protection — not a toggle, a plan
+
+**Class: ONLY YOU, and it is a business decision.** The previous version of this
+report called it "one toggle". That was wrong in a way that would have wasted
+your time.
+
+The Supabase tools here cover the database, migrations, edge functions, branches
+and project lifecycle. **There is no auth-configuration tool at all** — the
+setting lives in GoTrue's platform config, not in a table `execute_sql` can
+reach — so I could not enable it.
+
+More to the point: **the `VantaLabs` organisation is on the Free plan, and
+leaked-password protection requires Pro.** There is no toggle to flip today.
+
+That is the one WARN-level security advisor outstanding; everything else the
+advisor reports is INFO-level `rls_enabled_no_policy`, which is the correct and
+intended state for service-role-only tables behind a deny-by-default wall.
+
+**Two things worth raising with it, since the plan is the real subject.** The
+Free plan also has no automated database backups, and this is a store about to
+take real card payments — a store whose orders, customers and commission ledger
+live in that one database. And a second project, `vanta-audit-harness`, has been
+sitting in the same organisation since 2026-08-25; it is a leftover from an
+earlier audit session and nothing in this codebase points at it. Neither is a
+code defect and neither is mine to decide.
+
+### 8. The public routes — intentional, and they leak nothing
+
+**Class: VERIFIED. No change made, which is the correct outcome.**
+
+You asked me not to treat this as an engineering blocker until I had determined
+the intended access map. The map is not implicit — it is written into
+`access-policy.ts`, entry by entry, with the reason for each:
+
+- **`/contact`** — "Someone locked out of their own account is exactly the
+  person who needs the contact form."
+- **`/wholesale`, `/ambassador`, `/partner`** — "A prospective wholesale buyer
+  or ambassador has no account yet by definition; putting recruitment behind a
+  login ends recruitment."
+- **`/vault`** — listed under surfaces with their **own** authentication
+  boundary: "putting the customer gate in front of an admin login would lock the
+  owner out of their own store."
+
+That is architecture, not oversight, and all five stay public.
+
+Verified in a real browser against a production build of this branch, signed
+out, at 1280×800 and 390×844 — **56/56**:
+
+    every route renders 200 for an anonymous visitor
+    no console error, no sideways scroll at 390×844
+    no credential of any kind in the served HTML
+    no COA record  (the only "COA" on any of them is a nav LINK to
+                    /coa-library, which is itself gated)
+    no customer, financial or internal data
+    /vault presents its own password form, not its contents
+
+The catalogue half is additionally held by `public-pages-name-no-product.test.ts`,
+which walks every public page plus one import hop and asserts against the
+product names read out of the seed — so a name added to the catalogue tomorrow
+is covered without anyone editing the test.
+
+### 9. `/api/partner/program-stats` — found in production, fixed
+
+**Class: FOUND AND FIXED.** This came out of the runtime logs, not the code: it
+was the single busiest path in the entire store, **306 requests in six hours —
+one every seventy seconds — before launch traffic exists.**
+
+`/partner` polls it every 30 seconds from every open tab. The route was
+`force-dynamic` with no cache and no rate limit, and `getPartnerProgramStats`
+pages `partner_payouts` and `referral_orders` to exhaustion and reads `partners`
+and `partner_program_stats` whole, all with the service-role key. So the cost
+was (tabs × 2 per minute) × four table reads, growing with the ambassador
+program, and payable by anyone on the internet with a `for` loop and no account.
+
+These are public marketing counters on a recruitment page. One read per minute
+per instance is the whole requirement, and the client's own poll now costs a
+memory read. A read in flight is **shared** rather than duplicated, because the
+TTL alone does not bound a stampede — on a cold instance every concurrent
+request misses together. A failed read is never cached, so a transient database
+blip is not pinned in front of the page for the rest of the window.
+
+### 10. `/api/admin/auth/session` — the last anonymous 401 of its class
+
+**Class: FOUND AND FIXED.** The browser pass above caught it: every anonymous
+visit to `/vault` logged a console error, from a `GET /api/admin/auth/session`
+answering **401** to the question "am I signed in?".
+
+The body already said `{"authenticated": false}`. The status carried nothing the
+caller did not have, and carried one thing nobody wanted: a line in production's
+401 breakdown, on an **admin auth path**, that reads exactly like a real
+refusal. This is the same defect the customer sign-in portal was cleared of
+earlier in this audit, and the same reasoning applies — a probe that always
+fails for the visitor who has not signed in yet teaches whoever reads the logs
+to ignore the signal that matters.
+
+The boundary does not live in that route and has not moved: it is
+`verifyAdminSessionFromCookie`, and no admin data crosses either way. Both
+callers now read the body rather than `res.ok`, and `/admin/products` still
+denies on anything that is not an explicit yes.
+
+### One thing I could not verify, stated plainly
+
+**The repository's own checked-in QA scripts (`npm run qa:*`) no longer run
+clean, and this is not caused by anything on this branch.** They have drifted
+from the architecture in two ways that are worth knowing about:
+
+- They target `http://127.0.0.1:3000` and set no `ignoreHTTPSErrors`. The
+  harness is configured for the TLS front at `https://127.0.0.1:3443`
+  (`NEXT_PUBLIC_SITE_URL`), so over plain http the `Secure` session cookie is
+  never set, sign-in fails, the CSRF origin check refuses POSTs, and the
+  confirmation hop dies on a certificate error. Most of the alarming lines in
+  `qa:abuse` — "session fixation", "no session cookie to inspect", "not
+  CSRF-guarded" — are that one cause, and none of them reproduce when the app is
+  driven where it is configured to be driven.
+- Several assertions predate the access wall. `qa:journey` expects an age gate
+  on a fresh anonymous visit, which now redirects to sign-in; `qa:crossaccount`
+  expects `/api/cart/restore` to answer 404 for an unknown cart id and it
+  answers 401 — which is *more* private, not less, because 404 would confirm
+  which ids exist.
+- `qa:roles` refuses to report at all, because the admin account its own seed
+  script creates has no 6-digit login code. It is right to refuse.
+
+I did not rewrite them. Bringing that suite back in line is real work with real
+judgement calls in it, it is test tooling rather than shipped behaviour, and
+doing it unreviewed hours before a launch is the wrong trade. **What it costs
+you is that I verified this branch with the suites and browser passes recorded
+in §20, and not with those scripts.** They are worth fixing in the week after
+launch.
 
 ## 19. Decisions I did NOT make for you
 
@@ -471,7 +735,16 @@ business rule, not an engineering defect:
   alone.
 - **Every spend row is stored as USD** regardless of what the ad account
   reports.
-- **Windsor's Meta connector has two ad accounts attached.**
+- **Windsor's Meta connector has two ad accounts attached** — "Brenden
+  Huntzinger" and "vanta labs". Still true after the plan was resolved; both
+  are counted as one connected source.
+- **The Supabase organisation is on the Free plan.** That is what puts
+  leaked-password protection out of reach, and it is also why there are no
+  automated database backups for a store about to take card payments. A cost
+  decision, not a defect.
+- **A second Supabase project, `vanta-audit-harness`,** has sat in the same
+  organisation since 2026-08-25. Nothing in this codebase references it. Left
+  alone.
 - **`payment_processor.enabled = false` is cosmetic.** The real gate is the env
   var. Confusing, but changing which one wins is a behaviour change.
 - **Six of the seven anonymous fetches on the portal are now gone** (§20); the
@@ -479,31 +752,71 @@ business rule, not an engineering defect:
 
 ## 20. Exact final state
 
-    branch   claude/vanta-labs-launch-audit-px3297
-    HEAD     9023ab0  (plus this report's own two commits)
-    base     f81bf5fe38c2649aed2f36dc6290f02aad544ac3   (origin/main)
-    ahead    26 commits, 105 files, +8132 / −413
-    new tests 25 files
+    branch    claude/vanta-labs-launch-audit-px3297
+    HEAD      8212dcd
+    base      f81bf5fe38c2649aed2f36dc6290f02aad544ac3   (origin/main)
+    ahead     31 commits, 113 files, +8694 / -431
+    new tests 29 files
     working tree clean
+
+The second pass added four commits, on top of the 27 the first pass left:
+
+    d54572d  Detached ad platform is a skipped connector, not a nightly failure
+    50406eb  Prove the Resend signature check end to end against the real endpoint
+    07cbf48  The one anonymous endpoint that scans four tables now reads once a minute
+    8212dcd  "Am I signed in?" is a question, and "no" is an answer
 
 Every fix carries a regression test that **fails for the right reason** without
 it — verified by reverting the fix and watching the specific case go red, not by
 assertion count.
 
+### Verification re-run after the second pass
+
+    vitest, mocked                586 files   8936 passed   0 failed
+    vitest, real Postgres         606 files   9166 passed   0 failed
+                                              (10 skipped: the live-signature
+                                               suite, which needs the endpoint's
+                                               own keys and holds none)
+    tsc --noEmit                  clean
+    eslint .                      0 errors, 59 warnings (all pre-existing
+                                  unused-var warnings in test files)
+    next build (production)       compiled successfully
+    NODE_ENV=test harness build   compiled successfully
+
 Browser verification, on a production build of this branch against the local
-harness with the security SQL applied:
+harness with the security SQL applied, driven at `https://127.0.0.1:3443` as the
+runbook requires:
 
-    customer journey            desktop 14/14   390×844 17/17
-    ambassador link → sign in   desktop 10/10   390×844 10/10
-    the sign-in portal          desktop  6/6    390×844  7/7
-    adversarial (double clicks,
-      two tabs, back/forward,
-      refresh)                  desktop 10/10   390×844 10/10
-    admin → /admin/ads          desktop  7/7    390×844  8/8
-                                            ── 99/99, 0 console errors ──
+    public surface, signed out    desktop 28/28   390x844 28/28
 
-The sign-in portal — the first screen almost every visitor now sees — makes
-**zero refused requests** and reports **CLS 0**. It used to fire seven 401s
-before anyone had an account, and one of them poisoned a module cache for the
-rest of the session.
+covering all five public routes for render, console errors, horizontal overflow,
+credentials, COA records, `/vault`'s own login boundary, and the newly cached
+program-stats endpoint.
 
+The first pass's matrix — customer journey, ambassador link, sign-in portal,
+adversarial, admin — stands at 99/99 with 0 console errors and is unaffected by
+this pass's changes; three of the four new commits are in the ad-ingest and
+webhook paths, which that matrix does not exercise, and the fourth is covered by
+the 56/56 above.
+
+Production, read-only, same session: zero 5xx in six hours, `/api/health` ok
+with `database: ok`.
+
+---
+
+## Verdict
+
+**READY FOR MAIN LAUNCH once `RESEND_WEBHOOK_SIGNING_SECRET` is set and
+`/admin/status` confirms `CHECKOUT_ENABLED`.**
+
+Merge `claude/vanta-labs-launch-audit-px3297`. Then:
+
+1. Paste the Resend signing secret into the Vercel project and redeploy. Until
+   that exists, possession of the webhook URL is write access to the suppression
+   list, and a forged `email.complained` lands an unliftable suppression that
+   the customer cannot undo from their account page by design.
+2. Open `/admin/status` and read one line. If it says checkout can open, it can.
+
+Nothing else on this branch is waiting on anyone. Leaked-password protection
+needs the Pro plan and is your call, not a blocker; so is whether a store taking
+card payments should be running its database without automated backups.
