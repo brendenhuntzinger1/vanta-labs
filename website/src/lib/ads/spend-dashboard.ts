@@ -62,6 +62,25 @@ export type SpendDashboard = {
   winners: CreativeRow[];
   losers: CreativeRow[];
 
+  /**
+   * TODAY, from the same source as the window above it.
+   *
+   * The page's Today strip read `ad_performance_daily`, which is the table PR
+   * #161 was written to replace: its creative_id foreign key requires a
+   * creative designed inside this system, and no ad running on the four live
+   * platforms has one, so it "could never hold a row". The strip therefore read
+   * $0.00 / $0.00 / 0 / — / — for ever, sitting directly above a thirty-day
+   * panel showing real money, on a page whose own copy promises that "an empty
+   * panel means no data, never a guess".
+   *
+   * Measured: $573.45 of spend seeded across five days INCLUDING today, and the
+   * strip showed $0.00.
+   *
+   * Derived from the platform rows already fetched, so it costs no extra query
+   * and cannot disagree with the window beside it.
+   */
+  today: Parts & Rates;
+
   /** Spend we can see but cannot tie to revenue. */
   untagged: UntaggedRow[];
   untaggedSpend: number;
@@ -112,6 +131,14 @@ export async function getSpendDashboard(windowDays = DEFAULT_WINDOW_DAYS): Promi
   // rows include untagged spend and unattributed revenue. Summing creatives
   // would silently exclude both and report a flattering, smaller denominator.
   const parts: Parts = platforms.length > 0 ? totalParts(platforms) : { ...EMPTY_PARTS };
+
+  // The same rollup, narrowed to today's stat_date. aggregatePlatforms collapses
+  // the per-day rows, so today is taken from the raw rows before that.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayRows = aggregatePlatforms(
+    platformRes.rows.filter((row) => String(row.stat_date ?? "").slice(0, 10) === todayIso),
+  );
+  const todayParts: Parts = todayRows.length > 0 ? totalParts(todayRows) : { ...EMPTY_PARTS };
   const platformConversions = platforms.reduce<number | null>(
     (acc, p) => (p.platformConversions === null ? acc : (acc ?? 0) + p.platformConversions),
     null,
@@ -132,6 +159,7 @@ export async function getSpendDashboard(windowDays = DEFAULT_WINDOW_DAYS): Promi
     windowDays,
 
     totals: { ...parts, ...ratios(parts), platformConversions },
+    today: { ...todayParts, ...ratios(todayParts) },
 
     platforms,
     campaigns: campaigns.slice(0, TABLE_LIMIT),

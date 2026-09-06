@@ -376,14 +376,23 @@ export default async function AdsDashboardPage() {
     <>
       {schemaBanner}
 
-      <Panel title="Today" subtitle={d.schemaReady ? "UTC day, site-attributed revenue net of refunds" : "no data source yet"}>
+      {/* FROM THE SAME SOURCE AS THE THIRTY-DAY PANEL BELOW IT.
+          This read `d.today`, which comes from ad_performance_daily — the table
+          PR #161 was written to replace, because its creative_id foreign key
+          requires a creative designed inside this system and no ad running on
+          the four live platforms has one. So the strip showed
+          $0.00 / $0.00 / 0 / — / — for ever, directly above a panel reporting
+          real money, on a page that promises "an empty panel means no data,
+          never a guess". Measured: $573.45 of spend seeded across five days
+          including today, and this strip read $0.00. */}
+      <Panel title="Today" subtitle={spend.schemaReady ? "site-attributed revenue net of refunds" : "no data source yet"}>
         <dl className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           {[
-            ["Spend", money(d.today.spend)],
-            ["Revenue", money(d.today.revenue)],
-            ["Purchases", String(d.today.purchases)],
-            ["CPA", d.today.cpa === null ? "—" : money(d.today.cpa)],
-            ["ROAS", ratio(d.today.roas)],
+            ["Spend", money(spend.today.spend)],
+            ["Revenue", money(spend.today.revenue)],
+            ["Purchases", String(spend.today.orders)],
+            ["CPA", spend.today.cpa === null ? "—" : money(spend.today.cpa)],
+            ["ROAS", ratio(spend.today.roas)],
           ].map(([label, value]) => (
             <div key={label} className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
               <dt className="text-[10px] uppercase tracking-[0.16em] text-white/35">{label}</dt>
