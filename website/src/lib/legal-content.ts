@@ -87,9 +87,15 @@ It reports shopping actions too: which product pages you view, when you add an i
 
 A hash cannot be reversed back into an email address, though anyone already holding the same address could confirm a match — so treat it as pseudonymous rather than anonymous. This is the same treatment TikTok and Snap already receive, with one difference worth stating plainly: for those two it happens only on a paid order, whereas Reddit receives it on page views while you are signed in. You can stop it at any time by declining cookies, signing out, or asking us using the contact details above.
 
-If you decline cookies, none of these pixels are loaded at all. No request is made to TikTok, Snap or Reddit, no identifier is set, and no platform receives anything about your visit.
+**The Google Ads tag.** We also advertise on Google. Its tag (gtag.js) loads only if you accept cookies, and it reports your page views together with the technical data any web request carries — IP address, browser and device type, referring page — and an identifier Google stores in your browser. Google uses this to report advert performance to us, to build the remarketing audiences our adverts are shown to and, in line with its own privacy policy, for its own purposes.
 
-We do not run a Meta pixel, a Google Ads tag or any equivalent technology. If we add one, this policy and our Cookie Policy will be updated to name the platform, the data shared and the purpose before it is switched on.
+It is the narrowest of the four, and in a different way from Reddit. It does not report shopping actions at all: we do not tell Google which product pages you view, when you add an item to the cart, when you begin checkout, or when an order is paid, and it receives no product identifier, quantity, order value or currency. Nothing identifying you is sent either. Google's own setup offers a field for your email address, under the name Enhanced Conversions; we do not use it, so Google receives neither a plain address nor a hash of one.
+
+Google also offers a "consent mode", which keeps the tag running for visitors who decline and sends Google cookieless signals so it can estimate the conversions it was not allowed to measure. We do not use it. Declining means the tag is never loaded, exactly as with the other three.
+
+If you decline cookies, none of these pixels are loaded at all — the Google tag included. No request is made to TikTok, Snap, Reddit or Google, no identifier is set, and no platform receives anything about your visit.
+
+We do not run a Meta pixel or any advertising technology beyond the four named above. If we add one, this policy and our Cookie Policy will be updated to name the platform, the data shared and the purpose before it is switched on — as they were for the Google tag above.
 
 ## Sharing
 Only with service providers that help us operate — payment processing, email delivery, hosting, analytics and shipping — as needed to run the store, or as required by law.
@@ -196,7 +202,7 @@ Email ${email} and we'll help.`,
 
 **Analytics — only if you accept.** A random visitor and session identifier stored in your browser, any campaign parameters from the link you arrived through, and Vercel Analytics, our hosting provider's privacy-focused measurement service. Nothing in this category is created or sent unless you choose Accept on the cookie banner.
 
-**Advertising — only if you accept.** Three pixels, which measure whether our adverts lead to visits and orders: the TikTok Pixel, the Snap Pixel and the Reddit Pixel. Each sets an identifier in your browser and sends its platform your page views together with the technical data any web request carries. All three additionally receive shopping actions — product viewed, added to cart, order paid — and Reddit receives a one-way hash of your email address while you are signed in. Declining means none of them is ever loaded, so no request reaches TikTok, Snap or Reddit and no identifier is set. We do not run a Meta pixel, a Google Ads tag or any equivalent.
+**Advertising — only if you accept.** Four tags, which measure whether our adverts lead to visits and orders: the TikTok Pixel, the Snap Pixel, the Reddit Pixel and the Google Ads tag. Each sets an identifier in your browser and sends its platform your page views together with the technical data any web request carries. The first three additionally receive shopping actions — product viewed, added to cart, order paid — and Reddit receives a one-way hash of your email address while you are signed in; the Google tag gets page views and nothing else, no hash of any kind. Declining means none of them is ever loaded, so no request reaches TikTok, Snap, Reddit or Google and no identifier is set. We do not run a Meta pixel or any equivalent.
 
 ## Your choices
 Choosing Decline on the banner stops all non-essential storage; nothing in the analytics category is created. Your choice is remembered in your browser. To change it, clear this site's data in your browser and the banner will appear again on your next visit. You can also control cookies through your browser settings, though disabling essential cookies may break checkout or login.

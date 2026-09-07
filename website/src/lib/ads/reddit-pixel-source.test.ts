@@ -253,9 +253,17 @@ describe("the disclosure names Reddit", () => {
     expect(banner).toMatch(/Reddit/);
   });
 
-  it("names it in the cookie policy alongside the other two", () => {
+  it("names it in the cookie policy alongside the others", () => {
     expect(legal).toMatch(/Reddit Pixel/);
-    expect(legal).toMatch(/no request reaches TikTok, Snap or Reddit/);
+    // Asserts the PROMISE, not one word order. This used to pin the literal
+    // "no request reaches TikTok, Snap or Reddit", which became un-updatable
+    // the moment a fourth platform joined the sentence — exactly the trap
+    // snap-pixel-source.test.ts documents at "neither pixel is loaded at all".
+    // Naming the platform is the substance; its position in the list is not.
+    const promise = legal.match(/no request reaches [^.]*/i)?.[0] ?? "";
+    for (const platform of ["TikTok", "Snap", "Reddit"]) {
+      expect(promise, `the decline promise does not name ${platform}`).toContain(platform);
+    }
   });
 
   it("does not still claim Reddit receives page views only", () => {

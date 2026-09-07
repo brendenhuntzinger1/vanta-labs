@@ -35,6 +35,7 @@ import { ConsentedAnalytics } from "@/components/consented-analytics";
 import { TikTokPixel } from "@/components/tiktok-pixel";
 import { SnapPixel } from "@/components/snap-pixel";
 import { RedditPixel } from "@/components/reddit-pixel";
+import { GoogleAdsTag } from "@/components/google-ads-tag";
 import { TikTokCommerceEvents } from "@/components/tiktok-commerce-events";
 import "./globals.css";
 
@@ -333,6 +334,7 @@ export default async function RootLayout({
           <TikTokPixel />
           <SnapPixel />
           <RedditPixel />
+          <GoogleAdsTag />
         </Suspense>
         <TikTokCommerceEvents />
         {/* Renders only for ?debug_entry=1 — see components/entry-diagnostics.tsx.

@@ -182,7 +182,7 @@ export function CookieConsent({ initiallyOpen = false }: { initiallyOpen?: boole
     <div className="vl-consent-bar" role="region" aria-label="Cookie consent">
       <div className="vl-consent-inner">
         <p className="vl-consent-copy">
-          Essential cookies run the store. Analytics and our advertising pixels (TikTok, Snapchat and Reddit) load only if you accept.{" "}
+          Essential cookies run the store. Analytics and our advertising pixels (TikTok, Snapchat, Reddit and Google) load only if you accept.{" "}
           {/* py-1.5 -my-1.5 gives the link a comfortably-over-24px tap box
               (WCAG 2.2 AA 2.5.8) without changing the line box it sits in.
               py-1 landed on exactly 24px, which rounds under the threshold. */}
