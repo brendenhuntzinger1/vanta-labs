@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  MIN_HOURS_BETWEEN_RUNS,
   RESTATEMENT_WINDOW_DAYS,
   runSpendIngest,
   spendWindow,
@@ -543,11 +544,18 @@ describe("runSpendIngest", () => {
 
   it("skips a fetch when the stored data is still fresh", async () => {
     // The sweep runs every 30 minutes; the platforms restate a few times a day.
+    //
+    // Derived from MIN_HOURS_BETWEEN_RUNS rather than hard-coded: this asserts
+    // the GATE, not the interval's current value. Pinning "three hours ago" to
+    // a six-hour default meant lowering the default to one hour failed this
+    // test for no defect — the gate was working exactly as written.
+    const now = new Date("2026-09-06T12:00:00Z");
+    const halfWindowAgo = new Date(now.getTime() - (MIN_HOURS_BETWEEN_RUNS / 2) * 3_600_000);
     const fetchImpl = vi.fn(async () => jsonResponse({ data: [] }));
     const result = await runSpendIngest({
       apiKey: "k",
-      now: new Date("2026-09-06T12:00:00Z"),
-      lastIngestedAt: new Date("2026-09-06T09:00:00Z"),
+      now,
+      lastIngestedAt: halfWindowAgo,
       upsert: ok,
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });

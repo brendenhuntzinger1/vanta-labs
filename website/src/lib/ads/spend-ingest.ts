@@ -49,16 +49,31 @@ const CHUNK_SIZE = 500;
 /**
  * Least time between two real fetches.
  *
- * The sweep this hangs off runs every 30 minutes, which for four connectors
- * would be 192 Windsor requests a day to restate numbers the platforms
- * themselves only update a few times a day. Six hours gives four refreshes
- * daily — well inside any quota, and finer than the data's own granularity.
+ * The sweep this hangs off runs every 30 minutes. Refreshing that often would
+ * be 144 Windsor requests a day for three connectors, to restate numbers the
+ * platforms themselves only settle a few times a day — so the gate exists to
+ * stop the feed spending quota on data that has not changed.
+ *
+ * SIX HOURS WAS TOO COARSE FOR THE PERSON WATCHING THE DASHBOARD. It is defensible
+ * against the data's own granularity and indefensible when someone has just
+ * changed an ad and wants to see the spend land: the honest worst case was
+ * "correct in up to six hours", which reads as broken. One hour is still only
+ * 72 requests a day, comfortably inside any quota, and it is the difference
+ * between checking the dashboard and waiting on it.
+ *
+ * Override with ADS_SPEND_MIN_HOURS — 0.5 matches the sweep exactly, if the
+ * quota ever proves to allow it.
  *
  * The gate is a freshness READ rather than a schedule, so it stays correct when
  * the sweep is late, runs twice, or is triggered by hand, and it needs no state
  * of its own beyond the rows already being written.
  */
-export const MIN_HOURS_BETWEEN_RUNS = 6;
+export const MIN_HOURS_BETWEEN_RUNS = (() => {
+  const raw = Number(process.env.ADS_SPEND_MIN_HOURS);
+  // A nonsense value must not disable the gate: an unparseable or non-positive
+  // override would otherwise mean "fetch on every sweep, forever".
+  return Number.isFinite(raw) && raw > 0 ? raw : 1;
+})();
 
 /** UTC, because `stat_date` is a UTC day and a local day would silently shift it. */
 export function spendWindow(now: Date, days = RESTATEMENT_WINDOW_DAYS): { dateFrom: string; dateTo: string } {
