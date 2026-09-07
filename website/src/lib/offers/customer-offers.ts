@@ -215,6 +215,35 @@ export const OFFER_CATALOG = {
     // gift never dies before the sale the email pairs it with.
     ttlDays: 8,
   },
+  /**
+   * THE 72-HOUR FOLLOW-UP, for the four carts that did not come back.
+   *
+   * Forty percent is not a round number picked to sound generous — it is the
+   * first one that changes anything for the two carts that matter. The store
+   * grants ONE discount per order (bundleStacking is off), so a gift's
+   * percentage competes with Buy 2 Get 1 rather than adding to it, and Buy 2
+   * Get 1 is already worth 30% on a ten-unit cart and 33% on a three-unit one.
+   * A 30% gift therefore loses the slot and is worth exactly $0 to both of
+   * them; measured, not assumed. Forty beats it and is worth $64.99 and $34.00
+   * more respectively.
+   *
+   * The two free vials ride ALONGSIDE it rather than competing, because a $0
+   * product line is not in the discount race at all — which is what makes
+   * "40% off AND two free BAC Water" expressible without touching the
+   * store-wide stacking rule that every other customer depends on.
+   *
+   * What it must NOT be sold as is "Buy 2 Get 1 plus 40%". The customer gets
+   * the better of the two, and at 40% that is the 40%.
+   *
+   * Five days, so a token minted at the 72-hour mark still outlives the sale
+   * it sits beside.
+   */
+  labor_day_bac_water_2_40: {
+    label: "2 free BAC Water",
+    reward: { kind: "free_product_percent", productSlug: BAC_WATER_SLUG, percent: 40, quantity: 2 } as OfferReward,
+    minSubtotalCents: 3500,
+    ttlDays: 5,
+  },
   winback_60_percent_15: {
     label: "15% off",
     reward: { kind: "percent", percent: 15 } as OfferReward,

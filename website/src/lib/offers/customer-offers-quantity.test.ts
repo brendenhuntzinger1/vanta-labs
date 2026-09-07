@@ -119,3 +119,39 @@ describe("minting a multi-unit gift", () => {
     expect(db.inserted).toHaveLength(0);
   });
 });
+
+describe("the 72-hour follow-up gift", () => {
+  it("grants two vials AND forty percent, in one reward", async () => {
+    const { OFFER_CATALOG, isOfferKey } = await import("@/lib/offers/customer-offers");
+    const { BAC_WATER_SLUG } = await import("@/lib/bac-water");
+
+    expect(isOfferKey("labor_day_bac_water_2_40")).toBe(true);
+    expect(OFFER_CATALOG.labor_day_bac_water_2_40.reward).toEqual({
+      kind: "free_product_percent", productSlug: BAC_WATER_SLUG, percent: 40, quantity: 2,
+    });
+  });
+
+  it("is forty and not thirty, because thirty is worth nothing here", async () => {
+    // Buy 2 Get 1 is worth 30% on a ten-unit cart, and the store grants one
+    // discount per order — so a 30% gift loses the slot and changes no price.
+    // This pins the number against a well-meaning trim.
+    const { OFFER_CATALOG } = await import("@/lib/offers/customer-offers");
+    const reward = OFFER_CATALOG.labor_day_bac_water_2_40.reward as { percent: number };
+    expect(reward.percent).toBeGreaterThan(33.4);
+  });
+
+  it("describes both halves in the terms the checkout enforces", async () => {
+    const { describeOfferTerms } = await import("@/lib/offers/customer-offers");
+    const terms = describeOfferTerms("labor_day_bac_water_2_40", "2026-09-15T16:30:00Z");
+    expect(terms).toContain("40% off");
+    expect(terms).toContain("2 free BAC Water are added to your order");
+    expect(terms).toContain("$35 or more");
+  });
+
+  it("outlives the sale it sits beside", async () => {
+    const { OFFER_CATALOG } = await import("@/lib/offers/customer-offers");
+    // Minted at the 72-hour mark (10 Sept) it must still be live on the 14th,
+    // which is when Buy 2 Get 1 ends.
+    expect(OFFER_CATALOG.labor_day_bac_water_2_40.ttlDays).toBeGreaterThanOrEqual(5);
+  });
+});
