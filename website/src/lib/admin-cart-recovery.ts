@@ -396,6 +396,24 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
   // reminder from the button — so the lookup is the same lookup.
   const override = (await loadCartRecoveryOverrides([cart.id])).get(`${cart.id}::${stage}`);
 
+  // A GIFT GOES OUT ONCE, AND A SECOND PRESS IS NOT A SECOND GIFT.
+  //
+  // Resending an ordinary reminder is harmless and is what this button is for.
+  // Resending a gift is not: issueCustomerOffer keeps at most one live token
+  // per address per campaign, so minting a second one RETIRES the first — the
+  // customer gets two emails and the link in the one they already opened stops
+  // working. Nothing else stops this. The sweep is protected by its stage
+  // claim; this path reuses the row by design, and the cart_recovery family is
+  // exempt from the frequency guard's quiet window, so neither of those would
+  // catch a double click.
+  if (override && override.consumedAt) {
+    return {
+      success: false,
+      error: `This cart's gift email already went out at ${new Date(override.consumedAt).toLocaleString("en-US", { timeZone: "UTC" })} UTC. `
+        + "Sending it again would issue a new entitlement and break the link in the message they already have.",
+    };
+  }
+
   if (stage === "t72h" && !override) {
     const coupon = (await findLiveCouponForCart(cart.id))
       ?? (await mintCartRecoveryCoupon(cart.email, config.discountPercent, config.couponExpirationHours));

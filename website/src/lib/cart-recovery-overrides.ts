@@ -29,6 +29,17 @@ export interface CartRecoveryOverride {
    */
   perks: string[];
   note: string | null;
+  /**
+   * When this replaced stage already went out, or null.
+   *
+   * THE TWO SEND PATHS READ THIS DIFFERENTLY, on purpose. The sweep ignores it
+   * — its claim on (cart, stage) already makes a second send impossible, and
+   * if one were somehow re-attempted it must carry the SAME bespoke body
+   * rather than silently reverting to the generic one. The operator resend has
+   * no such claim (reusing the row is the whole point of a resend), so this is
+   * the only thing standing between a second click and a second gift email.
+   */
+  consumedAt: string | null;
 }
 
 /**
@@ -55,7 +66,7 @@ export async function loadCartRecoveryOverrides(
   try {
     const { data, error } = await supabaseAdmin
       .from("cart_recovery_stage_overrides")
-      .select("abandoned_cart_id, stage, offer_key, perks, note")
+      .select("abandoned_cart_id, stage, offer_key, perks, note, consumed_at")
       .in("abandoned_cart_id", ids);
     if (error) throw error;
     for (const row of data ?? []) {
@@ -80,6 +91,7 @@ export async function loadCartRecoveryOverrides(
         offerKey: rawKey as OfferKey | null,
         perks,
         note: row.note === null || row.note === undefined ? null : String(row.note),
+        consumedAt: row.consumed_at ? String(row.consumed_at) : null,
       });
     }
   } catch (error) {
