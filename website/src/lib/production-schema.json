@@ -546,7 +546,8 @@
     "automation_key",
     "reference_id",
     "revoke_reason",
-    "closed_by_order_id"
+    "closed_by_order_id",
+    "quantity"
   ],
   "customer_preferences": [
     "user_id",
@@ -1443,5 +1444,15 @@
     "user_id",
     "product_slug",
     "created_at"
+  ],
+  "cart_recovery_stage_overrides": [
+    "abandoned_cart_id",
+    "stage",
+    "offer_key",
+    "note",
+    "created_at",
+    "consumed_at",
+    "consumed_email_id",
+    "perks"
   ]
 }

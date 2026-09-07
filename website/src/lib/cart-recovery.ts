@@ -2,8 +2,9 @@ import "server-only";
 import crypto from "crypto";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { getCartRecoveryControlConfig, type CartRecoveryConfig } from "@/lib/admin-control";
+import { getCartRecoveryControlConfig, getShippingConfig, type CartRecoveryConfig } from "@/lib/admin-control";
 import { getSiteUrl } from "@/lib/env";
+import { isFreeShippingSitewide } from "@/lib/shipping";
 import { formatDisplayDate } from "@/lib/format-date";
 import { isMarketingSuppressed, sendMarketingEmail } from "@/lib/email/marketing";
 import { claimMarketingSend } from "@/lib/email/frequency";
@@ -11,11 +12,15 @@ import { plainGreetingName } from "@/lib/email/greeting-name";
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
 import { isPaidOrderStatus, isProductPurchaseOrder } from "@/lib/ledger";
 import {
+  cartRecoveryGiftTemplate,
   cartRecoveryT30mTemplate,
   cartRecoveryT12hTemplate,
   cartRecoveryT24hTemplate,
   cartRecoveryT72hTemplate,
 } from "@/lib/email/templates";
+import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
+import { describeOfferTerms, issueCustomerOffer, OFFER_CATALOG } from "@/lib/offers/customer-offers";
+import { loadCartRecoveryOverrides, markCartRecoveryOverrideConsumed } from "@/lib/cart-recovery-overrides";
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -385,7 +390,26 @@ async function reserveAndSendStage(input: {
    * code and cannot produce one releases its claim and waits.
    */
   couponRequired?: boolean;
-  buildTemplate: (restoreUrlForEmail: string, coupon: RecoveryCoupon | null) => { subject: string; html: string; text: string };
+  /**
+   * Mint the entitlement this stage carries, BEHIND the claim, for the same
+   * reason mintCoupon runs there (C-06): minting before the slot is held lets
+   * a failing send re-mint once per sweep for as long as the window is open.
+   * Returns the plaintext token, which exists only for the length of this
+   * function and the email it renders — it is never stored or logged.
+   *
+   * A stage that names an offer and cannot mint one sends NOTHING and releases
+   * its claim, so the next sweep retries. That is stricter than the coupon
+   * path's `couponRequired: false` escape and deliberately has no escape: the
+   * body of a gift email is about the gift, so sending it without one would
+   * promise a customer something the till would refuse.
+   */
+  mintOffer?: () => Promise<string | null>;
+  /** Called once the send has actually succeeded. Best-effort bookkeeping. */
+  onSent?: (reservationId: string) => Promise<void>;
+  buildTemplate: (
+    restoreUrlForEmail: string,
+    coupon: RecoveryCoupon | null,
+  ) => { subject: string; html: string; text: string };
 }): Promise<boolean> {
   // THE FREQUENCY GUARD COMES BEFORE THE STAGE CLAIM AND THE MINT. If another
   // marketing email reached this inbox inside the window the stage is simply
@@ -458,7 +482,27 @@ async function reserveAndSendStage(input: {
     }
   }
 
-  const trackedRestoreUrl = `${getSiteUrl()}/api/email/track/click?id=${reservationId}&url=${encodeURIComponent(restoreUrl(input.cartId))}`;
+  // THE ENTITLEMENT IS MINTED BEHIND THE CLAIM, exactly like the coupon above,
+  // and a stage that cannot mint one sends nothing at all.
+  let offerToken: string | null = null;
+  if (input.mintOffer) {
+    offerToken = await input.mintOffer();
+    if (!offerToken) {
+      // No token exists, so releasing the slot cannot accumulate one — the same
+      // argument that makes a failed mint safe to retry for coupons.
+      await supabaseAdmin.from("abandoned_cart_emails").delete().eq("id", reservationId);
+      await releaseClaim();
+      console.error("[cart-recovery] stage carries an offer that could not be minted; nothing sent", input.cartId, input.stage);
+      return false;
+    }
+  }
+
+  // The token rides in the tracking redirect's `o`, which sets it as an
+  // httpOnly cookie and drops it — it never reaches the landing page's URL,
+  // its Referer header, or any script on it. Same treatment, and the same
+  // reasoning, as the retention automations' click route.
+  const offerParam = offerToken ? `&o=${encodeURIComponent(offerToken)}` : "";
+  const trackedRestoreUrl = `${getSiteUrl()}/api/email/track/click?id=${reservationId}&url=${encodeURIComponent(restoreUrl(input.cartId))}${offerParam}`;
   const openTrackingPixelUrl = `${getSiteUrl()}/api/email/track/open?id=${reservationId}`;
 
   const sendResult = await sendMarketingEmail({
@@ -485,6 +529,8 @@ async function reserveAndSendStage(input: {
     );
     return false;
   }
+
+  if (input.onSent) await input.onSent(reservationId);
 
   return true;
 }
@@ -1006,6 +1052,10 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     return result;
   }
 
+  // One read for the whole sweep. A cart with no row here — which is every
+  // cart, almost always — takes the ordinary path untouched.
+  const overrides = await loadCartRecoveryOverrides(candidates.map(({ row }) => String(row.id)));
+
   for (const { row, stage } of candidates) {
     const items = recoveryEmailItems(Array.isArray(row.items) ? row.items : [], catalogueNames);
     // Nothing in this cart is a live product — a retired listing, or a beacon
@@ -1034,6 +1084,88 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     const cartId = String(row.id);
     const base = { name, items, cartValueCents: row.cart_value_cents };
     let sent = false;
+
+    // A NAMED CART'S STAGE CAN BE REPLACED, and that is all this does.
+    //
+    // It does not add a send, skip a stage, restart a sequence or change a
+    // window: the branch below still goes through reserveAndSendStage, still
+    // claims (cart, stage) before anything else, and still sends exactly once
+    // behind that claim. Only the body and the entitlement differ. So every
+    // property the ordinary sequence has — retry, concurrent sweep, redeploy,
+    // conversion before the send, unsubscribe, the frequency guard — holds
+    // here unchanged, because this IS the ordinary path.
+    const override = overrides.get(`${cartId}::${stage}`);
+    if (override) {
+      const offerKey = override.offerKey;
+      // A PROMOTION IS MENTIONED ONLY IF THE LIVE CONFIGURATION IS RUNNING ONE.
+      //
+      // getApplicableBxgyPromotions is the same resolver the checkout prices
+      // through: switched on, inside its own schedule, and not used up for this
+      // customer. So the sentence cannot outlive the promotion, and nothing
+      // here invents a deadline, a discount or an urgency the store does not
+      // already hold. No live promotion means the sentence is simply absent.
+      // FREE SHIPPING IS STATED ONLY IF THE STORE IS ACTUALLY GIVING IT.
+      // Read from the live shipping configuration, the same one the checkout
+      // prices through, so the line cannot outlive the setting.
+      const overridePerks = [...override.perks];
+      try {
+        const shippingConfig = await getShippingConfig();
+        if (isFreeShippingSitewide(shippingConfig)) overridePerks.unshift("Free shipping");
+      } catch {
+        // A perk we cannot confirm is a perk we do not claim.
+      }
+
+      let livePromotionNote: string | null = null;
+      try {
+        const livePromotions = await getApplicableBxgyPromotions({ customerEmail: email });
+        const headline = livePromotions.find((promotion) => !promotion.hidden) ?? livePromotions[0];
+        if (headline) {
+          // THE DEADLINE COMES OFF THE PROMOTION ROW, not out of the copy. So
+          // "limited time" is only ever said when the store genuinely holds an
+          // end date, and the date shown is the one the checkout stops honouring
+          // the promotion at. Clear the endsAt and this sentence loses its
+          // deadline by itself rather than going stale in a template.
+          const endsAt = headline.endsAt ? new Date(headline.endsAt) : null;
+          const endsOn = endsAt && Number.isFinite(endsAt.getTime())
+            ? endsAt.toLocaleDateString("en-US", { month: "long", day: "numeric", timeZone: "America/New_York" })
+            : null;
+          livePromotionNote = endsOn
+            ? `Our ${headline.name} offer runs through ${endsOn} \u2014 a limited-time sale.`
+            : `Our ${headline.name} offer is still running where eligible.`;
+        }
+      } catch (error) {
+        // Not worth failing the send over — the message is about the gift.
+        console.error("[cart-recovery] could not read live promotions; sending without the mention", error);
+      }
+      sent = await reserveAndSendStage({
+        cartId, stage, email,
+        campaignType: `cart_recovery_${stage}`,
+        templateKey: "cartRecoveryGiftTemplate",
+        // Minted behind the claim; a stage that cannot mint sends nothing.
+        mintOffer: offerKey
+          ? async () => {
+            const issued = await issueCustomerOffer({ email, offerKey, referenceId: cartId });
+            return issued?.token ?? null;
+          }
+          : undefined,
+        onSent: (reservationId) => markCartRecoveryOverrideConsumed({ cartId, stage, reservationId }),
+        buildTemplate: (url) => cartRecoveryGiftTemplate({
+          ...base,
+          restoreUrl: url,
+          giftLabel: offerKey ? OFFER_CATALOG[offerKey].label : "",
+          // The store's own statement of what the till will do, generated from
+          // the same catalogue entry the checkout reads — so the copy and the
+          // checkout cannot drift apart.
+          offerTerms: offerKey
+            ? describeOfferTerms(offerKey, new Date(now + OFFER_CATALOG[offerKey].ttlDays * 24 * HOUR_MS).toISOString())
+            : "",
+          promotionNote: livePromotionNote,
+          perks: overridePerks,
+          }),
+      });
+      if (sent) result[STAGE_RESULT_KEY[stage]] += 1;
+      continue;
+    }
 
     if (stage === "t30m") {
       sent = await reserveAndSendStage({

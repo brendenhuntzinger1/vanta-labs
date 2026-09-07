@@ -1830,6 +1830,144 @@ export function cartRecoveryT12hTemplate(input: { name: string; items: Array<{ n
 }
 
 /**
+ * A recovery stage that carries an entitlement instead of a plain reminder.
+ *
+ * Used where a named cart has its stage replaced (cart-recovery-overrides.ts).
+ * It is a SIBLING of the reminders above, not a variant of them: same layout,
+ * same button, same footer, so nothing global changes and every standards test
+ * that holds the others holds this.
+ *
+ * EVERY CLAIM IN IT IS PASSED IN, NOT WRITTEN HERE. `giftLabel` and
+ * `offerTerms` come from the offer catalogue via describeOfferTerms — the same
+ * text the till enforces — and `promotionNote` is only ever set by a caller
+ * that has re-read the live promotion configuration. The template states no
+ * deadline, no scarcity, no shipping speed and no price of its own: the only
+ * figure it prints is the cart's own total, which is the figure the cart shows.
+ *
+ * The fields are documented HERE rather than inline because
+ * templates-sweep.test.ts builds its fixture by parsing this signature's text,
+ * and a comment between the braces silently drops every field after it:
+ *
+ *   giftLabel      e.g. "2 free BAC Water" — the offer catalogue's own label.
+ *   offerTerms     describeOfferTerms output: what the checkout will do.
+ *   promotionNote  a live promotion worth mentioning, or null. Never invented
+ *                  here — only ever passed by a caller that has just re-read
+ *                  the live promotion configuration.
+ *   perks          the other things this order carries, each one already
+ *                  verified true by its caller. Rendered as a plain list; an
+ *                  empty array renders nothing at all.
+ */
+export function cartRecoveryGiftTemplate(input: {
+  name: string;
+  items: Array<{ name: string; quantity: number }>;
+  cartValueCents: number;
+  restoreUrl: string;
+  giftLabel: string;
+  offerTerms: string;
+  promotionNote?: string | null;
+  perks?: string[];
+}): EmailTemplate {
+  const hi = greeting(input.name);
+  const promoHtml = input.promotionNote
+    ? `<p style="margin:0 0 4px;">${escapeHtml(input.promotionNote)}</p>`
+    : "";
+  // The gift gets its own block because it is the reason for the message. A
+  // bordered row rather than a coloured banner: the layout is dark and a
+  // banner reads as an ad, which is the thing this brand does not do.
+  // Coerced rather than trusted: these arrive from a jsonb column, so a row
+  // holding a number or a null must render as nothing instead of throwing
+  // inside a template that is already mid-send.
+  // Only actual strings, and NOT String()-coerced: these arrive from a jsonb
+  // column, so an element could be a number, a null or an object, and
+  // stringifying one of those prints "[object Object]" into a customer's
+  // inbox. A value that is not a sentence is not a perk — drop it.
+  const perks = (Array.isArray(input.perks) ? input.perks : [])
+    .filter((perk): perk is string => typeof perk === "string")
+    .map((perk) => perk.trim())
+    .filter((perk) => perk.length > 0);
+  const perksHtml = perks.length
+    ? `<table role="presentation" width="100%" style="margin-top:10px;font-size:14px;">`
+      + perks.map((perk) =>
+        `<tr><td style="padding:5px 0;color:#d4d4d4;">`
+        + `<span style="color:#ffffff;">&#8226;</span>&nbsp;&nbsp;${escapeHtml(perk)}</td></tr>`).join("")
+      + `</table>`
+    : "";
+  const giftHtml = `<table role="presentation" width="100%" style="margin:16px 0 4px;">`
+    + `<tr><td style="padding:14px 16px;border:1px solid rgba(255,255,255,0.14);border-radius:10px;">`
+    + `<span style="display:block;color:#a1a1aa;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;">On this order</span>`
+    + `<strong style="display:block;margin-top:4px;color:#ffffff;font-size:18px;">${escapeHtml(input.giftLabel)}</strong>`
+    + perksHtml
+    + `</td></tr></table>`;
+  // THE SUBJECT NAMES WHAT THEY LEFT. It is the only part of this most people
+  // will ever read, and "we added something extra" says nothing they can act
+  // on. The lead item is the first line that is not the gift itself — someone
+  // who already has BAC Water in the basket should see the peptide they were
+  // actually deciding about, not the water.
+  const giftNoun = input.giftLabel.toLowerCase().replace(/^\d+\s+free\s+/, "").trim();
+  const leadItem = input.items.find((item) => !item.name.toLowerCase().includes(giftNoun))
+    ?? input.items[0];
+  const subject = leadItem
+    ? `Your ${leadItem.name.replace(/\s*\(.*\)\s*$/, "").trim()} + ${input.giftLabel}`
+    : `${input.giftLabel}, on us`;
+  const perkLine = perks.length ? `${perks.join(". ")}.` : "";
+  // THE ONE DEADLINE IN THIS MESSAGE IS A REAL ONE. It is the entitlement's own
+  // expiry, lifted out of describeOfferTerms — the same date customer_offers
+  // stores and the checkout enforces — so a shopper who arrives after it is
+  // refused by the till exactly as the line said they would be. Nothing else in
+  // here is allowed to carry a date: a deadline the store does not hold is
+  // manufactured scarcity, whatever the copy says.
+  const deadline = /through ([A-Z][a-z]+ \d{1,2}, \d{4})/.exec(input.offerTerms)?.[1] ?? null;
+  return {
+    subject,
+    html: renderLayout({
+      // Everything the subject could not fit, in the line Gmail prints beside it.
+      // THE PROMOTION LEADS, because on a multi-unit cart it is worth many
+      // times the gift — and the preview line is the only other thing Gmail
+      // shows beside the subject. It appears only when the live resolver said
+      // one is genuinely running for this customer.
+      preheader: [input.promotionNote, perkLine, "Your cart is exactly as you left it."]
+        .filter((part): part is string => Boolean(part && part.trim()))
+        .join(" "),
+      titleHtml: `${escapeHtml(input.giftLabel)}, on us`,
+      bodyHtml: `${hi.html}`
+        + `<p style="margin:0 0 4px;">Your cart is still saved &mdash; and we have added to it.</p>`
+        + promoHtml
+        + giftHtml
+        + cartSummaryHtml(input.items, input.cartValueCents)
+        + (deadline
+          ? `<p style="margin-top:14px;color:#a1a1aa;">Your ${escapeHtml(input.giftLabel.toLowerCase())} are reserved for you through <strong style="color:#ffffff;">${escapeHtml(deadline)}</strong>.</p>`
+          : "")
+        + `<p style="margin-top:10px;color:#a1a1aa;">Pick up exactly where you left off.</p>`,
+      // NOT lower-cased: "Claim my 2 free bac water" reads like a typo, and
+      // the label is a product name the brand capitalises everywhere else.
+      ctaLabel: `Claim my ${input.giftLabel}`,
+      ctaUrl: input.restoreUrl,
+      ctaVariant: "primary",
+      footerNoteHtml: escapeHtml(input.offerTerms),
+    }),
+    text: toText([
+      hi.text,
+      hi.text ? "" : null,
+      "Your cart is still saved - and we have added to it.",
+      input.promotionNote ?? null,
+      "",
+      `On this order: ${input.giftLabel}`,
+      ...perks.map((perk) => `  - ${perk}`),
+      "",
+      ...cartSummaryText(input.items, input.cartValueCents),
+      "",
+      deadline ? `Reserved for you through ${deadline}.` : null,
+      "Pick up exactly where you left off.",
+      `Claim it here: ${input.restoreUrl}`,
+      "",
+      input.offerTerms,
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
+/**
  * The second message carries no discount, and that is the point of it.
  *
  * Someone who has not finished checking out a research compound after a day

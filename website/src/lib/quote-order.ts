@@ -673,7 +673,14 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     };
   });
 
-  const subtotal = roundMoney(
+  // NOT const, because a product gift can take units OUT of the paid lines.
+  //
+  // A gift of something the cart already holds frees those units rather than
+  // adding duplicates (see THE FREE UNIT below), and the moment a paid line
+  // shrinks these four figures are stale. `recomputeSubtotals` puts them back
+  // in step; nothing between here and the gift block reads them, so there is
+  // no window in which a stale value can be used.
+  let subtotal = roundMoney(
     lineItems.reduce(
       (sum, line) => sum + line.product.price * line.quantity,
       0,
@@ -686,12 +693,29 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // on the full base and must BEAT the bundle savings to apply — the customer
   // gets exactly ONE discount per order: bundle pricing or the better promo,
   // never both. The admin can restore legacy stacking in the Control Center.
-  const fullSubtotal = roundMoney(
+  let fullSubtotal = roundMoney(
     lineItems.reduce((sum, line) => sum + line.baseUnitPrice * line.quantity, 0),
   );
   const bundleStacking = homepageControlConfig.bundleStacking === true;
-  const quantityBundleSavings = bundleStacking ? 0 : roundMoney(Math.max(0, fullSubtotal - subtotal));
-  const discountBase = bundleStacking ? subtotal : fullSubtotal;
+  let quantityBundleSavings = bundleStacking ? 0 : roundMoney(Math.max(0, fullSubtotal - subtotal));
+  let discountBase = bundleStacking ? subtotal : fullSubtotal;
+
+  /**
+   * Re-derive the four merchandise figures from whatever lineItems now holds.
+   *
+   * Gift lines contribute zero to both sums, so calling this when nothing was
+   * absorbed reproduces the values above exactly — which is what makes it safe
+   * to call unconditionally.
+   */
+  const recomputeSubtotals = () => {
+    subtotal = roundMoney(lineItems.reduce((sum, line) => sum + line.product.price * line.quantity, 0));
+    fullSubtotal = roundMoney(lineItems.reduce((sum, line) => sum + line.baseUnitPrice * line.quantity, 0));
+    quantityBundleSavings = bundleStacking ? 0 : roundMoney(Math.max(0, fullSubtotal - subtotal));
+    discountBase = bundleStacking ? subtotal : fullSubtotal;
+  };
+
+  /** The slug half of a line id, the way parseOrderItemRef splits it. */
+  const lineSlug = (line: QuoteOrderLine) => String(line.product.id).split("::")[0];
 
   // ---------------------------------------------------------------------
   // THE FREE UNIT.
@@ -741,6 +765,17 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // actually granted. Null when no gift is in play.
   let offerGrant: { productDescription: string | null; wantsShipping: boolean; percent: number } | null = null;
 
+  // UNITS THE GIFT TOOK OFF THE SHOPPER'S OWN LINES, so they can be handed back.
+  //
+  // The gift's floor is judged a second time further down, on what the customer
+  // will actually pay, and the gift can be withdrawn there. Withdrawal deletes
+  // the $0 line — but the units it absorbed were things the shopper had put in
+  // their basket, and deleting those would quietly empty part of their cart
+  // along with the offer. This records enough to restore them exactly: the line
+  // object, how many were taken, and what each cost before the tier was
+  // recalculated.
+  const absorbedFromCart: Array<{ line: QuoteOrderLine; quantity: number; unitPrice: number }> = [];
+
   // ONE BLOCK FOR EVERY KIND. A reward is up to three grants — a $0 product
   // line, a waived shipping fee, a percentage — and each kind is a subset:
   //   free_product          line
@@ -788,26 +823,97 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
         && !(typeof offerStock === "number" && Number.isFinite(offerStock) && offerStock <= 0);
 
       if (offerProduct && shippable) {
-        lineItems.push({
-          product: {
-            ...offerProduct,
-            id: offerDose ? `${offerProduct.slug}::${offerDose.id}` : offerProduct.slug,
-            // The only place in this function a price is forced rather than
-            // resolved. It is not a discount on a real price — it is the price.
-            price: 0,
-            stockStatus: offerDose?.stockStatus ?? offerProduct.stockStatus,
-            variantId: offerDose?.id,
-            variantLabel: offerDose?.label,
-            variantSku: offerDose?.sku,
-          },
-          quantity: 1,
-          // Zero here too, so fullSubtotal-style reads stay honest if this line
-          // is ever included in one: the customer was never charged for it and
-          // was never "discounted" from anything.
-          baseUnitPrice: 0,
-          gift: true,
-        });
-        productDescription = offerDose?.label ? `${offerProduct.name} (${offerDose.label})` : offerProduct.name;
+        // HOW MANY, AND WHERE THEY COME FROM.
+        //
+        // The count is whatever the row was minted with, defaulting to one so
+        // that every token issued before the column existed still grants the
+        // single unit its email promised. It is floored to a whole number at or
+        // above one: a corrupt row must not put a fractional or negative
+        // quantity into order_items, where it becomes an un-shippable pick list
+        // rather than a pricing bug.
+        const storedQuantity = Number((offer as { quantity?: number | null }).quantity ?? 1);
+        const wanted = Number.isFinite(storedQuantity) ? Math.max(1, Math.floor(storedQuantity)) : 1;
+
+        // A GIFT OF SOMETHING ALREADY IN THE CART FREES THOSE UNITS.
+        //
+        // "The BAC Water in your cart is on us" and "here are two more bottles
+        // of water" are different promises, and only the first is what anyone
+        // means. So the gift is satisfied from the basket first and only the
+        // shortfall is added as new stock. A cart holding none of the product
+        // — the ordinary win-back case — absorbs nothing and behaves exactly as
+        // it always did.
+        //
+        // Absorbed units leave the paid subtotal, so they also leave Buy X Get
+        // Y eligibility (gift lines are filtered out of it): a unit the store
+        // has already given away must not additionally earn a promotion reward.
+        const giftVariantId = offerDose?.id ?? null;
+        const matchesGift = (line: QuoteOrderLine) =>
+          !line.gift
+          && lineSlug(line) === offerProduct.slug
+          && (line.product.variantId ?? null) === giftVariantId;
+
+        let outstanding = wanted;
+        for (const line of lineItems) {
+          if (outstanding <= 0) break;
+          if (!matchesGift(line)) continue;
+          const take = Math.min(outstanding, line.quantity);
+          if (take <= 0) continue;
+          absorbedFromCart.push({ line, quantity: take, unitPrice: line.product.price });
+          line.quantity -= take;
+          // THE SHRUNKEN LINE LOSES THE VOLUME PRICE THOSE UNITS BOUGHT. Ten
+          // units absorbed down to eight are eight units, and charging the
+          // ten-unit rate for them is money the store gives away twice.
+          line.product = {
+            ...line.product,
+            price: getBundleDiscountedUnitPrice(line.baseUnitPrice, line.quantity, bundleConfig),
+          };
+          outstanding -= take;
+        }
+        const absorbed = wanted - outstanding;
+        // A line absorbed to nothing is not a zero-quantity order item.
+        for (let i = lineItems.length - 1; i >= 0; i--) {
+          if (!lineItems[i].gift && lineItems[i].quantity <= 0) lineItems.splice(i, 1);
+        }
+
+        // ADDED UNITS COME OFF THE SHELF AND MUST FIT ON IT. Everything this
+        // order already ships of the same row — the units still being paid for
+        // AND the ones just absorbed — competes for the same stock, so all of
+        // it counts before deciding how many new ones can be promised.
+        // Untracked stock (the usual case for supplies) is unbounded here and
+        // is guarded authoritatively by reserve_inventory at order creation.
+        const shelf = typeof offerStock === "number" && Number.isFinite(offerStock) ? offerStock : Infinity;
+        const alreadyShipping = absorbed
+          + lineItems.filter(matchesGift).reduce((sum, line) => sum + line.quantity, 0);
+        const added = Math.max(0, Math.min(outstanding, shelf - alreadyShipping));
+        const granted = absorbed + added;
+
+        if (granted > 0) {
+          lineItems.push({
+            product: {
+              ...offerProduct,
+              id: offerDose ? `${offerProduct.slug}::${offerDose.id}` : offerProduct.slug,
+              // The only place in this function a price is forced rather than
+              // resolved. It is not a discount on a real price — it is the price.
+              price: 0,
+              stockStatus: offerDose?.stockStatus ?? offerProduct.stockStatus,
+              variantId: offerDose?.id,
+              variantLabel: offerDose?.label,
+              variantSku: offerDose?.sku,
+            },
+            quantity: granted,
+            // Zero here too, so fullSubtotal-style reads stay honest if this line
+            // is ever included in one: the customer was never charged for it and
+            // was never "discounted" from anything.
+            baseUnitPrice: 0,
+            gift: true,
+          });
+          const name = offerDose?.label ? `${offerProduct.name} (${offerDose.label})` : offerProduct.name;
+          // One unit keeps the wording every existing receipt and email uses.
+          productDescription = granted > 1 ? `${granted} × ${name}` : name;
+        }
+        // Absorption moved money out of the paid lines; put the four
+        // merchandise figures back in step before anything reads them.
+        recomputeSubtotals();
       }
     }
 
@@ -871,28 +977,43 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // (a referral cannot stack on it, a coupon competes with it unless the admin
   // allows stacking, the profit guard can peel it off) applies unchanged to all
   // five new promotions without a line of new policy.
-  const selectedPromotion = selectPromotionForCart(
-    toPromotionCartLines(lineItems),
-    applicablePromotions,
-    { bundleStacking },
-  );
-  const promotionDiscount = selectedPromotion?.application.discountAmount ?? 0;
-  const appliedPromotionId = selectedPromotion?.promotion.id ?? null;
-  const appliedPromotionName = selectedPromotion?.promotion.name ?? null;
-  const appliedPromotionLimits = selectedPromotion
-    && (selectedPromotion.promotion.maxRedemptions !== null || selectedPromotion.promotion.perCustomerLimit !== null)
-    ? {
-      maxRedemptions: selectedPromotion.promotion.maxRedemptions,
-      perCustomerLimit: selectedPromotion.promotion.perCustomerLimit,
-    }
-    : null;
+  //
+  // Re-runnable, and it has to be: withdrawing a gift that had absorbed units
+  // hands those units back as PAID ones, which changes what the engine is
+  // looking at. selectPromotionForCart is pure — it reads lines and promotions
+  // and claims nothing — so running it a second time is free of side effects.
+  let selectedPromotion: ReturnType<typeof selectPromotionForCart> = null;
+  let promotionDiscount = 0;
+  let appliedPromotionId: string | null = null;
+  let appliedPromotionName: string | null = null;
+  let appliedPromotionLimits: { maxRedemptions: number | null; perCustomerLimit: number | null } | null = null;
   // Kept under its original name because payment-service, the express lane and
   // the referral-exclusivity suite all read it. It has always meant "a free/
   // reduced-price item promotion priced this order"; it now means that for any
   // of the six, not only Buy 3 Get 1.
-  const isBuy3Get1Active = promotionDiscount > 0;
+  let isBuy3Get1Active = false;
   /** This promotion says a coupon may be added on top of it. */
-  const promotionAllowsCouponStacking = isBuy3Get1Active && (selectedPromotion?.promotion.stackWithCoupon ?? false);
+  let promotionAllowsCouponStacking = false;
+  const applyPromotionSelection = () => {
+    selectedPromotion = selectPromotionForCart(
+      toPromotionCartLines(lineItems),
+      applicablePromotions,
+      { bundleStacking },
+    );
+    promotionDiscount = selectedPromotion?.application.discountAmount ?? 0;
+    appliedPromotionId = selectedPromotion?.promotion.id ?? null;
+    appliedPromotionName = selectedPromotion?.promotion.name ?? null;
+    appliedPromotionLimits = selectedPromotion
+      && (selectedPromotion.promotion.maxRedemptions !== null || selectedPromotion.promotion.perCustomerLimit !== null)
+      ? {
+        maxRedemptions: selectedPromotion.promotion.maxRedemptions,
+        perCustomerLimit: selectedPromotion.promotion.perCustomerLimit,
+      }
+      : null;
+    isBuy3Get1Active = promotionDiscount > 0;
+    promotionAllowsCouponStacking = isBuy3Get1Active && (selectedPromotion?.promotion.stackWithCoupon ?? false);
+  };
+  applyPromotionSelection();
 
   const couponEntered = Boolean(input.couponCode?.trim());
   const referralCodeEntered = Boolean(input.referralCode?.trim());
@@ -987,9 +1108,13 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   if (couponEntered && !couponPolicy.couponsEnabled) {
     throw new Error("Coupons are currently disabled. Remove the coupon code to continue.");
   }
-  const coupon = couponPolicy.couponsEnabled && couponEntered
+  // Re-validatable for the same reason the promotion selection is: a percentage
+  // code is worth a percentage OF discountBase, and handing absorbed units back
+  // moves that base.
+  const resolveCoupon = async () => (couponPolicy.couponsEnabled && couponEntered
     ? await validateCoupon(input.couponCode, discountBase, input.customer.email, { isActiveMember: memberPerks.isActiveMember })
-    : null;
+    : null);
+  let coupon = await resolveCoupon();
 
   // WHO GETS FREE SHIPPING — four independent grants, any one of which is
   // enough. Two are account-tied and were always here (a bulk-savings tier, a
@@ -1036,11 +1161,16 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // Ambassador commission is handled separately below — it is NOT a customer
   // discount and is never removed because another discount applied.
   const DISCOUNT_COMPONENTS = new Set<DiscountComponent>(["coupon", "referral", "bundle", "membership"]);
-  const couponAmount = coupon ? coupon.discountAmount : 0;
+  let couponAmount = coupon ? coupon.discountAmount : 0;
   // Everything the rulebook needs except the coupon slot, which is filled two
   // different ways below: without the gift's percentage to judge the gift's
   // minimum, and with it to price the order.
-  const discountInputsBase = {
+  //
+  // A FUNCTION, NOT AN OBJECT, so it cannot go stale. Withdrawing a gift that
+  // absorbed units changes the subtotal, the discount base and the promotion
+  // after this point; a literal captured here would have priced the order on
+  // the smaller basket while charging for the larger one.
+  const discountInputsBase = () => ({
     subtotal,
     fullSubtotal: discountBase,
     quantityBundleSavings,
@@ -1066,7 +1196,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     shippingCost: 0,
     handlingCollected: 0,
     taxPercent: 0,
-  };
+  });
 
   // THE QUALIFYING SUBTOTAL.
   //
@@ -1091,13 +1221,32 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     const couponWillApply = couponAmount > 0
       && (couponAmount >= offerPercentDiscount || couponPolicy.allowStacking || promotionAllowsCouponStacking);
     const baseline = resolveCustomerDiscount(
-      { ...discountInputsBase, couponDiscount: couponWillApply ? couponAmount : 0 },
+      { ...discountInputsBase(), couponDiscount: couponWillApply ? couponAmount : 0 },
       DISCOUNT_COMPONENTS,
     );
     const qualifyingCents = Math.round((subtotal - baseline.amount) * 100);
     if (!offerMinimumMet(offer, qualifyingCents)) {
       for (let i = lineItems.length - 1; i >= 0; i--) {
         if (lineItems[i].gift) lineItems.splice(i, 1);
+      }
+      // GIVE BACK WHAT THE GIFT BORROWED. The $0 line has just gone; without
+      // this, so have the units the shopper actually chose, and their cart
+      // silently shrinks because an offer they never asked about failed a floor.
+      if (absorbedFromCart.length > 0) {
+        for (const taken of absorbedFromCart) {
+          if (!lineItems.includes(taken.line)) lineItems.push(taken.line);
+          taken.line.quantity += taken.quantity;
+          taken.line.product = { ...taken.line.product, price: taken.unitPrice };
+        }
+        absorbedFromCart.length = 0;
+        // The basket is bigger again, so everything derived from its size has
+        // to be derived again. Pricing the restored order on the shrunken
+        // basket's promotion and coupon would charge for units whose discounts
+        // were never counted.
+        recomputeSubtotals();
+        applyPromotionSelection();
+        coupon = await resolveCoupon();
+        couponAmount = coupon ? coupon.discountAmount : 0;
       }
       offerGrantsFreeShipping = false;
       offerPercentDiscount = 0;
@@ -1137,7 +1286,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
 
   const customerDiscount = resolveCustomerDiscount(
     {
-      ...discountInputsBase,
+      ...discountInputsBase(),
       // ONE SLOT, THE BETTER OF THE TWO. A gift's percentage and a typed
       // coupon are the same kind of thing — a code-shaped percentage off — so
       // they take the same slot and the customer keeps whichever is worth
