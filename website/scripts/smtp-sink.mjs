@@ -99,21 +99,52 @@ function parseMessage(raw) {
 
   const contentType = headers["content-type"] ?? "";
   let html = "";
+  // THE PLAIN-TEXT PART IS EVIDENCE, NOT DECORATION.
+  //
+  // This used to extract text/html and stop, so every captured message came
+  // back with an `html` and no `text`, and a test reading the capture file
+  // could not see the plain-text alternative at all. Three properties the
+  // deliverability work claims are carried ONLY by that part or by Reply-To:
+  //
+  //   * a bulk message is multipart, not HTML-only (an HTML-only bulk send is
+  //     a long-standing spam signal)
+  //   * the unsubscribe URL is readable to a client that blocks HTML
+  //   * marketing replies go to a mailbox that RECEIVES, because the marketing
+  //     From is a send-only subdomain with no MX
+  //
+  // All three were unobservable end to end. The message on the wire was always
+  // correct — verified against the raw MIME — but "correct and untestable" is
+  // how a regression ships, so the capture now surfaces both parts and the
+  // Reply-To header alongside them.
+  let text = "";
+
+  const partBody = (part) => {
+    const crlf = part.indexOf("\r\n\r\n");
+    const lf = part.indexOf("\n\n");
+    const at = crlf >= 0 ? crlf : lf;
+    if (at < 0) return null;
+    const encoding = /content-transfer-encoding:\s*(\S+)/i.exec(unfold(part.slice(0, at)))?.[1] ?? "";
+    return decodeBody(part.slice(at + (crlf >= 0 ? 4 : 2)), encoding);
+  };
 
   const boundaryMatch = /boundary="?([^";]+)"?/i.exec(contentType);
   if (boundaryMatch) {
     const boundary = `--${boundaryMatch[1]}`;
     for (const part of body.split(boundary)) {
-      if (!/content-type:\s*text\/html/i.test(part)) continue;
-      const partSplit = part.indexOf("\r\n\r\n") >= 0 ? part.indexOf("\r\n\r\n") : part.indexOf("\n\n");
-      if (partSplit < 0) continue;
-      const partHeaders = unfold(part.slice(0, partSplit));
-      const encoding = /content-transfer-encoding:\s*(\S+)/i.exec(partHeaders)?.[1] ?? "";
-      html = decodeBody(part.slice(partSplit + (part.includes("\r\n\r\n") ? 4 : 2)), encoding);
-      break;
+      // text/plain first: `text/plain` does not match the html test, and a
+      // nested multipart/related would otherwise let an inline image's part
+      // win the html slot.
+      if (!html && /content-type:\s*text\/html/i.test(part)) {
+        html = partBody(part) ?? html;
+      } else if (!text && /content-type:\s*text\/plain/i.test(part)) {
+        text = partBody(part) ?? text;
+      }
+      if (html && text) break;
     }
   } else if (/text\/html/i.test(contentType)) {
     html = decodeBody(body, headers["content-transfer-encoding"] ?? "");
+  } else {
+    text = decodeBody(body, headers["content-transfer-encoding"] ?? "");
   }
 
   const addressOnly = (value) => {
@@ -124,8 +155,13 @@ function parseMessage(raw) {
   return {
     to: addressOnly(headers.to),
     from: addressOnly(headers.from),
+    // Not addressOnly: a test asserting the marketing reply path needs to see
+    // that this is a DIFFERENT mailbox from `from`, and the display name is
+    // part of what the recipient sees.
+    replyTo: headers["reply-to"] ? addressOnly(headers["reply-to"]) : "",
     subject: decodeWord(headers.subject ?? ""),
     html,
+    text,
     headers,
     raw,
     capturedAt: new Date().toISOString(),

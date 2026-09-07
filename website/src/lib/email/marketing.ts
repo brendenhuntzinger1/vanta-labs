@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { redactEmailForLog } from "@/lib/log-redaction";
 import "server-only";
 import { sendEmail } from "@/lib/email/send";
@@ -100,6 +101,79 @@ export type MarketingSendOptions = {
    */
   guardUnavailable?: boolean;
 };
+
+/**
+ * THE KEY RESEND COLLAPSES A REPEATED SEND AGAINST.
+ *
+ * The gap this closes. A campaign recipient is claimed (`status = 'claiming'`),
+ * the message is handed to Resend, Resend ACCEPTS it — and the worker dies
+ * before writing 'sent'. Ten minutes later reclaimStaleClaims returns the row
+ * to 'pending' and another worker sends it again. The customer gets two copies.
+ *
+ * Worse than it first looks: `attempts` is incremented only on a HANDLED
+ * outcome (sent / suppressed / failed). A crash is not one, so the reclaimed
+ * row comes back with `attempts` unchanged and the MAX_ATTEMPTS ceiling never
+ * binds. The comments around that ceiling say a recipient is given up on after
+ * three tries; against a repeating crash in this window, the true bound is
+ * none.
+ *
+ * Automations never had this hole: `email_send_log_automation_once` is a
+ * partial unique index over (campaign_type, reference_id) WHERE status <>
+ * 'failed', so a crashed send leaves the row at 'sending' and the row itself
+ * goes on holding the slot. Campaigns have no such constraint — their claim is
+ * a conditional UPDATE, which is a lock and not a record.
+ *
+ * WHY THE RENDERED MESSAGE IS PART OF THE KEY, and not just the addressing.
+ *
+ * The obvious key is (campaignType, referenceId, recipient). It is wrong, and
+ * the way it is wrong would be worse than the bug it fixes. An automation that
+ * carries a gift mints a NEW one-time token every time it renders; a send that
+ * legitimately failed is closed 'failed', releases its slot, and is re-rendered
+ * next sweep with a different token. Under a fixed key that second attempt is
+ * the same key with a different payload — which Resend answers 409 — so the
+ * retry fails, and the next, until the attempts are gone. A recipient whose
+ * first send hit a transient provider error would be permanently dropped from
+ * the sequence, silently, and only for the automations that carry a gift.
+ *
+ * Hashing the subject and body as well makes the key mean "this exact message
+ * to this exact person", which is what idempotency should mean here:
+ *
+ *   crash after Resend accepted → identical re-render → same key → Resend
+ *     replays the original response and does not send again
+ *   legitimate retry after a failure → new token, new body → new key → sends,
+ *     exactly as it should
+ *
+ * WHAT THIS DOES NOT COVER. Resend stores a key for 24 hours (verified against
+ * their documentation, 2026-09-07). Every retry path here is far inside that:
+ * the reclaim cutoff is ten minutes and the ceiling is three attempts. A
+ * campaign paused for more than a day and resumed falls outside the window, and
+ * the stale-claim path has long since resolved those rows anyway.
+ *
+ * And if a payload ever did vary between two attempts that should have
+ * collapsed, the failure is a 409 — a handled failure, which costs an attempt
+ * and at worst a missed marketing email. That is the direction this whole
+ * module already chooses: "a missed marketing email costs nothing next to a
+ * duplicate one".
+ */
+export function marketingIdempotencyKey(input: {
+  campaignType: string;
+  referenceId?: string | null;
+  to: string;
+  subject: string;
+  html: string;
+}): string {
+  const tuple = [
+    input.campaignType,
+    input.referenceId ?? "",
+    String(input.to).trim().toLowerCase(),
+    input.subject,
+    input.html,
+  ].join("\u0000");
+  // Hashed rather than concatenated: Resend caps the header at 256 characters,
+  // an address alone can be 254, and a raw key would put the recipient's email
+  // in a request header for no reason.
+  return `vl-${createHash("sha256").update(tuple).digest("hex")}`;
+}
 
 /**
  * A caller-held claim row must not stay at 'sending' when this wrapper refuses
@@ -445,6 +519,13 @@ export async function sendRenderedMarketingEmail(input: {
     text: input.rendered.text,
     from: marketingFrom,
     replyTo: marketingReplyTo,
+    idempotencyKey: marketingIdempotencyKey({
+      campaignType: input.campaignType,
+      referenceId: input.referenceId,
+      to: input.rendered.to,
+      subject: input.rendered.subject,
+      html: input.rendered.html,
+    }),
   });
 
   // The OUTCOME is recorded, not just the attempt. Callers dedupe against this

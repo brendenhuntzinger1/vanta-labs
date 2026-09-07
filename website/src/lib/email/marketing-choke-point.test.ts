@@ -203,6 +203,14 @@ describe("the wrapper still applies each gate", () => {
     expect(handler).toContain("resolveMarketingReplyTo");
   });
 
+  it("attaches an idempotency key to every marketing send", () => {
+    // The only guard that survives this process dying between "Resend accepted
+    // it" and "we wrote that down". Campaigns have no unique index behind them
+    // — their claim is a conditional UPDATE, which is a lock and not a record —
+    // so without this a crash in that window sends the message again.
+    expect(handler).toContain("idempotencyKey: marketingIdempotencyKey(");
+  });
+
   it("carries a plain-text part alongside the HTML", () => {
     // A HTML-only bulk message is a well-known spam signal, and the text part
     // is where the unsubscribe URL is readable to a client that blocks HTML.

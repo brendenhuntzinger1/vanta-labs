@@ -55,9 +55,26 @@ stop() {
 # route swallowed its own exception (fixed separately).
 #
 # `env` rather than a prefix assignment so it survives setsid/nohup.
+# NODE_TLS_REJECT_UNAUTHORIZED=0 IS NOT OPTIONAL EITHER, AND ITS ABSENCE LOOKS
+# LIKE A SLOW PRODUCT.
+#
+# gotrue-tls-proxy.mjs serves a self-signed certificate, and .env.test.local
+# points NEXT_PUBLIC_SUPABASE_URL at it (https://127.0.0.1:54443) because the
+# browser half of the harness needs https — see the runbook, section 5c. The
+# app's own server-side calls go to that same URL, and Node rejects the cert
+# with DEPTH_ZERO_SELF_SIGNED_CERT. NODE_EXTRA_CA_CERTS does NOT fix it: a
+# depth-zero self-signed leaf is refused however the CA store is loaded. Both
+# the runbook and gotrue-tls-proxy.mjs's own header say to start the app with
+# this variable; this script bypassed them and started bare.
+#
+# The symptom is not an error page. Every server-side Supabase call fails and
+# burns its timeout, so /api/cron/sweep went from 0.3s to over 90 SECONDS and
+# was cut off mid-run, with each job reporting its own unrelated-looking
+# failure — "unable to list users", "RPC failed", "FAILING OPEN". Read at face
+# value that is a broken sweep. It is one missing variable.
 start() {
   local script="$1" log="$2"; shift 2
-  ( cd "$HERE" && setsid nohup env NODE_ENV=test node "scripts/$script" "$@" >"$LOGDIR/$log" 2>&1 </dev/null & )
+  ( cd "$HERE" && setsid nohup env NODE_ENV=test NODE_TLS_REJECT_UNAUTHORIZED=0 node "scripts/$script" "$@" >"$LOGDIR/$log" 2>&1 </dev/null & )
 }
 
 wait_for() {
@@ -75,9 +92,42 @@ echo "==> stopping anything already running"
 stop "pgrst-shim.mjs"; stop "harness-server.mjs"; stop "veyra-stub.mjs"
 sleep 2
 
+# THE VARIABLES WITHOUT WHICH A SUITE FAILS FOR A REASON THAT NAMES SOMETHING
+# ELSE. Every one of these cost a debugging round on 2026-09-07:
+#
+#   CRON_SECRET               /api/cron/sweep answers 401 and the three email
+#                             suites (retention, lifecycle, gift-wiring) cannot
+#                             run at all. The error is a bare 401.
+#   EMAIL_ENABLED             the sweep reports "Email sending is turned off in
+#                             Settings" and mails nobody, so every email
+#                             assertion fails as though the engine were broken.
+#   EMAIL_PROVIDER + SMTP_*   EMAIL_PROVIDER=none resolves to "smtp", which then
+#                             fails isReady(), and the sweep reports "provider
+#                             isn't fully configured". The harness wants smtp
+#                             pointed at scripts/smtp-sink.mjs.
+#   MARKETING_POSTAL_ADDRESS  CAN-SPAM gate: marketing is refused without it.
+#
+# Reported together and by name, because finding them one at a time means one
+# rebuild-and-rerun cycle each.
+echo "==> required harness env"
+missing=""
+for var in CRON_SECRET EMAIL_ENABLED EMAIL_PROVIDER SMTP_HOST SMTP_PORT MARKETING_POSTAL_ADDRESS; do
+  grep -qE "^${var}=" "$HERE/.env.test.local" 2>/dev/null || missing="$missing $var"
+done
+if [ -n "$missing" ]; then
+  echo "  MISSING from .env.test.local:$missing"
+  echo "  Without these the EMAIL suites fail with errors that name something else."
+  echo "  See docs/BROWSER-TESTING-RUNBOOK.md section 5b."
+else
+  echo "  ok: every variable the email suites need is present"
+fi
+
 echo "==> starting"
 start "pgrst-shim.mjs" "shim.log" --port 54321 --db "$DB"
 start "veyra-stub.mjs" "veyra.log"
+# The email suites read EMAIL_CAPTURE_DIR/captured-emails.jsonl. Nothing writes
+# it unless the sink is up, and a missing sink looks like "the send failed".
+start "smtp-sink.mjs" "smtp-sink.log" --port "${SMTP_SINK_PORT:-2525}" --capture "$LOGDIR"
 sleep 3
 start "harness-server.mjs" "harness.log"
 
@@ -99,14 +149,32 @@ if [ ! -f "$HERE/.env.test.local" ]; then
   echo "  without it the app has no NEXT_PUBLIC_SUPABASE_URL and the shop is empty."
   echo "  See docs/BROWSER-TESTING-RUNBOOK.md section 5b."
 fi
-catalogue="$(curl -sf --max-time 20 http://127.0.0.1:3000/api/catalog/products 2>/dev/null || true)"
+# ...AND THE STORE NOW REQUIRES AN ACCOUNT, so the probe had to change with it.
+#
+# This asked /api/catalog/products anonymously and expected products back. That
+# was right until access-policy.ts closed the default: the endpoint is not on
+# the public list, so an unauthenticated request correctly answers
+# {"success":false,"error":"Sign in to continue"} — and the probe read that as
+# "CATALOGUE EMPTY OR FAILING" and told you to go and read harness.log. It
+# reported a broken storefront on a perfectly healthy one, every single run.
+#
+# What is actually worth checking is unchanged in spirit: does the read path
+# reach real data? So ask the shim, which is behind the wall and returns the
+# catalogue, and separately confirm the app enforces the wall rather than 500ing.
+catalogue="$(curl -sf --max-time 20 "http://127.0.0.1:54321/products?limit=1" 2>/dev/null || true)"
 case "$catalogue" in
-  *'"success":true'*[0-9]*)
-    echo "  ok: the catalogue returns products" ;;
+  *'"slug"'*)
+    echo "  ok: the catalogue has products behind the wall" ;;
   *)
     echo "  CATALOGUE EMPTY OR FAILING — every product, cart and checkout step will fail."
-    echo "  This is a HARNESS fault until proven otherwise; check $LOGDIR/harness.log first."
+    echo "  This is a HARNESS fault until proven otherwise; check $LOGDIR/shim.log first."
     ;;
+esac
+walled="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 http://127.0.0.1:3000/api/catalog/products 2>/dev/null || true)"
+case "$walled" in
+  401|403|307) echo "  ok: the app enforces the account wall ($walled)" ;;
+  200)         echo "  WARNING: /api/catalog/products answered 200 to an anonymous request — the wall is open" ;;
+  *)           echo "  WARNING: /api/catalog/products answered $walled — expected the wall, not an error" ;;
 esac
 
 # The check that matters: is what is RUNNING newer than what is on disk?
