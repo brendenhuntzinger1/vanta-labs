@@ -546,7 +546,8 @@
     "automation_key",
     "reference_id",
     "revoke_reason",
-    "closed_by_order_id"
+    "closed_by_order_id",
+    "quantity"
   ],
   "customer_preferences": [
     "user_id",

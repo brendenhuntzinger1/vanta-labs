@@ -315,6 +315,77 @@ describeDb("customer_offers", () => {
     });
   });
 
+  describe("how many units a gift grants", () => {
+    // The count is the difference between an email that says "two free vials"
+    // and an order that ships one, so the guarantees it needs are database
+    // guarantees: the reserve has to hand it back, an un-countable gift has to
+    // be refused, and every row written before the column existed has to keep
+    // meaning exactly one.
+    it("hands the count back through the reserve, which is where the till reads it", async () => {
+      const token = `qty-${Math.random().toString(36).slice(2)}`;
+      await client.query(
+        `insert into public.customer_offers (offer_key, token_hash, email, reward_kind, product_slug, quantity, min_subtotal_cents, expires_at)
+         values ('labor_day_bac_water_2', $1, 'two@example.test', 'free_product', 'bac-water', 2, 3500, now() + interval '8 days')`,
+        [hash(token)],
+      );
+
+      const rows = await reserve(token, "order-two", "two@example.test");
+
+      expect(rows).toHaveLength(1);
+      expect(Number(rows[0].quantity)).toBe(2);
+    });
+
+    it("still accepts a product gift that names no count, because null means one", async () => {
+      // Every insert written before this column existed looks like this — the
+      // repair path, an operator's hand-written row, an older deploy mid-rollout.
+      // Rejecting it would turn a promised gift into no gift at all.
+      const token = `qty-null-${Math.random().toString(36).slice(2)}`;
+      await client.query(
+        `insert into public.customer_offers (offer_key, token_hash, email, reward_kind, product_slug, min_subtotal_cents, expires_at)
+         values ('winback_60_free_ghkcu', $1, 'legacy@example.test', 'free_product', 'ghk-cu', 6000, now() + interval '1 day')`,
+        [hash(token)],
+      );
+
+      const { rows } = await client.query("select quantity from public.customer_offers where email = 'legacy@example.test'");
+      expect(rows[0].quantity).toBeNull();
+    });
+
+    it.each([0, -1])("refuses a count of %s, which is not a shippable line", async (quantity) => {
+      await expect(client.query(
+        `insert into public.customer_offers (offer_key, token_hash, email, reward_kind, product_slug, quantity, min_subtotal_cents, expires_at)
+         values ('labor_day_bac_water_2', $1, 'bad@example.test', 'free_product', 'bac-water', $2, 3500, now() + interval '1 day')`,
+        [hash(`bad-${quantity}`), quantity],
+      )).rejects.toThrow(/customer_offers_quantity_shape/);
+    });
+
+    it("refuses a count on a gift with nothing to count", async () => {
+      // "Three free shippings" is not a thing, and a row that says so would
+      // read as three of something in every report that joins on quantity.
+      await expect(client.query(
+        `insert into public.customer_offers (offer_key, token_hash, email, reward_kind, product_slug, quantity, min_subtotal_cents, expires_at)
+         values ('winback_60_free_shipping', $1, 'ship@example.test', 'free_shipping', null, 3, 3500, now() + interval '1 day')`,
+        [hash("ship-qty")],
+      )).rejects.toThrow(/customer_offers_quantity_shape/);
+    });
+
+    it("backfills existing product gifts to one when the migration is re-applied", async () => {
+      // The migration is applied to a database that already holds live tokens.
+      // Those rows must come out of it granting what their emails promised.
+      await client.query(
+        `insert into public.customer_offers (offer_key, token_hash, email, reward_kind, product_slug, min_subtotal_cents, expires_at)
+         values ('winback_60_free_ghkcu', $1, 'backfill@example.test', 'free_product', 'ghk-cu', 6000, now() + interval '1 day')`,
+        [hash("backfill-token")],
+      );
+
+      // Re-applying is also the idempotency proof: this is the second time the
+      // file has run against this database, the first being beforeAll.
+      await client.query(readFileSync(MIGRATION, "utf8"));
+
+      const { rows } = await client.query("select quantity from public.customer_offers where email = 'backfill@example.test'");
+      expect(Number(rows[0].quantity)).toBe(1);
+    });
+  });
+
   describe("reward shapes", () => {
     // Two kinds of gift now share this table, and the constraint is what stops
     // a half-described one from ever being written: a product gift with no

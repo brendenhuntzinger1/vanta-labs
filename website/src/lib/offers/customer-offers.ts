@@ -83,14 +83,29 @@ export function readOfferCookie(request: Request): string | null {
  * another PRODUCT gift means one entry below and no code at all.
  */
 export type OfferReward =
-  | { kind: "free_product"; productSlug: string }
+  /**
+   * `quantity` defaults to one and is the number of units granted, not a
+   * multiplier on anything else. A cart that already holds the product has
+   * those units freed instead of being handed duplicates — "the BAC Water in
+   * your cart is on us" and "here are two more bottles of water" are different
+   * promises, and only the first is what anyone means. See THE FREE UNIT in
+   * quote-order.ts for how the absorb-then-add split works.
+   */
+  | { kind: "free_product"; productSlug: string; quantity?: number }
   | { kind: "free_shipping" }
   | { kind: "free_shipping_percent"; percent: number }
   /** A percentage off and nothing else. Competes in the coupon slot exactly
    *  as the combined gift's percentage does; shipping is charged as usual. */
   | { kind: "percent"; percent: number }
   /** A $0 product line AND a percentage off the rest. */
-  | { kind: "free_product_percent"; productSlug: string; percent: number };
+  | { kind: "free_product_percent"; productSlug: string; percent: number; quantity?: number };
+
+/** How many units a reward grants. One unless the reward says otherwise. */
+export function offerRewardQuantity(reward: OfferReward): number | null {
+  if (reward.kind !== "free_product" && reward.kind !== "free_product_percent") return null;
+  const stated = Number(reward.quantity ?? 1);
+  return Number.isFinite(stated) ? Math.max(1, Math.floor(stated)) : 1;
+}
 
 /** The offers this store knows how to grant. */
 export const OFFER_CATALOG = {
@@ -176,6 +191,30 @@ export const OFFER_CATALOG = {
     minSubtotalCents: 3500,
     ttlDays: 30,
   },
+  /**
+   * TWO VIALS OF BAC WATER, FOR THE LABOR DAY CART RECOVERY.
+   *
+   * Issued by hand to two named abandoned carts rather than by an automation,
+   * so it carries no `winback_` prefix — nothing on the retention ladder points
+   * at it and nothing should.
+   *
+   * The two carts want opposite halves of the same mechanism, which is why the
+   * gift is expressed as a count rather than as two separate offers: one cart
+   * holds no BAC Water and receives two, the other already holds two and has
+   * those made free. quote-order decides which from the cart, not from here.
+   *
+   * The floor is the same half-a-vial the other product gifts use — the vials
+   * are $14.99 and the carts they are aimed at are $99 and $650, so it is a
+   * guard against a token being spent on a basket of nothing, not a hurdle.
+   */
+  labor_day_bac_water_2: {
+    label: "2 free BAC Water",
+    reward: { kind: "free_product", productSlug: BAC_WATER_SLUG, quantity: 2 } as OfferReward,
+    minSubtotalCents: 3500,
+    // Long enough to outlast the Labor Day promotion it rides beside, so the
+    // gift never dies before the sale the email pairs it with.
+    ttlDays: 8,
+  },
   winback_60_percent_15: {
     label: "15% off",
     reward: { kind: "percent", percent: 15 } as OfferReward,
@@ -201,6 +240,10 @@ export type CustomerOffer = {
   reward_kind: string;
   /** Null for a shipping gift. A check constraint keeps the two in step. */
   product_slug: string | null;
+  /** How many units the product half grants. Null when there is no product
+   *  half; null ALSO on a row minted before the column existed, which is why
+   *  every reader treats null as one rather than as zero. */
+  quantity: number | null;
   /** Set only for free_shipping_percent. */
   percent_off: number | null;
   variant_id: string | null;
@@ -246,6 +289,7 @@ export async function issueCustomerOffer(input: {
 
   const now = input.now ?? Date.now();
   const expiresAt = new Date(now + config.ttlDays * 24 * 60 * 60 * 1000).toISOString();
+  const quantity = offerRewardQuantity(config.reward);
 
   const mint = async (): Promise<{ token: string; expiresAt: string } | { code: string; message: string }> => {
     const token = crypto.randomBytes(TOKEN_BYTES).toString("base64url");
@@ -259,6 +303,9 @@ export async function issueCustomerOffer(input: {
       reward_kind: config.reward.kind,
       product_slug: config.reward.kind === "free_product" || config.reward.kind === "free_product_percent" ? config.reward.productSlug : null,
       percent_off: config.reward.kind === "free_shipping_percent" || config.reward.kind === "percent" || config.reward.kind === "free_product_percent" ? config.reward.percent : null,
+      // Null for a gift with no product line, so the check constraint can say
+      // "a count only where there is something to count".
+      ...(quantity === null ? {} : { quantity }),
       min_subtotal_cents: config.minSubtotalCents,
       expires_at: expiresAt,
     };
@@ -270,6 +317,13 @@ export async function issueCustomerOffer(input: {
     // has no automation_key column (42703). The gift still has to go out; it is
     // only the redemption-attribution breadcrumb that is lost, and that is
     // logged rather than silently dropped.
+    //
+    // NOTE THE RETRY STILL CARRIES `row`, AND SO STILL CARRIES `quantity`.
+    // That is the difference between the two columns and it is deliberate: a
+    // missing provenance column costs a report, while a missing quantity column
+    // would let the row's default answer 1 for a gift whose email promised two.
+    // Retrying without the count would ship one vial against a two-vial
+    // promise; failing the mint sends nothing, which is the recoverable half.
     if (error && String(error.code ?? "") === "42703" && input.automationKey) {
       console.error("[offers] customer_offers has no provenance columns yet; minting without them", error.message);
       ({ error } = await supabaseAdmin.from("customer_offers").insert(row));
@@ -393,10 +447,15 @@ export function describeOfferTerms(offerKey: OfferKey, expiresAt: string): strin
   const deadline = new Date(expiresAt).toLocaleDateString("en-US", {
     month: "long", day: "numeric", year: "numeric", timeZone: "America/New_York",
   });
+  // "a free X is added" is wrong the moment a gift grants more than one, and
+  // this line is the store's own statement of what the till will do — the one
+  // place the customer's copy and the checkout are guaranteed to agree.
+  const count = offerRewardQuantity(config.reward);
+  const units = (noun: string) => (count && count > 1 ? `${count} free ${noun} are` : `a free ${noun} is`);
   const gift = config.reward.kind === "free_product"
-    ? `a free ${config.label.replace(/^free\s+/i, "")} is added to your order`
+    ? `${units(config.label.replace(/^\d+\s+/, "").replace(/^free\s+/i, ""))} added to your order`
     : config.reward.kind === "free_product_percent"
-      ? `${config.reward.percent}% off, and a free ${config.label.replace(/^.*free\s+/i, "")} is added to your order`
+      ? `${config.reward.percent}% off, and ${units(config.label.replace(/^.*free\s+/i, ""))} added to your order`
     : config.reward.kind === "free_shipping_percent"
       ? `${config.reward.percent}% off plus free shipping`
       : config.reward.kind === "percent"
@@ -570,7 +629,7 @@ export async function peekCustomerOffer(input: {
   try {
     const { data, error } = await supabaseAdmin
       .from("customer_offers")
-      .select("id, offer_key, email, reward_kind, product_slug, percent_off, variant_id, min_subtotal_cents, expires_at, reserved_order_id, redeemed_at, revoked_at")
+      .select("id, offer_key, email, reward_kind, product_slug, percent_off, quantity, variant_id, min_subtotal_cents, expires_at, reserved_order_id, redeemed_at, revoked_at")
       .eq("token_hash", hashOfferToken(token))
       .maybeSingle();
     if (error || !data) return null;
@@ -611,6 +670,8 @@ export async function readOfferStatus(token: string | null | undefined, now = Da
   rewardKind: string;
   productSlug: string | null;
   percentOff: number | null;
+  /** Units the product half grants; null when there is no product half. */
+  quantity: number | null;
   minSubtotalCents: number;
   expiresAt: string;
   /**
@@ -633,11 +694,11 @@ export async function readOfferStatus(token: string | null | undefined, now = Da
   try {
     const { data } = await supabaseAdmin
       .from("customer_offers")
-      .select("offer_key, reward_kind, product_slug, percent_off, min_subtotal_cents, expires_at, redeemed_at, revoked_at, email")
+      .select("offer_key, reward_kind, product_slug, percent_off, quantity, min_subtotal_cents, expires_at, redeemed_at, revoked_at, email")
       .eq("token_hash", hashOfferToken(value))
       .maybeSingle();
     if (!data) return null;
-    const row = data as { offer_key: string; reward_kind: string; product_slug: string | null; percent_off: number | null; min_subtotal_cents: number; expires_at: string; redeemed_at: string | null; revoked_at: string | null; email: string };
+    const row = data as { offer_key: string; reward_kind: string; product_slug: string | null; percent_off: number | null; quantity: number | null; min_subtotal_cents: number; expires_at: string; redeemed_at: string | null; revoked_at: string | null; email: string };
     if (row.redeemed_at || row.revoked_at) return null;
     if (new Date(row.expires_at).getTime() <= now) return null;
     return {
@@ -645,6 +706,9 @@ export async function readOfferStatus(token: string | null | undefined, now = Da
       rewardKind: row.reward_kind,
       productSlug: row.product_slug,
       percentOff: row.percent_off === null ? null : Number(row.percent_off),
+      // Null only where there is no product. A row minted before the column
+      // existed reads null too, and every reader treats that as one.
+      quantity: row.product_slug === null ? null : Math.max(1, Math.floor(Number(row.quantity ?? 1))),
       minSubtotalCents: Number(row.min_subtotal_cents ?? 0),
       expiresAt: row.expires_at,
       email: String(row.email ?? ""),

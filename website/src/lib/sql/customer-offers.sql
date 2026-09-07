@@ -486,3 +486,51 @@ comment on function public.customer_offer_close_cycle(text, text) is
 
 revoke execute on function public.customer_offer_close_cycle(text, text) from public, anon, authenticated;
 grant execute on function public.customer_offer_close_cycle(text, text) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- A GIFT CAN GRANT MORE THAN ONE UNIT (2026-09-07).
+--
+-- The count lived nowhere: the catalogue could name the product and quoteOrder
+-- wrote `quantity: 1` as a literal, so "two free BAC Water" was promisable in
+-- an email and unshippable at the till. It is stored on the ROW rather than
+-- read back from the catalogue at redemption, for the same reason reward_kind,
+-- product_slug and percent_off already are — a token lives for days or weeks,
+-- and the entry it was minted from can be edited or retired inside that life.
+-- What was promised is what redeems.
+--
+-- NULLABLE, AND NULL MEANS ONE. Requiring a count on every product gift was
+-- the first shape tried and it is wrong: it rejects every insert that predates
+-- this column — the repair path, an operator's hand-written row, an older
+-- deploy still running — and a gift that fails to mint is a customer who is
+-- promised something and sent nothing. So the constraint enforces only the two
+-- things that are actually invariants:
+--
+--   * no count where there is no product to count (a free-shipping gift with
+--     `quantity = 3` means nothing, and would read as three of something);
+--   * never zero, negative or fractional, which would reach order_items as an
+--     un-shippable line rather than as a pricing bug.
+--
+-- Readers resolve null to one, in one place (offerRewardQuantity / the till's
+-- `?? 1`), so "unset" and "one" can never disagree.
+--
+-- Additive and idempotent; safe to re-run.
+-- ---------------------------------------------------------------------------
+alter table if exists public.customer_offers
+  add column if not exists quantity integer;
+
+-- Existing product gifts say 1 explicitly, so reports do not have to know the
+-- null convention. New inserts may still omit it.
+update public.customer_offers
+  set quantity = 1
+  where product_slug is not null and quantity is null;
+
+alter table public.customer_offers
+  drop constraint if exists customer_offers_quantity_shape;
+alter table public.customer_offers
+  add constraint customer_offers_quantity_shape check (
+    (quantity is null or quantity >= 1)
+    and (quantity is null or product_slug is not null)
+  );
+
+comment on column public.customer_offers.quantity is
+  'Units the product half grants. Null means one — a gift with no product half, or a row minted before this column existed. Set at mint time from the catalogue entry and never re-read from it, so editing an offer cannot change what an outstanding token is worth.';
