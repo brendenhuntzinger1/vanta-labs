@@ -35,6 +35,7 @@ import { ConsentedAnalytics } from "@/components/consented-analytics";
 import { TikTokPixel } from "@/components/tiktok-pixel";
 import { SnapPixel } from "@/components/snap-pixel";
 import { RedditPixel } from "@/components/reddit-pixel";
+import { GoogleAdsTag } from "@/components/google-ads-tag";
 import { TikTokCommerceEvents } from "@/components/tiktok-commerce-events";
 import "./globals.css";
 
@@ -250,6 +251,16 @@ export default async function RootLayout({
       //
     >
       <body className="min-h-full flex flex-col">
+        {/* THE GOOGLE TAG IS FIRST IN THE BODY, AND SERVER-RENDERED.
+            Google's install screen asks for it "immediately after the <head>
+            element", and unlike the three pixels further down it is not a
+            client component -- so it is present in the served HTML rather than
+            appearing only after hydration. That is what lets Google's own
+            installation check, and anything else that does not run our
+            JavaScript, actually see it. Consent Mode inside the snippet keeps
+            every storage signal denied until the visitor accepts; see
+            components/google-ads-tag.tsx. */}
+        <GoogleAdsTag />
         {/* Site-wide Organization + WebSite structured data for brand/knowledge
             panel eligibility. Rendered server-side so crawlers always see it. */}
         <script
