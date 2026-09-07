@@ -530,3 +530,74 @@ describe("the blast radius", () => {
     expect((await runAbandonedCartSweep()).t12hSent).toBe(1);
   });
 });
+
+describe("a replaced stage whose gift also carries a percentage", () => {
+  // The 72-hour follow-up. It is a different message from the first one in
+  // three specific ways, and each is a consequence of the store granting ONE
+  // discount per order rather than a styling choice.
+  beforeEach(() => {
+    state.db.overrides.length = 0;
+  });
+
+  function seedPercentOverride(cartId: string) {
+    state.db.overrides.push({
+      abandoned_cart_id: cartId, stage: "t72h", offer_key: "labor_day_bac_water_2_40",
+      perks: ["Free shipping"], note: "72h follow-up", consumed_at: null, consumed_email_id: null,
+    });
+  }
+
+  it("leads with the percentage, because it is the bigger number", async () => {
+    const cart = seedCart({ hoursAgo: 73 });
+    for (const stage of ["t30m", "t12h", "t24h"]) {
+      state.db.stages.push({ id: `pre-${stage}`, abandoned_cart_id: cart.id, stage, sent_at: new Date().toISOString() });
+    }
+    seedPercentOverride(String(cart.id));
+
+    const result = await runAbandonedCartSweep();
+
+    expect(result.t72hSent).toBe(1);
+    const sent = state.sends[0];
+    expect(sent.subject).toBe("40% off your BPC-157");
+    expect(sent.html).toContain("40% off, plus 2 free BAC Water");
+    expect(sent.html).toContain("Claim my 40% off");
+  });
+
+  it("does NOT name the promotion beside it, because the percentage replaces it", async () => {
+    // Buy 2 Get 1 is live for this customer and worth less than 40%. Naming
+    // both would promise a stack the checkout refuses — the shopper gets the
+    // better of the two, and here that is the 40%.
+    const cart = seedCart({ hoursAgo: 73 });
+    for (const stage of ["t30m", "t12h", "t24h"]) {
+      state.db.stages.push({ id: `pre2-${stage}`, abandoned_cart_id: cart.id, stage, sent_at: new Date().toISOString() });
+    }
+    seedPercentOverride(String(cart.id));
+
+    await runAbandonedCartSweep();
+
+    const body = `${state.sends[0].subject} ${state.sends[0].text}`;
+    expect(body).not.toContain("Buy 2 Get 1");
+    // And the terms still state both halves the till will honour.
+    expect(state.sends[0].text).toContain("40% off");
+    expect(state.sends[0].text).toContain("2 free BAC Water are added to your order");
+  });
+
+  it("still mints exactly one entitlement, and only for that cart", async () => {
+    const chosen = seedCart({ id: "cart-follow", email: "chosen@example.com", hoursAgo: 73 });
+    const bystander = seedCart({ id: "cart-bystander", email: "other@example.com", hoursAgo: 73 });
+    for (const cart of [chosen, bystander]) {
+      for (const stage of ["t30m", "t12h", "t24h"]) {
+        state.db.stages.push({ id: `p-${cart.id}-${stage}`, abandoned_cart_id: cart.id, stage, sent_at: new Date().toISOString() });
+      }
+    }
+    seedPercentOverride(String(chosen.id));
+
+    await runAbandonedCartSweep();
+
+    expect(state.issued).toEqual([
+      { email: "chosen@example.com", offerKey: "labor_day_bac_water_2_40", referenceId: "cart-follow" },
+    ]);
+    // The bystander got the ordinary last-chance mail, with its own coupon.
+    const bystanderSend = state.sends.find((s) => s.to === "other@example.com");
+    expect(bystanderSend?.templateKey).toBe("cartRecoveryT72hTemplate");
+  });
+});

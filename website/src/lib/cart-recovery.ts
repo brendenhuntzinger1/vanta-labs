@@ -1161,6 +1161,9 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
             : "",
           promotionNote: livePromotionNote,
           perks: overridePerks,
+          offerPercent: offerKey && "percent" in OFFER_CATALOG[offerKey].reward
+            ? Number((OFFER_CATALOG[offerKey].reward as { percent: number }).percent)
+            : 0,
           }),
       });
       if (sent) result[STAGE_RESULT_KEY[stage]] += 1;

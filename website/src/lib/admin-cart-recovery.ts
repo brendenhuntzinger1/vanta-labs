@@ -522,6 +522,9 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
           : "",
         promotionNote,
         perks: overridePerks,
+        offerPercent: override.offerKey && "percent" in OFFER_CATALOG[override.offerKey].reward
+          ? Number((OFFER_CATALOG[override.offerKey].reward as { percent: number }).percent)
+          : 0,
         }),
     });
     if (result.success) {

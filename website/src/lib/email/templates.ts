@@ -1856,6 +1856,12 @@ export function cartRecoveryT12hTemplate(input: { name: string; items: Array<{ n
  *   perks          the other things this order carries, each one already
  *                  verified true by its caller. Rendered as a plain list; an
  *                  empty array renders nothing at all.
+ *   offerPercent   the percentage this gift also carries, or 0. When set it
+ *                  becomes the headline, because it is the bigger number — and
+ *                  it SUPPRESSES the promotion line, because the store grants
+ *                  one discount per order: a percentage that beats the
+ *                  promotion REPLACES it, and naming both would read as a
+ *                  stack the checkout will not honour.
  */
 export function cartRecoveryGiftTemplate(input: {
   name: string;
@@ -1866,11 +1872,11 @@ export function cartRecoveryGiftTemplate(input: {
   offerTerms: string;
   promotionNote?: string | null;
   perks?: string[];
+  offerPercent?: number;
 }): EmailTemplate {
   const hi = greeting(input.name);
-  const promoHtml = input.promotionNote
-    ? `<p style="margin:0 0 4px;">${escapeHtml(input.promotionNote)}</p>`
-    : "";
+  const percent = Number(input.offerPercent ?? 0);
+
   // The gift gets its own block because it is the reason for the message. A
   // bordered row rather than a coloured banner: the layout is dark and a
   // banner reads as an ad, which is the thing this brand does not do.
@@ -1895,7 +1901,7 @@ export function cartRecoveryGiftTemplate(input: {
   const giftHtml = `<table role="presentation" width="100%" style="margin:16px 0 4px;">`
     + `<tr><td style="padding:14px 16px;border:1px solid rgba(255,255,255,0.14);border-radius:10px;">`
     + `<span style="display:block;color:#a1a1aa;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;">On this order</span>`
-    + `<strong style="display:block;margin-top:4px;color:#ffffff;font-size:18px;">${escapeHtml(input.giftLabel)}</strong>`
+    + `<strong style="display:block;margin-top:4px;color:#ffffff;font-size:18px;">${escapeHtml(percent > 0 ? `${percent}% off, plus ${input.giftLabel}` : input.giftLabel)}</strong>`
     + perksHtml
     + `</td></tr></table>`;
   // THE SUBJECT NAMES WHAT THEY LEFT. It is the only part of this most people
@@ -1906,9 +1912,18 @@ export function cartRecoveryGiftTemplate(input: {
   const giftNoun = input.giftLabel.toLowerCase().replace(/^\d+\s+free\s+/, "").trim();
   const leadItem = input.items.find((item) => !item.name.toLowerCase().includes(giftNoun))
     ?? input.items[0];
-  const subject = leadItem
-    ? `Your ${leadItem.name.replace(/\s*\(.*\)\s*$/, "").trim()} + ${input.giftLabel}`
+  const lead = leadItem ? leadItem.name.replace(/\s*\(.*\)\s*$/, "").trim() : "";
+  const subject = percent > 0
+    ? (lead ? `${percent}% off your ${lead}` : `${percent}% off your cart`)
+    : (lead ? `Your ${lead} + ${input.giftLabel}` : `${input.giftLabel}, on us`);
+  const headline = percent > 0
+    ? `${percent}% off, plus ${input.giftLabel}`
     : `${input.giftLabel}, on us`;
+  const ctaLabel = percent > 0 ? `Claim my ${percent}% off` : `Claim my ${input.giftLabel}`;
+  // ONE DISCOUNT PER ORDER. A percentage that beats the promotion takes its
+  // place, so naming the promotion beside it would promise a stack the
+  // checkout refuses.
+  const promoNote = percent > 0 ? null : input.promotionNote;
   const perkLine = perks.length ? `${perks.join(". ")}.` : "";
   // THE ONE DEADLINE IN THIS MESSAGE IS A REAL ONE. It is the entitlement's own
   // expiry, lifted out of describeOfferTerms — the same date customer_offers
@@ -1925,13 +1940,13 @@ export function cartRecoveryGiftTemplate(input: {
       // times the gift — and the preview line is the only other thing Gmail
       // shows beside the subject. It appears only when the live resolver said
       // one is genuinely running for this customer.
-      preheader: [input.promotionNote, perkLine, "Your cart is exactly as you left it."]
+      preheader: [promoNote, perkLine, "Your cart is exactly as you left it."]
         .filter((part): part is string => Boolean(part && part.trim()))
         .join(" "),
-      titleHtml: `${escapeHtml(input.giftLabel)}, on us`,
+      titleHtml: escapeHtml(headline),
       bodyHtml: `${hi.html}`
         + `<p style="margin:0 0 4px;">Your cart is still saved &mdash; and we have added to it.</p>`
-        + promoHtml
+        + (promoNote ? `<p style="margin:0 0 4px;">${escapeHtml(promoNote)}</p>` : "")
         + giftHtml
         + cartSummaryHtml(input.items, input.cartValueCents)
         + (deadline
@@ -1940,7 +1955,7 @@ export function cartRecoveryGiftTemplate(input: {
         + `<p style="margin-top:10px;color:#a1a1aa;">Pick up exactly where you left off.</p>`,
       // NOT lower-cased: "Claim my 2 free bac water" reads like a typo, and
       // the label is a product name the brand capitalises everywhere else.
-      ctaLabel: `Claim my ${input.giftLabel}`,
+      ctaLabel,
       ctaUrl: input.restoreUrl,
       ctaVariant: "primary",
       footerNoteHtml: escapeHtml(input.offerTerms),
@@ -1949,9 +1964,9 @@ export function cartRecoveryGiftTemplate(input: {
       hi.text,
       hi.text ? "" : null,
       "Your cart is still saved - and we have added to it.",
-      input.promotionNote ?? null,
+      promoNote ?? null,
       "",
-      `On this order: ${input.giftLabel}`,
+      percent > 0 ? `On this order: ${percent}% off, plus ${input.giftLabel}` : `On this order: ${input.giftLabel}`,
       ...perks.map((perk) => `  - ${perk}`),
       "",
       ...cartSummaryText(input.items, input.cartValueCents),
