@@ -1,10 +1,12 @@
 /**
  * One spend feed for four ad platforms.
  *
- * Meta, TikTok, Reddit and Snapchat are already connected and authenticated
- * through Windsor.ai, which normalises all four behind one REST endpoint. That
- * is why this file is one client rather than four, with four OAuth dances, four
+ * Windsor.ai normalises several ad platforms behind one REST endpoint, which is
+ * why this file is one client rather than four, with four OAuth dances, four
  * pagination styles and four rate limiters.
+ *
+ * WHICH platforms are requested is NOT this list — see activeWindsorConnectors
+ * below. Asking for one the account has not attached takes the whole feed down.
  *
  * ══ EVERY FIELD NAME BELOW WAS READ BACK FROM THE LIVE API. ══
  *
@@ -41,8 +43,63 @@ import { adPlatformKey, isSafeTag, parseAdTagsFromUrl } from "./utm";
 export const WINDSOR_ENDPOINT = "https://connectors.windsor.ai";
 
 /** Connector slugs, as Windsor spells them. `facebook` covers Instagram too. */
+/** Every connector this client knows how to read. NOT the list it asks for. */
 export const WINDSOR_CONNECTORS = ["facebook", "tiktok", "reddit", "snapchat"] as const;
 export type WindsorConnector = (typeof WINDSOR_CONNECTORS)[number];
+
+/** What this account actually has attached. Override with WINDSOR_CONNECTORS. */
+export const DEFAULT_WINDSOR_CONNECTORS = ["facebook", "tiktok", "snapchat"] as const;
+
+/**
+ * ASKING FOR A CONNECTOR THE ACCOUNT HAS NOT CONNECTED TAKES DOWN THE WHOLE FEED.
+ *
+ * This used to be one list doing two jobs: the connectors this code can parse,
+ * and the connectors it requests every night. That is fine while every platform
+ * is attached and actively wrong otherwise, because Windsor bills by DATA
+ * SOURCE and counts a request for an unattached one against the plan.
+ *
+ * Measured against the live account on 2026-09-06. Three sources were
+ * connected — facebook, tiktok, snapchat — on a plan that allows three. We
+ * asked for four. Windsor answered every one of them, including the three that
+ * were connected and paid for, with:
+ *
+ *   "Uh-oh! You've connected more data sources than your Basic plan allows.
+ *    Upgrade here: https://onboard.windsor.ai/app/manage-subscription"
+ *
+ * HTTP 200, a data array, that sentence in every text field and 0 in every
+ * number. So one unconnected platform in this list cost the store its entire
+ * spend feed — $11.33 of real TikTok spend that day recorded as $0.00 — and
+ * the notice reads as an instruction to spend money upgrading, which would not
+ * have fixed it either.
+ *
+ * The owner's own count is the authority on what is attached, so the default is
+ * the three that are, and the environment variable is what changes it without a
+ * deploy when a platform is added or dropped.
+ */
+export function activeWindsorConnectors(
+  raw: string | undefined = process.env.WINDSOR_CONNECTORS,
+): readonly WindsorConnector[] {
+  const configured = String(raw ?? "")
+    .split(",")
+    .map((name) => name.trim().toLowerCase())
+    .filter((name): name is WindsorConnector => (WINDSOR_CONNECTORS as readonly string[]).includes(name));
+  // De-duplicated: asking twice would double-count against the plan.
+  const unique = [...new Set(configured)];
+  return unique.length > 0 ? unique : DEFAULT_WINDSOR_CONNECTORS;
+}
+
+/**
+ * Windsor's plan-limit notice, which arrives as DATA rather than as an error.
+ *
+ * Matched on the sentence rather than a status code, for the same reason
+ * isNotConnectedResponse is: the status is Windsor's to change and the wording
+ * is what identifies the condition. Deliberately narrow — "Basic plan" alone
+ * would match an ad named after a pricing tier.
+ */
+export function isPlanLimitNotice(text: string): boolean {
+  return /connected more data sources than your/i.test(text)
+    || /onboard\.windsor\.ai\/app\/manage-subscription/i.test(text);
+}
 
 /**
  * Per-connector field names, all verified against the live API.
@@ -445,6 +502,37 @@ export async function fetchConnectorSpend(input: {
   // verbatim — an operator reading this at 2am needs Windsor's own words, not
   // "0 rows written".
   if (rows.length === 0 && rejections.length > 0) {
+    // NAME THE ONE CONDITION WE HAVE ACTUALLY SEEN, because its cause is on OUR
+    // side and the generic message sends you to Windsor's dashboard instead.
+    //
+    // Measured 2026-09-06: every connector returned the plan-limit notice, and
+    // the account had exactly the three sources its plan allows connected
+    // (facebook, tiktok, snapchat). The fourth request was ours —
+    // WINDSOR_CONNECTORS asks for `reddit` as well — and asking for a source
+    // the account has not connected is what trips the limit. Windsor then
+    // returns the notice for EVERY connector in the run, so one unconnected
+    // platform in our list takes the whole spend feed down.
+    //
+    // "Upgrade your plan" is therefore the wrong instruction and an expensive
+    // one to follow. The fix is to ask only for what the account has, which is
+    // what the WINDSOR_CONNECTORS environment variable is for.
+    const planLimit = rejections.find((r) => isPlanLimitNotice(r.reason));
+    if (planLimit) {
+      return {
+        ok: false,
+        // WINDSOR'S OWN WORDS STAY IN, and the explanation is added AFTER them
+        // rather than in place of them. The rule this file already follows —
+        // "an operator reading this at 2am needs Windsor's own words, not '0
+        // rows written'" — is not weakened by knowing what to do about it, and
+        // replacing the verbatim notice would leave nothing to search for.
+        error:
+          `Windsor returned its plan-limit notice instead of data for ${input.connector} — ${planLimit.reason}. `
+          + "This is usually caused by requesting a connector the account has not connected: "
+          + "the extra request itself counts against the plan, and Windsor then returns this "
+          + "for EVERY connector, not just the missing one. Set WINDSOR_CONNECTORS to the "
+          + `connectors this account actually has (currently asking for: ${activeWindsorConnectors().join(", ")}).`,
+      };
+    }
     return {
       ok: false,
       error: `${rejections.length} row(s) returned, none usable — ${rejections[0].reason}`,

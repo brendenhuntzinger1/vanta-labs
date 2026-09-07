@@ -1,3 +1,4 @@
+import { WINDSOR_CONNECTORS } from "@/lib/ads/windsor-client";
 import { describe, expect, it } from "vitest";
 
 import { fetchConnectorSpend, normalizeSpendRow } from "./windsor-client";
@@ -95,7 +96,7 @@ describe("Windsor's account notice is never mistaken for ad data", () => {
     });
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) {
-      expect(outcome.error).toMatch(/none usable/);
+      expect(outcome.error).toMatch(/plan-limit notice instead of data/);
       // Windsor's own words reach the operator, because the fix differs per cause.
       expect(outcome.error).toMatch(/Basic plan/);
     }
@@ -140,6 +141,9 @@ describe("Windsor's account notice is never mistaken for ad data", () => {
         apiKey: "k",
         now: new Date("2026-09-06T09:00:00Z"),
         lastIngestedAt: null,
+      // Explicit: this suite is about behaviour across ALL FOUR connectors,
+      // not about which ones the account has attached (activeWindsorConnectors).
+      connectors: [...WINDSOR_CONNECTORS],
         fetchImpl: jsonResponse({ data: [noticeRow] }),
         upsert: async (rows) => {
           written.push(...rows);
@@ -162,6 +166,9 @@ describe("Windsor's account notice is never mistaken for ad data", () => {
       apiKey: "k",
       now: new Date("2026-09-06T09:00:00Z"),
       lastIngestedAt: null,
+      // Explicit: this suite is about behaviour across ALL FOUR connectors,
+      // not about which ones the account has attached (activeWindsorConnectors).
+      connectors: [...WINDSOR_CONNECTORS],
       fetchImpl,
       upsert: async () => ({ error: null }),
     });

@@ -3,7 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { checkRateLimit } from "@/lib/rate-limit";
 import {
-  WINDSOR_CONNECTORS,
+  activeWindsorConnectors,
   fetchConnectorSpend,
   type SpendRow,
   type WindsorConnector,
@@ -153,7 +153,7 @@ export async function runSpendIngest(deps: {
   }
 
   const { dateFrom, dateTo } = spendWindow(deps.now, deps.windowDays);
-  const connectors = deps.connectors ?? WINDSOR_CONNECTORS;
+  const connectors = deps.connectors ?? activeWindsorConnectors();
   const outcomes: ConnectorOutcome[] = [];
   let totalWritten = 0;
   let totalSpend = 0;

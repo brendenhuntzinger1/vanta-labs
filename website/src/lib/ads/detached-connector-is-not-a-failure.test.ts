@@ -1,3 +1,4 @@
+import { WINDSOR_CONNECTORS } from "@/lib/ads/windsor-client";
 import { describe, expect, it } from "vitest";
 import { fetchConnectorSpend } from "@/lib/ads/windsor-client";
 import { runSpendIngest } from "@/lib/ads/spend-ingest";
@@ -72,6 +73,10 @@ describe("the nightly run", () => {
   const deps = (bodyFor: (connector: string) => Response) => ({
     apiKey: "test-key",
     now: new Date("2026-09-06T12:00:00Z"),
+    // Named explicitly: this suite is about what happens to a DETACHED platform
+    // among attached ones, so it must drive all four regardless of which the
+    // live account currently has (activeWindsorConnectors).
+    connectors: [...WINDSOR_CONNECTORS],
     upsert: async () => ({ error: null }),
     fetchImpl: async (url: string | URL) => bodyFor(String(url)),
   });
