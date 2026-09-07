@@ -341,7 +341,7 @@ export async function ingestAdSpend(options: { force?: boolean } = {}): Promise<
       };
     }
   }
-  return runSpendIngest({
+  const result = await runSpendIngest({
     apiKey: process.env.WINDSOR_API_KEY,
     now: new Date(),
     force: options.force,
@@ -353,6 +353,35 @@ export async function ingestAdSpend(options: { force?: boolean } = {}): Promise<
       return { error: error ? { code: error.code, message: error.message } : null };
     },
   });
+
+  // WHAT EACH CONNECTOR SAID, WHERE SOMEONE CAN READ IT LATER.
+  //
+  // Every per-connector outcome lived only in the value returned from here, and
+  // the only production caller is Vercel Cron, which discards the response
+  // body. So an ingest that fetched nothing was indistinguishable from an
+  // ingest that fetched nothing FOR A REASON: the table simply stayed as it
+  // was, no alarm fired (an empty `data` array is a legitimately quiet day),
+  // and there was no way to find out which connector had answered what without
+  // being the caller.
+  //
+  // That cost a full round on 2026-09-07. The Windsor connector fix deployed,
+  // the sweep ran, zero rows were written, and nothing anywhere could say
+  // whether Windsor had returned an empty window, skipped a platform as not
+  // connected, or failed — the three cases with completely different fixes.
+  //
+  // One line, at info. No API key, no customer data: connector names, statuses,
+  // counts and the provider's own error text, which is the thing worth having
+  // at 2am and is already written to be read by a human.
+  const summary = result.connectors
+    .map((c) => `${c.connector}=${c.status}(rows ${c.rows}, written ${c.written}${c.error ? `, ${c.error}` : ""})`)
+    .join("; ");
+  console.log(
+    `[ads-spend] ${result.ran ? "ran" : "did not run"}: written ${result.totalWritten}, spend ${result.totalSpend}`
+    + `${result.reason ? `, reason: ${result.reason}` : ""}`
+    + `${summary ? ` — ${summary}` : " — no connectors attempted"}`,
+  );
+
+  return result;
 }
 
 /**
