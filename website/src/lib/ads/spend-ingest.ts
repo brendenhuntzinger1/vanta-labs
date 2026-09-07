@@ -120,6 +120,8 @@ export type ConnectorOutcome = {
   /** Duplicate (platform, ad_id, stat_date) pairs summed before the write. */
   merged: number;
   error?: string;
+  /** Windsor's reply when it returned nothing. See FetchOutcome.emptySample. */
+  emptySample?: string;
 };
 
 export type SpendIngestResult = {
@@ -202,6 +204,7 @@ export async function runSpendIngest(deps: {
     }
 
     outcome.rows = fetched.rows.length;
+    if (fetched.emptySample !== undefined) outcome.emptySample = fetched.emptySample;
     outcome.rejected = fetched.rejections.length;
     outcome.untagged = fetched.rows.filter((r) => !r.utmContent && r.spend > 0).length;
 
@@ -388,7 +391,7 @@ export async function ingestAdSpend(options: { force?: boolean } = {}): Promise<
   // counts and the provider's own error text, which is the thing worth having
   // at 2am and is already written to be read by a human.
   const summary = result.connectors
-    .map((c) => `${c.connector}=${c.status}(rows ${c.rows}, written ${c.written}${c.error ? `, ${c.error}` : ""})`)
+    .map((c) => `${c.connector}=${c.status}(rows ${c.rows}, written ${c.written}${c.error ? `, ${c.error}` : ""}${c.emptySample ? `, empty reply: ${c.emptySample}` : ""})`)
     .join("; ");
   console.log(
     `[ads-spend] ${result.ran ? "ran" : "did not run"}: written ${result.totalWritten}, spend ${result.totalSpend}`

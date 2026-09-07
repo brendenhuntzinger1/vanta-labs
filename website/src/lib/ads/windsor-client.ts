@@ -364,7 +364,11 @@ export function normalizeSpendRow(
 }
 
 export type FetchOutcome =
-  | { ok: true; rows: SpendRow[]; rejections: RowRejection[] }
+  | { ok: true; rows: SpendRow[]; rejections: RowRejection[];
+      /** Windsor's own reply, truncated, when it returned NO rows. An empty
+       *  window and a window we asked for wrongly look identical from the
+       *  outside; this is the only thing that tells them apart. */
+      emptySample?: string }
   /**
    * `notConnected` separates "this platform is not attached to the Windsor
    * account" from "the feed is broken", and the two need opposite responses.
@@ -539,5 +543,11 @@ export async function fetchConnectorSpend(input: {
     };
   }
 
+  // NOTHING CAME BACK. Say what Windsor actually replied, once, rather than
+  // reporting a clean zero that could equally mean "no spend that week" or
+  // "you asked for the wrong thing". Ad reporting, not customer data.
+  if (rows.length === 0 && rejections.length === 0) {
+    return { ok: true, rows, rejections, emptySample: bodyText.slice(0, 300) };
+  }
   return { ok: true, rows, rejections };
 }
