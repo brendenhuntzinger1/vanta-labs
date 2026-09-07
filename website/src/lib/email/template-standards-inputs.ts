@@ -49,6 +49,7 @@ export const INPUTS: Record<string, unknown> = {
     giftLabel: "2 free BAC Water",
     offerTerms: "Your gift: 2 free BAC Water are added to your order on any order of $35 or more, through September 15, 2026. One per customer, for this email address only.",
     promotionNote: "Our Buy 2 Get 1 Free offer is still running where eligible.",
+    perks: ["Free shipping", "2-day shipping, on us"],
   },
   cartRecoveryT72hTemplate: { name: "Zain", items: [{ name: "BPC-157", quantity: 1 }], cartValueCents: 11998, restoreUrl: URL_, couponCode: "COMEBACK", discountPercent: 5, expiresAt: "September 30, 2026" },
   contactFormNotificationTemplate: { firstName: "Zain", lastName: "M", email: "z@example.test", orderNumber: "VL-1001", subject: "Question", message: "Hello" },

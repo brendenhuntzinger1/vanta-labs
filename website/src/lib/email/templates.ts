@@ -1853,6 +1853,9 @@ export function cartRecoveryT12hTemplate(input: { name: string; items: Array<{ n
  *   promotionNote  a live promotion worth mentioning, or null. Never invented
  *                  here — only ever passed by a caller that has just re-read
  *                  the live promotion configuration.
+ *   perks          the other things this order carries, each one already
+ *                  verified true by its caller. Rendered as a plain list; an
+ *                  empty array renders nothing at all.
  */
 export function cartRecoveryGiftTemplate(input: {
   name: string;
@@ -1862,6 +1865,7 @@ export function cartRecoveryGiftTemplate(input: {
   giftLabel: string;
   offerTerms: string;
   promotionNote?: string | null;
+  perks?: string[];
 }): EmailTemplate {
   const hi = greeting(input.name);
   const promoHtml = input.promotionNote
@@ -1870,10 +1874,29 @@ export function cartRecoveryGiftTemplate(input: {
   // The gift gets its own block because it is the reason for the message. A
   // bordered row rather than a coloured banner: the layout is dark and a
   // banner reads as an ad, which is the thing this brand does not do.
+  // Coerced rather than trusted: these arrive from a jsonb column, so a row
+  // holding a number or a null must render as nothing instead of throwing
+  // inside a template that is already mid-send.
+  // Only actual strings, and NOT String()-coerced: these arrive from a jsonb
+  // column, so an element could be a number, a null or an object, and
+  // stringifying one of those prints "[object Object]" into a customer's
+  // inbox. A value that is not a sentence is not a perk — drop it.
+  const perks = (Array.isArray(input.perks) ? input.perks : [])
+    .filter((perk): perk is string => typeof perk === "string")
+    .map((perk) => perk.trim())
+    .filter((perk) => perk.length > 0);
+  const perksHtml = perks.length
+    ? `<table role="presentation" width="100%" style="margin-top:10px;font-size:14px;">`
+      + perks.map((perk) =>
+        `<tr><td style="padding:5px 0;color:#d4d4d4;">`
+        + `<span style="color:#ffffff;">&#8226;</span>&nbsp;&nbsp;${escapeHtml(perk)}</td></tr>`).join("")
+      + `</table>`
+    : "";
   const giftHtml = `<table role="presentation" width="100%" style="margin:16px 0 4px;">`
     + `<tr><td style="padding:14px 16px;border:1px solid rgba(255,255,255,0.14);border-radius:10px;">`
-    + `<span style="display:block;color:#a1a1aa;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;">Added to this order</span>`
+    + `<span style="display:block;color:#a1a1aa;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;">On this order</span>`
     + `<strong style="display:block;margin-top:4px;color:#ffffff;font-size:18px;">${escapeHtml(input.giftLabel)}</strong>`
+    + perksHtml
     + `</td></tr></table>`;
   return {
     subject: "We added something extra to your cart",
@@ -1897,7 +1920,8 @@ export function cartRecoveryGiftTemplate(input: {
       "You left a few things behind, so here is one more reason to come back.",
       input.promotionNote ?? null,
       "",
-      `Added to this order: ${input.giftLabel}`,
+      `On this order: ${input.giftLabel}`,
+      ...perks.map((perk) => `  - ${perk}`),
       "",
       ...cartSummaryText(input.items, input.cartValueCents),
       "",

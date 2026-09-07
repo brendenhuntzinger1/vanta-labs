@@ -63,3 +63,25 @@ alter table public.cart_recovery_stage_overrides enable row level security;
 do $$ begin
   execute 'revoke all on public.cart_recovery_stage_overrides from public, anon, authenticated';
 exception when undefined_object then null; end $$;
+
+-- ---------------------------------------------------------------------------
+-- EXTRA PERKS ON A REPLACED STAGE (2026-09-07).
+--
+-- A gift the store can price (a free product, a waived fee) is decided by the
+-- catalogue and the checkout. An operator's promise about how ONE order will be
+-- handled — expedited postage bought at their own cost, say — is not something
+-- the store can verify, so it cannot be inferred and must not be hard-coded
+-- into a template that other carts also render.
+--
+-- Recording it on the row makes it data: it is stated verbatim in the message,
+-- and it is findable afterwards by whoever packs the box, rather than living
+-- only in an email that the fulfilment side never sees. A promise nobody can
+-- look up is a promise that gets missed.
+--
+-- Additive and idempotent; safe to re-run.
+-- ---------------------------------------------------------------------------
+alter table if exists public.cart_recovery_stage_overrides
+  add column if not exists perks jsonb not null default '[]'::jsonb;
+
+comment on column public.cart_recovery_stage_overrides.perks is
+  'Operator promises stated verbatim in the replaced message, e.g. expedited shipping. NOT priced or verified by the store — whoever fulfils the order has to honour them, which is why they are recorded here rather than only in the email.';

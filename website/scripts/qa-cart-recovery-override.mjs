@@ -118,7 +118,7 @@ const CARTS = [
     // Both vials absorbed, so she pays for the GLP-3 alone — and the promotion
     // now sees ONE paid unit rather than three, so it grants nothing.
     expectMerchandise: 69.99,
-    expectShipping: 15,
+    expectShipping: 0,
     expectFreeBac: 2,
     expectBacUnits: 2,
     expectPromotion: false,
@@ -153,7 +153,7 @@ const CARTS = [
     valueCents: 4999,
     items: [{ slug: "b12", name: "B12", quantity: 1, unitPrice: 49.99, variantId: "c8ea4006-2e7d-4852-a74c-786d5a52da87" }],
     expectMerchandise: 49.99,
-    expectShipping: 15,
+    expectShipping: 0,
     expectFreeBac: 2,
     expectBacUnits: 2,
     expectPromotion: false,
@@ -203,6 +203,13 @@ async function seedPromotion() {
      values ('admin_control_upsert', 'promotions', 'bxgy_promotions', $1, now())`,
     [JSON.stringify({ value: promotions })],
   );
+  // Production runs free shipping sitewide, so the harness must too — the whole
+  // point of these totals is that they are the totals the shopper will see.
+  await q(
+    `insert into admin_audit_logs (action, target_table, target_id, metadata, created_at)
+     values ('admin_control_upsert', 'shipping', 'free_shipping_sitewide', $1, now())`,
+    [JSON.stringify({ value: true })],
+  );
   for (const [key, value] of [["t30m_enabled", true], ["t12h_enabled", true], ["t24h_enabled", true], ["t72h_enabled", true]]) {
     await q(
       `insert into admin_audit_logs (action, target_table, target_id, metadata, created_at)
@@ -249,9 +256,9 @@ async function seedCarts() {
 async function seedOverrides() {
   for (const cart of CARTS) {
     await q(
-      `insert into cart_recovery_stage_overrides (abandoned_cart_id, stage, offer_key, note)
-       values ($1, $2, 'labor_day_bac_water_2', 'harness')`,
-      [cart.id, cart.stage],
+      `insert into cart_recovery_stage_overrides (abandoned_cart_id, stage, offer_key, perks, note)
+       values ($1, $2, 'labor_day_bac_water_2', $3, 'harness')`,
+      [cart.id, cart.stage, JSON.stringify(["2-day shipping, on us"])],
     );
   }
 }
@@ -415,18 +422,42 @@ async function main() {
       return message.subject;
     });
 
-    await step("the message states the gift and the enforced terms", async () => {
+    await step("the message states the gift, the perks and the enforced terms", async () => {
       const body = `${message.html} ${message.text ?? ""}`;
       assert(/2 free BAC Water/i.test(body), "the gift is not stated");
       assert(/\$35 or more/.test(body), "the minimum the till enforces is not stated");
+      assert(/Free shipping/i.test(body), "free shipping is not stated");
+      assert(/2-day shipping, on us/i.test(body), "the expedited-shipping promise is not stated");
+      assert(/Buy 2 Get 1 Free/i.test(body), "the live promotion is not mentioned");
     });
 
-    await step("makes no deadline, scarcity or shipping-speed claim", async () => {
+    await step("claims nothing the store has not actually committed to", async () => {
+      // The rule is not "never mention shipping speed" — it is "never invent".
+      // A perk RECORDED ON THE OVERROW ROW is an operator's deliberate promise
+      // about this order, and it is stated verbatim; anything else in this list
+      // would be the template speaking for the store, which is the thing that
+      // gets a brand into trouble.
       const copy = `${message.subject} ${message.text ?? message.html}`.toLowerCase();
-      for (const banned of ["limited time", "limited-time", "last chance", "hurry",
-        "while supplies last", "labor day", "2-day", "two-day", "overnight", "purity"]) {
+      const recorded = ["2-day shipping, on us"].map((perk) => perk.toLowerCase());
+      const invented = [
+        "limited time", "limited-time", "last chance", "hurry", "act now",
+        "while supplies last", "selling out", "only a few",
+        "guaranteed", "purity", "99%", "sterile", "fda",
+        "overnight", "next day", "same day",
+      ];
+      for (const banned of invented) {
         assert(!copy.includes(banned), `copy claims "${banned}"`);
       }
+      // Any shipping-speed wording that IS present must be one of the recorded
+      // promises, character for character.
+      for (const speed of ["2-day", "two-day", "2 day"]) {
+        if (!copy.includes(speed)) continue;
+        assert(
+          recorded.some((perk) => perk.includes(speed) && copy.includes(perk)),
+          `copy says "${speed}" but no recorded perk says it verbatim`,
+        );
+      }
+      return "no invented claims; the shipping promise is the recorded one";
     });
 
     const context = await freshContext();

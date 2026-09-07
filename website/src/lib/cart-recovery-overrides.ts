@@ -18,6 +18,16 @@ export interface CartRecoveryOverride {
   stage: RecoveryStage;
   /** The gift to mint behind the stage claim, or null for a body-only change. */
   offerKey: OfferKey | null;
+  /**
+   * Extra things this order carries, stated verbatim in the message.
+   *
+   * ON THE ROW, NOT IN CODE, because each one is an operator's promise about
+   * how a specific order will be handled — expedited postage, say — and the
+   * store cannot verify it the way it verifies a price. Recording it against
+   * the cart is what makes it findable later by whoever packs the box, instead
+   * of living only in an email nobody on the fulfilment side ever sees.
+   */
+  perks: string[];
   note: string | null;
 }
 
@@ -45,7 +55,7 @@ export async function loadCartRecoveryOverrides(
   try {
     const { data, error } = await supabaseAdmin
       .from("cart_recovery_stage_overrides")
-      .select("abandoned_cart_id, stage, offer_key, note")
+      .select("abandoned_cart_id, stage, offer_key, perks, note")
       .in("abandoned_cart_id", ids);
     if (error) throw error;
     for (const row of data ?? []) {
@@ -61,10 +71,14 @@ export async function loadCartRecoveryOverrides(
         console.error("[cart-recovery] override names an unknown offer key; ignoring it", cartId, stage, rawKey);
         continue;
       }
+      const perks = Array.isArray(row.perks)
+        ? row.perks.map((perk) => String(perk ?? "").trim()).filter(Boolean)
+        : [];
       found.set(`${cartId}::${stage}`, {
         cartId,
         stage,
         offerKey: rawKey as OfferKey | null,
+        perks,
         note: row.note === null || row.note === undefined ? null : String(row.note),
       });
     }

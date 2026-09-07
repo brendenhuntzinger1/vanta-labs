@@ -2,8 +2,9 @@ import "server-only";
 import crypto from "crypto";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { getCartRecoveryControlConfig, type CartRecoveryConfig } from "@/lib/admin-control";
+import { getCartRecoveryControlConfig, getShippingConfig, type CartRecoveryConfig } from "@/lib/admin-control";
 import { getSiteUrl } from "@/lib/env";
+import { isFreeShippingSitewide } from "@/lib/shipping";
 import { formatDisplayDate } from "@/lib/format-date";
 import { isMarketingSuppressed, sendMarketingEmail } from "@/lib/email/marketing";
 import { claimMarketingSend } from "@/lib/email/frequency";
@@ -1103,6 +1104,17 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       // customer. So the sentence cannot outlive the promotion, and nothing
       // here invents a deadline, a discount or an urgency the store does not
       // already hold. No live promotion means the sentence is simply absent.
+      // FREE SHIPPING IS STATED ONLY IF THE STORE IS ACTUALLY GIVING IT.
+      // Read from the live shipping configuration, the same one the checkout
+      // prices through, so the line cannot outlive the setting.
+      const overridePerks = [...override.perks];
+      try {
+        const shippingConfig = await getShippingConfig();
+        if (isFreeShippingSitewide(shippingConfig)) overridePerks.unshift("Free shipping");
+      } catch {
+        // A perk we cannot confirm is a perk we do not claim.
+      }
+
       let livePromotionNote: string | null = null;
       try {
         const livePromotions = await getApplicableBxgyPromotions({ customerEmail: email });
@@ -1135,7 +1147,8 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
             ? describeOfferTerms(offerKey, new Date(now + OFFER_CATALOG[offerKey].ttlDays * 24 * HOUR_MS).toISOString())
             : "",
           promotionNote: livePromotionNote,
-        }),
+          perks: overridePerks,
+          }),
       });
       if (sent) result[STAGE_RESULT_KEY[stage]] += 1;
       continue;

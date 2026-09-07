@@ -1,7 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { getCartRecoveryControlConfig } from "@/lib/admin-control";
+import { getCartRecoveryControlConfig, getShippingConfig } from "@/lib/admin-control";
 import {
   cartRecoveryGiftTemplate,
   cartRecoveryT30mTemplate,
@@ -13,6 +13,7 @@ import { isMarketingSuppressed, sendMarketingEmail } from "@/lib/email/marketing
 import { claimMarketingSend } from "@/lib/email/frequency";
 import { findLiveCouponForCart, mintCartRecoveryCoupon, type AbandonedCartItemSnapshot } from "@/lib/cart-recovery";
 import { getSiteUrl } from "@/lib/env";
+import { isFreeShippingSitewide } from "@/lib/shipping";
 import { formatDisplayDate } from "@/lib/format-date";
 import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
 import { readAllRowsBounded } from "@/lib/supabase-page";
@@ -451,6 +452,17 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
   const openTrackingPixelUrl = `${getSiteUrl()}/api/email/track/open?id=${rowId}`;
 
   if (override) {
+    // FREE SHIPPING IS STATED ONLY IF THE STORE IS ACTUALLY GIVING IT.
+    // Read from the live shipping configuration, the same one the checkout
+    // prices through, so the line cannot outlive the setting.
+    const overridePerks = [...override.perks];
+    try {
+      const shippingConfig = await getShippingConfig();
+      if (isFreeShippingSitewide(shippingConfig)) overridePerks.unshift("Free shipping");
+    } catch {
+      // A perk we cannot confirm is a perk we do not claim.
+    }
+
     let promotionNote: string | null = null;
     try {
       const live = await getApplicableBxgyPromotions({ customerEmail: cart.email });
@@ -478,7 +490,8 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
             )
           : "",
         promotionNote,
-      }),
+        perks: overridePerks,
+        }),
     });
     if (result.success) {
       await markCartRecoveryOverrideConsumed({ cartId: cart.id, stage, reservationId: rowId });

@@ -1452,6 +1452,7 @@
     "note",
     "created_at",
     "consumed_at",
-    "consumed_email_id"
+    "consumed_email_id",
+    "perks"
   ]
 }
