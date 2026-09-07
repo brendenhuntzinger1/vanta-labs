@@ -8,45 +8,51 @@ import { GOOGLE_ADS_TAG_ID } from "@/lib/ads/google-ads-tag-id";
 import { hasAcceptedConsent, subscribeToConsent } from "@/lib/cookie-consent-client";
 
 /**
- * The Google tag (gtag.js) for Google Ads — installed globally, behind the same
- * consent gate as TikTok, Snap and Reddit.
+ * The Google tag (gtag.js) for Google Ads — installed the way Google's install
+ * screen describes, with Consent Mode v2 doing the privacy work.
  *
- * Mounted once in the root layout so it is present on every page, and injected
- * with next/script at `afterInteractive`, which is the correct placement in the
- * App Router: Next puts it in the document rather than the React tree, so it
- * survives client navigation without re-executing the loader.
+ * WHY THIS DIFFERS FROM THE OTHER THREE PIXELS. TikTok, Snap and Reddit are not
+ * loaded at all until a visitor clicks Accept: their components return null, so
+ * no SDK is ever fetched for someone who declined. This tag is deliberately NOT
+ * built that way. Google's install page says to place the snippet on every page
+ * of the site, and Google's own "Test installation" check loads the page without
+ * touching the cookie banner — so a tag that only appears after Accept can never
+ * be verified, and reports as not installed forever.
  *
- * GOOGLE'S INSTALL PAGE SAYS "immediately after the <head> element", AND THIS
- * DELIBERATELY DOES NOT DO THAT. Hard-coding an advertising tag into <head>
- * runs it for everyone, including the visitor who just chose Decline on a
- * banner promising that our advertising pixels load only if they accept.
- * Gating it here means gtag.js is never fetched for someone who declined — no
- * request to googletagmanager.com, no cookie, nothing to revoke. Placement in
- * the document is what Google is actually asking for, and afterInteractive
- * satisfies that; unconditional execution is not part of the requirement.
+ * Consent Mode is the mechanism Google's install screen itself points at (the
+ * "if you have end users in the EEA" notice beside the snippet). The tag loads
+ * on every page, but every storage signal starts DENIED, so before a visitor
+ * accepts:
  *
- * ON CONSENT MODE (the "if you have end users in the EEA" notice on that same
- * install page): not implemented, on purpose. Consent Mode's default-denied
- * state does not stop the tag running — it loads gtag.js anyway and sends
- * COOKIELESS PINGS so Google can model the conversions it was not allowed to
- * observe. That is more contact with Google for a declining visitor, not less,
- * and it would directly falsify the sentence in our Cookie Policy that says no
- * request reaches the platform if you decline. Not loading at all is strictly
- * stronger than `denied`, and it is the promise the banner already makes. If
- * Consent Mode is ever wanted for EEA measurement, the policy has to change
- * first, in the same edit.
+ *   - no advertising cookie is written and no identifier is stored;
+ *   - no ad_user_data or ad_personalization signal is sent;
+ *   - Google receives only a cookieless ping — that a page was viewed, with no
+ *     identifier tying it to a person or to any other visit.
  *
- * The snippet below is Google's own, from the Google Ads install screen,
- * unmodified apart from the id being interpolated from the shared constant —
- * so it can be diffed against whatever the console currently generates without
- * having to read past reformatting.
+ * On Accept the tag sends `consent update` with the same signals granted, and
+ * ordinary measurement begins. On Decline — or a withdrawal made later, in this
+ * tab or another — it sends the update with everything denied and stays there.
  *
- * ON IDENTITY: nothing about the visitor is passed. Google's console will
- * offer Enhanced Conversions, which asks for `user_data` carrying a raw email
- * address or phone number in the browser tag. This does not do that, and
- * google-ads-tag-source.test.ts holds the line. The same rule the other three
- * integrations follow applies here: identity is attached on the server, only
- * on a confirmed paid order, and only ever as a SHA-256 digest.
+ * THIS IS A REAL TRADE-OFF AND IT WAS MADE DELIBERATELY. A declining visitor
+ * does load gtag.js and does cause one cookieless ping to Google, which is more
+ * contact than the other three allow. The Cookie and Privacy policies describe
+ * this tag separately from the three pixels for exactly that reason; they must
+ * not be collapsed back into one "nothing loads if you decline" sentence, which
+ * would be false for this tag. If the stricter behaviour is ever wanted, the
+ * component goes back to returning null before consent AND the policy changes
+ * in the same edit AND Google's install check stops passing.
+ *
+ * The snippet below is Google's own, from the Google Ads install screen, with
+ * two changes: the id comes from the shared constant, and the `consent default`
+ * block is prepended. That block MUST come before `config` — a default set
+ * afterwards is applied too late and the first hit goes out granted.
+ *
+ * ON IDENTITY: nothing about the visitor is passed, at any consent state.
+ * Google's console offers Enhanced Conversions, which asks for `user_data`
+ * carrying a raw email address or phone number in the browser tag. This does
+ * not do that, and google-ads-tag-source.test.ts holds the line. Identity is
+ * attached on the server, only on a confirmed paid order, and only ever as a
+ * SHA-256 digest.
  *
  * NO CONVERSION ACTION IS WIRED YET. `config` records the page view and the
  * remarketing hit, which is the whole of the "install the Google tag" step.
@@ -58,6 +64,15 @@ import { hasAcceptedConsent, subscribeToConsent } from "@/lib/cookie-consent-cli
  * see the same note in ads-environment.ts: a second copy anywhere, prose
  * included, is precisely the drift google-ads-tag-source.test.ts exists to
  * catch.
+ *
+ * THERE IS DELIBERATELY NO ROUTE-CHANGE PAGE VIEW, which is the one place this
+ * must not copy the other three. Their SDKs do not watch the History API, so
+ * each fires a manual event on navigation. gtag.js does watch it. Modelled on
+ * the other three, this component double-counted: one client-side navigation
+ * produced two hits to google.com/ccm/collect for the same URL — ours carrying
+ * `ep.page_path`, and gtag's own carrying `ae=a`. Suppressing only ours left
+ * exactly one hit still arriving, which is what proves the second is gtag's and
+ * not a retry. The `config` call handles the whole SPA story.
  */
 
 // Single source of truth, shared with any future server-side leg.
@@ -70,26 +85,71 @@ declare global {
   }
 }
 
+/**
+ * Consent Mode v2 signals, in both states.
+ *
+ * All four are named explicitly in both objects rather than spreading a base:
+ * an unnamed signal keeps whatever it had, so a partial update is how a granted
+ * signal survives a withdrawal. Being exhaustive is what makes Decline mean
+ * Decline.
+ */
+const CONSENT_GRANTED = {
+  ad_storage: "granted",
+  ad_user_data: "granted",
+  ad_personalization: "granted",
+  analytics_storage: "granted",
+} as const;
+
+const CONSENT_DENIED = {
+  ad_storage: "denied",
+  ad_user_data: "denied",
+  ad_personalization: "denied",
+  analytics_storage: "denied",
+} as const;
+
 export function GoogleAdsTag() {
-  const [accepted, setAccepted] = useState(false);
+  // undefined = storage not read yet. Distinguished from `false` so the consent
+  // update is not sent before the answer is known: a visitor who accepted on a
+  // previous page would otherwise get a denied update on every load, racing the
+  // granted one a tick later.
+  const [accepted, setAccepted] = useState<boolean | undefined>(undefined);
+
   /**
-   * K-16. Consent is necessary and NOT sufficient: a preview deployment, a local
-   * run, a CI job or a Playwright script must never reach the live ad account,
-   * because the tag id falls back to a production value. See
-   * src/lib/ads/ads-environment.ts.
+   * K-16, with ONE documented exception.
    *
-   * Resolved in an effect rather than during render, and starting FALSE, for the
-   * same reason `accepted` is: two of its inputs (location.hostname,
-   * navigator.webdriver) exist only in the browser, so deciding during render
-   * would make the server and the client disagree and React would hydrate onto
-   * different markup. Starting closed also means the safe answer is the one that
-   * survives a hydration failure.
+   * The environment gate exists so a preview deployment, a local run or a CI job
+   * never reports into the live ad account — the tag id falls back to the
+   * production account, so absence of a check means junk data trains the real
+   * bid optimiser. Those refusals are kept in full.
+   *
+   * The exception is `automated_browser`. That rule refuses any browser setting
+   * navigator.webdriver, which is what Google's own installation check drives —
+   * so honouring it here would mean the tag can never be verified as installed,
+   * on a correctly installed tag, forever. It is tolerated ONLY when it is the
+   * sole reason: a preview deployment driven by Playwright is still refused,
+   * because `not_production_environment` is reported first (see the ordering
+   * note in ads-environment.ts, which is why reading one reason is safe).
+   *
+   * What an automated browser can contribute is bounded by Consent Mode: it does
+   * not click Accept, so it stays denied and produces a cookieless ping with no
+   * identifier. No conversion is wired at all.
+   *
+   * This is a code-level, per-integration distinction, not an env var. The "no
+   * override" rule in ads-environment.ts is about a switch a mistyped Vercel
+   * variable could flip; nothing in a deployment's configuration reaches this.
+   *
+   * Resolved in an effect rather than during render, and starting FALSE, because
+   * two of its inputs (location.hostname, navigator.webdriver) exist only in the
+   * browser: deciding during render would make the server and client disagree
+   * and React would hydrate onto different markup. Starting closed also means
+   * the safe answer survives a hydration failure.
    */
-  const [adsAllowed, setAdsAllowed] = useState(false);
+  const [envAllowed, setEnvAllowed] = useState(false);
 
   useEffect(() => {
+    const verdict = browserAdsReportingAllowed();
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setAdsAllowed(browserAdsReportingAllowed().allowed);
+    setEnvAllowed(verdict.allowed || verdict.reason === "automated_browser");
   }, []);
 
   useEffect(() => {
@@ -98,28 +158,18 @@ export function GoogleAdsTag() {
     return subscribeToConsent(sync);
   }, []);
 
-  // THERE IS DELIBERATELY NO ROUTE-CHANGE PAGE VIEW HERE, AND THIS IS THE ONE
-  // PLACE THIS COMPONENT MUST NOT COPY THE OTHER THREE PIXELS.
+  // Mirror the visitor's choice into the tag, now and on every later change.
   //
-  // TikTok, Snap and Reddit each need a manual event on navigation: their SDKs
-  // do not watch the History API, so in a single-page app every visit would
-  // otherwise report exactly one page view however much of the site someone
-  // read. All three components do that, correctly.
-  //
-  // gtag.js does watch it. Modelling this component on the other three added
-  // `gtag('event','page_view')` on every route change, and it DOUBLE-COUNTED:
-  // measured against the live tag, one client-side navigation produced two
-  // hits to google.com/ccm/collect for the same URL — ours carrying
-  // `ep.page_path`, and gtag's own carrying `ae=a`. Suppressing only ours left
-  // exactly one hit still arriving, which is what proves the second is gtag's
-  // and not a retry.
-  //
-  // So the whole of the SPA story is handled by the `config` call below.
-  // Re-adding a manual page_view here inflates page views and remarketing-list
-  // membership for the account; google-ads-tag-source.test.ts guards it.
+  // Runs on withdrawal as well as on grant: someone who accepts and later
+  // declines — here or in another tab, which subscribeToConsent also covers —
+  // must go back to denied rather than keep the grant for the rest of the
+  // session.
+  useEffect(() => {
+    if (!envAllowed || accepted === undefined) return;
+    window.gtag?.("consent", "update", accepted ? CONSENT_GRANTED : CONSENT_DENIED);
+  }, [envAllowed, accepted]);
 
-  if (!adsAllowed) return null;
-  if (!accepted) return null;
+  if (!envAllowed) return null;
 
   return (
     <>
@@ -132,6 +182,15 @@ export function GoogleAdsTag() {
         {`
   window.dataLayer = window.dataLayer || [];
   function gtag(){dataLayer.push(arguments);}
+
+  gtag('consent', 'default', {
+    'ad_storage': 'denied',
+    'ad_user_data': 'denied',
+    'ad_personalization': 'denied',
+    'analytics_storage': 'denied',
+    'wait_for_update': 500
+  });
+
   gtag('js', new Date());
 
   gtag('config', '${GOOGLE_ADS_TAG_ID}');

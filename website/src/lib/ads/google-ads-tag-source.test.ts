@@ -5,20 +5,22 @@ import { describe, expect, it } from "vitest";
 /**
  * Repository invariants for the Google Ads tag.
  *
- * Google's install screen hands you a snippet with the instruction "copy and
- * paste it in the code of every page of your website, immediately after the
- * <head> element". Followed literally on this site that would be a defect, not
- * a feature: it runs the tag for the visitor who just chose Decline on a banner
- * promising our advertising pixels load only if they accept. So the three
- * mistakes this file exists to catch are all mistakes a correct-looking paste
- * would make:
+ * This tag is installed the way Google's install screen describes — present on
+ * every page — rather than held back until Accept like the other three pixels.
+ * Consent Mode is what does the privacy work instead, so the invariants that
+ * matter here are different from the ones in snap-pixel-source.test.ts:
  *
- * - the tag loading before consent, or outside production;
- * - a second `config` for the same account somewhere, double-counting every
+ * - every storage signal must DEFAULT TO DENIED, and the default must be set
+ *   BEFORE `config`; a default set afterwards is applied too late and the first
+ *   hit goes out granted, which is the whole failure this file exists to stop;
+ * - Decline and a later withdrawal must both reach the tag as a denied update;
+ * - a second `config` for the same account somewhere would double-count every
  *   page view and every remarketing hit;
  * - Enhanced Conversions' `user_data` arriving with a raw email address, which
  *   Google's own console actively offers and which would hand a third party a
- *   customer's address from code running in their browser.
+ *   customer's address from code running in their browser;
+ * - the non-production environment refusals must stay in force, so a preview
+ *   deployment or a CI job never reports into the live ad account.
  *
  * None of these show up in a unit test of any individual module, so they are
  * asserted against the source tree itself — the same approach, and mostly the
@@ -27,7 +29,6 @@ import { describe, expect, it } from "vitest";
 
 const SRC = join(process.cwd(), "src");
 const GOOGLE_TAG = join(SRC, "components", "google-ads-tag.tsx");
-const SNAP_PIXEL = join(SRC, "components", "snap-pixel.tsx");
 
 function sourceFiles(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -109,13 +110,25 @@ describe("exactly one Google Ads data source", () => {
   });
 });
 
+/**
+ * Enhanced Conversions' identity payload, told apart from the Consent Mode
+ * signal that shares most of its name.
+ *
+ * `ad_user_data` is a consent SIGNAL — it grants or denies permission and
+ * carries nothing about anyone, and it is required to be present. `user_data`
+ * is the Enhanced Conversions PAYLOAD, which is where a raw email address or
+ * phone number would travel. A plain substring check cannot tell them apart and
+ * would force the consent signal out of the snippet to stay green.
+ */
+const ENHANCED_CONVERSIONS_PAYLOAD = /(?<!ad_)\buser_data\b/;
+
 describe("no customer identity is ever handed to Google", () => {
   it("never ships Enhanced Conversions' user_data field", () => {
     // Google's console offers this next to the snippet itself. Pasted as
     // offered it sends a raw email address or phone number to Google from the
     // visitor's own browser, on every page that fires a conversion.
     const snippet = injectedSnippet();
-    expect(snippet).not.toContain("user_data");
+    expect(snippet).not.toMatch(ENHANCED_CONVERSIONS_PAYLOAD);
     expect(snippet).not.toMatch(/email|phone_number|address/i);
   });
 
@@ -131,15 +144,14 @@ describe("no customer identity is ever handed to Google", () => {
     for (const path of files) {
       const source = executableSource(path);
       if (!source.includes("gtag")) continue;
-      expect(source, `${relative(path)} builds a user_data payload near gtag`).not.toContain("user_data");
+      expect(source, `${relative(path)} builds a user_data payload near gtag`).not.toMatch(ENHANCED_CONVERSIONS_PAYLOAD);
       expect(source, `${relative(path)} constructs a raw email for gtag`).not.toMatch(/["']?user_email["']?\s*:/);
     }
   });
 });
 
-describe("the Google tag is gated exactly like the other three pixels", () => {
+describe("Consent Mode is what protects a visitor who has not accepted", () => {
   const google = read(GOOGLE_TAG);
-  const snap = read(SNAP_PIXEL);
 
   it("reads the same stored consent key as every other tracker", () => {
     // Asserted as a SHARED IMPORT rather than as a matching string literal: a
@@ -151,37 +163,72 @@ describe("the Google tag is gated exactly like the other three pixels", () => {
     expect(google).not.toContain('"vl_cookie_consent"');
   });
 
-  it("renders nothing at all until consent is recorded", () => {
-    // Not a denied consent-mode default, not a disabled cookie: gtag.js is
-    // never fetched, so there is no request to Google for someone who declined.
-    expect(google).toContain("if (!accepted) return null;");
-    expect(snap).toContain("if (!accepted) return null;");
+  it("denies every storage signal by default", () => {
+    // Exhaustive on purpose. gtag leaves an unnamed signal at whatever it had,
+    // so omitting one here is how it silently ships granted.
+    const snippet = injectedSnippet();
+    const defaultBlock = snippet.slice(snippet.indexOf("gtag('consent', 'default'"));
+    for (const signal of ["ad_storage", "ad_user_data", "ad_personalization", "analytics_storage"]) {
+      expect(defaultBlock, `${signal} is missing from the consent default`).toContain(signal);
+    }
+    // No signal may be granted in the default block.
+    const upToConfig = defaultBlock.slice(0, defaultBlock.indexOf("gtag('config'"));
+    expect(upToConfig).not.toContain("granted");
   });
 
-  it("starts from declined rather than assuming consent while it checks", () => {
-    expect(google).toContain("useState(false)");
+  it("sets the consent default BEFORE config, not after", () => {
+    // The ordering IS the control. A default applied after config is too late:
+    // the first hit has already gone out granted, and nothing in the ad account
+    // shows that it did.
+    const snippet = injectedSnippet();
+    const consentAt = snippet.indexOf("gtag('consent', 'default'");
+    const configAt = snippet.indexOf("gtag('config'");
+    expect(consentAt, "the consent default is missing entirely").toBeGreaterThan(-1);
+    expect(configAt).toBeGreaterThan(-1);
+    expect(consentAt).toBeLessThan(configAt);
   });
 
-  it("reacts to consent being granted later in the visit", () => {
-    expect(google).toContain("subscribeToConsent(sync)");
+  it("grants only on an accept, and returns to denied on a withdrawal", () => {
+    // A withdrawal that only reaches the tab it was made in is not a withdrawal,
+    // and a grant that survives one is worse. Both directions run through the
+    // same effect, so neither can be dropped without the other.
+    const source = executableSource(GOOGLE_TAG);
+    expect(source).toMatch(/gtag\?\.\(\s*["']consent["']\s*,\s*["']update["']/);
+    expect(source).toContain("accepted ? CONSENT_GRANTED : CONSENT_DENIED");
+    expect(source).toContain("subscribeToConsent(sync)");
+    for (const signal of ["ad_storage", "ad_user_data", "ad_personalization", "analytics_storage"]) {
+      const denied = source.slice(source.indexOf("CONSENT_DENIED = {"));
+      expect(denied, `${signal} is missing from CONSENT_DENIED`).toContain(signal);
+    }
   });
 
-  it("refuses to report from anywhere but production (K-16)", () => {
-    // The id falls back to the live account, so consent alone would let a
-    // preview deployment, a local run, a CI job or a Playwright script train
-    // the real bid optimiser. Same gate, same chokepoint, as the other three.
+  it("does not send a consent update before it has read the stored answer", () => {
+    // `accepted` starts undefined rather than false. Starting false would send a
+    // denied update on every load for a visitor who had already accepted, racing
+    // the granted one a tick later.
+    const source = executableSource(GOOGLE_TAG);
+    expect(source).toContain("useState<boolean | undefined>(undefined)");
+    expect(source).toContain("accepted === undefined) return;");
+  });
+
+  it("keeps the non-production refusals in force (K-16)", () => {
+    // The id falls back to the live account, so without this a preview
+    // deployment, a local run or a CI job trains the real bid optimiser.
     expect(google).toContain("browserAdsReportingAllowed()");
-    expect(google).toContain("if (!adsAllowed) return null;");
+    expect(google).toContain("if (!envAllowed) return null;");
   });
 
-  it("does not implement consent mode's default-denied pings", () => {
-    // Deliberate, and the reasoning is in the component header. `denied` does
-    // not stop the tag: it loads gtag.js anyway and sends cookieless pings so
-    // Google can model what it was not allowed to observe. That is MORE contact
-    // with Google for a declining visitor than we promise, so the stronger
-    // guarantee — never loading — is the one we keep. Turning this on requires
-    // the Cookie Policy sentence below to change in the same edit.
-    expect(injectedSnippet()).not.toMatch(/gtag\('consent'/);
+  it("tolerates the automated-browser refusal, and ONLY that one", () => {
+    // Google's own installation check drives an automated browser, so honouring
+    // that rule would mean a correctly installed tag can never be verified.
+    // Tolerating it as the SOLE reason is what keeps a Playwright run against a
+    // preview refused: ads-environment.ts reports the broadest reason first, so
+    // `not_production_environment` wins there.
+    const source = executableSource(GOOGLE_TAG);
+    expect(source).toContain('verdict.reason === "automated_browser"');
+    for (const reason of ["not_production_environment", "not_production_build", "non_production_host"]) {
+      expect(source, `${reason} must not be tolerated`).not.toContain(reason);
+    }
   });
 
   it("sends no manual page view on navigation, because gtag already does", () => {
@@ -239,23 +286,45 @@ describe("the disclosure names Google", () => {
     expect(legal).not.toMatch(/do not run[^.]*Google Ads tag/);
   });
 
-  it("keeps the decline promise true for Google too", () => {
-    // Asserts the PROMISE, not one word order — see the same note on the Snap
-    // and Reddit tests. Every platform the site loads a tag for has to appear
-    // in the sentence that says declining stops it.
+  it("never sweeps Google into the three pixels' \"nothing loads\" promise", () => {
+    // THE ONE WAY THESE POLICIES CAN BECOME FALSE.
+    //
+    // The three pixels genuinely are not loaded before Accept, and both policies
+    // say so. The Google tag IS loaded, on every page, with consent mode denying
+    // its storage instead. Every sentence promising that nothing loads must
+    // therefore name only the three — a later edit that tidies the two
+    // paragraphs into one publishes a false statement about a live tag.
     for (const promise of legal.match(/no request (?:is made to|reaches)[^.]*/gi) ?? []) {
-      for (const platform of ["TikTok", "Snap", "Reddit", "Google"]) {
+      for (const platform of ["TikTok", "Snap", "Reddit"]) {
         expect(promise, `the decline promise does not name ${platform}`).toContain(platform);
       }
+      expect(promise, "Google is inside a \"nothing reaches\" promise, which is false").not.toContain("Google");
     }
-    expect(legal.match(/no request (?:is made to|reaches)[^.]*/gi) ?? []).toHaveLength(2);
+    // Same trap, stated the other way round.
+    expect(legal).not.toMatch(/none of (them|these|the four)[^.]*(is|are) ever loaded[^.]*Google/i);
+    expect(legal).not.toMatch(/the Google tag included/);
+  });
+
+  it("says plainly that the tag loads whatever the visitor chooses", () => {
+    // Understating this is the failure mode: a policy that implies the tag is
+    // held back is worse than one that admits it is not.
+    expect(legal).toMatch(/loads on every page|present on every page|loads either way/i);
+    expect(legal).toMatch(/denied/);
+    expect(legal).toMatch(/cookieless/i);
   });
 
   it("does not claim Google receives shopping actions it is never sent", () => {
     // No conversion action is wired: `config` records the page view and the
     // remarketing hit and that is all. If a purchase conversion is added later,
     // this policy sentence has to change in the same edit.
-    expect(legal).toMatch(/the Google tag gets page views and nothing else/);
+    expect(legal).toMatch(/does not report shopping actions at all/);
+    expect(legal).toMatch(/never told about shopping actions/);
+  });
+
+  it("tells the visitor on the banner that Google is not held back", () => {
+    // The banner is where the choice is actually made, so it carries the same
+    // distinction rather than deferring all of it to the policy page.
+    expect(banner).toMatch(/Google Ads tag loads either way/);
   });
 });
 
