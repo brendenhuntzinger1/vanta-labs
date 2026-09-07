@@ -197,7 +197,7 @@ async function seedCatalogue() {
 async function seedPromotion() {
   const promotions = [{
     id: "buy-2-get-1-free", name: "Buy 2 Get 1 Free", enabled: true, hidden: false, priority: 50,
-    startsAt: null, endsAt: null, buyQuantity: 2, getQuantity: 1, rewardPercent: 100,
+    startsAt: null, endsAt: "2026-09-15T03:59:59.000Z", buyQuantity: 2, getQuantity: 1, rewardPercent: 100,
     eligibility: { includeSlugs: [], excludeSlugs: [] },
     maxRedemptions: null, perCustomerLimit: null, maxRewardUnitsPerOrder: null,
     stackWithCoupon: false, stackWithBundlePricing: false,
@@ -439,6 +439,9 @@ async function main() {
       assert(/Free shipping/i.test(body), "free shipping is not stated");
       assert(/2-day shipping, on us/i.test(body), "the expedited-shipping promise is not stated");
       assert(/Buy 2 Get 1 Free/i.test(body), "the live promotion is not mentioned");
+      assert(/runs through September 14/i.test(body), "the sale's real end date is not stated");
+      assert(/limited-time/i.test(body), "the sale is not described as limited-time");
+      assert(/reserved for you through September/i.test(body), "the gift's own expiry is not stated");
     });
 
     await step("claims nothing the store has not actually committed to", async () => {
@@ -449,8 +452,14 @@ async function main() {
       // gets a brand into trouble.
       const copy = `${message.subject} ${message.text ?? message.html}`.toLowerCase();
       const recorded = ["2-day shipping, on us"].map((perk) => perk.toLowerCase());
+      // "limited-time" is allowed ONLY because the live promotion now carries an
+      // endsAt the checkout enforces. Assert the date is really there rather
+      // than trusting the adjective, which is the half that can lie.
+      if (copy.includes("limited-time")) {
+        assert(/runs through [a-z]+ \d{1,2}/.test(copy), "says limited-time without naming the date it ends");
+      }
       const invented = [
-        "limited time", "limited-time", "last chance", "hurry", "act now",
+        "last chance", "hurry", "act now",
         "while supplies last", "selling out", "only a few",
         "guaranteed", "purity", "99%", "sterile", "fda",
         "overnight", "next day", "same day",

@@ -467,7 +467,20 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
     try {
       const live = await getApplicableBxgyPromotions({ customerEmail: cart.email });
       const headline = live.find((promotion) => !promotion.hidden) ?? live[0];
-      if (headline) promotionNote = `Our ${headline.name} offer is still running where eligible.`;
+      if (headline) {
+        // THE DEADLINE COMES OFF THE PROMOTION ROW, not out of the copy. So
+        // "limited time" is only ever said when the store genuinely holds an
+        // end date, and the date shown is the one the checkout stops honouring
+        // the promotion at. Clear the endsAt and this sentence loses its
+        // deadline by itself rather than going stale in a template.
+        const endsAt = headline.endsAt ? new Date(headline.endsAt) : null;
+        const endsOn = endsAt && Number.isFinite(endsAt.getTime())
+          ? endsAt.toLocaleDateString("en-US", { month: "long", day: "numeric", timeZone: "America/New_York" })
+          : null;
+        promotionNote = endsOn
+          ? `Our ${headline.name} offer runs through ${endsOn} \u2014 a limited-time sale.`
+          : `Our ${headline.name} offer is still running where eligible.`;
+      }
     } catch {
       // The message is about the gift; a missing mention is not worth failing on.
     }

@@ -1910,6 +1910,13 @@ export function cartRecoveryGiftTemplate(input: {
     ? `Your ${leadItem.name.replace(/\s*\(.*\)\s*$/, "").trim()} + ${input.giftLabel}`
     : `${input.giftLabel}, on us`;
   const perkLine = perks.length ? `${perks.join(". ")}.` : "";
+  // THE ONE DEADLINE IN THIS MESSAGE IS A REAL ONE. It is the entitlement's own
+  // expiry, lifted out of describeOfferTerms — the same date customer_offers
+  // stores and the checkout enforces — so a shopper who arrives after it is
+  // refused by the till exactly as the line said they would be. Nothing else in
+  // here is allowed to carry a date: a deadline the store does not hold is
+  // manufactured scarcity, whatever the copy says.
+  const deadline = /through ([A-Z][a-z]+ \d{1,2}, \d{4})/.exec(input.offerTerms)?.[1] ?? null;
   return {
     subject,
     html: renderLayout({
@@ -1927,7 +1934,10 @@ export function cartRecoveryGiftTemplate(input: {
         + promoHtml
         + giftHtml
         + cartSummaryHtml(input.items, input.cartValueCents)
-        + `<p style="margin-top:14px;color:#a1a1aa;">Pick up exactly where you left off.</p>`,
+        + (deadline
+          ? `<p style="margin-top:14px;color:#a1a1aa;">Your ${escapeHtml(input.giftLabel.toLowerCase())} are reserved for you through <strong style="color:#ffffff;">${escapeHtml(deadline)}</strong>.</p>`
+          : "")
+        + `<p style="margin-top:10px;color:#a1a1aa;">Pick up exactly where you left off.</p>`,
       // NOT lower-cased: "Claim my 2 free bac water" reads like a typo, and
       // the label is a product name the brand capitalises everywhere else.
       ctaLabel: `Claim my ${input.giftLabel}`,
@@ -1946,6 +1956,7 @@ export function cartRecoveryGiftTemplate(input: {
       "",
       ...cartSummaryText(input.items, input.cartValueCents),
       "",
+      deadline ? `Reserved for you through ${deadline}.` : null,
       "Pick up exactly where you left off.",
       `Claim it here: ${input.restoreUrl}`,
       "",
