@@ -1,0 +1,103 @@
+import "server-only";
+
+import { supabaseAdmin } from "@/lib/supabase-server";
+import { isOfferKey, type OfferKey } from "@/lib/offers/customer-offers";
+import type { RecoveryStage } from "@/lib/cart-recovery";
+
+/**
+ * Per-cart replacements for one stage of the recovery sequence.
+ *
+ * See cart-recovery-stage-overrides.sql for why this replaces a body rather
+ * than adding a send. The short version: the sweep's claim on
+ * (abandoned_cart_id, stage) is what makes a stage send exactly once, and an
+ * override rides inside that claim instead of around it — so it inherits every
+ * idempotency property the sequence already has rather than needing its own.
+ */
+export interface CartRecoveryOverride {
+  cartId: string;
+  stage: RecoveryStage;
+  /** The gift to mint behind the stage claim, or null for a body-only change. */
+  offerKey: OfferKey | null;
+  note: string | null;
+}
+
+/**
+ * Every override for the carts this sweep is about to work on.
+ *
+ * ONE READ FOR THE WHOLE SWEEP, keyed `cartId::stage`, for the same reason the
+ * claimed stages and the paid orders are read in bulk: a per-cart query inside
+ * the send loop turns a 200-cart sweep into 200 round trips.
+ *
+ * A FAILURE HERE IS NOT A FAILURE OF THE SWEEP. If the table cannot be read —
+ * an un-migrated database, a transport blip — every cart simply has no
+ * override and the ordinary sequence goes out. That is the safe direction:
+ * the shopper gets the normal reminder rather than nothing, and the override
+ * is still there for the next sweep. It is logged rather than swallowed,
+ * because "the gift silently stopped being attached" must not be invisible.
+ */
+export async function loadCartRecoveryOverrides(
+  cartIds: readonly string[],
+): Promise<Map<string, CartRecoveryOverride>> {
+  const found = new Map<string, CartRecoveryOverride>();
+  const ids = [...new Set(cartIds.map(String).filter(Boolean))];
+  if (ids.length === 0) return found;
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("cart_recovery_stage_overrides")
+      .select("abandoned_cart_id, stage, offer_key, note")
+      .in("abandoned_cart_id", ids);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      const cartId = String(row.abandoned_cart_id ?? "");
+      const stage = String(row.stage ?? "") as RecoveryStage;
+      if (!cartId || !stage) continue;
+      const rawKey = row.offer_key === null || row.offer_key === undefined ? null : String(row.offer_key);
+      // AN UNKNOWN KEY IS NOT A GIFT OF NOTHING, it is a row naming a
+      // catalogue entry that has since been retired. Dropping the whole
+      // override sends the ordinary reminder; honouring it with a null offer
+      // would send bespoke copy promising a gift that cannot be minted.
+      if (rawKey !== null && !isOfferKey(rawKey)) {
+        console.error("[cart-recovery] override names an unknown offer key; ignoring it", cartId, stage, rawKey);
+        continue;
+      }
+      found.set(`${cartId}::${stage}`, {
+        cartId,
+        stage,
+        offerKey: rawKey as OfferKey | null,
+        note: row.note === null || row.note === undefined ? null : String(row.note),
+      });
+    }
+  } catch (error) {
+    console.error("[cart-recovery] stage overrides unavailable; sending the ordinary sequence", error);
+    return new Map();
+  }
+  return found;
+}
+
+/**
+ * Record that a replaced stage went out.
+ *
+ * Observability, not control. `abandoned_cart_emails` is what stops a second
+ * send; nothing reads this back to decide whether to send, and the template
+ * lookup deliberately ignores it — a re-attempted send must carry the same
+ * bespoke body, never quietly revert to the generic one. Best-effort for the
+ * same reason: failing to write a breadcrumb must not fail a send that already
+ * happened.
+ */
+export async function markCartRecoveryOverrideConsumed(input: {
+  cartId: string;
+  stage: RecoveryStage;
+  reservationId: string;
+}): Promise<void> {
+  try {
+    await supabaseAdmin
+      .from("cart_recovery_stage_overrides")
+      .update({ consumed_at: new Date().toISOString(), consumed_email_id: input.reservationId })
+      .eq("abandoned_cart_id", input.cartId)
+      .eq("stage", input.stage)
+      .is("consumed_at", null);
+  } catch (error) {
+    console.error("[cart-recovery] could not stamp override as consumed", input.cartId, input.stage, error);
+  }
+}

@@ -1830,6 +1830,88 @@ export function cartRecoveryT12hTemplate(input: { name: string; items: Array<{ n
 }
 
 /**
+ * A recovery stage that carries an entitlement instead of a plain reminder.
+ *
+ * Used where a named cart has its stage replaced (cart-recovery-overrides.ts).
+ * It is a SIBLING of the reminders above, not a variant of them: same layout,
+ * same button, same footer, so nothing global changes and every standards test
+ * that holds the others holds this.
+ *
+ * EVERY CLAIM IN IT IS PASSED IN, NOT WRITTEN HERE. `giftLabel` and
+ * `offerTerms` come from the offer catalogue via describeOfferTerms — the same
+ * text the till enforces — and `promotionNote` is only ever set by a caller
+ * that has re-read the live promotion configuration. The template states no
+ * deadline, no scarcity, no shipping speed and no price of its own: the only
+ * figure it prints is the cart's own total, which is the figure the cart shows.
+ *
+ * The fields are documented HERE rather than inline because
+ * templates-sweep.test.ts builds its fixture by parsing this signature's text,
+ * and a comment between the braces silently drops every field after it:
+ *
+ *   giftLabel      e.g. "2 free BAC Water" — the offer catalogue's own label.
+ *   offerTerms     describeOfferTerms output: what the checkout will do.
+ *   promotionNote  a live promotion worth mentioning, or null. Never invented
+ *                  here — only ever passed by a caller that has just re-read
+ *                  the live promotion configuration.
+ */
+export function cartRecoveryGiftTemplate(input: {
+  name: string;
+  items: Array<{ name: string; quantity: number }>;
+  cartValueCents: number;
+  restoreUrl: string;
+  giftLabel: string;
+  offerTerms: string;
+  promotionNote?: string | null;
+}): EmailTemplate {
+  const hi = greeting(input.name);
+  const promoHtml = input.promotionNote
+    ? `<p style="margin:0 0 4px;">${escapeHtml(input.promotionNote)}</p>`
+    : "";
+  // The gift gets its own block because it is the reason for the message. A
+  // bordered row rather than a coloured banner: the layout is dark and a
+  // banner reads as an ad, which is the thing this brand does not do.
+  const giftHtml = `<table role="presentation" width="100%" style="margin:16px 0 4px;">`
+    + `<tr><td style="padding:14px 16px;border:1px solid rgba(255,255,255,0.14);border-radius:10px;">`
+    + `<span style="display:block;color:#a1a1aa;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;">Added to this order</span>`
+    + `<strong style="display:block;margin-top:4px;color:#ffffff;font-size:18px;">${escapeHtml(input.giftLabel)}</strong>`
+    + `</td></tr></table>`;
+  return {
+    subject: "We added something extra to your cart",
+    html: renderLayout({
+      preheader: `Come back and we will include ${input.giftLabel.toLowerCase()} on us.`,
+      titleHtml: "Your cart just got better",
+      bodyHtml: `${hi.html}`
+        + `<p style="margin:0 0 4px;">You left a few things behind, so here is one more reason to come back.</p>`
+        + promoHtml
+        + giftHtml
+        + cartSummaryHtml(input.items, input.cartValueCents)
+        + `<p style="margin-top:14px;color:#a1a1aa;">Your cart is ready when you are.</p>`,
+      ctaLabel: "Return to my cart",
+      ctaUrl: input.restoreUrl,
+      ctaVariant: "primary",
+      footerNoteHtml: escapeHtml(input.offerTerms),
+    }),
+    text: toText([
+      hi.text,
+      hi.text ? "" : null,
+      "You left a few things behind, so here is one more reason to come back.",
+      input.promotionNote ?? null,
+      "",
+      `Added to this order: ${input.giftLabel}`,
+      "",
+      ...cartSummaryText(input.items, input.cartValueCents),
+      "",
+      "Your cart is ready when you are.",
+      `Return to your cart: ${input.restoreUrl}`,
+      "",
+      input.offerTerms,
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
+/**
  * The second message carries no discount, and that is the point of it.
  *
  * Someone who has not finished checking out a research compound after a day

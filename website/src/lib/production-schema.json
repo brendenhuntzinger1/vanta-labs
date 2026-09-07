@@ -1444,5 +1444,14 @@
     "user_id",
     "product_slug",
     "created_at"
+  ],
+  "cart_recovery_stage_overrides": [
+    "abandoned_cart_id",
+    "stage",
+    "offer_key",
+    "note",
+    "created_at",
+    "consumed_at",
+    "consumed_email_id"
   ]
 }
