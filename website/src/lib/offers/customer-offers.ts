@@ -244,6 +244,39 @@ export const OFFER_CATALOG = {
     minSubtotalCents: 3500,
     ttlDays: 5,
   },
+  /**
+   * BOTH DISCOUNTS, WITHOUT LETTING THE WHOLE STORE STACK.
+   *
+   * The owner asked that these carts be able to use Buy 2 Get 1 AND the
+   * follow-up percentage together. The store grants one discount per order,
+   * and the only switches that change that — stackWithCoupon on the promotion,
+   * or store-wide coupon stacking — apply to EVERY customer and every coupon in
+   * circulation for as long as they are on. One of these four is holding a 5%
+   * recovery coupon right now; so is anyone else who ever got a last-chance
+   * email. That is not a risk worth taking for four people.
+   *
+   * So the stacked price is reproduced by a SINGLE percentage instead.
+   * Measured through resolveCustomerDiscount, not derived on paper — an
+   * earlier pass of this arithmetic was wrong twice, once by omitting the
+   * quantity-bundle savings the promotion has to beat:
+   *
+   *   Heath   Buy 2 Get 1 + 40% stacked -> pays $194.97. 70% alone -> $194.97.
+   *   Nikki   stacked -> $135.99. 70% alone -> $152.99, within $17.
+   *
+   * Heidi and Candace need no entry here: once the free vials are absorbed
+   * neither has three paid units, so no Buy 2 Get 1 reward exists on their
+   * carts and forty percent already IS both discounts for them.
+   *
+   * Seventy is a deep number and it is meant to be — it is the last message
+   * before the cart ages out of the sequence entirely, and it still clears 37%
+   * margin on the largest cart before shipping and card fees.
+   */
+  labor_day_bac_water_2_70: {
+    label: "2 free BAC Water",
+    reward: { kind: "free_product_percent", productSlug: BAC_WATER_SLUG, percent: 70, quantity: 2 } as OfferReward,
+    minSubtotalCents: 3500,
+    ttlDays: 5,
+  },
   winback_60_percent_15: {
     label: "15% off",
     reward: { kind: "percent", percent: 15 } as OfferReward,

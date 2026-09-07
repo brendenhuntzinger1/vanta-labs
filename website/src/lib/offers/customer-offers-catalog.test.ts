@@ -79,6 +79,7 @@ describe("every product gift points at a canonical slug", () => {
       "winback_60_bac_water_15",
       "labor_day_bac_water_2",
       "labor_day_bac_water_2_40",
+      "labor_day_bac_water_2_70",
     ]);
   });
 
