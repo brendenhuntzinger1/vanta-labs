@@ -250,7 +250,11 @@ describe("the replaced stage", () => {
     expect(state.sends).toHaveLength(1);
     expect(state.sends[0].campaignType).toBe("cart_recovery_t12h");
     expect(state.sends[0].templateKey).toBe("cartRecoveryGiftTemplate");
-    expect(state.sends[0].subject).toBe("We added something extra to your cart");
+    // THE SUBJECT NAMES WHAT THEY LEFT AND WHAT THEY GET. A generic line is
+    // the one thing a recovery email cannot afford: it is the only part most
+    // recipients ever read.
+    expect(state.sends[0].subject).toBe("Your BPC-157 + 2 free BAC Water");
+    expect(state.sends[0].subject.length).toBeLessThanOrEqual(60);
     // And nothing from the generic one.
     expect(state.sends[0].subject).not.toBe("Your cart is still saved");
     expect(state.sends[0].html).not.toContain("Still here when you are");

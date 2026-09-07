@@ -91,6 +91,7 @@ const PRODUCTS = [
 const CARTS = [
   {
     who: "Heath",
+    subjectItem: "HGH GH-191",
     stage: "t24h",
     id: "8e14335e-341d-4917-a8cd-e70c5a3ffb4f",
     email: "heathgreve402@gmail.com",
@@ -106,6 +107,7 @@ const CARTS = [
   },
   {
     who: "Heidi",
+    subjectItem: "GLP-3",
     stage: "t24h",
     id: "8d961db8-715a-4e9c-ad62-ddaf6d270811",
     email: "heidi.lrsn@gmail.com",
@@ -125,6 +127,7 @@ const CARTS = [
   },
   {
     who: "Nikki",
+    subjectItem: "GLP-3",
     id: "0f6c55a8-4b1c-4f8d-891a-f55344aec180",
     email: "nikkir1072@gmail.com",
     name: "Nikki",
@@ -146,6 +149,7 @@ const CARTS = [
   },
   {
     who: "Candace",
+    subjectItem: "B12",
     stage: "t24h",
     id: "70c07050-1b3b-43d2-84bc-703dbb6e173f",
     email: "candace.roush@gmail.com",
@@ -414,11 +418,17 @@ async function main() {
 
     await step("received the gift message, not the generic reminder", async () => {
       assert(message, `no message captured for ${cart.email}`);
+      // The subject has to name what THIS shopper left, not a generic line.
       assert(
-        message.subject === "We added something extra to your cart",
+        message.subject.includes(cart.subjectItem) && message.subject.includes("2 free BAC Water"),
         `subject was ${JSON.stringify(message.subject)}`,
       );
-      assert(!/still saved/i.test(String(message.html)), "the generic t12h body was sent");
+      assert(message.subject.length <= 60, `subject is ${message.subject.length} chars, too long to survive a phone`);
+      // Matched on the generic template's own headline, not on a stray phrase:
+      // "still saved" appears in the gift copy too, quite legitimately, and
+      // matching that made this assertion fire on the right email.
+      assert(!/Still here when you are/i.test(String(message.html)), "the generic reminder body was sent");
+      assert(/on us/i.test(String(message.html)), "this is not the gift body");
       return message.subject;
     });
 

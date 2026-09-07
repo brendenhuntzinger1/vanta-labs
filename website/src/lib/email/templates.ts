@@ -1898,18 +1898,39 @@ export function cartRecoveryGiftTemplate(input: {
     + `<strong style="display:block;margin-top:4px;color:#ffffff;font-size:18px;">${escapeHtml(input.giftLabel)}</strong>`
     + perksHtml
     + `</td></tr></table>`;
+  // THE SUBJECT NAMES WHAT THEY LEFT. It is the only part of this most people
+  // will ever read, and "we added something extra" says nothing they can act
+  // on. The lead item is the first line that is not the gift itself — someone
+  // who already has BAC Water in the basket should see the peptide they were
+  // actually deciding about, not the water.
+  const giftNoun = input.giftLabel.toLowerCase().replace(/^\d+\s+free\s+/, "").trim();
+  const leadItem = input.items.find((item) => !item.name.toLowerCase().includes(giftNoun))
+    ?? input.items[0];
+  const subject = leadItem
+    ? `Your ${leadItem.name.replace(/\s*\(.*\)\s*$/, "").trim()} + ${input.giftLabel}`
+    : `${input.giftLabel}, on us`;
+  const perkLine = perks.length ? `${perks.join(". ")}.` : "";
   return {
-    subject: "We added something extra to your cart",
+    subject,
     html: renderLayout({
-      preheader: `Come back and we will include ${input.giftLabel.toLowerCase()} on us.`,
-      titleHtml: "Your cart just got better",
+      // Everything the subject could not fit, in the line Gmail prints beside it.
+      // THE PROMOTION LEADS, because on a multi-unit cart it is worth many
+      // times the gift — and the preview line is the only other thing Gmail
+      // shows beside the subject. It appears only when the live resolver said
+      // one is genuinely running for this customer.
+      preheader: [input.promotionNote, perkLine, "Your cart is exactly as you left it."]
+        .filter((part): part is string => Boolean(part && part.trim()))
+        .join(" "),
+      titleHtml: `${escapeHtml(input.giftLabel)}, on us`,
       bodyHtml: `${hi.html}`
-        + `<p style="margin:0 0 4px;">You left a few things behind, so here is one more reason to come back.</p>`
+        + `<p style="margin:0 0 4px;">Your cart is still saved &mdash; and we have added to it.</p>`
         + promoHtml
         + giftHtml
         + cartSummaryHtml(input.items, input.cartValueCents)
-        + `<p style="margin-top:14px;color:#a1a1aa;">Your cart is ready when you are.</p>`,
-      ctaLabel: "Return to my cart",
+        + `<p style="margin-top:14px;color:#a1a1aa;">Pick up exactly where you left off.</p>`,
+      // NOT lower-cased: "Claim my 2 free bac water" reads like a typo, and
+      // the label is a product name the brand capitalises everywhere else.
+      ctaLabel: `Claim my ${input.giftLabel}`,
       ctaUrl: input.restoreUrl,
       ctaVariant: "primary",
       footerNoteHtml: escapeHtml(input.offerTerms),
@@ -1917,7 +1938,7 @@ export function cartRecoveryGiftTemplate(input: {
     text: toText([
       hi.text,
       hi.text ? "" : null,
-      "You left a few things behind, so here is one more reason to come back.",
+      "Your cart is still saved - and we have added to it.",
       input.promotionNote ?? null,
       "",
       `On this order: ${input.giftLabel}`,
@@ -1925,8 +1946,8 @@ export function cartRecoveryGiftTemplate(input: {
       "",
       ...cartSummaryText(input.items, input.cartValueCents),
       "",
-      "Your cart is ready when you are.",
-      `Return to your cart: ${input.restoreUrl}`,
+      "Pick up exactly where you left off.",
+      `Claim it here: ${input.restoreUrl}`,
       "",
       input.offerTerms,
       "",
