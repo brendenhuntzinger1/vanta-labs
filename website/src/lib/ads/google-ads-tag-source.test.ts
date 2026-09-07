@@ -29,6 +29,7 @@ import { describe, expect, it } from "vitest";
 
 const SRC = join(process.cwd(), "src");
 const GOOGLE_TAG = join(SRC, "components", "google-ads-tag.tsx");
+const GOOGLE_CONSENT = join(SRC, "components", "google-ads-consent.tsx");
 
 function sourceFiles(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -63,12 +64,12 @@ function executableSource(path: string): string {
     .join("\n");
 }
 
-/** The inline snippet actually injected into the page. */
+/** The inline snippet actually served in the HTML. */
 function injectedSnippet(): string {
   const source = read(GOOGLE_TAG);
-  const start = source.indexOf('<Script id="google-ads-tag"');
-  const end = source.indexOf("</Script>", start);
-  expect(start, "google-ads-tag.tsx no longer renders the inline <Script>").toBeGreaterThan(-1);
+  const start = source.indexOf("dangerouslySetInnerHTML");
+  expect(start, "google-ads-tag.tsx no longer renders the inline script").toBeGreaterThan(-1);
+  const end = source.indexOf("<GoogleAdsConsent", start);
   expect(end).toBeGreaterThan(start);
   return source.slice(start, end);
 }
@@ -77,6 +78,29 @@ describe("exactly one Google Ads data source", () => {
   it("configures the tag in exactly one place", () => {
     const loaders = files.filter((path) => /gtag\(\s*['"]config['"]/.test(read(path)));
     expect(loaders.map(relative)).toEqual(["src/components/google-ads-tag.tsx"]);
+  });
+
+  it("is rendered on the SERVER, so it reaches the HTML without JavaScript", () => {
+    // THE REASON GOOGLE'S INSTALL CHECK FAILED THE FIRST TIME.
+    //
+    // As a client component this emitted nothing into the served document: the
+    // tag only existed after React hydrated and an effect ran, so `curl` of a
+    // production page found no googletagmanager.com at all and Google reported
+    // the tag as not detected. Marking this file "use client" again puts it
+    // straight back.
+    const source = read(GOOGLE_TAG);
+    expect(source.startsWith('"use client"'), "google-ads-tag.tsx is a client component again").toBe(false);
+    expect(source).not.toContain("useEffect");
+    // The consent mirror is the half that legitimately needs the browser.
+    expect(read(GOOGLE_CONSENT).startsWith('"use client"')).toBe(true);
+  });
+
+  it("refuses a tag id that is not a Google Ads id", () => {
+    // The id is interpolated into an inline <script> and comes from an operator
+    // env var, so it is checked rather than trusted.
+    const source = read(GOOGLE_TAG);
+    expect(source).toContain("TAG_ID_SHAPE");
+    expect(source).toMatch(/\/\^AW-\\d\+\$\//);
   });
 
   it("injects gtag.js from exactly one place", () => {
@@ -101,12 +125,12 @@ describe("exactly one Google Ads data source", () => {
   it("is mounted once, globally, from the root layout", () => {
     const mounts = files.filter((path) => /<GoogleAdsTag\s*\/>/.test(read(path)));
     expect(mounts.map(relative)).toEqual(["src/app/layout.tsx"]);
-    // Grouped with the other three ad tags rather than mounted somewhere of its
-    // own. It does not itself need that Suspense boundary — it reads no search
-    // params, for the reason in the double-count test below — but keeping the
-    // four together is what stops one of them being missed by a change to the
-    // consent or environment gates they all share.
-    expect(read(join(SRC, "app", "layout.tsx"))).toContain("<RedditPixel />");
+    // First in the body, which is as close to Google's "immediately after the
+    // <head> element" as this layout gets, and ahead of the three client pixels
+    // rather than inside their Suspense boundary — it is server-rendered and
+    // needs neither.
+    const layout = read(join(SRC, "app", "layout.tsx"));
+    expect(layout.indexOf("<GoogleAdsTag />")).toBeLessThan(layout.indexOf("<RedditPixel />"));
   });
 });
 
@@ -152,15 +176,16 @@ describe("no customer identity is ever handed to Google", () => {
 
 describe("Consent Mode is what protects a visitor who has not accepted", () => {
   const google = read(GOOGLE_TAG);
+  const consent = read(GOOGLE_CONSENT);
 
   it("reads the same stored consent key as every other tracker", () => {
     // Asserted as a SHARED IMPORT rather than as a matching string literal: a
     // test that pins one copy of a magic string cannot tell "every tracker
     // agrees" from "this file happens to contain the same characters", which is
     // the drift the shared module removes.
-    expect(google).toContain('from "@/lib/cookie-consent-client"');
-    expect(google).toContain("hasAcceptedConsent()");
-    expect(google).not.toContain('"vl_cookie_consent"');
+    expect(consent).toContain('from "@/lib/cookie-consent-client"');
+    expect(consent).toContain("hasAcceptedConsent()");
+    expect(consent).not.toContain('"vl_cookie_consent"');
   });
 
   it("denies every storage signal by default", () => {
@@ -192,7 +217,7 @@ describe("Consent Mode is what protects a visitor who has not accepted", () => {
     // A withdrawal that only reaches the tab it was made in is not a withdrawal,
     // and a grant that survives one is worse. Both directions run through the
     // same effect, so neither can be dropped without the other.
-    const source = executableSource(GOOGLE_TAG);
+    const source = executableSource(GOOGLE_CONSENT);
     expect(source).toMatch(/gtag\?\.\(\s*["']consent["']\s*,\s*["']update["']/);
     expect(source).toContain("accepted ? CONSENT_GRANTED : CONSENT_DENIED");
     expect(source).toContain("subscribeToConsent(sync)");
@@ -206,29 +231,30 @@ describe("Consent Mode is what protects a visitor who has not accepted", () => {
     // `accepted` starts undefined rather than false. Starting false would send a
     // denied update on every load for a visitor who had already accepted, racing
     // the granted one a tick later.
-    const source = executableSource(GOOGLE_TAG);
+    const source = executableSource(GOOGLE_CONSENT);
     expect(source).toContain("useState<boolean | undefined>(undefined)");
     expect(source).toContain("accepted === undefined) return;");
   });
 
   it("keeps the non-production refusals in force (K-16)", () => {
     // The id falls back to the live account, so without this a preview
-    // deployment, a local run or a CI job trains the real bid optimiser.
-    expect(google).toContain("browserAdsReportingAllowed()");
-    expect(google).toContain("if (!envAllowed) return null;");
+    // deployment or a local run trains the real bid optimiser. Resolved through
+    // the shared decision function rather than by hand-rolling the comparison.
+    expect(google).toContain("adsReportingAllowed(");
+    expect(google).toContain("if (!tagIsPermittedHere()) return null;");
+    expect(google).toContain("process.env.VERCEL_ENV");
+    expect(google).toContain("process.env.NODE_ENV");
   });
 
-  it("tolerates the automated-browser refusal, and ONLY that one", () => {
-    // Google's own installation check drives an automated browser, so honouring
-    // that rule would mean a correctly installed tag can never be verified.
-    // Tolerating it as the SOLE reason is what keeps a Playwright run against a
-    // preview refused: ads-environment.ts reports the broadest reason first, so
-    // `not_production_environment` wins there.
+  it("does not gate the served tag on CI, which every Vercel build sets", () => {
+    // Deliberate, and the reasoning is on tagIsPermittedHere. Refusing on CI is
+    // right for a test runner and wrong for markup: Vercel sets CI=1 for every
+    // build, so any prerendered page would be served without the tag while
+    // request-rendered pages carried it. Production-ness is already established
+    // by VERCEL_ENV and NODE_ENV.
     const source = executableSource(GOOGLE_TAG);
-    expect(source).toContain('verdict.reason === "automated_browser"');
-    for (const reason of ["not_production_environment", "not_production_build", "non_production_host"]) {
-      expect(source, `${reason} must not be tolerated`).not.toContain(reason);
-    }
+    expect(source).not.toContain("process.env.CI");
+    expect(source).not.toContain("serverAdsReportingAllowed");
   });
 
   it("sends no manual page view on navigation, because gtag already does", () => {
