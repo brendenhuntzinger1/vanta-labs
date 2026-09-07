@@ -3,6 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getCartRecoveryControlConfig } from "@/lib/admin-control";
 import {
+  cartRecoveryGiftTemplate,
   cartRecoveryT30mTemplate,
   cartRecoveryT12hTemplate,
   cartRecoveryT24hTemplate,
@@ -15,6 +16,9 @@ import { getSiteUrl } from "@/lib/env";
 import { formatDisplayDate } from "@/lib/format-date";
 import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
 import { readAllRowsBounded } from "@/lib/supabase-page";
+import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
+import { describeOfferTerms, issueCustomerOffer, OFFER_CATALOG } from "@/lib/offers/customer-offers";
+import { loadCartRecoveryOverrides, markCartRecoveryOverrideConsumed } from "@/lib/cart-recovery-overrides";
 
 /**
  * Ceiling on the paged reads below. Matches the figure admin-email.ts uses for
@@ -382,7 +386,16 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
   // live code first, exactly as the sweep does (resolveLastChanceCoupon): a
   // second click used to mint a second stackable-by-order code for the same
   // cart, and every click after that another.
-  if (stage === "t72h") {
+  // A REPLACED STAGE CARRIES ITS GIFT HERE TOO.
+  //
+  // The sweep is not the only way a stage goes out: an operator can resend one,
+  // and a cart whose sequence has already run to the end can ONLY be reached
+  // this way. If the two paths disagreed about which template a replaced stage
+  // renders, the same cart would get the gift from the cron and the ordinary
+  // reminder from the button — so the lookup is the same lookup.
+  const override = (await loadCartRecoveryOverrides([cart.id])).get(`${cart.id}::${stage}`);
+
+  if (stage === "t72h" && !override) {
     const coupon = (await findLiveCouponForCart(cart.id))
       ?? (await mintCartRecoveryCoupon(cart.email, config.discountPercent, config.couponExpirationHours));
     if (coupon) {
@@ -422,8 +435,56 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
     rowId = inserted.id;
   }
 
-  const trackedRestoreUrl = `${getSiteUrl()}/api/email/track/click?id=${rowId}&url=${encodeURIComponent(restoreUrl(cart.id))}`;
+  // The gift is minted only once the tracking row exists, mirroring the sweep's
+  // claim-first order: a mint in front of it can be repeated by a failing send.
+  let offerToken: string | null = null;
+  if (override?.offerKey) {
+    const issued = await issueCustomerOffer({ email: cart.email, offerKey: override.offerKey, referenceId: cart.id });
+    offerToken = issued?.token ?? null;
+    if (!offerToken) {
+      return { success: false, error: "The gift for this cart could not be issued, so nothing was sent. Try again in a moment." };
+    }
+  }
+
+  const offerParam = offerToken ? `&o=${encodeURIComponent(offerToken)}` : "";
+  const trackedRestoreUrl = `${getSiteUrl()}/api/email/track/click?id=${rowId}&url=${encodeURIComponent(restoreUrl(cart.id))}${offerParam}`;
   const openTrackingPixelUrl = `${getSiteUrl()}/api/email/track/open?id=${rowId}`;
+
+  if (override) {
+    let promotionNote: string | null = null;
+    try {
+      const live = await getApplicableBxgyPromotions({ customerEmail: cart.email });
+      const headline = live.find((promotion) => !promotion.hidden) ?? live[0];
+      if (headline) promotionNote = `Our ${headline.name} offer is still running where eligible.`;
+    } catch {
+      // The message is about the gift; a missing mention is not worth failing on.
+    }
+    const result = await sendMarketingEmail({
+      to: cart.email,
+      campaignType,
+      referenceId: cart.id,
+      templateKey: "cartRecoveryGiftTemplate",
+      openTrackingPixelUrl,
+      claimedLogId,
+      guardUnavailable,
+      ...cartRecoveryGiftTemplate({
+        name, items, cartValueCents: cart.cart_value_cents,
+        restoreUrl: trackedRestoreUrl,
+        giftLabel: override.offerKey ? OFFER_CATALOG[override.offerKey].label : "",
+        offerTerms: override.offerKey
+          ? describeOfferTerms(
+              override.offerKey,
+              new Date(Date.now() + OFFER_CATALOG[override.offerKey].ttlDays * 24 * 60 * 60 * 1000).toISOString(),
+            )
+          : "",
+        promotionNote,
+      }),
+    });
+    if (result.success) {
+      await markCartRecoveryOverrideConsumed({ cartId: cart.id, stage, reservationId: rowId });
+    }
+    return result;
+  }
 
   if (stage === "t30m") {
     return sendMarketingEmail({

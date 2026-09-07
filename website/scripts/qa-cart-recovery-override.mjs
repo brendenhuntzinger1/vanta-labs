@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ---------------------------------------------------------------------------
-// THE THREE REPLACED CART-RECOVERY STAGES, END TO END, AS THE SHOPPER GETS THEM.
+// THE REPLACED CART-RECOVERY STAGES, END TO END, AS EACH SHOPPER GETS THEM.
 //
 // The unit tests prove the sweep picks the right template and cannot send
 // twice. They cannot prove the thing the owner is actually buying: that a real
@@ -12,8 +12,8 @@
 // variants, same real prices and product costs — the real cron endpoint runs,
 // the message is read out of the SMTP sink, and its CTA is clicked by Chromium.
 //
-// The three carts are three DIFFERENT shapes of the same gift, which is the
-// whole reason to run all three rather than one:
+// The carts are four DIFFERENT shapes of the same gift, which is the
+// whole reason to run all of them rather than one:
 //
 //   Heath    10 x HGH GH-191, no BAC Water in the cart
 //            -> two vials are ADDED. Buy 2 Get 1 must still free three of his
@@ -78,6 +78,7 @@ const PRODUCTS = [
   ] },
   { slug: "glp-3", name: "GLP-3", doses: [
     { id: "55544dc9-b7b6-4bf1-a2f4-50b62d0e6e49", label: "10mg", cents: 6999, cost: 1047, qty: 36, isDefault: true },
+    { id: "fcea0b5c-62f8-4e28-b9d0-a4898c28303c", label: "30mg", cents: 16999, cost: 1875, qty: 49 },
   ] },
   { slug: "bac-water", name: "BAC Water (0.9% Benzyl Alcohol)", doses: [
     { id: "06126d6b-bbc4-4ae3-bc99-d6a4119aa514", label: "10mL", cents: 1499, cost: 143, qty: 92, isDefault: true, tracked: false },
@@ -90,6 +91,7 @@ const PRODUCTS = [
 const CARTS = [
   {
     who: "Heath",
+    stage: "t24h",
     id: "8e14335e-341d-4917-a8cd-e70c5a3ffb4f",
     email: "heathgreve402@gmail.com",
     name: "Heath Greve",
@@ -104,6 +106,7 @@ const CARTS = [
   },
   {
     who: "Heidi",
+    stage: "t24h",
     id: "8d961db8-715a-4e9c-ad62-ddaf6d270811",
     email: "heidi.lrsn@gmail.com",
     name: "Heidi",
@@ -121,7 +124,29 @@ const CARTS = [
     expectPromotion: false,
   },
   {
+    who: "Nikki",
+    id: "0f6c55a8-4b1c-4f8d-891a-f55344aec180",
+    email: "nikkir1072@gmail.com",
+    name: "Nikki",
+    valueCents: 48416,
+    stage: "t72h",
+    items: [
+      { slug: "glp-3", name: "GLP-3", quantity: 3, unitPrice: 169.99, variantId: "fcea0b5c-62f8-4e28-b9d0-a4898c28303c" },
+      { slug: "bac-water", name: "BAC Water (0.9% Benzyl Alcohol)", quantity: 1, unitPrice: 14.99, variantId: "06126d6b-bbc4-4ae3-bc99-d6a4119aa514" },
+    ],
+    // THE PARTIAL-ABSORB SHAPE, and the only cart that has it: her one vial is
+    // freed and a second is added. Her three GLP-3 then stand alone as the paid
+    // units, which is exactly one Buy 2 Get 1 group — so the promotion frees one
+    // of them at full list ($169.99), beating the three-unit bundle tier.
+    expectMerchandise: 339.98,
+    expectShipping: 0,
+    expectFreeBac: 2,
+    expectBacUnits: 2,
+    expectPromotion: true,
+  },
+  {
     who: "Candace",
+    stage: "t24h",
     id: "70c07050-1b3b-43d2-84bc-703dbb6e173f",
     email: "candace.roush@gmail.com",
     name: "Candace Roush",
@@ -201,17 +226,23 @@ async function seedCarts() {
   await q("delete from customer_offers");
   await q("delete from email_send_log");
   for (const cart of CARTS) {
+    // Age the cart into ITS OWN stage's window, and claim every stage before
+    // it — otherwise the sweep picks the earliest unclaimed stage instead.
+    const ageHours = cart.stage === "t72h" ? 73 : 25;
+    const priorStages = cart.stage === "t72h" ? ["t30m", "t12h", "t24h"] : ["t30m", "t12h"];
     await q(
       `insert into abandoned_carts (id, session_id, email, customer_name, items, cart_value_cents,
          first_seen_at, last_updated_at, status, created_at)
-       values ($1, $2, $3, $4, $5, $6, now() - interval '13 hours', now() - interval '13 hours', 'active', now() - interval '13 hours')`,
-      [cart.id, `sess-${cart.id}`, cart.email, cart.name, JSON.stringify(cart.items), cart.valueCents],
+       values ($1, $2, $3, $4, $5, $6, now() - make_interval(hours => $7), now() - make_interval(hours => $7), 'active', now() - make_interval(hours => $7))`,
+      [cart.id, `sess-${cart.id}`, cart.email, cart.name, JSON.stringify(cart.items), cart.valueCents, ageHours],
     );
-    await q(
-      `insert into abandoned_cart_emails (abandoned_cart_id, stage, sent_at)
-       values ($1, 't30m', now() - interval '12 hours')`,
-      [cart.id],
-    );
+    for (const [index, stage] of priorStages.entries()) {
+      await q(
+        `insert into abandoned_cart_emails (abandoned_cart_id, stage, sent_at)
+         values ($1, $2, now() - make_interval(hours => $3))`,
+        [cart.id, stage, ageHours - index - 1],
+      );
+    }
   }
 }
 
@@ -219,8 +250,8 @@ async function seedOverrides() {
   for (const cart of CARTS) {
     await q(
       `insert into cart_recovery_stage_overrides (abandoned_cart_id, stage, offer_key, note)
-       values ($1, 't12h', 'labor_day_bac_water_2', 'harness')`,
-      [cart.id],
+       values ($1, $2, 'labor_day_bac_water_2', 'harness')`,
+      [cart.id, cart.stage],
     );
   }
 }
@@ -333,16 +364,16 @@ async function placeOrder(page, { email, items }) {
 }
 
 async function main() {
-  console.log("\nTHE THREE REPLACED STAGES, END TO END\n");
+  console.log("\nTHE REPLACED STAGES, END TO END\n");
 
   await step("seed the real catalogue rows", seedCatalogue);
   await step("configure Buy 2 Get 1 as production has it", seedPromotion);
-  await step("reproduce the three carts in their t12h window", seedCarts);
+  await step("reproduce each cart at its own stage", seedCarts);
   await step("add one override per cart, and nothing else", seedOverrides);
 
-  await step("EXACTLY three carts are eligible for a replaced stage", async () => {
+  await step("EXACTLY the named carts are eligible for a replaced stage", async () => {
     const { rows } = await q("select count(*)::int as n from cart_recovery_stage_overrides");
-    assert(rows[0].n === 3, `expected 3 override rows, found ${rows[0].n}`);
+    assert(rows[0].n === CARTS.length, `expected ${CARTS.length} override rows, found ${rows[0].n}`);
   });
 
   const mark = captureMark();
@@ -350,7 +381,7 @@ async function main() {
   await step("run the real cron sweep", async () => {
     sweep = await runSweep();
     const cart = sweep?.abandonedCarts ?? sweep?.cart ?? sweep;
-    return `t12h sent: ${JSON.stringify(cart?.t12hSent ?? cart)}`;
+    return `sent: ${JSON.stringify(cart)}`;
   });
 
   const emails = capturedSince(mark);
@@ -360,9 +391,9 @@ async function main() {
     if (!byRecipient.has(to)) byRecipient.set(to, message);
   }
 
-  await step("exactly three emails went out, one per cart", async () => {
+  await step("one message per cart, and no others", async () => {
     const relevant = emails.filter((m) => CARTS.some((c) => String(m.to ?? "").toLowerCase().includes(c.email)));
-    assert(relevant.length === 3, `expected 3 messages, captured ${relevant.length}: ${emails.map((m) => m.to).join(", ")}`);
+    assert(relevant.length === CARTS.length, `expected ${CARTS.length} messages, captured ${relevant.length}: ${emails.map((m) => m.to).join(", ")}`);
   });
 
   browser = await chromium.launch({
@@ -588,17 +619,22 @@ async function main() {
        group by 1, 2 having count(*) > 1`,
     );
     assert(rows.length === 0, `duplicate stage rows: ${JSON.stringify(rows)}`);
-    const { rows: t12h } = await q("select count(*)::int as n from abandoned_cart_emails where stage = 't12h'");
-    assert(t12h[0].n === 3, `expected 3 t12h rows, found ${t12h[0].n}`);
-    return "3 t12h claims, no duplicates";
+    for (const cart of CARTS) {
+      const { rows: own } = await q(
+        "select count(*)::int as n from abandoned_cart_emails where abandoned_cart_id = $1 and stage = $2",
+        [cart.id, cart.stage],
+      );
+      assert(own[0].n === 1, `${cart.who} holds ${own[0].n} ${cart.stage} claims`);
+    }
+    return `${CARTS.length} replaced-stage claims, no duplicates`;
   });
 
   await step("every override is stamped consumed, exactly once", async () => {
     const { rows } = await q(
       "select count(*) filter (where consumed_at is not null)::int as consumed, count(*)::int as total from cart_recovery_stage_overrides",
     );
-    assert(rows[0].consumed === 3 && rows[0].total === 3, `consumed ${rows[0].consumed} of ${rows[0].total}`);
-    return "3 of 3";
+    assert(rows[0].consumed === CARTS.length && rows[0].total === CARTS.length, `consumed ${rows[0].consumed} of ${rows[0].total}`);
+    return `${CARTS.length} of ${CARTS.length}`;
   });
 
   await step("no other cart was touched", async () => {
