@@ -262,20 +262,56 @@ Resend's own suppression list holds two addresses added by hard bounce on
 refuses them at the provider regardless. But our table should carry them for
 correctness and for provider portability. It is a two-row backfill.
 
-### 4.2 Confirm `RESEND_WEBHOOK_SIGNING_SECRET` is set in Vercel — please check
+### 4.2 `RESEND_WEBHOOK_SIGNING_SECRET` is NOT set — CONFIRMED, and it is the one open security item
 
 The webhook route supports Svix signature verification, but only when that
-variable is set. Without it, authentication binds to the URL and nothing else.
-The route's own header states the consequence, and it is worth repeating:
-possession of the webhook URL is **full write access to the suppression list** —
-one forged `email.complained` per address lands an unliftable suppression and
-flips that customer's marketing preference off, and addresses are guessable for
-any customer whose email is known.
+variable is set. **It is not set in production.** Established by probe against
+the live endpoint on 2026-09-07:
 
-I did not probe production to find out, because that would mean POSTing to a
-state-changing endpoint on the live store. Please confirm the variable is set;
-if it is not, set it from Resend → Webhooks → the endpoint → Signing Secret
-(a value beginning `whsec_`).
+| Probe | Response | Meaning |
+|---|---|---|
+| no secret at all | **401** | the URL secret is enforced |
+| correct URL secret, no Svix headers | 200 | unsigned deliveries pass **by design** — SendGrid sends none, and this endpoint serves both providers |
+| correct URL secret, **deliberately invalid** Svix signature | **200** | the signature is not being checked, so the variable is absent |
+
+The third row is the discriminator. With the signing secret set,
+`verifySvixSignature` returns `bad-signature` and the route answers 401; it
+answered 200. The second row is what makes a missing-header probe useless and is
+why the invalid-signature form was needed.
+
+**The probe wrote nothing.** Both requests carried a body with no `type` field
+beginning `email.` and no `event` field, so `parseDeliveryEvents` returns an
+empty array and the handler returns before `applyDeliveryEvents` is reached.
+Both responses were `{"received":0,"suppressed":0}`, which is that path
+reporting itself.
+
+**Consequence**, in the route's own words: authentication binds to the URL and
+nothing else. Possession of the webhook URL is **full write access to the
+suppression list** — one forged `email.complained` per address lands an
+unliftable suppression and flips that customer's marketing preference off, which
+they cannot undo from their account page by design. Addresses are guessable for
+any customer whose email is known. The URL is obtainable from the Resend
+dashboard, a proxy or CDN access log, or a screenshot of the webhook
+configuration.
+
+**The fix**, which needs the owner because this session has no Vercel token, no
+CLI and no environment-variable tool:
+
+    Vercel → vanta-labs → Settings → Environment Variables
+      Name         RESEND_WEBHOOK_SIGNING_SECRET
+      Value        the endpoint's signing secret, from
+                   Resend → Webhooks → this endpoint → Signing Secret
+                   (a value beginning `whsec_`)
+      Environment  Production
+
+Then redeploy — an environment variable only takes effect on a new build. The
+probe above re-run should answer **401** on the third row.
+
+**Rotate the URL secret at the same time.** It currently travels in the query
+string, where Resend's dashboard, proxies and CDN logs all record it, and its
+value reads like a personal password rather than a generated secret. The route
+already accepts the `x-email-webhook-secret` header form, which keeps it out of
+URLs entirely.
 
 **Related, and worth doing either way:** the webhook secret currently travels in
 the URL query string, where proxies, CDN logs and dashboard screenshots
@@ -343,8 +379,10 @@ the TypeScript language-server configuration, not email, and was left alone.
    since the endpoint was created; two pre-webhook bounces are missing (§4.1).
 9. **Are SPF/DKIM/DMARC and alignment correct in real DNS?** Yes — three
    resolvers, all three senders aligned on both mechanisms.
-10. **Anything configured in a way likely to damage reputation?** One item, and
-    it is an access-control risk rather than a sending one: §4.2.
+10. **Anything configured in a way likely to damage reputation?** One, confirmed
+    by probe: the webhook signing secret is not set, so the URL alone can write
+    to the suppression list (§4.2). It is an access-control risk rather than a
+    sending one, but a forged complaint is an unliftable suppression.
 11. **Are transactional emails isolated from marketing suppression?** Yes —
     proved by delivering an account confirmation to an address suppressed for
     marketing.
@@ -361,8 +399,9 @@ the TypeScript language-server configuration, not email, and was left alone.
 The automations and campaigns are demonstrated end to end and no known defect
 remains in them. Four things are honestly short of proved:
 
-1. The webhook signing secret is unconfirmed (§4.2) — the one item with a real
-   security consequence, and it needs you.
+1. The webhook signing secret is **confirmed absent** (§4.2) — the one item with
+   a real security consequence, and it needs you. Until it is set, possession of
+   the webhook URL is write access to the suppression list.
 2. Two suppression rows are un-backfilled (§4.1) — no live exposure.
 3. `qa-retention-system.mjs` remains stale (§4.3), so the gift-versus-discount
    and cart-recovery interactions are not covered end to end by this audit.
