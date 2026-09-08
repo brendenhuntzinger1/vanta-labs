@@ -484,8 +484,14 @@ describe("the blast radius", () => {
     expect((await runAbandonedCartSweep()).t24hSent).toBe(1);
     expect(state.sends[2].templateKey).toBe("cartRecoveryT24hTemplate");
 
-    // One gift, one entitlement, three ordinary stage rows.
-    expect(state.issued).toHaveLength(1);
+    // TWO entitlements, and which is which is the point. The override minted
+    // its own named gift at the stage it replaced; stage 3 then minted the
+    // standing ladder gift it now carries for every qualifying cart. The
+    // override replaced one message, not the sequence around it.
+    expect(state.issued.map((issue) => issue.offerKey)).toEqual([
+      "labor_day_bac_water_2",
+      "cart_recovery_bac_water",
+    ]);
     expect(state.db.stages.map((s) => s.stage)).toEqual(["t30m", "t12h", "t24h"]);
   });
 
@@ -593,11 +599,19 @@ describe("a replaced stage whose gift also carries a percentage", () => {
 
     await runAbandonedCartSweep();
 
-    expect(state.issued).toEqual([
+    // THE OVERRIDE'S GIFT REACHES EXACTLY ONE ADDRESS. That is what this test
+    // is about, and it is unchanged: nobody but the named cart is issued
+    // `labor_day_bac_water_2_40`.
+    expect(state.issued.filter((issue) => issue.offerKey === "labor_day_bac_water_2_40")).toEqual([
       { email: "chosen@example.com", offerKey: "labor_day_bac_water_2_40", referenceId: "cart-follow" },
     ]);
-    // The bystander got the ordinary last-chance mail, with its own coupon.
+    // The bystander got the ordinary last-chance mail — which now carries the
+    // standing ladder gift alongside its coupon. A different offer key, minted
+    // by the ordinary path, for its own cart.
     const bystanderSend = state.sends.find((s) => s.to === "other@example.com");
     expect(bystanderSend?.templateKey).toBe("cartRecoveryT72hTemplate");
+    expect(state.issued).toContainEqual(
+      { email: "other@example.com", offerKey: "cart_recovery_bac_water", referenceId: "cart-bystander" },
+    );
   });
 });

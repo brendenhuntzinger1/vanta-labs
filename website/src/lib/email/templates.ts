@@ -1756,17 +1756,84 @@ export function backInStockTemplate(input: { name: string; productName: string; 
 // deliverability-check.ts — template-standards.test.ts holds them there.
 // ---------------------------------------------------------------------
 
-function cartItemsHtml(items: Array<{ name: string; quantity: number }>) {
-  return items.map((item) => `<tr><td style="padding:4px 0;color:#e4e4e7;">${escapeHtml(item.name)} × ${item.quantity}</td></tr>`).join("");
+/**
+ * THE CART, AS A CART — with the product in it.
+ *
+ * This used to render `name x quantity` as plain text rows and nothing else:
+ * no image, no price, no line total. On a store whose recovery carts run from
+ * $50 to $520 that was the single largest conversion gap in the message. The
+ * shopper is being asked to return to a specific basket, and the basket was
+ * described to them in words.
+ *
+ * Everything here comes from the CATALOGUE, never from the stored snapshot —
+ * the snapshot is whatever the tracking beacon's caller posted, and this is
+ * rendered into branded mail. `image` must already be absolute; a relative src
+ * resolves against the mail client and simply fails.
+ *
+ * Images degrade properly. Most clients block them by default and some never
+ * load them at all, so every row states the product and the price in text and
+ * the thumbnail cell collapses to nothing when there is no image to show.
+ */
+type RecoveryCartLine = { name: string; quantity: number; unitPriceCents?: number; image?: string };
+
+function recoveryCartRowHtml(item: RecoveryCartLine) {
+  const quantity = Math.max(1, Math.floor(Number(item.quantity) || 1));
+  const unit = Number(item.unitPriceCents);
+  const lineTotal = Number.isFinite(unit) ? `${money((unit * quantity) / 100)}` : "";
+  const thumb = item.image
+    ? `<td width="56" style="padding:10px 12px 10px 0;vertical-align:top;">`
+      + `<img src="${escapeHtml(item.image)}" width="56" height="56" alt="" `
+      + `style="display:block;width:56px;height:56px;border-radius:10px;border:1px solid rgba(255,255,255,0.10);object-fit:cover;background:#1a1a1a;" /></td>`
+    : "";
+  return `<tr>${thumb}`
+    + `<td style="padding:10px 0;vertical-align:top;color:#ffffff;font-size:14px;line-height:1.5;">`
+    + `${escapeHtml(item.name)}`
+    + `<div style="color:#a3a3a3;font-size:13px;padding-top:2px;">Qty ${quantity}</div></td>`
+    + `<td style="padding:10px 0;vertical-align:top;text-align:right;color:#ffffff;font-size:14px;white-space:nowrap;">${lineTotal}</td>`
+    + `</tr>`;
 }
 
-function cartSummaryHtml(items: Array<{ name: string; quantity: number }>, cartValueCents: number) {
-  return `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(items)}</table>`
-    + `<p style="margin-top:12px;">Cart total: <strong style="color:#ffffff;">${money(cartValueCents / 100)}</strong></p>`;
+function cartSummaryHtml(items: RecoveryCartLine[], cartValueCents: number) {
+  const rows = items.map(recoveryCartRowHtml).join("");
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" `
+    + `style="margin:18px 0 0;border-top:1px solid rgba(255,255,255,0.10);">${rows}</table>`
+    + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" `
+    + `style="border-top:1px solid rgba(255,255,255,0.10);margin-top:2px;">`
+    + `<tr><td style="padding:14px 0 0;color:#a3a3a3;font-size:14px;">Cart total</td>`
+    + `<td style="padding:14px 0 0;text-align:right;color:#ffffff;font-size:16px;font-weight:700;">`
+    + `${money(cartValueCents / 100)}</td></tr></table>`;
 }
 
-function cartSummaryText(items: Array<{ name: string; quantity: number }>, cartValueCents: number): string[] {
-  return [...items.map((i) => `${i.name} x ${i.quantity}`), "", `Cart total: ${money(cartValueCents / 100)}`];
+function cartSummaryText(items: RecoveryCartLine[], cartValueCents: number): string[] {
+  return [
+    ...items.map((i) => {
+      const quantity = Math.max(1, Math.floor(Number(i.quantity) || 1));
+      const unit = Number(i.unitPriceCents);
+      const total = Number.isFinite(unit) ? `  ${money((unit * quantity) / 100)}` : "";
+      return `${i.name} x ${quantity}${total}`;
+    }),
+    "",
+    `Cart total: ${money(cartValueCents / 100)}`,
+  ];
+}
+
+/**
+ * The one product the subject line names.
+ *
+ * "Your cart is saved" is about the store. "Your GLP-3 is still in your cart"
+ * is about them, and it is the difference between a subject a shopper can
+ * ignore without opening and one they cannot. The highest-value line is chosen
+ * rather than the first, so the subject names the thing they actually want.
+ */
+function leadCartItem(items: RecoveryCartLine[]): string {
+  let best: RecoveryCartLine | null = null;
+  let bestValue = -1;
+  for (const item of items) {
+    const quantity = Math.max(1, Math.floor(Number(item.quantity) || 1));
+    const value = (Number(item.unitPriceCents) || 0) * quantity;
+    if (value > bestValue) { bestValue = value; best = item; }
+  }
+  return best?.name ?? "";
 }
 
 /** "Hi Sam," when a name is known; nothing when it is not. Never "Hi there". */
@@ -1777,52 +1844,45 @@ function greeting(name: string): { html: string; text: string | null } {
     : { html: "", text: null };
 }
 
-export function cartRecoveryT30mTemplate(input: { name: string; items: Array<{ name: string; quantity: number }>; cartValueCents: number; restoreUrl: string }): EmailTemplate {
+/**
+ * STAGE 1 (1-12h) - RECALL, AND NOTHING ELSE.
+ *
+ * Most abandonment at this age is an interruption, not a decision: a phone
+ * call, a dead battery, a comparison tab. The only job is to put the basket
+ * back in front of them, so this message carries no incentive and no urgency.
+ *
+ * NO URGENCY IS A DECISION. Nothing is genuinely urgent an hour after a cart
+ * is left, and inventing a deadline here spends the credibility that stage 4's
+ * real one depends on.
+ */
+export function cartRecoveryT30mTemplate(input: { name: string; items: Array<{ name: string; quantity: number; unitPriceCents?: number; image?: string }>; cartValueCents: number; restoreUrl: string; variant?: string }): EmailTemplate {
   const hi = greeting(input.name);
+  const lead = leadCartItem(input.items);
+  const treatment = input.variant === "b";
   return {
-    subject: "We kept your cart",
+    // THE ONE AXIS UNDER TEST. Arm A names the product, arm B names the state
+    // of the cart. Everything else in this message is identical across arms,
+    // because a test that varies two things explains neither.
+    subject: treatment
+      ? "Your cart is saved"
+      : (lead ? `Your ${lead} is still in your cart` : "Your cart is saved"),
     html: renderLayout({
-      preheader: "Everything you selected is still here, at the price you saw.",
-      titleHtml: "Your selection is saved",
-      bodyHtml: `${hi.html}<p style="margin:0 0 4px;">You left these in your cart. We have held them for you, at the same price.</p>${cartSummaryHtml(input.items, input.cartValueCents)}<p style="margin-top:14px;color:#a1a1aa;">Pick up where you left off whenever you are ready.</p>`,
-      ctaLabel: "Return to my cart",
+      preheader: "Everything you selected, at the price you saw.",
+      titleHtml: "Still in your cart",
+      bodyHtml: `${hi.html}<p style="margin:0;">You left this behind. Nothing has been cleared, and the prices are the ones you saw.</p>`
+        + `${cartSummaryHtml(input.items, input.cartValueCents)}`,
+      ctaLabel: "Complete my order",
       ctaUrl: input.restoreUrl,
       ctaVariant: "primary",
     }),
     text: toText([
       hi.text,
       hi.text ? "" : null,
-      "You left these in your cart. We have held them for you, at the same price.",
+      "You left this behind. Nothing has been cleared, and the prices are the ones you saw.",
       "",
       ...cartSummaryText(input.items, input.cartValueCents),
       "",
-      `Return to your cart: ${input.restoreUrl}`,
-      "",
-      "- Vanta Labs",
-    ]),
-  };
-}
-
-export function cartRecoveryT12hTemplate(input: { name: string; items: Array<{ name: string; quantity: number }>; cartValueCents: number; restoreUrl: string }): EmailTemplate {
-  const hi = greeting(input.name);
-  return {
-    subject: "Your cart is still saved",
-    html: renderLayout({
-      preheader: "A quick note: your selection is held and ready whenever you are.",
-      titleHtml: "Still here when you are",
-      bodyHtml: `${hi.html}<p style="margin:0 0 4px;">A quick note that your cart is still saved.</p>${cartSummaryHtml(input.items, input.cartValueCents)}`,
-      ctaLabel: "Return to my cart",
-      ctaUrl: input.restoreUrl,
-      ctaVariant: "primary",
-    }),
-    text: toText([
-      hi.text,
-      hi.text ? "" : null,
-      "A quick note that your cart is still saved.",
-      "",
-      ...cartSummaryText(input.items, input.cartValueCents),
-      "",
-      `Return to your cart: ${input.restoreUrl}`,
+      `Complete your order: ${input.restoreUrl}`,
       "",
       "- Vanta Labs",
     ]),
@@ -1830,39 +1890,71 @@ export function cartRecoveryT12hTemplate(input: { name: string; items: Array<{ n
 }
 
 /**
- * A recovery stage that carries an entitlement instead of a plain reminder.
+ * STAGE 2 (12-24h) - THE OBJECTION, ANSWERED.
  *
- * Used where a named cart has its stage replaced (cart-recovery-overrides.ts).
- * It is a SIBLING of the reminders above, not a variant of them: same layout,
- * same button, same footer, so nothing global changes and every standards test
- * that holds the others holds this.
+ * This used to be a second copy of stage 1 ("A quick note that your cart is
+ * still saved"), which spent one of four touches restating the previous one.
  *
- * EVERY CLAIM IN IT IS PASSED IN, NOT WRITTEN HERE. `giftLabel` and
- * `offerTerms` come from the offer catalogue via describeOfferTerms — the same
- * text the till enforces — and `promotionNote` is only ever set by a caller
- * that has re-read the live promotion configuration. The template states no
- * deadline, no scarcity, no shipping speed and no price of its own: the only
- * figure it prints is the cart's own total, which is the figure the cart shows.
+ * The real hesitation for a first-time buyer of research compounds at a $230
+ * median is whether the material is what it says it is. The brand's answer to
+ * that is not a claim, it is a document: a batch-level COA library a customer
+ * can search by lot number. So this message leads with the document and lets
+ * the cart follow it.
  *
- * The fields are documented HERE rather than inline because
- * templates-sweep.test.ts builds its fixture by parsing this signature's text,
- * and a comment between the braces silently drops every field after it:
- *
- *   giftLabel      e.g. "2 free BAC Water" — the offer catalogue's own label.
- *   offerTerms     describeOfferTerms output: what the checkout will do.
- *   promotionNote  a live promotion worth mentioning, or null. Never invented
- *                  here — only ever passed by a caller that has just re-read
- *                  the live promotion configuration.
- *   perks          the other things this order carries, each one already
- *                  verified true by its caller. Rendered as a plain list; an
- *                  empty array renders nothing at all.
- *   offerPercent   the percentage this gift also carries, or 0. When set it
- *                  becomes the headline, because it is the bigger number — and
- *                  it SUPPRESSES the promotion line, because the store grants
- *                  one discount per order: a percentage that beats the
- *                  promotion REPLACES it, and naming both would read as a
- *                  stack the checkout will not honour.
+ * `batchNumber` is rendered ONLY when the caller read one off the catalogue.
+ * A blanket "everything is tested" would be false the moment one product has
+ * no published report, and an invented batch number is the single worst thing
+ * this email could contain.
  */
+export function cartRecoveryT12hTemplate(input: { name: string; items: Array<{ name: string; quantity: number; unitPriceCents?: number; image?: string }>; cartValueCents: number; restoreUrl: string; coaUrl: string; batchNumber: string; supportEmail: string }): EmailTemplate {
+  const hi = greeting(input.name);
+  const batch = String(input.batchNumber ?? "").trim();
+  const support = String(input.supportEmail ?? "").trim();
+  const coa = String(input.coaUrl ?? "").trim();
+  const batchHtml = batch
+    ? `<p style="margin:14px 0 0;color:#a3a3a3;font-size:13px;">The batch on file for your order: `
+      + `<span style="font-family:Geist Mono,SFMono-Regular,Menlo,monospace;color:#ffffff;">${escapeHtml(batch)}</span></p>`
+    : "";
+  const coaHtml = coa.startsWith("https://")
+    ? `<p style="margin:10px 0 0;"><a href="${escapeHtml(coa)}" style="color:#c7ae5e;">Open the COA library</a></p>`
+    : "";
+  const supportHtml = support
+    ? `<p style="margin:16px 0 0;color:#a3a3a3;font-size:13px;">Questions before you order? `
+      + `<a href="mailto:${escapeHtml(support)}" style="color:#a1a1aa;">${escapeHtml(support)}</a></p>`
+    : "";
+  return {
+    subject: "Every batch has a published report",
+    html: renderLayout({
+      preheader: "Search a lot number and read the actual document.",
+      titleHtml: "What is on file",
+      bodyHtml: `${hi.html}`
+        + `<p style="margin:0;">Every production batch is filed in our COA library. You can search it by product, batch or lot number and read the report itself, before you order.</p>`
+        + `${batchHtml}${coaHtml}${supportHtml}`
+        + `<p style="margin:22px 0 0;color:#a3a3a3;font-size:13px;">Your cart is still saved.</p>`
+        + `${cartSummaryHtml(input.items, input.cartValueCents)}`,
+      ctaLabel: "Complete my order",
+      ctaUrl: input.restoreUrl,
+      ctaVariant: "primary",
+    }),
+    text: toText([
+      hi.text,
+      hi.text ? "" : null,
+      "Every production batch is filed in our COA library. You can search it by product, batch or lot number and read the report itself, before you order.",
+      batch ? `The batch on file for your order: ${batch}` : null,
+      coa.startsWith("https://") ? `COA library: ${coa}` : null,
+      support ? `Questions before you order? ${support}` : null,
+      "",
+      "Your cart is still saved.",
+      "",
+      ...cartSummaryText(input.items, input.cartValueCents),
+      "",
+      `Complete your order: ${input.restoreUrl}`,
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
 export function cartRecoveryGiftTemplate(input: {
   name: string;
   items: Array<{ name: string; quantity: number }>;
@@ -1993,36 +2085,79 @@ export function cartRecoveryGiftTemplate(input: {
  * per-batch COAs in the COA library, tracked shipping, a monitored support
  * address in the footer of every message.
  */
-export function cartRecoveryT24hTemplate(input: { name: string; items: Array<{ name: string; quantity: number }>; cartValueCents: number; restoreUrl: string }): EmailTemplate {
+/**
+ * STAGE 3 (24-72h) - THE FIRST INCENTIVE, AND IT IS A GIFT.
+ *
+ * This used to be a newsletter ("Before you order: testing, shipping,
+ * support") with no purchase intent, and its objection-handling content has
+ * moved forward to stage 2 where more shoppers are still live. What sits here
+ * now is the first thing in the sequence that costs the store money.
+ *
+ * A GIFT, NOT A PERCENTAGE, AND THAT IS MEASURED RATHER THAN PREFERRED. The
+ * store grants one discount per order, so a percentage competes for that slot
+ * against the live promotion and can lose outright - with Buy 2 Get 1 running,
+ * ten percent was worth exactly $0 to Heath's cart and to Nikki's. quoteOrder
+ * adds a free-product line independently of the discount slot, so the vial is
+ * worth its full price whatever else the store is running. It is also an order
+ * of magnitude cheaper: one vial of COGS against roughly $25 for ten percent of
+ * a $250 basket.
+ *
+ * `giftLabel` and `offerTerms` EMPTY MEANS NO GIFT WAS MINTED, and the message
+ * then promises nothing - the segmentation rules withhold the gift from recent
+ * buyers, from addresses already gifted this month, and from carts under the
+ * floor. What the email says comes from what was actually minted, never from
+ * what the stage nominally offers.
+ */
+export function cartRecoveryT24hTemplate(input: { name: string; items: Array<{ name: string; quantity: number; unitPriceCents?: number; image?: string }>; cartValueCents: number; restoreUrl: string; giftLabel: string; offerTerms: string; variant?: string }): EmailTemplate {
   const hi = greeting(input.name);
-  const points = [
-    ["Tested per batch", "Every batch is third-party tested and its certificate of analysis is available before you order."],
-    ["Tracked, discreet shipping", "Orders ship with tracking in plain packaging, and you get an email at every step."],
-    ["A person to ask", "Reply to this email or write to support and a member of the team answers — no ticket maze."],
-  ];
-  const pointsHtml = points
-    .map(([title, body]) => `<tr><td style="padding:8px 0;border-top:1px solid rgba(255,255,255,0.08);"><strong style="color:#ffffff;">${escapeHtml(title)}</strong><br/><span style="color:#d4d4d4;">${escapeHtml(body)}</span></td></tr>`)
-    .join("");
+  const lead = leadCartItem(input.items);
+  const giftLabel = String(input.giftLabel ?? "").trim();
+  const offerTerms = String(input.offerTerms ?? "").trim();
+  const hasGift = giftLabel.length > 0;
+
+  const giftHtml = hasGift
+    ? `<div style="margin:18px 0 0;padding:16px 18px;border:1px solid rgba(199,174,94,0.35);border-radius:12px;background:rgba(199,174,94,0.06);">`
+      + `<p style="margin:0;color:#c7ae5e;font-size:12px;letter-spacing:0.18em;text-transform:uppercase;font-weight:700;">Free gift</p>`
+      + `<p style="margin:8px 0 0;color:#ffffff;font-size:18px;font-weight:700;">${escapeHtml(giftLabel)}</p>`
+      + (offerTerms ? `<p style="margin:8px 0 0;color:#a3a3a3;font-size:13px;line-height:1.6;">${escapeHtml(offerTerms)}</p>` : "")
+      + `</div>`
+    : "";
+
   return {
-    subject: "Before you order: testing, shipping, support",
+    // Arm A leads with the gift, arm B with the product it rides on. Which of
+    // those a shopper clicks is the whole question the stage-3 subject asks.
+    subject: hasGift
+      ? (input.variant === "b"
+        ? (lead ? `Your ${lead}, and a free BAC Water` : "Your cart, and a free BAC Water")
+        : (lead ? `A free BAC Water with your ${lead}` : "A free BAC Water with your order"))
+      : (lead ? `Your ${lead} is still saved` : "Your cart is still saved"),
     html: renderLayout({
-      preheader: "The three things most people want to know before their first order.",
-      titleHtml: "A few things worth knowing",
-      bodyHtml: `${hi.html}<p style="margin:0 0 4px;">Your cart is still saved. If you were weighing it up, these are the three questions we hear most.</p><table role="presentation" width="100%" style="margin-top:12px;font-size:14px;">${pointsHtml}</table>${cartSummaryHtml(input.items, input.cartValueCents)}`,
-      ctaLabel: "Finish checking out",
+      preheader: hasGift
+        ? "Added automatically when you finish your order. No code needed."
+        : "Your selection is held and ready whenever you are.",
+      titleHtml: hasGift ? "A free BAC Water, on us" : "Still saved for you",
+      bodyHtml: `${hi.html}`
+        + (hasGift
+          ? `<p style="margin:0;">Your cart is still here, and there is a vial of BAC Water on it from us.</p>${giftHtml}`
+          : `<p style="margin:0;">Your cart is still here, at the price you saw.</p>`)
+        + `${cartSummaryHtml(input.items, input.cartValueCents)}`,
+      ctaLabel: hasGift ? "Claim my free BAC Water" : "Complete my order",
       ctaUrl: input.restoreUrl,
       ctaVariant: "primary",
     }),
     text: toText([
       hi.text,
       hi.text ? "" : null,
-      "Your cart is still saved. If you were weighing it up, these are the three questions we hear most.",
-      "",
-      ...points.map(([title, body]) => `${title}: ${body}`),
+      hasGift
+        ? "Your cart is still here, and there is a vial of BAC Water on it from us."
+        : "Your cart is still here, at the price you saw.",
+      hasGift ? "" : null,
+      hasGift ? `Free gift: ${giftLabel}` : null,
+      hasGift && offerTerms ? offerTerms : null,
       "",
       ...cartSummaryText(input.items, input.cartValueCents),
       "",
-      `Finish checking out: ${input.restoreUrl}`,
+      `${hasGift ? "Claim your free BAC Water" : "Complete your order"}: ${input.restoreUrl}`,
       "",
       "- Vanta Labs",
     ]),
@@ -2030,38 +2165,89 @@ export function cartRecoveryT24hTemplate(input: { name: string; items: Array<{ n
 }
 
 /**
- * The last message about this cart, with or without a code.
+ * STAGE 4 (72-96h) - THE LAST NOTE, AND THE BEST OFFER.
  *
- * `couponCode` empty means no discount was allowed for this shopper (see
- * recoveryDiscountAllowed in cart-recovery.ts); the email then says only that
- * it is the last note, which is true, and asks nothing else. When a code is
- * present, `discountPercent` and `expiresAt` describe the row the checkout will
- * honour — never a number computed here.
+ * The only place in the sequence a percentage appears, on the message that
+ * follows three the shopper has already ignored. It carries the gift as well:
+ * the product half and the percentage half occupy different slots in
+ * quoteOrder, so both land together without touching the store-wide stacking
+ * rule every other customer depends on.
+ *
+ * THE HONEST SENTENCE ABOUT THE CODE IS LOAD-BEARING. One discount applies per
+ * order, greatest saving wins, so while a promotion is running the code may be
+ * worth nothing at all on a qualifying basket. Saying "whichever saves you
+ * more" is true in every case; promising the percentage outright is false
+ * precisely on the largest carts, which are the ones this email exists for.
+ *
+ * Every half is independently optional, because the segmentation rules and the
+ * mint can each withhold one. The email describes what was actually minted.
  */
 export function cartRecoveryT72hTemplate(input: {
   name: string;
-  items: Array<{ name: string; quantity: number }>;
+  items: Array<{ name: string; quantity: number; unitPriceCents?: number; image?: string }>;
   cartValueCents: number;
   restoreUrl: string;
   couponCode: string;
   discountPercent?: number;
   expiresAt: string;
+  giftLabel: string;
+  offerTerms: string;
 }): EmailTemplate {
   const hi = greeting(input.name);
-  const code = input.couponCode.trim();
+  const code = String(input.couponCode ?? "").trim();
   const percent = Math.max(0, Math.round(Number(input.discountPercent ?? 0)));
-  const hasOffer = Boolean(code) && percent > 0;
+  const hasCode = Boolean(code) && percent > 0;
+  const giftLabel = String(input.giftLabel ?? "").trim();
+  const offerTerms = String(input.offerTerms ?? "").trim();
+  const hasGift = giftLabel.length > 0;
   const closing = "This is the last note we will send about this cart.";
-  const offerHtml = hasOffer
-    ? `<p style="margin-top:14px;">If it is still useful, code <strong style="color:#ffffff;">${escapeHtml(code)}</strong> takes ${percent}% off this order${input.expiresAt ? ` through ${escapeHtml(input.expiresAt)}` : ""}.</p>`
+
+  const headline = hasCode && hasGift
+    ? `${percent}% off and a free BAC Water`
+    : hasCode
+      ? `${percent}% off your order`
+      : hasGift
+        ? "A free BAC Water, on us"
+        : "One last note";
+
+  const offerRows: string[] = [];
+  if (hasGift) {
+    offerRows.push(
+      `<p style="margin:0;color:#c7ae5e;font-size:12px;letter-spacing:0.18em;text-transform:uppercase;font-weight:700;">Free gift</p>`
+      + `<p style="margin:8px 0 0;color:#ffffff;font-size:18px;font-weight:700;">${escapeHtml(giftLabel)}</p>`
+      + (offerTerms ? `<p style="margin:8px 0 0;color:#a3a3a3;font-size:13px;line-height:1.6;">${escapeHtml(offerTerms)}</p>` : ""),
+    );
+  }
+  if (hasCode) {
+    offerRows.push(
+      `<p style="margin:${hasGift ? "18px" : "0"} 0 0;color:#c7ae5e;font-size:12px;letter-spacing:0.18em;text-transform:uppercase;font-weight:700;">${percent}% off</p>`
+      + `<div style="margin:8px 0 0;padding:12px;border:1px dashed rgba(255,255,255,0.30);border-radius:10px;text-align:center;">`
+      + `<span style="font-family:Geist Mono,SFMono-Regular,Menlo,monospace;font-size:18px;font-weight:700;letter-spacing:0.10em;color:#ffffff;">${escapeHtml(code)}</span></div>`
+      + `<p style="margin:8px 0 0;color:#a3a3a3;font-size:13px;line-height:1.6;">Applied for you when you use the button below`
+      + `${input.expiresAt ? `, through ${escapeHtml(String(input.expiresAt))}` : ""}. `
+      + `One discount applies per order, so we use whichever saves you more, this code or any sale running.</p>`,
+    );
+  }
+  const offerHtml = offerRows.length > 0
+    ? `<div style="margin:18px 0 0;padding:16px 18px;border:1px solid rgba(199,174,94,0.35);border-radius:12px;background:rgba(199,174,94,0.06);">${offerRows.join("")}</div>`
     : "";
+
   return {
-    subject: hasOffer ? `One last note on your cart, with ${percent}% off` : "One last note on your cart",
+    subject: hasCode && hasGift
+      ? `Last note: ${percent}% off and a free BAC Water`
+      : hasCode
+        ? `Last note on your cart, with ${percent}% off`
+        : hasGift
+          ? "Last note: a free BAC Water with your order"
+          : "One last note on your cart",
     html: renderLayout({
-      preheader: hasOffer ? `Code ${code} takes ${percent}% off if you finish this order.` : "Your selection is still saved if you want it.",
-      titleHtml: "One last note",
-      bodyHtml: `${hi.html}<p style="margin:0 0 4px;">${closing} Your selection is still saved if you want it.</p>${cartSummaryHtml(input.items, input.cartValueCents)}${offerHtml}`,
-      ctaLabel: "Finish my order",
+      preheader: hasCode || hasGift
+        ? "The last thing we will send about this cart."
+        : "Your selection is still saved if you want it.",
+      titleHtml: escapeHtml(headline),
+      bodyHtml: `${hi.html}<p style="margin:0;">${closing} Your selection is still saved if you want it.</p>`
+        + `${offerHtml}${cartSummaryHtml(input.items, input.cartValueCents)}`,
+      ctaLabel: hasCode || hasGift ? "Claim my offer" : "Finish my order",
       ctaUrl: input.restoreUrl,
       ctaVariant: "primary",
     }),
@@ -2070,11 +2256,14 @@ export function cartRecoveryT72hTemplate(input: {
       hi.text ? "" : null,
       `${closing} Your selection is still saved if you want it.`,
       "",
-      ...cartSummaryText(input.items, input.cartValueCents),
-      hasOffer ? "" : null,
-      hasOffer ? `Code ${code} takes ${percent}% off this order${input.expiresAt ? ` through ${input.expiresAt}` : ""}.` : null,
+      hasGift ? `Free gift: ${giftLabel}` : null,
+      hasGift && offerTerms ? offerTerms : null,
+      hasCode ? `${percent}% off with code ${code}${input.expiresAt ? `, through ${input.expiresAt}` : ""}.` : null,
+      hasCode ? "One discount applies per order, so we use whichever saves you more, this code or any sale running." : null,
       "",
-      `Finish your order: ${input.restoreUrl}`,
+      ...cartSummaryText(input.items, input.cartValueCents),
+      "",
+      `${hasCode || hasGift ? "Claim your offer" : "Finish your order"}: ${input.restoreUrl}`,
       "",
       "- Vanta Labs",
     ]),

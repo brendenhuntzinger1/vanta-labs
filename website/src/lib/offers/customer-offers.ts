@@ -286,6 +286,37 @@ export const OFFER_CATALOG = {
     minSubtotalCents: 3500,
     ttlDays: 30,
   },
+  /**
+   * THE STANDING CART-RECOVERY GIFT, carried by stages 3 and 4.
+   *
+   * A PURE PRODUCT, WITH NO PERCENTAGE ATTACHED, AND THAT IS THE WHOLE POINT.
+   * The store grants one discount per order, so a gift's percentage competes
+   * for the discount slot against the live promotion and can lose outright —
+   * with Buy 2 Get 1 running, ten percent was measured worth exactly $0 to
+   * Heath's cart and to Nikki's. A $0 product line is not in that race at all,
+   * so this gift is worth its full $14.99 whatever else the store is running,
+   * on the largest carts as much as the smallest.
+   *
+   * It is also the cheapest thing the ladder can offer: one vial of COGS
+   * against a $230 median recovery cart, versus roughly $25 for ten percent of
+   * one. Stage 4 pairs it with a coupon, and the two ride together for the same
+   * reason the Labor Day gifts did — the product half and the percentage half
+   * occupy different slots.
+   *
+   * TEN DAYS, not the five the Labor Day tokens used. Stage 3 fires anywhere in
+   * the 24-72 hour window and stage 4 up to 96 hours, and the SAME entitlement
+   * is re-offered at stage 4 rather than a second one being minted — so the
+   * token has to outlive the whole tail of the sequence plus a weekend.
+   *
+   * Its own key, with no `winback_` prefix: nothing on the retention ladder
+   * points at it and nothing should.
+   */
+  cart_recovery_bac_water: {
+    label: "Free BAC Water",
+    reward: { kind: "free_product", productSlug: BAC_WATER_SLUG, quantity: 1 } as OfferReward,
+    minSubtotalCents: 3500,
+    ttlDays: 10,
+  },
 } as const;
 
 export type OfferKey = keyof typeof OFFER_CATALOG;
@@ -371,9 +402,17 @@ export async function issueCustomerOffer(input: {
       min_subtotal_cents: config.minSubtotalCents,
       expires_at: expiresAt,
     };
-    const provenance = input.automationKey
-      ? { automation_key: input.automationKey, reference_id: input.referenceId ?? null }
-      : {};
+    // REFERENCE_ID IS WRITTEN WHENEVER IT IS GIVEN, automation or not.
+    //
+    // It used to ride only alongside `automation_key`, so a caller that passed
+    // a referenceId and no automationKey — every cart-recovery gift does — had
+    // it silently dropped. Nothing failed; the breadcrumb simply was not there,
+    // which is how the cart-recovery gift cooldown could not tell a second gift
+    // to one address from the SAME cart's second stage re-minting its own.
+    const provenance = {
+      ...(input.automationKey ? { automation_key: input.automationKey } : {}),
+      ...(input.referenceId ? { reference_id: input.referenceId } : {}),
+    };
     let { error } = await supabaseAdmin.from("customer_offers").insert({ ...row, ...provenance });
     // A database that has not run the 2026-09-04 section of customer-offers.sql
     // has no automation_key column (42703). The gift still has to go out; it is
@@ -386,7 +425,7 @@ export async function issueCustomerOffer(input: {
     // would let the row's default answer 1 for a gift whose email promised two.
     // Retrying without the count would ship one vial against a two-vial
     // promise; failing the mint sends nothing, which is the recoverable half.
-    if (error && String(error.code ?? "") === "42703" && input.automationKey) {
+    if (error && String(error.code ?? "") === "42703" && Object.keys(provenance).length > 0) {
       console.error("[offers] customer_offers has no provenance columns yet; minting without them", error.message);
       ({ error } = await supabaseAdmin.from("customer_offers").insert(row));
     }

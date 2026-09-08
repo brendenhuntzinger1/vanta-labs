@@ -3,6 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { decodeAutomationCookie } from "@/lib/email/automation-links";
 import { decodeAttributionCookie } from "@/lib/email/campaign-links";
+import { decodeCartRecoveryCookie } from "@/lib/email/cart-recovery-links";
 import { isAutomationKey } from "@/lib/email/automation-catalog";
 
 /**
@@ -22,8 +23,8 @@ import { isAutomationKey } from "@/lib/email/automation-catalog";
  *                       automation email ever carried that token, so this is
  *                       proof, click or no click. Credits that automation.
  *   2. click            a tracked email link inside its 7-day window. When
- *                       both an automation and a campaign were clicked, the
- *                       LATER click wins (last touch).
+ *                       more than one channel was clicked, the LATER click
+ *                       wins (last touch).
  *   3. recovery_coupon  the order used a SAVE- code minted by cart recovery.
  *   4. referral_code    the customer typed an ambassador code. The ambassador
  *                       is paid commission regardless — that ledger is
@@ -58,6 +59,14 @@ export type MarketingSignals = {
   redeemedOffer?: { automationKey: string | null; offerKey: string } | null;
   automationClick?: { key: string; clickedAtMs: number } | null;
   campaignClick?: { campaignId: string; clickedAtMs: number } | null;
+  /**
+   * A tracked click on a cart-recovery email, from `vl_cart_recovery`.
+   *
+   * Stages 1-3 carry no coupon, so without this a shopper who clicked the
+   * first reminder and bought ten minutes later was recorded `organic` and the
+   * programme could not be shown to work. See cart-recovery-links.ts.
+   */
+  cartRecoveryClick?: { cartId: string; clickedAtMs: number } | null;
   /** The order's coupon, when it was minted by cart recovery. */
   recoveryCoupon?: { code: string } | null;
   ambassadorId?: string | null;
@@ -74,13 +83,24 @@ export function resolveMarketingSource(signals: MarketingSignals): MarketingSour
 
   const automationClick = signals.automationClick && isAutomationKey(signals.automationClick.key) ? signals.automationClick : null;
   const campaignClick = signals.campaignClick && signals.campaignClick.campaignId ? signals.campaignClick : null;
-  if (automationClick || campaignClick) {
-    // Last touch. On an exact tie the automation wins: it is the more specific
-    // message, and a tie only arises when the click times are unknown.
-    const automationWins = automationClick && (!campaignClick || automationClick.clickedAtMs >= campaignClick.clickedAtMs);
-    return automationWins
-      ? { kind: "automation", ref: automationClick!.key, basis: "click" }
-      : { kind: "campaign", ref: campaignClick!.campaignId, basis: "click" };
+  const cartRecoveryClick = signals.cartRecoveryClick && signals.cartRecoveryClick.cartId ? signals.cartRecoveryClick : null;
+  // LAST TOUCH, ACROSS ALL THREE CLICK CHANNELS.
+  //
+  // Ordered so that on an exact tie the earlier entry wins, and the order is
+  // the specificity order: an automation names one message to one person, a
+  // cart-recovery click names one person's own cart, a campaign names a blast.
+  // A tie only arises when click times are unknown, which is exactly when the
+  // more specific message is the better guess.
+  const clicks: Array<{ decision: MarketingSourceDecision; at: number }> = [];
+  if (automationClick) clicks.push({ decision: { kind: "automation", ref: automationClick.key, basis: "click" }, at: automationClick.clickedAtMs });
+  if (cartRecoveryClick) clicks.push({ decision: { kind: "cart_recovery", ref: cartRecoveryClick.cartId, basis: "click" }, at: cartRecoveryClick.clickedAtMs });
+  if (campaignClick) clicks.push({ decision: { kind: "campaign", ref: campaignClick.campaignId, basis: "click" }, at: campaignClick.clickedAtMs });
+  if (clicks.length > 0) {
+    let best = clicks[0];
+    for (const candidate of clicks.slice(1)) {
+      if (candidate.at > best.at) best = candidate;
+    }
+    return best.decision;
   }
 
   if (signals.recoveryCoupon?.code) {
@@ -150,6 +170,8 @@ export async function stampMarketingSourceAtCreation(input: {
   orderId: string;
   automationCookie: string | null | undefined;
   campaignCookie: string | null | undefined;
+  /** `vl_cart_recovery`, set by the recovery email's click redirect. */
+  cartRecoveryCookie?: string | null | undefined;
   now?: number;
 }): Promise<MarketingSourceDecision | null> {
   try {
@@ -158,9 +180,11 @@ export async function stampMarketingSourceAtCreation(input: {
     if (!orderId) return null;
     const automation = decodeAutomationCookie(input.automationCookie, now);
     const campaign = decodeAttributionCookie(input.campaignCookie, now);
+    const cartRecovery = decodeCartRecoveryCookie(input.cartRecoveryCookie, now);
     const decision = resolveMarketingSource({
       automationClick: automation ? { key: automation.automationKey, clickedAtMs: automation.clickedAtMs } : null,
       campaignClick: campaign ? { campaignId: campaign.campaignId, clickedAtMs: campaign.clickedAtMs } : null,
+      cartRecoveryClick: cartRecovery ? { cartId: cartRecovery.cartId, clickedAtMs: cartRecovery.clickedAtMs } : null,
     });
     if (decision.kind === "organic") return null;   // nothing known yet; the paid-time pass decides
     const written = await writeDecision(orderId, null, decision, now);

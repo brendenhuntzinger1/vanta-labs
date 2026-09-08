@@ -3,6 +3,11 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { getSiteUrl } from "@/lib/env";
 import { stampCartRecoveryEngagement } from "@/lib/email/engagement";
 import { OFFER_COOKIE, OFFER_COOKIE_MAX_AGE_SECONDS } from "@/lib/offers/customer-offers";
+import {
+  CART_RECOVERY_COOKIE,
+  CART_RECOVERY_COOKIE_MAX_AGE_SECONDS,
+  encodeCartRecoveryCookie,
+} from "@/lib/email/cart-recovery-links";
 
 export const dynamic = "force-dynamic";
 
@@ -26,20 +31,65 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // The cart this click belongs to, read from the reservation rather than
+  // taken from the URL, so the attribution cookie below names a cart the
+  // shopper was actually mailed about.
+  let clickedCartId: string | null = null;
   if (id) {
     try {
-      await supabaseAdmin
+      const { data } = await supabaseAdmin
         .from("abandoned_cart_emails")
         .update({ clicked_at: new Date().toISOString() })
         .eq("id", id)
-        .is("clicked_at", null);
+        .is("clicked_at", null)
+        .select("abandoned_cart_id")
+        .maybeSingle();
+      if (data?.abandoned_cart_id) clickedCartId = String(data.abandoned_cart_id);
     } catch {
       // Non-fatal - the redirect still needs to happen.
+    }
+    if (!clickedCartId) {
+      // A SECOND CLICK ON THE SAME EMAIL IS STILL A CLICK. The update above is
+      // conditioned on clicked_at being null so the timestamp keeps meaning
+      // "first click", which means it returns no row the second time - and
+      // without this read a shopper who clicked twice would lose attribution
+      // entirely on the visit that actually converted.
+      try {
+        const { data } = await supabaseAdmin
+          .from("abandoned_cart_emails")
+          .select("abandoned_cart_id")
+          .eq("id", id)
+          .maybeSingle();
+        if (data?.abandoned_cart_id) clickedCartId = String(data.abandoned_cart_id);
+      } catch {
+        // Attribution is best-effort; the redirect is not.
+      }
     }
     await stampCartRecoveryEngagement("clicked", id);
   }
 
   const response = NextResponse.redirect(destination);
+
+  // WHICH CHANNEL GETS CREDIT FOR AN ORDER THAT FOLLOWS THIS CLICK.
+  //
+  // Cart recovery used to be creditable only through a redeemed SAVE- code, so
+  // the three stages that carry no code were invisible: click the first
+  // reminder, buy ten minutes later, and the order was filed `organic`. Its own
+  // cookie, never a value smuggled into vl_campaign - see cart-recovery-links.
+  //
+  // Readable by scripts on purpose (not httpOnly): it is an attribution marker,
+  // not a bearer secret. The token that IS one travels in vl_offer beside it,
+  // and that one is httpOnly.
+  if (clickedCartId) {
+    response.cookies.set({
+      name: CART_RECOVERY_COOKIE,
+      value: encodeCartRecoveryCookie(clickedCartId, Date.now()),
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: CART_RECOVERY_COOKIE_MAX_AGE_SECONDS,
+    });
+  }
 
   // THE ENTITLEMENT TOKEN GOES IN AN httpOnly COOKIE, NOT IN THE DESTINATION.
   //

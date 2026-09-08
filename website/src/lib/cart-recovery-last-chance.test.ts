@@ -322,7 +322,11 @@ describe("the 72h last-chance email", () => {
     });
     const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
     await runAbandonedCartSweep();
-    expect(t72()!.subject).toBe("One last note on your cart, with 8% off");
+    // Asserted on the PERCENTAGE rather than the whole subject line. The
+    // subject now also names the gift this stage carries, and pinning the exact
+    // sentence made this test fail for a reason that has nothing to do with
+    // what it is about — which is that 8 is read back from the coupon row.
+    expect(t72()!.subject).toContain("8% off");
     expect(t72()!.text).toContain("8% off");
     expect(t72()!.text).not.toContain("5% off");
   });
