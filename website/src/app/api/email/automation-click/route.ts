@@ -8,6 +8,7 @@ import {
   safeAutomationDestination,
   verifyAutomationLink,
 } from "@/lib/email/automation-links";
+import { utmForAutomation } from "@/lib/email/utm";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { isAutomationKey } from "@/lib/email/automations";
 import { hashIpAddress } from "@/lib/ip-hash";
@@ -87,6 +88,12 @@ export async function GET(request: NextRequest) {
     signedIn = false;
   }
   destination = destinationForVisitor(destination, signedIn);
+
+  // TAGGED AFTER THE VISITOR SWAP, NEVER BEFORE. destinationForVisitor clears
+  // `url.search` when it forwards a signed-out visitor off a gated account
+  // page, so tagging first would silently drop every parameter for guest
+  // buyers — half the marketing list. utm-wiring.test.ts pins this order.
+  destination = utmForAutomation(destination, automationKey);
 
   const clickedAt = new Date();
 

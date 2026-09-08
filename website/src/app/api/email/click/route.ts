@@ -8,6 +8,7 @@ import {
   verifyCampaignLink,
   verifyCampaignRecipient,
 } from "@/lib/email/campaign-links";
+import { utmForCampaign } from "@/lib/email/utm";
 import { normalizeLinkButtons } from "@/lib/email/affiliate-campaign-template";
 import { hashIpAddress } from "@/lib/ip-hash";
 import { stampCampaignEngagement } from "@/lib/email/engagement";
@@ -131,7 +132,11 @@ export async function GET(request: NextRequest) {
   // above must not cost the send log its record of the click.
   await stampCampaignEngagement("clicked", campaignId, email);
 
-  const response = NextResponse.redirect(destination, { status: 302 });
+  // Tagged last, on the destination that was actually chosen. The in-house
+  // attribution above is the number this business runs on; this is what lets
+  // GA4 agree with it instead of filing every one of these arrivals as
+  // `direct`. Tagging cannot fail the redirect — see utm.ts.
+  const response = NextResponse.redirect(utmForCampaign(destination, campaignId), { status: 302 });
   response.cookies.set({
     name: CAMPAIGN_COOKIE,
     value: encodeAttributionCookie(campaignId, clickedAt.getTime()),

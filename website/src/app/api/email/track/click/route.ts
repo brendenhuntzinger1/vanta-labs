@@ -14,6 +14,7 @@ import {
   CART_RECOVERY_COOKIE_MAX_AGE_SECONDS,
   encodeCartRecoveryCookie,
 } from "@/lib/email/cart-recovery-links";
+import { utmForCartRecovery } from "@/lib/email/utm";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +42,9 @@ export async function GET(request: NextRequest) {
   // taken from the URL, so the attribution cookie below names a cart the
   // shopper was actually mailed about.
   let clickedCartId: string | null = null;
+  // Which of the recovery emails this click came from. Tagged onto the
+  // destination below so GA4 can separate them the same way the sweep does.
+  let clickedStage: string | null = null;
   if (id) {
     try {
       const { data } = await supabaseAdmin
@@ -48,9 +52,10 @@ export async function GET(request: NextRequest) {
         .update({ clicked_at: new Date().toISOString() })
         .eq("id", id)
         .is("clicked_at", null)
-        .select("abandoned_cart_id")
+        .select("abandoned_cart_id, stage")
         .maybeSingle();
       if (data?.abandoned_cart_id) clickedCartId = String(data.abandoned_cart_id);
+      if (data?.stage) clickedStage = String(data.stage);
     } catch {
       // Non-fatal - the redirect still needs to happen.
     }
@@ -63,10 +68,11 @@ export async function GET(request: NextRequest) {
       try {
         const { data } = await supabaseAdmin
           .from("abandoned_cart_emails")
-          .select("abandoned_cart_id")
+          .select("abandoned_cart_id, stage")
           .eq("id", id)
           .maybeSingle();
         if (data?.abandoned_cart_id) clickedCartId = String(data.abandoned_cart_id);
+        if (data?.stage) clickedStage = String(data.stage);
       } catch {
         // Attribution is best-effort; the redirect is not.
       }
@@ -101,7 +107,9 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const response = NextResponse.redirect(destination);
+  // Tagged last, after the guest-grant parameter is attached, so nothing
+  // downstream rewrites the query string out from under it.
+  const response = NextResponse.redirect(utmForCartRecovery(destination, clickedStage));
 
   if (grant) {
     response.cookies.set({
