@@ -65,17 +65,47 @@ const POLL_MS = 2500;
 const REASSURE_AFTER_MS = 60_000;
 
 /**
+ * How long "Loading secure card entry…" may stand after the iframe is mounted.
+ *
+ * WHY THIS EXISTS. A shopper's screenshot from a real failed checkout showed
+ * that line still on the page while the card form beneath it was fully
+ * rendered, his card was typed in, and the processor had already answered. The
+ * only thing that clears it is `onReady`, so on that session the iframe's
+ * messages were not reaching this page AT ALL — which also means neither
+ * `onRequiresAction` nor `onFailure` would have arrived, whatever we register.
+ * (The SDK attaches its listener before appending the iframe, so it is not a
+ * race on our side; the likeliest cause is the iframe answering from an origin
+ * other than the one the SDK pins, which is Veyra's to explain.)
+ *
+ * This does not fix that channel and does not pretend to. It stops the ONE
+ * consequence that is ours: a page telling the customer it is still loading a
+ * form they are already typing into. `onReady` still clears it instantly on the
+ * normal path, so nothing about a healthy checkout changes.
+ */
+const READY_FALLBACK_MS = 4_000;
+
+/**
  * What the shopper is told once their bank asks for verification.
  *
  * It must not say "try again": at this point a charge is genuinely in flight
  * inside the iframe, and a second attempt is how someone pays twice. It must
  * say "don't refresh", because refreshing destroys the challenge — which is
  * precisely the dead end this page used to leave people in.
+ *
+ * AND IT MUST NOT PROMISE A STEP THAT MAY NOT ARRIVE. The first version of this
+ * sentence said "Finish the verification step in the form below", which assumes
+ * one is there. A shopper's screenshot of a real failed checkout shows it is not
+ * always: the iframe printed "Additional verification is required for this
+ * payment", greyed out its own pay button, and offered no code field, no bank
+ * app and no redirect. Telling that shopper to complete a step he cannot see is
+ * worse than saying nothing, because it reads as his mistake. So the sentence is
+ * conditional, and it carries a way out for the case where nothing appears.
  */
 const VERIFICATION_MESSAGE =
-  "Your bank is asking you to confirm this payment. Finish the verification step in the form below — "
-  + "it may be a code by text, or your banking app. Please don't close or refresh this page while you do; "
-  + "we'll take you straight to your receipt as soon as it clears.";
+  "Your bank is asking you to confirm this payment. If a verification step appears in the form below — "
+  + "a code by text, or your banking app — complete it, and please don't close or refresh this page while "
+  + "you do. If nothing appears, this card can't finish the payment here: use a different card, or contact "
+  + "us and we'll sort it out.";
 
 type MountHandle = { destroy?: () => void };
 
@@ -219,10 +249,17 @@ export default function VeyraCheckout({
 
   useEffect(() => {
     let cancelled = false;
+    let readyFallback: number | undefined;
 
     loadScript()
       .then((Veyra) => {
         if (cancelled || !containerRef.current) return;
+        // The iframe is about to exist whether or not it ever says `ready`, so
+        // the loading line gets a deadline. Only ever promotes "loading" — an
+        // error already shown must not be painted over by a timer.
+        readyFallback = window.setTimeout(() => {
+          if (!cancelled) setStatus((current) => (current === "loading" ? "ready" : current));
+        }, READY_FALLBACK_MS);
         handleRef.current = Veyra.mount(containerRef.current, {
           sessionId,
           onReady: () => {
@@ -308,6 +345,7 @@ export default function VeyraCheckout({
 
     return () => {
       cancelled = true;
+      window.clearTimeout(readyFallback);
       try {
         handleRef.current?.destroy?.();
       } catch {

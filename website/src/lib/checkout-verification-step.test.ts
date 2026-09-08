@@ -157,6 +157,41 @@ describe("what the shopper is told while their bank is asking", () => {
     expect(copy).toMatch(/form below/i);
     expect(copy).not.toMatch(/form above/i);
   });
+
+  it("does not promise a verification step that may never appear", () => {
+    // A real shopper's screenshot: the iframe printed "Additional verification
+    // is required for this payment", greyed out its own pay button, and offered
+    // no code field, no bank app and no redirect. Copy that instructs him to
+    // finish a step he cannot see reads as his mistake rather than ours.
+    expect(copy).toMatch(/\bif\b/i);
+    expect(copy).not.toMatch(/finish the verification step in the form/i);
+  });
+
+  it("tells them what to do when nothing appears", () => {
+    expect(copy).toMatch(/nothing appears|does not appear|doesn't appear/i);
+    expect(copy).toMatch(/different card|contact/i);
+  });
+});
+
+describe("the loading line cannot outlive the form it describes", () => {
+  it("does not hang the loading state on onReady alone", () => {
+    // That screenshot also showed "Loading secure card entry…" still on the
+    // page while the card form beneath it was rendered and typed into. Only
+    // onReady clears it, so on that session no iframe message reached the page
+    // at all. The channel is Veyra's to explain; the page claiming to be
+    // loading a form the customer is using is ours.
+    expect(page).toMatch(/READY_FALLBACK_MS/);
+    expect(page).toMatch(/setTimeout\(\s*\(\)\s*=>\s*\{[^}]*current === "loading"/);
+  });
+
+  it("the fallback only ever promotes loading, never paints over an error", () => {
+    const guard = page.slice(page.indexOf("readyFallback = window.setTimeout"));
+    expect(guard.slice(0, 300)).toMatch(/current === "loading" \? "ready" : current/);
+  });
+
+  it("clears the fallback timer on unmount", () => {
+    expect(page).toMatch(/window\.clearTimeout\(readyFallback\)/);
+  });
 });
 
 describe("a stalled verification is never reported to the shopper as a bank decline", () => {
