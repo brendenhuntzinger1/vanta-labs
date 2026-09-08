@@ -251,7 +251,13 @@ async function resolveCampaignRecipients(campaign: CampaignRow): Promise<Recipie
   }
 
   const segment = isCampaignSegment(campaign.segment) ? (campaign.segment as CampaignSegment) : "all";
-  const emails = await resolveAudience({ segment, segmentParam: campaign.segment_param });
+  // The rule and the category param share segment_param; resolveAudience only
+  // reads the one its segment calls for, so passing both is unambiguous.
+  const emails = await resolveAudience({
+    segment,
+    segmentParam: campaign.segment_param,
+    rule: campaign.segment_param,
+  });
   return emails.map((email) => ({ campaign_id: campaignId, email, status: "pending" }));
 }
 

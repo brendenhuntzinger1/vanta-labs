@@ -3,6 +3,7 @@ import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest
 import { canManageEmailCampaigns } from "@/lib/admin-roles";
 import { validateCampaignInput } from "@/lib/admin-email";
 import { isCampaignSegment, resolveAudience, type CampaignSegment } from "@/lib/email/audience";
+import { parseSegmentRule } from "@/lib/email/segment-rules";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { resolveCampaignGift } from "@/lib/offers/campaign-gift-server";
 
@@ -30,6 +31,18 @@ export async function POST(request: Request) {
 
   if (!isCampaignSegment(value.segment)) {
     return NextResponse.json({ success: false, error: "Unknown audience segment." }, { status: 400 });
+  }
+
+  // A RULE IS VALIDATED WHERE THE OPERATOR IS STANDING. It rides in
+  // segment_param, which email-campaigns.sql already reserves as free text for
+  // exactly this. Refusing here means a rule the engine cannot read is a form
+  // error the operator can fix; accepting it would make it a campaign that
+  // silently reaches nobody at send time, hours later, with no one watching.
+  if (value.segment === "rule" && !parseSegmentRule(value.segmentParam)) {
+    return NextResponse.json(
+      { success: false, error: "That audience rule could not be read. Check the conditions and try again." },
+      { status: 400 },
+    );
   }
 
   // THE GIFT'S PRODUCT MUST BE ON SALE, and the operator finds out now rather
@@ -110,7 +123,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const emails = await resolveAudience({ segment: segment as CampaignSegment, segmentParam });
+    const emails = await resolveAudience({ segment: segment as CampaignSegment, segmentParam, rule: segmentParam });
     // The COUNT only. The admin needs to know how many people a send reaches,
     // not to be handed the customer list through an API response.
     return NextResponse.json({ success: true, count: emails.length });
