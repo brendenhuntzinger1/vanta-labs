@@ -602,6 +602,37 @@ describe("a replaced stage whose gift also carries a percentage", () => {
     expect(state.sends[0].text).toContain("2 free BAC Water are added to your order");
   });
 
+  // FOUR REAL OVERRIDE ROWS WERE WAITING TO SEND WITH THIS EXACT SHAPE.
+  //
+  // The operator typed "Free shipping" into the perks of every unconsumed
+  // override, and the sweep adds its own when the sitewide switch is on. The
+  // highest-value cart in the store was two hours from being mailed a list
+  // reading "Free shipping / Free shipping / 2-day shipping, on us". Caught by
+  // reading the pending rows during a scheduled check, not by any test — so
+  // this is the test.
+  it("says a perk once, however many places it came from", async () => {
+    const cart = seedCart({ hoursAgo: 73 });
+    for (const stage of ["t30m", "t12h", "t24h"]) {
+      state.db.stages.push({ id: `dedupe-${stage}`, abandoned_cart_id: cart.id, stage, sent_at: new Date().toISOString() });
+    }
+    state.db.overrides.push({
+      abandoned_cart_id: String(cart.id), stage: "t72h", offer_key: "labor_day_bac_water_2_40",
+      // As stored on the live rows: the operator's own wording, plus a second
+      // perk, plus a casing/spacing variant that must also collapse.
+      perks: ["Free shipping", "2-day shipping, on us", "  free SHIPPING "],
+      note: "72h follow-up", consumed_at: null, consumed_email_id: null,
+    });
+
+    await runAbandonedCartSweep();
+
+    const html = state.sends[0].html;
+    // The bullets themselves, not the whole message: the body states the
+    // store's shipping terms elsewhere too, and that sentence is not a perk.
+    const bullets = (html.match(/&#8226;<\/span>&nbsp;&nbsp;([^<]+)/g) ?? [])
+      .map((bullet) => bullet.replace(/.*&nbsp;/, "").trim());
+    expect(bullets).toEqual(["Free shipping", "2-day shipping, on us"]);
+  });
+
   it("still mints exactly one entitlement, and only for that cart", async () => {
     const chosen = seedCart({ id: "cart-follow", email: "chosen@example.com", hoursAgo: 73 });
     const bystander = seedCart({ id: "cart-bystander", email: "other@example.com", hoursAgo: 73 });
