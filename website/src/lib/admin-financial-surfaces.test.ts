@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Pool } from "pg";
@@ -364,7 +364,42 @@ describeDb("row caps on the profit reads", () => {
     await reset();
   });
 
-  /** 1,500 identical $100 sales in the last 30 days. Truth: $150,000, 1,500 orders. */
+  // CLEAN UP EVEN WHEN THE TEST DID NOT FINISH.
+  //
+  // beforeEach already truncates, which is enough when every test ends where it
+  // says it does. A test killed by a timeout does not: vitest abandons the test
+  // function, but the queries it already issued are not cancelled and keep
+  // landing afterwards. On 2026-09-08 that put rows in the table AFTER the next
+  // test's beforeEach had truncated, and the next seed died on
+  // orders_order_id_key — one slow runner, three failures, and an error naming
+  // a duplicate key, which reads like a data bug and is a clock.
+  //
+  // Truncating on the way out as well closes the window from the other side.
+  // `catch` because a cleanup failure must never replace the real failure with
+  // a less informative one.
+  afterEach(async () => {
+    await pg?.query("truncate public.orders, public.order_items, public.commissions").catch(() => {});
+  });
+
+  /**
+   * 1,500 identical $100 sales in the last 30 days. Truth: $150,000, 1,500 orders.
+   *
+   * ONE STATEMENT, NOT 1,500. `seed()` issues a query per row, which is fine for
+   * the handful every other test here seeds and was not fine for this: 1,500
+   * sequential round trips ran past vitest's 5s default on a loaded runner, and
+   * CI went red on 2026-09-08 with application code byte-identical to the run
+   * that had passed eight minutes earlier.
+   *
+   * The timeout was also not the whole cost. A test killed mid-seed leaves the
+   * rows it had already inserted behind, so the NEXT test's seed died on
+   * `orders_order_id_key` — one slow runner produced three failures and an
+   * error naming a duplicate key, which reads like a data bug and is a clock.
+   *
+   * These rows carry no order_items or commissions (no unitCostCents, quantity
+   * or commissionAmount), so the per-row branches in `seed()` are dead for them
+   * and a single multi-row insert is exactly equivalent. It runs in one round
+   * trip instead of 1,500.
+   */
   async function seed1500() {
     const rows: SeedOrder[] = [];
     for (let i = 0; i < 1500; i += 1) {
@@ -373,7 +408,31 @@ describeDb("row caps on the profit reads", () => {
         paymentMethod: "zelle", createdAt: iso(NOW - (i % 25) * DAY),
       });
     }
-    await seed(rows);
+
+    // Built from seedOrderSql so the column list and defaults stay in one
+    // place: if the fixture gains a column, this follows it rather than drifting.
+    const columns = `order_id, order_number, customer_email, state, tax_state,
+      subtotal, shipping_amount, discount_amount, handling_fee, tax_amount, tax_rate_percent,
+      card_processing_fee, shipping_protection_fee, store_credit_redeemed_cents, points_redeemed,
+      amount_paid, refund_amount, payment_method, payment_status, order_type, paid_at, created_at`;
+    const perRow = seedOrderSql(rows[0]).values.length;
+    const values: unknown[] = [];
+    const tuples = rows.map((row, index) => {
+      values.push(...seedOrderSql(row).values);
+      const params = Array.from({ length: perRow }, (_, k) => `$${index * perRow + k + 1}`);
+      return `(${params.join(",")})`;
+    });
+
+    // ON CONFLICT DO NOTHING is not papering over a bug: these ids are
+    // deterministic and synthetic, so the only way one can already exist is a
+    // row leaked by an abandoned run. It cannot hide a missing row either —
+    // every caller asserts the exact count of 1500, so under-seeding still
+    // fails, loudly and with a number.
+    await pg.query(
+      `insert into public.orders (${columns}) values ${tuples.join(",")}
+       on conflict (order_id) do nothing`,
+      values,
+    );
   }
 
   it("reports every order when the row source is not capped", async () => {
@@ -381,7 +440,7 @@ describeDb("row caps on the profit reads", () => {
     const { getProfitWindowMetrics, getProfitDashboard } = await import("@/lib/admin-profit");
     expect((await getProfitWindowMetrics(NOW)).ordersLast30Days).toBe(1500);
     expect((await getProfitDashboard(NOW)).lifetime.orderCount).toBe(1500);
-  });
+  }, 30_000);
 
   it("does not silently under-report when the row source caps the response", async () => {
     // PostgREST applies `db-max-rows` when the project sets one, capping EVERY
@@ -402,7 +461,7 @@ describeDb("row caps on the profit reads", () => {
 
     expect(metrics.ordersLast30Days).toBe(1500);
     expect(metrics.truncated).toBe(false);
-  });
+  }, 30_000);
 
   it("reports the WHOLE figure under a cap far below the page size", async () => {
     // Strengthened for the same reason as the reconciliation test above. The
@@ -420,7 +479,7 @@ describeDb("row caps on the profit reads", () => {
 
     expect(metrics.ordersLast30Days).toBe(1500);
     expect(metrics.truncated).toBe(false);
-  });
+  }, 30_000);
 });
 
 describeDb("sales tax — the number filed with each state", () => {
