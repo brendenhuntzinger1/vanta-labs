@@ -4,6 +4,7 @@ import { canManageEmailCampaigns } from "@/lib/admin-roles";
 import { validateCampaignInput } from "@/lib/admin-email";
 import { isCampaignSegment } from "@/lib/email/audience";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { resolveCampaignGift } from "@/lib/offers/campaign-gift-server";
 
 async function guard(request: Request) {
   const session = await verifyAdminSessionFromRequest(request);
@@ -23,7 +24,7 @@ export async function GET(request: Request, context: { params: Promise<{ campaig
   const { campaignId } = await context.params;
   const { data, error } = await supabaseAdmin
     .from("email_campaigns")
-    .select("id, name, subject, preview_text, headline, body, promo_code, cta_label, cta_path, segment, segment_param, status, scheduled_at, audience_kind")
+    .select("id, name, subject, preview_text, headline, body, promo_code, cta_label, cta_path, segment, segment_param, status, scheduled_at, audience_kind, offer_key, offer_custom")
     .eq("id", campaignId)
     .maybeSingle();
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 });
@@ -59,6 +60,15 @@ export async function PATCH(request: Request, context: { params: Promise<{ campa
     return NextResponse.json({ success: false, error: "This campaign has already been sent and can no longer be edited." }, { status: 409 });
   }
 
+  // The same gift check the create route makes, for the same reason: an edit
+  // that repoints a gift at a retired product must be refused here, while the
+  // operator is looking at the form, rather than becoming an email that
+  // promises a product the checkout will never add.
+  const giftCheck = await resolveCampaignGift({ offer_key: value.offerKey, offer_custom: value.offerCustom });
+  if (giftCheck.error) {
+    return NextResponse.json({ success: false, error: giftCheck.error }, { status: 400 });
+  }
+
   const { error: updateError } = await supabaseAdmin
     .from("email_campaigns")
     .update({
@@ -72,6 +82,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ campa
       cta_path: value.ctaPath,
       segment: value.segment,
       segment_param: value.segmentParam,
+      offer_key: value.offerKey,
+      offer_custom: value.offerCustom,
       updated_at: new Date().toISOString(),
     })
     .eq("id", campaignId);

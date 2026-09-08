@@ -10,6 +10,15 @@ import { resolveAffiliateAudience, type AffiliateFilter } from "@/lib/email/affi
 import { buildAffiliateCampaignEmail, normalizeLinkButtons } from "@/lib/email/affiliate-campaign-template";
 import type { AffiliateMergeContext } from "@/lib/email/affiliate-merge";
 import { getSiteUrl } from "@/lib/env";
+import { claimMarketingSend } from "@/lib/email/frequency";
+import { campaignOfferKey } from "@/lib/offers/campaign-gift";
+import { resolveCampaignGift } from "@/lib/offers/campaign-gift-server";
+import {
+  describeGiftTerms,
+  issueResolvedOffer,
+  revokeUnredeemedOffer,
+  type GiftConfig,
+} from "@/lib/offers/customer-offers";
 
 /**
  * Queueing and sending campaigns.
@@ -72,6 +81,15 @@ export type CampaignRow = {
   affiliate_filter?: string | null;
   affiliate_ids?: string[] | null;
   link_buttons?: unknown;
+  /**
+   * The gift this campaign carries, if any. Exactly one may be set — a
+   * catalogue key or an operator-built one — and the database CHECK
+   * `email_campaigns_one_gift_source` is what makes that a fact rather than an
+   * intention. Both null means no gift, which is every campaign sent before
+   * 2026-09-08.
+   */
+  offer_key?: string | null;
+  offer_custom?: unknown;
 };
 
 /** Statuses a campaign may be in when a send or a schedule is allowed to start. */
@@ -370,12 +388,28 @@ export async function sendCampaignBatch(input: {
 
   const { data: campaignData, error: campaignError } = await supabaseAdmin
     .from("email_campaigns")
-    .select("id, name, subject, preview_text, headline, body, promo_code, cta_label, cta_path, segment, segment_param, status, scheduled_at, audience_kind, affiliate_filter, affiliate_ids, link_buttons")
+    .select("id, name, subject, preview_text, headline, body, promo_code, cta_label, cta_path, segment, segment_param, status, scheduled_at, audience_kind, affiliate_filter, affiliate_ids, link_buttons, offer_key, offer_custom")
     .eq("id", input.campaignId)
     .maybeSingle();
   if (campaignError) throw campaignError;
   if (!campaignData) throw new Error("Campaign not found");
   const campaign = campaignData as CampaignRow;
+
+  // THE GIFT IS RESOLVED ONCE PER SWEEP, NOT ONCE PER RECIPIENT.
+  //
+  // It is the same answer for everybody in the batch and it costs a catalogue
+  // read, so asking per recipient would multiply that read by the audience for
+  // no new information.
+  //
+  // A campaign that SAYS it carries a gift and cannot deliver one does not
+  // send. Throwing here is the same shape as the marketingBlockedReason check
+  // above: nothing is consumed, no recipient is marked, the campaign stays
+  // queued, and the admin sees why. The alternative — sending copy that
+  // promises a free vial with a token that grants nothing — is the failure
+  // that costs a customer rather than a sweep.
+  const giftResolution = await resolveCampaignGift(campaign);
+  if (giftResolution.error) throw new Error(giftResolution.error);
+  const gift = giftResolution.gift ?? null;
 
   await reclaimStaleClaims(campaign.id, now);
 
@@ -387,6 +421,90 @@ export async function sendCampaignBatch(input: {
   // delivered, suppressed or a returned failure. See CONSECUTIVE_THROW_ABORT.
   let consecutiveThrows = 0;
   let sweepAborted = false;
+
+  /**
+   * TAKE THE INBOX FIRST, MINT THE GIFT SECOND.
+   *
+   * ORDER IS THE WHOLE POINT. A gift's token has to be in the button and its
+   * terms have to be in the body, so it must be minted BEFORE the message is
+   * rendered. Mint first and every deferral leaves a live, spendable,
+   * unannounced offer behind — and because a deferred recipient goes back to
+   * pending, the next sweep mints another one. A campaign deferred for a week
+   * would leave seven.
+   *
+   * So the frequency claim is taken here, explicitly, exactly as cart recovery
+   * does it ("cart recovery does this so the claim precedes its coupon mint").
+   * A deferral or a duplicate costs nothing because nothing has been minted
+   * yet; only a granted claim proceeds to the mint, and sendMarketingEmail is
+   * then handed that claim rather than taking a second one.
+   *
+   * Campaigns WITHOUT a gift keep the path they have always had — no explicit
+   * claim, sendMarketingEmail takes its own. That is deliberate: this is the
+   * highest-traffic marketing path in the app and the change should reach only
+   * the campaigns that need it.
+   */
+  const takeGiftClaim = async (
+    email: string,
+    config: GiftConfig,
+  ): Promise<
+    | { outcome: "ready"; claimedLogId: string; token: string; terms: string }
+    | { outcome: "blocked"; result: Awaited<ReturnType<typeof sendMarketingEmail>> }
+  > => {
+    const claim = await claimMarketingSend({
+      email,
+      campaignType: "campaign",
+      referenceId: campaign.id,
+      templateKey: "campaign",
+    });
+
+    if (claim.outcome === "deferred") {
+      return {
+        outcome: "blocked",
+        result: {
+          success: false,
+          deferred: true,
+          retryAt: claim.retryAt,
+          error: "Deferred: this address received a marketing email inside the last 24 hours.",
+        },
+      };
+    }
+    if (claim.outcome === "duplicate") {
+      return { outcome: "blocked", result: { success: false, duplicate: true, error: "Already sent: the send-once slot for this message is taken." } };
+    }
+    if (claim.outcome !== "claimed") {
+      // "refused" or "unavailable". A gift-carrying campaign does NOT fall back
+      // to the guard-less path the way an ordinary marketing send does: without
+      // a claim there is nothing holding the inbox between the mint and the
+      // wire, so a concurrent sweep could mint a second gift for the same
+      // person. Failing this recipient costs one retry; the alternative costs a
+      // duplicated gift.
+      return { outcome: "blocked", result: { success: false, error: "Could not claim this send, so no gift was issued." } };
+    }
+
+    const issued = await issueResolvedOffer({
+      offerKey: campaignOfferKey(campaign.id),
+      config,
+      email,
+      referenceId: campaign.id,
+    });
+
+    if (!issued) {
+      // THE CLAIM IS RELEASED, or it holds this address's inbox for fifteen
+      // minutes and its send-once slot forever, for a message that never went.
+      await supabaseAdmin.from("email_send_log").update({ status: "failed" }).eq("id", claim.logId);
+      return { outcome: "blocked", result: { success: false, error: "Could not issue the gift this campaign promises, so nothing was sent." } };
+    }
+
+    return {
+      outcome: "ready",
+      claimedLogId: claim.logId,
+      token: issued.token,
+      // From the SAME config the mint wrote onto the row, so the sentence the
+      // customer reads and the terms customer_offer_reserve enforces cannot
+      // disagree.
+      terms: describeGiftTerms(config, issued.expiresAt),
+    };
+  };
 
   while (Date.now() - started < budget) {
     const batch = await claimBatch(campaign.id, input.batchSize ?? CAMPAIGN_BATCH_SIZE, Date.now());
@@ -427,8 +545,45 @@ export async function sendCampaignBatch(input: {
       // change, a malformed link button), so the template build is inside the
       // same guard. A throw is treated as exactly what it is: this recipient's
       // attempt failed, and it is retried on the next sweep like any other.
-      let result: Awaited<ReturnType<typeof sendMarketingEmail>>;
-      try {
+      // THE GIFT IS SETTLED BEFORE ANYTHING IS RENDERED OR SENT.
+      //
+      // A GIFT ONLY RIDES A CUSTOMER CAMPAIGN. Affiliate broadcasts are
+      // deliberately untouched: the affiliate programme is a separate system
+      // with its own templates and its own commercial terms, and a customer
+      // gift minted against an affiliate's address would be neither.
+      //
+      // `result` is set here only when the claim BLOCKED — deferred, duplicate,
+      // or unclaimable — in which case nothing was minted, nothing is sent, and
+      // the status branches below record exactly that.
+      let result: Awaited<ReturnType<typeof sendMarketingEmail>> | null = null;
+      let claimedLogId: string | null = null;
+      let offerTerms: string | null = null;
+      // Scoped out here so every failure branch below can withdraw a gift that
+      // was minted for a message which then never left.
+      let mintedToken: string | null = null;
+
+      if (gift && !isAffiliate) {
+        try {
+          const attempt = await takeGiftClaim(recipient.email, gift);
+          if (attempt.outcome === "blocked") {
+            result = attempt.result;
+          } else {
+            claimedLogId = attempt.claimedLogId;
+            mintedToken = attempt.token;
+            offerTerms = attempt.terms;
+          }
+          consecutiveThrows = 0;
+        } catch (error) {
+          result = {
+            success: false,
+            error: error instanceof Error ? error.message : "the gift could not be issued",
+          };
+          consecutiveThrows += 1;
+          sweepAborted = consecutiveThrows >= CONSECUTIVE_THROW_ABORT;
+        }
+      }
+
+      if (result === null) try {
         const template = isAffiliate
           ? buildAffiliateCampaignEmail({
               subject: campaign.subject,
@@ -450,7 +605,15 @@ export async function sendCampaignBatch(input: {
               body: campaign.body,
               promoCode: campaign.promo_code,
               ctaLabel: campaign.cta_label,
-              ctaUrl: buildCampaignClickUrl(campaign.id, recipient.email),
+              // The gift's token rides the button when there is one, so the
+              // click that brings the customer back is also the moment the
+              // gift lands in their browser.
+              ctaUrl: buildCampaignClickUrl(campaign.id, recipient.email, mintedToken),
+              // The store's own statement of what the till will honour —
+              // minimum, deadline, one per customer — rendered under whatever
+              // the operator wrote. Copy that promises more than the checkout
+              // applies is the failure this line exists to prevent.
+              offerTerms,
               postalAddress: config.marketingPostalAddress,
             });
 
@@ -466,6 +629,12 @@ export async function sendCampaignBatch(input: {
           referenceId: campaign.id,
           templateKey: isAffiliate ? "affiliate_campaign" : "campaign",
           openTrackingPixelUrl: buildCampaignOpenUrl(campaign.id, recipient.email),
+          // A gift-carrying send already holds its claim, taken before the
+          // mint. Passing it means the wrapper closes THAT row rather than
+          // asking the guard for a second one — which would answer "deferred",
+          // because the row this send is holding is itself a marketing send
+          // inside the window.
+          claimedLogId,
           ...template,
         });
         // It RESOLVED — delivered, suppressed, or a returned failure. The
@@ -492,6 +661,21 @@ export async function sendCampaignBatch(input: {
         // sweeps) and costs an outage one attempt in total.
         consecutiveThrows += 1;
         sweepAborted = consecutiveThrows >= CONSECUTIVE_THROW_ABORT;
+      }
+
+      // A GIFT THAT WAS MINTED FOR A MESSAGE THAT NEVER ARRIVED IS WITHDRAWN.
+      //
+      // The token exists only in this process — it is never stored, only its
+      // hash — so a send that failed after the mint leaves a live, spendable,
+      // unannounced offer that nobody can be told about and that blocks the
+      // one-live-offer index for the retry. Withdrawing it makes the retry a
+      // clean mint rather than a reissue, and closes the window in which an
+      // offer nobody was told about stands open against the store.
+      //
+      // Only ever touches a row that is still unspent, so a token the customer
+      // is already spending at this instant is left exactly as it is.
+      if (mintedToken && !result.success) {
+        await revokeUnredeemedOffer(mintedToken, "send_failed");
       }
 
       const attempts = recipient.attempts + 1;

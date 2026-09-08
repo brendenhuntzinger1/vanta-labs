@@ -22,7 +22,19 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(request: Request) {
   const status = await readOfferStatus(readOfferCookie(request));
-  if (!status || !isOfferKey(status.offerKey)) {
+  // A LIVE OFFER IS A LIVE OFFER, WHETHER OR NOT ITS KEY IS IN THE CATALOGUE.
+  //
+  // This used to also require `isOfferKey(status.offerKey)`, which was true of
+  // every offer that existed when it was written. A campaign gift files under
+  // `campaign:<id>` deliberately — that is what gives one live gift per
+  // recipient PER CAMPAIGN rather than one ever — so the check silently hid
+  // every campaign gift from the cart banner.
+  //
+  // The failure mode was the quiet kind: the token still worked, quoteOrder
+  // still priced the gift from the offer row, and the customer was simply never
+  // told they had one. Caught by following a real delivered email through the
+  // local harness, not by reading this file.
+  if (!status) {
     return NextResponse.json({ offer: null });
   }
 
@@ -32,7 +44,16 @@ export async function GET(request: Request) {
   // so a renamed product reads correctly in a banner shown weeks after the
   // token was minted. A shipping gift has no product to name, so it falls back
   // to the catalogue entry's own label.
-  let rewardName: string = OFFER_CATALOG[status.offerKey].label;
+  // A catalogue gift keeps the label that was written for it. Anything else —
+  // a gift an operator built for one campaign — is named from what the offer
+  // row actually grants, because there is no catalogue entry to ask.
+  let rewardName: string = isOfferKey(status.offerKey)
+    ? OFFER_CATALOG[status.offerKey].label
+    : status.rewardKind === "free_shipping_percent"
+      ? `Free shipping + ${status.percentOff ?? 0}% off`
+      : status.rewardKind === "percent"
+        ? `${status.percentOff ?? 0}% off`
+        : "Free shipping";
   if (status.productSlug) {
     try {
       const [product] = await getCatalogProductsBySlugs([status.productSlug]);

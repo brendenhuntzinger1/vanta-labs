@@ -4,6 +4,7 @@ import { canManageEmailCampaigns } from "@/lib/admin-roles";
 import { validateCampaignInput } from "@/lib/admin-email";
 import { isCampaignSegment, resolveAudience, type CampaignSegment } from "@/lib/email/audience";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { resolveCampaignGift } from "@/lib/offers/campaign-gift-server";
 
 // Create a campaign (always as a draft — composing and sending are separate
 // actions, so a mistyped subject line can't reach the whole list on one click).
@@ -31,6 +32,21 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: false, error: "Unknown audience segment." }, { status: 400 });
   }
 
+  // THE GIFT'S PRODUCT MUST BE ON SALE, and the operator finds out now rather
+  // than from a support ticket. quoteOrder resolves the product half of a gift
+  // with an exact slug match and no fallback, so a gift naming a product that
+  // is not live does not throw — the free line is simply never added, the
+  // percentage half still applies, and the customer gets the discount the email
+  // promised and none of the product it promised.
+  //
+  // The sender checks again at mint time, because a product can be retired
+  // between saving a campaign and sending it. This one is the fast feedback;
+  // that one is the guarantee.
+  const giftCheck = await resolveCampaignGift({ offer_key: value.offerKey, offer_custom: value.offerCustom });
+  if (giftCheck.error) {
+    return NextResponse.json({ success: false, error: giftCheck.error }, { status: 400 });
+  }
+
   const { data, error } = await supabaseAdmin
     .from("email_campaigns")
     .insert({
@@ -44,6 +60,8 @@ export async function POST(request: Request) {
       cta_path: value.ctaPath,
       segment: value.segment,
       segment_param: value.segmentParam,
+      offer_key: value.offerKey,
+      offer_custom: value.offerCustom,
       status: "draft",
       created_by: session.username,
     })

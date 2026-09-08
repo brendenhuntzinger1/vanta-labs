@@ -633,7 +633,9 @@
     "audience_kind",
     "affiliate_filter",
     "affiliate_ids",
-    "link_buttons"
+    "link_buttons",
+    "offer_key",
+    "offer_custom"
   ],
   "email_delivery_events": [
     "id",

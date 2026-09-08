@@ -7,6 +7,8 @@ import { isSafeSitePath } from "@/lib/email/cta-path";
 import { getSiteUrl } from "@/lib/env";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 import { mergeSubscriberDirectory, type SubscriberDirectory } from "@/lib/email/subscriber-directory";
+import { validateCampaignGift, type CampaignGiftSpec } from "@/lib/offers/campaign-gift";
+import { isOfferKey } from "@/lib/offers/customer-offers";
 
 /**
  * Reporting for the admin Email tab.
@@ -297,6 +299,10 @@ async function loadCampaignDeliveryOutcomes(campaignIds: string[]): Promise<Map<
 export function validateCampaignInput(input: Record<string, unknown>): { ok: true; value: {
   name: string; subject: string; previewText: string | null; headline: string; body: string;
   promoCode: string | null; ctaLabel: string; ctaPath: string; segment: string; segmentParam: string | null;
+  /** A catalogue gift key, or null. Never set at the same time as offerCustom. */
+  offerKey: string | null;
+  /** An operator-built gift, already validated, or null. */
+  offerCustom: CampaignGiftSpec | null;
 } } | { ok: false; error: string } {
   const text = (value: unknown, max: number) => String(value ?? "").trim().slice(0, max);
 
@@ -318,6 +324,43 @@ export function validateCampaignInput(input: Record<string, unknown>): { ok: tru
     return { ok: false, error: "The button link must be a path on this site, like /products." };
   }
 
+  // THE GIFT. Either a catalogue key, or one the operator built, or neither —
+  // never both, which is also a database CHECK so a hand-written row cannot
+  // carry two answers to "what did this email promise".
+  //
+  // The custom gift is validated HERE rather than trusted from the composer,
+  // because the composer's copy of validateCampaignGift is a convenience for
+  // the person typing and this is the boundary. The product slug is not checked
+  // against the catalogue at this layer — the route does that, and the sender
+  // does it again at mint time, because a product can be retired between saving
+  // a campaign and sending it.
+  const offerKey = text(input.offerKey, 80) || null;
+  const rawCustom = input.offerCustom ?? null;
+  const hasCustom = Boolean(rawCustom) && typeof rawCustom === "object";
+  if (offerKey && hasCustom) {
+    return { ok: false, error: "Choose either a gift from the catalogue or a custom one, not both." };
+  }
+  if (offerKey && !isOfferKey(offerKey)) {
+    return { ok: false, error: "That gift is not one this store knows how to grant." };
+  }
+  let offerCustom: CampaignGiftSpec | null = null;
+  if (hasCustom) {
+    const verdict = validateCampaignGift(rawCustom, null);
+    if (!verdict.ok) return { ok: false, error: verdict.error };
+    const { label, reward, minSubtotalCents, ttlDays } = verdict.config;
+    // Stored back in the SPEC shape rather than the reward shape, so what the
+    // composer reloads is what it saved and the round trip is lossless.
+    offerCustom = {
+      label,
+      rewardKind: reward.kind,
+      ...("productSlug" in reward ? { productSlug: reward.productSlug } : {}),
+      ...("quantity" in reward && reward.quantity ? { quantity: reward.quantity } : {}),
+      ...("percent" in reward ? { percent: reward.percent } : {}),
+      minSubtotalCents,
+      ttlDays,
+    };
+  }
+
   return {
     ok: true,
     value: {
@@ -331,6 +374,8 @@ export function validateCampaignInput(input: Record<string, unknown>): { ok: tru
       ctaPath: ctaPathRaw,
       segment: text(input.segment, 40) || "all",
       segmentParam: text(input.segmentParam, 80) || null,
+      offerKey,
+      offerCustom,
     },
   };
 }

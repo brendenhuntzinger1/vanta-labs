@@ -14,6 +14,37 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * The products a campaign gift may hand out.
+ *
+ * Only what is genuinely purchasable, and the filters are the same four
+ * getCatalogProductsBySlugs applies — because a gift naming anything else
+ * resolves to nothing at the till, and quoteOrder's exact-slug match has no
+ * fallback to notice. The operator picks from this list rather than typing a
+ * slug, which is what stops the class of bug that shipped a percentage and no
+ * vial for weeks after a rename.
+ *
+ * Non-fatal: a failed read shows an empty product list, so the catalogue gifts
+ * and the percentage-only custom gifts still work.
+ */
+async function loadGiftProducts(): Promise<Array<{ slug: string; name: string }>> {
+  try {
+    const { data } = await supabaseAdmin
+      .from("products")
+      .select("slug, name")
+      .eq("is_active", true)
+      .eq("is_enabled", true)
+      .eq("is_published", true)
+      .eq("is_archived", false)
+      .order("name");
+    return (data ?? [])
+      .map((row) => ({ slug: String(row.slug ?? ""), name: String(row.name ?? row.slug ?? "") }))
+      .filter((row) => row.slug);
+  } catch {
+    return [];
+  }
+}
+
 async function loadCategories(): Promise<string[]> {
   try {
     const { data } = await supabaseAdmin.from("products").select("category").not("category", "is", null);
@@ -43,7 +74,7 @@ export default async function AdminEmailPage({
   // Every load is independently fault-tolerant: a campaign system that can't
   // render because one query failed is worse than one showing partial data.
   const emptyDirectory = { rows: [], counts: { subscribed: 0, unsubscribed: 0, bounced: 0, complained: 0 }, truncated: false };
-  const [dashboard, automations, automationStats, emailSettings, categories, subscriberDirectory, sendLedger] = canManage
+  const [dashboard, automations, automationStats, emailSettings, categories, giftProducts, subscriberDirectory, sendLedger] = canManage
     ? await Promise.all([
         getEmailDashboard().catch(() => ({ subscribers: 0, campaigns: [], totals: { sent: 0, opened: 0, clicked: 0, orders: 0, revenue: 0 } })),
         loadAutomations().catch(() => []),
@@ -56,13 +87,14 @@ export default async function AdminEmailPage({
           emptyAutomationStatsReport(statsRange, error instanceof Error ? error.message : String(error))),
         getEmailAdminSettings().catch(() => null),
         loadCategories(),
+        loadGiftProducts(),
         loadSubscriberDirectory(),
         // Never rejects on its own; the catch keeps one failed read from taking
         // the whole page down, exactly like every other load in this list.
         loadSendLedger().catch((error: unknown) =>
           emptySendLedger(error instanceof Error ? error.message : String(error))),
       ])
-    : [{ subscribers: 0, campaigns: [], totals: { sent: 0, opened: 0, clicked: 0, orders: 0, revenue: 0 } }, [], emptyAutomationStatsReport(statsRange), null, [], emptyDirectory, emptySendLedger()];
+    : [{ subscribers: 0, campaigns: [], totals: { sent: 0, opened: 0, clicked: 0, orders: 0, revenue: 0 } }, [], emptyAutomationStatsReport(statsRange), null, [], [], emptyDirectory, emptySendLedger()];
 
   return (
     <div className="vl-page-shell min-h-screen bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.1),transparent_52%),linear-gradient(145deg,#04060f_0%,#0b1324_50%,#060911_100%)] px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
@@ -84,6 +116,7 @@ export default async function AdminEmailPage({
             automationStats={automationStats}
             offerChoices={Object.entries(OFFER_CATALOG).map(([key, value]) => ({ key, label: value.label }))}
             segments={CAMPAIGN_SEGMENTS}
+            giftProducts={giftProducts}
             categories={categories}
             postalAddressSet={Boolean(emailSettings?.marketingPostalAddress)}
             emailReady={emailSettings?.ready ?? false}

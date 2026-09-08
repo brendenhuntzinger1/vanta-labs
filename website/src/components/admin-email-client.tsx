@@ -1,6 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import {
+  GIFT_REWARD_KINDS,
+  validateCampaignGift,
+  type CampaignGiftSpec,
+} from "@/lib/offers/campaign-gift";
+import { describeGiftTerms } from "@/lib/offers/gift-terms";
+import { ctaPathReachesStore } from "@/lib/email/link-grant";
 import type { CampaignSummary, EmailDashboard } from "@/lib/admin-email";
 import type { AutomationRow } from "@/lib/email/automations";
 import { AUTOMATION_KEYS, AUTOMATION_LABELS, type AutomationKey } from "@/lib/email/automation-catalog";
@@ -30,6 +37,21 @@ const EMPTY_FORM = {
   ctaPath: "/products",
   segment: "all",
   segmentParam: "",
+  // THE GIFT. "none" is the default and stays the default: a broadcast that
+  // gives something away should be a decision somebody made, never what happens
+  // when a field is left alone.
+  giftMode: "none" as "none" | "catalog" | "custom",
+  offerKey: "",
+  giftLabel: "",
+  giftRewardKind: "percent" as CampaignGiftSpec["rewardKind"],
+  giftProductSlug: "",
+  giftQuantity: "1",
+  giftPercent: "10",
+  // Dollars in the form, cents on the wire. The operator thinks in dollars and
+  // every store of this value thinks in cents; converting at the boundary is
+  // what stops a $10 minimum being saved as ten cents.
+  giftMinSubtotal: "35",
+  giftTtlDays: "14",
 };
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
@@ -47,6 +69,7 @@ export function AdminEmailClient({
   automations,
   automationStats,
   offerChoices,
+  giftProducts,
   segments,
   categories,
   postalAddressSet,
@@ -58,6 +81,8 @@ export function AdminEmailClient({
   automations: AutomationRow[];
   automationStats: AutomationStatsReport;
   offerChoices: Array<{ key: string; label: string }>;
+  /** Live, purchasable products a gift may hand out. Slug is what gets stored. */
+  giftProducts: Array<{ slug: string; name: string }>;
   segments: Segment[];
   categories: string[];
   // Deliberately three separate flags rather than one "ready" boolean: the
@@ -111,6 +136,42 @@ export function AdminEmailClient({
     anchor.click();
     URL.revokeObjectURL(url);
   }
+  // WHAT THE GIFT WILL ACTUALLY BE, recomputed as the operator types.
+  //
+  // The same validator the API runs, so a gift the composer shows as valid is
+  // one the API accepts — and a refusal is seen while the form is open rather
+  // than after pressing Save. The product list is passed in, so a slug that is
+  // not on sale is caught here too; the API and the sender both check again.
+  const giftSpec: CampaignGiftSpec | null = form.giftMode === "custom"
+    ? {
+        label: form.giftLabel,
+        rewardKind: form.giftRewardKind,
+        productSlug: form.giftProductSlug,
+        quantity: Number(form.giftQuantity),
+        percent: Number(form.giftPercent),
+        minSubtotalCents: Math.round(Number(form.giftMinSubtotal) * 100),
+        ttlDays: Number(form.giftTtlDays),
+      }
+    : null;
+  const giftShape = GIFT_REWARD_KINDS.find((entry) => entry.value === form.giftRewardKind);
+  const giftVerdict = useMemo(
+    () => (giftSpec ? validateCampaignGift(giftSpec, new Set(giftProducts.map((product) => product.slug))) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [form.giftMode, form.giftLabel, form.giftRewardKind, form.giftProductSlug, form.giftQuantity, form.giftPercent, form.giftMinSubtotal, form.giftTtlDays, giftProducts],
+  );
+  // The exact sentence the recipient will read, from the exact config the mint
+  // will write onto their offer row. Dated a gift-lifetime out, which is what
+  // the sender will do.
+  //
+  // "Now" is pinned once at mount rather than read per render: Date.now() is
+  // impure, so calling it while rendering makes this component's output depend
+  // on when React happened to render it. Pinning it also stops the previewed
+  // deadline flickering by a day if the composer is left open over midnight.
+  const [composerOpenedAt] = useState(() => Date.now());
+  const giftTermsPreview = giftVerdict?.ok
+    ? describeGiftTerms(giftVerdict.config, new Date(composerOpenedAt + giftVerdict.config.ttlDays * 86_400_000).toISOString())
+    : null;
+
   const [campaignPreview, setCampaignPreview] = useState<{ subject: string; html: string } | null>(null);
   const [campaignPreviewDevice, setCampaignPreviewDevice] = useState<"desktop" | "mobile">("desktop");
 
@@ -202,11 +263,44 @@ export function AdminEmailClient({
   }
 
   async function saveCampaign(): Promise<string | null> {
+    // A custom gift that does not validate is refused here rather than sent and
+    // bounced: the operator is looking at the form, and the message names the
+    // field. The API validates again — this is convenience, not the boundary.
+    if (form.giftMode === "custom" && giftVerdict && !giftVerdict.ok) {
+      setMessage({ tone: "error", text: giftVerdict.error });
+      return null;
+    }
+    if (form.giftMode === "catalog" && !form.offerKey) {
+      setMessage({ tone: "error", text: "Choose which gift from the catalogue, or set the gift back to “No gift”." });
+      return null;
+    }
     const url = editingId ? `/api/admin/email/campaigns/${editingId}` : "/api/admin/email/campaigns";
     const response = await fetch(url, {
       method: editingId ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
+      // THE GIFT IS SHAPED HERE, not sent as the flat form.
+      //
+      // The form keeps the three modes as separate fields because that is what
+      // a form is good at; the API takes exactly one of offerKey or offerCustom
+      // and refuses both. Deriving the payload from giftMode is what makes
+      // "switch to No gift and save" actually remove the gift, rather than
+      // leaving whichever field happened to still hold a value.
+      body: JSON.stringify({
+        ...form,
+        offerKey: form.giftMode === "catalog" ? form.offerKey : null,
+        offerCustom: form.giftMode === "custom" && giftVerdict?.ok
+          ? {
+              label: giftVerdict.config.label,
+              rewardKind: giftVerdict.config.reward.kind,
+              ...("productSlug" in giftVerdict.config.reward ? { productSlug: giftVerdict.config.reward.productSlug } : {}),
+              ...("quantity" in giftVerdict.config.reward && giftVerdict.config.reward.quantity
+                ? { quantity: giftVerdict.config.reward.quantity } : {}),
+              ...("percent" in giftVerdict.config.reward ? { percent: giftVerdict.config.reward.percent } : {}),
+              minSubtotalCents: giftVerdict.config.minSubtotalCents,
+              ttlDays: giftVerdict.config.ttlDays,
+            }
+          : null,
+      }),
     });
     const data = await response.json().catch(() => null);
     if (!data?.success) {
@@ -301,6 +395,39 @@ export function AdminEmailClient({
     });
   }
 
+  /**
+   * Turn a stored campaign row back into the composer's gift fields.
+   *
+   * The round trip has to be lossless in both directions or "duplicate" becomes
+   * a trap: a campaign carrying a custom gift that reloads as "No gift" looks
+   * finished and promises nothing. Anything unreadable falls back to no gift,
+   * which is the safe direction — an operator noticing a missing gift adds it
+   * back, while an operator not noticing an invented one sends it.
+   */
+  function giftFormFrom(detail: Record<string, unknown> | null) {
+    const offerKey = typeof detail?.offer_key === "string" ? detail.offer_key : "";
+    const custom = (detail?.offer_custom ?? null) as Partial<CampaignGiftSpec> | null;
+    if (offerKey) {
+      return { giftMode: "catalog" as const, offerKey };
+    }
+    if (custom && typeof custom === "object" && custom.rewardKind) {
+      return {
+        giftMode: "custom" as const,
+        offerKey: "",
+        giftLabel: String(custom.label ?? ""),
+        giftRewardKind: custom.rewardKind,
+        giftProductSlug: String(custom.productSlug ?? ""),
+        giftQuantity: String(custom.quantity ?? 1),
+        giftPercent: String(custom.percent ?? 10),
+        // Cents on the wire, dollars in the form — converted back at exactly the
+        // boundary it was converted at on the way out.
+        giftMinSubtotal: String((Number(custom.minSubtotalCents ?? 0)) / 100),
+        giftTtlDays: String(custom.ttlDays ?? 14),
+      };
+    }
+    return { giftMode: "none" as const, offerKey: "" };
+  }
+
   async function loadIntoComposer(campaign: CampaignSummary) {
     // The WHOLE campaign — headline, message, code, button — not just the
     // name and subject the summary row carries. "Duplicate" used to load four
@@ -328,6 +455,10 @@ export function AdminEmailClient({
         ctaPath: str(detail?.cta_path, EMPTY_FORM.ctaPath),
         segment: campaign.segment,
         segmentParam: campaign.segmentParam ?? "",
+        // THE GIFT COMES BACK TOO. Duplicating a campaign that gave something
+        // away and silently dropping the gift would be the worst kind of
+        // duplicate: it looks complete and quietly promises nothing.
+        ...giftFormFrom(detail),
       });
       setEditingId(null);
       setCampaignPreview(null);
@@ -352,6 +483,9 @@ export function AdminEmailClient({
           promoCode: form.promoCode,
           ctaLabel: form.ctaLabel,
           ctaPath: form.ctaPath,
+          // So the preview shows the gift paragraph the recipient will read.
+          offerKey: form.giftMode === "catalog" ? form.offerKey : null,
+          offerCustom: form.giftMode === "custom" ? giftSpec : null,
         }),
       });
       const data = await response.json().catch(() => null);
@@ -580,6 +714,184 @@ export function AdminEmailClient({
                   placeholder="/products"
                 />
               </label>
+            </div>
+
+            {/* THE GIFT.
+
+                Placed directly above "Send to" on purpose: choosing what the
+                campaign GIVES and choosing who it goes TO are one decision, and
+                a gift buried under the copy is a gift nobody remembers to
+                attach. Default is "no gift" and stays that way — a broadcast
+                that gives something away should be something somebody chose. */}
+            <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+              <span className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Gift for everyone who receives this</span>
+              <p className="mt-1 text-[11px] text-zinc-600">
+                Minted one per recipient, bound to their email address, and applied automatically at
+                checkout when they come back through this email&apos;s button. Not a coupon code —
+                nothing to share, nothing to paste into a forum.
+              </p>
+
+              <select
+                data-testid="field-gift-mode"
+                className="mt-2 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                value={form.giftMode}
+                onChange={(event) => setForm({
+                  ...form,
+                  giftMode: event.target.value as typeof form.giftMode,
+                  // Switching mode clears the other mode's answer, so a campaign
+                  // can never be saved carrying both. The database CHECK says the
+                  // same thing; this is so the form never has to be told.
+                  offerKey: event.target.value === "catalog" ? form.offerKey : "",
+                })}
+              >
+                <option value="none" className="bg-zinc-900">No gift</option>
+                <option value="catalog" className="bg-zinc-900">A gift from the catalogue</option>
+                <option value="custom" className="bg-zinc-900">Build a custom gift</option>
+              </select>
+
+              {form.giftMode === "catalog" ? (
+                <label className="mt-2 block">
+                  <span className="text-[11px] text-zinc-500">Which gift</span>
+                  <select
+                    data-testid="field-gift-offer-key"
+                    className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                    value={form.offerKey}
+                    onChange={(event) => setForm({ ...form, offerKey: event.target.value })}
+                  >
+                    <option value="" className="bg-zinc-900">Choose a gift…</option>
+                    {offerChoices.map((choice) => (
+                      <option key={choice.key} value={choice.key} className="bg-zinc-900">{choice.label}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+
+              {form.giftMode === "custom" ? (
+                <div className="mt-2 space-y-2">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <label className="block">
+                      <span className="text-[11px] text-zinc-500">Name it</span>
+                      <input
+                        data-testid="field-gift-label"
+                        className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                        value={form.giftLabel}
+                        onChange={(event) => setForm({ ...form, giftLabel: event.target.value })}
+                        placeholder="Free BAC water"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[11px] text-zinc-500">What it gives</span>
+                      <select
+                        data-testid="field-gift-kind"
+                        className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                        value={form.giftRewardKind}
+                        onChange={(event) => setForm({ ...form, giftRewardKind: event.target.value as typeof form.giftRewardKind })}
+                      >
+                        {GIFT_REWARD_KINDS.map((kind) => (
+                          <option key={kind.value} value={kind.value} className="bg-zinc-900">{kind.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  {giftShape?.needsProduct ? (
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <label className="block">
+                        <span className="text-[11px] text-zinc-500">Which product</span>
+                        <select
+                          data-testid="field-gift-product"
+                          className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                          value={form.giftProductSlug}
+                          onChange={(event) => setForm({ ...form, giftProductSlug: event.target.value })}
+                        >
+                          <option value="" className="bg-zinc-900">Choose a product…</option>
+                          {giftProducts.map((product) => (
+                            <option key={product.slug} value={product.slug} className="bg-zinc-900">{product.name}</option>
+                          ))}
+                        </select>
+                        {/* Chosen from the live catalogue, never typed. A gift
+                            naming a retired slug does not fail loudly — the free
+                            line is simply never added and the customer gets the
+                            discount without the product. */}
+                      </label>
+                      <label className="block">
+                        <span className="text-[11px] text-zinc-500">How many</span>
+                        <input
+                          type="number" min={1} max={10}
+                          data-testid="field-gift-quantity"
+                          className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                          value={form.giftQuantity}
+                          onChange={(event) => setForm({ ...form, giftQuantity: event.target.value })}
+                        />
+                      </label>
+                    </div>
+                  ) : null}
+
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {giftShape?.needsPercent ? (
+                      <label className="block">
+                        <span className="text-[11px] text-zinc-500">Percent off</span>
+                        <input
+                          type="number" min={1} max={100}
+                          data-testid="field-gift-percent"
+                          className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                          value={form.giftPercent}
+                          onChange={(event) => setForm({ ...form, giftPercent: event.target.value })}
+                        />
+                      </label>
+                    ) : null}
+                    <label className="block">
+                      <span className="text-[11px] text-zinc-500">Minimum order ($)</span>
+                      <input
+                        type="number" min={0} step="1"
+                        data-testid="field-gift-minimum"
+                        className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                        value={form.giftMinSubtotal}
+                        onChange={(event) => setForm({ ...form, giftMinSubtotal: event.target.value })}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[11px] text-zinc-500">Expires after (days)</span>
+                      <input
+                        type="number" min={1} max={90}
+                        data-testid="field-gift-ttl"
+                        className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                        value={form.giftTtlDays}
+                        onChange={(event) => setForm({ ...form, giftTtlDays: event.target.value })}
+                      />
+                    </label>
+                  </div>
+
+                  {/* THE EXACT SENTENCE THE RECIPIENT WILL READ, from the exact
+                      config the mint will write onto their offer row. This is
+                      the one place the copy and the checkout are guaranteed to
+                      agree, so it is shown rather than described. */}
+                  {giftVerdict && !giftVerdict.ok ? (
+                    <p data-testid="gift-error" className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
+                      {giftVerdict.error}
+                    </p>
+                  ) : null}
+                  {giftTermsPreview ? (
+                    <p data-testid="gift-terms" className="rounded-lg border border-emerald-500/20 bg-emerald-500/[0.06] px-3 py-2 text-[11px] leading-relaxed text-emerald-100/90">
+                      {giftTermsPreview}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {/* WHERE THE BUTTON LANDS DECIDES WHETHER ANY OF THIS PAYS.
+                  The store requires an account, so a button pointing behind that
+                  wall sends the recipient to a sign-in page. Clicks from this
+                  email carry a browse grant that covers the storefront; it
+                  deliberately does not cover account pages. */}
+              {!ctaPathReachesStore(form.ctaPath) ? (
+                <p data-testid="cta-wall-warning" className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-100/90">
+                  The button link <span className="font-mono">{form.ctaPath}</span> sits behind the sign-in
+                  wall, so recipients will be asked to sign in before they see it. That is correct for a
+                  link to someone&apos;s own account or orders. For a shop-now button, use a storefront
+                  path such as <span className="font-mono">/products</span> and they arrive straight there.
+                </p>
+              ) : null}
             </div>
 
             <label className="block">
