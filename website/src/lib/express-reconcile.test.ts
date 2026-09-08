@@ -21,7 +21,13 @@ const releaseInventoryForOrder = vi.fn(async () => {});
 const recordSystemAlert = vi.fn(async () => {});
 const orderUpdate = vi.fn();
 
-let pendingRows: Array<{ order_id: string; payment_id: string | null; created_at: string }> = [];
+let pendingRows: Array<{
+  order_id: string;
+  payment_id: string | null;
+  created_at: string;
+  /** Omitted reads as the card lane, which is what the column holds for it. */
+  payment_method?: string | null;
+}> = [];
 /** Captured filters from the SELECT, so the query's own safety rails are asserted. */
 let selectFilters: Record<string, unknown[]> = {};
 
@@ -288,6 +294,57 @@ describe("a checkout the processor never resolves is retired after a week", () =
     });
   }
 
+  // -------------------------------------------------------------------------
+  // AN ORDER THAT NEVER RECORDED A SESSION AT ALL.
+  //
+  // The SELECT used to exclude these (`.not payment_id is null`) on the true
+  // observation that there is nothing to poll — which also put them beyond this
+  // very abandonment rule, so they stayed pending_payment for ever. Two were
+  // still open in production at 35 and 29 days when this was found.
+  // -------------------------------------------------------------------------
+  it("retires a week-old order that never recorded a processor session", async () => {
+    pendingRows = [{ order_id: "order-orphan", payment_id: null, created_at: LAST_MONTH }];
+    providerSays("open");
+    const result = await reconcileVeyraPendingPayments();
+    expect(result.failedOut).toBe(1);
+    // Never polled: there is nothing to ask about, which was always true.
+    expect(result.checked).toBe(0);
+    expect(fetchSession).not.toHaveBeenCalled();
+    const call = orderUpdate.mock.calls[0][0] as { payload: Record<string, unknown>; eq_order_id: string; eq_payment_status: string };
+    expect(call.eq_order_id).toBe("order-orphan");
+    expect(call.eq_payment_status).toBe("pending_payment");
+    expect(call.payload).toMatchObject({
+      payment_status: "payment_failed",
+      payment_failure_kind: "checkout_expired",
+      payment_failure_code: "abandoned",
+    });
+    expect(String(call.payload.payment_failure_reason)).toMatch(/session was ever recorded/i);
+    expect(String(call.payload.payment_failure_reason)).toMatch(/no charge was attempted/i);
+    expect(releaseInventoryForOrder).toHaveBeenCalledWith("order-orphan");
+  });
+
+  it("leaves a session-less order alone until it is a week old", async () => {
+    const THREE_DAYS_AGO = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    pendingRows = [{ order_id: "order-young", payment_id: null, created_at: THREE_DAYS_AGO }];
+    providerSays("open");
+    const result = await reconcileVeyraPendingPayments();
+    expect(result.failedOut).toBe(0);
+    expect(orderUpdate).not.toHaveBeenCalled();
+  });
+
+  it("NEVER retires a manual-payment order, which has no session by design", async () => {
+    // Cash App / Zelle orders wait for the shopper to send money and submit
+    // proof. Ageing one out on a timer would cancel a live order.
+    for (const method of ["cashapp", "zelle", "paypal"]) {
+      orderUpdate.mockClear();
+      pendingRows = [{ order_id: `order-${method}`, payment_id: null, created_at: LAST_MONTH, payment_method: method }];
+      providerSays("open");
+      const result = await reconcileVeyraPendingPayments();
+      expect(result.failedOut).toBe(0);
+      expect(orderUpdate).not.toHaveBeenCalled();
+    }
+  });
+
   it("still settles a week-old session the processor says is PAID — money moved, order owed", async () => {
     pendingRows = [{ order_id: "order-old", payment_id: "cs_live_old", created_at: LAST_MONTH }];
     providerSays("paid");
@@ -326,8 +383,12 @@ describe("the query only ever considers orders that can be reconciled", () => {
     providerSays("open");
     await reconcileVeyraPendingPayments();
     expect(selectFilters.eq).toEqual(["payment_status", "pending_payment"]);
-    // Without a session id there is nothing to ask the processor about.
-    expect(selectFilters.not).toEqual(["payment_id", "is", null]);
+    // The read no longer excludes session-less rows, and this assertion used to
+    // require that it did. "Nothing to ask the processor about" is true of
+    // POLLING and the loop still skips them for it — but as a READ filter it
+    // also put those rows beyond the 7-day abandonment, so they sat
+    // pending_payment for ever (two were open in production at 35 and 29 days).
+    expect(selectFilters.not).toBeUndefined();
     expect(selectFilters.lt?.[0]).toBe("created_at");
     expect(selectFilters.order).toEqual(["created_at", { ascending: false }]);
   });

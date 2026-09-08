@@ -141,6 +141,8 @@ interface PendingOrderRow {
   order_id: string;
   payment_id: string | null;
   created_at: string;
+  /** Null reads as the card lane; a manual method is never retired here. */
+  payment_method?: string | null;
 }
 
 export interface ReconcileResult {
@@ -200,9 +202,20 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
     const from = page * RECONCILE_PAGE;
     const { data, error } = await supabaseAdmin
       .from("orders")
-      .select("order_id, payment_id, created_at")
+      .select("order_id, payment_id, created_at, payment_method")
       .eq("payment_status", "pending_payment")
-      .not("payment_id", "is", null)
+      // NO `.not("payment_id", "is", null)` — AND THAT EXCLUSION WAS A HOLE.
+      //
+      // It was true that a row without a session id has nothing to poll, and
+      // the polling loop below still skips those rows for exactly that reason.
+      // But excluding them from the READ also put them beyond the 7-day
+      // abandonment added on 2026-09-05, which is the one thing that stops a
+      // pending order sitting for ever — the condition that change existed to
+      // end. Found still open in production at 35 and 29 days.
+      //
+      // Session-less rows cost no round trip (they are never polled), so
+      // widening the read cannot crowd a freshly charged order out of the work
+      // budget. They are retired by the sweep below, after the main loop.
       .lt("created_at", cutoff)
       .order("created_at", { ascending: false })
       .range(from, from + RECONCILE_PAGE - 1);
@@ -351,6 +364,53 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
     }
     unresolved += 1;
     if (Date.parse(order.created_at) < staleFloor) stale += 1;
+  }
+
+  // ---------------------------------------------------------------------
+  // Orders that never recorded a processor session.
+  //
+  // The loop above skips these — correctly, there is nothing to ask about.
+  // Until now the SELECT skipped them too, so nothing in the system could
+  // ever retire them and they stayed pending_payment for ever.
+  //
+  // They are aged out on the SAME 7-day rule as an unresolvable session, and
+  // for the same reason: no charge, no webhook, no processor record. Like that
+  // one it is reversible — a late payment.succeeded still moves a
+  // payment_failed order to paid, and the webhook identifies an order by its
+  // id, not by a session — so nothing charged can be lost here.
+  //
+  // THE CARD LANE ONLY. A manual method (Cash App / Zelle / PayPal) has no
+  // processor session by design and is meant to wait while the shopper sends
+  // money and submits proof; retiring one on a timer would cancel a live
+  // order. Null reads as card, which is what the column holds for this lane.
+  // ---------------------------------------------------------------------
+  for (const order of orders) {
+    if (Date.now() >= deadline) break;
+    if (String(order.payment_id ?? "")) continue;
+
+    const method = String(order.payment_method ?? "card").trim().toLowerCase();
+    if (method && method !== "card") continue;
+    if (Date.parse(order.created_at) >= abandonFloor) continue;
+
+    const retiredAt = new Date().toISOString();
+    const { error: orphanError } = await supabaseAdmin
+      .from("orders")
+      .update({
+        payment_status: "payment_failed",
+        payment_failure_kind: "checkout_expired",
+        payment_failure_code: "abandoned",
+        payment_failure_reason:
+          `No processor checkout session was ever recorded for this order, and no payment arrived in the `
+          + `${RECONCILE_ABANDON_DAYS} days after it was created. Retired as an abandoned checkout; no charge was attempted.`,
+        payment_failed_at: retiredAt,
+        updated_at: retiredAt,
+      })
+      .eq("order_id", order.order_id)
+      .eq("payment_status", "pending_payment");
+    if (!orphanError) {
+      await releaseInventoryForOrder(order.order_id);
+      failedOut += 1;
+    }
   }
 
   if (stale > 0 && (await backlogAlertIsDue(BACKLOG_ALERT_TYPE))) {
