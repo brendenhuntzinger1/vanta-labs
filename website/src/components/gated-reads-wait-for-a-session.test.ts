@@ -43,12 +43,40 @@ describe("the layout's gated reads wait for a session", () => {
   });
 
   it.each([
-    ["the cart drawer's pending-offer read", drawer, '"/api/offer/status"'],
     ["the BAC-water upsell", bacWater, '"/api/catalog/bac-water"'],
   ])("%s waits for it", (_label, src, endpoint) => {
     expect(src).toContain(endpoint);
     expect(src).toContain("if (!signedIn) return;");
     expect(src).toContain("useCart()");
+  });
+
+  // THE DRAWER'S GUARD IS WIDER BY ONE CASE, AND THE REASON IS MONEY.
+  //
+  // Waiting for a SESSION excluded the shopper the gift exists for: a win-back
+  // recipient arrives with a browse grant and no account, so this returned
+  // early, pendingOffer stayed null, and the drawer showed them full shipping
+  // and no gift — over a banner promising both. Caught in the browser at 19/19
+  // only after the grant was admitted here.
+  //
+  // The property this file protects is unchanged: a visitor with NEITHER a
+  // session nor a grant still fires nothing, and the sign-in portal carries
+  // neither, so the 401s stay gone.
+  it("the cart drawer's pending-offer read waits for a session OR an email grant", () => {
+    expect(drawer).toContain('"/api/offer/status"');
+    expect(drawer).toContain("useCart()");
+    expect(drawer).toContain("if (!signedIn && !emailGrant) return;");
+    // Never the bare form: that is the bug returning.
+    const at = drawer.indexOf('"/api/offer/status"');
+    const effectStart = drawer.lastIndexOf("useEffect(", at);
+    expect(drawer.slice(effectStart, at)).not.toContain("if (!signedIn) return;");
+  });
+
+  it("and the grant reaches it from the layout, not from document.cookie", () => {
+    // Two of the three grant cookies are httpOnly; a browser-side check sees
+    // only the third, which is how the campaign and automation journeys kept
+    // this bug after the recovery one was fixed.
+    expect(cart).toContain("emailGrant: boolean;");
+    expect(drawer).not.toContain("document.cookie");
   });
 });
 

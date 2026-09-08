@@ -12,6 +12,8 @@ const code = (src: string) =>
 
 const layout = code(read("src/app/layout.tsx"));
 const cart = code(read("src/components/cart-context.tsx"));
+const drawer = code(read("src/components/cart-drawer.tsx"));
+const cartPage = code(read("src/app/cart/cart-client.tsx"));
 
 // ---------------------------------------------------------------------------
 // "FREE SHIPPING AT $200.00 — $108.82 AWAY", ON A STORE SHIPPING EVERYTHING FREE.
@@ -72,5 +74,51 @@ describe("the cart asks for the store's terms when an emailed shopper arrives", 
 
   it("still refuses to act on a non-ok response", () => {
     expect(cart).toContain("if (!response.ok) return;");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE DRAWER SHOWED A SIGNED-OUT WIN-BACK SHOPPER FULL SHIPPING AND NO GIFT.
+//
+// The same guard, one component along, with a sharper cost. The drawer asks
+// /api/offer/status to learn whether this browser holds a gift; without an
+// answer, useOfferQuote never arms and every figure is the un-gifted one. It
+// returned early on `!signedIn` — excluding precisely the person the gift was
+// minted for, who arrives from the email with a browse grant and no account.
+//
+// /cart never had the guard, so the page showed the gift while the drawer
+// beside it did not. Two surfaces, one cart, different money.
+// ---------------------------------------------------------------------------
+describe("both cart surfaces ask whether this browser holds a gift", () => {
+  it("the drawer asks when signed in OR carrying a grant", () => {
+    expect(drawer).toContain("if (!signedIn && !emailGrant) return;");
+  });
+
+  it("and re-asks when either changes", () => {
+    expect(drawer).toContain("}, [signedIn, emailGrant]);");
+  });
+
+  it("the /cart page asks unconditionally, as it always did", () => {
+    const at = cartPage.indexOf('"/api/offer/status"');
+    expect(at, "the cart page must still ask").toBeGreaterThan(-1);
+    const effectStart = cartPage.lastIndexOf("useEffect(", at);
+    expect(cartPage.slice(effectStart, at)).not.toContain("if (!signedIn) return;");
+  });
+
+  // The regression in one line: a guard that names signedIn and not emailGrant,
+  // in front of the offer read, is the bug coming back.
+  it("neither surface gates the offer read on signedIn alone", () => {
+    for (const [label, source] of [["drawer", drawer], ["cart page", cartPage]] as const) {
+      const at = source.indexOf('"/api/offer/status"');
+      if (at < 0) continue;
+      const effectStart = source.lastIndexOf("useEffect(", at);
+      expect(source.slice(effectStart, at), `${label} gates the gift on an account`)
+        .not.toContain("if (!signedIn) return;");
+    }
+  });
+
+  it("the context carries the grant, so a component in the root layout can see it", () => {
+    expect(cart).toContain("emailGrant: boolean;");
+    expect(cart).toMatch(/signedIn,\s*\n\s*emailGrant,/);
   });
 });

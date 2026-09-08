@@ -181,6 +181,19 @@ type CartContextValue = {
   activePromotionAllowsCoupon: boolean;
   /** Whether the viewer has an account session. Every gated read hangs off it. */
   signedIn: boolean;
+  /**
+   * Whether this visit carries an email browse grant — a shopper who clicked a
+   * cart-recovery, campaign or automation link and is shopping WITHOUT an
+   * account. Resolved server-side in the root layout, because two of the three
+   * grant cookies are httpOnly and a browser-side check sees only the third.
+   *
+   * Exposed on the context because the CART DRAWER needs it: it lives in the
+   * root layout, gated its own /api/offer/status read on `signedIn`, and so
+   * showed a signed-out win-back shopper full shipping and no gift — the exact
+   * failure the drawer's own quote wiring was written to fix, reintroduced for
+   * the one visitor the gift was minted for.
+   */
+  emailGrant: boolean;
   /** What it did, in one sentence: "Buy 2 Get 1 Free applied — 1 item free." */
   activePromotionMessage: string | null;
   /** The nudge: "Add 1 more item to unlock an item free." */
@@ -2174,6 +2187,7 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
     activePromotionName,
     activePromotionAllowsCoupon,
     signedIn,
+    emailGrant,
     activePromotionMessage,
     promotionProgressMessage,
     availablePromotions,
