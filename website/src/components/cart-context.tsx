@@ -383,7 +383,7 @@ function calculateCouponDiscountAmount(subtotal: number, coupon: CouponDetails |
 // to be — remounting would empty the shopper's cart, which is the one thing
 // worse than the bug.
 // ---------------------------------------------------------------------------
-export function CartProvider({ children, signedIn = false }: { children: React.ReactNode; signedIn?: boolean }) {
+export function CartProvider({ children, signedIn = false, emailGrant = false }: { children: React.ReactNode; signedIn?: boolean; emailGrant?: boolean }) {
   const [items, setItems] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -627,31 +627,27 @@ export function CartProvider({ children, signedIn = false }: { children: React.R
       // dependency (the config has to be re-read the moment a session appears),
       // so this costs nothing and skips work that could never succeed.
       //
-      // A RECOVERED SHOPPER IS NOT SIGNED IN AND IS STILL ALLOWED TO ASK.
+      // A SHOPPER WHO ARRIVED FROM AN EMAIL IS NOT SIGNED IN AND STILL SHOPS.
       //
-      // The cart-recovery email's click mints a browse grant, and the wall
-      // consults it last, so a grant-holder reaches /cart without an account.
-      // This effect is where the STORE'S OWN TERMS arrive — the live shipping
-      // configuration among them — so skipping it on `!signedIn` left exactly
-      // that shopper reading DEFAULT_SHIPPING_CONFIG: a cart saying "Free
-      // shipping at $200.00 — $108.82 away" while the store was shipping every
-      // order free, directly under an email that had just told them shipping
-      // was free. Whoever is right there, the customer is being contradicted.
+      // All three click trackers — cart recovery, campaigns, automations — mint
+      // a browse grant, and the wall consults it last, so a grant-holder reaches
+      // /cart with no account. This effect is where the STORE'S OWN TERMS
+      // arrive, the live shipping configuration among them, so returning early
+      // on `!signedIn` left every one of those shoppers reading
+      // DEFAULT_SHIPPING_CONFIG: "Free shipping at $200.00 — $108.82 away" on a
+      // store shipping every order free, under an email that had just said
+      // shipping was free.
       //
-      // The name is spelt out rather than imported: CART_RECOVERY_COOKIE lives in
-      // email/cart-recovery-links, which pulls in a `server-only` module and would
-      // break this client bundle. cart-recovery-cookie-name.test.ts pins the two
-      // together so they cannot drift apart in silence.
+      // `emailGrant` IS RESOLVED IN THE ROOT LAYOUT, NOT SNIFFED HERE. The
+      // first fix read the recovery attribution cookie in the browser, which
+      // works for exactly one of the three journeys: the campaign and
+      // automation grants are httpOnly, so a client-side check is blind to them
+      // and they kept the bug. The server can see all three.
       //
-      // `vl_cart_recovery` is the attribution cookie the same redirect sets. It
-      // is deliberately not httpOnly (marketing-source reads it client-side),
-      // it is not a credential, and it is not what the wall checks — the
-      // httpOnly grant beside it is. So this only decides whether to ASK; the
-      // endpoint still answers 401 to anyone without the grant, and the
-      // `response.ok` guard below turns that back into the old no-op.
-      const recoveredVisit = typeof document !== "undefined"
-        && document.cookie.split("; ").some((entry) => entry.startsWith("vl_cart_recovery="));
-      if (!signedIn && !recoveredVisit) return;
+      // It still only decides whether to ASK. The endpoint authenticates the
+      // request itself and answers 401 to a forged cookie, and the `response.ok`
+      // guard below turns that back into the old no-op.
+      if (!signedIn && !emailGrant) return;
 
       try {
         const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
@@ -698,7 +694,7 @@ export function CartProvider({ children, signedIn = false }: { children: React.R
         setStoreConfigLoaded(true);
       }
     })();
-  }, [signedIn]);
+  }, [signedIn, emailGrant]);
 
   useEffect(() => {
     (async () => {
