@@ -56,6 +56,38 @@ export interface CartRecoveryOverride {
  * is still there for the next sweep. It is logged rather than swallowed,
  * because "the gift silently stopped being attached" must not be invisible.
  */
+/**
+ * THE PERK LIST AN OVERRIDE EMAIL SHOWS — ONE FUNCTION, TWO CALLERS.
+ *
+ * The store adds "Free shipping" when the sitewide switch is on, and the
+ * operator can type it into an override's own perks as well. All four override
+ * rows waiting to send do exactly that, so the list rendered as:
+ *
+ *     Free shipping / Free shipping / 2-day shipping, on us
+ *
+ * WHY IT LIVES HERE RATHER THAN AT EITHER CALL SITE. The sweep and the admin
+ * resend each had their own copy of the two lines that build this, so fixing
+ * the sweep left the resend — the path the operator actually presses, on the
+ * highest-value cart in the store — still duplicating. Two copies of a rule is
+ * how that happens; one function is the fix, and perk-dedupe.test.ts pins both
+ * callers to it.
+ *
+ * Case- and whitespace-insensitive, FIRST OCCURRENCE WINS, so the operator's
+ * own wording survives and the store's is what gets dropped.
+ */
+export function resolveOverridePerks(
+  perks: ReadonlyArray<string>,
+  freeShippingSitewide: boolean,
+): string[] {
+  const seen = new Set<string>();
+  return (freeShippingSitewide ? ["Free shipping", ...perks] : [...perks]).filter((perk) => {
+    const key = String(perk ?? "").trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export async function loadCartRecoveryOverrides(
   cartIds: readonly string[],
 ): Promise<Map<string, CartRecoveryOverride>> {

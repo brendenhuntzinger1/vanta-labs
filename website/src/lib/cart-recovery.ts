@@ -27,7 +27,7 @@ import {
   issueResolvedOffer,
   OFFER_CATALOG,
 } from "@/lib/offers/customer-offers";
-import { loadCartRecoveryOverrides, markCartRecoveryOverrideConsumed } from "@/lib/cart-recovery-overrides";
+import { loadCartRecoveryOverrides, resolveOverridePerks, markCartRecoveryOverrideConsumed } from "@/lib/cart-recovery-overrides";
 import { recoveryVariantFor } from "@/lib/cart-recovery-experiments";
 import {
   planStageOffer,
@@ -1497,14 +1497,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       // mailed a bullet list that read "Free shipping / Free shipping / 2-day
       // shipping, on us". Case-insensitive and whitespace-insensitive, first
       // occurrence wins, so the operator's own wording is what survives.
-      const seenPerks = new Set<string>();
-      const overridePerks = (freeShippingSitewide ? ["Free shipping", ...override.perks] : [...override.perks])
-        .filter((perk) => {
-          const key = String(perk ?? "").trim().toLowerCase();
-          if (!key || seenPerks.has(key)) return false;
-          seenPerks.add(key);
-          return true;
-        });
+      const overridePerks = resolveOverridePerks(override.perks, freeShippingSitewide);
 
       let livePromotionNote: string | null = null;
       try {

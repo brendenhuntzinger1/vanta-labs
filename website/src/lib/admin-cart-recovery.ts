@@ -16,6 +16,7 @@ import {
   loadRecoveryCatalogue,
   mintCartRecoveryCoupon,
   recoveryEmailItems,
+  reconciledCartValueCents,
   type AbandonedCartItemSnapshot,
   type RecoveryCatalogueEntry,
 } from "@/lib/cart-recovery";
@@ -26,7 +27,7 @@ import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger
 import { readAllRowsBounded } from "@/lib/supabase-page";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
 import { describeOfferTerms, issueCustomerOffer, OFFER_CATALOG } from "@/lib/offers/customer-offers";
-import { loadCartRecoveryOverrides, markCartRecoveryOverrideConsumed } from "@/lib/cart-recovery-overrides";
+import { loadCartRecoveryOverrides, markCartRecoveryOverrideConsumed, resolveOverridePerks } from "@/lib/cart-recovery-overrides";
 
 /**
  * Ceiling on the paged reads below. Matches the figure admin-email.ts uses for
@@ -393,6 +394,15 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
   if (items.length === 0) {
     return { success: false, error: "Nothing in this cart is a live product any more, so there is no honest email to build from it." };
   }
+  // THE SAME RECONCILED TOTAL THE SWEEP PRINTS, for the same reason.
+  //
+  // cart_value_cents is a snapshot from whenever the beacon fired; `items` above
+  // has just been re-read from the live catalogue and re-priced at the dose the
+  // shopper chose. Passing the snapshot printed a "Cart total" that the summary
+  // above it contradicted — and the resend is the path an operator presses
+  // deliberately, on the carts that matter most, so it is the worst place to
+  // show a number the shopper can disprove by clicking through.
+  const cartValueCents = reconciledCartValueCents(items, Number(cart.cart_value_cents ?? 0));
   const leadSlug = leadSlugForItems(storedItems, catalogue);
   const batchNumber = leadSlug ? catalogue.get(leadSlug)?.batchNumber ?? "" : "";
   const name = cart.customer_name ?? "";
@@ -520,13 +530,17 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
     // FREE SHIPPING IS STATED ONLY IF THE STORE IS ACTUALLY GIVING IT.
     // Read from the live shipping configuration, the same one the checkout
     // prices through, so the line cannot outlive the setting.
-    const overridePerks = [...override.perks];
+    // DEDUPLICATED THROUGH THE SHARED HELPER, because this path and the sweep
+    // each used to build the list themselves — so the sweep could be fixed
+    // while this one, the button the operator actually presses, kept shipping
+    // "Free shipping / Free shipping / 2-day shipping, on us".
+    let freeShippingSitewide = false;
     try {
-      const shippingConfig = await getShippingConfig();
-      if (isFreeShippingSitewide(shippingConfig)) overridePerks.unshift("Free shipping");
+      freeShippingSitewide = isFreeShippingSitewide(await getShippingConfig());
     } catch {
       // A perk we cannot confirm is a perk we do not claim.
     }
+    const overridePerks = resolveOverridePerks(override.perks, freeShippingSitewide);
 
     let promotionNote: string | null = null;
     try {
@@ -558,7 +572,7 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
       claimedLogId,
       guardUnavailable,
       ...cartRecoveryGiftTemplate({
-        name, items, cartValueCents: cart.cart_value_cents,
+        name, items, cartValueCents,
         restoreUrl: trackedRestoreUrl,
         giftLabel: override.offerKey ? OFFER_CATALOG[override.offerKey].label : "",
         offerTerms: override.offerKey
@@ -589,7 +603,7 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
       openTrackingPixelUrl,
       claimedLogId,
       guardUnavailable,
-      ...cartRecoveryT30mTemplate({ name, items, cartValueCents: cart.cart_value_cents, restoreUrl: trackedRestoreUrl }),
+      ...cartRecoveryT30mTemplate({ name, items, cartValueCents, restoreUrl: trackedRestoreUrl }),
     });
   }
 
@@ -603,7 +617,7 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
       claimedLogId,
       guardUnavailable,
       ...cartRecoveryT12hTemplate({
-        name, items, cartValueCents: cart.cart_value_cents, restoreUrl: trackedRestoreUrl,
+        name, items, cartValueCents, restoreUrl: trackedRestoreUrl,
         coaUrl: `${getSiteUrl()}/coa-library`,
         batchNumber,
         supportEmail: RECOVERY_SUPPORT_EMAIL,
@@ -627,7 +641,7 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
       // gift. The Labor Day-style override path above is how a gift is sent by
       // hand, and it refuses a second press.
       ...cartRecoveryT24hTemplate({
-        name, items, cartValueCents: cart.cart_value_cents, restoreUrl: trackedRestoreUrl,
+        name, items, cartValueCents, restoreUrl: trackedRestoreUrl,
         giftLabel: "", offerTerms: "",
       }),
     });
@@ -644,7 +658,7 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
     ...cartRecoveryT72hTemplate({
       name,
       items,
-      cartValueCents: cart.cart_value_cents,
+      cartValueCents,
       restoreUrl: trackedRestoreUrl,
       couponCode: couponCode ?? "",
       discountPercent: couponCode ? couponPercent : 0,

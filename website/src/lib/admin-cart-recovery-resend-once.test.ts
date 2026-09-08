@@ -24,7 +24,11 @@ const state = vi.hoisted(() => ({
   minted: 0,
 }));
 
-vi.mock("@/lib/cart-recovery-overrides", () => ({
+// PARTIAL, deliberately. Only the two database calls are faked; the perk
+// resolver stays real, because it is the thing that decides what the shopper
+// reads and a stub of it would prove nothing about this path.
+vi.mock("@/lib/cart-recovery-overrides", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/cart-recovery-overrides")>()),
   loadCartRecoveryOverrides: async () => new Map([[
     "cart-1::t24h",
     { cartId: "cart-1", stage: "t24h", offerKey: "labor_day_bac_water_2", perks: [], note: null, consumedAt: state.consumedAt },
