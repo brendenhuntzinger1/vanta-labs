@@ -87,11 +87,18 @@ describe("classifyDeadSession — what the reconcile sweep learned by asking the
     expect(detail).toEqual({ kind: "processor_declined", code: "do_not_honor", reason: "Do not honor" });
   });
 
-  it("still calls a bare failed session a decline, with the status as its code", () => {
+  it("does NOT call a bare failed session a bank decline", () => {
+    // This asserted `processor_declined` until 2026-09-08, and the assertion
+    // was the bug: it fixed in place a guess about a bank that was never asked.
+    // Veyra's SDK never forwards a decline code, and an abandoned 3-D Secure
+    // challenge produces this same bare `failed` — so five orders from two
+    // shoppers were filed as declined cards while the real cause was the card
+    // lane ignoring the verification event. Unexplained is now recorded as
+    // unexplained; see checkout-verification-step.test.ts.
     const detail = classifyDeadSession("failed", { status: "failed" });
-    expect(detail.kind).toBe("processor_declined");
+    expect(detail.kind).toBe("other");
     expect(detail.code).toBe("failed");
-    expect(detail.reason).toMatch(/payment attempt failed/i);
+    expect(detail.reason).toMatch(/did not complete/i);
   });
 
   it("treats an expired session as an abandoned checkout, not a decline", () => {

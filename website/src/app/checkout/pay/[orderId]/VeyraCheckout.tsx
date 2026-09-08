@@ -64,8 +64,36 @@ const POLL_MS = 2500;
  */
 const REASSURE_AFTER_MS = 60_000;
 
+/**
+ * What the shopper is told once their bank asks for verification.
+ *
+ * It must not say "try again": at this point a charge is genuinely in flight
+ * inside the iframe, and a second attempt is how someone pays twice. It must
+ * say "don't refresh", because refreshing destroys the challenge — which is
+ * precisely the dead end this page used to leave people in.
+ */
+const VERIFICATION_MESSAGE =
+  "Your bank is asking you to confirm this payment. Finish the verification step in the form above — "
+  + "it may be a code by text, or your banking app. Please don't close or refresh this page while you do; "
+  + "we'll take you straight to your receipt as soon as it clears.";
+
 type MountHandle = { destroy?: () => void };
 
+/**
+ * The callbacks veyragate.com/v1/checkout.js v1.2.0 will actually invoke,
+ * dispatched from the iframe's `data.type`:
+ *
+ *   payment.succeeded       -> onSuccess
+ *   payment.failed          -> onFailure
+ *   payment.requires_action -> onRequiresAction   ("3DS started")
+ *   cancel                  -> onCancel
+ *
+ * NOTHING ELSE IS CALLED. This used to declare and pass `onError`, which is not
+ * in the SDK at all — so the decline banner it guarded had never once fired,
+ * and every failed card fell through to the reconcile sweep half an hour later.
+ * Keep this type to real callback names only: it is the one thing standing
+ * between a typo and silence at the moment of payment.
+ */
 type VeyraGlobal = {
   mount: (
     target: string | HTMLElement,
@@ -73,7 +101,8 @@ type VeyraGlobal = {
       sessionId: string;
       onReady?: (event: unknown) => void;
       onSuccess?: (event: { return_url?: string; payment_id?: string }) => void;
-      onError?: (event: unknown) => void;
+      onFailure?: (event: { message?: string; code?: string | null }) => void;
+      onRequiresAction?: (event: unknown) => void;
       onCancel?: (event: unknown) => void;
     },
   ) => MountHandle;
@@ -128,6 +157,9 @@ export default function VeyraCheckout({
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [message, setMessage] = useState<string | null>(null);
   const [reassure, setReassure] = useState(false);
+  // The bank is mid-challenge. Orthogonal to `status`: the card form stays
+  // mounted and the poll keeps running throughout.
+  const [verifying, setVerifying] = useState(false);
 
   const goToConfirmation = useCallback(
     (returnUrl?: string) => {
@@ -201,12 +233,49 @@ export default function VeyraCheckout({
             // does not.
             goToConfirmation(event?.return_url);
           },
-          onError: () => {
+          onRequiresAction: () => {
+            // 3DS has started inside the iframe. The SHOPPER can see the
+            // challenge; until now this page could not, so it went on showing a
+            // card form and, after 60s, a reassurance banner that carefully
+            // said nothing — while the one thing they needed was an
+            // instruction. Two customers lost five orders to that silence on
+            // 2026-09-08 before anyone knew the state existed.
             if (cancelled) return;
+            setVerifying(true);
+            // Report it, because we still cannot see whether the challenge is
+            // completable inside the iframe — only that it started. This is the
+            // measurement that tells us, on the next real order, whether
+            // handling the event is enough or the challenge itself is blocked.
+            void import("@sentry/nextjs")
+              .then((Sentry) => {
+                Sentry.captureMessage("checkout: card payment entered 3DS verification", {
+                  level: "info",
+                  tags: { area: "checkout", stage: "requires_action" },
+                });
+              })
+              .catch(() => {});
+          },
+          onFailure: () => {
+            // The real name for what `onError` was trying to be. Announced on
+            // the same one-way latch the poll uses, so whichever notices first
+            // wins and neither repaints the other.
+            if (cancelled) return;
+            setVerifying(false);
+            if (declineShownRef.current) return;
+            declineShownRef.current = true;
             setStatus("error");
+            // The processor's own message is deliberately NOT shown: the SDK
+            // states it never forwards a decline code, so anything it sends
+            // here is generic text wearing a supplier's voice.
             setMessage(
-              "We couldn't load secure card entry. Your card has not been charged — please refresh to try again.",
+              "That payment did not go through, and your card has not been charged. You can try again below, or use a different card.",
             );
+          },
+          onCancel: () => {
+            // Backing out of a challenge is not a decline and must never be
+            // announced as one — it only ends the verifying state.
+            if (cancelled) return;
+            setVerifying(false);
           },
         });
       })
@@ -304,7 +373,19 @@ export default function VeyraCheckout({
       {/* The processor replaces this node's contents with the card iframe.
           The id is intentionally generic — it is visible in page source. */}
       <div ref={containerRef} id="secure-card-entry" className="min-h-[420px] w-full" />
-      {reassure && status !== "error" && (
+      {verifying && status !== "error" && (
+        // Specific, because for once we KNOW what is happening: the iframe told
+        // us. This outranks the generic reassurance below, which exists only
+        // for the case where we cannot see inside the form at all.
+        <div
+          role="status"
+          aria-live="assertive"
+          className="mt-4 border border-amber-400/40 bg-amber-400/10 px-4 py-3 text-sm text-amber-100"
+        >
+          {VERIFICATION_MESSAGE}
+        </div>
+      )}
+      {reassure && !verifying && status !== "error" && (
         // Deliberately says nothing about whether a payment is in flight — we
         // cannot see inside the card form, so we do not know. Every clause here
         // is true both for someone still filling the form in and for someone

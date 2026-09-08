@@ -134,11 +134,39 @@ export function classifyDeadSession(status: string, session?: unknown): PaymentF
   const roots = [session].filter(isRecord);
 
   if (normalized === "failed") {
+    const code = firstText(roots, CODE_PATHS, MAX_CODE_CHARS);
+    const reason = firstText(roots, REASON_PATHS, MAX_REASON_CHARS);
+
+    // The processor said WHY. That is a real decline, in its own words.
+    if (code || reason) {
+      return {
+        kind: "processor_declined",
+        code: code ?? "failed",
+        reason: reason ?? "The processor reported the payment attempt failed.",
+      };
+    }
+
+    // It said only the word "failed", and this used to be filed as
+    // processor_declined anyway — which the admin list renders as "Declined by
+    // bank / processor", a sentence about a bank that was never asked.
+    //
+    // That guess is not free. Veyra's own SDK states it "intentionally does not
+    // expose decline_code", and a shopper who never finishes a 3-D Secure
+    // challenge lands on exactly this bare `failed` too. On 2026-09-08 five
+    // orders from two shoppers (~$620) were labelled bank declines this way,
+    // and the label is why nobody looked: a declined card is the customer's
+    // problem, so the queue read as bad luck rather than as the card lane
+    // ignoring the verification event entirely.
+    //
+    // An unexplained failure is now filed as what it is. `other` renders as the
+    // neutral "Payment failed", the order is still retired, and nothing about
+    // the money changes — only the claim we make about whose fault it was.
     return {
-      kind: "processor_declined",
-      code: firstText(roots, CODE_PATHS, MAX_CODE_CHARS) ?? "failed",
-      reason: firstText(roots, REASON_PATHS, MAX_REASON_CHARS)
-        ?? "The processor reported the payment attempt failed.",
+      kind: "other",
+      code: "failed",
+      reason:
+        "The payment did not complete at the processor, which recorded no decline code or message. "
+        + "Not evidence the card was refused — an abandoned verification (3-D Secure) step ends here too.",
     };
   }
   if (normalized === "expired") {
