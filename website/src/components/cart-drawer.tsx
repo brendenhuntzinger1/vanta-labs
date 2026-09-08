@@ -117,6 +117,7 @@ export function CartDrawer() {
     memberDiscountPercent,
     shippingConfig,
     signedIn,
+    emailGrant,
   } = useCart();
 
   const freeShipThreshold = shippingConfig.freeShippingThreshold;
@@ -145,12 +146,24 @@ export function CartDrawer() {
   // entire point of attaching one to a win-back.
   const [pendingOffer, setPendingOffer] = useState<{ rewardKind: string; rewardName: string; minSubtotalCents: number } | null>(null);
   useEffect(() => {
-    // NOTHING TO ASK FOR WHILE SIGNED OUT. /api/offer/status is behind the
-    // account wall, and this drawer lives in the root layout — so it asked on
-    // the sign-in portal, the first screen of almost every visit, and logged a
-    // 401 in a new customer's console before they had an account to have an
-    // offer against.
-    if (!signedIn) return;
+    // NOTHING TO ASK FOR WHILE SIGNED OUT AND UNINVITED. /api/offer/status is
+    // behind the account wall, and this drawer lives in the root layout — so it
+    // asked on the sign-in portal, the first screen of almost every visit, and
+    // logged a 401 in a new customer's console before they had an account to
+    // have an offer against.
+    //
+    // BUT `signedIn` ALONE EXCLUDED THE ONE SHOPPER THE GIFT IS FOR. A win-back
+    // recipient clicks through with a browse grant and no account; this returned
+    // early, pendingOffer stayed null, useOfferQuote never armed, and the drawer
+    // showed FULL SHIPPING AND NO GIFT — the precise failure the quote wiring
+    // below was written to fix, reintroduced by the wall for guests. The page at
+    // /cart never had the guard and so never had the bug, which is why the two
+    // surfaces disagreed.
+    //
+    // The grant is resolved server-side in the root layout (two of the three
+    // cookies are httpOnly), and the endpoint still authenticates the request
+    // itself, so this only decides whether to ASK.
+    if (!signedIn && !emailGrant) return;
     let cancelled = false;
     fetch("/api/offer/status", { cache: "no-store" })
       .then((response) => (response.ok ? response.json() : null))
@@ -160,7 +173,7 @@ export function CartDrawer() {
       // A gift banner is never worth a console error or a broken drawer.
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [signedIn]);
+  }, [signedIn, emailGrant]);
 
   const offerShortfall = pendingOffer
     ? Math.max(0, pendingOffer.minSubtotalCents / 100 - subtotal)

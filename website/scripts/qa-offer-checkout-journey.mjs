@@ -20,7 +20,7 @@
 //   QA_ENGINES=chromium node scripts/qa-offer-checkout-journey.mjs
 // ---------------------------------------------------------------------------
 
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { chromium, webkit } from "playwright";
 import pg from "pg";
@@ -61,6 +61,32 @@ async function step(name, fn) {
 
 // Prices in the harness catalogue: $69 clears the $60 GHK-Cu minimum, $59 does
 // not, and $79 is the third product used for the bulk-tier and threshold cases.
+// ---------------------------------------------------------------------------
+// THE STORE CONFIGURATION THIS SUITE ASSUMES, AND WHY IT IS NOT A DEFAULT.
+//
+// Several assertions here are dollar-exact — "$59 + $15 shipping", "15% of
+// $207 is $31.05" — so they only hold with:
+//
+//     shipping.free_shipping_sitewide = false
+//     promotions.bxgy_promotions      = []   (no live Buy 2 Get 1)
+//
+// Run it against a harness carrying the store's REAL settings (both are on in
+// production) and four tests fail with figures that look like pricing bugs and
+// are the suite disagreeing with the config: shipping is $0 because the owner
+// switched it on for everyone, and the 15% loses to Buy 2 Get 1 because
+// "largest discount wins" picked the larger one — correctly.
+//
+// That cost an hour to re-derive once. Flip both in the local database before
+// running, and put them back afterwards:
+//
+//   insert into admin_audit_logs (action, target_table, target_id, metadata)
+//   values ('admin_control_upsert','shipping','free_shipping_sitewide','{"value": false}'),
+//          ('admin_control_upsert','promotions','bxgy_promotions','{"value": []}');
+//
+// The suite is deliberately NOT rewritten to accept either config: an exact
+// figure is what catches a pricing regression, and "whatever the config says"
+// would pass on a total nobody checked.
+// ---------------------------------------------------------------------------
 const BIG = { slug: "bpc-157-10mg", price: 69 };
 const SMALL = { slug: "ipamorelin-5mg", price: 59 };
 const THIRD = { slug: "cjc-1295-2mg", price: 79 };
@@ -88,19 +114,53 @@ async function issue(email, kind, { minCents = 6000, percent = null, hours = 48 
 
 async function clearRateLimit() { await q("delete from rate_limit_hits").catch(() => {}); }
 
-/** A shopper who has clicked the emailed link: their browser holds the cookie
- *  the click route set, and nothing else. */
+/** The browse grant the email click routes mint, signed the way link-grant.ts
+ *  signs it. THE SCRIPT USED TO SET vl_offer ALONE, and said so — "the cookie
+ *  the click route set, and nothing else". That stopped being true when the
+ *  catalogue moved behind an account wall: the click routes now mint a grant
+ *  too, and it is what lets a signed-out recipient shop at all. Without it every
+ *  step here answered "Sign in to continue", which looks like nineteen product
+ *  failures and is one stale fixture. */
+async function emailLinkGrant() {
+  const secret = process.env.UNSUBSCRIBE_SECRET ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!secret) return null;
+  // EMAIL_GRANT_TTL_MS is 7 days and verifyEmailLinkGrant refuses a stamp
+  // FURTHER OUT than the TTL allows — so an over-generous expiry is rejected
+  // exactly like a forged one. Half the window keeps this clear of both edges.
+  const expiresAtMs = Date.now() + 3.5 * 24 * 60 * 60 * 1000;
+  const mac = createHmac("sha256", secret)
+    .update(`email_link_grant:v1:${expiresAtMs}`)
+    .digest("hex")
+    .slice(0, 32);
+  return `v1.${expiresAtMs}.${mac}`;
+}
+
+/** A shopper who has clicked the emailed link: their browser holds exactly the
+ *  cookies that click set — the offer token AND the browse grant. */
 async function armedContext(browser, token, viewport) {
   ipCounter += 1;
   const context = await browser.newContext({
     ...(viewport ? { viewport } : {}),
+    // The checkout hands off to the harness's HTTPS origin, which serves a
+    // self-signed certificate — without this the browser stops at an interstitial
+    // and every payment step reports "did not reach payment", which reads as a
+    // checkout bug and is a certificate the test itself refused to accept.
+    ignoreHTTPSErrors: true,
     extraHTTPHeaders: { "x-real-ip": `198.51.100.${100 + (ipCounter % 140)}` },
   });
+  const cookies = [];
   if (token) {
-    await context.addCookies([{
+    cookies.push({
       name: "vl_offer", value: token, domain: "127.0.0.1", path: "/", httpOnly: true, sameSite: "Lax",
-    }]);
+    });
   }
+  const grant = await emailLinkGrant();
+  if (grant) {
+    cookies.push({
+      name: "vl_email_grant", value: grant, domain: "127.0.0.1", path: "/", httpOnly: true, sameSite: "Lax",
+    });
+  }
+  if (cookies.length) await context.addCookies(cookies);
   return context;
 }
 

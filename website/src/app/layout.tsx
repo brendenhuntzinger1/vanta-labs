@@ -15,6 +15,8 @@ import { StorefrontOffersBar } from "@/components/storefront-offers-bar";
 import { StorefrontOfferModal } from "@/components/storefront-offer-modal";
 import { cookies } from "next/headers";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { EMAIL_GRANT_COOKIE } from "@/lib/email/link-grant";
+import { GUEST_GRANT_COOKIE } from "@/lib/cart-recovery-grant";
 import {
   OFFERS_DISMISSED_COOKIE,
   getStorefrontOffers,
@@ -210,6 +212,30 @@ export default async function RootLayout({
   // every account screen) this costs nothing, and for a visitor with no cookie
   // it never touches the network.
   const signedIn = Boolean(await getAuthenticatedUser());
+
+  // A SHOPPER WHO ARRIVED FROM AN EMAIL IS NOT SIGNED IN AND STILL SHOPS HERE.
+  //
+  // Three click trackers mint a browse grant — cart recovery, campaigns and
+  // automations — and the wall consults it last, so all three land a signed-out
+  // customer on the catalogue and the cart. The cart then prices what it shows
+  // from /api/catalog/promotions, which it only asked for when signedIn, so
+  // every one of those visitors read DEFAULT_SHIPPING_CONFIG instead: "Free
+  // shipping at $200.00 — $108.82 away" on a store shipping every order free.
+  //
+  // PRESENCE, NOT VALIDITY, and deliberately so. This decides only whether the
+  // cart bothers to ASK; the endpoint still authenticates the request and
+  // answers 401 to a forged or expired cookie, and the client treats a non-ok
+  // response exactly as it treated the old early return. So the worst a faked
+  // cookie buys is one refused request.
+  //
+  // Read here rather than sniffed in the browser because two of the three
+  // cookies are httpOnly — a client-side check can see the recovery visit and
+  // is blind to the other two, which is how the campaign and automation
+  // journeys kept the bug after the recovery one was fixed.
+  const emailGrant = Boolean(
+    cookieStore.get(EMAIL_GRANT_COOKIE)?.value
+    || cookieStore.get(GUEST_GRANT_COOKIE)?.value,
+  );
   const allOffers = signedIn ? await getStorefrontOffers().catch(() => []) : [];
   const dismissed = new Set(parseDismissed(cookieStore.get(OFFERS_DISMISSED_COOKIE)?.value));
   const offers = visibleOffers(allOffers.filter((offer) => !dismissed.has(offerTag(offer.id))));
@@ -280,7 +306,7 @@ export default async function RootLayout({
             cart kept its built-in defaults for the whole page session and
             showed $15 shipping on a store that ships free. See the header on
             CartProvider in components/cart-context.tsx. */}
-        <CartProvider signedIn={signedIn}>
+        <CartProvider signedIn={signedIn} emailGrant={emailGrant}>
           <Suspense fallback={null}>
             <SiteAnalyticsTracker />
           </Suspense>

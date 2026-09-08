@@ -27,7 +27,7 @@ import {
   issueResolvedOffer,
   OFFER_CATALOG,
 } from "@/lib/offers/customer-offers";
-import { loadCartRecoveryOverrides, markCartRecoveryOverrideConsumed } from "@/lib/cart-recovery-overrides";
+import { loadCartRecoveryOverrides, resolveOverridePerks, markCartRecoveryOverrideConsumed } from "@/lib/cart-recovery-overrides";
 import { recoveryVariantFor } from "@/lib/cart-recovery-experiments";
 import {
   planStageOffer,
@@ -1489,8 +1489,15 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       // FREE SHIPPING IS STATED ONLY IF THE STORE IS ACTUALLY GIVING IT.
       // Read from the live shipping configuration, the same one the checkout
       // prices through, so the line cannot outlive the setting.
-      const overridePerks = [...override.perks];
-      if (freeShippingSitewide) overridePerks.unshift("Free shipping");
+      //
+      // DEDUPLICATED, because the operator can type the same perk the store
+      // already adds. Four override rows waiting to send carry "Free shipping"
+      // in their own perks list, and with the sitewide switch on this unshifted
+      // a second one — so the highest-value cart in the store was about to be
+      // mailed a bullet list that read "Free shipping / Free shipping / 2-day
+      // shipping, on us". Case-insensitive and whitespace-insensitive, first
+      // occurrence wins, so the operator's own wording is what survives.
+      const overridePerks = resolveOverridePerks(override.perks, freeShippingSitewide);
 
       let livePromotionNote: string | null = null;
       try {

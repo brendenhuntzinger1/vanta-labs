@@ -53,7 +53,7 @@ describe("the cart refetches its configuration when the viewer signs in", () => 
 
   it("the root layout passes the value it already resolves", () => {
     expect(layout).toContain("const signedIn = Boolean(await getAuthenticatedUser())");
-    expect(layout).toContain("<CartProvider signedIn={signedIn}>");
+    expect(layout).toContain("<CartProvider signedIn={signedIn} emailGrant={emailGrant}>");
   });
 
   it.each([
@@ -99,21 +99,22 @@ describe("the cart refetches its configuration when the viewer signs in", () => 
     // before the guard: 5 of them on /account/login.
     //
     // ONE OF THE FIVE HAS A SECOND WAY IN, and it is not a loosening of this
-    // rule. A cart-recovery click mints a browse grant that the wall consults
-    // last, so that shopper reaches /cart with no account — and /catalog/
-    // promotions is where the STORE'S OWN TERMS arrive. Skipping it for them
-    // left a recovered cart reading DEFAULT_SHIPPING_CONFIG: "Free shipping at
-    // $200.00 — $108.82 away" on a store shipping every order free, directly
-    // under an email that had just said shipping was free. The guard therefore
-    // also admits a visit carrying vl_cart_recovery — which the sign-in portal
-    // never has, so the 401s this test exists to prevent still do not happen.
+    // rule. All three email click trackers mint a browse grant that the wall
+    // consults last, so those shoppers reach /cart with no account — and
+    // /catalog/promotions is where the STORE'S OWN TERMS arrive. Skipping it
+    // for them left an emailed cart reading DEFAULT_SHIPPING_CONFIG: "Free
+    // shipping at $200.00 — $108.82 away" on a store shipping every order free,
+    // directly under an email that had just said shipping was free. The guard
+    // therefore also admits a visit carrying a grant cookie — which the sign-in
+    // portal never has, so the 401s this test exists to prevent still do not
+    // happen.
     const at = cart.indexOf(endpoint);
     expect(at, `${endpoint} must still be fetched here`).toBeGreaterThan(-1);
     const effectStart = cart.lastIndexOf("(async () => {", at);
     expect(effectStart, `no effect body found around ${endpoint}`).toBeGreaterThan(-1);
     const guard = cart.slice(effectStart, at);
     const guarded = endpoint === '"/api/catalog/promotions"'
-      ? /if \(!signedIn && !recoveredVisit\) return;/.test(guard)
+      ? guard.includes("if (!signedIn && !emailGrant) return;")
       : guard.includes("if (!signedIn) return;");
     expect(guarded, `${endpoint} is requested before anyone could be signed in`).toBe(true);
   });
@@ -122,15 +123,18 @@ describe("the cart refetches its configuration when the viewer signs in", () => 
   // this visit carries, checked on the client, deciding only whether to ASK.
   // The endpoint still answers 401 to anyone without the httpOnly grant beside
   // it, and the response.ok guard turns that back into the old no-op.
-  it("lets a cart-recovery visitor read the store's terms, and no one else", () => {
-    expect(cart).toContain('startsWith("vl_cart_recovery=")');
-    expect(cart).toMatch(/const recoveredVisit = typeof document !== "undefined"/);
-    // Not widened to the other four: those carry account state, which a browse
-    // grant is not evidence of.
+  it("lets an emailed visitor read the store's terms, and no one else", () => {
+    // Resolved in the layout from the grant cookies, not sniffed in the
+    // browser — see cart-terms-reach-email-visitors.test.ts for why that
+    // distinction is the whole fix.
+    expect(cart).toContain("if (!signedIn && !emailGrant) return;");
+    // NOT widened to the other four: those carry ACCOUNT state — balances,
+    // membership, an ambassador's own discount — and a browse grant is evidence
+    // that someone opened an email, not that they are the account holder.
     for (const endpoint of ['"/api/account/me"', '"/api/account/ambassador-discount"']) {
       const at = cart.indexOf(endpoint);
       const effectStart = cart.lastIndexOf("(async () => {", at);
-      expect(cart.slice(effectStart, at)).not.toContain("recoveredVisit");
+      expect(cart.slice(effectStart, at)).not.toContain("emailGrant");
     }
   });
 
