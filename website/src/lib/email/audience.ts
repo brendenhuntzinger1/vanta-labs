@@ -107,6 +107,81 @@ export type ConsentedAudience = {
  * about account holders specifically — but resolving it here keeps every caller
  * from having to know that two consent stores exist.
  */
+/**
+ * Turn opted-in auth user ids into addresses.
+ *
+ * THE DIRECT QUESTION FIRST. `auth_emails_by_user_ids` (see
+ * src/lib/sql/auth-emails-by-user-ids.sql) costs the opted-in list; the
+ * directory paging below costs every account that has ever signed up, on every
+ * campaign send and every audience preview. Chunked because the id set is an
+ * array parameter and an unbounded one makes for an unbounded statement.
+ *
+ * THE FALLBACK IS NOT SILENT ANY MORE. It used to page 100 x 1,000 and then
+ * simply stop: past 100,000 accounts an opted-in customer was not found, not
+ * mentioned, and the campaign went out to a short list. A run that reaches the
+ * ceiling while pages are still arriving full now refuses the audience, exactly
+ * as a truncated suppression read does. A directory that genuinely runs out
+ * (a short final page) is not truncation — an id that resolves to nothing there
+ * is a deleted account, which is absent on purpose.
+ */
+const ACCOUNT_ID_CHUNK = 1_000;
+const DIRECTORY_PAGE_SIZE = 1_000;
+const DIRECTORY_MAX_PAGES = 100;
+
+async function resolveAccountEmails(userIds: Set<string>): Promise<Set<string>> {
+  const emails = new Set<string>();
+  if (userIds.size === 0) return emails;
+
+  const ids = [...userIds];
+
+  const { data, error } = await supabaseAdmin.rpc("auth_emails_by_user_ids", {
+    p_ids: ids.slice(0, ACCOUNT_ID_CHUNK),
+  });
+
+  if (!error) {
+    const rows = (data ?? []) as Array<{ email: string | null }>;
+    for (const row of rows) {
+      const email = normalize(row.email);
+      if (email) emails.add(email);
+    }
+    for (let start = ACCOUNT_ID_CHUNK; start < ids.length; start += ACCOUNT_ID_CHUNK) {
+      const chunk = ids.slice(start, start + ACCOUNT_ID_CHUNK);
+      const { data: more, error: chunkError } = await supabaseAdmin.rpc("auth_emails_by_user_ids", { p_ids: chunk });
+      // A failure PART WAY THROUGH is a short read, not a degrade: falling back
+      // now would re-resolve the chunks that already succeeded and silently
+      // keep whichever half is cheaper. Refuse instead.
+      if (chunkError) throw new Error(AUDIENCE_TRUNCATED);
+      for (const row of ((more ?? []) as Array<{ email: string | null }>)) {
+        const email = normalize(row.email);
+        if (email) emails.add(email);
+      }
+    }
+    return emails;
+  }
+
+  // The function is not applied. Page the directory as before.
+  for (let page = 1; page <= DIRECTORY_MAX_PAGES; page++) {
+    const { data: pageData, error: pageError } = await supabaseAdmin.auth.admin.listUsers({
+      page,
+      perPage: DIRECTORY_PAGE_SIZE,
+    });
+    if (pageError) throw pageError;
+    const users = pageData?.users ?? [];
+    for (const user of users) {
+      if (userIds.has(user.id)) {
+        const email = normalize(user.email);
+        if (email) emails.add(email);
+      }
+    }
+    // A short page is the genuine end of the directory.
+    if (users.length < DIRECTORY_PAGE_SIZE) return emails;
+  }
+
+  // Ran out of pages while they were still arriving full: there is more
+  // directory than this loop can read, so the answer is incomplete.
+  throw new Error(AUDIENCE_TRUNCATED);
+}
+
 export async function loadConsentedAudience(): Promise<ConsentedAudience> {
   const accounts = new Set<string>();
   const subscribers = new Set<string>();
@@ -127,23 +202,8 @@ export async function loadConsentedAudience(): Promise<ConsentedAudience> {
 
   const optedInUserIds = new Set(prefs.map((row) => row.user_id).filter(Boolean));
 
-  // Resolve opted-in user ids to addresses by paging the auth admin list once,
-  // rather than one lookup per customer against a rate-limited API.
-  if (optedInUserIds.size > 0) {
-    const PER_PAGE = 1000;
-    const MAX_PAGES = 100;
-    for (let page = 1; page <= MAX_PAGES; page++) {
-      const { data: pageData, error: pageError } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: PER_PAGE });
-      if (pageError) throw pageError;
-      const users = pageData?.users ?? [];
-      for (const user of users) {
-        if (optedInUserIds.has(user.id)) {
-          const email = normalize(user.email);
-          if (email) accounts.add(email);
-        }
-      }
-      if (users.length < PER_PAGE) break;
-    }
+  for (const email of await resolveAccountEmails(optedInUserIds)) {
+    accounts.add(email);
   }
 
   // Paged: an unpaged read stops at the server's row cap without saying so,
