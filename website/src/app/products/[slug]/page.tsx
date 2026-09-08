@@ -4,6 +4,7 @@ import { ProductDetailClient } from "@/components/product-detail-client";
 import { TikTokViewContent } from "@/components/tiktok-view-content";
 import { getCatalogProductBySlug, getCatalogProductsByCategory } from "@/lib/catalog";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { requestHasEmailLinkGrant } from "@/lib/email/link-grant-server";
 import { getHomepageControlConfig } from "@/lib/admin-control";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
 import { advertisableBxgyPromotions, isSlugEligible, storefrontDescription } from "@/lib/bxgy-engine";
@@ -114,8 +115,12 @@ export default async function ProductDetailPage({
   // catalogue. The slug is carried into ?next= so signing in lands the visitor
   // on the product they actually clicked, which is what keeps an ad, a bio link
   // or an ambassador's referral worth following.
+  // A session OR a marketing-link grant, matching the wall and the catalogue
+  // index. A campaign linking straight at one product is the ordinary case, so
+  // this page has to agree with /products or half the destinations an operator
+  // can choose still dead-end at a sign-in page.
   const viewer = await getAuthenticatedUser().catch(() => null);
-  if (!viewer) {
+  if (!viewer && !(await requestHasEmailLinkGrant())) {
     redirect(`/account/login?next=${encodeURIComponent(`/products/${slug}`)}`);
   }
 

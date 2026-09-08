@@ -6,6 +6,11 @@ import {
   readGuestGrantCookie,
   verifyGuestRecoveryGrant,
 } from "@/lib/cart-recovery-grant";
+import {
+  emailGrantAllowsPath,
+  readEmailGrantCookie,
+  verifyEmailLinkGrant,
+} from "@/lib/email/link-grant";
 import { copyAdParams } from "@/lib/attribution";
 
 import {
@@ -366,6 +371,31 @@ async function hasGuestCartGrant(request: NextRequest, pathname: string): Promis
   // token cannot be passed around as a URL for the rest of the journey.
   if (pathname !== "/cart/restore" && pathname !== "/api/cart/restore") return false;
   return await verifyGuestRecoveryGrant(request.nextUrl.searchParams.get(GUEST_GRANT_PARAM)) !== null;
+}
+
+/**
+ * Does this request carry a marketing-link grant that covers THIS path?
+ *
+ * Same shape and same ordering discipline as hasGuestCartGrant above: the path
+ * is checked FIRST and the cookie second, so a grant presented for a path
+ * outside the allowlist is never even verified. The allowlist is the boundary;
+ * the signature only decides whether a request already inside it is genuine.
+ *
+ * There is no query-parameter form here, unlike the cart grant. The cart grant
+ * accepts one on /cart/restore because corporate link rewriters follow the
+ * redirect server-side and swallow the Set-Cookie. That trade buys nothing for
+ * a browse capability — a rewriter that eats the cookie simply lands the
+ * shopper on the sign-in page, which is where they landed before — and a
+ * capability passed around as a URL is a capability that ends up in a Referer
+ * header. So: cookie only.
+ *
+ * Non-throwing, an HMAC over a cookie with no database read, so it cannot slow
+ * the wall or fail it open. Async only because Web Crypto is, and Web Crypto is
+ * what the edge runtime has.
+ */
+async function hasEmailLinkGrant(request: NextRequest, pathname: string): Promise<boolean> {
+  if (!emailGrantAllowsPath(pathname)) return false;
+  return await verifyEmailLinkGrant(readEmailGrantCookie(request)) !== null;
 }
 
 async function hasValidAdminSession(request: NextRequest) {
@@ -949,6 +979,7 @@ export async function middleware(request: NextRequest) {
     && !(await sessionIsVerified())
     && !(await hasValidAdminSession(request))
     && !(await hasGuestCartGrant(request, pathname))
+    && !(await hasEmailLinkGrant(request, pathname))
   ) {
     if (pathname.startsWith("/api/")) {
       return finish(

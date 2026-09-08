@@ -11,6 +11,8 @@ import {
 import { normalizeLinkButtons } from "@/lib/email/affiliate-campaign-template";
 import { hashIpAddress } from "@/lib/ip-hash";
 import { stampCampaignEngagement } from "@/lib/email/engagement";
+import { attachEmailLinkGrant } from "@/lib/email/recipient-attestation";
+import { OFFER_COOKIE, OFFER_COOKIE_MAX_AGE_SECONDS } from "@/lib/offers/customer-offers";
 
 export const dynamic = "force-dynamic";
 
@@ -139,5 +141,44 @@ export async function GET(request: NextRequest) {
     path: "/",
     maxAge: Math.floor(ATTRIBUTION_WINDOW_MS / 1000),
   });
+
+  // THE GIFT, IF THIS CAMPAIGN CARRIED ONE — IN A COOKIE, NEVER IN THE URL.
+  //
+  // Identical handling to the automation click route, and for the same reason:
+  // the token is a bearer secret that can grant a physical product. In a query
+  // string on the landing page it would be readable by every script there, sent
+  // in the Referer of every outbound request that page makes, captured by
+  // analytics and session recorders, and copied verbatim any time the customer
+  // shared the link. The checkout reads it server-side, so the browser never
+  // needs to see it.
+  //
+  // Length-capped because anyone can put anything in `o`: junk should cost a
+  // failed lookup, not a Set-Cookie header no proxy will forward.
+  const offerToken = request.nextUrl.searchParams.get("o") ?? "";
+  if (offerToken && offerToken.length <= 128) {
+    response.cookies.set({
+      name: OFFER_COOKIE,
+      value: offerToken,
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: OFFER_COOKIE_MAX_AGE_SECONDS,
+    });
+  }
+
+  // AND THE CAPABILITY TO ACTUALLY REACH THE DESTINATION.
+  //
+  // Without this the redirect above lands on /account/login. The store is
+  // account-only by default (access-policy.ts) and every campaign cta_path in
+  // production points behind that wall, so the click was recorded, the
+  // attribution cookie was set, and the shopper was handed a sign-in page. A
+  // click that cannot become an order is a metric, not a sale.
+  //
+  // Minted only for a recipient whose account already carries the 21+ and
+  // research-use representations — see recipient-attestation.ts. Everyone else
+  // reaches the sign-in page exactly as before and makes them there.
+  await attachEmailLinkGrant(response, email);
+
   return response;
 }

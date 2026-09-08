@@ -3,6 +3,7 @@ import { ProductsPageClient } from "./products-client";
 import { getStorefrontCatalog } from "@/lib/storefront-catalog";
 import { pageMetadata } from "@/lib/page-metadata";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { requestHasEmailLinkGrant } from "@/lib/email/link-grant-server";
 import { redirect } from "next/navigation";
 
 // NOINDEX. The catalogue requires an account, so there is nothing here for a
@@ -57,8 +58,14 @@ export default async function Page() {
   // sign-in prompt would still ship all 36 products to the browser, where
   // "view source" reads them. The only way to withhold the data is not to load
   // it, so the guard sits above the fetch rather than around the markup.
+  // A SESSION *OR* A MARKETING-LINK GRANT. The wall in middleware accepts both;
+  // this guard used to accept only the first, so a subscriber who clicked the
+  // button in a campaign passed the wall and was redirected by this line
+  // instead. The grant is signed, expiring, carries no identity, and is only
+  // ever minted for an address whose account already made the 21+ and
+  // research-use representations — see lib/email/link-grant.ts.
   const viewer = await getAuthenticatedUser().catch(() => null);
-  if (!viewer) {
+  if (!viewer && !(await requestHasEmailLinkGrant())) {
     redirect("/account/login?next=%2Fproducts");
   }
 
