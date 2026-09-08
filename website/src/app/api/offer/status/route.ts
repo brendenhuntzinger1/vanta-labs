@@ -44,6 +44,37 @@ export async function GET(request: Request) {
   // so a renamed product reads correctly in a banner shown weeks after the
   // token was minted. A shipping gift has no product to name, so it falls back
   // to the catalogue entry's own label.
+  // A MULTI-ITEM GIFT IS NAMED FROM ITS ITEMS, NOT FROM ITS KEY.
+  //
+  // Cart-recovery gifts file under a stable slot key that happens to BE a
+  // catalogue key (`cart_recovery_bac_water`, kept so the one-live-offer index
+  // and the 30-day cooldown do not reset). So the catalogue branch below
+  // matched and the cart banner said "Free BAC Water" for a gift of three
+  // different products. The row is what the checkout honours, so the row is
+  // what the banner must name. Caught by taking a real top-band recovery email
+  // through the click and reading what the cart said.
+  if (status.giftItems.length > 0) {
+    let names = status.giftItems.map((item) => item.slug);
+    try {
+      const products = await getCatalogProductsBySlugs(status.giftItems.map((item) => item.slug));
+      names = status.giftItems.map((item) => {
+        const product = products.find((candidate) => candidate.slug === item.slug);
+        const name = product?.name ?? item.slug;
+        return item.quantity > 1 ? `${item.quantity} × ${name}` : name;
+      });
+    } catch {
+      // The catalogue being unavailable is not a reason to hide the gift.
+    }
+    return NextResponse.json({
+      offer: {
+        rewardKind: status.rewardKind,
+        rewardName: names.join(" + "),
+        minSubtotalCents: status.minSubtotalCents,
+        expiresAt: status.expiresAt,
+      },
+    });
+  }
+
   // A catalogue gift keeps the label that was written for it. Anything else —
   // a gift an operator built for one campaign — is named from what the offer
   // row actually grants, because there is no catalogue entry to ask.

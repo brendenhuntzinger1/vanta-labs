@@ -3,14 +3,14 @@ import crypto from "crypto";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getCartRecoveryControlConfig, getShippingConfig, type CartRecoveryConfig } from "@/lib/admin-control";
-import { DEFAULT_RECOVERY_TIERS } from "@/lib/cart-recovery-tiers";
+import { DEFAULT_RECOVERY_TIERS, type RecoveryGiftItem } from "@/lib/cart-recovery-tiers";
 import { getSiteUrl } from "@/lib/env";
 import { isFreeShippingSitewide } from "@/lib/shipping";
 import { formatDisplayDate } from "@/lib/format-date";
 import { isMarketingSuppressed, sendMarketingEmail } from "@/lib/email/marketing";
 import { claimMarketingSend } from "@/lib/email/frequency";
 import { plainGreetingName } from "@/lib/email/greeting-name";
-import { getCatalogProductsBySlugs } from "@/lib/catalog";
+import { getCatalogProductsBySlugs, getStockLevelsBySlugs } from "@/lib/catalog";
 import { isPaidOrderStatus, isProductPurchaseOrder } from "@/lib/ledger";
 import {
   cartRecoveryGiftTemplate,
@@ -1085,6 +1085,44 @@ export function recoveryEmailItems(
 }
 
 /**
+ * WHAT THIS CART IS WORTH, judged on the lines the email will actually print.
+ *
+ * `cart_value_cents` is a SNAPSHOT taken when the beacon was posted. The lines
+ * are not: recoveryEmailItems reconciles them against the live catalogue,
+ * dropping a slug that no longer sells and re-pricing the rest, so the two
+ * disagree the moment a product is retired or repriced. Using the snapshot
+ * regardless cost money in both directions:
+ *
+ *   THE EMAIL. A cart stored at $519.90 whose live lines came to $95.98 was
+ *   mailed with "Cart total $519.90" printed under a summary that added up to
+ *   $95.98. The shopper clicks, sees the real basket, and the message has been
+ *   wrong about the one number they can check for themselves.
+ *
+ *   THE OFFER. The band is chosen from cart value, so that same cart drew the
+ *   TOP band — three free products — on $95.98 of goods, redeemable against a
+ *   $35 minimum. The ladder is generous at the top precisely BECAUSE the basket
+ *   is large; paying out on a stale figure hands that away to carts that never
+ *   qualified for it.
+ *
+ * THE SUM IS ONLY TRUSTED WHEN EVERY SURVIVING LINE CARRIES A LIVE PRICE.
+ * recoveryEmailItems omits the price rather than printing a wrong one, so a
+ * partial sum would understate the cart and quietly demote a real one; in that
+ * case the stored figure stands and behaviour is exactly as it was.
+ *
+ * An empty basket returns the stored value too — the sweep drops those carts
+ * before this point, and returning 0 would only mislabel one if it ever did not.
+ */
+export function reconciledCartValueCents(
+  items: ReadonlyArray<RecoveryEmailItem>,
+  storedCents: number,
+): number {
+  const stored = Number.isFinite(storedCents) ? Math.max(0, Math.round(storedCents)) : 0;
+  if (items.length === 0) return stored;
+  if (!items.every((item) => typeof item.unitPriceCents === "number")) return stored;
+  return items.reduce((sum, item) => sum + (item.unitPriceCents ?? 0) * item.quantity, 0);
+}
+
+/**
  * Everything the emails need about these slugs, in one catalogue read.
  *
  * Throws on a read failure, deliberately: the sweep catches it and sends
@@ -1267,6 +1305,76 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     [...catalogueNames.entries()].map(([slug, entry]) => [slug, entry.name]),
   );
 
+  // WHICH GIFT PRODUCTS CAN ACTUALLY SHIP TODAY.
+  //
+  // quoteOrder already skips an unshippable gift item at the till, and the rest
+  // of a multi-item gift still lands — but that is the WRONG PLACE for this to
+  // be the only check. The email is written first: without this, a band naming
+  // an out-of-stock product mails "TB-500 + GHK-Cu + BAC Water" and the
+  // checkout hands over two of the three. Promising what cannot ship is the one
+  // failure this whole programme is least able to afford, because the customer
+  // reads the promise and then counts the box.
+  //
+  // Found by sending a real top-band cart through the sweep against a harness
+  // where TB-500 was out of stock, and comparing the email against the quote.
+  //
+  // Unknown is treated as SHIPPABLE: an untracked supply has no count, and
+  // withholding a gift because a stock read was silent would quietly empty the
+  // ladder. quoteOrder and reserve_inventory both still guard the real order.
+  //
+  // THE CATALOGUE STATUS ALONE IS NOT ENOUGH, and the first version of this
+  // check believed it was. resolveStockStatus() in catalog.ts returns "In Stock"
+  // for EVERY product while the global inventory-tracking flag is off — which is
+  // its default — so a shelf holding zero units still reads In Stock there. The
+  // count from getStockLevelsBySlugs() is not masked that way: it carries the
+  // per-row tracked quantity regardless of the flag, which is exactly why
+  // quoteOrder tests both. Testing both here too is what makes the email and the
+  // till agree; testing only the status mailed a three-gift promise that the
+  // quote then honoured two thirds of.
+  const giftSlugs = Array.from(new Set(recoveryTiers.flatMap((tier) => [
+    ...tier.stage3.map((item) => item.slug),
+    ...tier.stage4.gifts.map((item) => item.slug),
+  ])));
+  const unshippableGiftSlugs = new Set<string>();
+  if (giftSlugs.length > 0) {
+    try {
+      const [giftProducts, giftStock] = await Promise.all([
+        getCatalogProductsBySlugs(giftSlugs),
+        getStockLevelsBySlugs(giftSlugs),
+      ]);
+      for (const slug of giftSlugs) {
+        const product = giftProducts.find((candidate) => candidate.slug === slug);
+        // Absent from the catalogue is unshippable too — a retired or unpublished
+        // slug resolves to nothing at the till and would be promised for ever.
+        if (!product) { unshippableGiftSlugs.add(slug); continue; }
+        // The same dose quoteOrder picks for a gift that names no variant, and
+        // the same key order: dose id for a variant, slug for a product.
+        const dose = product.doses?.find((entry) => entry.isDefault) ?? product.doses?.[0];
+        const status = dose?.stockStatus ?? product.stockStatus;
+        const count = dose ? giftStock.get(dose.id) : giftStock.get(slug);
+        if (status === "Out of Stock" || status === "Reserved") unshippableGiftSlugs.add(slug);
+        else if (typeof count === "number" && Number.isFinite(count) && count <= 0) unshippableGiftSlugs.add(slug);
+      }
+    } catch (error) {
+      // A failed read leaves the set empty, so every gift is attempted and the
+      // till decides. Better than silently mailing a ladder with no gifts.
+      console.error("[cart-recovery] gift stock unreadable; offering every configured gift", error);
+    }
+  }
+  /** Drop what cannot ship, so the email promises only what the box will hold. */
+  const shippableGifts = (gifts: RecoveryGiftItem[]) =>
+    gifts.filter((item) => !unshippableGiftSlugs.has(item.slug));
+
+  // IS THE STORE SHIPPING EVERYTHING FREE RIGHT NOW? Read once for the sweep,
+  // from the configuration the checkout prices through, so no message can state
+  // a policy the till would then charge for. Unreadable means NOT CLAIMED.
+  let freeShippingSitewide = false;
+  try {
+    freeShippingSitewide = isFreeShippingSitewide(await getShippingConfig());
+  } catch {
+    // A perk we cannot confirm is a perk we do not claim.
+  }
+
   // One read for the whole sweep. A cart with no row here — which is every
   // cart, almost always — takes the ordinary path untouched.
   const overrides = await loadCartRecoveryOverrides(candidates.map(({ row }) => String(row.id)));
@@ -1297,7 +1405,9 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     // the beacon, and it is printed at the top of a branded email.
     const name = plainGreetingName(row.customer_name);
     const cartId = String(row.id);
-    const base = { name, items, cartValueCents: row.cart_value_cents };
+
+    const reconciledCartCents = reconciledCartValueCents(items, Number(row.cart_value_cents ?? 0));
+    const base = { name, items, cartValueCents: reconciledCartCents };
     let sent = false;
 
     // A NAMED CART'S STAGE CAN BE REPLACED, and that is all this does.
@@ -1323,12 +1433,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       // Read from the live shipping configuration, the same one the checkout
       // prices through, so the line cannot outlive the setting.
       const overridePerks = [...override.perks];
-      try {
-        const shippingConfig = await getShippingConfig();
-        if (isFreeShippingSitewide(shippingConfig)) overridePerks.unshift("Free shipping");
-      } catch {
-        // A perk we cannot confirm is a perk we do not claim.
-      }
+      if (freeShippingSitewide) overridePerks.unshift("Free shipping");
 
       let livePromotionNote: string | null = null;
       try {
@@ -1398,7 +1503,9 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     const variant = recoveryVariantFor(cartId);
     const plan = planStageOffer({
       stage,
-      cartValueCents: Number(row.cart_value_cents ?? 0),
+      // The reconciled figure, not the snapshot — see the note where it is
+      // computed. The band a cart draws must match the basket it will restore.
+      cartValueCents: reconciledCartCents,
       lastPaidAt: lastPaid,
       lastRecoveryCouponAt: context.lastRecoveryCouponAt.get(email) ?? null,
       lastRecoveryGiftAt: lastGiftForOtherCarts(context.recoveryGifts.get(email), cartId),
@@ -1443,7 +1550,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       // $520 cart a GHK-Cu and a BAC Water, because one flat gift under-serves
       // the carts holding most of the money and over-serves the rest.
       const giftKey = plan.offerKey;
-      const giftConfig = recoveryGiftConfig(plan.gifts, catalogueNameBySlug);
+      const giftConfig = recoveryGiftConfig(shippableGifts(plan.gifts), catalogueNameBySlug);
       let giftTerms = "";
       sent = await reserveAndSendStage({
         cartId, stage, email,
@@ -1468,6 +1575,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
           giftLabel: giftConfig?.label ?? "",
           offerTerms: giftTerms,
           variant,
+          freeShipping: freeShippingSitewide,
         }),
       });
     } else {
@@ -1489,7 +1597,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       // issueCustomerOffer retires this cart's own stage-3 row and mints a
       // fresh token, so the link in the NEWEST email is the one that works.
       const giftKey = plan.offerKey;
-      const giftConfig = recoveryGiftConfig(plan.gifts, catalogueNameBySlug);
+      const giftConfig = recoveryGiftConfig(shippableGifts(plan.gifts), catalogueNameBySlug);
       let giftToken: string | null = null;
       let giftTerms = "";
       if (giftKey && giftConfig) {
@@ -1520,7 +1628,13 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
         // code first, a fresh mint second — and a stage that can mint nothing
         // waits for the next sweep rather than promising a code it lacks.
         mintCoupon: discountAllowed
-          ? () => resolveLastChanceCoupon(cartId, email, config.discountPercent, config.couponExpirationHours)
+          // THE BAND'S PERCENTAGE, NOT THE GLOBAL ONE. `config.discountPercent`
+          // is now the master switch — zero turns every recovery coupon off at
+          // once — while each band carries the rate it was configured with.
+          // Passing the global figure here made the band's percentage a number
+          // that was computed, logged, and then quietly ignored: a $150 cart
+          // whose band said 10% was mailed the global 5%.
+          ? () => resolveLastChanceCoupon(cartId, email, plan.percent, config.couponExpirationHours)
           : () => findLiveCouponForCart(cartId),
         couponRequired: discountAllowed,
         offerToken: giftToken,

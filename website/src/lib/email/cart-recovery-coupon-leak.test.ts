@@ -404,7 +404,10 @@ describe("no duplicate customer benefit", () => {
     const coupon = recoveryCoupons()[0];
     expect(coupon).toMatchObject({
       discount_type: "percent",
-      discount_value: 5,
+      // The BAND's rate for this $149.99 cart. The global setting in the
+      // fixture is 5% and is now only a master switch — zero turns every
+      // recovery coupon off, it no longer sets the rate.
+      discount_value: 10,
       max_redemptions: 1,
       redemptions_count: 0,
       active: true,

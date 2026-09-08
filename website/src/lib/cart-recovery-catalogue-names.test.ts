@@ -16,7 +16,7 @@ import { plainGreetingName } from "@/lib/email/greeting-name";
 // cart-recovery-sequence.test.ts.
 // ---------------------------------------------------------------------------
 
-const { recoveryEmailItems } = await import("@/lib/cart-recovery");
+const { recoveryEmailItems, reconciledCartValueCents } = await import("@/lib/cart-recovery");
 
 // The catalogue entry is the WHOLE description now, not just a name: price and
 // image come from here too, so the beacon's stored snapshot decides only WHICH
@@ -96,5 +96,53 @@ describe("plainGreetingName", () => {
     expect(plainGreetingName("...")).toBe("");
     expect(plainGreetingName(null)).toBe("");
     expect(plainGreetingName(undefined)).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE CART IS WORTH WHAT THE EMAIL SAYS IT IS WORTH.
+//
+// recoveryEmailItems reconciles a cart against the live catalogue; the stored
+// `cart_value_cents` is a snapshot from whenever the beacon fired. Two things
+// read the cart's value afterwards — the total printed under the summary, and
+// the BAND that decides the gift — and both were reading the snapshot. A cart
+// stored at $519.90 whose surviving lines came to $95.98 was mailed a total it
+// contradicted, and drew the top band's three free products on a basket that
+// never qualified. Found by walking a real top-band cart through the sweep.
+// ---------------------------------------------------------------------------
+describe("reconciledCartValueCents", () => {
+  it("values the cart at the lines that survived reconciliation, not the snapshot", () => {
+    const items = recoveryEmailItems(
+      [
+        { slug: "retired-product", name: "gone", quantity: 4, unitPrice: 109.99 },
+        { slug: "bpc-157", name: "x", quantity: 2, unitPrice: 1 },
+      ],
+      catalogue,
+    );
+    expect(reconciledCartValueCents(items, 51_990)).toBe(13_800);
+  });
+
+  it("uses live prices, so a repriced product moves the total the shopper is shown", () => {
+    const items = recoveryEmailItems([{ slug: "tb-500", name: "x", quantity: 3, unitPrice: 0.01 }], catalogue);
+    expect(reconciledCartValueCents(items, 3)).toBe(23_700);
+  });
+
+  // A partial sum would UNDERSTATE the cart, and understating it demotes a real
+  // basket to a smaller band — the opposite mistake, made for the same reason.
+  it("keeps the stored figure when any surviving line has no live price", () => {
+    const priceless = new Map([...catalogue, ["no-price", { name: "No Price", unitPriceCents: 0 }]]);
+    const items = recoveryEmailItems(
+      [{ slug: "bpc-157", name: "x", quantity: 1, unitPrice: 1 }, { slug: "no-price", name: "y", quantity: 1, unitPrice: 1 }],
+      priceless,
+    );
+    expect(reconciledCartValueCents(items, 42_000)).toBe(42_000);
+  });
+
+  it("keeps the stored figure for a cart with nothing left in it", () => {
+    expect(reconciledCartValueCents([], 42_000)).toBe(42_000);
+  });
+
+  it.each([Number.NaN, Number.NEGATIVE_INFINITY, -1])("never reports a negative or unreal value (%s)", (stored) => {
+    expect(reconciledCartValueCents([], stored as number)).toBe(0);
   });
 });

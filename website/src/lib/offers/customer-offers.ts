@@ -830,6 +830,8 @@ export async function readOfferStatus(token: string | null | undefined, now = Da
   percentOff: number | null;
   /** Units the product half grants; null when there is no product half. */
   quantity: number | null;
+  /** The products a multi-item gift grants, normalised. Empty for other kinds. */
+  giftItems: GiftItem[];
   minSubtotalCents: number;
   expiresAt: string;
   /**
@@ -856,7 +858,7 @@ export async function readOfferStatus(token: string | null | undefined, now = Da
       .eq("token_hash", hashOfferToken(value))
       .maybeSingle();
     if (!data) return null;
-    const row = data as { offer_key: string; reward_kind: string; product_slug: string | null; percent_off: number | null; quantity: number | null; min_subtotal_cents: number; expires_at: string; redeemed_at: string | null; revoked_at: string | null; email: string };
+    const row = data as { offer_key: string; reward_kind: string; product_slug: string | null; gift_items: unknown; percent_off: number | null; quantity: number | null; min_subtotal_cents: number; expires_at: string; redeemed_at: string | null; revoked_at: string | null; email: string };
     if (row.redeemed_at || row.revoked_at) return null;
     if (new Date(row.expires_at).getTime() <= now) return null;
     return {
@@ -867,6 +869,7 @@ export async function readOfferStatus(token: string | null | undefined, now = Da
       // Null only where there is no product. A row minted before the column
       // existed reads null too, and every reader treats that as one.
       quantity: row.product_slug === null ? null : Math.max(1, Math.floor(Number(row.quantity ?? 1))),
+      giftItems: normalizeGiftItems(row.gift_items),
       minSubtotalCents: Number(row.min_subtotal_cents ?? 0),
       expiresAt: row.expires_at,
       email: String(row.email ?? ""),

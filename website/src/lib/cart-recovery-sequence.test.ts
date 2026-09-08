@@ -397,7 +397,9 @@ describe("the sweep", () => {
     const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
     await runAbandonedCartSweep();
     expect(sent[0].text).toMatch(/SAVE-[A-Z0-9]+/);
-    expect(sent[0].text).toContain("5%");
+    // The BAND's rate for a $149.99 cart, not the global 5% in this fixture's
+    // config — which is now only a master switch.
+    expect(sent[0].text).toContain("10%");
     expect(db.coupons).toHaveLength(1);
   });
 });
