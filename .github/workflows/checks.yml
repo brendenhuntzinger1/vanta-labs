@@ -163,25 +163,44 @@ jobs:
       # A SKIP THAT READS AS A PASS IS THE THING THIS GUARDS AGAINST.
       #
       # If the service container ever stops being reachable, every one of those
-      # suites goes back to skipping quietly and the run stays green. So the
-      # count is asserted: the run must execute the database-backed files rather
-      # than merely not fail.
+      # suites goes back to skipping quietly and the run stays green. The main
+      # `Tests` step cannot catch that on its own: vitest exits 0 with skipped
+      # tests, so a suite that quietly opts out is indistinguishable there from
+      # one that passed. Hence a second, asserting run.
+      #
+      # EVERY DB-GATED SUITE, DISCOVERED RATHER THAN LISTED. This named two
+      # files. That covered the two, and nothing else: the other eighteen could
+      # each go back to skipping with CI still green, and a DB suite added
+      # tomorrow would be born outside the guard — which is the same
+      # "the check exists but does not reach the thing" shape as the payment
+      # defects this audit turned up. The list is now derived from the source,
+      # so a new suite is covered the moment it gates itself.
+      #
+      # The floor is on the DISCOVERY, not on the suites: if the grep ever
+      # matches nothing (a rename, a moved directory) an empty run would
+      # otherwise pass vacuously.
       - name: The database-backed suites actually ran
         env:
           VANTA_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
         run: |
-          npx vitest run src/lib/sql/ads-roas-views-executed.test.ts \
-                         src/lib/sql/catalog-lockdown-sql-is-idempotent.test.ts \
-                         --reporter=json --outputFile=/tmp/db-suites.json
+          mapfile -t DB_SUITES < <(grep -rl 'VANTA_TEST_DATABASE_URL' src --include='*.test.ts' | sort)
+          echo "Discovered ${#DB_SUITES[@]} database-backed suite(s):"
+          printf '  %s\n' "${DB_SUITES[@]}"
+          if [ "${#DB_SUITES[@]}" -lt 15 ]; then
+            echo "::error::Discovery found only ${#DB_SUITES[@]} database-backed suites (expected >= 15). The grep is broken, not the suites — fix it rather than lowering this floor." >&2
+            exit 1
+          fi
+          npx vitest run "${DB_SUITES[@]}" --reporter=json --outputFile=/tmp/db-suites.json
           node -e '
             const r = require("/tmp/db-suites.json");
             const skipped = r.numPendingTests ?? 0;
             const passed = r.numPassedTests ?? 0;
+            const files = r.numTotalTestSuites ?? 0;
             if (skipped > 0 || passed === 0) {
-              console.error(`database-backed suites did not run: ${passed} passed, ${skipped} skipped`);
+              console.error(`::error::database-backed suites did not all run: ${passed} passed, ${skipped} SKIPPED across ${files} file(s). A skipped money-path suite is a green run that proved nothing.`);
               process.exit(1);
             }
-            console.log(`database-backed suites executed: ${passed} assertions`);
+            console.log(`database-backed suites executed: ${passed} assertions across ${files} files, 0 skipped`);
           '
 
       - name: Types
