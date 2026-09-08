@@ -16,6 +16,7 @@ import { getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { selectPromotionForCart, type BxgyCartLine } from "@/lib/bxgy-engine";
 import { offerMinimumMet, peekCustomerOffer, type CustomerOffer } from "@/lib/offers/customer-offers";
+import { normalizeGiftItems } from "@/lib/offers/gift-terms";
 import { calculateCouponDiscount } from "@/lib/coupons";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
 import { calculateShipping, isDomesticCountry, isShippableCountry, isShippingWaived } from "@/lib/shipping";
@@ -490,6 +491,11 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   const requestedSlugs = Array.from(new Set([
     ...sanitizedItems.map((item) => item.id.split("::")[0]),
     ...(offer?.product_slug ? [offer.product_slug] : []),
+    // A MULTI-ITEM GIFT'S PRODUCTS MUST BE FETCHED TOO. Missing here, every
+    // item would fail `catalogProducts.find(...)` and the whole gift would
+    // silently not apply — the exact shape of failure that shipped a
+    // percentage and no vial after the bac-water rename.
+    ...normalizeGiftItems((offer as { gift_items?: unknown } | null)?.gift_items).map((item) => item.slug),
   ]));
   let catalogProducts = await getCatalogProductsBySlugs(requestedSlugs);
   // EXPIRED HOLDS MUST NOT REFUSE A SALE HERE EITHER. The catalogue's
@@ -779,26 +785,66 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // ONE BLOCK FOR EVERY KIND. A reward is up to three grants — a $0 product
   // line, a waived shipping fee, a percentage — and each kind is a subset:
   //   free_product          line
+  //   free_products         line(s)
   //   free_shipping                shipping
   //   free_shipping_percent        shipping + percent
   //   percent                                 percent
   //   free_product_percent  line            + percent
+  //   free_products_percent line(s)         + percent
   // Each grant is decided once, below, from the stored row; the kind only says
   // which of the three to attempt. Nothing applies under the minimum.
   if (offer && input.offerToken && offerMinimumMet(offer, Math.round(subtotal * 100))) {
     const kind = String(offer.reward_kind);
     const wantsProduct = kind === "free_product" || kind === "free_product_percent";
+    // The multi-product kinds. Separate from `wantsProduct` because they read a
+    // different column: gift_items rather than product_slug + quantity.
+    const wantsProducts = kind === "free_products" || kind === "free_products_percent";
     const wantsShipping = kind === "free_shipping" || kind === "free_shipping_percent";
-    const percent = kind === "free_shipping_percent" || kind === "percent" || kind === "free_product_percent"
+    const percent = kind === "free_shipping_percent" || kind === "percent"
+      || kind === "free_product_percent" || kind === "free_products_percent"
       ? Number(offer.percent_off ?? 0)
       : 0;
 
-    let productDescription: string | null = null;
-    if (wantsProduct) {
-      const offerProduct = catalogProducts.find((candidate) => candidate.slug === offer.product_slug);
+    // WHAT THIS GIFT GRANTS, AS A LIST — because one gift can now be several
+    // different products.
+    //
+    // `free_product` / `free_product_percent` grant N units of ONE product and
+    // are unchanged: they resolve to a single-entry list, so every token minted
+    // before today means exactly what it always meant.
+    //
+    // `free_products` / `free_products_percent` carry `gift_items`, which is
+    // how the top of the cart-recovery ladder can offer a GLOW *and* a GHK-Cu
+    // *and* a BAC Water. At this store's real dose costs that is the cheapest
+    // strong offer available — three vials cost less than a tenth of what a
+    // percentage costs on the same cart — and it was the one shape the schema
+    // could not express.
+    const giftGrants: Array<{ slug: string; variantId: string | null; quantity: number }> = wantsProducts
+      ? normalizeGiftItems((offer as { gift_items?: unknown }).gift_items)
+      : wantsProduct && offer.product_slug
+        ? [{
+            slug: offer.product_slug,
+            variantId: offer.variant_id ?? null,
+            // Defaulting to one keeps every token issued before the quantity
+            // column existed granting the single unit its email promised.
+            quantity: (() => {
+              const stored = Number((offer as { quantity?: number | null }).quantity ?? 1);
+              return Number.isFinite(stored) ? Math.max(1, Math.floor(stored)) : 1;
+            })(),
+          }]
+        : [];
+
+    // ONE PRODUCT'S GRANT, RUN ONCE PER ITEM.
+    //
+    // Extracted verbatim from the single-product path rather than rewritten, so
+    // the absorb-then-add behaviour, the volume-price recalculation and the
+    // stock ceiling are the same code for a one-item gift and a three-item one.
+    // Returns what to call this item in the description, or null when nothing
+    // was granted.
+    const grantGiftProduct = (grant: { slug: string; variantId: string | null; quantity: number }): string | null => {
+      const offerProduct = catalogProducts.find((candidate) => candidate.slug === grant.slug);
       const offerDose = offerProduct
-        ? (offer.variant_id
-            ? offerProduct.doses?.find((dose) => dose.id === offer.variant_id)
+        ? (grant.variantId
+            ? offerProduct.doses?.find((dose) => dose.id === grant.variantId)
             : offerProduct.doses?.find((dose) => dose.isDefault) ?? offerProduct.doses?.[0])
         : undefined;
       const offerStock = offerProduct
@@ -807,9 +853,9 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       const offerStockStatus = offerDose?.stockStatus ?? offerProduct?.stockStatus;
 
       // A gift we cannot ship is worse than no gift: it would be promised in
-      // the email, shown in the cart, and then oversold. Out of stock means the
-      // product half simply does not apply to this order and the token stays
-      // spendable for later.
+      // the email, shown in the cart, and then oversold. Out of stock means
+      // this ITEM simply does not apply to this order — the rest of a
+      // multi-item gift still lands — and the token stays spendable for later.
       //
       // stockLevels carries only TRACKED rows (getStockLevelsBySlugs), so a
       // number here is a real count and 0 means "tracked, and there are none".
@@ -822,100 +868,104 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
         && offerStockStatus !== "Reserved"
         && !(typeof offerStock === "number" && Number.isFinite(offerStock) && offerStock <= 0);
 
-      if (offerProduct && shippable) {
-        // HOW MANY, AND WHERE THEY COME FROM.
-        //
-        // The count is whatever the row was minted with, defaulting to one so
-        // that every token issued before the column existed still grants the
-        // single unit its email promised. It is floored to a whole number at or
-        // above one: a corrupt row must not put a fractional or negative
-        // quantity into order_items, where it becomes an un-shippable pick list
-        // rather than a pricing bug.
-        const storedQuantity = Number((offer as { quantity?: number | null }).quantity ?? 1);
-        const wanted = Number.isFinite(storedQuantity) ? Math.max(1, Math.floor(storedQuantity)) : 1;
+      if (!offerProduct || !shippable) return null;
 
-        // A GIFT OF SOMETHING ALREADY IN THE CART FREES THOSE UNITS.
-        //
-        // "The BAC Water in your cart is on us" and "here are two more bottles
-        // of water" are different promises, and only the first is what anyone
-        // means. So the gift is satisfied from the basket first and only the
-        // shortfall is added as new stock. A cart holding none of the product
-        // — the ordinary win-back case — absorbs nothing and behaves exactly as
-        // it always did.
-        //
-        // Absorbed units leave the paid subtotal, so they also leave Buy X Get
-        // Y eligibility (gift lines are filtered out of it): a unit the store
-        // has already given away must not additionally earn a promotion reward.
-        const giftVariantId = offerDose?.id ?? null;
-        const matchesGift = (line: QuoteOrderLine) =>
-          !line.gift
-          && lineSlug(line) === offerProduct.slug
-          && (line.product.variantId ?? null) === giftVariantId;
+      const wanted = grant.quantity;
 
-        let outstanding = wanted;
-        for (const line of lineItems) {
-          if (outstanding <= 0) break;
-          if (!matchesGift(line)) continue;
-          const take = Math.min(outstanding, line.quantity);
-          if (take <= 0) continue;
-          absorbedFromCart.push({ line, quantity: take, unitPrice: line.product.price });
-          line.quantity -= take;
-          // THE SHRUNKEN LINE LOSES THE VOLUME PRICE THOSE UNITS BOUGHT. Ten
-          // units absorbed down to eight are eight units, and charging the
-          // ten-unit rate for them is money the store gives away twice.
-          line.product = {
-            ...line.product,
-            price: getBundleDiscountedUnitPrice(line.baseUnitPrice, line.quantity, bundleConfig),
-          };
-          outstanding -= take;
-        }
-        const absorbed = wanted - outstanding;
-        // A line absorbed to nothing is not a zero-quantity order item.
-        for (let i = lineItems.length - 1; i >= 0; i--) {
-          if (!lineItems[i].gift && lineItems[i].quantity <= 0) lineItems.splice(i, 1);
-        }
+      // A GIFT OF SOMETHING ALREADY IN THE CART FREES THOSE UNITS.
+      //
+      // "The BAC Water in your cart is on us" and "here are two more bottles
+      // of water" are different promises, and only the first is what anyone
+      // means. So the gift is satisfied from the basket first and only the
+      // shortfall is added as new stock. A cart holding none of the product
+      // — the ordinary win-back case — absorbs nothing and behaves exactly as
+      // it always did.
+      //
+      // Absorbed units leave the paid subtotal, so they also leave Buy X Get
+      // Y eligibility (gift lines are filtered out of it): a unit the store
+      // has already given away must not additionally earn a promotion reward.
+      const giftVariantId = offerDose?.id ?? null;
+      const matchesGift = (line: QuoteOrderLine) =>
+        !line.gift
+        && lineSlug(line) === offerProduct.slug
+        && (line.product.variantId ?? null) === giftVariantId;
 
-        // ADDED UNITS COME OFF THE SHELF AND MUST FIT ON IT. Everything this
-        // order already ships of the same row — the units still being paid for
-        // AND the ones just absorbed — competes for the same stock, so all of
-        // it counts before deciding how many new ones can be promised.
-        // Untracked stock (the usual case for supplies) is unbounded here and
-        // is guarded authoritatively by reserve_inventory at order creation.
-        const shelf = typeof offerStock === "number" && Number.isFinite(offerStock) ? offerStock : Infinity;
-        const alreadyShipping = absorbed
-          + lineItems.filter(matchesGift).reduce((sum, line) => sum + line.quantity, 0);
-        const added = Math.max(0, Math.min(outstanding, shelf - alreadyShipping));
-        const granted = absorbed + added;
-
-        if (granted > 0) {
-          lineItems.push({
-            product: {
-              ...offerProduct,
-              id: offerDose ? `${offerProduct.slug}::${offerDose.id}` : offerProduct.slug,
-              // The only place in this function a price is forced rather than
-              // resolved. It is not a discount on a real price — it is the price.
-              price: 0,
-              stockStatus: offerDose?.stockStatus ?? offerProduct.stockStatus,
-              variantId: offerDose?.id,
-              variantLabel: offerDose?.label,
-              variantSku: offerDose?.sku,
-            },
-            quantity: granted,
-            // Zero here too, so fullSubtotal-style reads stay honest if this line
-            // is ever included in one: the customer was never charged for it and
-            // was never "discounted" from anything.
-            baseUnitPrice: 0,
-            gift: true,
-          });
-          const name = offerDose?.label ? `${offerProduct.name} (${offerDose.label})` : offerProduct.name;
-          // One unit keeps the wording every existing receipt and email uses.
-          productDescription = granted > 1 ? `${granted} × ${name}` : name;
-        }
-        // Absorption moved money out of the paid lines; put the four
-        // merchandise figures back in step before anything reads them.
-        recomputeSubtotals();
+      let outstanding = wanted;
+      for (const line of lineItems) {
+        if (outstanding <= 0) break;
+        if (!matchesGift(line)) continue;
+        const take = Math.min(outstanding, line.quantity);
+        if (take <= 0) continue;
+        absorbedFromCart.push({ line, quantity: take, unitPrice: line.product.price });
+        line.quantity -= take;
+        // THE SHRUNKEN LINE LOSES THE VOLUME PRICE THOSE UNITS BOUGHT. Ten
+        // units absorbed down to eight are eight units, and charging the
+        // ten-unit rate for them is money the store gives away twice.
+        line.product = {
+          ...line.product,
+          price: getBundleDiscountedUnitPrice(line.baseUnitPrice, line.quantity, bundleConfig),
+        };
+        outstanding -= take;
       }
+      const absorbed = wanted - outstanding;
+      // A line absorbed to nothing is not a zero-quantity order item.
+      for (let i = lineItems.length - 1; i >= 0; i--) {
+        if (!lineItems[i].gift && lineItems[i].quantity <= 0) lineItems.splice(i, 1);
+      }
+
+      // ADDED UNITS COME OFF THE SHELF AND MUST FIT ON IT. Everything this
+      // order already ships of the same row — the units still being paid for
+      // AND the ones just absorbed — competes for the same stock, so all of
+      // it counts before deciding how many new ones can be promised.
+      // Untracked stock (the usual case for supplies) is unbounded here and
+      // is guarded authoritatively by reserve_inventory at order creation.
+      const shelf = typeof offerStock === "number" && Number.isFinite(offerStock) ? offerStock : Infinity;
+      const alreadyShipping = absorbed
+        + lineItems.filter(matchesGift).reduce((sum, line) => sum + line.quantity, 0);
+      const added = Math.max(0, Math.min(outstanding, shelf - alreadyShipping));
+      const granted = absorbed + added;
+
+      let described: string | null = null;
+      if (granted > 0) {
+        lineItems.push({
+          product: {
+            ...offerProduct,
+            id: offerDose ? `${offerProduct.slug}::${offerDose.id}` : offerProduct.slug,
+            // The only place in this function a price is forced rather than
+            // resolved. It is not a discount on a real price — it is the price.
+            price: 0,
+            stockStatus: offerDose?.stockStatus ?? offerProduct.stockStatus,
+            variantId: offerDose?.id,
+            variantLabel: offerDose?.label,
+            variantSku: offerDose?.sku,
+          },
+          quantity: granted,
+          // Zero here too, so fullSubtotal-style reads stay honest if this line
+          // is ever included in one: the customer was never charged for it and
+          // was never "discounted" from anything.
+          baseUnitPrice: 0,
+          gift: true,
+        });
+        const name = offerDose?.label ? `${offerProduct.name} (${offerDose.label})` : offerProduct.name;
+        // One unit keeps the wording every existing receipt and email uses.
+        described = granted > 1 ? `${granted} × ${name}` : name;
+      }
+      // Absorption moved money out of the paid lines; put the four
+      // merchandise figures back in step before anything reads them.
+      recomputeSubtotals();
+      return described;
+    };
+
+    // EVERY ITEM IS ATTEMPTED, AND A FAILURE IS PER ITEM. If the GLOW at the
+    // top of the ladder is out of stock, the GHK-Cu and the BAC Water beside it
+    // still land — a partly-granted gift is better than none, and the shopper
+    // sees exactly what was added rather than a promise the till ignored.
+    const grantedNames: string[] = [];
+    for (const grant of giftGrants) {
+      const described = grantGiftProduct(grant);
+      if (described) grantedNames.push(described);
     }
+    const productDescription: string | null = grantedNames.length > 0 ? grantedNames.join(" + ") : null;
 
     if (wantsShipping) offerGrantsFreeShipping = true;
     // Priced off discountBase, the same base every other percentage uses, so

@@ -6,8 +6,10 @@ import { redactEmailForLog } from "@/lib/log-redaction";
 import { BAC_WATER_SLUG } from "@/lib/bac-water";
 import {
   describeGiftTerms,
+  normalizeGiftItems,
   offerRewardQuantity,
   type GiftConfig,
+  type GiftItem,
   type OfferReward,
 } from "@/lib/offers/gift-terms";
 
@@ -17,8 +19,10 @@ import {
 // Component — has to render the same terms sentence the checkout enforces.
 export {
   describeGiftTerms,
+  normalizeGiftItems,
   offerRewardQuantity,
   type GiftConfig,
+  type GiftItem,
   type OfferReward,
 };
 
@@ -305,6 +309,13 @@ export type CustomerOffer = {
   reward_kind: string;
   /** Null for a shipping gift. A check constraint keeps the two in step. */
   product_slug: string | null;
+  /**
+   * The products a multi-item gift grants, as stored. Null for every
+   * single-product kind, which uses product_slug and quantity instead. Read
+   * through normalizeGiftItems — it is a jsonb column, so it is whatever was
+   * last written to it, and it decides what the store gives away for free.
+   */
+  gift_items?: unknown;
   /** How many units the product half grants. Null when there is no product
    *  half; null ALSO on a row minted before the column existed, which is why
    *  every reader treats null as one rather than as zero. */
@@ -403,6 +414,14 @@ export async function issueResolvedOffer(input: {
       // Null for a gift with no product line, so the check constraint can say
       // "a count only where there is something to count".
       ...(quantity === null ? {} : { quantity }),
+      // THE MULTI-ITEM GIFT'S PRODUCTS. Without this the row is a
+      // `free_products` kind with no items, which the reward-shape CHECK
+      // refuses outright — so the mint returns null, the caller sends without a
+      // gift, and the only evidence is an email that promised one. Counts live
+      // inside the items, which is why `quantity` stays null for these kinds.
+      ...(config.reward.kind === "free_products" || config.reward.kind === "free_products_percent"
+        ? { gift_items: config.reward.items }
+        : {}),
       min_subtotal_cents: config.minSubtotalCents,
       expires_at: expiresAt,
     };
@@ -768,7 +787,7 @@ export async function peekCustomerOffer(input: {
   try {
     const { data, error } = await supabaseAdmin
       .from("customer_offers")
-      .select("id, offer_key, email, reward_kind, product_slug, percent_off, quantity, variant_id, min_subtotal_cents, expires_at, reserved_order_id, redeemed_at, revoked_at")
+      .select("id, offer_key, email, reward_kind, product_slug, gift_items, percent_off, quantity, variant_id, min_subtotal_cents, expires_at, reserved_order_id, redeemed_at, revoked_at")
       .eq("token_hash", hashOfferToken(token))
       .maybeSingle();
     if (error || !data) return null;
@@ -833,7 +852,7 @@ export async function readOfferStatus(token: string | null | undefined, now = Da
   try {
     const { data } = await supabaseAdmin
       .from("customer_offers")
-      .select("offer_key, reward_kind, product_slug, percent_off, quantity, min_subtotal_cents, expires_at, redeemed_at, revoked_at, email")
+      .select("offer_key, reward_kind, product_slug, gift_items, percent_off, quantity, min_subtotal_cents, expires_at, redeemed_at, revoked_at, email")
       .eq("token_hash", hashOfferToken(value))
       .maybeSingle();
     if (!data) return null;

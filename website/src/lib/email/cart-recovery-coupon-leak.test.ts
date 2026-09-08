@@ -100,7 +100,10 @@ vi.mock("@/lib/supabase-server", () => {
           email: SHOPPER,
           customer_name: "Test Shopper",
           items: [{ slug: "p1", productId: "p1", name: "Item", quantity: 1, priceCents: 5000 }],
-          cart_value_cents: 5000,
+          // $149.99. The $35-99 band deliberately carries no percentage, and
+          // this suite is about the COUPON's leak-proofing, so it sits in a
+          // band that mints one. cart-recovery-tiers.test.ts pins the bands.
+          cart_value_cents: 14999,
           first_seen_at: new Date(Date.now() - cartAgeHours * 60 * 60 * 1000).toISOString(),
         }],
         error: null,

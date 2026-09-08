@@ -549,7 +549,8 @@
     "reference_id",
     "revoke_reason",
     "closed_by_order_id",
-    "quantity"
+    "quantity",
+    "gift_items"
   ],
   "customer_preferences": [
     "user_id",

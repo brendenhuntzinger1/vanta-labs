@@ -3,6 +3,7 @@ import crypto from "crypto";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getCartRecoveryControlConfig, getShippingConfig, type CartRecoveryConfig } from "@/lib/admin-control";
+import { DEFAULT_RECOVERY_TIERS } from "@/lib/cart-recovery-tiers";
 import { getSiteUrl } from "@/lib/env";
 import { isFreeShippingSitewide } from "@/lib/shipping";
 import { formatDisplayDate } from "@/lib/format-date";
@@ -19,11 +20,18 @@ import {
   cartRecoveryT72hTemplate,
 } from "@/lib/email/templates";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
-import { describeOfferTerms, issueCustomerOffer, OFFER_CATALOG } from "@/lib/offers/customer-offers";
+import {
+  describeGiftTerms,
+  describeOfferTerms,
+  issueCustomerOffer,
+  issueResolvedOffer,
+  OFFER_CATALOG,
+} from "@/lib/offers/customer-offers";
 import { loadCartRecoveryOverrides, markCartRecoveryOverrideConsumed } from "@/lib/cart-recovery-overrides";
 import { recoveryVariantFor } from "@/lib/cart-recovery-experiments";
 import {
   planStageOffer,
+  recoveryGiftConfig,
   RECOVERY_GIFT_COOLDOWN_MS,
   RECOVERY_GIFT_OFFER_KEY,
 } from "@/lib/cart-recovery-offers";
@@ -1227,15 +1235,37 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
   // see recoveryEmailItems. One read for every candidate's lines. If the
   // catalogue cannot be read nothing is sent this sweep: no stage has been
   // claimed yet, so the next tick simply tries again.
+  // THE BANDS, DEFENDED. `config.tiers` is validated on the way out of the
+  // control store, but a config assembled by an older deploy — or by a caller
+  // that predates the field — has none, and a sweep that throws here sends no
+  // recovery mail at all. Falling back to the shipped ladder keeps the
+  // programme running on the defaults it was designed with.
+  const recoveryTiers = config.tiers ?? DEFAULT_RECOVERY_TIERS;
+
   let catalogueNames: Map<string, RecoveryCatalogueEntry>;
   try {
-    catalogueNames = await loadRecoveryCatalogue(
-      candidates.flatMap(({ row }) => (Array.isArray(row.items) ? row.items : []).map((item) => String(item?.slug ?? ""))),
-    );
+    catalogueNames = await loadRecoveryCatalogue([
+      ...candidates.flatMap(({ row }) => (Array.isArray(row.items) ? row.items : []).map((item) => String(item?.slug ?? ""))),
+      // THE GIFT PRODUCTS TOO, or a banded gift could not be named. Every band
+      // is known before the sweep runs, so this costs one wider read rather
+      // than a lookup per cart — and a gift the sweep cannot name is a gift the
+      // email would advertise as a slug.
+      ...recoveryTiers.flatMap((tier) => [
+        ...tier.stage3.map((item) => item.slug),
+        ...tier.stage4.gifts.map((item) => item.slug),
+      ]),
+    ]);
   } catch (error) {
     console.error("[cart-recovery] catalogue unavailable; no recovery mail sent this sweep", error);
     return result;
   }
+
+  // Slug to product name, for naming a banded gift in the email and on the
+  // offer row. Derived rather than loaded again: the read above already covers
+  // both the cart's products and every band's.
+  const catalogueNameBySlug = new Map<string, string>(
+    [...catalogueNames.entries()].map(([slug, entry]) => [slug, entry.name]),
+  );
 
   // One read for the whole sweep. A cart with no row here — which is every
   // cart, almost always — takes the ordinary path untouched.
@@ -1373,6 +1403,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       lastRecoveryCouponAt: context.lastRecoveryCouponAt.get(email) ?? null,
       lastRecoveryGiftAt: lastGiftForOtherCarts(context.recoveryGifts.get(email), cartId),
       discountPercent: config.discountPercent,
+      tiers: recoveryTiers,
       now,
     });
 
@@ -1408,17 +1439,25 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       // promotion is running instead of competing with it for the one discount
       // slot — the reason a percentage does not belong here is measured, not
       // preferred (10% was worth $0 to the two largest carts under Buy 2 Get 1).
+      // THE BAND DECIDES THE GIFT. A $61 cart is offered a BAC Water and a
+      // $520 cart a GHK-Cu and a BAC Water, because one flat gift under-serves
+      // the carts holding most of the money and over-serves the rest.
       const giftKey = plan.offerKey;
+      const giftConfig = recoveryGiftConfig(plan.gifts, catalogueNameBySlug);
       let giftTerms = "";
       sent = await reserveAndSendStage({
         cartId, stage, email,
         campaignType: "cart_recovery_t24h",
         templateKey: "cartRecoveryT24hTemplate",
-        mintOffer: giftKey
+        mintOffer: giftKey && giftConfig
           ? async () => {
-            const issued = await issueCustomerOffer({ email, offerKey: giftKey, referenceId: cartId });
+            const issued = await issueResolvedOffer({
+              email, offerKey: giftKey, config: giftConfig, referenceId: cartId,
+            });
             if (issued) {
-              giftTerms = describeOfferTerms(giftKey, issued.expiresAt);
+              // From the SAME config the mint wrote onto the row, so what the
+              // email states and what the till applies cannot disagree.
+              giftTerms = describeGiftTerms(giftConfig, issued.expiresAt);
             }
             return issued?.token ?? null;
           }
@@ -1426,7 +1465,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
         buildTemplate: (url) => cartRecoveryT24hTemplate({
           ...base,
           restoreUrl: url,
-          giftLabel: giftKey ? OFFER_CATALOG[giftKey].label : "",
+          giftLabel: giftConfig?.label ?? "",
           offerTerms: giftTerms,
           variant,
         }),
@@ -1450,20 +1489,23 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       // issueCustomerOffer retires this cart's own stage-3 row and mints a
       // fresh token, so the link in the NEWEST email is the one that works.
       const giftKey = plan.offerKey;
+      const giftConfig = recoveryGiftConfig(plan.gifts, catalogueNameBySlug);
       let giftToken: string | null = null;
       let giftTerms = "";
-      if (giftKey) {
+      if (giftKey && giftConfig) {
         try {
-          const issued = await issueCustomerOffer({ email, offerKey: giftKey, referenceId: cartId });
+          const issued = await issueResolvedOffer({
+            email, offerKey: giftKey, config: giftConfig, referenceId: cartId,
+          });
           if (issued) {
             giftToken = issued.token;
-            giftTerms = describeOfferTerms(giftKey, issued.expiresAt);
+            giftTerms = describeGiftTerms(giftConfig, issued.expiresAt);
           }
         } catch (error) {
           console.error("[cart-recovery] last-chance gift could not be minted; sending without it", cartId, error);
         }
       }
-      const giftLabel = giftToken && giftKey ? OFFER_CATALOG[giftKey].label : "";
+      const giftLabel = giftToken && giftConfig ? giftConfig.label : "";
 
       // C-06 and K-05 both hold here: the claim comes first, and any code the
       // email advertises is one the database will honour at the till. When the

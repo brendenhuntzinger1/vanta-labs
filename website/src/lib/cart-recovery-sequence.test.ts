@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_RECOVERY_TIERS } from "@/lib/cart-recovery-tiers";
 
 // ---------------------------------------------------------------------------
 // THE RECOVERY SEQUENCE IS A SEQUENCE, NOT A BACKLOG.
@@ -54,6 +55,9 @@ vi.mock("@/lib/catalog", () => ({
 const config = {
   t30mEnabled: true, t12hEnabled: false, t24hEnabled: true, t72hEnabled: true,
   discountPercent: 5, couponExpirationHours: 48,
+  // The shipped bands, so this suite exercises the ladder the store actually
+  // runs rather than a fixture that could drift from it.
+  tiers: DEFAULT_RECOVERY_TIERS,
 };
 vi.mock("@/lib/admin-control", () => ({ getCartRecoveryControlConfig: async () => config }));
 
@@ -138,7 +142,13 @@ function seedCart(input: { id?: string; email?: string; firstSeenHoursAgo: numbe
     email: input.email ?? "shopper@example.com",
     customer_name: "Sam",
     items: [{ slug: "bpc-157", name: "BPC-157", quantity: 1, price: 42.99 }],
-    cart_value_cents: input.value ?? 4299,
+  // $149.99, not $42.99. THE PERCENTAGE IS NOW BAND-DRIVEN: the $35-99 band
+  // deliberately carries no discount, because on a small cart a percentage adds
+  // a few dollars of perceived value for a few dollars of cost while the gift
+  // beside it adds forty. These suites exist to prove the COUPON machinery, so
+  // they sit in a band that carries one. cart-recovery-offers.test.ts pins the
+  // no-discount bands themselves.
+    cart_value_cents: input.value ?? 14999,
     first_seen_at: new Date(Date.now() - input.firstSeenHoursAgo * HOUR_MS).toISOString(),
     last_updated_at: new Date(Date.now() - (input.lastUpdatedHoursAgo ?? input.firstSeenHoursAgo) * HOUR_MS).toISOString(),
     status: "active",
