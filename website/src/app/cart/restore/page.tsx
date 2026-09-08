@@ -27,9 +27,22 @@ function CartRestoreInner() {
         setMessage("This cart link is missing its cart id.");
         return;
       }
+      // The recovery grant, when the click redirect carried it here rather than
+      // as a cookie. It is handed to the endpoint once, exchanged there for an
+      // httpOnly cookie, and then removed from the address bar so it does not
+      // sit in history or travel in a link the shopper shares.
+      const grant = searchParams.get("k");
 
       try {
-        const response = await fetch(`/api/cart/restore?id=${encodeURIComponent(id)}`, { cache: "no-store" });
+        const response = await fetch(
+          `/api/cart/restore?id=${encodeURIComponent(id)}${grant ? `&k=${encodeURIComponent(grant)}` : ""}`,
+          { cache: "no-store" },
+        );
+        if (grant && typeof window !== "undefined") {
+          const clean = new URL(window.location.href);
+          clean.searchParams.delete("k");
+          window.history.replaceState(null, "", clean.toString());
+        }
         const result = await response.json() as {
           success: boolean;
           items?: Array<{ slug: string; variantId?: string; name: string; quantity: number; unitPrice: number; image?: string }>;

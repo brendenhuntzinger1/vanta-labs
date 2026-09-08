@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import {
   planStageOffer,
   RECOVERY_GIFT_COOLDOWN_MS,
@@ -181,5 +183,55 @@ describe("the plan explains itself", () => {
 
   it("names the blocking rule when it withholds", () => {
     expect(at({ stage: "t72h", lastPaidAt: base.now - 1000 }).reason).toContain("recent");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CHANGING THE RECOVERY DISCOUNT MUST MOVE NOTHING ELSE.
+//
+// `cart_recovery.discount_percent` is about to go from 5 to 10, and the word
+// "discountPercent" appears on several unrelated config objects — subscribe &
+// save (its own default is 10), the referral programme, and the membership
+// tiers. They are separate admin_control keys with separate defaults, and a
+// change to one must not read as a change to another.
+//
+// Pinned on the SOURCE, because the risk is not that today's code is wrong —
+// it is that a later refactor quietly widens the read.
+// ---------------------------------------------------------------------------
+
+describe("the recovery discount's blast radius", () => {
+  const sweep = readFileSync(path.resolve(__dirname, "./cart-recovery.ts"), "utf8");
+
+  it("is read in exactly two places, both of them the last stage", () => {
+    const uses = [...sweep.matchAll(/config\.discountPercent/g)];
+    expect(uses).toHaveLength(2);
+  });
+
+  it("reaches only the stage-4 plan and the stage-4 coupon mint", () => {
+    expect(sweep).toContain("discountPercent: config.discountPercent");
+    expect(sweep).toContain("resolveLastChanceCoupon(cartId, email, config.discountPercent");
+  });
+
+  // Stage 3's gift is a product with no percentage at all, so the number cannot
+  // reach it even by accident.
+  it("stage 3 carries a gift and never a percentage, whatever the setting says", () => {
+    for (const discountPercent of [0, 5, 10, 40, 100]) {
+      const plan = at({ stage: "t24h", discountPercent });
+      expect(plan.coupon).toBe(false);
+      expect(plan.offerKey).toBe("cart_recovery_bac_water");
+    }
+  });
+
+  it("stage 4 carries the gift AND the code once the discount is set", () => {
+    const plan = at({ stage: "t72h", discountPercent: 10 });
+    expect(plan.offerKey).toBe("cart_recovery_bac_water");
+    expect(plan.coupon).toBe(true);
+  });
+
+  // The email describes the percentage READ BACK FROM THE COUPON ROW, never the
+  // current setting (K-05), so a code minted at 5 still reads as 5 after the
+  // setting moves to 10.
+  it("the last-chance email describes the coupon row, not the live setting", () => {
+    expect(sweep).toContain("discountPercent: coupon ? coupon.percent : 0");
   });
 });

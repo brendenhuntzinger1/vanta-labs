@@ -228,3 +228,126 @@ restored_at` and `abandoned_cart_emails.variant`.
 `cart-recovery-experiments.ts`: variant assigned deterministically from the cart
 id, stable across the whole sequence, recorded on the send row. Only the subject
 and preheader vary — one axis at a time. Live on stages 1 and 3.
+
+---
+
+# Part two: the guest recovery grant (2026-09-08)
+
+## Root cause of the guest-recovery failure
+
+Three facts, each verified:
+
+1. `access-policy.ts` makes the store **account-only by default** — a path is
+   reachable without a session only if it is on a short named list.
+2. `/api/email` **is** on that list (an unsubscribe link must work for anyone),
+   so `/api/email/track/click` answered, stamped `clicked_at`, and redirected.
+3. `/cart/restore`, `/cart` and `/checkout` are **not** on that list.
+
+So the tracker recorded the click and then handed the shopper
+`/account/login?next=/cart/restore?id=…`. Most recovery recipients are guests
+who typed an email into the checkout field and never created an account, so
+there was no account to sign into. **Clicks were recordable; conversions were
+structurally impossible.** That is the exact shape of the production data: one
+click in 41 sends, and no click-attributed recovery ever.
+
+## Security design of the recovery credential
+
+    v1.<cartId>.<expiresAtMs>.<hmac-sha256, truncated to 32 hex>
+
+signed over `cart_recovery_grant:v1:<cartId>:<expiresAtMs>`.
+
+| Requirement | How |
+|---|---|
+| High entropy / signed | HMAC-SHA256 over a namespaced payload, secret from `UNSUBSCRIBE_SECRET` (falls back to the service-role key) |
+| Expiration | 14 days, **inside the signature** so a client cannot extend it; also refused if stamped further out than the TTL allows |
+| Server-side validation | `verifyGuestRecoveryGrant`, timing-safe, null for every failure with no reason attached |
+| Scoped to one cart | The cart id is inside the signature, **and** `/api/cart/restore` refuses a grant that names a different cart than the one requested |
+| No other customer's cart | Repointing the id breaks the signature; a valid grant for cart B returns the same 404 as an unknown cart, so it is not an enumeration oracle |
+| No general session | It sets no identity and no user id. The middleware consults it **only** for paths on a closed allowlist |
+| No account/order/admin data | `/account/*`, `/api/account/*`, `/admin`, `/vault`, `/products` and `/` are all outside the allowlist and stay shut |
+| Safe when tampered/expired/reused | Every failure is indistinguishable from "no grant", which lands on the ordinary sign-in wall. Repeat clicks are idempotent |
+| Cart already converted | Items still restore; **no recovery code is armed**, because the cart is no longer active |
+
+**Delivery.** The click route mints the grant (it already resolves the cart from
+the reservation), sets it as an httpOnly `vl_cart_grant` cookie, *and* appends
+it as `k=` on the redirect. Both, because corporate link rewriters (Outlook
+SafeLinks and its kind) follow the redirect server-side and hand the browser
+only the final URL — those recipients never receive the `Set-Cookie`. The
+parameter is accepted on `/cart/restore` and `/api/cart/restore` **only**, is
+exchanged there for the cookie, and is stripped from the address bar; `/cart`
+and `/checkout` accept the cookie alone, so the token cannot be passed around
+as a URL for the rest of the journey.
+
+**Why not the raw UUID.** A database key appears in admin screens, logs, support
+threads and CSV exports, and it never expires. Treating it as authentication
+would mean anyone who ever saw one could open that cart for ever. The id stays
+an identifier; the capability is a separate, expiring, unforgeable thing.
+
+## Source fix for the bad BAC slug
+
+The reconciliation at restore was treating a symptom. The **source** is that a
+cart lives in `localStorage` and outlives a rename: every browser that had added
+the vial before production moved `bacteriostatic-water` → `bac-water` kept
+re-posting the old slug to the tracking beacon and into `abandoned_carts`. That
+is why two hand-repaired carts both reverted within a day.
+
+`sanitizeCartItems` — the function that reads the persisted cart — now maps each
+stored slug through `canonicalCartSlug()`, and migrates the stored line `key`
+with it. The stale value stops being written. Reconciliation stays as defence in
+depth for carts stored before this shipped and for any future rename.
+
+## RLS verification
+
+The guest journey's data access is **entirely server-side through
+`supabaseAdmin`** (service-role key), which bypasses RLS. The only browser-side
+Supabase client is lazily loaded for referral-code validation and is not part of
+this path. Verified against production with the live anon key:
+
+| Table | anon read |
+|---|---|
+| abandoned_carts, abandoned_cart_emails, customer_offers, coupons, orders, order_items, products, admin_audit_logs | **HTTP 401 `42501`** — every one |
+
+Security advisors after the migration: all `rls_enabled_no_policy` at INFO,
+which is the intended deny-all posture (RLS on, no policies, no anon grants).
+The two new columns sit on tables already in that state. The one WARN
+(leaked-password protection) is pre-existing and unrelated.
+
+**The grant cannot widen any of this**: it is an application-layer capability
+checked in middleware, and it never reaches Postgres.
+
+## What was driven end to end, and what was not
+
+Driven in a real browser as a **guest with no session** (verified: `/products`
+still redirected that browser to sign-in throughout):
+
+| Step | Evidence |
+|---|---|
+| sent | `abandoned_cart_emails` row, `variant=a` |
+| clicked | tracker stamped `clicked_at`, minted the grant, set the cookie, appended `k=` |
+| restored | `restored_at` stamped; renamed slug repaired; dead line dropped with a notice; `k=` stripped from the address bar |
+| checkout | `/cart` and `/checkout` reachable, $174.96 quote, desktop and 390×844 |
+| purchase | `create-session` 200, order created, **`marketing_source_kind=cart_recovery`, `basis=click`, `ref=`the cart id** |
+| self-serve control | a second guest with the recovery cookie cleared → `kind=(null)`, so the two never mix |
+
+`basis=click` is the point: that order carried **no coupon**, and before this
+change it would have been filed `organic`.
+
+`scripts/qa-guest-recovery.mjs` runs the adversarial cases as a suite —
+**34 checks, all passing**: no-grant wall, valid grant, cross-cart grant,
+repointed id, flipped signature, expired grant, the bare UUID, the converted
+cart, repeated clicks, the allowlist, and the restore stamp.
+
+**Covered by unit tests rather than the browser**, because the harness cannot
+mint a real GoTrue session: B2G1 alongside the gift, percentage-vs-promotion
+competition, membership pricing and referral attribution
+(`offer-gift-promotion`, `offer-percent-competition`, `member-pricing`,
+`discount-*` — 100 tests). Their engine is the same `quoteOrder` the browser
+run exercised.
+
+## Harness/production parity fixed along the way
+
+`setup-local-harness.sh` applied an explicit file list that was missing
+`cart-recovery-stage-overrides`, `cart-recovery-measurement` and
+`marketing-attribution` — so the harness had no `marketing_source_*` columns at
+all and the attribution leg could not have been verified on it. All three are
+now in the list.

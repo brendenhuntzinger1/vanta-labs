@@ -3,6 +3,13 @@ import { getAbandonedCartById, liveRecoveryCouponForCart, markCartRestored } fro
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
 import { BAC_WATER_SLUG_CANDIDATES } from "@/lib/bac-water";
 import {
+  GUEST_GRANT_COOKIE,
+  GUEST_GRANT_MAX_AGE_SECONDS,
+  GUEST_GRANT_PARAM,
+  readGuestGrantCookie,
+  verifyGuestRecoveryGrant,
+} from "@/lib/cart-recovery-grant";
+import {
   describeReconciliation,
   reconcileRestoredCart,
   type ReconcileCatalogueEntry,
@@ -37,6 +44,24 @@ export async function GET(request: NextRequest) {
   const id = request.nextUrl.searchParams.get("id");
   if (!id) {
     return NextResponse.json({ success: false, error: "Missing cart id" }, { status: 400 });
+  }
+
+  // THE GRANT MUST NAME THIS CART. The middleware decided only that the caller
+  // holds SOME valid grant for a path on the allowlist; binding it to the cart
+  // being asked for is this route's job, and it is the whole of "no ability to
+  // access another customer's cart".
+  //
+  // The parameter is accepted as well as the cookie because a cookie set on a
+  // redirect does not always reach the browser — see the click route. Whichever
+  // arrives, it is verified the same way, and a grant that names a different
+  // cart is refused as though it were absent.
+  const presentedGrant = request.nextUrl.searchParams.get(GUEST_GRANT_PARAM) ?? readGuestGrantCookie(request);
+  const grant = await verifyGuestRecoveryGrant(presentedGrant);
+  if (grant && grant.cartId !== id) {
+    // Deliberately the same answer as an unknown cart. Telling the holder of a
+    // valid grant that some OTHER id exists would turn this into an oracle for
+    // enumerating carts.
+    return NextResponse.json({ success: false, error: "This cart link is no longer valid" }, { status: 404 });
   }
 
   let cart;
@@ -121,7 +146,7 @@ export async function GET(request: NextRequest) {
   // read that fails still restores the cart. The address handed back is the
   // one the CODE is bound to, and only when there is a code to bind it to.
   const coupon = cart.status === "active" ? await liveRecoveryCouponForCart(cart.id).catch(() => null) : null;
-  return NextResponse.json({
+  const body = NextResponse.json({
     success: true,
     items,
     ...(notice ? { notice } : {}),
@@ -132,4 +157,20 @@ export async function GET(request: NextRequest) {
       ? { coupon: { code: coupon.code, discountType: coupon.discountType, discountValue: coupon.discountValue }, email: coupon.email }
       : {}),
   });
+
+  // EXCHANGE THE PARAMETER FOR THE COOKIE. From here on the guest carries the
+  // grant in a header no script can read, and /cart and /checkout are admitted
+  // by it without the token ever appearing in another URL.
+  if (grant && grant.cartId === id) {
+    body.cookies.set({
+      name: GUEST_GRANT_COOKIE,
+      value: presentedGrant as string,
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: GUEST_GRANT_MAX_AGE_SECONDS,
+    });
+  }
+  return body;
 }

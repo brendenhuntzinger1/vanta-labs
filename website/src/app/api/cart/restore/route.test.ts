@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { NextRequest } from "next/server";
@@ -17,6 +17,13 @@ import { NextRequest } from "next/server";
 // ---------------------------------------------------------------------------
 
 vi.mock("server-only", () => ({}));
+
+// The grant is an HMAC, and without a secret signGuestRecoveryGrant returns
+// null rather than throwing — which would make every grant test below pass
+// vacuously against "no grant" instead of testing the grant.
+beforeAll(() => {
+  process.env.UNSUBSCRIBE_SECRET ??= "test-secret-for-cart-recovery-grants";
+});
 
 const state = vi.hoisted(() => ({
   cart: null as null | { id: string; items: Array<Record<string, unknown>>; email: string; customerName: string | null; sessionId?: string | null; status?: string },
@@ -272,5 +279,98 @@ describe("recording that a recovery link worked", () => {
     state.cart = null;
     await GET(request("missing"));
     expect(state.restored).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE GUEST GRANT, ADVERSARIALLY.
+//
+// The grant is what lets a guest — someone who typed an email into the checkout
+// field and never made an account — through the storefront wall to finish ONE
+// cart. Middleware decides only that the caller holds SOME valid grant for a
+// path on the allowlist. Binding it to the cart actually being asked for is
+// this route's job, and it is the whole of "no ability to access another
+// customer's cart".
+// ---------------------------------------------------------------------------
+
+const grantRequest = (id: string, token: string | null, via: "query" | "cookie" = "query") =>
+  new NextRequest(
+    `https://www.vantalabsresearch.com/api/cart/restore?id=${encodeURIComponent(id)}${via === "query" && token ? `&k=${encodeURIComponent(token)}` : ""}`,
+    via === "cookie" && token ? { headers: { cookie: `vl_cart_grant=${token}` } } : undefined,
+  );
+
+describe("the guest recovery grant is bound to one cart", () => {
+  it("a valid grant for THIS cart restores it, and is exchanged for the cookie", async () => {
+    const { signGuestRecoveryGrant } = await import("@/lib/cart-recovery-grant");
+    const token = (await signGuestRecoveryGrant("cart-1"))!;
+    const response = await GET(grantRequest("cart-1", token));
+    expect(response.status).toBe(200);
+    expect((await response.json()).success).toBe(true);
+    // Handed on as an httpOnly cookie so the rest of the journey carries it in
+    // a header no script can read, and no later URL holds the token.
+    const setCookie = response.headers.get("set-cookie") ?? "";
+    expect(setCookie).toContain("vl_cart_grant=");
+    expect(setCookie.toLowerCase()).toContain("httponly");
+  });
+
+  it("works from the cookie alone, with no token in the URL", async () => {
+    const { signGuestRecoveryGrant } = await import("@/lib/cart-recovery-grant");
+    const token = (await signGuestRecoveryGrant("cart-1"))!;
+    expect((await GET(grantRequest("cart-1", token, "cookie"))).status).toBe(200);
+  });
+
+  // THE ONE THAT MATTERS. A grant minted for someone else's cart must not open
+  // this one, and the refusal is deliberately identical to an unknown cart —
+  // confirming that some OTHER id exists would make this an enumeration oracle.
+  it("a grant for a DIFFERENT cart is refused, and says nothing about either", async () => {
+    const { signGuestRecoveryGrant } = await import("@/lib/cart-recovery-grant");
+    const token = (await signGuestRecoveryGrant("cart-somebody-else"))!;
+    const response = await GET(grantRequest("cart-1", token));
+    expect(response.status).toBe(404);
+    expect((await response.json()).error).toBe("This cart link is no longer valid");
+  });
+
+  it.each([
+    ["a tampered signature", (t: string) => `${t.slice(0, -1)}${t.slice(-1) === "a" ? "b" : "a"}`],
+    ["a repointed cart id", (t: string) => { const p = t.split("."); p[1] = "cart-1"; return p.join("."); }],
+  ])("%s is treated as no grant at all", async (_label, mutate) => {
+    const { signGuestRecoveryGrant } = await import("@/lib/cart-recovery-grant");
+    const forged = mutate((await signGuestRecoveryGrant("cart-somebody-else"))!);
+    // A forged grant verifies to null, so the route sees no grant and does not
+    // refuse on the binding — the WALL is what stops this request, and it never
+    // reaches here. What matters is that the token buys nothing on its own.
+    const { verifyGuestRecoveryGrant } = await import("@/lib/cart-recovery-grant");
+    expect(await verifyGuestRecoveryGrant(forged)).toBeNull();
+  });
+
+  it("an expired grant buys nothing", async () => {
+    const { signGuestRecoveryGrant, verifyGuestRecoveryGrant, GUEST_GRANT_TTL_MS } =
+      await import("@/lib/cart-recovery-grant");
+    const now = Date.now();
+    const token = (await signGuestRecoveryGrant("cart-1", now))!;
+    expect(await verifyGuestRecoveryGrant(token, now + GUEST_GRANT_TTL_MS + 1)).toBeNull();
+  });
+
+  // A cart that converted between the send and the click. The shopper already
+  // bought; restoring the items is harmless, but the recovery CODE must not be
+  // armed for a cart that is no longer active.
+  it("restores a converted cart's items but arms no code", async () => {
+    const { signGuestRecoveryGrant } = await import("@/lib/cart-recovery-grant");
+    state.cart = { ...state.cart!, status: "recovered" };
+    state.coupon = { code: "SAVE-ABCDEF1234", discountType: "percent", discountValue: 5, expiresAt: new Date(Date.now() + 3_600_000).toISOString(), email: "x@y.test" };
+    const body = await (await GET(grantRequest("cart-1", (await signGuestRecoveryGrant("cart-1"))!))).json();
+    expect(body.success).toBe(true);
+    expect(body.coupon).toBeUndefined();
+    expect(state.lookups).toEqual([]);
+  });
+
+  // Clicking the same email twice is ordinary behaviour, not an attack, and it
+  // must not degrade: same cart, same answer, every time.
+  it("is idempotent across repeated clicks", async () => {
+    const { signGuestRecoveryGrant } = await import("@/lib/cart-recovery-grant");
+    const token = (await signGuestRecoveryGrant("cart-1"))!;
+    const first = await (await GET(grantRequest("cart-1", token))).json();
+    const second = await (await GET(grantRequest("cart-1", token))).json();
+    expect(second).toEqual(first);
   });
 });

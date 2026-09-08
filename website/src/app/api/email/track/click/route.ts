@@ -4,6 +4,12 @@ import { getSiteUrl } from "@/lib/env";
 import { stampCartRecoveryEngagement } from "@/lib/email/engagement";
 import { OFFER_COOKIE, OFFER_COOKIE_MAX_AGE_SECONDS } from "@/lib/offers/customer-offers";
 import {
+  GUEST_GRANT_COOKIE,
+  GUEST_GRANT_MAX_AGE_SECONDS,
+  GUEST_GRANT_PARAM,
+  signGuestRecoveryGrant,
+} from "@/lib/cart-recovery-grant";
+import {
   CART_RECOVERY_COOKIE,
   CART_RECOVERY_COOKIE_MAX_AGE_SECONDS,
   encodeCartRecoveryCookie,
@@ -68,7 +74,49 @@ export async function GET(request: NextRequest) {
     await stampCartRecoveryEngagement("clicked", id);
   }
 
+  // THE GUEST GRANT IS MINTED HERE, where the reservation proves which cart
+  // this click belongs to. It rides two ways on purpose:
+  //
+  //   * AS AN httpOnly COOKIE, which is how every later hop (/cart, /checkout)
+  //     is admitted, and which no script can read.
+  //   * AS `k` ON THE DESTINATION, because a cookie set on a redirect does not
+  //     always survive. Corporate link rewriters (Outlook SafeLinks and its
+  //     kind) follow the redirect server-side and hand the BROWSER the final
+  //     URL, so the browser never receives this Set-Cookie. Without the
+  //     parameter those recipients — a large share of any list — would land on
+  //     the sign-in page this whole change exists to remove.
+  //
+  // /api/cart/restore exchanges the parameter for the cookie and the page
+  // strips it from the address bar, so it does not linger in history or in a
+  // shared link any longer than the one hop it exists for.
+  const grant = clickedCartId ? await signGuestRecoveryGrant(clickedCartId) : null;
+  if (grant) {
+    try {
+      const target = new URL(destination);
+      target.searchParams.set(GUEST_GRANT_PARAM, grant);
+      destination = target.toString();
+    } catch {
+      // destination was validated above; if it will not parse, redirect
+      // without the parameter rather than losing the redirect.
+    }
+  }
+
   const response = NextResponse.redirect(destination);
+
+  if (grant) {
+    response.cookies.set({
+      name: GUEST_GRANT_COOKIE,
+      value: grant,
+      httpOnly: true,
+      // Lax, not Strict: the shopper arrives from their mail client, which is a
+      // cross-site top-level navigation, and Strict drops the cookie on exactly
+      // the hop this exists for.
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: GUEST_GRANT_MAX_AGE_SECONDS,
+    });
+  }
 
   // WHICH CHANNEL GETS CREDIT FOR AN ORDER THAT FOLLOWS THIS CLICK.
   //
