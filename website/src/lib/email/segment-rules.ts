@@ -407,6 +407,55 @@ export function parseSegmentRule(input: unknown): SegmentRule | null {
 }
 
 // ---------------------------------------------------------------------------
+// WHAT THE COMPOSER MAY OFFER.
+//
+// The rule builder reads its dropdowns from here rather than carrying a second
+// copy of the field and operator lists. A UI offering "is more than" on an
+// email address, or an operator this engine does not implement, produces a rule
+// that parses cleanly and then silently matches nobody — the hardest kind of
+// bug to notice, because the campaign sends and simply reaches no one.
+// ---------------------------------------------------------------------------
+
+const NUMBER_OPERATORS: FilterOperator[] = ["equals", "notEquals", "moreThan", "lessThan", "between"];
+const DATE_OPERATORS: FilterOperator[] = ["inTheLast", "notInTheLast", "before", "after", "exists", "doesNotExist"];
+const TEXT_OPERATORS: FilterOperator[] = ["contains", "doesNotContain", "startsWith", "endsWith", "equals", "notEquals"];
+const CHOICE_OPERATORS: FilterOperator[] = ["anyOf", "noneOf", "equals", "notEquals"];
+
+export type FieldKind = "number" | "money" | "date" | "text" | "choice" | "multiChoice";
+
+export type FieldDef = {
+  field: FilterField;
+  label: string;
+  kind: FieldKind;
+  operators: FilterOperator[];
+  /** Fixed options, where the field has them. Category is loaded from the catalogue instead. */
+  choices?: string[];
+  hint?: string;
+};
+
+export const LIFECYCLE_STAGES: LifecycleStage[] = [
+  "champions",
+  "loyalists",
+  "recentCustomers",
+  "highPotential",
+  "needNurturing",
+  "atRisk",
+  "cantLose",
+  "prospect",
+];
+
+export const FIELD_DEFS: FieldDef[] = [
+  { field: "orderCount", label: "Order count", kind: "number", operators: NUMBER_OPERATORS, hint: "Paid orders. Reships and membership charges don't count." },
+  { field: "spendCents", label: "Total spend", kind: "money", operators: NUMBER_OPERATORS, hint: "Net of refunds, across paid orders." },
+  { field: "lastPaidAt", label: "Last order", kind: "date", operators: DATE_OPERATORS, hint: "Somebody who has never ordered matches neither direction." },
+  { field: "firstPaidAt", label: "First order", kind: "date", operators: DATE_OPERATORS, hint: "How long they have been a customer." },
+  { field: "category", label: "Category bought", kind: "multiChoice", operators: ["anyOf", "noneOf"], hint: "Any paid order containing a product in the category." },
+  { field: "lifecycleStage", label: "Lifecycle stage", kind: "choice", operators: CHOICE_OPERATORS, choices: LIFECYCLE_STAGES, hint: "Computed from how recently, how often and how much they buy." },
+  { field: "accountStatus", label: "Contact type", kind: "choice", operators: CHOICE_OPERATORS, choices: ["account", "guest"], hint: "An account holder, or a guest who opted in without one." },
+  { field: "email", label: "Email address", kind: "text", operators: TEXT_OPERATORS, hint: "Useful for domains — everyone on a .edu address, say." },
+];
+
+// ---------------------------------------------------------------------------
 // Rendering a rule back as English. The admin shows this before Send and the
 // audit log stores it: a rule nobody can read is a rule nobody can check.
 // ---------------------------------------------------------------------------
@@ -422,7 +471,7 @@ const FIELD_LABELS: Record<FilterField, string> = {
   lifecycleStage: "Lifecycle stage",
 };
 
-const OPERATOR_LABELS: Record<FilterOperator, string> = {
+export const OPERATOR_LABELS: Record<FilterOperator, string> = {
   equals: "is",
   notEquals: "is not",
   moreThan: "is more than",

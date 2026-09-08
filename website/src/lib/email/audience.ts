@@ -70,7 +70,14 @@ export type CampaignSegment =
  */
 export const HIGH_VALUE_SPEND_CENTS = 30_000;
 
-export const CAMPAIGN_SEGMENTS: Array<{ value: CampaignSegment; label: string; needsParam?: boolean; hint: string }> = [
+export const CAMPAIGN_SEGMENTS: Array<{
+  value: CampaignSegment;
+  label: string;
+  needsParam?: boolean;
+  /** The composer must show the rule builder, and store its JSON in segment_param. */
+  needsRule?: boolean;
+  hint: string;
+}> = [
   { value: "all", label: "All marketing subscribers", hint: "Everyone who opted in and hasn't unsubscribed." },
   { value: "purchasers", label: "Customers who purchased before", hint: "At least one paid order." },
   { value: "first_time", label: "First-time customers", hint: "Exactly one paid order. Good for a second-order nudge; skip the discount for these." },
@@ -81,6 +88,10 @@ export const CAMPAIGN_SEGMENTS: Array<{ value: CampaignSegment; label: string; n
   { value: "dormant_90", label: "No order in 90+ days", hint: "Bought before, but not recently." },
   { value: "account_no_order", label: "Signed up, never ordered", hint: "Has an account, no paid order yet." },
   { value: "category", label: "Bought a specific category", hint: "Ordered any product in the chosen category.", needsParam: true },
+  // LAST, because it is the escape hatch rather than the common case. The nine
+  // presets above are one click and skip work a rule cannot skip; this is for
+  // the question none of them asks.
+  { value: "rule", label: "Custom rule…", hint: "Build your own audience from spend, orders, recency, category and lifecycle stage.", needsRule: true },
 ];
 
 export function isCampaignSegment(value: unknown): value is CampaignSegment {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { SegmentRuleBuilder } from "@/components/admin-segment-rule-builder";
 import {
   GIFT_REWARD_KINDS,
   validateCampaignGift,
@@ -15,7 +16,7 @@ import type { AutomationStatsReport } from "@/lib/email/automation-stats";
 import { checkCampaignDeliverability } from "@/lib/email/deliverability-check";
 import { describeSubscriberSource, type SubscriberDirectory, type SubscriberStatus } from "@/lib/email/subscriber-directory";
 
-type Segment = { value: string; label: string; needsParam?: boolean; hint: string };
+type Segment = { value: string; label: string; needsParam?: boolean; needsRule?: boolean; hint: string };
 
 function money(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -909,6 +910,19 @@ export function AdminEmailClient({
               </select>
               <span className="mt-1 block text-[11px] text-zinc-600">{activeSegment?.hint}</span>
             </label>
+
+            {activeSegment?.needsRule ? (
+              <div className="block">
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Audience rule</span>
+                <div className="mt-2">
+                  <SegmentRuleBuilder
+                    value={form.segmentParam}
+                    onChange={(json) => setForm({ ...form, segmentParam: json })}
+                    categories={categories}
+                  />
+                </div>
+              </div>
+            ) : null}
 
             {activeSegment?.needsParam ? (
               <label className="block">

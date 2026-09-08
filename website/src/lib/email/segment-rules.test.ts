@@ -8,6 +8,7 @@ import {
   type ContactFacts,
   type SegmentRule,
   type SegmentFilter,
+  FIELD_DEFS,
 } from "@/lib/email/segment-rules";
 
 const NOW = Date.parse("2026-09-08T12:00:00Z");
@@ -302,5 +303,58 @@ describe("describeSegmentRule", () => {
 
   it("says so plainly when the rule is unusable", () => {
     expect(describeSegmentRule(null)).toBe("No valid rule — this segment matches nobody.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The composer builds its dropdowns from this, rather than hardcoding a second
+// copy of the field and operator lists. A UI that offers "is more than" on an
+// email address produces a rule the engine will silently never match.
+// ---------------------------------------------------------------------------
+
+describe("FIELD_DEFS drives the composer", () => {
+  it("describes every field the engine accepts", () => {
+    const described = new Set(FIELD_DEFS.map((def) => def.field));
+    for (const field of ["email", "orderCount", "spendCents", "lastPaidAt", "firstPaidAt", "category", "accountStatus", "lifecycleStage"]) {
+      expect(described.has(field as never)).toBe(true);
+    }
+  });
+
+  it("offers only operators that field can answer", () => {
+    const numeric = FIELD_DEFS.find((def) => def.field === "orderCount");
+    expect(numeric?.operators).toContain("moreThan");
+    expect(numeric?.operators).not.toContain("startsWith");
+
+    const text = FIELD_DEFS.find((def) => def.field === "email");
+    expect(text?.operators).toContain("contains");
+    expect(text?.operators).not.toContain("moreThan");
+
+    const date = FIELD_DEFS.find((def) => def.field === "lastPaidAt");
+    expect(date?.operators).toContain("inTheLast");
+    expect(date?.operators).not.toContain("contains");
+  });
+
+  it("names the choices for fields that have a fixed set", () => {
+    const stage = FIELD_DEFS.find((def) => def.field === "lifecycleStage");
+    expect(stage?.choices).toContain("champions");
+
+    const status = FIELD_DEFS.find((def) => def.field === "accountStatus");
+    expect(status?.choices).toEqual(["account", "guest"]);
+  });
+
+  it("marks which fields are money, so the composer can ask in dollars", () => {
+    expect(FIELD_DEFS.find((def) => def.field === "spendCents")?.kind).toBe("money");
+    expect(FIELD_DEFS.find((def) => def.field === "orderCount")?.kind).toBe("number");
+  });
+
+  // Every operator a field offers must be one the engine knows, or the composer
+  // can build a rule that parses and then matches nobody.
+  it("offers no operator the engine cannot evaluate", () => {
+    const parsed = FIELD_DEFS.flatMap((def) =>
+      def.operators.map((operator) => parseSegmentRule({
+        groups: [{ conditions: [{ junction: "and", filters: [{ field: def.field, operator, value: 1 }] }] }],
+      })),
+    );
+    expect(parsed.every((rule) => rule !== null)).toBe(true);
   });
 });

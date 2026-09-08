@@ -39,3 +39,38 @@ describe("the sender resolves the rule it was given", () => {
     expect(SENDER).toMatch(/resolveAudience\(\{[\s\S]{0,200}rule:/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE CHECK THE SOURCE-LEVEL TESTS ABOVE CANNOT MAKE.
+//
+// Those assert that the API mentions parseSegmentRule. They do not assert that
+// a rule campaign can be SAVED — and it could not: the API gates every campaign
+// on isCampaignSegment(), which reads CAMPAIGN_SEGMENTS, and "rule" was added
+// to the CampaignSegment type without being added to that array. Every rule
+// campaign was rejected with a 400 before the rule was ever looked at.
+//
+// A test that asserts a symbol is present is not a test that the feature works.
+// ---------------------------------------------------------------------------
+
+describe("a rule campaign passes the API's segment gate", () => {
+  it("accepts \"rule\" as a segment", async () => {
+    const { isCampaignSegment } = await import("@/lib/email/audience");
+    expect(isCampaignSegment("rule")).toBe(true);
+  });
+
+  it("still rejects a segment nobody defined", async () => {
+    const { isCampaignSegment } = await import("@/lib/email/audience");
+    expect(isCampaignSegment("everyone_everywhere")).toBe(false);
+  });
+
+  it("offers the rule option to the composer, flagged as needing a rule", async () => {
+    const { CAMPAIGN_SEGMENTS } = await import("@/lib/email/audience");
+    const rule = CAMPAIGN_SEGMENTS.find((segment) => segment.value === "rule");
+
+    expect(rule).toBeDefined();
+    expect(rule?.needsRule).toBe(true);
+    // It must not also claim to need the category param, or the composer would
+    // render a category dropdown beside the rule builder.
+    expect(rule?.needsParam).toBeFalsy();
+  });
+});
