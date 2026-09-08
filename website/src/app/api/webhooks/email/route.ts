@@ -39,29 +39,43 @@ export const dynamic = "force-dynamic";
 // Treat the URL as a credential: it appears in the provider's dashboard and
 // delivery logs. Rotate by changing the env var and editing the webhook URL.
 //
-//   4. STRONGLY RECOMMENDED, and the reason step 3's secret is not enough on
-//      its own: set RESEND_WEBHOOK_SIGNING_SECRET to the endpoint's signing
-//      secret (Resend → Webhooks → the endpoint → Signing Secret, a value
-//      beginning `whsec_`). Once it is set, every Resend delivery must carry a
-//      valid Svix signature over its own body or it is refused.
+//   4. REQUIRED, NOT OPTIONAL: set RESEND_WEBHOOK_SIGNING_SECRET to the
+//      endpoint's signing secret (Resend → Webhooks → the endpoint → Signing
+//      Secret, a value beginning `whsec_`). Every delivery must carry a valid
+//      Svix signature over its own body, inside a five-minute window, or it is
+//      refused. Until it is set this endpoint answers 503 and Resend
+//      redelivers, so no event is lost while it is being configured.
 //
-//      Without it, authentication binds to the URL and NOTHING ELSE. The
-//      signature covers no bytes, there is no timestamp window and no nonce, so
-//      possession of the URL alone is full write access to the suppression
-//      list: one forged `email.complained` per address lands an UNLIFTABLE
-//      suppression and flips that customer's marketing preference off, and the
-//      customer cannot undo it from their account page by design. Addresses are
-//      guessable for any customer whose email is known. The URL is obtainable
-//      from the Resend dashboard, a proxy or CDN access log, or a screenshot of
-//      the webhook configuration — all places a query string is routinely
-//      recorded. (Sentry is not one of them: `secret` is in
-//      SENSITIVE_KEY_FRAGMENTS and scrubUrl redacts it.)
+//      This used to say "strongly recommended", and the code matched that
+//      wording rather than the risk: a delivery carrying NO Svix headers was
+//      accepted whether or not the secret was set. So the recommendation
+//      protected nothing — an attacker holding the URL omitted the headers
+//      rather than forging them.
 //
-//      SendGrid has no equivalent signature here, so the shared secret remains
-//      the only check for it.
+//      What the URL alone was worth: one forged `email.complained` per address
+//      lands an UNLIFTABLE suppression and flips that customer's marketing
+//      preference off, and the customer cannot undo it from their account page
+//      by design. Addresses are guessable for any customer whose email is
+//      known. The URL is obtainable from the Resend dashboard, a proxy or CDN
+//      access log, or a screenshot of the webhook configuration — all places a
+//      query string is routinely recorded. (Sentry is not one of them:
+//      `secret` is in SENSITIVE_KEY_FRAGMENTS and scrubUrl redacts it.)
+//
+//      Prefer a header to the query string where the provider allows one:
+//      `x-email-webhook-secret` is accepted and keeps the value out of every
+//      access log on the path.
+//
+//      SENDGRID IS NOT USABLE HERE UNTIL SOMEBODY IMPLEMENTS ITS SIGNATURE.
+//      It sends no Svix headers, and this file has no ECDSA verifier for the
+//      ones it does send, so a SendGrid delivery is now refused. That is the
+//      correct order: a provider whose payloads cannot be authenticated should
+//      not be able to write to the suppression list. The store runs Resend.
 //
 // WHAT IT ANSWERS
-//   * 401 to anything without the secret, compared in CONSTANT TIME.
+//   * 503 when either secret is unconfigured — retryable, because it is our
+//     fault and the provider redelivers.
+//   * 401 to anything without the URL secret, compared in CONSTANT TIME, and to
+//     anything whose Svix signature is absent, wrong, or outside the window.
 //   * 200 to a body it understands, and to one it does not — an unrecognised
 //     shape will not become recognisable on a retry.
 //   * 5xx only when a suppression write FAILED, so the provider's retry gets
@@ -176,22 +190,82 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid body." }, { status: 400 });
   }
 
-  // BIND AUTHENTICATION TO THE PAYLOAD, when the operator has configured it.
+  // AUTHENTICATION IS BOUND TO THE PAYLOAD. THIS IS THE ACTUAL BOUNDARY.
   //
-  // The shared secret above authenticates the URL and nothing else, so anyone
-  // holding the URL can post any event for any address. With the signing secret
-  // set, a Resend delivery must carry a valid Svix signature over its own body
-  // and a timestamp inside a five-minute window, which also bounds replay.
+  // WHAT WAS WRONG. This block used to read:
   //
-  // An UNSIGNED delivery still passes: SendGrid sends none, and this endpoint
-  // supports both providers. That is why the URL secret stays as well rather
-  // than being replaced.
+  //     if (signingSecret) {
+  //       const verdict = verifySvixSignature(...);
+  //       if (verdict === "bad-signature" || verdict === "stale") return 401;
+  //     }
+  //
+  // `unsigned` — a request carrying no Svix headers at all — fell straight
+  // through and was ACCEPTED. So the signature check stopped nobody: an
+  // attacker holding the URL did not have to forge a signature, they simply
+  // omitted the headers. Setting RESEND_WEBHOOK_SIGNING_SECRET bought exactly
+  // nothing against the one attacker it was added for, and the comment here
+  // said it was "strongly recommended" while the code made it decorative.
+  //
+  // WHAT THAT WAS WORTH TO AN ATTACKER. delivery-events.ts turns
+  // `email.complained` into a row in `email_suppressions`, and
+  // suppression-reasons.ts classes `complained` and `bounced` as
+  // PROVIDER_IMPOSED_SUPPRESSION_REASONS — which the customer cannot lift from
+  // their own account page. One forged POST per address permanently removes
+  // that customer from every marketing send, and addresses are guessable for
+  // anyone whose email is known. The URL itself carries its secret in a query
+  // string, so it is recorded in the provider dashboard, in CDN and proxy
+  // access logs, and in any screenshot of the webhook configuration.
+  //
+  // WHY THE CARVE-OUT IS GONE. It existed for SendGrid, which sends no Svix
+  // headers. But this endpoint implements no SendGrid verifier either, so an
+  // unsigned "SendGrid" delivery could not be authenticated by anything except
+  // the URL — which is the vulnerability, not a feature. The store runs Resend
+  // (admin_control_current: email.provider = 'resend'), so the carve-out was
+  // paying full price for a provider that is not in use. Moving to SendGrid
+  // would mean implementing its ECDSA verification here first; that is the
+  // correct order, and it is now the only order available.
+  //
+  // WHAT IS REQUIRED NOW, and each half is load-bearing:
+  //
+  //   * A VALID SVIX SIGNATURE over the raw bytes of THIS body, under the
+  //     endpoint's own signing secret. Covers tampering and forgery.
+  //   * A TIMESTAMP INSIDE THE WINDOW. Covers replay of a captured delivery —
+  //     the signature alone would verify forever.
+  //   * THE URL SECRET, still, checked first and in constant time. Cheap, and
+  //     it means a prober without it never reaches the HMAC at all.
+  //
+  // FAIL CLOSED WHEN UNCONFIGURED, exactly as the URL secret above does. An
+  // endpoint that can suppress any customer must not be reachable on a
+  // half-configured deployment. 503 rather than 401 because it is OUR fault
+  // and it IS retryable: Resend redelivers a 5xx, so events that arrive during
+  // a misconfiguration are not lost — they land once the secret is set.
   const signingSecret = (process.env.RESEND_WEBHOOK_SIGNING_SECRET ?? "").trim();
-  if (signingSecret) {
-    const verdict = verifySvixSignature(request.headers, rawBody, signingSecret, Date.now());
-    if (verdict === "bad-signature" || verdict === "stale") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  if (!signingSecret) {
+    console.error(
+      "[email-webhook] REFUSED: RESEND_WEBHOOK_SIGNING_SECRET is not set, so no delivery can be "
+      + "authenticated against its own payload. Set it from Resend → Webhooks → the endpoint → "
+      + "Signing Secret (it begins whsec_) and redeploy. Deliveries are answered 503 until then, "
+      + "so the provider will redeliver them.",
+    );
+    return NextResponse.json({ error: "Webhook signature verification is not configured." }, { status: 503 });
+  }
+
+  const verdict = verifySvixSignature(request.headers, rawBody, signingSecret, Date.now());
+  if (verdict !== "ok") {
+    // OBSERVABLE, AND IT NAMES NOTHING SECRET. The verdict says which rule was
+    // broken; the body, the addresses it contains, the secrets and the
+    // signature itself are all absent. Without this line a rejected delivery is
+    // indistinguishable from one that never arrived, which is the same
+    // ambiguity email_delivery_events exists to remove.
+    console.error("[email-webhook] refused a delivery", {
+      verdict,
+      // Bounded, and it is the provider's own opaque id — not customer data.
+      // It is what makes one refusal findable in Resend's own delivery log.
+      svixId: (request.headers.get("svix-id") ?? request.headers.get("webhook-id") ?? "").slice(0, 64),
+    });
+    // The response says nothing beyond "no". A prober learns only that the
+    // endpoint exists — the same rule the URL-secret check above follows.
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   let body: unknown;

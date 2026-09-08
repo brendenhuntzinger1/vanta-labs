@@ -12,6 +12,7 @@ import { getAuthenticatedUser } from "@/lib/auth-session";
 import { isAutomationKey } from "@/lib/email/automations";
 import { hashIpAddress } from "@/lib/ip-hash";
 import { OFFER_COOKIE, OFFER_COOKIE_MAX_AGE_SECONDS } from "@/lib/offers/customer-offers";
+import { attachEmailLinkGrant } from "@/lib/email/recipient-attestation";
 
 export const dynamic = "force-dynamic";
 
@@ -161,5 +162,22 @@ export async function GET(request: NextRequest) {
     path: "/",
     maxAge: AUTOMATION_COOKIE_MAX_AGE_SECONDS,
   });
+
+  // THE CAPABILITY TO REACH THE DESTINATION AT ALL.
+  //
+  // destinationForVisitor above already forwards a signed-out visitor off a
+  // gated account page and onto the catalogue — but the catalogue is gated too,
+  // so that only exchanged one sign-in wall for another. Every automation's
+  // cta_path in production is /products or /account/orders, and both 307 to
+  // /account/login for a request without a session.
+  //
+  // Minted only when the recipient's account already carries the 21+ and
+  // research-use representations, because those are collected on the sign-in
+  // form this grant lets them skip. See recipient-attestation.ts.
+  //
+  // Set AFTER the offer cookie deliberately: if a gift rode on this click, the
+  // customer must be able to reach a page that can spend it.
+  await attachEmailLinkGrant(response, email);
+
   return response;
 }

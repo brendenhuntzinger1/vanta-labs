@@ -4,6 +4,23 @@ import crypto from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { redactEmailForLog } from "@/lib/log-redaction";
 import { BAC_WATER_SLUG } from "@/lib/bac-water";
+import {
+  describeGiftTerms,
+  offerRewardQuantity,
+  type GiftConfig,
+  type OfferReward,
+} from "@/lib/offers/gift-terms";
+
+// Re-exported so every existing caller keeps importing "what a gift means"
+// from here. The definitions moved to gift-terms.ts only because they are pure
+// and this module is `server-only`, and the campaign composer — a Client
+// Component — has to render the same terms sentence the checkout enforces.
+export {
+  describeGiftTerms,
+  offerRewardQuantity,
+  type GiftConfig,
+  type OfferReward,
+};
 
 /**
  * One-time, per-customer offers.
@@ -60,51 +77,6 @@ export function readOfferCookie(request: Request): string | null {
     return value && value.length <= 128 ? value : null;
   }
   return null;
-}
-
-/**
- * WHAT AN OFFER CAN GRANT.
- *
- * Two shapes, because they are genuinely different operations rather than two
- * settings of one:
- *
- *   free_product   adds a real order line at $0. Inventory reserves it and its
- *                  COGS is booked, so the store knows what the gift cost.
- *   free_shipping  zeroes the shipping charge. There is no line, no stock and
- *                  no COGS — it is the absence of a fee.
- *   free_shipping_percent
- *                  both at once. The percentage competes in the store's
- *                  single-best-discount rule exactly as a coupon does; the free
- *                  shipping does not, because shipping was never in that race.
- *                  Worst case: the customer keeps a better discount and still
- *                  gets free shipping.
- *
- * Adding another kind means a new branch in quoteOrder and nothing else; adding
- * another PRODUCT gift means one entry below and no code at all.
- */
-export type OfferReward =
-  /**
-   * `quantity` defaults to one and is the number of units granted, not a
-   * multiplier on anything else. A cart that already holds the product has
-   * those units freed instead of being handed duplicates — "the BAC Water in
-   * your cart is on us" and "here are two more bottles of water" are different
-   * promises, and only the first is what anyone means. See THE FREE UNIT in
-   * quote-order.ts for how the absorb-then-add split works.
-   */
-  | { kind: "free_product"; productSlug: string; quantity?: number }
-  | { kind: "free_shipping" }
-  | { kind: "free_shipping_percent"; percent: number }
-  /** A percentage off and nothing else. Competes in the coupon slot exactly
-   *  as the combined gift's percentage does; shipping is charged as usual. */
-  | { kind: "percent"; percent: number }
-  /** A $0 product line AND a percentage off the rest. */
-  | { kind: "free_product_percent"; productSlug: string; percent: number; quantity?: number };
-
-/** How many units a reward grants. One unless the reward says otherwise. */
-export function offerRewardQuantity(reward: OfferReward): number | null {
-  if (reward.kind !== "free_product" && reward.kind !== "free_product_percent") return null;
-  const stated = Number(reward.quantity ?? 1);
-  return Number.isFinite(stated) ? Math.max(1, Math.floor(stated)) : 1;
 }
 
 /** The offers this store knows how to grant. */
@@ -363,8 +335,40 @@ export function hashOfferToken(token: string): string {
  * fails, the process dies — the offer row is stranded and unusable, which is
  * the safe direction. A stranded row expires on its own.
  */
+/**
+ * Mint the gift a CATALOGUE key names.
+ *
+ * The original entry point, unchanged for every existing caller and still
+ * typed on OfferKey so a mistyped key is a compile error rather than a silent
+ * null at 3am. The work happens in issueResolvedOffer below, which takes the
+ * catalogue entry rather than the key that names it — because a campaign gift
+ * an operator built has exactly the same shape and no key in the catalogue.
+ */
 export async function issueCustomerOffer(input: {
   offerKey: OfferKey;
+  email: string;
+  automationKey?: string;
+  referenceId?: string;
+  now?: number;
+}): Promise<{ token: string; expiresAt: string } | null> {
+  return issueResolvedOffer({ ...input, config: OFFER_CATALOG[input.offerKey] });
+}
+
+/**
+ * Mint a gift from a RESOLVED config, whatever produced it.
+ *
+ * `offerKey` is a plain string here on purpose: a campaign gift files under
+ * `campaign:<id>` (campaign-gift.ts), which is deliberately not a catalogue
+ * key. It still governs the one-live-offer index, so the invariant holds
+ * per campaign per recipient exactly as it holds per automation per recipient.
+ *
+ * The row records what was PROMISED, so nothing downstream ever needs to
+ * resolve the key back to a config — which is what makes an operator-built
+ * gift redeem through the identical path as a catalogue one.
+ */
+export async function issueResolvedOffer(input: {
+  offerKey: string;
+  config: GiftConfig;
   email: string;
   /**
    * Which automation send is minting this gift. Written onto the row so a
@@ -376,9 +380,9 @@ export async function issueCustomerOffer(input: {
   referenceId?: string;
   now?: number;
 }): Promise<{ token: string; expiresAt: string } | null> {
-  const config = OFFER_CATALOG[input.offerKey];
+  const config = input.config;
   const email = String(input.email ?? "").trim().toLowerCase();
-  if (!email) return null;
+  if (!email || !config) return null;
 
   const now = input.now ?? Date.now();
   const expiresAt = new Date(now + config.ttlDays * 24 * 60 * 60 * 1000).toISOString();
@@ -473,6 +477,51 @@ export async function issueCustomerOffer(input: {
   return null;
 }
 
+/**
+ * Withdraw a gift that was minted and then never delivered.
+ *
+ * WHY THIS IS NEEDED, and it is specific to campaigns. A gift has to be minted
+ * BEFORE the message is rendered, because its token goes in the button and its
+ * terms go in the body. If the send then fails — the provider refuses, the
+ * address is suppressed, the render throws — the row survives in
+ * `customer_offers` as a live, spendable, unredeemed offer that nobody was
+ * ever told about. It then blocks the one-live-offer index, so the RETRY on
+ * the next sweep has to retire it before it can mint again, and in the window
+ * between the two an unnannounced gift sits open against the store.
+ *
+ * The automations avoid this by minting only after the frequency guard has
+ * granted the claim, and the campaign sender now does the same. This closes
+ * the remainder: the failures that happen after a claim is held.
+ *
+ * Keyed on the TOKEN because that is the only handle the caller has — the row
+ * id is never returned and the token is never stored, only its hash. Best
+ * effort and never throws: an un-withdrawn offer costs at most one gift, and
+ * failing a send over the bookkeeping would cost the whole campaign.
+ *
+ * Only ever touches an offer that is still unspent. A row a customer has
+ * already reserved or redeemed is left exactly as it is.
+ */
+export async function revokeUnredeemedOffer(token: string, reason = "send_failed"): Promise<boolean> {
+  const raw = String(token ?? "").trim();
+  if (!raw) return false;
+  try {
+    const { error } = await supabaseAdmin
+      .from("customer_offers")
+      .update({ revoked_at: new Date().toISOString(), revoke_reason: reason })
+      .eq("token_hash", hashOfferToken(raw))
+      .is("revoked_at", null)
+      .is("redeemed_at", null)
+      .is("reserved_order_id", null);
+    if (error) {
+      console.error("[offers] unable to withdraw an undelivered gift", error.message);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** How long a checkout's hold on an offer is respected before it is presumed abandoned. */
 const OFFER_HOLD_SECONDS = 1800;
 
@@ -480,7 +529,7 @@ const OFFER_HOLD_SECONDS = 1800;
  * Retire the unredeemed row blocking a reissue, unless a checkout is holding it.
  * Returns true when the way is clear for a fresh insert.
  */
-async function retireStaleOffer(offerKey: OfferKey, email: string, now: number): Promise<boolean> {
+async function retireStaleOffer(offerKey: string, email: string, now: number): Promise<boolean> {
   const { data, error } = await supabaseAdmin
     .from("customer_offers")
     .select("id, expires_at, reserved_order_id, reserved_at")
@@ -543,29 +592,18 @@ async function retireStaleOffer(offerKey: OfferKey, email: string, now: number):
  * more than the till honours is the failure this line exists to prevent.
  */
 export function describeOfferTerms(offerKey: OfferKey, expiresAt: string): string {
-  const config = OFFER_CATALOG[offerKey];
-  const minimum = `$${(config.minSubtotalCents / 100).toFixed(config.minSubtotalCents % 100 === 0 ? 0 : 2)}`;
-  const deadline = new Date(expiresAt).toLocaleDateString("en-US", {
-    month: "long", day: "numeric", year: "numeric", timeZone: "America/New_York",
-  });
-  // "a free X is added" is wrong the moment a gift grants more than one, and
-  // this line is the store's own statement of what the till will do — the one
-  // place the customer's copy and the checkout are guaranteed to agree.
-  const count = offerRewardQuantity(config.reward);
-  const units = (noun: string) => (count && count > 1 ? `${count} free ${noun} are` : `a free ${noun} is`);
-  const gift = config.reward.kind === "free_product"
-    ? `${units(config.label.replace(/^\d+\s+/, "").replace(/^free\s+/i, ""))} added to your order`
-    : config.reward.kind === "free_product_percent"
-      ? `${config.reward.percent}% off, and ${units(config.label.replace(/^.*free\s+/i, ""))} added to your order`
-    : config.reward.kind === "free_shipping_percent"
-      ? `${config.reward.percent}% off plus free shipping`
-      : config.reward.kind === "percent"
-        ? `${config.reward.percent}% off`
-        : "free shipping";
-  return `Your gift: ${gift} on any order of ${minimum} or more, through ${deadline}. `
-    + "One per customer, for this email address only. It is applied automatically when you shop through the button below — no code needed.";
+  return describeGiftTerms(OFFER_CATALOG[offerKey], expiresAt);
 }
 
+/**
+ * The same sentence, for a gift that has no catalogue key.
+ *
+ * Split out rather than duplicated because this line is the ONE place the
+ * customer's copy and the checkout are guaranteed to agree. A campaign gift
+ * with its own wording of the minimum and the deadline would be a second
+ * statement of the terms, free to drift from the row quoteOrder actually
+ * prices — which is the whole failure this sentence exists to prevent.
+ */
 /**
  * Hold an offer for one order while its checkout runs.
  *

@@ -63,13 +63,25 @@ export function verifyCampaignRecipient(campaignId: string, email: string, token
   }
 }
 
-/** The click-tracked CTA URL that goes in the email. */
-export function buildCampaignClickUrl(campaignId: string, email: string): string {
+/**
+ * The click-tracked CTA URL that goes in the email.
+ *
+ * `offerToken` rides the link when the campaign carries a gift, exactly as it
+ * does for automations (automation-links.ts). It is NOT signed and does not
+ * need to be: it is itself 32 random bytes, and the signature over the address
+ * already stops a link being re-pointed at somebody else. The click route
+ * moves it straight into an httpOnly cookie and never lets it reach the
+ * landing page's URL — see the note there on why a bearer secret that grants a
+ * physical product does not belong in a query string a page can read.
+ */
+export function buildCampaignClickUrl(campaignId: string, email: string, offerToken?: string | null): string {
   const params = new URLSearchParams({
     c: campaignId,
     e: email.trim().toLowerCase(),
     t: signCampaignRecipient(campaignId, email),
   });
+  const token = String(offerToken ?? "").trim();
+  if (token) params.set("o", token);
   return `${getSiteUrl()}/api/email/click?${params.toString()}`;
 }
 

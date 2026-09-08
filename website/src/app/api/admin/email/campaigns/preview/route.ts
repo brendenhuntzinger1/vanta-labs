@@ -5,6 +5,8 @@ import { campaignTemplate } from "@/lib/email/templates";
 import { normalizeSitePathInput, resolveSitePath } from "@/lib/email/cta-path";
 import { getEmailRuntimeConfig } from "@/lib/email/settings";
 import { getSiteUrl } from "@/lib/env";
+import { OFFER_CATALOG, describeGiftTerms, isOfferKey } from "@/lib/offers/customer-offers";
+import { validateCampaignGift } from "@/lib/offers/campaign-gift";
 
 /**
  * Render a customer campaign exactly as a recipient will see it.
@@ -18,6 +20,12 @@ import { getSiteUrl } from "@/lib/env";
  * preview has no recipient to attribute a click to), and the CAN-SPAM postal
  * address renders from the same setting the sender will use, so a blank one is
  * visible here before it blocks the send.
+ *
+ * THE GIFT'S TERMS RENDER TOO, dated from today plus the gift's own lifetime —
+ * which is what the sender will do at mint time. Leaving them out of the
+ * preview would mean the operator approves a message that is missing the one
+ * paragraph stating the minimum, the deadline and the one-per-customer rule
+ * the checkout will actually enforce.
  */
 export async function POST(request: Request) {
   const session = await verifyAdminSessionFromRequest(request);
@@ -36,6 +44,21 @@ export async function POST(request: Request) {
   const ctaLabel = text(body.ctaLabel, 40);
   const ctaPath = normalizeSitePathInput(text(body.ctaPath, 300) || "/products", getSiteUrl()) ?? "/products";
 
+  // Same precedence the sender uses: a catalogue key, else a custom gift, else
+  // nothing. An invalid custom gift previews as no gift rather than failing the
+  // preview — the composer is already showing the operator why it is invalid,
+  // and refusing to render the rest of the email on top of that helps nobody.
+  const offerKey = text(body.offerKey, 80);
+  const giftConfig = offerKey && isOfferKey(offerKey)
+    ? OFFER_CATALOG[offerKey]
+    : (() => {
+        const verdict = validateCampaignGift(body.offerCustom ?? null, null);
+        return verdict.ok ? verdict.config : null;
+      })();
+  const offerTerms = giftConfig
+    ? describeGiftTerms(giftConfig, new Date(Date.now() + giftConfig.ttlDays * 86_400_000).toISOString())
+    : null;
+
   const config = await getEmailRuntimeConfig().catch(() => ({ marketingPostalAddress: "" }));
   const template = campaignTemplate({
     subject,
@@ -45,6 +68,7 @@ export async function POST(request: Request) {
     promoCode: text(body.promoCode, 60) || null,
     ctaLabel,
     ctaUrl: ctaLabel ? resolveSitePath(ctaPath, getSiteUrl()) : "",
+    offerTerms,
     postalAddress: config.marketingPostalAddress || "(postal address not set — add it in Settings before sending)",
   });
 

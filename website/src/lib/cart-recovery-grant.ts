@@ -211,6 +211,22 @@ export const GUEST_GRANT_EXACT = new Set([
   "/api/cart/validate",
   "/api/cart/track",
   "/api/checkout/create-session",
+  // WHAT PRICES THE GIFT. Missing here, and the omission was invisible because
+  // the gift still worked — it just was not SHOWN.
+  //
+  // cart-client.tsx: "The drawer and the checkout summary already price an
+  // armed offer through /api/checkout/quote, so a shopper who clicked the
+  // win-back link sees the $0 vial and the waived shipping wherever they look."
+  // Every one of those calls answered 401 for a grant holder, so a guest
+  // arriving on a recovery link saw a cart total that did not include the gift
+  // they had been mailed — the exact defect that comment was written to fix,
+  // reintroduced for the one audience the grant exists to serve.
+  //
+  // Safe to open, on the endpoint's own terms: "quoteOrder takes no lock and
+  // reserves nothing, in any mode. Nothing here writes. The response carries NO
+  // token. The gift is described, never granted." It prices the items in the
+  // request body and discloses nothing about anyone else.
+  "/api/checkout/quote",
   "/api/coupons/validate",
   "/api/offer/status",
   "/api/catalog/promotions",

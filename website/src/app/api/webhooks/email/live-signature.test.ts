@@ -59,7 +59,7 @@ function sign(body: string, secret: string, opts: { id?: string; timestampMs?: n
   return { "svix-id": id, "svix-timestamp": timestamp, "svix-signature": `v1,${signature}` };
 }
 
-async function post(body: string, headers: Record<string, string>) {
+async function post(body: string, headers: Record<string, string> = {}) {
   const { POST } = await import("@/app/api/webhooks/email/route");
   return POST(new Request(
     `https://www.vantalabsresearch.com/api/webhooks/email?secret=${encodeURIComponent(URL_SECRET)}`,
@@ -96,6 +96,16 @@ describeLive("the live Resend endpoint secret", () => {
     const wrong = "whsec_" + Buffer.from("not-the-endpoint-secret-bytes").toString("base64");
     const response = await post(BODY, sign(BODY, wrong));
     expect(response.status).toBe(401);
+  });
+
+  // THE ASSERTION THE WHOLE E-01 FIX EXISTS FOR, against the real key. Before
+  // it, this returned 200: an attacker holding the URL omitted the Svix
+  // headers rather than forging them, and the signing secret being configured
+  // changed nothing.
+  it("REFUSES a delivery that carries no signature at all", async () => {
+    const response = await post(BODY);
+    expect(response.status).toBe(401);
+    expect(applied, "nothing was suppressed").toHaveLength(0);
   });
 
   it("REFUSES a valid signature replayed three hours later", async () => {

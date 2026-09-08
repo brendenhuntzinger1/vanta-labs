@@ -174,6 +174,7 @@ for f in referral-orders-commission-lifecycle referral-orders-manual-review-stat
   membership-pending-tier-change \
   order-attribution ads-system ads-spend-roas \
   cart-recovery-stage-overrides cart-recovery-measurement \
+  campaign-gifts auth-user-attested-by-email \
   marketing-attribution; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
 done
