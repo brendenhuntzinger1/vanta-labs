@@ -140,6 +140,23 @@ describe("what the shopper is told while their bank is asking", () => {
   it("never tells them to pay again while a charge may be in flight", () => {
     expect(copy).not.toMatch(/try again|pay again|resubmit/i);
   });
+
+  it("renders ABOVE the card form, where the shopper is already looking", () => {
+    // At 390x844 the card container's 420px minimum pushed this off the bottom
+    // of the screen, so the instruction had to be scrolled to — which is the
+    // dead end being fixed, not a fix for it. The decline banner was already
+    // above the form; this now matches it.
+    const banner = page.indexOf("{verifying && status !==");
+    const form = page.indexOf('id="secure-card-entry"');
+    expect(banner).toBeGreaterThan(-1);
+    expect(form).toBeGreaterThan(-1);
+    expect(banner).toBeLessThan(form);
+  });
+
+  it("points at the form in the direction it is actually in", () => {
+    expect(copy).toMatch(/form below/i);
+    expect(copy).not.toMatch(/form above/i);
+  });
 });
 
 describe("a stalled verification is never reported to the shopper as a bank decline", () => {

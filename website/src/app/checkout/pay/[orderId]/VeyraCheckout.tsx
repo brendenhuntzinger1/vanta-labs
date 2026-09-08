@@ -73,7 +73,7 @@ const REASSURE_AFTER_MS = 60_000;
  * precisely the dead end this page used to leave people in.
  */
 const VERIFICATION_MESSAGE =
-  "Your bank is asking you to confirm this payment. Finish the verification step in the form above — "
+  "Your bank is asking you to confirm this payment. Finish the verification step in the form below — "
   + "it may be a code by text, or your banking app. Please don't close or refresh this page while you do; "
   + "we'll take you straight to your receipt as soon as it clears.";
 
@@ -372,19 +372,25 @@ export default function VeyraCheckout({
       )}
       {/* The processor replaces this node's contents with the card iframe.
           The id is intentionally generic — it is visible in page source. */}
-      <div ref={containerRef} id="secure-card-entry" className="min-h-[420px] w-full" />
       {verifying && status !== "error" && (
         // Specific, because for once we KNOW what is happening: the iframe told
         // us. This outranks the generic reassurance below, which exists only
         // for the case where we cannot see inside the form at all.
+        //
+        // ABOVE THE FORM, like the decline banner and for the same reason.
+        // Below it, at 390x844 with the card container's 420px minimum, this
+        // sat off the bottom of the screen — an instruction the shopper has to
+        // go looking for is the dead end we are fixing, not a fix for it. Found
+        // by looking at the page rather than at the diff.
         <div
           role="status"
           aria-live="assertive"
-          className="mt-4 border border-amber-400/40 bg-amber-400/10 px-4 py-3 text-sm text-amber-100"
+          className="mb-4 border border-amber-400/40 bg-amber-400/10 px-4 py-3 text-sm text-amber-100"
         >
           {VERIFICATION_MESSAGE}
         </div>
       )}
+      <div ref={containerRef} id="secure-card-entry" className="min-h-[420px] w-full" />
       {reassure && !verifying && status !== "error" && (
         // Deliberately says nothing about whether a payment is in flight — we
         // cannot see inside the card form, so we do not know. Every clause here
