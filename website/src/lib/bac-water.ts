@@ -40,6 +40,35 @@ export const BAC_WATER_SLUG_CANDIDATES = ["bac-water", "bacteriostatic-water", "
 export const BAC_WATER_SLUG = BAC_WATER_SLUG_CANDIDATES[0];
 
 /**
+ * THE SLUG A STORED CART LINE SHOULD BE CARRYING TODAY.
+ *
+ * A cart lives in localStorage and outlives a rename. `bacteriostatic-water`
+ * stopped being a products row when production moved to `bac-water`, but every
+ * browser that had added the vial before that day kept writing the old slug —
+ * to storage, and from there to the tracking beacon and into abandoned_carts.
+ * Two live carts were repaired by hand and BOTH reverted within a day, because
+ * repairing a row does nothing about the client that keeps re-posting it.
+ *
+ * quoteOrder throws `Invalid product id` on a slug with no product row and
+ * fails the WHOLE quote, so such a cart cannot check out at all. This is the
+ * source fix: the cart is migrated as it is read, so the stale slug stops being
+ * written. The restore endpoint reconciles as well, and keeps doing so — that
+ * is defence in depth for carts stored before this shipped, and for any future
+ * rename nobody remembers to handle here.
+ *
+ * Client-safe by construction: a pure lookup over a list, no catalogue read.
+ * It is deliberately NOT a general "guess the product" — only slugs in a known
+ * alias family are rewritten, and everything else is returned untouched.
+ */
+export function canonicalCartSlug(slug: string): string {
+  const candidate = String(slug ?? "").trim();
+  if (!candidate) return candidate;
+  return (BAC_WATER_SLUG_CANDIDATES as readonly string[]).includes(candidate)
+    ? BAC_WATER_SLUG
+    : candidate;
+}
+
+/**
  * IS THIS PRODUCT ITSELF BACTERIOSTATIC WATER?
  *
  * Used only to stop the cross-sell offering a product to itself. The catalogue

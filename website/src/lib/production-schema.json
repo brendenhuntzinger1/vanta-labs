@@ -6,7 +6,8 @@
     "sent_at",
     "opened_at",
     "clicked_at",
-    "coupon_id"
+    "coupon_id",
+    "variant"
   ],
   "abandoned_carts": [
     "id",
@@ -20,7 +21,8 @@
     "last_updated_at",
     "status",
     "recovered_order_id",
-    "created_at"
+    "created_at",
+    "restored_at"
   ],
   "ad_action_log": [
     "action_id",

@@ -21,6 +21,12 @@ import {
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
 import { describeOfferTerms, issueCustomerOffer, OFFER_CATALOG } from "@/lib/offers/customer-offers";
 import { loadCartRecoveryOverrides, markCartRecoveryOverrideConsumed } from "@/lib/cart-recovery-overrides";
+import { recoveryVariantFor } from "@/lib/cart-recovery-experiments";
+import {
+  planStageOffer,
+  RECOVERY_GIFT_COOLDOWN_MS,
+  RECOVERY_GIFT_OFFER_KEY,
+} from "@/lib/cart-recovery-offers";
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -150,6 +156,34 @@ export async function getAbandonedCartById(id: string): Promise<AbandonedCartSna
     status: String(data.status ?? "active"),
     sessionId: data.session_id ? String(data.session_id) : null,
   };
+}
+
+/**
+ * Note that a recovery link actually worked.
+ *
+ * THE MISSING MIDDLE OF THE FUNNEL. The programme could see a click and it
+ * could see an order, and between them nothing at all — so "the click produced
+ * a cart the shopper could buy" was an assumption rather than a measurement,
+ * and it was a wrong one for every cart holding a dead slug.
+ *
+ * FIRST TOUCH ONLY, conditioned on the column still being null, so the
+ * timestamp answers "when did this link first work" rather than "when was it
+ * last used". That also makes it idempotent, which matters because a shopper
+ * who reloads the restore page hits this again.
+ *
+ * Never throws. It is bookkeeping on the path a customer is walking down, and
+ * a failed stamp must not cost them their cart.
+ */
+export async function markCartRestored(cartId: string): Promise<void> {
+  try {
+    await supabaseAdmin
+      .from("abandoned_carts")
+      .update({ restored_at: new Date().toISOString() })
+      .eq("id", cartId)
+      .is("restored_at", null);
+  } catch (error) {
+    console.error("[cart-recovery] could not stamp a restore", cartId, error);
+  }
 }
 
 // Called from payment-webhook.ts's paid-status transition - stops every
@@ -404,6 +438,17 @@ async function reserveAndSendStage(input: {
    * promise a customer something the till would refuse.
    */
   mintOffer?: () => Promise<string | null>;
+  /**
+   * An entitlement token the CALLER already minted, for a stage where the gift
+   * is a bonus rather than the subject.
+   *
+   * `mintOffer` above is deliberately fatal — a gift email with no gift is a
+   * promise the till would refuse. The last-chance message is not a gift email:
+   * it stands on the code and the cart summary, and going silent because a vial
+   * could not be attached would waste the only remaining chance to convert. So
+   * that stage mints first, sends either way, and passes whatever it got here.
+   */
+  offerToken?: string | null;
   /** Called once the send has actually succeeded. Best-effort bookkeeping. */
   onSent?: (reservationId: string) => Promise<void>;
   buildTemplate: (
@@ -447,7 +492,17 @@ async function reserveAndSendStage(input: {
 
   const { data: inserted, error: insertError } = await supabaseAdmin
     .from("abandoned_cart_emails")
-    .insert({ abandoned_cart_id: input.cartId, stage: input.stage, sent_at: new Date().toISOString(), coupon_id: null })
+    // THE VARIANT IS WRITTEN WITH THE CLAIM, not after the send. An experiment
+    // whose assignment lives only in the process that chose it cannot be joined
+    // to an outcome later, and a send that fails after the claim still consumed
+    // an arm - so the arm has to be on the row either way.
+    .insert({
+      abandoned_cart_id: input.cartId,
+      stage: input.stage,
+      sent_at: new Date().toISOString(),
+      coupon_id: null,
+      variant: recoveryVariantFor(input.cartId),
+    })
     .select("id")
     .single();
 
@@ -484,7 +539,7 @@ async function reserveAndSendStage(input: {
 
   // THE ENTITLEMENT IS MINTED BEHIND THE CLAIM, exactly like the coupon above,
   // and a stage that cannot mint one sends nothing at all.
-  let offerToken: string | null = null;
+  let offerToken: string | null = input.offerToken ?? null;
   if (input.mintOffer) {
     offerToken = await input.mintOffer();
     if (!offerToken) {
@@ -780,6 +835,19 @@ type RecoveryContext = {
   recoverySends: Map<string, Array<{ at: number; cartId: string }>>;
   /** Newest cart-recovery coupon per address, within the discount cooldown. */
   lastRecoveryCouponAt: Map<string, number>;
+  /**
+   * Cart-recovery GIFTS issued per address inside the gift cooldown, each with
+   * the cart it was issued for.
+   *
+   * THE CART ID IS WHY THIS IS A LIST RATHER THAN A TIMESTAMP. One sequence
+   * issues the gift at stage 3 and re-issues the SAME entitlement at stage 4 —
+   * issueCustomerOffer retires the older row so only the newest link works — and
+   * that is one gift, not two. A flat "when did this address last get a gift"
+   * would read stage 3's own row two days later and withhold stage 4's, which
+   * is the opposite of what the cooldown is for. The rule is about a SECOND
+   * sequence to the same address, so the cart has to be part of the answer.
+   */
+  recoveryGifts: Map<string, Array<{ at: number; cartId: string | null }>>;
 };
 
 /** PostgREST `in` filters ride in the URL; a page of addresses is read in slices. */
@@ -789,10 +857,11 @@ function mergeRecoveryContext(into: RecoveryContext, from: RecoveryContext): voi
   for (const [email, orders] of from.paidOrders) into.paidOrders.set(email, orders);
   for (const [email, sends] of from.recoverySends) into.recoverySends.set(email, sends);
   for (const [email, at] of from.lastRecoveryCouponAt) into.lastRecoveryCouponAt.set(email, at);
+  for (const [email, gifts] of from.recoveryGifts) into.recoveryGifts.set(email, gifts);
 }
 
 async function loadRecoveryContext(emails: string[], now: number): Promise<RecoveryContext> {
-  const context: RecoveryContext = { paidOrders: new Map(), recoverySends: new Map(), lastRecoveryCouponAt: new Map() };
+  const context: RecoveryContext = { paidOrders: new Map(), recoverySends: new Map(), lastRecoveryCouponAt: new Map(), recoveryGifts: new Map() };
   if (emails.length === 0) return context;
   if (emails.length > CONTEXT_CHUNK) {
     for (let i = 0; i < emails.length; i += CONTEXT_CHUNK) {
@@ -874,7 +943,47 @@ async function loadRecoveryContext(emails: string[], now: number): Promise<Recov
     console.error("[cart-recovery] could not read recent recovery coupons; discount cooldown not applied this tick", error);
   }
 
+  try {
+    const { data } = await supabaseAdmin
+      .from("customer_offers")
+      .select("email, issued_at, reference_id")
+      .eq("offer_key", RECOVERY_GIFT_OFFER_KEY)
+      .in("email", emails)
+      .gte("issued_at", new Date(now - RECOVERY_GIFT_COOLDOWN_MS).toISOString());
+    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+      const email = String(row.email ?? "").trim().toLowerCase();
+      const at = new Date(String(row.issued_at)).getTime();
+      if (!email || !Number.isFinite(at)) continue;
+      const list = context.recoveryGifts.get(email) ?? [];
+      list.push({ at, cartId: row.reference_id ? String(row.reference_id) : null });
+      context.recoveryGifts.set(email, list);
+    }
+  } catch (error) {
+    // FAILS OPEN like every other read here: an unreadable offers table must
+    // not stop recovery mail. What it can cost is one gift too many, which is
+    // the cheaper mistake — the same trade the coupon cooldown above makes.
+    console.error("[cart-recovery] could not read recent recovery gifts; gift cooldown not applied this tick", error);
+  }
+
   return context;
+}
+
+/**
+ * When this ADDRESS was last gifted for some OTHER cart.
+ *
+ * A gift issued for this same cart is this sequence's own stage 3, re-minted
+ * at stage 4; it is not a second gift and must not block one.
+ */
+function lastGiftForOtherCarts(
+  gifts: ReadonlyArray<{ at: number; cartId: string | null }> | undefined,
+  cartId: string,
+): number | null {
+  let last: number | null = null;
+  for (const gift of gifts ?? []) {
+    if (gift.cartId === cartId) continue;
+    if (last === null || gift.at > last) last = gift.at;
+  }
+  return last;
 }
 
 /** Close a cart the payment webhook missed, so the sweep stops looking at it. */
@@ -901,10 +1010,33 @@ const STAGE_RESULT_KEY: Record<RecoveryStage, keyof Pick<AbandonedCartSweepResul
 /** The most units one line of a recovery email will claim, whatever was stored. */
 const MAX_RECOVERY_LINE_QUANTITY = 99;
 
+/**
+ * What the CATALOGUE says about a slug the cart holds.
+ *
+ * Everything a recovery email renders about a product comes from here, so that
+ * the beacon's stored snapshot decides only WHICH products are shown and never
+ * how they are described or priced.
+ */
+export interface RecoveryCatalogueEntry {
+  name: string;
+  unitPriceCents: number;
+  image?: string;
+  batchNumber?: string;
+}
+
 /** What a recovery email renders per line — and nothing the client typed. */
 export interface RecoveryEmailItem {
   name: string;
   quantity: number;
+  /**
+   * From the catalogue, so the email prices what the till will price. Optional
+   * because a product row with no usable price still has a name worth showing:
+   * a line rendered without a figure is a smaller loss than a line dropped, and
+   * far smaller than a wrong figure.
+   */
+  unitPriceCents?: number;
+  /** Absolute URL. A relative src resolves against the mail client and fails. */
+  image?: string;
 }
 
 /**
@@ -924,29 +1056,82 @@ export interface RecoveryEmailItem {
  */
 export function recoveryEmailItems(
   items: ReadonlyArray<Partial<AbandonedCartItemSnapshot>>,
-  namesBySlug: ReadonlyMap<string, string>,
+  catalogue: ReadonlyMap<string, RecoveryCatalogueEntry>,
 ): RecoveryEmailItem[] {
   const out: RecoveryEmailItem[] = [];
   for (const item of items) {
     const slug = String(item?.slug ?? "").trim();
-    const name = slug ? namesBySlug.get(slug) : undefined;
-    if (!name) continue;
+    const entry = slug ? catalogue.get(slug) : undefined;
+    if (!entry?.name) continue;
     const quantity = Math.floor(Number(item?.quantity ?? 0));
     if (!Number.isFinite(quantity) || quantity < 1) continue;
-    out.push({ name, quantity: Math.min(MAX_RECOVERY_LINE_QUANTITY, quantity) });
+    const unitPriceCents = Number(entry.unitPriceCents);
+    out.push({
+      name: entry.name,
+      quantity: Math.min(MAX_RECOVERY_LINE_QUANTITY, quantity),
+      ...(Number.isFinite(unitPriceCents) && unitPriceCents > 0 ? { unitPriceCents } : {}),
+      ...(entry.image ? { image: entry.image } : {}),
+    });
   }
   return out;
 }
 
-/** Live product names for these slugs, in one catalogue read. Throws on a read failure. */
-async function loadCatalogueNames(slugs: string[]): Promise<Map<string, string>> {
-  const unique = [...new Set(slugs.map((slug) => String(slug ?? "").trim()).filter(Boolean))];
-  const names = new Map<string, string>();
-  if (unique.length === 0) return names;
-  for (const product of await getCatalogProductsBySlugs(unique)) {
-    if (product?.slug && product.name) names.set(String(product.slug), String(product.name));
+/**
+ * Everything the emails need about these slugs, in one catalogue read.
+ *
+ * Throws on a read failure, deliberately: the sweep catches it and sends
+ * nothing that tick rather than mailing a cart it cannot describe. No stage
+ * has been claimed at that point, so the next tick simply tries again.
+ *
+ * IMAGES ARE ABSOLUTISED HERE. The catalogue stores site-relative paths, and a
+ * relative src in an email resolves against the mail client rather than the
+ * site, so it renders as a broken image in every inbox.
+ */
+/** Where a shopper replies. Rendered as a mailto, so it must stay a real inbox. */
+const SUPPORT_EMAIL = "support@vantalabsresearch.com";
+
+/**
+ * The slug of the highest-value line in a cart, for the one product the proof
+ * message names. Highest value rather than first, so the batch number shown is
+ * for the thing the shopper actually wants.
+ */
+function leadSlugFor(
+  row: DueCartRow,
+  catalogue: ReadonlyMap<string, RecoveryCatalogueEntry>,
+): string {
+  let best = "";
+  let bestValue = -1;
+  for (const item of Array.isArray(row.items) ? row.items : []) {
+    const slug = String(item?.slug ?? "").trim();
+    const entry = slug ? catalogue.get(slug) : undefined;
+    if (!entry) continue;
+    const quantity = Math.max(1, Math.floor(Number(item?.quantity ?? 1)) || 1);
+    const value = (Number(entry.unitPriceCents) || 0) * quantity;
+    if (value > bestValue) { bestValue = value; best = slug; }
   }
-  return names;
+  return best;
+}
+
+export async function loadRecoveryCatalogue(slugs: string[]): Promise<Map<string, RecoveryCatalogueEntry>> {
+  const unique = [...new Set(slugs.map((slug) => String(slug ?? "").trim()).filter(Boolean))];
+  const entries = new Map<string, RecoveryCatalogueEntry>();
+  if (unique.length === 0) return entries;
+  const site = getSiteUrl();
+  for (const product of await getCatalogProductsBySlugs(unique)) {
+    if (!product?.slug || !product.name) continue;
+    const price = Number(String(product.salePrice ?? product.price ?? "").replace(/[^0-9.]/g, ""));
+    const rawImage = product.image ? String(product.image) : "";
+    const image = rawImage.startsWith("http")
+      ? rawImage
+      : rawImage.startsWith("/") ? `${site}${rawImage}` : "";
+    entries.set(String(product.slug), {
+      name: String(product.name),
+      unitPriceCents: Number.isFinite(price) ? Math.round(price * 100) : 0,
+      ...(image ? { image } : {}),
+      ...(product.batchNumber ? { batchNumber: String(product.batchNumber) } : {}),
+    });
+  }
+  return entries;
 }
 
 export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult> {
@@ -967,7 +1152,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
   const RECOVERY_MAX_AGE_MS = STAGE_WINDOWS.t72h.closesAfterMs;
   const oldestActivityIso = new Date(now - RECOVERY_MAX_AGE_MS - RECOVERY_SEQUENCE_COOLDOWN_MS).toISOString();
 
-  const context: RecoveryContext = { paidOrders: new Map(), recoverySends: new Map(), lastRecoveryCouponAt: new Map() };
+  const context: RecoveryContext = { paidOrders: new Map(), recoverySends: new Map(), lastRecoveryCouponAt: new Map(), recoveryGifts: new Map() };
   const candidates: Array<{ row: DueCartRow; stage: RecoveryStage; claimed: Set<string> }> = [];
   for (let offset = 0; offset < CART_MAX_SCAN && candidates.length < CART_SWEEP_BUDGET; offset += CART_SCAN_PAGE) {
     const { data, error } = await supabaseAdmin
@@ -1042,9 +1227,9 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
   // see recoveryEmailItems. One read for every candidate's lines. If the
   // catalogue cannot be read nothing is sent this sweep: no stage has been
   // claimed yet, so the next tick simply tries again.
-  let catalogueNames: Map<string, string>;
+  let catalogueNames: Map<string, RecoveryCatalogueEntry>;
   try {
-    catalogueNames = await loadCatalogueNames(
+    catalogueNames = await loadRecoveryCatalogue(
       candidates.flatMap(({ row }) => (Array.isArray(row.items) ? row.items : []).map((item) => String(item?.slug ?? ""))),
     );
   } catch (error) {
@@ -1170,39 +1355,115 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       continue;
     }
 
+    // WHAT THIS PARTICULAR CART'S STAGE MAY OFFER.
+    //
+    // The plan is a REQUEST, never a promise: what the email says is built
+    // below from what was actually minted behind the stage claim. A gift that
+    // fails to mint produces a message without one, not a message promising
+    // one.
+    const lastPaid = context.paidOrders.get(email)?.[0]?.at ?? null;
+    // One arm per CART, held across all four stages - see the header of
+    // cart-recovery-experiments.ts for why re-drawing per stage would make
+    // neither arm describe an experience anyone had.
+    const variant = recoveryVariantFor(cartId);
+    const plan = planStageOffer({
+      stage,
+      cartValueCents: Number(row.cart_value_cents ?? 0),
+      lastPaidAt: lastPaid,
+      lastRecoveryCouponAt: context.lastRecoveryCouponAt.get(email) ?? null,
+      lastRecoveryGiftAt: lastGiftForOtherCarts(context.recoveryGifts.get(email), cartId),
+      discountPercent: config.discountPercent,
+      now,
+    });
+
     if (stage === "t30m") {
       sent = await reserveAndSendStage({
         cartId, stage, email,
         campaignType: "cart_recovery_t30m",
         templateKey: "cartRecoveryT30mTemplate",
-        buildTemplate: (url) => cartRecoveryT30mTemplate({ ...base, restoreUrl: url }),
+        buildTemplate: (url) => cartRecoveryT30mTemplate({ ...base, restoreUrl: url, variant }),
       });
     } else if (stage === "t12h") {
+      // THE PROOF MESSAGE. The batch number is whatever the catalogue holds for
+      // the highest-value line in this cart, and it is omitted entirely when
+      // there is none — a blanket "everything is tested" is false the moment
+      // one product has no published report, and an invented batch number is
+      // the worst thing this email could carry.
+      const leadSlug = leadSlugFor(row, catalogueNames);
+      const batchNumber = leadSlug ? catalogueNames.get(leadSlug)?.batchNumber ?? "" : "";
       sent = await reserveAndSendStage({
         cartId, stage, email,
         campaignType: "cart_recovery_t12h",
         templateKey: "cartRecoveryT12hTemplate",
-        buildTemplate: (url) => cartRecoveryT12hTemplate({ ...base, restoreUrl: url }),
+        buildTemplate: (url) => cartRecoveryT12hTemplate({
+          ...base,
+          restoreUrl: url,
+          coaUrl: `${getSiteUrl()}/coa-library`,
+          batchNumber,
+          supportEmail: SUPPORT_EMAIL,
+        }),
       });
     } else if (stage === "t24h") {
-      // No code here any more. The second message answers the questions a
-      // first-time buyer of a research compound actually has — testing,
-      // shipping, who to ask — which is worth more than five percent to the
-      // people who were hesitating, and costs nothing for the people who were
-      // merely busy.
+      // THE GIFT STAGE. A pure product, so it lands alongside whatever
+      // promotion is running instead of competing with it for the one discount
+      // slot — the reason a percentage does not belong here is measured, not
+      // preferred (10% was worth $0 to the two largest carts under Buy 2 Get 1).
+      const giftKey = plan.offerKey;
+      let giftTerms = "";
       sent = await reserveAndSendStage({
         cartId, stage, email,
         campaignType: "cart_recovery_t24h",
         templateKey: "cartRecoveryT24hTemplate",
-        buildTemplate: (url) => cartRecoveryT24hTemplate({ ...base, restoreUrl: url }),
+        mintOffer: giftKey
+          ? async () => {
+            const issued = await issueCustomerOffer({ email, offerKey: giftKey, referenceId: cartId });
+            if (issued) {
+              giftTerms = describeOfferTerms(giftKey, issued.expiresAt);
+            }
+            return issued?.token ?? null;
+          }
+          : undefined,
+        buildTemplate: (url) => cartRecoveryT24hTemplate({
+          ...base,
+          restoreUrl: url,
+          giftLabel: giftKey ? OFFER_CATALOG[giftKey].label : "",
+          offerTerms: giftTerms,
+          variant,
+        }),
       });
     } else {
-      const lastPaid = context.paidOrders.get(email)?.[0]?.at ?? null;
-      const discountAllowed = config.discountPercent > 0 && recoveryDiscountAllowed({
+      const discountAllowed = plan.coupon && recoveryDiscountAllowed({
         lastRecoveryCouponAt: context.lastRecoveryCouponAt.get(email) ?? null,
         lastPaidAt: lastPaid,
         now,
       });
+
+      // THE GIFT IS SOFT HERE AND THE CODE IS NOT.
+      //
+      // reserveAndSendStage treats a failed `mintOffer` as fatal, because the
+      // body of a gift email is about the gift. This message is not: it is the
+      // last note about the cart, and it stands on the code and the cart
+      // summary whether or not a vial can be attached. So the gift is minted
+      // BEFORE the send is arranged, and a failure just means the gift block is
+      // absent — never a stage that goes silent on its last chance to convert.
+      //
+      // issueCustomerOffer retires this cart's own stage-3 row and mints a
+      // fresh token, so the link in the NEWEST email is the one that works.
+      const giftKey = plan.offerKey;
+      let giftToken: string | null = null;
+      let giftTerms = "";
+      if (giftKey) {
+        try {
+          const issued = await issueCustomerOffer({ email, offerKey: giftKey, referenceId: cartId });
+          if (issued) {
+            giftToken = issued.token;
+            giftTerms = describeOfferTerms(giftKey, issued.expiresAt);
+          }
+        } catch (error) {
+          console.error("[cart-recovery] last-chance gift could not be minted; sending without it", cartId, error);
+        }
+      }
+      const giftLabel = giftToken && giftKey ? OFFER_CATALOG[giftKey].label : "";
 
       // C-06 and K-05 both hold here: the claim comes first, and any code the
       // email advertises is one the database will honour at the till. When the
@@ -1220,6 +1481,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
           ? () => resolveLastChanceCoupon(cartId, email, config.discountPercent, config.couponExpirationHours)
           : () => findLiveCouponForCart(cartId),
         couponRequired: discountAllowed,
+        offerToken: giftToken,
         buildTemplate: (url, coupon) => cartRecoveryT72hTemplate({
           ...base,
           restoreUrl: url,
@@ -1228,6 +1490,8 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
           // K-01. Vercel runs UTC, so a bare toLocaleString told a Pacific
           // customer 10 PM for a code that died at 3 PM their time.
           expiresAt: coupon?.expiresAt ? formatDisplayDate(coupon.expiresAt, "datetime") ?? "" : "",
+          giftLabel,
+          offerTerms: giftLabel ? giftTerms : "",
         }),
       });
     }

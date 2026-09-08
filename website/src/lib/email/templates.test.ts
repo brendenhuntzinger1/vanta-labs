@@ -49,9 +49,11 @@ describe("customer emails never reference the ambassador program", () => {
     passwordResetTemplate({ name: "Sam", resetUrl: "https://vantalabsresearch.com/account/reset-password" }),
     cartRecoveryT24hTemplate({
       name: "Sam",
-      items: [{ name: "Sample", quantity: 1 }],
+      items: [{ name: "Sample", quantity: 1, unitPriceCents: 5000 }],
       cartValueCents: 5000,
       restoreUrl: "https://vantalabsresearch.com/cart/restore",
+      giftLabel: "Free BAC Water",
+      offerTerms: "Your gift: a free BAC Water is added to your order on any order of $35 or more.",
     }),
   ];
 

@@ -33,6 +33,11 @@ const REQUIRED_FOR_PARITY: Array<{ route: keyof typeof ROUTES; symbol: string; w
   { route: "authorize", symbol: "attributeOrderToAutomation({", why: "wallet orders must credit the automation that produced them" },
   { route: "authorize", symbol: "attributeOrderToCampaign({", why: "wallet orders must credit the campaign that produced them" },
   { route: "authorize", symbol: "stampMarketingSourceAtCreation({", why: "wallet orders must carry the one primary marketing source" },
+  // Added with cart-recovery click attribution (2026-09-07). The card lane
+  // passes this cookie so a recovery click that ends in a wallet purchase is
+  // still credited to cart recovery rather than filed organic; the express lane
+  // must not turn on without it, for the same reason as the two above.
+  { route: "authorize", symbol: "readCartRecoveryCookie(", why: "wallet orders must credit the cart-recovery email that produced them" },
 ];
 
 /** The route's CODE, with comments removed — a comment that names a symbol is not wiring. */

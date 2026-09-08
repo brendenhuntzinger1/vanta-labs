@@ -19,6 +19,7 @@ import { calculateShippingProtectionFee, SHIPPING_PROTECTION_PERCENT } from "@/l
 import { calculateShipping, DEFAULT_SHIPPING_CONFIG, isShippingWaived, type ShippingConfig } from "@/lib/shipping";
 import { DEFAULT_SALES_TAX_CONFIG, type SalesTaxConfig } from "@/lib/sales-tax";
 import type { MembershipTierSummary } from "@/lib/member-pricing";
+import { canonicalCartSlug } from "@/lib/bac-water";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 import { cartPromoCandidates, describeCouponOutcome, resolveCartDiscount, type CouponOutcome, type PriceControllingDiscount } from "@/lib/discount-resolution";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
@@ -284,14 +285,28 @@ function sanitizeCartItems(raw: unknown): CartItem[] {
     if (!entry || typeof entry !== "object") continue;
     const record = entry as Partial<CartItem>;
     const price = Number(record.price);
-    const slug = typeof record.slug === "string" ? record.slug.trim() : "";
+    // A RENAMED PRODUCT IS MIGRATED AS THE CART IS READ. This is the source of
+    // the dead-slug carts: storage outlives a rename, so a browser that added
+    // the vial before production moved to `bac-water` kept re-posting
+    // `bacteriostatic-water` — to the tracking beacon, into abandoned_carts,
+    // and on to a checkout that throws `Invalid product id` and refuses the
+    // WHOLE order. Repairing the rows did not hold; this stops it being
+    // written. See canonicalCartSlug.
+    const slug = canonicalCartSlug(typeof record.slug === "string" ? record.slug : "");
     const name = typeof record.name === "string" ? record.name.trim() : "";
     if (!Number.isFinite(price) || price < 0 || !slug || !name) continue;
     const quantity = Math.max(1, Math.min(99, Math.floor(Number(record.quantity))));
     if (!Number.isFinite(quantity)) continue;
     const fallbackKey = record.variantId ? `${slug}::${record.variantId}` : slug;
+    // The stored key embeds the slug, so a migrated line must take the new key
+    // too — otherwise it renders under the canonical slug while every lookup
+    // keyed on `key` still says the old one, and the two halves drift.
+    const storedKey = typeof record.key === "string" && record.key ? record.key : "";
+    const migratedKey = storedKey && storedKey !== fallbackKey && canonicalCartSlug(storedKey.split("::")[0]) === slug
+      ? fallbackKey
+      : storedKey;
     cleaned.push({
-      key: typeof record.key === "string" && record.key ? record.key : fallbackKey,
+      key: migratedKey || fallbackKey,
       variantId: record.variantId,
       doseLabel: record.doseLabel,
       sku: record.sku,

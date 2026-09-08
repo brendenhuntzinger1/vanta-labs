@@ -80,6 +80,10 @@ describe("every product gift points at a canonical slug", () => {
       "labor_day_bac_water_2",
       "labor_day_bac_water_2_40",
       "labor_day_bac_water_2_70",
+      // The standing cart-recovery gift, carried by stages 3 and 4 of the
+      // rebuilt ladder. A pure product with no percentage, so it lands
+      // alongside a live promotion instead of competing with it.
+      "cart_recovery_bac_water",
     ]);
   });
 

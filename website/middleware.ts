@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isPerRequesterResponse, requiresAccount } from "@/lib/access-policy";
+import {
+  GUEST_GRANT_PARAM,
+  guestGrantAllowsPath,
+  readGuestGrantCookie,
+  verifyGuestRecoveryGrant,
+} from "@/lib/cart-recovery-grant";
 import { copyAdParams } from "@/lib/attribution";
 
 import {
@@ -332,6 +338,34 @@ async function isValidAdminSessionToken(token: string) {
     sessionCache.set(token, { value: false, expiresAt: now + SESSION_CACHE_TTL_MS });
     return false;
   }
+}
+
+/**
+ * Does this request carry a cart-recovery grant that covers THIS path?
+ *
+ * The path is checked FIRST and the cookie second, so a grant presented for a
+ * path outside the allowlist is never even verified — the allowlist is the
+ * boundary, and the signature only decides whether a request already inside it
+ * is genuine.
+ *
+ * Non-throwing, and an HMAC over a cookie with no database read — so it cannot
+ * slow the wall down or fail it open. It is async only because Web Crypto is,
+ * and Web Crypto is what the edge runtime has (see cart-recovery-grant.ts).
+ */
+async function hasGuestCartGrant(request: NextRequest, pathname: string): Promise<boolean> {
+  if (!guestGrantAllowsPath(pathname)) return false;
+  if (await verifyGuestRecoveryGrant(readGuestGrantCookie(request)) !== null) return true;
+  // THE PARAMETER IS ACCEPTED ON THE TWO RESTORE PATHS ONLY, and only because
+  // a cookie set on a redirect does not always reach the browser: corporate
+  // link rewriters follow the redirect server-side and hand the browser the
+  // final URL, so it never sees the Set-Cookie. Those recipients would
+  // otherwise land on the sign-in page this exists to remove.
+  //
+  // It is verified identically, and it is confined to the hop that exchanges
+  // it for the cookie — /cart and /checkout accept the cookie alone, so a
+  // token cannot be passed around as a URL for the rest of the journey.
+  if (pathname !== "/cart/restore" && pathname !== "/api/cart/restore") return false;
+  return await verifyGuestRecoveryGrant(request.nextUrl.searchParams.get(GUEST_GRANT_PARAM)) !== null;
 }
 
 async function hasValidAdminSession(request: NextRequest) {
@@ -892,7 +926,30 @@ export async function middleware(request: NextRequest) {
   // Ordered second, so the ordinary shopper never pays for it: the customer
   // check runs first and short-circuits, and this only runs for a request that
   // failed it while carrying an admin cookie.
-  if (requiresAccount(pathname) && !(await sessionIsVerified()) && !(await hasValidAdminSession(request))) {
+  //
+  // A GUEST HOLDING A CART-RECOVERY GRANT IS ADMITTED TO THE CART JOURNEY, AND
+  // TO NOTHING ELSE.
+  //
+  // Most recovery recipients are guests who typed an email into the checkout
+  // field and never made an account. /api/email is public, so the recovery
+  // click was tracked and then redirected into this wall — a sign-in page for
+  // an account they do not have. The programme could record a click and could
+  // never record a conversion.
+  //
+  // This is NOT a session. It sets no identity, and the ordered && below is the
+  // whole of its blast radius: the grant is consulted only for a path on
+  // cart-recovery-grant.ts's closed allowlist, so a valid grant presented for
+  // /account/orders or /api/admin/* is not even looked at. The cart binding —
+  // that this grant names THIS cart — is enforced again at the route, because
+  // middleware must not have to parse every path's id to be safe.
+  //
+  // Ordered last, so neither a signed-in shopper nor an admin pays for it.
+  if (
+    requiresAccount(pathname)
+    && !(await sessionIsVerified())
+    && !(await hasValidAdminSession(request))
+    && !(await hasGuestCartGrant(request, pathname))
+  ) {
     if (pathname.startsWith("/api/")) {
       return finish(
         NextResponse.json(

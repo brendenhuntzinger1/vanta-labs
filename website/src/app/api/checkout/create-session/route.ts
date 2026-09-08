@@ -7,6 +7,7 @@ import { stampMarketingSourceAtCreation } from "@/lib/marketing-source";
 import { readAutomationCookie } from "@/lib/email/automation-links";
 import { readOfferCookie } from "@/lib/offers/customer-offers";
 import { readCampaignCookie } from "@/lib/email/campaign-links";
+import { readCartRecoveryCookie } from "@/lib/email/cart-recovery-links";
 import { createCheckoutSession, sanitizeCustomerInput } from "@/lib/payment-service";
 import { recordMarketingOptIn } from "@/lib/marketing-broadcast";
 import { detectRoleFromUser } from "@/lib/auth-role";
@@ -164,6 +165,7 @@ export async function POST(request: Request) {
       orderId: result.orderId,
       automationCookie: readAutomationCookie(request),
       campaignCookie: readCampaignCookie(request),
+      cartRecoveryCookie: readCartRecoveryCookie(request),
     });
 
     // Notice a shopper who keeps starting checkout and never finishing. On

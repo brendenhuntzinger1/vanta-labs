@@ -48,6 +48,16 @@ vi.mock("@/lib/offers/customer-offers", async () => {
   };
 });
 
+// THE RESEND RENDERS FROM THE CATALOGUE NOW, exactly as the sweep does (AUTH-3)
+// — it used to pass the tracking beacon's stored snapshot straight into the
+// template. Without this mock the catalogue comes back empty and the resend
+// correctly refuses, on the grounds that nothing in the cart is a live product.
+vi.mock("@/lib/catalog", () => ({
+  getCatalogProductsBySlugs: async () => ([
+    { slug: "bpc-157", name: "BPC-157", price: "$42.99", image: "/images/bpc.jpg", batchNumber: "VL-BPC-0826", doses: [] },
+  ]),
+}));
+
 vi.mock("@/lib/email/frequency", () => ({
   claimMarketingSend: async () => ({ outcome: "claimed", logId: "log-1" }),
 }));

@@ -11,7 +11,14 @@ import {
 } from "@/lib/email/templates";
 import { isMarketingSuppressed, sendMarketingEmail } from "@/lib/email/marketing";
 import { claimMarketingSend } from "@/lib/email/frequency";
-import { findLiveCouponForCart, mintCartRecoveryCoupon, type AbandonedCartItemSnapshot } from "@/lib/cart-recovery";
+import {
+  findLiveCouponForCart,
+  loadRecoveryCatalogue,
+  mintCartRecoveryCoupon,
+  recoveryEmailItems,
+  type AbandonedCartItemSnapshot,
+  type RecoveryCatalogueEntry,
+} from "@/lib/cart-recovery";
 import { getSiteUrl } from "@/lib/env";
 import { isFreeShippingSitewide } from "@/lib/shipping";
 import { formatDisplayDate } from "@/lib/format-date";
@@ -329,6 +336,27 @@ function restoreUrl(cartId: string) {
 // Manual "resend recovery email" - re-sends whichever stage the admin
 // picks, regardless of what the automatic sweep has already sent (an
 // explicit admin action, not subject to the sweep's once-per-stage guard).
+/** The highest-value line's slug, for the batch number the proof email names. */
+function leadSlugForItems(
+  items: ReadonlyArray<Partial<AbandonedCartItemSnapshot>>,
+  catalogue: ReadonlyMap<string, RecoveryCatalogueEntry>,
+): string {
+  let best = "";
+  let bestValue = -1;
+  for (const item of items) {
+    const slug = String(item?.slug ?? "").trim();
+    const entry = slug ? catalogue.get(slug) : undefined;
+    if (!entry) continue;
+    const quantity = Math.max(1, Math.floor(Number(item?.quantity ?? 1)) || 1);
+    const value = (Number(entry.unitPriceCents) || 0) * quantity;
+    if (value > bestValue) { bestValue = value; best = slug; }
+  }
+  return best;
+}
+
+/** Where a shopper replies. Must stay a real inbox — it renders as a mailto. */
+const RECOVERY_SUPPORT_EMAIL = "support@vantalabsresearch.com";
+
 export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t12h" | "t24h" | "t72h") {
   const { data: cart, error } = await supabaseAdmin
     .from("abandoned_carts")
@@ -347,7 +375,26 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
   }
 
   const config = await getCartRecoveryControlConfig();
-  const items = Array.isArray(cart.items) ? (cart.items as AbandonedCartItemSnapshot[]) : [];
+  // RENDERED FROM THE CATALOGUE, exactly as the sweep does it (AUTH-3). This
+  // path used to pass the stored snapshot straight into the template, so the
+  // admin resend button re-opened the hole the sweep had closed: the tracking
+  // beacon stores whatever the browser posted, per line, verbatim. It also
+  // meant a manual resend showed no product image and no price, while the same
+  // stage sent by the sweep showed both.
+  const storedItems = Array.isArray(cart.items) ? (cart.items as AbandonedCartItemSnapshot[]) : [];
+  let catalogue: Map<string, RecoveryCatalogueEntry>;
+  try {
+    catalogue = await loadRecoveryCatalogue(storedItems.map((item) => String(item?.slug ?? "")));
+  } catch (error) {
+    console.error("[admin-cart-recovery] catalogue unavailable; nothing resent", error);
+    return { success: false, error: "The product catalogue could not be read, so nothing was sent. Try again in a moment." };
+  }
+  const items = recoveryEmailItems(storedItems, catalogue);
+  if (items.length === 0) {
+    return { success: false, error: "Nothing in this cart is a live product any more, so there is no honest email to build from it." };
+  }
+  const leadSlug = leadSlugForItems(storedItems, catalogue);
+  const batchNumber = leadSlug ? catalogue.get(leadSlug)?.batchNumber ?? "" : "";
   const name = cart.customer_name ?? "";
 
   // THE GUARD FIRST, before anything is minted or reset. A manual resend is
@@ -555,7 +602,12 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
       openTrackingPixelUrl,
       claimedLogId,
       guardUnavailable,
-      ...cartRecoveryT12hTemplate({ name, items, cartValueCents: cart.cart_value_cents, restoreUrl: trackedRestoreUrl }),
+      ...cartRecoveryT12hTemplate({
+        name, items, cartValueCents: cart.cart_value_cents, restoreUrl: trackedRestoreUrl,
+        coaUrl: `${getSiteUrl()}/coa-library`,
+        batchNumber,
+        supportEmail: RECOVERY_SUPPORT_EMAIL,
+      }),
     });
   }
 
@@ -568,7 +620,16 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
       openTrackingPixelUrl,
       claimedLogId,
       guardUnavailable,
-      ...cartRecoveryT24hTemplate({ name, items, cartValueCents: cart.cart_value_cents, restoreUrl: trackedRestoreUrl }),
+      // A MANUAL RESEND MINTS NO GIFT. The sweep's stage-3 gift is an
+      // entitlement with a cost, gated by the segmentation rules and issued
+      // once behind a stage claim; a button that re-issued one on every press
+      // would be a free-vial dispenser. The operator gets the message, not the
+      // gift. The Labor Day-style override path above is how a gift is sent by
+      // hand, and it refuses a second press.
+      ...cartRecoveryT24hTemplate({
+        name, items, cartValueCents: cart.cart_value_cents, restoreUrl: trackedRestoreUrl,
+        giftLabel: "", offerTerms: "",
+      }),
     });
   }
 
@@ -588,6 +649,156 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
       couponCode: couponCode ?? "",
       discountPercent: couponCode ? couponPercent : 0,
       expiresAt: couponExpiresAt ? formatDisplayDate(couponExpiresAt, "datetime") ?? "" : "",
+      // Same reasoning as stage 3 above: no gift is minted by a resend.
+      giftLabel: "",
+      offerTerms: "",
     }),
   });
+}
+
+/**
+ * THE FUNNEL, WITH ITS MIDDLE PUT BACK.
+ *
+ * getCartRecoveryStats above reports sent / opened / clicked / recovered, and
+ * every one of those four was doing work it could not do:
+ *
+ *   OPENED is contaminated. Heath Greve's stage-2 open is stamped seven seconds
+ *   after the send; Nikki R's stages 1 and 2 are stamped at the same
+ *   millisecond. Those are Gmail and Apple image prefetches, not reads. It is
+ *   reported here for completeness and must not be used to judge anything.
+ *
+ *   RECOVERED counted any paid order from that address inside the window, click
+ *   or no click. On 2026-09-06 it counted Neil Hidalgo, who received zero
+ *   emails. That is the question "did they come back", not "did we bring them
+ *   back", and the two were indistinguishable.
+ *
+ *   Between CLICKED and RECOVERED there was nothing, so nobody could see that a
+ *   click was landing shoppers in carts that could not check out.
+ *
+ * This answers the question the money depends on: of the carts we mailed, how
+ * many clicked, how many got a working cart back, how many bought, what that
+ * was worth NET OF WHAT IT COST, and how much of it we can actually claim.
+ *
+ * ATTRIBUTED vs SELF-SERVE is the split that matters most. A recovery credited
+ * to `marketing_source_kind = 'cart_recovery'` followed a click or spent a code
+ * this programme issued. One without it is a customer who came back on their
+ * own, and counting those as recoveries is how a programme with one click ever
+ * looked like it was working.
+ */
+export interface CartRecoveryFunnel {
+  windowDays: number;
+  sent: number;
+  /** Reported, but contaminated by image prefetch. Do not judge anything on it. */
+  openedUnreliable: number;
+  clicked: number;
+  /** Carts a recovery link actually handed back — the click produced a cart. */
+  restored: number;
+  purchases: number;
+  recoveredRevenueCents: number;
+  merchandiseCostCents: number;
+  /** What the incentives cost: discount given away plus the COGS of gifts spent. */
+  incentiveCostCents: number;
+  recoveredGrossProfitCents: number;
+  attributedRecoveries: number;
+  /** Carts that closed with no click and no attributed order. Not ours. */
+  selfServeRecoveries: number;
+  byVariant: Array<{ variant: string; sent: number; clicked: number }>;
+}
+
+export async function getCartRecoveryFunnel(days = 30): Promise<CartRecoveryFunnel> {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const empty: CartRecoveryFunnel = {
+    windowDays: days, sent: 0, openedUnreliable: 0, clicked: 0, restored: 0, purchases: 0,
+    recoveredRevenueCents: 0, merchandiseCostCents: 0, incentiveCostCents: 0,
+    recoveredGrossProfitCents: 0, attributedRecoveries: 0, selfServeRecoveries: 0, byVariant: [],
+  };
+
+  const { data: sends } = await supabaseAdmin
+    .from("abandoned_cart_emails")
+    .select("abandoned_cart_id, opened_at, clicked_at, variant")
+    .gte("sent_at", since);
+  const sendRows = (sends ?? []) as Array<{
+    abandoned_cart_id: string; opened_at: string | null; clicked_at: string | null; variant: string | null;
+  }>;
+
+  const byVariant = new Map<string, { sent: number; clicked: number }>();
+  const mailedCartIds = new Set<string>();
+  for (const row of sendRows) {
+    mailedCartIds.add(String(row.abandoned_cart_id));
+    const key = row.variant ?? "unassigned";
+    const bucket = byVariant.get(key) ?? { sent: 0, clicked: 0 };
+    bucket.sent += 1;
+    if (row.clicked_at) bucket.clicked += 1;
+    byVariant.set(key, bucket);
+  }
+
+  const funnel: CartRecoveryFunnel = {
+    ...empty,
+    sent: sendRows.length,
+    openedUnreliable: sendRows.filter((row) => row.opened_at).length,
+    clicked: sendRows.filter((row) => row.clicked_at).length,
+    byVariant: [...byVariant.entries()]
+      .map(([variant, counts]) => ({ variant, ...counts }))
+      .sort((a, b) => a.variant.localeCompare(b.variant)),
+  };
+  if (mailedCartIds.size === 0) return funnel;
+
+  // Restores and recoveries, over the carts this window actually mailed.
+  const cartIds = [...mailedCartIds];
+  const carts: Array<{ id: string; status: string; restored_at: string | null; recovered_order_id: string | null }> = [];
+  for (let i = 0; i < cartIds.length; i += IN_CHUNK) {
+    const { data } = await supabaseAdmin
+      .from("abandoned_carts")
+      .select("id, status, restored_at, recovered_order_id")
+      .in("id", cartIds.slice(i, i + IN_CHUNK));
+    carts.push(...((data ?? []) as typeof carts));
+  }
+  funnel.restored = carts.filter((cart) => cart.restored_at).length;
+
+  // ORDERS THIS PROGRAMME CAN ACTUALLY CLAIM. marketing-source.ts decides one
+  // primary channel per order, so this cannot double-count an order a campaign
+  // or an automation also touched — that discipline is the whole reason the
+  // column exists.
+  const { data: orders } = await supabaseAdmin
+    .from("orders")
+    .select("order_id, amount_paid, refund_amount, discount_amount, payment_status, order_type, replacement_of")
+    .eq("marketing_source_kind", "cart_recovery")
+    .gte("created_at", since);
+  const attributed = ((orders ?? []) as Array<Record<string, unknown>>)
+    // isSaleOrder takes the TYPE, not the row — a membership renewal or a
+    // replacement is not a recovered sale and must not be counted as one.
+    .filter((row) => isRevenueOrderStatus(String(row.payment_status ?? ""))
+      && isSaleOrder(row.order_type as string | null | undefined)
+      && !row.replacement_of);
+
+  funnel.purchases = attributed.length;
+  funnel.recoveredRevenueCents = attributed.reduce((sum, row) => sum + Math.round(netOrderRevenue(row) * 100), 0);
+  funnel.incentiveCostCents = attributed.reduce((sum, row) => sum + Math.round(Number(row.discount_amount ?? 0) * 100), 0);
+
+  // COGS from the order lines themselves, which is where the real per-unit cost
+  // lives. A gift shipped at $0 still has a line and still has a unit cost, so
+  // the vials this programme gives away are counted here rather than estimated.
+  const orderIds = attributed.map((row) => String(row.order_id));
+  for (let i = 0; i < orderIds.length; i += IN_CHUNK) {
+    const { data } = await supabaseAdmin
+      .from("order_items")
+      .select("unit_cost_cents, quantity")
+      .in("order_id", orderIds.slice(i, i + IN_CHUNK));
+    for (const line of (data ?? []) as Array<{ unit_cost_cents: number | null; quantity: number | null }>) {
+      funnel.merchandiseCostCents += Number(line.unit_cost_cents ?? 0) * Number(line.quantity ?? 0);
+    }
+  }
+  funnel.recoveredGrossProfitCents = funnel.recoveredRevenueCents - funnel.merchandiseCostCents;
+
+  // THE SPLIT THAT DECIDES WHETHER ANY OF THIS PAID FOR ITSELF.
+  const attributedOrderIds = new Set(orderIds);
+  const clickedCarts = new Set(sendRows.filter((row) => row.clicked_at).map((row) => String(row.abandoned_cart_id)));
+  for (const cart of carts) {
+    if (cart.status !== "recovered") continue;
+    const orderId = cart.recovered_order_id ? String(cart.recovered_order_id) : "";
+    if (attributedOrderIds.has(orderId) || clickedCarts.has(String(cart.id))) funnel.attributedRecoveries += 1;
+    else funnel.selfServeRecoveries += 1;
+  }
+
+  return funnel;
 }

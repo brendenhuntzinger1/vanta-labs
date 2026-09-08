@@ -10,6 +10,15 @@ function CartRestoreInner() {
   const searchParams = useSearchParams();
   const { restoreItems, restoreCoupon } = useCart();
   const [message, setMessage] = useState("Restoring your cart...");
+  // A RECONCILIATION NOTICE STOPS THE AUTOMATIC HOP TO /cart.
+  //
+  // A clean restore still goes straight through — that is every restore where
+  // nothing changed. But when a line could not be added back, redirecting in
+  // silence means a shopper who clicked "your cart is saved" arrives at a cart
+  // that is missing something, with no explanation, which reads as the store
+  // having lost their order. Saying what went, and letting them continue on
+  // their own click, is the difference between an apology and a mystery.
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     const restoreFromUrl = async () => {
@@ -18,14 +27,28 @@ function CartRestoreInner() {
         setMessage("This cart link is missing its cart id.");
         return;
       }
+      // The recovery grant, when the click redirect carried it here rather than
+      // as a cookie. It is handed to the endpoint once, exchanged there for an
+      // httpOnly cookie, and then removed from the address bar so it does not
+      // sit in history or travel in a link the shopper shares.
+      const grant = searchParams.get("k");
 
       try {
-        const response = await fetch(`/api/cart/restore?id=${encodeURIComponent(id)}`, { cache: "no-store" });
+        const response = await fetch(
+          `/api/cart/restore?id=${encodeURIComponent(id)}${grant ? `&k=${encodeURIComponent(grant)}` : ""}`,
+          { cache: "no-store" },
+        );
+        if (grant && typeof window !== "undefined") {
+          const clean = new URL(window.location.href);
+          clean.searchParams.delete("k");
+          window.history.replaceState(null, "", clean.toString());
+        }
         const result = await response.json() as {
           success: boolean;
           items?: Array<{ slug: string; variantId?: string; name: string; quantity: number; unitPrice: number; image?: string }>;
           sessionId?: string | null;
           email?: string;
+          notice?: string;
           coupon?: { code: string; discountType: "percent" | "fixed"; discountValue: number };
           error?: string;
         };
@@ -41,6 +64,11 @@ function CartRestoreInner() {
         // The recovery code the email promised, already validated server-side
         // against the address it is bound to; the checkout validates it again.
         if (result.coupon && result.email) restoreCoupon({ ...result.coupon, email: result.email });
+        if (result.notice) {
+          setNotice(result.notice);
+          setMessage("");
+          return;
+        }
         router.push("/cart");
       } catch {
         setMessage("Unable to restore this cart right now.");
@@ -57,7 +85,19 @@ function CartRestoreInner() {
       <SiteHeaderV2 />
       <main className="mx-auto max-w-xl px-6 py-32 text-center">
         <p className="vl2-eyebrow">Cart Recovery</p>
-        <p className="mt-4 text-white/70">{message}</p>
+        {message ? <p className="mt-4 text-white/70">{message}</p> : null}
+        {notice ? (
+          <>
+            <p className="mt-4 text-white/70">{notice}</p>
+            <button
+              type="button"
+              onClick={() => router.push("/cart")}
+              className="vl-btn-primary mt-8 inline-flex px-6 py-3 text-sm"
+            >
+              Continue to my cart
+            </button>
+          </>
+        ) : null}
       </main>
     </div>
   );

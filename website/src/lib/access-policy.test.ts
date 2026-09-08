@@ -464,12 +464,42 @@ describe("the layout does not fetch offers for a visitor without a session", () 
 describe("the wall verifies the session rather than trusting the cookie", () => {
   const mw = readFileSync(join(process.cwd(), "middleware.ts"), "utf8");
 
+  // Whitespace-normalised, because the condition is now multi-line: the guest
+  // cart-recovery grant was added as a fourth clause and the reflow broke a
+  // literal match without changing a thing about what is asserted.
+  const flat = mw.replace(/\s+/g, " ");
+
   it("gates on a verified session at both call sites", () => {
-    expect(mw).toContain("requiresAccount(pathname) && !(await sessionIsVerified())");
+    expect(flat).toContain("requiresAccount(pathname) && !(await sessionIsVerified())");
     // The /account branch that adds ?next= asks the same question, so a forged
     // cookie cannot skip the return path either.
     expect(mw).toContain('pathname.startsWith("/account")');
     expect(mw.match(/await sessionIsVerified\(\)/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+  });
+
+  // ---------------------------------------------------------------------
+  // THE GUEST CART-RECOVERY GRANT IS THE ONE OTHER WAY THROUGH THIS WALL, and
+  // its blast radius is entirely a matter of ordering and of the closed list it
+  // consults. Both are pinned here, because a later edit that moved the grant
+  // ahead of the session check, or dropped the path test, would widen the wall
+  // silently — the happy path would look identical.
+  // ---------------------------------------------------------------------
+  it("consults the guest grant LAST, after the session and the admin session", () => {
+    const wall = flat.slice(flat.indexOf("if ( requiresAccount(pathname)"));
+    const session = wall.indexOf("sessionIsVerified()");
+    const admin = wall.indexOf("hasValidAdminSession(request)");
+    const grant = wall.indexOf("hasGuestCartGrant(request, pathname)");
+    expect(session).toBeGreaterThan(-1);
+    expect(admin).toBeGreaterThan(session);
+    expect(grant).toBeGreaterThan(admin);
+  });
+
+  it("the grant is checked against a closed path list before its signature", () => {
+    const fn = flat.slice(flat.indexOf("async function hasGuestCartGrant"));
+    // The path test comes FIRST, so a grant presented for a path outside the
+    // allowlist is never even verified. The allowlist is the boundary.
+    expect(fn.indexOf("guestGrantAllowsPath(pathname)"))
+      .toBeLessThan(fn.indexOf("verifyGuestRecoveryGrant("));
   });
 
   it("no longer decides anything on the cookie being present", () => {
