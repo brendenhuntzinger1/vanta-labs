@@ -3,6 +3,7 @@ import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { canManageCartRecovery } from "@/lib/admin-roles";
 import { listAbandonedCarts, getCartRecoveryStats, getCartRecoveryTrend } from "@/lib/admin-cart-recovery";
 import { getCartRecoveryControlConfig } from "@/lib/admin-control";
+import { listGiftableProducts, loadRecoveryEconomicsInputs } from "@/lib/admin-cart-recovery";
 import { AdminCartRecoveryClient } from "@/components/admin-cart-recovery-client";
 
 export const dynamic = "force-dynamic";
@@ -15,15 +16,21 @@ export default async function AdminCartRecoveryPage() {
 
   const canManage = canManageCartRecovery(session.role);
 
-  const [carts, stats, weeklyTrend, monthlyTrend, config] = canManage
+  const [carts, stats, weeklyTrend, monthlyTrend, config, giftProducts, economics] = canManage
     ? await Promise.all([
         listAbandonedCarts().catch(() => []),
         getCartRecoveryStats().catch(() => null),
         getCartRecoveryTrend(7).catch(() => []),
         getCartRecoveryTrend(30).catch(() => []),
         getCartRecoveryControlConfig().catch(() => null),
+        // The band editor's product picker and its margin readout. Both are
+        // independently fault-tolerant: an empty product list disables the
+        // pickers rather than breaking the page, and the economics fall back to
+        // conservative constants rather than showing nothing.
+        listGiftableProducts().catch(() => []),
+        loadRecoveryEconomicsInputs().catch(() => ({ postageCents: 793, productCostRatio: 0.2 })),
       ])
-    : [[], null, [], [], null];
+    : [[], null, [], [], null, [], { postageCents: 793, productCostRatio: 0.2 }];
 
   return (
     <div className="vl-page-shell min-h-screen bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.1),transparent_52%),linear-gradient(145deg,#04060f_0%,#0b1324_50%,#060911_100%)] px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
@@ -45,6 +52,9 @@ export default async function AdminCartRecoveryPage() {
             initialWeeklyTrend={weeklyTrend}
             initialMonthlyTrend={monthlyTrend}
             initialConfig={config}
+            giftProducts={giftProducts}
+            postageCents={economics.postageCents}
+            productCostRatio={economics.productCostRatio}
           />
         ) : (
           <section className="vl-panel rounded-2xl p-6 text-sm text-zinc-300">
