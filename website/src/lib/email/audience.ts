@@ -1,5 +1,8 @@
 import "server-only";
 
+import { applyRuleSegment, buildContactFacts } from "@/lib/email/segment-audience";
+import { parseSegmentRule, type SegmentRule } from "@/lib/email/segment-rules";
+
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { isPaidOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
 import { readAllRowsBounded } from "@/lib/supabase-page";
@@ -54,7 +57,10 @@ export type CampaignSegment =
   | "dormant_60"
   | "dormant_90"
   | "account_no_order"
-  | "category";
+  | "category"
+  // A saved rule (segment-rules.ts). Not offered as a fixed preset: the admin
+  // supplies the rule alongside it, and applySegment never sees this case.
+  | "rule";
 
 /**
  * A "high-value" customer has spent at least this much, net, across paid
@@ -271,6 +277,8 @@ export async function loadConsentedAudience(): Promise<ConsentedAudience> {
 type PurchaseHistory = {
   /** email → most recent paid order time (ms). */
   lastPaidAt: Map<string, number>;
+  /** email → earliest paid order time (ms). Rules can ask "customer since". */
+  firstPaidAt: Map<string, number>;
   /** email → number of paid orders. */
   orderCount: Map<string, number>;
   /** email → net spend in cents across paid orders (amount paid less refunds). */
@@ -286,6 +294,7 @@ type PurchaseHistory = {
  */
 async function loadPurchaseHistory(): Promise<PurchaseHistory> {
   const lastPaidAt = new Map<string, number>();
+  const firstPaidAt = new Map<string, number>();
   const orderCount = new Map<string, number>();
   const spendCents = new Map<string, number>();
   const PAGE = 1000;
@@ -308,6 +317,8 @@ async function loadPurchaseHistory(): Promise<PurchaseHistory> {
       if (!Number.isFinite(at)) continue;
       const existing = lastPaidAt.get(email);
       if (existing === undefined || at > existing) lastPaidAt.set(email, at);
+      const earliest = firstPaidAt.get(email);
+      if (earliest === undefined || at < earliest) firstPaidAt.set(email, at);
       orderCount.set(email, (orderCount.get(email) ?? 0) + 1);
       spendCents.set(
         email,
@@ -317,7 +328,7 @@ async function loadPurchaseHistory(): Promise<PurchaseHistory> {
     if (rows.length < PAGE) break;
   }
 
-  return { lastPaidAt, orderCount, spendCents };
+  return { lastPaidAt, firstPaidAt, orderCount, spendCents };
 }
 
 /** Emails that have a paid order containing any product in `category`. */
@@ -377,6 +388,68 @@ async function loadCategoryBuyers(category: string): Promise<Set<string>> {
   }
 
   return buyers;
+}
+
+/**
+ * Every category each customer has bought, keyed by email.
+ *
+ * loadCategoryBuyers answers "who bought category X" for the fixed `category`
+ * segment; a rule can ask about several categories at once, so this builds the
+ * whole map in the same two passes rather than once per category named.
+ */
+async function loadCategoriesByEmail(): Promise<Map<string, Set<string>>> {
+  const byEmail = new Map<string, Set<string>>();
+  const PAGE = 1000;
+
+  const { data: products, error: productsError } = await supabaseAdmin
+    .from("products")
+    .select("slug, category");
+  if (productsError) throw productsError;
+
+  const categoryForSlug = new Map<string, string>();
+  for (const row of products ?? []) {
+    const slug = String((row as { slug?: unknown }).slug ?? "");
+    const category = String((row as { category?: unknown }).category ?? "").trim();
+    if (slug && category) categoryForSlug.set(slug, category);
+  }
+  if (categoryForSlug.size === 0) return byEmail;
+
+  const orderEmail = new Map<string, string>();
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabaseAdmin
+      .from("orders")
+      .select("order_id, customer_email, payment_status")
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const rows = data ?? [];
+    for (const row of rows) {
+      if (!isPaidOrderStatus(row.payment_status as string | null)) continue;
+      const id = String(row.order_id ?? "");
+      const email = normalize(row.customer_email);
+      if (id && email) orderEmail.set(id, email);
+    }
+    if (rows.length < PAGE) break;
+  }
+
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabaseAdmin
+      .from("order_items")
+      .select("order_id, product_id")
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const rows = data ?? [];
+    for (const row of rows) {
+      const email = orderEmail.get(String(row.order_id ?? ""));
+      const category = categoryForSlug.get(String(row.product_id ?? ""));
+      if (!email || !category) continue;
+      const held = byEmail.get(email) ?? new Set<string>();
+      held.add(category);
+      byEmail.set(email, held);
+    }
+    if (rows.length < PAGE) break;
+  }
+
+  return byEmail;
 }
 
 /**
@@ -448,17 +521,39 @@ export function applySegment(input: {
 export async function resolveAudience(input: {
   segment: CampaignSegment;
   segmentParam?: string | null;
+  /** A saved rule, used when `segment` is "rule". Validated here, never trusted. */
+  rule?: unknown;
   now?: number;
 }): Promise<string[]> {
   const audience = await loadConsentedAudience();
   if (audience.all.size === 0) return [];
+
+  // THE RULE PATH. Parsed before anything is loaded, so an unusable rule costs
+  // nothing and — more importantly — selects NOBODY rather than falling through
+  // to a segment that would select everybody.
+  if (input.segment === "rule") {
+    const rule: SegmentRule | null = parseSegmentRule(input.rule);
+    if (!rule) return [];
+
+    const [history, categoriesByEmail] = await Promise.all([
+      loadPurchaseHistory(),
+      loadCategoriesByEmail(),
+    ]);
+
+    return applyRuleSegment({
+      rule,
+      audience,
+      facts: buildContactFacts({ audience, history, categoriesByEmail }),
+      now: input.now ?? Date.now(),
+    });
+  }
 
   // Skip the work each segment doesn't need — "all" is the common case and
   // shouldn't page the entire orders table to answer.
   const needsHistory = input.segment !== "all" && input.segment !== "category";
   const history = needsHistory
     ? await loadPurchaseHistory()
-    : { lastPaidAt: new Map<string, number>(), orderCount: new Map<string, number>(), spendCents: new Map<string, number>() };
+    : { lastPaidAt: new Map<string, number>(), firstPaidAt: new Map<string, number>(), orderCount: new Map<string, number>(), spendCents: new Map<string, number>() };
   const categoryBuyers = input.segment === "category"
     ? await loadCategoryBuyers(String(input.segmentParam ?? ""))
     : undefined;
