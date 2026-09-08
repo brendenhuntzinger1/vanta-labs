@@ -146,3 +146,79 @@ describe("reconciledCartValueCents", () => {
     expect(reconciledCartValueCents([], stored as number)).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// A PRODUCT DOES NOT HAVE ONE PRICE, AND THE CART LINES KNOW WHICH ONE.
+//
+// Every abandoned cart in this store carries a `variantId` per line — the dose
+// the shopper picked. The catalogue entry used to carry only the product's
+// headline figure, so a real cart holding three GLP-3 at $169.99 was described
+// at $49.99 each: a third of what that shopper had in front of them, in the
+// email asking them to come back and pay it.
+//
+// Once cart value chose the offer band it stopped being a display bug. A
+// $524.96 basket priced at $164.96 falls two bands, so the biggest carts in the
+// store would have drawn the small-cart gift — the exact sale the top band was
+// built to win back.
+// ---------------------------------------------------------------------------
+describe("a line names a dose, and the dose has its own price", () => {
+  const doses = new Map([
+    ["glp-3", {
+      name: "GLP-3",
+      unitPriceCents: 4_999,
+      variantPriceCents: new Map([["dose-10mg", 4_999], ["dose-30mg", 16_999]]),
+      variantLabel: new Map([["dose-10mg", "10mg"], ["dose-30mg", "30mg"]]),
+    }],
+  ]);
+
+  it("prices the dose the shopper chose, not the one the product leads with", () => {
+    const items = recoveryEmailItems([{ slug: "glp-3", name: "x", quantity: 3, unitPrice: 1, variantId: "dose-30mg" }], doses);
+    expect(items[0].unitPriceCents).toBe(16_999);
+    expect(reconciledCartValueCents(items, 48_416)).toBe(50_997);
+  });
+
+  it("qualifies the name with the dose, so the summary says which one", () => {
+    const items = recoveryEmailItems([{ slug: "glp-3", name: "x", quantity: 1, unitPrice: 1, variantId: "dose-30mg" }], doses);
+    expect(items[0].name).toBe("GLP-3 30mg");
+  });
+
+  it("does not repeat a dose already in the product's name", () => {
+    const named = new Map([["ghk-cu", {
+      name: "GHK-Cu 50mg", unitPriceCents: 3_999,
+      variantPriceCents: new Map([["d", 3_999]]), variantLabel: new Map([["d", "50mg"]]),
+    }]]);
+    const items = recoveryEmailItems([{ slug: "ghk-cu", name: "x", quantity: 1, unitPrice: 1, variantId: "d" }], named);
+    expect(items[0].name).toBe("GHK-Cu 50mg");
+  });
+
+  // "BPC-157 10mg 5mg" — a product NAMED after one of its doses, selling
+  // another. Two contradictory strengths on one line is worse than no label at
+  // all, so any dose token in the name suppresses the suffix, not just this
+  // dose's own. Seen on the harness the first time a variant line was priced.
+  it("adds no dose when the name already states a different one", () => {
+    const odd = new Map([["bpc-157-10mg", {
+      name: "BPC-157 10mg", unitPriceCents: 6_900,
+      variantPriceCents: new Map([["d5", 4_900]]), variantLabel: new Map([["d5", "5mg"]]),
+    }]]);
+    const items = recoveryEmailItems([{ slug: "bpc-157-10mg", name: "x", quantity: 2, unitPrice: 1, variantId: "d5" }], odd);
+    expect(items[0].name).toBe("BPC-157 10mg");
+    expect(items[0].unitPriceCents).toBe(4_900);
+  });
+
+  it("still uses the product price for a line that names no variant", () => {
+    const items = recoveryEmailItems([{ slug: "glp-3", name: "x", quantity: 1, unitPrice: 1 }], doses);
+    expect(items[0].unitPriceCents).toBe(4_999);
+  });
+
+  // THE SAFE DIRECTION, DELIBERATELY. A dose this code cannot find leaves the
+  // line unpriced, which makes the whole cart fall back to its stored value —
+  // so an unresolvable variant can never shrink a large cart into a smaller
+  // offer band. Losing a figure on one line is recoverable; losing the sale is
+  // not.
+  it("leaves a line unpriced when its dose cannot be resolved, and keeps the stored cart value", () => {
+    const items = recoveryEmailItems([{ slug: "glp-3", name: "x", quantity: 3, unitPrice: 1, variantId: "dose-that-went-away" }], doses);
+    expect(items[0].unitPriceCents).toBeUndefined();
+    expect(items[0].name).toBe("GLP-3");
+    expect(reconciledCartValueCents(items, 48_416)).toBe(48_416);
+  });
+});
