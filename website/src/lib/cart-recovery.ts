@@ -1030,6 +1030,23 @@ export interface RecoveryCatalogueEntry {
   unitPriceCents: number;
   image?: string;
   batchNumber?: string;
+  /**
+   * THE DOSES, BECAUSE A PRODUCT DOES NOT HAVE ONE PRICE.
+   *
+   * This entry used to carry only the product's headline figure, and the cart
+   * lines it priced carry a `variantId` — the dose the shopper actually chose.
+   * GLP-3 sells at $49.99 for its base dose and $169.99 for the one in a real
+   * abandoned cart here, so the email quoted a third of what that shopper had
+   * in front of them, and the cart total under it was wrong by the same amount.
+   *
+   * It got worse once the offer ladder read cart value: a $524.96 basket priced
+   * at $164.96 falls two bands, so the largest carts in the store — the ones
+   * the top band exists for — would have been offered the small-cart gift.
+   *
+   * Keyed by dose id, which is exactly what the snapshot stores.
+   */
+  variantPriceCents?: Map<string, number>;
+  variantLabel?: Map<string, string>;
 }
 
 /** What a recovery email renders per line — and nothing the client typed. */
@@ -1073,9 +1090,36 @@ export function recoveryEmailItems(
     if (!entry?.name) continue;
     const quantity = Math.floor(Number(item?.quantity ?? 0));
     if (!Number.isFinite(quantity) || quantity < 1) continue;
-    const unitPriceCents = Number(entry.unitPriceCents);
+
+    // THE DOSE THE SHOPPER CHOSE, NOT THE ONE THE PRODUCT LEADS WITH.
+    //
+    // A line carrying a variantId is a specific dose, and doses differ in price
+    // by more than 3x on this catalogue. Priced by product alone, a real cart
+    // holding three GLP-3 at $169.99 was described at $49.99 each — a third of
+    // what the shopper was actually looking at, on the email asking them to
+    // come back and pay it.
+    //
+    // AN UNRESOLVABLE VARIANT LEAVES THE LINE UNPRICED, and that is the safe
+    // direction on purpose: reconciledCartValueCents falls back to the stored
+    // figure the moment any line is unpriced, so a dose this code cannot find
+    // can never quietly shrink a cart into a smaller offer band. A missing
+    // price loses a number on one line; a wrong one loses the sale.
+    const variantId = String(item?.variantId ?? "").trim();
+    const variantPrice = variantId ? entry.variantPriceCents?.get(variantId) : undefined;
+    const unitPriceCents = variantId ? Number(variantPrice) : Number(entry.unitPriceCents);
+    // The dose label qualifies the name for the same reason: "GLP-3" and
+    // "GLP-3 10mg" are different lines to whoever is reading the summary.
+    //
+    // ONLY WHEN THE NAME CARRIES NO DOSE OF ITS OWN. A product named after one
+    // of its doses — "BPC-157 10mg", whose slug is bpc-157-10mg, selling a 5mg
+    // as well — produced "BPC-157 10mg 5mg" when the label was simply appended.
+    // Two contradictory strengths on one line is worse than none, so the test
+    // is for ANY dose token in the name, not just this dose's.
+    const variantLabel = variantId ? entry.variantLabel?.get(variantId) : undefined;
+    const nameCarriesADose = /\d\s*(mg|mcg|ml|iu|g)\b/i.test(entry.name);
+    const name = variantLabel && !nameCarriesADose ? `${entry.name} ${variantLabel}` : entry.name;
     out.push({
-      name: entry.name,
+      name,
       quantity: Math.min(MAX_RECOVERY_LINE_QUANTITY, quantity),
       ...(Number.isFinite(unitPriceCents) && unitPriceCents > 0 ? { unitPriceCents } : {}),
       ...(entry.image ? { image: entry.image } : {}),
@@ -1170,11 +1214,24 @@ export async function loadRecoveryCatalogue(slugs: string[]): Promise<Map<string
     const image = rawImage.startsWith("http")
       ? rawImage
       : rawImage.startsWith("/") ? `${site}${rawImage}` : "";
+    // Every dose, keyed by the id the cart snapshot stores, so a line naming a
+    // variant is priced at that variant. Sale price first, exactly as the
+    // product-level figure above resolves it.
+    const variantPriceCents = new Map<string, number>();
+    const variantLabel = new Map<string, string>();
+    for (const dose of product.doses ?? []) {
+      if (!dose?.id) continue;
+      const dosePrice = Number(String(dose.salePrice ?? dose.price ?? "").replace(/[^0-9.]/g, ""));
+      if (Number.isFinite(dosePrice) && dosePrice > 0) variantPriceCents.set(String(dose.id), Math.round(dosePrice * 100));
+      if (dose.label) variantLabel.set(String(dose.id), String(dose.label));
+    }
     entries.set(String(product.slug), {
       name: String(product.name),
       unitPriceCents: Number.isFinite(price) ? Math.round(price * 100) : 0,
       ...(image ? { image } : {}),
       ...(product.batchNumber ? { batchNumber: String(product.batchNumber) } : {}),
+      ...(variantPriceCents.size > 0 ? { variantPriceCents } : {}),
+      ...(variantLabel.size > 0 ? { variantLabel } : {}),
     });
   }
   return entries;
