@@ -97,14 +97,41 @@ describe("the cart refetches its configuration when the viewer signs in", () => 
     // fired five requests it knew would be refused and put five 401s in the
     // console of the page a new customer sees first. Measured in the browser
     // before the guard: 5 of them on /account/login.
+    //
+    // ONE OF THE FIVE HAS A SECOND WAY IN, and it is not a loosening of this
+    // rule. A cart-recovery click mints a browse grant that the wall consults
+    // last, so that shopper reaches /cart with no account — and /catalog/
+    // promotions is where the STORE'S OWN TERMS arrive. Skipping it for them
+    // left a recovered cart reading DEFAULT_SHIPPING_CONFIG: "Free shipping at
+    // $200.00 — $108.82 away" on a store shipping every order free, directly
+    // under an email that had just said shipping was free. The guard therefore
+    // also admits a visit carrying vl_cart_recovery — which the sign-in portal
+    // never has, so the 401s this test exists to prevent still do not happen.
     const at = cart.indexOf(endpoint);
     expect(at, `${endpoint} must still be fetched here`).toBeGreaterThan(-1);
     const effectStart = cart.lastIndexOf("(async () => {", at);
     expect(effectStart, `no effect body found around ${endpoint}`).toBeGreaterThan(-1);
-    expect(
-      cart.slice(effectStart, at),
-      `${endpoint} is requested before anyone could be signed in`,
-    ).toContain("if (!signedIn) return;");
+    const guard = cart.slice(effectStart, at);
+    const guarded = endpoint === '"/api/catalog/promotions"'
+      ? /if \(!signedIn && !recoveredVisit\) return;/.test(guard)
+      : guard.includes("if (!signedIn) return;");
+    expect(guarded, `${endpoint} is requested before anyone could be signed in`).toBe(true);
+  });
+
+  // The exemption is exactly as wide as the grant that justifies it: a cookie
+  // this visit carries, checked on the client, deciding only whether to ASK.
+  // The endpoint still answers 401 to anyone without the httpOnly grant beside
+  // it, and the response.ok guard turns that back into the old no-op.
+  it("lets a cart-recovery visitor read the store's terms, and no one else", () => {
+    expect(cart).toContain('startsWith("vl_cart_recovery=")');
+    expect(cart).toMatch(/const recoveredVisit = typeof document !== "undefined"/);
+    // Not widened to the other four: those carry account state, which a browse
+    // grant is not evidence of.
+    for (const endpoint of ['"/api/account/me"', '"/api/account/ambassador-discount"']) {
+      const at = cart.indexOf(endpoint);
+      const effectStart = cart.lastIndexOf("(async () => {", at);
+      expect(cart.slice(effectStart, at)).not.toContain("recoveredVisit");
+    }
   });
 
   it("does not remount the provider to solve it, which would empty the cart", () => {

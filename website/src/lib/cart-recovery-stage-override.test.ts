@@ -76,7 +76,18 @@ vi.mock("@/lib/offers/customer-offers", async () => {
   const actual = await vi.importActual<Record<string, unknown>>("@/lib/offers/customer-offers");
   return {
     ...actual,
+    // The OVERRIDE path mints a named catalogue gift by key.
     issueCustomerOffer: async (input: { email: string; offerKey: string; referenceId?: string }) => {
+      state.issued.push({ email: input.email, offerKey: input.offerKey, referenceId: input.referenceId });
+      if (state.offerMintFails) return null;
+      return { token: `tok-${state.issued.length}`, expiresAt: new Date(Date.now() + 8 * 24 * HOUR_MS).toISOString() };
+    },
+    // THE LADDER path mints a gift assembled from the cart's band, which has no
+    // catalogue entry to name — so it goes through issueResolvedOffer instead.
+    // Both are recorded here, because the point of this suite is that an
+    // override replaces ONE message and leaves the sequence around it minting
+    // its own gifts as usual.
+    issueResolvedOffer: async (input: { email: string; offerKey: string; referenceId?: string }) => {
       state.issued.push({ email: input.email, offerKey: input.offerKey, referenceId: input.referenceId });
       if (state.offerMintFails) return null;
       return { token: `tok-${state.issued.length}`, expiresAt: new Date(Date.now() + 8 * 24 * HOUR_MS).toISOString() };
@@ -206,7 +217,11 @@ function seedCart(input: { id?: string; email?: string; hoursAgo: number; value?
     email: input.email ?? "shopper@example.com",
     customer_name: "Sam",
     items: [{ slug: "bpc-157", name: "BPC-157", quantity: 1, price: 42.99 }],
-    cart_value_cents: input.value ?? 4299,
+  // $149.99. The band that a $42.99 cart falls into deliberately carries no
+  // percentage, and this suite is about STAGE OVERRIDES rather than about
+  // banding — so it sits in a band that exercises both halves of a stage's
+  // offer. cart-recovery-tiers.test.ts pins the bands themselves.
+    cart_value_cents: input.value ?? 14999,
     first_seen_at: new Date(Date.now() - input.hoursAgo * HOUR_MS).toISOString(),
     last_updated_at: new Date(Date.now() - input.hoursAgo * HOUR_MS).toISOString(),
     status: "active",

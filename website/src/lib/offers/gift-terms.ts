@@ -28,6 +28,39 @@
  * Adding another kind means a new branch in quoteOrder and nothing else; adding
  * another PRODUCT gift means one entry below and no code at all.
  */
+/** One product in a multi-product gift. */
+export type GiftItem = { slug: string; quantity: number; variantId: string | null };
+
+/**
+ * Read a stored `gift_items` value into something safe to price from.
+ *
+ * A jsonb column is whatever was last written to it, and this one decides what
+ * the store gives away for free — so nothing here trusts its shape. A row that
+ * cannot be read yields an EMPTY list, which grants nothing: the safe direction
+ * for a gift is to withhold it and leave the token spendable, never to guess.
+ *
+ * Quantities are floored to a whole number at or above one, for the same reason
+ * the single-product path does it: a fractional or negative count reaches
+ * order_items and becomes an un-shippable pick list rather than a pricing bug.
+ */
+export function normalizeGiftItems(value: unknown): GiftItem[] {
+  if (!Array.isArray(value)) return [];
+  const out: GiftItem[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue;
+    const entry = raw as Record<string, unknown>;
+    const slug = String(entry.slug ?? "").trim();
+    if (!slug || seen.has(slug)) continue;
+    seen.add(slug);
+    const stored = Number(entry.quantity ?? 1);
+    const quantity = Number.isFinite(stored) ? Math.max(1, Math.floor(stored)) : 1;
+    const variantId = typeof entry.variantId === "string" && entry.variantId ? entry.variantId : null;
+    out.push({ slug, quantity, variantId });
+  }
+  return out;
+}
+
 export type OfferReward =
   /**
    * `quantity` defaults to one and is the number of units granted, not a
@@ -44,7 +77,19 @@ export type OfferReward =
    *  as the combined gift's percentage does; shipping is charged as usual. */
   | { kind: "percent"; percent: number }
   /** A $0 product line AND a percentage off the rest. */
-  | { kind: "free_product_percent"; productSlug: string; percent: number; quantity?: number };
+  | { kind: "free_product_percent"; productSlug: string; percent: number; quantity?: number }
+  /**
+   * SEVERAL DIFFERENT PRODUCTS, free.
+   *
+   * The single-product kinds grant N units of ONE thing, which cannot express
+   * "a GLOW and a GHK-Cu and a BAC Water" — the top of the cart-recovery
+   * ladder. At this store's real dose costs that three-vial gift costs less
+   * than a tenth of what a percentage costs on the same cart, so it is the
+   * cheapest strong offer available and worth its own shape.
+   */
+  | { kind: "free_products"; items: GiftItem[] }
+  /** The same, plus a percentage off the rest. */
+  | { kind: "free_products_percent"; items: GiftItem[]; percent: number };
 
 /**
  * EVERYTHING A MINT NEEDS TO KNOW ABOUT A GIFT.
@@ -80,6 +125,25 @@ export function describeGiftTerms(config: GiftConfig, expiresAt: string): string
   // place the customer's copy and the checkout are guaranteed to agree.
   const count = offerRewardQuantity(config.reward);
   const units = (noun: string) => (count && count > 1 ? `${count} free ${noun} are` : `a free ${noun} is`);
+  // A MULTI-ITEM GIFT NAMES ITSELF FROM ITS LABEL.
+  //
+  // The single-product kinds derive their wording from the catalogue entry's
+  // label, stripping the "free" and any leading count so the sentence reads
+  // "a free X is added". A multi-item gift cannot be reconstructed that way —
+  // "a free GLOW + GHK-Cu + BAC Water is added" is wrong in both number and
+  // grammar — so the caller builds the label from real product names and this
+  // states it whole. It is still the SAME config the mint wrote onto the row,
+  // which is the property that keeps the email and the till in agreement.
+  if (config.reward.kind === "free_products" || config.reward.kind === "free_products_percent") {
+    const percentPart = config.reward.kind === "free_products_percent"
+      ? `${config.reward.percent}% off, and `
+      : "";
+    return `Your gift: ${percentPart}${config.label} added to your order on any order of ${minimum} or more, `
+      + `through ${deadline}. `
+      + "One per customer, for this email address only. It is applied automatically when you shop "
+      + "through the button below — no code needed.";
+  }
+
   const gift = config.reward.kind === "free_product"
     ? `${units(config.label.replace(/^\d+\s+/, "").replace(/^free\s+/i, ""))} added to your order`
     : config.reward.kind === "free_product_percent"

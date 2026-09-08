@@ -202,14 +202,32 @@ describe("the plan explains itself", () => {
 describe("the recovery discount's blast radius", () => {
   const sweep = readFileSync(path.resolve(__dirname, "./cart-recovery.ts"), "utf8");
 
-  it("is read in exactly two places, both of them the last stage", () => {
-    const uses = [...sweep.matchAll(/config\.discountPercent/g)];
-    expect(uses).toHaveLength(2);
+  // THE GLOBAL SETTING IS NOW A MASTER SWITCH, NOT THE RATE.
+  //
+  // Each band carries its own percentage; `config.discountPercent` only decides
+  // whether ANY recovery coupon may be minted, which is the control an operator
+  // reaches for when they want it all stopped without editing four bands. So it
+  // is read once — into the plan — and the coupon mint takes the band's rate.
+  it("is read in exactly one place: the stage-4 plan", () => {
+    // Comments stripped first. This file explains at length WHY the global
+    // setting is no longer the rate, and a naive count would score that prose
+    // as extra uses — a test that fails when the reasoning is written down is
+    // a test that discourages writing it down.
+    const code = sweep.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    const uses = [...code.matchAll(/config\.discountPercent/g)];
+    expect(uses).toHaveLength(1);
   });
 
-  it("reaches only the stage-4 plan and the stage-4 coupon mint", () => {
+  it("hands the coupon mint the BAND's percentage, not the global one", () => {
+    // The defect this pins: passing config.discountPercent here made the band's
+    // rate a number that was computed, logged and then ignored — a $150 cart
+    // whose band said 10% was mailed the global 5%.
+    expect(sweep).toContain("resolveLastChanceCoupon(cartId, email, plan.percent");
+    expect(sweep).not.toContain("resolveLastChanceCoupon(cartId, email, config.discountPercent");
+  });
+
+  it("reaches only the stage-4 plan", () => {
     expect(sweep).toContain("discountPercent: config.discountPercent");
-    expect(sweep).toContain("resolveLastChanceCoupon(cartId, email, config.discountPercent");
   });
 
   // Stage 3's gift is a product with no percentage at all, so the number cannot
