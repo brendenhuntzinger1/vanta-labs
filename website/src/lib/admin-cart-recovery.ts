@@ -802,3 +802,126 @@ export async function getCartRecoveryFunnel(days = 30): Promise<CartRecoveryFunn
 
   return funnel;
 }
+
+
+/**
+ * The products a recovery band may hand out, with what each really costs.
+ *
+ * COSTS COME FROM THE DOSE ROW, NEVER THE PARENT. `products.product_cost_cents`
+ * holds inherited EvoLabs figures that quote-order.ts measures at 1.4x-6.8x the
+ * true landed cost and explicitly refuses to price from. Reading it here would
+ * put a number on the admin screen that is wrong by up to seven times, on the
+ * one screen where the owner is deciding how much to give away.
+ *
+ * A product with no dose cost is returned with a null cost rather than a
+ * guessed one: the margin readout says "cost unknown" for it, which is the
+ * honest answer and the one that prompts somebody to fill the figure in.
+ */
+export type GiftableProduct = {
+  slug: string;
+  name: string;
+  priceCents: number;
+  costCents: number | null;
+};
+
+export async function listGiftableProducts(): Promise<GiftableProduct[]> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("products")
+      .select("slug, name, price_cents, product_doses(price_cents, product_cost_cents, is_default, position)")
+      .eq("is_active", true)
+      .eq("is_enabled", true)
+      .eq("is_published", true)
+      .eq("is_archived", false)
+      .order("name");
+    if (error) throw error;
+
+    return (data ?? []).map((row) => {
+      const doses = (row.product_doses ?? []) as Array<{
+        price_cents: number | null; product_cost_cents: number | null; is_default: boolean | null; position: number | null;
+      }>;
+      const chosen = doses.find((dose) => dose.is_default)
+        ?? [...doses].sort((a, b) => (a.position ?? 0) - (b.position ?? 0))[0];
+      return {
+        slug: String(row.slug ?? ""),
+        name: String(row.name ?? row.slug ?? ""),
+        priceCents: Number(chosen?.price_cents ?? row.price_cents ?? 0),
+        costCents: chosen?.product_cost_cents == null ? null : Number(chosen.product_cost_cents),
+      };
+    }).filter((product) => product.slug);
+  } catch {
+    // An empty list disables the band editor's product pickers rather than
+    // breaking the page. The sweep has its own catalogue read and is unaffected.
+    return [];
+  }
+}
+
+
+/**
+ * The two figures the band editor needs beyond the product list, measured
+ * rather than assumed.
+ *
+ * POSTAGE IS A REAL COST HERE because the store ships free sitewide, so every
+ * recovered order carries it. It is FIXED, which is why it matters so much more
+ * to a small cart than a large one — leaving it out overstates the smallest
+ * band's margin by around thirteen points, and that is the band most at risk of
+ * being over-served.
+ *
+ * THE PRODUCT COST RATIO comes from the DOSE rows. The parent
+ * `products.product_cost_cents` holds inherited EvoLabs figures that
+ * quote-order.ts measures at 1.4x-6.8x the true landed cost and refuses to
+ * price from; using it here would put a margin on screen that is wrong by up to
+ * seven times on the one page where the owner decides how much to give away.
+ *
+ * Both fall back to conservative constants when there is nothing to measure —
+ * a new store with no paid orders still gets a sane readout, and the numbers
+ * only get truer as orders arrive.
+ */
+export type RecoveryEconomicsInputs = { postageCents: number; productCostRatio: number };
+
+/** Until there are paid orders to measure. Roughly this store's observed average. */
+const FALLBACK_POSTAGE_CENTS = 793;
+/** Until there are dose costs to measure. Deliberately pessimistic. */
+const FALLBACK_PRODUCT_COST_RATIO = 0.2;
+
+export async function loadRecoveryEconomicsInputs(): Promise<RecoveryEconomicsInputs> {
+  let postageCents = FALLBACK_POSTAGE_CENTS;
+  let productCostRatio = FALLBACK_PRODUCT_COST_RATIO;
+
+  try {
+    const { data } = await supabaseAdmin
+      .from("orders")
+      .select("actual_shipping_cost_cents, postage_cost_cents, estimated_shipping_cost_cents")
+      .eq("payment_status", "paid")
+      .limit(200);
+    const costs = (data ?? [])
+      .map((row) => Number(row.actual_shipping_cost_cents ?? row.postage_cost_cents ?? row.estimated_shipping_cost_cents ?? 0))
+      .filter((cost) => Number.isFinite(cost) && cost > 0);
+    if (costs.length > 0) {
+      postageCents = Math.round(costs.reduce((sum, cost) => sum + cost, 0) / costs.length);
+    }
+  } catch {
+    // Keep the fallback. A readout from a default is better than no page.
+  }
+
+  try {
+    const { data } = await supabaseAdmin
+      .from("product_doses")
+      .select("price_cents, product_cost_cents, is_default")
+      .eq("is_default", true);
+    const rows = (data ?? [])
+      .map((row) => ({ price: Number(row.price_cents ?? 0), cost: Number(row.product_cost_cents ?? 0) }))
+      .filter((row) => row.price > 0 && row.cost > 0);
+    if (rows.length > 0) {
+      // Revenue-weighted, not a mean of ratios: a $120 product and a $15 one do
+      // not contribute equally to what a cart of mixed items costs.
+      const revenue = rows.reduce((sum, row) => sum + row.price, 0);
+      const cost = rows.reduce((sum, row) => sum + row.cost, 0);
+      productCostRatio = cost / revenue;
+    }
+  } catch {
+    // Keep the fallback.
+  }
+
+  return { postageCents, productCostRatio };
+}

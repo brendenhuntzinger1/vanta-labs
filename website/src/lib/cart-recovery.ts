@@ -3,13 +3,14 @@ import crypto from "crypto";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getCartRecoveryControlConfig, getShippingConfig, type CartRecoveryConfig } from "@/lib/admin-control";
+import { DEFAULT_RECOVERY_TIERS, type RecoveryGiftItem } from "@/lib/cart-recovery-tiers";
 import { getSiteUrl } from "@/lib/env";
 import { isFreeShippingSitewide } from "@/lib/shipping";
 import { formatDisplayDate } from "@/lib/format-date";
 import { isMarketingSuppressed, sendMarketingEmail } from "@/lib/email/marketing";
 import { claimMarketingSend } from "@/lib/email/frequency";
 import { plainGreetingName } from "@/lib/email/greeting-name";
-import { getCatalogProductsBySlugs } from "@/lib/catalog";
+import { getCatalogProductsBySlugs, getStockLevelsBySlugs } from "@/lib/catalog";
 import { isPaidOrderStatus, isProductPurchaseOrder } from "@/lib/ledger";
 import {
   cartRecoveryGiftTemplate,
@@ -19,11 +20,18 @@ import {
   cartRecoveryT72hTemplate,
 } from "@/lib/email/templates";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
-import { describeOfferTerms, issueCustomerOffer, OFFER_CATALOG } from "@/lib/offers/customer-offers";
+import {
+  describeGiftTerms,
+  describeOfferTerms,
+  issueCustomerOffer,
+  issueResolvedOffer,
+  OFFER_CATALOG,
+} from "@/lib/offers/customer-offers";
 import { loadCartRecoveryOverrides, markCartRecoveryOverrideConsumed } from "@/lib/cart-recovery-overrides";
 import { recoveryVariantFor } from "@/lib/cart-recovery-experiments";
 import {
   planStageOffer,
+  recoveryGiftConfig,
   RECOVERY_GIFT_COOLDOWN_MS,
   RECOVERY_GIFT_OFFER_KEY,
 } from "@/lib/cart-recovery-offers";
@@ -1022,6 +1030,23 @@ export interface RecoveryCatalogueEntry {
   unitPriceCents: number;
   image?: string;
   batchNumber?: string;
+  /**
+   * THE DOSES, BECAUSE A PRODUCT DOES NOT HAVE ONE PRICE.
+   *
+   * This entry used to carry only the product's headline figure, and the cart
+   * lines it priced carry a `variantId` — the dose the shopper actually chose.
+   * GLP-3 sells at $49.99 for its base dose and $169.99 for the one in a real
+   * abandoned cart here, so the email quoted a third of what that shopper had
+   * in front of them, and the cart total under it was wrong by the same amount.
+   *
+   * It got worse once the offer ladder read cart value: a $524.96 basket priced
+   * at $164.96 falls two bands, so the largest carts in the store — the ones
+   * the top band exists for — would have been offered the small-cart gift.
+   *
+   * Keyed by dose id, which is exactly what the snapshot stores.
+   */
+  variantPriceCents?: Map<string, number>;
+  variantLabel?: Map<string, string>;
 }
 
 /** What a recovery email renders per line — and nothing the client typed. */
@@ -1065,15 +1090,80 @@ export function recoveryEmailItems(
     if (!entry?.name) continue;
     const quantity = Math.floor(Number(item?.quantity ?? 0));
     if (!Number.isFinite(quantity) || quantity < 1) continue;
-    const unitPriceCents = Number(entry.unitPriceCents);
+
+    // THE DOSE THE SHOPPER CHOSE, NOT THE ONE THE PRODUCT LEADS WITH.
+    //
+    // A line carrying a variantId is a specific dose, and doses differ in price
+    // by more than 3x on this catalogue. Priced by product alone, a real cart
+    // holding three GLP-3 at $169.99 was described at $49.99 each — a third of
+    // what the shopper was actually looking at, on the email asking them to
+    // come back and pay it.
+    //
+    // AN UNRESOLVABLE VARIANT LEAVES THE LINE UNPRICED, and that is the safe
+    // direction on purpose: reconciledCartValueCents falls back to the stored
+    // figure the moment any line is unpriced, so a dose this code cannot find
+    // can never quietly shrink a cart into a smaller offer band. A missing
+    // price loses a number on one line; a wrong one loses the sale.
+    const variantId = String(item?.variantId ?? "").trim();
+    const variantPrice = variantId ? entry.variantPriceCents?.get(variantId) : undefined;
+    const unitPriceCents = variantId ? Number(variantPrice) : Number(entry.unitPriceCents);
+    // The dose label qualifies the name for the same reason: "GLP-3" and
+    // "GLP-3 10mg" are different lines to whoever is reading the summary.
+    //
+    // ONLY WHEN THE NAME CARRIES NO DOSE OF ITS OWN. A product named after one
+    // of its doses — "BPC-157 10mg", whose slug is bpc-157-10mg, selling a 5mg
+    // as well — produced "BPC-157 10mg 5mg" when the label was simply appended.
+    // Two contradictory strengths on one line is worse than none, so the test
+    // is for ANY dose token in the name, not just this dose's.
+    const variantLabel = variantId ? entry.variantLabel?.get(variantId) : undefined;
+    const nameCarriesADose = /\d\s*(mg|mcg|ml|iu|g)\b/i.test(entry.name);
+    const name = variantLabel && !nameCarriesADose ? `${entry.name} ${variantLabel}` : entry.name;
     out.push({
-      name: entry.name,
+      name,
       quantity: Math.min(MAX_RECOVERY_LINE_QUANTITY, quantity),
       ...(Number.isFinite(unitPriceCents) && unitPriceCents > 0 ? { unitPriceCents } : {}),
       ...(entry.image ? { image: entry.image } : {}),
     });
   }
   return out;
+}
+
+/**
+ * WHAT THIS CART IS WORTH, judged on the lines the email will actually print.
+ *
+ * `cart_value_cents` is a SNAPSHOT taken when the beacon was posted. The lines
+ * are not: recoveryEmailItems reconciles them against the live catalogue,
+ * dropping a slug that no longer sells and re-pricing the rest, so the two
+ * disagree the moment a product is retired or repriced. Using the snapshot
+ * regardless cost money in both directions:
+ *
+ *   THE EMAIL. A cart stored at $519.90 whose live lines came to $95.98 was
+ *   mailed with "Cart total $519.90" printed under a summary that added up to
+ *   $95.98. The shopper clicks, sees the real basket, and the message has been
+ *   wrong about the one number they can check for themselves.
+ *
+ *   THE OFFER. The band is chosen from cart value, so that same cart drew the
+ *   TOP band — three free products — on $95.98 of goods, redeemable against a
+ *   $35 minimum. The ladder is generous at the top precisely BECAUSE the basket
+ *   is large; paying out on a stale figure hands that away to carts that never
+ *   qualified for it.
+ *
+ * THE SUM IS ONLY TRUSTED WHEN EVERY SURVIVING LINE CARRIES A LIVE PRICE.
+ * recoveryEmailItems omits the price rather than printing a wrong one, so a
+ * partial sum would understate the cart and quietly demote a real one; in that
+ * case the stored figure stands and behaviour is exactly as it was.
+ *
+ * An empty basket returns the stored value too — the sweep drops those carts
+ * before this point, and returning 0 would only mislabel one if it ever did not.
+ */
+export function reconciledCartValueCents(
+  items: ReadonlyArray<RecoveryEmailItem>,
+  storedCents: number,
+): number {
+  const stored = Number.isFinite(storedCents) ? Math.max(0, Math.round(storedCents)) : 0;
+  if (items.length === 0) return stored;
+  if (!items.every((item) => typeof item.unitPriceCents === "number")) return stored;
+  return items.reduce((sum, item) => sum + (item.unitPriceCents ?? 0) * item.quantity, 0);
 }
 
 /**
@@ -1124,11 +1214,24 @@ export async function loadRecoveryCatalogue(slugs: string[]): Promise<Map<string
     const image = rawImage.startsWith("http")
       ? rawImage
       : rawImage.startsWith("/") ? `${site}${rawImage}` : "";
+    // Every dose, keyed by the id the cart snapshot stores, so a line naming a
+    // variant is priced at that variant. Sale price first, exactly as the
+    // product-level figure above resolves it.
+    const variantPriceCents = new Map<string, number>();
+    const variantLabel = new Map<string, string>();
+    for (const dose of product.doses ?? []) {
+      if (!dose?.id) continue;
+      const dosePrice = Number(String(dose.salePrice ?? dose.price ?? "").replace(/[^0-9.]/g, ""));
+      if (Number.isFinite(dosePrice) && dosePrice > 0) variantPriceCents.set(String(dose.id), Math.round(dosePrice * 100));
+      if (dose.label) variantLabel.set(String(dose.id), String(dose.label));
+    }
     entries.set(String(product.slug), {
       name: String(product.name),
       unitPriceCents: Number.isFinite(price) ? Math.round(price * 100) : 0,
       ...(image ? { image } : {}),
       ...(product.batchNumber ? { batchNumber: String(product.batchNumber) } : {}),
+      ...(variantPriceCents.size > 0 ? { variantPriceCents } : {}),
+      ...(variantLabel.size > 0 ? { variantLabel } : {}),
     });
   }
   return entries;
@@ -1227,14 +1330,106 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
   // see recoveryEmailItems. One read for every candidate's lines. If the
   // catalogue cannot be read nothing is sent this sweep: no stage has been
   // claimed yet, so the next tick simply tries again.
+  // THE BANDS, DEFENDED. `config.tiers` is validated on the way out of the
+  // control store, but a config assembled by an older deploy — or by a caller
+  // that predates the field — has none, and a sweep that throws here sends no
+  // recovery mail at all. Falling back to the shipped ladder keeps the
+  // programme running on the defaults it was designed with.
+  const recoveryTiers = config.tiers ?? DEFAULT_RECOVERY_TIERS;
+
   let catalogueNames: Map<string, RecoveryCatalogueEntry>;
   try {
-    catalogueNames = await loadRecoveryCatalogue(
-      candidates.flatMap(({ row }) => (Array.isArray(row.items) ? row.items : []).map((item) => String(item?.slug ?? ""))),
-    );
+    catalogueNames = await loadRecoveryCatalogue([
+      ...candidates.flatMap(({ row }) => (Array.isArray(row.items) ? row.items : []).map((item) => String(item?.slug ?? ""))),
+      // THE GIFT PRODUCTS TOO, or a banded gift could not be named. Every band
+      // is known before the sweep runs, so this costs one wider read rather
+      // than a lookup per cart — and a gift the sweep cannot name is a gift the
+      // email would advertise as a slug.
+      ...recoveryTiers.flatMap((tier) => [
+        ...tier.stage3.map((item) => item.slug),
+        ...tier.stage4.gifts.map((item) => item.slug),
+      ]),
+    ]);
   } catch (error) {
     console.error("[cart-recovery] catalogue unavailable; no recovery mail sent this sweep", error);
     return result;
+  }
+
+  // Slug to product name, for naming a banded gift in the email and on the
+  // offer row. Derived rather than loaded again: the read above already covers
+  // both the cart's products and every band's.
+  const catalogueNameBySlug = new Map<string, string>(
+    [...catalogueNames.entries()].map(([slug, entry]) => [slug, entry.name]),
+  );
+
+  // WHICH GIFT PRODUCTS CAN ACTUALLY SHIP TODAY.
+  //
+  // quoteOrder already skips an unshippable gift item at the till, and the rest
+  // of a multi-item gift still lands — but that is the WRONG PLACE for this to
+  // be the only check. The email is written first: without this, a band naming
+  // an out-of-stock product mails "TB-500 + GHK-Cu + BAC Water" and the
+  // checkout hands over two of the three. Promising what cannot ship is the one
+  // failure this whole programme is least able to afford, because the customer
+  // reads the promise and then counts the box.
+  //
+  // Found by sending a real top-band cart through the sweep against a harness
+  // where TB-500 was out of stock, and comparing the email against the quote.
+  //
+  // Unknown is treated as SHIPPABLE: an untracked supply has no count, and
+  // withholding a gift because a stock read was silent would quietly empty the
+  // ladder. quoteOrder and reserve_inventory both still guard the real order.
+  //
+  // THE CATALOGUE STATUS ALONE IS NOT ENOUGH, and the first version of this
+  // check believed it was. resolveStockStatus() in catalog.ts returns "In Stock"
+  // for EVERY product while the global inventory-tracking flag is off — which is
+  // its default — so a shelf holding zero units still reads In Stock there. The
+  // count from getStockLevelsBySlugs() is not masked that way: it carries the
+  // per-row tracked quantity regardless of the flag, which is exactly why
+  // quoteOrder tests both. Testing both here too is what makes the email and the
+  // till agree; testing only the status mailed a three-gift promise that the
+  // quote then honoured two thirds of.
+  const giftSlugs = Array.from(new Set(recoveryTiers.flatMap((tier) => [
+    ...tier.stage3.map((item) => item.slug),
+    ...tier.stage4.gifts.map((item) => item.slug),
+  ])));
+  const unshippableGiftSlugs = new Set<string>();
+  if (giftSlugs.length > 0) {
+    try {
+      const [giftProducts, giftStock] = await Promise.all([
+        getCatalogProductsBySlugs(giftSlugs),
+        getStockLevelsBySlugs(giftSlugs),
+      ]);
+      for (const slug of giftSlugs) {
+        const product = giftProducts.find((candidate) => candidate.slug === slug);
+        // Absent from the catalogue is unshippable too — a retired or unpublished
+        // slug resolves to nothing at the till and would be promised for ever.
+        if (!product) { unshippableGiftSlugs.add(slug); continue; }
+        // The same dose quoteOrder picks for a gift that names no variant, and
+        // the same key order: dose id for a variant, slug for a product.
+        const dose = product.doses?.find((entry) => entry.isDefault) ?? product.doses?.[0];
+        const status = dose?.stockStatus ?? product.stockStatus;
+        const count = dose ? giftStock.get(dose.id) : giftStock.get(slug);
+        if (status === "Out of Stock" || status === "Reserved") unshippableGiftSlugs.add(slug);
+        else if (typeof count === "number" && Number.isFinite(count) && count <= 0) unshippableGiftSlugs.add(slug);
+      }
+    } catch (error) {
+      // A failed read leaves the set empty, so every gift is attempted and the
+      // till decides. Better than silently mailing a ladder with no gifts.
+      console.error("[cart-recovery] gift stock unreadable; offering every configured gift", error);
+    }
+  }
+  /** Drop what cannot ship, so the email promises only what the box will hold. */
+  const shippableGifts = (gifts: RecoveryGiftItem[]) =>
+    gifts.filter((item) => !unshippableGiftSlugs.has(item.slug));
+
+  // IS THE STORE SHIPPING EVERYTHING FREE RIGHT NOW? Read once for the sweep,
+  // from the configuration the checkout prices through, so no message can state
+  // a policy the till would then charge for. Unreadable means NOT CLAIMED.
+  let freeShippingSitewide = false;
+  try {
+    freeShippingSitewide = isFreeShippingSitewide(await getShippingConfig());
+  } catch {
+    // A perk we cannot confirm is a perk we do not claim.
   }
 
   // One read for the whole sweep. A cart with no row here — which is every
@@ -1267,7 +1462,9 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     // the beacon, and it is printed at the top of a branded email.
     const name = plainGreetingName(row.customer_name);
     const cartId = String(row.id);
-    const base = { name, items, cartValueCents: row.cart_value_cents };
+
+    const reconciledCartCents = reconciledCartValueCents(items, Number(row.cart_value_cents ?? 0));
+    const base = { name, items, cartValueCents: reconciledCartCents };
     let sent = false;
 
     // A NAMED CART'S STAGE CAN BE REPLACED, and that is all this does.
@@ -1293,12 +1490,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       // Read from the live shipping configuration, the same one the checkout
       // prices through, so the line cannot outlive the setting.
       const overridePerks = [...override.perks];
-      try {
-        const shippingConfig = await getShippingConfig();
-        if (isFreeShippingSitewide(shippingConfig)) overridePerks.unshift("Free shipping");
-      } catch {
-        // A perk we cannot confirm is a perk we do not claim.
-      }
+      if (freeShippingSitewide) overridePerks.unshift("Free shipping");
 
       let livePromotionNote: string | null = null;
       try {
@@ -1368,11 +1560,14 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     const variant = recoveryVariantFor(cartId);
     const plan = planStageOffer({
       stage,
-      cartValueCents: Number(row.cart_value_cents ?? 0),
+      // The reconciled figure, not the snapshot — see the note where it is
+      // computed. The band a cart draws must match the basket it will restore.
+      cartValueCents: reconciledCartCents,
       lastPaidAt: lastPaid,
       lastRecoveryCouponAt: context.lastRecoveryCouponAt.get(email) ?? null,
       lastRecoveryGiftAt: lastGiftForOtherCarts(context.recoveryGifts.get(email), cartId),
       discountPercent: config.discountPercent,
+      tiers: recoveryTiers,
       now,
     });
 
@@ -1408,17 +1603,25 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       // promotion is running instead of competing with it for the one discount
       // slot — the reason a percentage does not belong here is measured, not
       // preferred (10% was worth $0 to the two largest carts under Buy 2 Get 1).
+      // THE BAND DECIDES THE GIFT. A $61 cart is offered a BAC Water and a
+      // $520 cart a GHK-Cu and a BAC Water, because one flat gift under-serves
+      // the carts holding most of the money and over-serves the rest.
       const giftKey = plan.offerKey;
+      const giftConfig = recoveryGiftConfig(shippableGifts(plan.gifts), catalogueNameBySlug);
       let giftTerms = "";
       sent = await reserveAndSendStage({
         cartId, stage, email,
         campaignType: "cart_recovery_t24h",
         templateKey: "cartRecoveryT24hTemplate",
-        mintOffer: giftKey
+        mintOffer: giftKey && giftConfig
           ? async () => {
-            const issued = await issueCustomerOffer({ email, offerKey: giftKey, referenceId: cartId });
+            const issued = await issueResolvedOffer({
+              email, offerKey: giftKey, config: giftConfig, referenceId: cartId,
+            });
             if (issued) {
-              giftTerms = describeOfferTerms(giftKey, issued.expiresAt);
+              // From the SAME config the mint wrote onto the row, so what the
+              // email states and what the till applies cannot disagree.
+              giftTerms = describeGiftTerms(giftConfig, issued.expiresAt);
             }
             return issued?.token ?? null;
           }
@@ -1426,9 +1629,10 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
         buildTemplate: (url) => cartRecoveryT24hTemplate({
           ...base,
           restoreUrl: url,
-          giftLabel: giftKey ? OFFER_CATALOG[giftKey].label : "",
+          giftLabel: giftConfig?.label ?? "",
           offerTerms: giftTerms,
           variant,
+          freeShipping: freeShippingSitewide,
         }),
       });
     } else {
@@ -1450,20 +1654,23 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       // issueCustomerOffer retires this cart's own stage-3 row and mints a
       // fresh token, so the link in the NEWEST email is the one that works.
       const giftKey = plan.offerKey;
+      const giftConfig = recoveryGiftConfig(shippableGifts(plan.gifts), catalogueNameBySlug);
       let giftToken: string | null = null;
       let giftTerms = "";
-      if (giftKey) {
+      if (giftKey && giftConfig) {
         try {
-          const issued = await issueCustomerOffer({ email, offerKey: giftKey, referenceId: cartId });
+          const issued = await issueResolvedOffer({
+            email, offerKey: giftKey, config: giftConfig, referenceId: cartId,
+          });
           if (issued) {
             giftToken = issued.token;
-            giftTerms = describeOfferTerms(giftKey, issued.expiresAt);
+            giftTerms = describeGiftTerms(giftConfig, issued.expiresAt);
           }
         } catch (error) {
           console.error("[cart-recovery] last-chance gift could not be minted; sending without it", cartId, error);
         }
       }
-      const giftLabel = giftToken && giftKey ? OFFER_CATALOG[giftKey].label : "";
+      const giftLabel = giftToken && giftConfig ? giftConfig.label : "";
 
       // C-06 and K-05 both hold here: the claim comes first, and any code the
       // email advertises is one the database will honour at the till. When the
@@ -1478,7 +1685,13 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
         // code first, a fresh mint second — and a stage that can mint nothing
         // waits for the next sweep rather than promising a code it lacks.
         mintCoupon: discountAllowed
-          ? () => resolveLastChanceCoupon(cartId, email, config.discountPercent, config.couponExpirationHours)
+          // THE BAND'S PERCENTAGE, NOT THE GLOBAL ONE. `config.discountPercent`
+          // is now the master switch — zero turns every recovery coupon off at
+          // once — while each band carries the rate it was configured with.
+          // Passing the global figure here made the band's percentage a number
+          // that was computed, logged, and then quietly ignored: a $150 cart
+          // whose band said 10% was mailed the global 5%.
+          ? () => resolveLastChanceCoupon(cartId, email, plan.percent, config.couponExpirationHours)
           : () => findLiveCouponForCart(cartId),
         couponRequired: discountAllowed,
         offerToken: giftToken,

@@ -10,6 +10,11 @@ import { resolveBundleConfig, type BundleConfig } from "@/lib/bundle-pricing";
 import { BXGY_CONTROL_KEY, applyLegacyPromotionFlags, resolveBxgyPromotions } from "@/lib/bxgy-config";
 import type { BxgyPromotion } from "@/lib/bxgy-engine";
 import {
+  DEFAULT_RECOVERY_TIERS,
+  validateRecoveryTiers,
+  type RecoveryTier,
+} from "@/lib/cart-recovery-tiers";
+import {
   DEFAULT_PAYMENT_METHODS,
   DEFAULT_CARD_PROCESSING_FEE,
   type PaymentMethodConfig,
@@ -332,9 +337,20 @@ export interface CartRecoveryConfig {
   t72hEnabled: boolean;
   discountPercent: number;
   couponExpirationHours: number;
+  /**
+   * The cart-value bands deciding what each stage gifts.
+   *
+   * Operator-editable, because what a band gives is a commercial decision the
+   * owner should be able to change and to SEE THE COST OF without a deploy.
+   * The safety rails around it are not editable and stay in code: the minimum
+   * cart value for any gift, one gift per address per 30 days, one sequence per
+   * address per week, nothing to a buyer from the last 30 days.
+   */
+  tiers: RecoveryTier[];
 }
 
 export const DEFAULT_CART_RECOVERY_CONFIG: CartRecoveryConfig = {
+  tiers: DEFAULT_RECOVERY_TIERS,
   t30mEnabled: true,
   // OFF by default since 2026-09-04. Four messages in three days was one more
   // than the sequence needed (Klaviyo and Shopify both default to three), and
@@ -376,6 +392,21 @@ export async function getCartRecoveryControlConfig(): Promise<CartRecoveryConfig
       // least one hour; anything unparseable falls back to the default.
       discountPercent: boundedPercent(config.discount_percent, DEFAULT_CART_RECOVERY_CONFIG.discountPercent),
       couponExpirationHours: boundedHours(config.coupon_expiration_hours, DEFAULT_CART_RECOVERY_CONFIG.couponExpirationHours),
+      // VALIDATED, NOT TRUSTED. This is a stored JSON value that decides what
+      // the store gives away, so a shape that does not pass falls back to the
+      // shipped ladder rather than being half-applied. The catalogue check is
+      // skipped here (null) because this runs in the sweep where a catalogue
+      // read has its own failure handling; the admin validates against the live
+      // product list before saving, and quoteOrder refuses an unsellable gift
+      // at the till regardless.
+      tiers: (() => {
+        const verdict = validateRecoveryTiers(config.tiers, null);
+        if (verdict.ok) return verdict.tiers;
+        if (config.tiers !== undefined && config.tiers !== null) {
+          console.error("[cart-recovery] stored bands are invalid; using the shipped ladder", verdict.error);
+        }
+        return DEFAULT_RECOVERY_TIERS;
+      })(),
     };
   } catch {
     return DEFAULT_CART_RECOVERY_CONFIG;
