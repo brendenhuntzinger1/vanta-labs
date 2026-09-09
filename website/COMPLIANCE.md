@@ -38,6 +38,10 @@ in the "Legal decisions" section.
 ### Legal decisions (get counsel to confirm)
 - [ ] **Have a lawyer review** the Terms, Privacy, Refund, Shipping, Disclaimer, and Cookie policies (the built-in text is a solid template, not legal advice). Edit in Admin → Policies.
 - [ ] **Card surcharge legality** — a 5% card fee is regulated/limited in some US states and often prohibited on debit cards. Confirm for the states you sell to, or disable/adjust it in Admin → Settings.
+- [ ] **Review `src/lib/sql/scrub-glp-naming.sql` with counsel** — it renames the
+      GLP compounds and rewrites past order lines. See
+      [`docs/STRIPE-RUO-COMPLIANCE.md`](./docs/STRIPE-RUO-COMPLIANCE.md) §4 for why this
+      likely increases risk rather than reducing it.
 - [ ] **Research-chemical / peptide regulations** — confirm your products, labeling, and claims comply with FDA/FTC and state law for "research use only" materials, including any prohibited destinations.
 - [ ] **Privacy law scope** — if you sell to CA (CCPA/CPRA), CO/VA/etc., or the EU/UK (GDPR), you may need specific disclosures, a "Do Not Sell/Share" link, and a data-request process. Decide your target markets.
 - [ ] **Sales tax / nexus** — per-state rates are applied automatically from the destination address (`US_STATE_TAX_TABLE` in `src/lib/sales-tax.ts`), with per-state overrides in Admin and a TaxJar/Avalara provider seam already built in; confirm where you have nexus and whether a tax service is required.
@@ -50,6 +54,9 @@ in the "Legal decisions" section.
 - [ ] Set your real **support email / hours**, shipping thresholds, tax rate, and membership perk values (so perks don't exceed membership revenue).
 - [ ] Configure a real **email provider** (SMTP/Resend) so transactional emails actually send.
 - [ ] Enter your **3PL** and (eventually) **card processor** credentials when available.
+      Stripe is **not** a viable option for this catalogue — see
+      [`docs/STRIPE-RUO-COMPLIANCE.md`](./docs/STRIPE-RUO-COMPLIANCE.md) for why
+      (there is no "research use only" exception) and what the alternatives are.
 
 ### Security follow-ups (recommended, not blocking)
 - [ ] Restrict Supabase RLS policies are correct for any **new** tables you add later.
