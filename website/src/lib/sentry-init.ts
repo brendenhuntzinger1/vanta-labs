@@ -81,6 +81,78 @@ export function isInAppBrowserInjectedScriptError(event: {
   return !touchesOurCode;
 }
 
+/**
+ * Scripts an EXTENSION or in-app browser injects into the document itself.
+ *
+ * These arrive looking like first-party code and are the most misleading noise
+ * Sentry reports. An inline script has no URL of its own, so `window.onerror`
+ * blames the document, and RewriteFrames then turns that into
+ * `app:///account/login` — a filename identical to the one a real bug of ours
+ * would carry.
+ *
+ * WHAT PROVED THEY ARE NOT OURS, on 2026-09-09, for the two signatures below:
+ *
+ *   1. The JSON-LD reader reported at EXACTLY `3:362` and `3:185` on both
+ *      /account/login and /account/auth/callback, across two different
+ *      releases (549d432 and b510c200) and two Safari versions. Those pages
+ *      differ in size and content, so identical coordinates on both are
+ *      impossible for code we serve; they are stable because the script is
+ *      self-contained and carries its own numbering. Our own line 3 is the 45
+ *      characters of the gtag snippet — column 362 does not exist on it.
+ *
+ *   2. `toLowerCase` appears ZERO times in the served HTML, and nothing in
+ *      this repository reads `@context` in the browser. The document is served
+ *      complete (`</script></body></html>`) and byte-identical across repeated
+ *      fetches, and every one of its 31 script tags parses without error in a
+ *      real engine — checked by serving the captured production HTML and
+ *      loading it.
+ *
+ * `Unexpected end of script` is WebKit's parser hitting EOF mid-script: either
+ * one of these injected scripts truncated, or our own streamed HTML cut off in
+ * transit on a phone. Both are the class already covered by `Load failed` and
+ * `AbortError` below — a shopper's connection, not a defect. It reached us once
+ * from Mobile Safari on iOS with a single frame, no column and no function
+ * name, and zero users impacted.
+ *
+ * KEYED ON THE SIGNATURE AND THE STACK, NEVER ON THE BROWSER — the same rule as
+ * the predicate above. A malformed script we actually shipped would break every
+ * load in every browser and be caught by the build, the suite and the browser
+ * verification the runbook mandates, and a broken `/_next/` chunk reports under
+ * its own filename, so the `/_next/` test below keeps it visible.
+ */
+const INJECTED_DOCUMENT_SCRIPT_SIGNATURES = [
+  // Matched without the minified receiver (`r` today) so an extension update
+  // that renames the variable does not quietly reopen the noise.
+  /\["@context"\]\.toLowerCase/,
+  /Unexpected end of script/,
+];
+
+export function isInjectedDocumentScriptError(event: {
+  exception?: {
+    values?: Array<{
+      value?: string;
+      stacktrace?: { frames?: Array<{ filename?: string }> };
+    }>;
+  };
+}): boolean {
+  const values = event.exception?.values ?? [];
+  if (values.length === 0) return false;
+
+  const matchesSignature = values.some((value) =>
+    INJECTED_DOCUMENT_SCRIPT_SIGNATURES.some((signature) => signature.test(String(value.value ?? ""))),
+  );
+  if (!matchesSignature) return false;
+
+  const filenames = values
+    .flatMap((value) => value.stacktrace?.frames ?? [])
+    .map((frame) => String(frame.filename ?? ""));
+  // No stack at all is not evidence of anything. Keep it rather than guess.
+  if (filenames.length === 0) return false;
+
+  // If any frame is OUR bundle, this is not a bare injected script — keep it.
+  return !filenames.some((name) => name.includes("/_next/"));
+}
+
 export function baseSentryOptions(): SentryInitOptions & { dsn: string } {
   const dsn = sentryDsn();
   if (!dsn) throw new Error("baseSentryOptions called without a DSN");
@@ -116,6 +188,9 @@ export function baseSentryOptions(): SentryInitOptions & { dsn: string } {
         // Dropped BEFORE scrubbing: there is nothing to learn from it, and it
         // arrives in proportion to paid social traffic.
         if (isInAppBrowserInjectedScriptError(event)) return null;
+        // Same reasoning, for scripts injected into the document rather than
+        // named in a frame. See the note on the predicate.
+        if (isInjectedDocumentScriptError(event)) return null;
         return scrubEvent(event);
       } catch {
         return null;
@@ -184,6 +259,18 @@ export function baseSentryOptions(): SentryInitOptions & { dsn: string } {
       // because the listener was attached to our page — the throw is theirs and
       // there is no version of it we could fix.
       /invoking postMessage: Java object is gone/,
+      // TikTok's webview does the same job with a different logger. Its
+      // injected `checkPerfReady` polls navigation timing and dereferences the
+      // entry before it exists, throwing "Cannot read properties of undefined
+      // (reading 'domInteractive')". It reached us from /account/login on
+      // TikTok / Android 15 with zero users impacted, and its stack is two
+      // `<anonymous>` frames plus one of ours — ours only because Sentry wraps
+      // setTimeout and the poll was scheduled through it, which is why the
+      // frame-based predicates cannot see it and this list has to.
+      //
+      // Safe to match on the property name: `domInteractive` appears nowhere in
+      // this repository and nowhere in the served HTML.
+      /domInteractive/,
     ],
 
     denyUrls: [/chrome-extension:\/\//, /safari-extension:\/\//, /moz-extension:\/\//],
