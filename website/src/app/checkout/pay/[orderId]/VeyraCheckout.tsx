@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { decideFromOrderStatus } from "@/lib/checkout-poll-decision";
+import { decideRequiresAction } from "@/lib/checkout-requires-action";
 
 // On-site card entry. Veyra's documented integration is "create a session
 // server-side and mount the iframe" — the shopper never leaves this domain and
@@ -184,6 +185,12 @@ export default function VeyraCheckout({
   // a fresh card in the form below, or a reload of this page, can succeed — and
   // when it does the receipt is the only honest place to be.
   const declineShownRef = useRef(false);
+  // Whether the iframe ever spoke to this page at all. Measured, because on
+  // every real session so far it has not: the processor renders the embed
+  // with no parent origin and its client only posts when it has one. A silent
+  // iframe is the difference between "3DS handling is fixed" and "3DS handling
+  // can never fire", and until now nothing recorded it.
+  const readyHeardRef = useRef(false);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [message, setMessage] = useState<string | null>(null);
   const [reassure, setReassure] = useState(false);
@@ -258,11 +265,23 @@ export default function VeyraCheckout({
         // the loading line gets a deadline. Only ever promotes "loading" — an
         // error already shown must not be painted over by a timer.
         readyFallback = window.setTimeout(() => {
-          if (!cancelled) setStatus((current) => (current === "loading" ? "ready" : current));
+          if (cancelled) return;
+          setStatus((current) => (current === "loading" ? "ready" : current));
+          if (!readyHeardRef.current) {
+            void import("@sentry/nextjs")
+              .then((Sentry) => {
+                Sentry.captureMessage("checkout: card iframe sent no ready message", {
+                  level: "warning",
+                  tags: { area: "checkout", stage: "iframe_silent" },
+                });
+              })
+              .catch(() => {});
+          }
         }, READY_FALLBACK_MS);
         handleRef.current = Veyra.mount(containerRef.current, {
           sessionId,
           onReady: () => {
+            readyHeardRef.current = true;
             if (!cancelled) setStatus("ready");
           },
           onSuccess: (event) => {
@@ -270,27 +289,48 @@ export default function VeyraCheckout({
             // does not.
             goToConfirmation(event?.return_url);
           },
-          onRequiresAction: () => {
-            // 3DS has started inside the iframe. The SHOPPER can see the
-            // challenge; until now this page could not, so it went on showing a
-            // card form and, after 60s, a reassurance banner that carefully
-            // said nothing — while the one thing they needed was an
-            // instruction. Two customers lost five orders to that silence on
-            // 2026-09-08 before anyone knew the state existed.
+          onRequiresAction: (event) => {
+            // The bank asked a question. Veyra's client forwards this as
+            // { session_id, redirect_url } — a hosted 3DS page when the
+            // processor has one, null when the challenge lives in the form.
+            //
+            // Until 2026-09-09 this ignored the payload entirely and only
+            // painted a banner, so a hosted page the processor offered was
+            // never visited. The Apple Pay lane had the right answer all along:
+            // validate https and send the shopper there at TOP LEVEL, where a
+            // bank challenge actually renders on iOS Safari (nested two frames
+            // deep, it is the thing most likely to be blocked).
             if (cancelled) return;
-            setVerifying(true);
-            // Report it, because we still cannot see whether the challenge is
-            // completable inside the iframe — only that it started. This is the
-            // measurement that tells us, on the next real order, whether
-            // handling the event is enough or the challenge itself is blocked.
+            const decision = decideRequiresAction(event);
+            // Report the shape we received, never the customer: a session id
+            // and the host of a URL are enough to tell "hosted page offered"
+            // from "in-form challenge" on the next real order.
+            let redirectHost: string | null = null;
+            if (decision.kind === "navigate") {
+              try {
+                redirectHost = new URL(decision.url).host;
+              } catch {
+                redirectHost = null;
+              }
+            }
             void import("@sentry/nextjs")
               .then((Sentry) => {
                 Sentry.captureMessage("checkout: card payment entered 3DS verification", {
                   level: "info",
-                  tags: { area: "checkout", stage: "requires_action" },
+                  tags: { area: "checkout", stage: "requires_action", decision: decision.kind },
+                  extra: { redirectHost },
                 });
               })
               .catch(() => {});
+            if (decision.kind === "navigate") {
+              // Same latch as the receipt navigation: leave this page once,
+              // whichever signal asks first.
+              if (settledRef.current) return;
+              settledRef.current = true;
+              window.location.assign(decision.url);
+              return;
+            }
+            setVerifying(true);
           },
           onFailure: () => {
             // The real name for what `onError` was trying to be. Announced on

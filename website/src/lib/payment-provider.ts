@@ -140,6 +140,16 @@ export function verifyTimestampedSignature(
   return timingSafeEqual(providedBuffer, expectedBuffer);
 }
 
+/** The host of a URL the processor returned, or null — for logs, never for navigation. */
+function hostOf(value: unknown): string | null {
+  if (typeof value !== "string" || !value) return null;
+  try {
+    return new URL(value).host;
+  } catch {
+    return null;
+  }
+}
+
 export class LivePaymentProvider implements PaymentProvider {
   async createCheckoutSession(input: CreateCheckoutSessionInput): Promise<CheckoutSessionResult> {
     const base = getRequiredEnv("VEYRA_API_BASE").replace(/\/+$/, "");
@@ -219,6 +229,18 @@ export class LivePaymentProvider implements PaymentProvider {
     if (!data.id) {
       throw new Error("Payment session was created without an id.");
     }
+    // What the processor actually echoed for this session — field NAMES and
+    // hosts only, never a value that could carry the customer. This is how we
+    // find out whether `allowed_origin` was honoured: the embed posts to our
+    // page only when the session's allowed parent origins include ours, and on
+    // 2026-09-09 its server rendered our sessions with none. Read it back from
+    // the runtime logs against the next real order.
+    console.info("[veyra] checkout session created", {
+      id: data.id,
+      fields: Object.keys(data),
+      urlHost: hostOf(data.url),
+      embedHost: hostOf(data.embed_url),
+    });
     const hostedCheckoutUrl =
       `${siteUrl}/checkout/pay/${encodeURIComponent(input.orderId)}` +
       `?cs=${encodeURIComponent(data.id)}`;
