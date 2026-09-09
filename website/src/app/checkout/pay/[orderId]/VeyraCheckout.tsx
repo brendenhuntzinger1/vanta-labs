@@ -488,7 +488,16 @@ export default function VeyraCheckout({
             If you&rsquo;ve already submitted your card, don&rsquo;t submit it again
           </strong>{" "}
           — we&rsquo;re watching for the payment and will take you straight to your receipt the
-          moment it clears.
+          moment it clears.{" "}
+          {/* The escape hatch, HERE and not only on the verification banner.
+              That banner paints on an event from the card iframe, and on every
+              real session to date the iframe has sent this page nothing — so a
+              shopper whose bank asked a question the form could not show sat
+              on "take your time" indefinitely. This is the one sentence that
+              shortens their path to a payment that works. It still never invites
+              a second attempt with the same card. */}
+          If the form said your bank needs to verify this payment and nothing appeared, this card
+          can&rsquo;t finish here — please use a different card, or contact us and we&rsquo;ll sort it out.
         </div>
       )}
     </div>

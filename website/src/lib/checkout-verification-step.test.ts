@@ -226,3 +226,26 @@ describe("a stalled verification is never reported to the shopper as a bank decl
     expect(detail.reason).toBeTruthy();
   });
 });
+
+describe("the shopper always has a way out of a challenge the form could not show", () => {
+  // The verification banner carries the escape copy, but it paints only on an
+  // event from the card iframe — and on every real session to date the iframe
+  // has sent this page nothing. The 60-second reassurance is the one surface
+  // a stranded shopper is guaranteed to see, so it must carry the way out too.
+  // What the SHOPPER can read — comments stripped, because the comments
+  // explain the rule by quoting the words it forbids.
+  const reassure = page
+    .slice(page.indexOf("{reassure && !verifying"), page.indexOf("</div>", page.indexOf("{reassure && !verifying")))
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
+  it("offers a different card or contact from the reassurance banner", () => {
+    expect(reassure).toMatch(/use a different card/);
+    expect(reassure).toMatch(/contact us/);
+  });
+
+  it("still never tells the shopper to try the same card again", () => {
+    expect(reassure).not.toMatch(/try again/i);
+    expect(reassure).toMatch(/don&rsquo;t submit it again/);
+  });
+});
