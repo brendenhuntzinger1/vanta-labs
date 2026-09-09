@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { decideFromOrderStatus } from "@/lib/checkout-poll-decision";
 import { decideRequiresAction } from "@/lib/checkout-requires-action";
+import { clearCheckoutIdempotencyKey, safeSessionStorage } from "@/lib/checkout-idempotency";
 
 // On-site card entry. Veyra's documented integration is "create a session
 // server-side and mount the iframe" — the shopper never leaves this domain and
@@ -202,6 +203,8 @@ export default function VeyraCheckout({
     (returnUrl?: string) => {
       if (settledRef.current) return;
       settledRef.current = true;
+      // Paid: the next distinct order must never be deduped against this one.
+      clearCheckoutIdempotencyKey(safeSessionStorage());
       window.location.assign(returnUrl || `/order-confirmation/${orderId}`);
     },
     [orderId],

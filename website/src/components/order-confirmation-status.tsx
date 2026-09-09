@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { OrderStatusTimeline } from "@/components/order-status-timeline";
+import { clearCheckoutIdempotencyKey, safeSessionStorage } from "@/lib/checkout-idempotency";
 
 /**
  * Lead-in for the order line's email clause.
@@ -73,6 +74,11 @@ export function OrderConfirmationStatus({
         const res = await fetch(`/api/checkout/order-status/${encodeURIComponent(orderId)}`, { cache: "no-store" });
         const json = (await res.json()) as { isPaid?: boolean; pending?: boolean };
         if (active && json?.isPaid) {
+          // Paid, and the shopper may have reached this receipt by reload or
+          // by link rather than through the pay page: the cart-keyed
+          // idempotency key must not survive to dedupe their NEXT order
+          // against this one.
+          clearCheckoutIdempotencyKey(safeSessionStorage());
           setPaid(true);
           // Announce it so measurement can react without polling this order
           // a second time. No payment logic depends on this event.

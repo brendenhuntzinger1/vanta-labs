@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCartCurrency, useCart } from "@/components/cart-context";
 import { bundleDiscountRate, getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
+import { cartFingerprint, clearCheckoutIdempotencyKey, resolveCheckoutIdempotencyKey, safeSessionStorage } from "@/lib/checkout-idempotency";
 import { readAttributionForCheckout } from "@/lib/attribution-client";
 import { calculateShipping, isDomesticCountry, isFreeShippingSitewide, isShippingWaived } from "@/lib/shipping";
 import { resolveSalesTax } from "@/lib/sales-tax";
@@ -689,11 +690,20 @@ export default function CheckoutPage() {
 
     if (isSubmitting || submitLatchRef.current) return;
     submitLatchRef.current = true;
-    if (!idempotencyKeyRef.current) {
-      idempotencyKeyRef.current = typeof crypto !== "undefined" && crypto.randomUUID
+    // The key is resolved from sessionStorage, keyed by the cart, not only
+    // from this ref: the handoff to the card form is a full-page navigation,
+    // and a shopper who came back and pressed the button again used to start
+    // from a null ref, a fresh key, and a SECOND order with its own stock hold
+    // — four orders for one $119.25 cart on 2026-09-09. Same cart, same key,
+    // same order; the server then mints a fresh processor session, which is
+    // its designed retry path. See lib/checkout-idempotency.ts.
+    idempotencyKeyRef.current = resolveCheckoutIdempotencyKey({
+      storage: safeSessionStorage(),
+      fingerprint: cartFingerprint(items),
+      generate: () => (typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID()
-        : `idem-${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    }
+        : `idem-${Date.now()}-${Math.round(Math.random() * 1e9)}`),
+    });
 
     haptic(12);
     setCheckoutState("loading");
@@ -753,6 +763,7 @@ export default function CheckoutPage() {
           // Order placed — this attempt is done; a later distinct order gets a
           // fresh idempotency key.
           idempotencyKeyRef.current = null;
+          clearCheckoutIdempotencyKey(safeSessionStorage());
           setCreatedOrder({
             orderId: result.orderId,
             orderNumber: result.orderNumber,
@@ -794,7 +805,13 @@ export default function CheckoutPage() {
       // The submit latch is deliberately LEFT ENGAGED here: the page unloads on
       // redirect, so re-enabling the button would only open a duplicate-order
       // window while the redirect is still in flight.
-      idempotencyKeyRef.current = null;
+      //
+      // The idempotency key is deliberately KEPT — it used to be cleared here.
+      // The order and its stock hold now exist under this key, so a shopper
+      // who backs out of the card form and tries again must land on THAT
+      // order, not a second one. It is cleared when the order is confirmed
+      // paid (the pay page and the receipt both do it), and superseded the
+      // moment the cart changes.
       window.location.assign(result.hostedCheckoutUrl);
     } catch (error) {
       // Only an ERROR reopens the button for a retry (which reuses the same
