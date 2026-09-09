@@ -5,6 +5,7 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import {
   activeWindsorConnectors,
   fetchConnectorSpend,
+  WINDSOR_REQUEST_TIMEOUT_MS,
   type SpendRow,
   type WindsorConnector,
 } from "./windsor-client";
@@ -45,6 +46,24 @@ export const RESTATEMENT_WINDOW_DAYS = 7;
 
 /** Rows per upsert. Small enough to stay well inside the 60s cron budget. */
 const CHUNK_SIZE = 500;
+
+/**
+ * How long the WHOLE job may spend fetching, across every connector.
+ *
+ * A per-request deadline alone is not enough. The connectors are fetched one
+ * after another, so three of them each stopping at the client's 15s limit is
+ * still 45s — and the cron sweep's watchdog fires at 50s and needs the
+ * remaining ten seconds to write its alert and email the operator. That is the
+ * failure this job actually caused on 2026-09-08: a critical
+ * `cron_sweep_timeout` naming `ad_spend_ingest` as the only job still running.
+ *
+ * Thirty-five seconds leaves the watchdog fifteen seconds of headroom while
+ * still allowing every connector a real attempt on a healthy day, when the
+ * whole job takes a second or two. Past it, connectors are not started at all:
+ * a partial window that lands is worth more than a complete one that is killed
+ * mid-flight, and the next tick re-fetches the same trailing window anyway.
+ */
+export const SPEND_INGEST_BUDGET_MS = 35_000;
 
 /**
  * Least time between two real fetches.
@@ -152,6 +171,12 @@ export async function runSpendIngest(deps: {
   lastIngestedAt?: Date | null;
   /** Bypass the freshness gate — an operator pressing refresh, not the cron. */
   force?: boolean;
+  /** Per-request deadline. Only ever narrows the client's own. */
+  requestTimeoutMs?: number;
+  /** Whole-job fetch budget. See SPEND_INGEST_BUDGET_MS. */
+  budgetMs?: number;
+  /** Monotonic clock, injected so the budget is testable without waiting. */
+  elapsedNow?: () => number;
 }): Promise<SpendIngestResult> {
   const empty: SpendIngestResult = { ran: false, connectors: [], totalWritten: 0, totalSpend: 0 };
 
@@ -175,8 +200,32 @@ export async function runSpendIngest(deps: {
   let totalWritten = 0;
   let totalSpend = 0;
 
+  const budgetMs = deps.budgetMs ?? SPEND_INGEST_BUDGET_MS;
+  const clock = deps.elapsedNow ?? (() => Date.now());
+  const startedAt = clock();
+
   for (const connector of connectors) {
     const outcome: ConnectorOutcome = { connector, status: "ok", rows: 0, written: 0, rejected: 0, untagged: 0, merged: 0 };
+
+    // OUT OF TIME IS "failed", NOT "skipped".
+    //
+    // `skipped` means "this platform is not attached to the account" and is
+    // excluded from BOTH sides of the every-connector-failed incident check
+    // below. Reusing it here would make a feed that is timing out on every
+    // connector report as a store that has simply stopped advertising — the
+    // exact "a broken feed reads as a quiet one" failure the rest of this file
+    // is built to prevent. It did not get its data, so it failed.
+    const remaining = budgetMs - (clock() - startedAt);
+    if (remaining <= 0) {
+      outcomes.push({
+        ...outcome,
+        status: "failed",
+        error:
+          `not attempted — the ${Math.round(budgetMs / 1000)}s ingest budget was spent by the connectors before it. `
+          + "The next tick re-fetches the same trailing window, so this heals itself if the feed recovers.",
+      });
+      continue;
+    }
 
     const fetched = await fetchConnectorSpend({
       connector,
@@ -184,6 +233,10 @@ export async function runSpendIngest(deps: {
       dateFrom,
       dateTo,
       fetchImpl: deps.fetchImpl,
+      // Whichever is sooner: the client's own per-request deadline, or all the
+      // budget this job has left. Without the clamp three connectors each
+      // stopping at 15s would still add up past the sweep's 50s watchdog.
+      timeoutMs: Math.min(deps.requestTimeoutMs ?? WINDSOR_REQUEST_TIMEOUT_MS, remaining),
     });
 
     if (!fetched.ok) {

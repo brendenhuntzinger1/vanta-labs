@@ -404,6 +404,29 @@ function isNotConnectedResponse(detail: string): boolean {
 }
 
 /**
+ * How long ONE Windsor request may take before it is abandoned.
+ *
+ * THE CLIENT APPLIES THIS ITSELF. It used to take an optional `signal` and pass
+ * it straight to fetch, and no caller ever passed one — so every request to
+ * Windsor was unbounded, and this was the only outbound call in the codebase
+ * without a deadline (shippo, veyra, resend, sendgrid, turnstile,
+ * payment-provider, express-reconcile and the sibling tiktok/reddit ad clients
+ * all bound theirs). On 2026-09-08 one hung request outlasted the cron sweep's
+ * 50s watchdog and raised a critical `cron_sweep_timeout` naming
+ * `ad_spend_ingest` as the only job still running.
+ *
+ * An optional deadline that every caller forgets is not a parameter, it is a
+ * default waiting to be wrong. So it is applied here, where it cannot be
+ * omitted, and `timeoutMs` only narrows it — the ingest clamps it to whatever
+ * is left of its own budget.
+ *
+ * Fifteen seconds matches tiktok-ads-api.ts and payment-provider.ts. A spend
+ * feed is a background read: one that has not answered in fifteen seconds is
+ * not about to make the tick worth waiting for.
+ */
+export const WINDSOR_REQUEST_TIMEOUT_MS = 15_000;
+
+/**
  * Fetch one connector's daily spend for a date range.
  *
  * `fetchImpl` is injected so the ingest can be tested end to end without a
@@ -415,9 +438,14 @@ export async function fetchConnectorSpend(input: {
   dateFrom: string;
   dateTo: string;
   fetchImpl?: typeof fetch;
-  signal?: AbortSignal;
+  /** Narrows the client's own deadline; never removes it. */
+  timeoutMs?: number;
 }): Promise<FetchOutcome> {
   const doFetch = input.fetchImpl ?? fetch;
+  // Clamped to at least 1ms: a caller whose budget has already run out must get
+  // an immediate abort, never `AbortSignal.timeout(0)`'s edge behaviour or an
+  // accidental "no deadline".
+  const timeoutMs = Math.max(1, Math.min(input.timeoutMs ?? WINDSOR_REQUEST_TIMEOUT_MS, WINDSOR_REQUEST_TIMEOUT_MS));
   const url = new URL(`${WINDSOR_ENDPOINT}/${input.connector}`);
   url.searchParams.set("api_key", input.apiKey);
   url.searchParams.set("date_from", input.dateFrom);
@@ -426,8 +454,16 @@ export async function fetchConnectorSpend(input: {
 
   let response: Response;
   try {
-    response = await doFetch(url.toString(), { signal: input.signal });
+    response = await doFetch(url.toString(), { signal: AbortSignal.timeout(timeoutMs) });
   } catch (error) {
+    // NAME THE TIMEOUT. AbortSignal.timeout rejects with a TimeoutError whose
+    // own message ("The operation was aborted due to timeout") says nothing
+    // about which connector, or that a deadline of ours is what stopped it —
+    // and that is the difference between "Windsor is slow" and "our feed is
+    // broken" for whoever reads this in an alert.
+    if (error instanceof Error && error.name === "TimeoutError") {
+      return { ok: false, error: `${input.connector} did not answer within ${timeoutMs}ms` };
+    }
     return { ok: false, error: `request failed: ${error instanceof Error ? error.message : String(error)}` };
   }
 
