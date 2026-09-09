@@ -58,10 +58,16 @@ describe("the catalogue page ships its products in the HTML", () => {
     // Two different orders would be a visible shuffle under the reader, so both
     // sides call one shared function rather than each having its own copy of
     // "best sellers first".
-    expect(client).toContain('import { inDefaultCatalogOrder } from "@/lib/catalog-order";');
+    expect(client).toMatch(/from "@\/lib\/catalog-order";/);
+    // The fallback paints the resting order; the hydrated grid runs the same
+    // module for whichever sort is selected, and `default` IS that resting
+    // order — so neither side owns a private copy of the rule.
+    expect(client).toContain("inDefaultCatalogOrder(products)");
+    expect(client).toContain("sortCatalogBy(result, sort)");
     expect(client).toMatch(/function ProductsPageContent\(\{ initialProducts \}/);
     expect(client).toMatch(/useState<Product\[\]>\(initialProducts\)/);
     expect(read("src/lib/catalog-order.ts")).toContain("export function inDefaultCatalogOrder");
+    expect(read("src/lib/catalog-order.ts")).toContain("export function sortCatalogBy");
   });
 
   it("does not re-fetch a catalogue it was already given", () => {
