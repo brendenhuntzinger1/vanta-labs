@@ -7,6 +7,7 @@ import { WishlistButton } from "@/components/wishlist-button";
 import { formatCartCurrency, useCart } from "@/components/cart-context";
 import { bestPaidTier, parsePriceValue, quoteMemberPrice } from "@/lib/member-pricing";
 import { hasCoa } from "@/lib/coa-url";
+import { isSoldOut } from "@/lib/catalog-order";
 
 const BADGE_LABELS: Record<NonNullable<Product["badge"]>, string> = {
   new: "New",
@@ -36,7 +37,11 @@ export function ProductCard({
   // catalog resolves everything to "In Stock" otherwise), so this simply
   // reflects what fulfillment reports. A sold-out card can't be added to the
   // cart — the shopper opens the product to sign up for a restock alert.
-  const soldOut = product.stockStatus === "Out of Stock" || product.stockStatus === "Reserved";
+  //
+  // Shared with the catalogue sort, which drops these cards to the bottom of
+  // the grid. One rule, so the badge and the position can never disagree about
+  // which products are dead ends.
+  const soldOut = isSoldOut(product);
 
   // Member pricing — dollars first. Members see THEIR real price; everyone else
   // sees the STRONGEST paid tier's price, which is the biggest discount the

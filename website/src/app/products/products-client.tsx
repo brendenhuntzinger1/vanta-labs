@@ -7,9 +7,9 @@ import { useCart } from "@/components/cart-context";
 import type { Product } from "@/lib/catalog-types";
 import { CatalogTrustRail } from "@/components/catalog-trust-rail";
 import { hasCoa } from "@/lib/coa-url";
-import { inDefaultCatalogOrder } from "@/lib/catalog-order";
+import { inDefaultCatalogOrder, sortCatalogBy, type CatalogSortKey } from "@/lib/catalog-order";
 
-type SortKey = "default" | "price-asc" | "price-desc" | "name-asc" | "purity";
+type SortKey = CatalogSortKey;
 
 // shortLabel is for the phone, where the select shares a row with the Filters
 // button -- "Best Sellers First" truncated to "Best Sellers Firs" there.
@@ -20,14 +20,6 @@ const SORT_OPTIONS: Array<{ value: SortKey; label: string; shortLabel: string }>
   { value: "name-asc", label: "Name: A to Z", shortLabel: "Name A–Z" },
   { value: "purity", label: "Purity: Highest", shortLabel: "Purity" },
 ];
-
-function parsePrice(price: string) {
-  return Number(price.replace(/[^0-9.]/g, "")) || 0;
-}
-
-function parsePurity(purity?: string) {
-  return Number((purity ?? "0").replace(/[^0-9.]/g, "")) || 0;
-}
 
 function ProductsPageContent({ initialProducts }: { initialProducts: Product[] }) {
   const searchParams = useSearchParams();
@@ -157,32 +149,11 @@ function ProductsPageContent({ initialProducts }: { initialProducts: Product[] }
       });
     }
 
-    switch (sort) {
-      case "price-asc":
-        result.sort((a, b) => parsePrice(a.price) - parsePrice(b.price));
-        break;
-      case "price-desc":
-        result.sort((a, b) => parsePrice(b.price) - parsePrice(a.price));
-        break;
-      case "name-asc":
-        result.sort((a, b) => a.name.localeCompare(b.name));
-        break;
-      case "purity":
-        result.sort((a, b) => parsePurity(b.purityResult) - parsePurity(a.purityResult));
-        break;
-      case "default":
-      default:
-        // Best sellers rise to the top; everything else keeps its catalog
-        // order (the sort is stable, so ties stay in position order).
-        result.sort((a, b) => {
-          const aRank = a.isBestSeller ? 0 : 1;
-          const bRank = b.isBestSeller ? 0 : 1;
-          return aRank - bRank;
-        });
-        break;
-    }
-
-    return result;
+    // Every sort here — including the one the shopper picked — puts sold-out
+    // products last. See lib/catalog-order.ts: a card that cannot be added to
+    // the cart never takes a row above one that can. The server's pre-hydration
+    // grid calls the same function, so the two orders cannot disagree.
+    return sortCatalogBy(result, sort);
   }, [products, searchQuery, selectedCategory, stockFilter, bestSellersOnly, sort]);
 
   // One number drives the mobile Filters badge and whether the desktop chip
