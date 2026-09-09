@@ -16,7 +16,13 @@ create table if not exists public.abandoned_carts (
   cart_value_cents integer not null default 0,
   first_seen_at timestamptz not null default now(),
   last_updated_at timestamptz not null default now(),
-  status text not null default 'active', -- active | recovered | expired
+  -- active | recovered | superseded | cleared | expired
+  --   recovered   the order in recovered_order_id completed THIS cart. At most
+  --               one cart per order carries this; see markAbandonedCartsRecovered.
+  --   superseded  the shopper bought, but a different cart of theirs earned the
+  --               credit. Closed so no reminder follows the purchase, and with
+  --               NO recovered_order_id so its value is never counted twice.
+  status text not null default 'active',
   recovered_order_id text references public.orders(order_id) on delete set null,
   created_at timestamptz not null default now()
 );

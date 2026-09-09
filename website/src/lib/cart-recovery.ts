@@ -210,13 +210,64 @@ export async function markAbandonedCartsRecovered(
   order?: { order_type?: string | null; replacement_of?: string | null },
 ) {
   if (order && !isProductPurchaseOrder(order)) return;
-  const { error } = await supabaseAdmin
+  const address = email.trim().toLowerCase();
+
+  // ONE ORDER RECOVERS ONE CART.
+  //
+  // This used to be a single UPDATE over every active cart for the address,
+  // stamping them all with the same order id. That wrote two different facts
+  // with one statement: "stop mailing this cart", true of ALL their open
+  // carts, and "this order recovered this cart", true of AT MOST ONE.
+  //
+  // Production on 2026-09-09: one $76.04 order credited to four carts claiming
+  // $582.90 between them. Nine carts read as recovered where five orders
+  // existed, so every recovery figure — count and value — was roughly double
+  // the truth.
+  //
+  // The close stays broad and only the credit narrows: a customer who has just
+  // bought must not keep receiving "you left something behind" for carts they
+  // abandoned weeks ago.
+  const { data, error: readError } = await supabaseAdmin
+    .from("abandoned_carts")
+    .select("id, restored_at, last_updated_at")
+    .eq("email", address)
+    .eq("status", "active");
+  if (readError) throw readError;
+
+  const open = (data ?? []) as Array<{ id: string; restored_at: string | null; last_updated_at: string | null }>;
+  if (open.length === 0) return;
+
+  // WHICH CART EARNS THE CREDIT.
+  //
+  // A restored cart wins outright: `restored_at` is stamped when the shopper
+  // came back through the recovery link, which is evidence rather than
+  // inference. Failing that, the most recently updated cart is the one the
+  // purchase most plausibly completed; the older ones are carts they had
+  // already moved on from.
+  const credited = [...open].sort((left, right) => {
+    const leftRestored = left.restored_at ? 1 : 0;
+    const rightRestored = right.restored_at ? 1 : 0;
+    if (leftRestored !== rightRestored) return rightRestored - leftRestored;
+    return String(right.last_updated_at ?? "").localeCompare(String(left.last_updated_at ?? ""));
+  })[0];
+
+  // CLOSED FIRST, CREDITED SECOND, on purpose. A failure between the two
+  // leaves the carts closed and nothing credited — an under-count in a report,
+  // which is recoverable. The other order would leave carts still active after
+  // a purchase, which means a real customer receiving abandoned-cart mail for
+  // something they have already bought.
+  const { error: closeError } = await supabaseAdmin
+    .from("abandoned_carts")
+    .update({ status: "superseded" })
+    .eq("email", address)
+    .eq("status", "active");
+  if (closeError) throw closeError;
+
+  const { error: creditError } = await supabaseAdmin
     .from("abandoned_carts")
     .update({ status: "recovered", recovered_order_id: orderId })
-    .eq("email", email.trim().toLowerCase())
-    .eq("status", "active");
-
-  if (error) throw error;
+    .eq("id", credited.id);
+  if (creditError) throw creditError;
 }
 
 function generateCouponCode(): string {
