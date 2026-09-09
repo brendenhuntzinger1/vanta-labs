@@ -8,6 +8,7 @@ export const INPUTS: Record<string, unknown> = {
   accountConfirmationTemplate: { name: "Zain", confirmUrl: URL_ },
   accountConfirmationResendTemplate: { name: "Zain", confirmUrl: URL_ },
   passwordResetTemplate: { name: "Zain", resetUrl: URL_ },
+  paymentDeclinedTemplate: { name: "Zain", orderNumber: "VL-1001", amountCents: 12_498, retryUrl: URL_ },
   orderConfirmationTemplate: { customerName: "Zain", orderId: "VL-1001", items: ITEMS, subtotal: 119.98, shipping: 5, total: 124.98, orderUrl: URL_, shippingAddress: "1 Nowhere Lane" },
   reimbursementRecordedTemplate: { customerName: "Zain", orderId: "VL-1001", amount: 25, supportEmail: "support@vantalabsresearch.com" },
   refundConfirmationTemplate: { customerName: "Zain", orderId: "VL-1001", refundAmount: 25, isFullRefund: false, supportEmail: "support@vantalabsresearch.com" },

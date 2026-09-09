@@ -3041,6 +3041,32 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           .catch(() => {});
       }
     }
+
+    // TELL A DECLINED CUSTOMER THEY CAN STILL FINISH.
+    //
+    // Production, 2026-09-09: $2,444.00 of orders had reached payment_failed
+    // against $1,085.21 ever paid, $1,813.24 of it from customers who never
+    // came back, and no recovery email of any kind had ever been sent for a
+    // failed payment — while the abandoned-cart sweep had sent 85 messages to
+    // people who only added to a cart. Someone who entered card details is the
+    // furthest down the funnel anyone gets without buying.
+    //
+    // Guarded on payment_failed and !wasPaid here so a refund or a cancellation
+    // never costs a read. The sender re-reads the order and applies its own
+    // rule regardless — in particular it refuses `checkout_expired`, where no
+    // charge was attempted and "your payment was declined" would be false.
+    //
+    // Send-once via order_email_log, and it never throws: this webhook's real
+    // work is already done by now, and an exception would make the processor
+    // redeliver the whole envelope.
+    if (nextStatus === "payment_failed" && !wasPaid) {
+      try {
+        const { sendPaymentDeclineRecovery } = await import("@/lib/email/payment-decline-send");
+        await sendPaymentDeclineRecovery(orderId);
+      } catch (declineEmailError) {
+        console.error("Unable to send the payment decline recovery for order", orderId, declineEmailError);
+      }
+    }
     // "PAID" IS A PROXY; THE RECEIPT IS `inventory_committed_at`. An order can
     // reach paid while its decrement failed (alerted, latch left null — see the
     // paid branch below). Restocking THAT order on a refund would add units

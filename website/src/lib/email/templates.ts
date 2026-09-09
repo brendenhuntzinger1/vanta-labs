@@ -1655,6 +1655,73 @@ export function membershipPaymentFailedTemplate(input: { name: string; amountCen
   };
 }
 
+/**
+ * A CARD DECLINE THE CUSTOMER CAN STILL RECOVER FROM.
+ *
+ * Production, 2026-09-09: $2,444.00 of orders reached payment_failed against
+ * $1,085.21 ever paid, and $1,813.24 of it belongs to customers who never came
+ * back. No recovery email of any kind had ever been sent for a failed payment,
+ * while 85 abandoned-cart messages went to people who had only added to a cart.
+ * Someone who entered card details is the furthest down the funnel anyone gets
+ * without buying.
+ *
+ * TRANSACTIONAL, AND THAT IS LOAD-BEARING. It carries no offer and no marketing
+ * footer, so it reaches a customer who unsubscribed from marketing and still
+ * needs to know their order did not go through — exactly as a receipt does. Add
+ * a discount here and it becomes marketing, loses that reach, and gives away
+ * margin on an order the customer had already agreed to pay in full. The
+ * barrier was the card, not the price.
+ *
+ * "You have not been charged" is the most important line in the message. A
+ * declined card often still shows a pending authorisation in a banking app, and
+ * a customer who believes they have paid does not retry — they open a support
+ * ticket, or they dispute it.
+ */
+export function paymentDeclinedTemplate(input: {
+  name: string;
+  orderNumber: string;
+  amountCents: number;
+  retryUrl: string;
+}): EmailTemplate {
+  const name = escapeHtml(input.name?.trim() || "there");
+  const plainName = input.name?.trim() || "there";
+  const orderNumber = escapeHtml(String(input.orderNumber ?? ""));
+  const amount = money((Number(input.amountCents) || 0) / 100);
+
+  return {
+    // No exclamation, no shouting, under 70 characters: this is the one message
+    // that cannot afford to be filed as promotional.
+    subject: `Your payment didn't go through — order ${input.orderNumber}`,
+    html: renderLayout({
+      preheader: "Your items are still saved. You have not been charged.",
+      titleHtml: `${name}, your payment didn't go through`,
+      bodyHtml:
+        `<p>Your bank declined the payment for order <strong>${orderNumber}</strong> (${amount}), `
+        + `so the order was not completed.</p>`
+        + `<p><strong>You have not been charged.</strong> If you see a pending amount from us, `
+        + `your bank releases it on its own — usually within a few days.</p>`
+        + `<p>Your items are still saved. Most declines clear on a second attempt, `
+        + `or with a different card.</p>`,
+      ctaLabel: "Finish your order",
+      ctaUrl: input.retryUrl,
+      ctaVariant: "primary",
+    }),
+    text: toText([
+      `${plainName}, your payment didn't go through.`,
+      "",
+      `Your bank declined the payment for order ${input.orderNumber} (${amount}), so the order was not completed.`,
+      "",
+      "You have not been charged. If you see a pending amount from us, your bank releases it on its own — usually within a few days.",
+      "",
+      "Your items are still saved. Most declines clear on a second attempt, or with a different card.",
+      "",
+      `Finish your order: ${input.retryUrl}`,
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
 // `bodyHtml` is the ONE deliberate raw-HTML channel here: this is the monthly
 // benefits mailer, whose body is composed in admin. `headline` is not — it is
 // plain text that happened to be interpolated into the heading unescaped, so an

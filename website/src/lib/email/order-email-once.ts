@@ -65,6 +65,11 @@ export type OrderEmailKind =
   // membership order the charge booked (membership-billing.ts).
   | "membership_signup_receipt"
   | "membership_renewal_receipt"
+  // A CARD DECLINE THE CUSTOMER CAN RECOVER FROM. One per order: the slot's
+  // unique index is what stops a replayed or retried processor event mailing
+  // the same person twice about the same failure. A later decline on the SAME
+  // order is the same fact, so it correctly collapses into this one slot.
+  | "payment_declined"
   // SHIPPING NOTICES carry a provider idempotency key and a queue identity but
   // take no order_email_log slot: the pipeline's own transition rules already
   // decide whether one is due. The key is what lets a provider timeout-after-
