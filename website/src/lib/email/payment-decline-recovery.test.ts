@@ -38,6 +38,7 @@ const declined = {
   failureKind: "processor_declined",
   orderType: "product",
   customerEmail: "buyer@x.test",
+  amountCents: 36_794,
 };
 
 describe("a real decline earns a recovery email", () => {
@@ -118,5 +119,28 @@ describe("the reason is always explainable", () => {
       expect(reason.length).toBeGreaterThan(10);
       expect(reason).not.toMatch(/undefined|null/);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FOUND IN THE ADVERSARIAL PASS. An order whose amount did not survive would
+// produce "your payment of $0.00 was declined" — a message that reads as a
+// broken system and invites a support ticket rather than a retry. Not present
+// in today's data (all 6 declined orders carry an amount), but the email makes
+// a specific claim about money and must not make a nonsensical one.
+// ---------------------------------------------------------------------------
+
+describe("it will not send a message about no money", () => {
+  it("refuses an order with no amount", () => {
+    expect(shouldSendDeclineRecovery({ ...declined, amountCents: 0 })).toBe(false);
+    expect(shouldSendDeclineRecovery({ ...declined, amountCents: null })).toBe(false);
+  });
+
+  it("says why", () => {
+    expect(declineRecoveryReason({ ...declined, amountCents: 0 })).toMatch(/amount/i);
+  });
+
+  it("still sends when an amount is present", () => {
+    expect(shouldSendDeclineRecovery({ ...declined, amountCents: 36_794 })).toBe(true);
   });
 });

@@ -18,6 +18,7 @@ const store = vi.hoisted(() => ({
   order: null as Record<string, unknown> | null,
   sends: [] as Array<{ orderId: string; kind: string; to: string; subject: string; html: string }>,
   sendOutcome: { attempted: true, sent: true } as Record<string, unknown>,
+  queued: [] as Array<{ to: string; kind: string; orderId: string }>,
   readError: null as { message: string } | null,
 }));
 
@@ -48,6 +49,12 @@ vi.mock("@/lib/email/order-email-once", () => ({
 
 vi.mock("@/lib/env", () => ({ getSiteUrl: () => "https://vantalabsresearch.com" }));
 
+vi.mock("@/lib/email/retry-queue", () => ({
+  enqueueFailedEmail: async (message: { to: string }, error: unknown, identity: { orderId: string; kind: string }) => {
+    store.queued.push({ to: message.to, kind: identity.kind, orderId: identity.orderId });
+  },
+}));
+
 const { sendPaymentDeclineRecovery } = await import("@/lib/email/payment-decline-send");
 
 function order(over: Record<string, unknown> = {}) {
@@ -68,6 +75,7 @@ beforeEach(() => {
   store.order = order();
   store.sends = [];
   store.sendOutcome = { attempted: true, sent: true };
+  store.queued = [];
   store.readError = null;
 });
 
@@ -146,6 +154,32 @@ describe("it cannot break the webhook that calls it", () => {
   it("returns quietly when the send itself fails", async () => {
     store.sendOutcome = { attempted: true, sent: false, error: "provider down" };
     await expect(sendPaymentDeclineRecovery("order-1")).resolves.not.toThrow();
+  });
+
+  // FOUND IN THE ADVERSARIAL PASS. The order-confirmation path queues a failed
+  // send for the retry sweep; this one only logged, so a transient provider
+  // outage meant the highest-value email in the system was simply never sent
+  // and nobody would know. The queue carries the same (orderId, kind) identity,
+  // which is what lets the sweep close the send-once slot rather than leaving
+  // it 'failed' and letting a later caller send a second copy.
+  it("queues a failed send for durable retry, under the same identity", async () => {
+    store.sendOutcome = { attempted: true, sent: false, error: "provider down" };
+
+    await sendPaymentDeclineRecovery("order-1");
+
+    expect(store.queued).toHaveLength(1);
+    expect(store.queued[0]).toMatchObject({ to: "buyer@x.test", kind: "payment_declined", orderId: "order-1" });
+  });
+
+  it("queues nothing when the send succeeded", async () => {
+    await sendPaymentDeclineRecovery("order-1");
+    expect(store.queued).toHaveLength(0);
+  });
+
+  it("queues nothing when the email was never attempted", async () => {
+    store.sendOutcome = { attempted: false, sent: false, skippedReason: "already_sent" };
+    await sendPaymentDeclineRecovery("order-1");
+    expect(store.queued).toHaveLength(0);
   });
 
   it("returns quietly on a blank order id rather than reading the whole table", async () => {

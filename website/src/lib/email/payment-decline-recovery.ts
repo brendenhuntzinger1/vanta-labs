@@ -38,6 +38,13 @@ export type DeclineRecoveryFacts = {
   failureKind: string | null | undefined;
   orderType: string | null | undefined;
   customerEmail: string | null | undefined;
+  /**
+   * What the declined attempt was for. The email states this figure, so an
+   * order whose amount did not survive is refused rather than mailed: "your
+   * payment of $0.00 was declined" reads as a broken system and invites a
+   * support ticket instead of a retry.
+   */
+  amountCents?: number | null;
   /** The order has since been paid — a later event overtook the failure. */
   alreadyPaid?: boolean;
   /**
@@ -56,6 +63,10 @@ const RECOVERABLE_ORDER_TYPES = new Set(["product", "sale"]);
 
 function clean(value: unknown): string {
   return String(value ?? "").trim().toLowerCase();
+}
+
+function isPositiveAmount(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 /**
@@ -80,6 +91,9 @@ export function declineRecoveryReason(facts: DeclineRecoveryFacts): string {
   if (clean(facts.failureKind) !== RECOVERABLE_KIND) {
     return "No charge was attempted — the checkout expired rather than being declined, so there is no decline to tell the customer about.";
   }
+  if (!isPositiveAmount(facts.amountCents)) {
+    return "The order carries no amount, and this email states the figure that was declined.";
+  }
   return "The processor declined a real payment attempt, and the customer can retry.";
 }
 
@@ -96,5 +110,6 @@ export function shouldSendDeclineRecovery(facts: DeclineRecoveryFacts): boolean 
   if (!RECOVERABLE_ORDER_TYPES.has(clean(facts.orderType))) return false;
   if (!clean(facts.customerEmail)) return false;
   if (clean(facts.failureKind) !== RECOVERABLE_KIND) return false;
+  if (!isPositiveAmount(facts.amountCents)) return false;
   return true;
 }

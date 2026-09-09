@@ -3,6 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getSiteUrl } from "@/lib/env";
 import { sendOrderEmailOnce } from "@/lib/email/order-email-once";
+import { enqueueFailedEmail } from "@/lib/email/retry-queue";
 import { paymentDeclinedTemplate } from "@/lib/email/templates";
 import { shouldSendDeclineRecovery, declineRecoveryReason } from "@/lib/email/payment-decline-recovery";
 
@@ -42,26 +43,19 @@ export async function sendPaymentDeclineRecovery(orderId: string): Promise<void>
 
     if (error || !order) return;
 
-    const eligible = shouldSendDeclineRecovery({
+    const amountCents = Math.round((Number(order.amount_paid) || 0) * 100);
+    const facts = {
       paymentStatus: order.payment_status as string | null,
       failureKind: order.payment_failure_kind as string | null,
       orderType: order.order_type as string | null,
       customerEmail: order.customer_email as string | null,
-    });
+      amountCents,
+    };
 
-    if (!eligible) {
+    if (!shouldSendDeclineRecovery(facts)) {
       // Logged rather than silent: "why did nobody get an email" is a question
       // somebody asks eventually, and the rule states its own answer.
-      console.info(
-        "[payment-decline] no recovery email for order",
-        id,
-        declineRecoveryReason({
-          paymentStatus: order.payment_status as string | null,
-          failureKind: order.payment_failure_kind as string | null,
-          orderType: order.order_type as string | null,
-          customerEmail: order.customer_email as string | null,
-        }),
-      );
+      console.info("[payment-decline] no recovery email for order", id, declineRecoveryReason(facts));
       return;
     }
 
@@ -72,7 +66,7 @@ export async function sendPaymentDeclineRecovery(orderId: string): Promise<void>
     const template = paymentDeclinedTemplate({
       name: String(order.customer_name ?? ""),
       orderNumber: String(order.order_number ?? order.order_id ?? ""),
-      amountCents: Math.round((Number(order.amount_paid) || 0) * 100),
+      amountCents,
       retryUrl,
     });
 
@@ -84,7 +78,18 @@ export async function sendPaymentDeclineRecovery(orderId: string): Promise<void>
     });
 
     if (outcome.attempted && !outcome.sent) {
+      // QUEUED, NOT JUST LOGGED. The order-confirmation path queues a failed
+      // send for the retry sweep and this did not, so a transient provider
+      // outage meant the highest-value email in the system was silently never
+      // sent. The (orderId, kind) identity is what lets the sweep close the
+      // send-once slot on delivery rather than leaving it 'failed' — which
+      // would let a later caller send the customer a second copy.
       console.error("[payment-decline] recovery email not sent for order", id, outcome.error);
+      await enqueueFailedEmail(
+        { to: String(order.customer_email), subject: template.subject, html: template.html, text: template.text },
+        outcome.error,
+        { orderId: id, kind: "payment_declined" },
+      );
     }
   } catch (error) {
     // Best-effort by design — see the note above about not failing the webhook.
