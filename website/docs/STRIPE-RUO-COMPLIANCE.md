@@ -176,6 +176,7 @@ which means the decision is still fully open — the cheapest possible position.
 | PayPal / Square / Shopify Payments | Same aggregator model, same prohibitions, same outcome. |
 | **High-risk acquirer, accurately disclosed** | The only stable card path. 3.5–6% plus rolling reserve, but the acquirer knows the category and priced it, so it does not evaporate on review. |
 | **Drop the GLP-1/2/3 SKUs** | Materially changes the picture. BPC-157, TB-500, GHK-Cu, CJC-1295, Ipamorelin and NAD+ are not approved drugs and are far easier to underwrite. The GLP line is what makes the account unplaceable at a mainstream processor. |
+| solRUO / similar RUO Connect platforms | Compliance tooling on top of Stripe, ~6% all-in. Contractually guarantees nothing, and its own AUP excludes the GLP line. See §7. |
 | Stay on manual methods | What is running now. No network rules apply, but no buyer protection either, and P2P accounts carry their own freeze risk (already noted in `COMPLIANCE.md`). |
 
 Strengthening a genuine B2B research posture helps with a high-risk acquirer
@@ -185,7 +186,133 @@ verification and a recorded intended-use attestation would be the next steps.
 
 ---
 
+## 7. Evaluated: solRUO (solruo.com)
+
+Looked at on request. **It does not solve Vanta Labs' problem, and its own
+rules appear to exclude the GLP line.** Some of the thinking is sound; the
+payment claim is where the risk sits.
+
+### What it actually is
+
+Not a processor. Their own disclaimer:
+
+> "SolRUO is compliance infrastructure software — not a bank, processor, MSB,
+> law firm, or regulatory authority."
+
+The model is **Stripe Connect**: they onboard merchants as connected accounts
+under their platform. Funds settle directly to the merchant's bank (genuinely
+better than an aggregator holding them). Pricing is "as low as 6%" all-in
+under $50K/month. Founder is Ronan Kalkan (LA), who also runs PepPal.io.
+
+### The claim vs. the contract
+
+Marketing says merchants "get approved for live B2B payment processing", with
+"Stripe-reviewed compliance infrastructure" and a "compliance score Stripe risk
+teams actually recognize." Their scanner site goes further: "Stripe has
+reviewed and approved solRUO's compliance auditing methods."
+
+Their Terms of Service say the opposite:
+
+> "SolRUO expressly disclaims any warranty that (a) your processor will
+> approve, maintain, or continue your account, (b) payouts will occur on any
+> particular schedule"
+
+> "SolRUO is not liable, financially or otherwise, for any of the following,
+> under any theory of liability, ever: Any suspension, restriction,
+> limitation, deactivation, revocation, offboarding, or shutdown of your
+> connected merchant account"
+
+> "All fees are non-refundable."
+
+Liability is capped at three months of fees; Delaware law, binding arbitration
+in Wilmington.
+
+Note also that the homepage's own wording is the weaker, self-descriptive
+form — compliance framework "built and reviewed **to** Stripe's standards" —
+which means "we read the policy and built to it," not "Stripe approved us."
+The stronger approval claim appears only on the scanner site and could not be
+corroborated on Stripe's side (no partner-directory listing found, no Stripe
+statement). Treat it as unverified.
+
+**Net:** every risk in §3 — termination, reserve, MATCH — stays entirely with
+the merchant, and the fees are non-refundable when it happens. That is not
+necessarily bad faith (nobody can guarantee a third party's underwriting
+decision, and these are ordinary SaaS disclaimers), but it reframes the
+product: this is compliance tooling that may improve the odds, not a payment
+solution. At 6% all-in, that distinction is worth being clear-eyed about — a
+real high-risk acquirer charges a similar rate *because it is absorbing the
+risk*. Here, nobody is.
+
+### Why it does not fit this catalogue
+
+Their Acceptable Use policy prohibits:
+
+> "Selling controlled substances, scheduled compounds, or any product whose
+> distribution requires a license you do not hold."
+
+Semaglutide and tirzepatide are prescription-only. Their distribution requires
+a license Vanta Labs does not hold. **The GLP line appears to breach solRUO's
+own acceptable-use policy**, which is consistent with §2 — the problem is the
+products, and changing payment vendors does not change the products.
+
+Their qualified-buyer definition is a real institutional gate:
+
+> "licensed researchers, clinical laboratories, contract research
+> organizations, and credentialed institutional buyers"
+
+Vanta Labs today sells DTC behind a 21+ age gate and a checkbox. That is not
+the same thing and is not close. Meeting this bar means rebuilding the
+customer model — which would remove most of the current customer base, not
+add a compliance layer on top of it.
+
+### What their scanner would likely flag here
+
+It audits against 21 CFR §201.128, which determines intended use from the
+**objective circumstances of distribution**, not the label. On that standard
+this storefront has problems beyond the GLP names:
+
+- **Bacteriostatic water offered on every published product**
+  (`bac-water-upsell.tsx`, deliberately un-gated per `bac-water-gating.test.ts`).
+  Bacteriostatic water exists to reconstitute lyophilized powder for
+  **injection**. Offering it with every peptide, DTC, is strong objective
+  evidence of intended human use.
+- **Consumer dose ladders and price points** — 5/10/20/30 mg at $49.99–$149.99.
+- **A 21+ age gate rather than a credentialing gate** — age is a consumer-retail
+  control. Researchers are credentialed, not carded.
+- **The GLP rename** (§4), which under a §201.128 analysis does not create
+  research intent and may read as concealment.
+
+The RUO disclaimer wording itself is strong and would likely pass. The
+disclaimers are not what a §201.128 analysis turns on.
+
+### One thing to be aware of
+
+The same founder operates PepPal.io, whose "Cycle Analyzer" invites users to
+paste "their full protocol of peptides, prescriptions, and supplements" for
+synergy and conflict analysis — a human-dosing tool. Running that alongside a
+business selling *not-for-human-consumption* attestation infrastructure is a
+tension worth understanding before relying on their compliance judgement.
+Noted neutrally; draw your own conclusion.
+
+### Verdict
+
+The compliance *methodology* — verified counterparties, signed intended-use
+attestations, tamper-evident audit records — is genuinely the right model, and
+matches what makes an RUO position defensible to both a processor and the FDA.
+If Vanta Labs ever moves to a real institutional B2B model, that architecture
+is worth building regardless of vendor.
+
+But as a way to keep selling the current catalogue to the current customers
+via Stripe, it does not work, and their own acceptable-use policy says so.
+**If contacted, ask one question first: "do you onboard semaglutide,
+tirzepatide and retatrutide?"** A "yes" contradicts their own AUP and Stripe's
+restricted list, and is itself the answer about their judgement.
+
+---
+
 ## Sources
+
+- [solRUO](https://solruo.com/) and [solRUO Compliance Scanner](https://solruocomply.com/) — claims and terms quoted in §7
 
 - [Stripe — Restricted Businesses](https://stripe.com/legal/restricted-businesses) — primary, quoted above
 - [Ballerine — What Is Mastercard BRAM?](https://ballerine.com/glossary/mastercard-bram-business-risk-assessment-and-mitigation-program)
