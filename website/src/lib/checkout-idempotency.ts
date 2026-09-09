@@ -18,9 +18,15 @@
  */
 const STORAGE_KEY = "vl:checkout:idempotency";
 
-/** Older than this and the order behind the key is not worth resuming: the
- * processor's sessions live an hour, and the reconcile sweep retires the row. */
-const DEFAULT_TTL_MS = 2 * 60 * 60 * 1000;
+/**
+ * Older than this and the attempt is NOT resumed. The processor's checkout
+ * sessions live 60 minutes, and the server's resume path hands back the SAME
+ * session (its idempotency key to the processor is the order id), so resuming
+ * an order past that window would send the shopper to a card form that says
+ * "checkout expired". Fifty minutes keeps a retry inside the window with
+ * margin; past it, a fresh key means a fresh order and a fresh session.
+ */
+const DEFAULT_TTL_MS = 50 * 60 * 1000;
 
 export type CartLine = { slug: string; variantId?: string | null; quantity: number };
 

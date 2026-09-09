@@ -89,8 +89,10 @@ describe("resolveCheckoutIdempotencyKey", () => {
     let n = 0;
     const generate = () => `key-${++n}`;
     expect(resolveCheckoutIdempotencyKey({ storage, fingerprint: "fp", generate, now: 1_000 })).toBe("key-1");
-    expect(resolveCheckoutIdempotencyKey({ storage, fingerprint: "fp", generate, now: 1_000 + 60 * 60 * 1000 })).toBe("key-1");
-    expect(resolveCheckoutIdempotencyKey({ storage, fingerprint: "fp", generate, now: 1_000 + 3 * 60 * 60 * 1000 })).toBe("key-2");
+    // Inside the processor's 60-minute session window: same attempt.
+    expect(resolveCheckoutIdempotencyKey({ storage, fingerprint: "fp", generate, now: 1_000 + 40 * 60 * 1000 })).toBe("key-1");
+    // Past 50 minutes the card session behind it may be expired: fresh attempt.
+    expect(resolveCheckoutIdempotencyKey({ storage, fingerprint: "fp", generate, now: 1_000 + 55 * 60 * 1000 })).toBe("key-2");
   });
 
   it("clears the key after a placed order so the next distinct order is not deduped against it", () => {
