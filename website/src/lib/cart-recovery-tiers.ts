@@ -1,3 +1,5 @@
+import { BAC_WATER_SLUG } from "@/lib/bac-water";
+
 // No `server-only`: the admin band editor is a Client Component and shows the
 // operator the cost, the net margin and the perceived value of a band WHILE
 // they are editing it. A margin they only learn after saving is a margin they
@@ -88,27 +90,27 @@ export const MAX_GIFT_QUANTITY = 5;
 export const DEFAULT_RECOVERY_TIERS: RecoveryTier[] = [
   {
     minCents: 3_500,
-    stage3: [{ slug: "bac-water", quantity: 1 }],
+    stage3: [{ slug: BAC_WATER_SLUG, quantity: 1 }],
     stage4: { gifts: [{ slug: "ghk-cu", quantity: 1 }], percent: 0 },
   },
   {
     minCents: 10_000,
     stage3: [{ slug: "ghk-cu", quantity: 1 }],
-    stage4: { gifts: [{ slug: "ghk-cu", quantity: 1 }, { slug: "bac-water", quantity: 1 }], percent: 10 },
+    stage4: { gifts: [{ slug: "ghk-cu", quantity: 1 }, { slug: BAC_WATER_SLUG, quantity: 1 }], percent: 10 },
   },
   {
     minCents: 25_000,
-    stage3: [{ slug: "ghk-cu", quantity: 1 }, { slug: "bac-water", quantity: 1 }],
-    stage4: { gifts: [{ slug: "ghk-cu", quantity: 1 }, { slug: "bac-water", quantity: 1 }], percent: 10 },
+    stage3: [{ slug: "ghk-cu", quantity: 1 }, { slug: BAC_WATER_SLUG, quantity: 1 }],
+    stage4: { gifts: [{ slug: "ghk-cu", quantity: 1 }, { slug: BAC_WATER_SLUG, quantity: 1 }], percent: 10 },
   },
   {
     minCents: 50_000,
-    stage3: [{ slug: "ghk-cu", quantity: 1 }, { slug: "bac-water", quantity: 1 }],
+    stage3: [{ slug: "ghk-cu", quantity: 1 }, { slug: BAC_WATER_SLUG, quantity: 1 }],
     stage4: {
       gifts: [
         { slug: "klow", quantity: 1 },
         { slug: "ghk-cu", quantity: 1 },
-        { slug: "bac-water", quantity: 1 },
+        { slug: BAC_WATER_SLUG, quantity: 1 },
       ],
       percent: 0,
     },

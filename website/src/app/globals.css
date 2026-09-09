@@ -3645,7 +3645,7 @@ select.vl-auth-field {
 }
 
 /* ---------------------------------------------------------------------------
-   BAC WATER SHEET
+   RECON WATER SHEET
    A bottom sheet on a phone, a centred dialog from sm. The separation from the
    page comes from LIGHT, never from a darker shadow: this sits on a near-black
    backdrop, where a black shadow separates nothing. A warm rim, a low champagne
@@ -4860,7 +4860,7 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
 }
 
 /* --- VIEW ALL OFFERS / DETAILS -------------------------------------------
-   A bottom sheet on a phone and a centred panel from sm, matching the BAC
+   A bottom sheet on a phone and a centred panel from sm, matching the Recon
    Water sheet exactly — the shape already proven inside the TikTok and
    Instagram webviews, anchored to an edge their chrome cannot take away. */
 .vl-offer-sheet-root {

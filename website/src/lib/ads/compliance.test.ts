@@ -237,3 +237,31 @@ describe("attribute correlation", () => {
     expect(mostInformativeAxis(rows.slice(-1))).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE RENAME MOVED THE WORDS, SO THE BLOCKER HAD TO MOVE WITH THEM.
+//
+// "mix with bacteriostatic water" was blocked. Renaming the product to Recon
+// Water opened a hole: the same instruction, written the way the product is now
+// named, matched no rule and would have passed ad review.
+// ---------------------------------------------------------------------------
+describe("reconstitution instructions stay blocked under the product's new name", () => {
+  const blocked = [
+    "Mix with recon water before use.",
+    "Mix with bacteriostatic water before use.",
+    "Mix with bac water before use.",
+  ];
+
+  it.each(blocked)("blocks %s", (script) => {
+    const verdict = reviewConcept({ creativeId: "vl-recon-001", script });
+    expect(verdict.findings.some((f) => f.ruleId === "reconstitution/instructions")).toBe(true);
+  });
+
+  it("still allows naming the product without instructing anyone to use it", () => {
+    const verdict = reviewConcept({
+      creativeId: "vl-recon-002",
+      script: "Recon Water 10 mL, sterile solution. For laboratory research use only.",
+    });
+    expect(verdict.findings.some((f) => f.ruleId === "reconstitution/instructions")).toBe(false);
+  });
+});

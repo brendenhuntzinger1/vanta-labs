@@ -80,7 +80,7 @@ const PRODUCTS = [
     { id: "55544dc9-b7b6-4bf1-a2f4-50b62d0e6e49", label: "10mg", cents: 6999, cost: 1047, qty: 36, isDefault: true },
     { id: "fcea0b5c-62f8-4e28-b9d0-a4898c28303c", label: "30mg", cents: 16999, cost: 1875, qty: 49 },
   ] },
-  { slug: "bac-water", name: "Recon Water (0.9% Benzyl Alcohol)", doses: [
+  { slug: "recon-water", name: "Recon Water (0.9% Benzyl Alcohol)", doses: [
     { id: "06126d6b-bbc4-4ae3-bc99-d6a4119aa514", label: "10mL", cents: 1499, cost: 143, qty: 92, isDefault: true, tracked: false },
   ] },
   { slug: "b12", name: "B12", doses: [
@@ -114,7 +114,7 @@ const CARTS = [
     name: "Heidi",
     valueCents: 9847,
     items: [
-      { slug: "bac-water", name: "Recon Water (0.9% Benzyl Alcohol)", quantity: 2, unitPrice: 14.99, variantId: "06126d6b-bbc4-4ae3-bc99-d6a4119aa514" },
+      { slug: "recon-water", name: "Recon Water (0.9% Benzyl Alcohol)", quantity: 2, unitPrice: 14.99, variantId: "06126d6b-bbc4-4ae3-bc99-d6a4119aa514" },
       { slug: "glp-3", name: "GLP-3", quantity: 1, unitPrice: 69.99, variantId: "55544dc9-b7b6-4bf1-a2f4-50b62d0e6e49" },
     ],
     // Both vials absorbed, so she pays for the GLP-3 alone — and the promotion
@@ -135,7 +135,7 @@ const CARTS = [
     stage: "t72h",
     items: [
       { slug: "glp-3", name: "GLP-3", quantity: 3, unitPrice: 169.99, variantId: "fcea0b5c-62f8-4e28-b9d0-a4898c28303c" },
-      { slug: "bac-water", name: "Recon Water (0.9% Benzyl Alcohol)", quantity: 1, unitPrice: 14.99, variantId: "06126d6b-bbc4-4ae3-bc99-d6a4119aa514" },
+      { slug: "recon-water", name: "Recon Water (0.9% Benzyl Alcohol)", quantity: 1, unitPrice: 14.99, variantId: "06126d6b-bbc4-4ae3-bc99-d6a4119aa514" },
     ],
     // THE PARTIAL-ABSORB SHAPE, and the only cart that has it: her one vial is
     // freed and a second is added. Her three GLP-3 then stand alone as the paid
@@ -507,7 +507,7 @@ async function main() {
       );
       assert(rows.length === 1, `expected one entitlement, found ${rows.length}`);
       assert(rows[0].offer_key === "labor_day_bac_water_2", `offer_key ${rows[0].offer_key}`);
-      assert(rows[0].product_slug === "bac-water", `product_slug ${rows[0].product_slug}`);
+      assert(rows[0].product_slug === "recon-water", `product_slug ${rows[0].product_slug}`);
       assert(Number(rows[0].quantity) === 2, `quantity ${rows[0].quantity}`);
       return `${rows[0].quantity} x ${rows[0].product_slug}, min $${rows[0].min_subtotal_cents / 100}`;
     });
@@ -601,7 +601,7 @@ async function main() {
       const units = (quoted.giftLines ?? []).reduce((sum, line) => sum + Number(line.quantity), 0);
       assert(units === cart.expectFreeBac, `expected ${cart.expectFreeBac} free units, found ${units}`);
       assert(
-        (quoted.giftLines ?? []).every((line) => /bac water/i.test(line.name)),
+        (quoted.giftLines ?? []).every((line) => /recon water/i.test(line.name)),
         `a gift line is not Recon Water: ${JSON.stringify(quoted.giftLines)}`,
       );
       return `${units} free Recon Water shown`;
@@ -627,7 +627,7 @@ async function main() {
         "select product_id, product_name, quantity, unit_price, line_total, unit_cost_cents from order_items where order_id = $1 order by product_name",
         [result.body.orderId],
       );
-      const bac = rows.filter((r) => String(r.product_id).split("::")[0] === "bac-water");
+      const bac = rows.filter((r) => String(r.product_id).split("::")[0] === "recon-water");
       const bacUnits = bac.reduce((sum, r) => sum + Number(r.quantity), 0);
       assert(bacUnits === cart.expectBacUnits, `pick list holds ${bacUnits} Recon Water, expected ${cart.expectBacUnits}`);
       // Every vial is free: Heidi's two are the ones that would otherwise be

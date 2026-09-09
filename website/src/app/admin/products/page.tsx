@@ -1081,7 +1081,7 @@ function ProductEditor({
           <input type="checkbox" checked={Boolean(draft.isArchived)} onChange={(e) => setDraft((prev) => ({ ...prev, isArchived: e.target.checked }))} />
           Archived
         </label>
-        {/* The ONLY thing that qualifies a product for the bacteriostatic
+        {/* The ONLY thing that qualifies a product for the recon
             water cross-sell. Off by default and never inferred from the name
             or category, so a liquid product cannot start recommending a
             reconstitution step just because it was added to the catalogue. */}
