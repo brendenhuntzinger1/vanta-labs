@@ -57,6 +57,22 @@ export async function recordAuthEmailAttempt(input: {
    * against a genuine retry and reporting a send perpetually in flight.
    */
   claimedAs?: AuthEmailKind;
+  /**
+   * The id the provider assigned to this message.
+   *
+   * THE JOIN THIS ROW EXISTS TO SERVE. `send-ledger.ts` matches
+   * `email_send_log` to `email_delivery_events` on `provider_message_id`, and
+   * Resend's delivered / opened / bounced / complained webhooks carry that id
+   * and nothing else identifying the message. Dropping it here did not lose a
+   * label, it severed auth mail from its own delivery record: 51 signup
+   * confirmations in production show ZERO opens across every domain, including
+   * the 29 to Gmail whose owners clicked the link. Nothing was wrong with those
+   * sends — there was no id to match their events to.
+   *
+   * Optional because it must never be required for correctness: a provider that
+   * returns no id, or a send that failed before one existed, still gets a row.
+   */
+  providerMessageId?: string;
 }): Promise<void> {
   try {
     // CLOSE THE CLAIM IF THERE IS ONE. claimAuthEmailSend() has usually already
@@ -67,6 +83,10 @@ export async function recordAuthEmailAttempt(input: {
       .update({
         status: input.success ? "sent" : "failed",
         reference_id: input.success ? null : String(input.error ?? "").slice(0, 200) || "unknown",
+        // The claim row was written as 'sending' BEFORE the send, so it cannot
+        // have carried an id. Closing it is the only moment one exists, and
+        // this is the ordinary path — every real signup goes through it.
+        provider_message_id: input.providerMessageId ?? null,
       })
       .eq("campaign_type", `auth:${input.claimedAs ?? input.kind}`)
       .eq("recipient_email", input.email)
@@ -86,6 +106,9 @@ export async function recordAuthEmailAttempt(input: {
       template_key: input.kind,
       sent_at: new Date().toISOString(),
       status: input.success ? "sent" : "failed",
+      // Explicitly null rather than omitted when the provider gave none, so the
+      // column reads as "no id" rather than as a field nobody thought about.
+      provider_message_id: input.providerMessageId ?? null,
     });
   } catch {
     // Non-fatal, exactly as in lib/email/marketing.ts: the email is what

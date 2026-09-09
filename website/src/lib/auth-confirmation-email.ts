@@ -261,6 +261,7 @@ export async function sendBrandedConfirmationResend(
     success: result.success,
     error: result.error,
     claimedAs,
+    providerMessageId: result.providerMessageId,
   });
   if (!result.success) {
     await fallBackToSupabaseConfirmation(email, result.error);

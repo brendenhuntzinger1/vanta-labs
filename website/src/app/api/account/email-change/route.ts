@@ -172,6 +172,7 @@ export async function POST(request: Request) {
       email: newEmail,
       success: result.success,
       error: result.error,
+      providerMessageId: result.providerMessageId,
     });
 
     if (!result.success) {

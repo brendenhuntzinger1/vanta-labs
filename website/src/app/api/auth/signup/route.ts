@@ -386,6 +386,8 @@ async function createAccountAndSend(input: {
     email: input.email,
     success: result.success,
     error: result.error,
+    // The join to the provider's own delivery events — see auth-email-audit.ts.
+    providerMessageId: result.providerMessageId,
   });
 
   if (result.success) {
