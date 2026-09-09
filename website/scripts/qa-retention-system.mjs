@@ -450,11 +450,11 @@ async function main() {
     return `two live gifts: ${offers.map((o) => o.offer_key).join(", ")}`;
   });
 
-  await step("the day-40 gift prices 10% off AND adds the free BAC water", async () => {
+  await step("the day-40 gift prices 10% off AND adds the free Recon water", async () => {
     const qt = await quote({ email: C, items: [BPC], offerToken: cTokenB });
     assert(qt.ok && qt.quote.discountAmount === 6.9, `discount ${qt.quote?.discountAmount}`);
     assert(qt.quote.offer?.percentApplied === true && qt.quote.offer?.productApplied === true && /10% off/.test(qt.quote.offer?.description ?? ""), `offer ${JSON.stringify(qt.quote?.offer)}`);
-    assert(qt.quote.giftLines?.length === 1 && /^Bacteriostatic Water/.test(qt.quote.giftLines[0].name), `gift lines ${JSON.stringify(qt.quote?.giftLines)}`);
+    assert(qt.quote.giftLines?.length === 1 && /^Recon Water/.test(qt.quote.giftLines[0].name), `gift lines ${JSON.stringify(qt.quote?.giftLines)}`);
     return `−$6.90 + free ${qt.quote.giftLines[0].name}`;
   });
 

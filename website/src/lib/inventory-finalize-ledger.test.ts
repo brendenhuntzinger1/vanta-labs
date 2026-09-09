@@ -16,9 +16,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // THIS IS NOT THEORETICAL. It corrupted production on 2026-08-27, the day of
 // the store's first real customer order (VL-C98B8AB1):
 //
-//   00:09:27  payment settles; finalize deducts BAC Water 39 → 38. No ledger row.
+//   00:09:27  payment settles; finalize deducts Recon Water 39 → 38. No ledger row.
 //   01:06:38  the operator opens Admin → Inventory, sees no sale row for an
-//             order they know was paid, and decrements BAC Water by hand 38 → 37.
+//             order they know was paid, and decrements Recon Water by hand 38 → 37.
 //
 // The shelf is now understated by one unit. Neither action was wrong on its own;
 // the operator simply had no way to see that the first one had happened. An

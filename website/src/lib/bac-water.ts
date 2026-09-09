@@ -1,7 +1,7 @@
 import type { Product, ProductDose } from "@/lib/catalog-types";
 
 // -------------------------------------------------------------------------
-// BAC Water cross-sell helpers, shared by every surface that offers it:
+// Recon Water cross-sell helpers, shared by every surface that offers it:
 // the product-page accessory block, "Frequently Bought Together", the
 // add-to-cart nudge popup, and the cart checkboxes. Client-safe (no
 // server-only imports) — prices always come from the live catalog row, so
@@ -9,11 +9,11 @@ import type { Product, ProductDose } from "@/lib/catalog-types";
 // -------------------------------------------------------------------------
 
 /**
- * THE SLUGS THAT IDENTIFY BACTERIOSTATIC WATER, IN PREFERENCE ORDER.
+ * THE SLUGS THAT IDENTIFY RECON WATER, IN PREFERENCE ORDER.
  *
  * This list used to exist twice: once here as a single offered slug, and once
  * below as the exclusion set. The cross-sell LOOKUP asked for the single slug
- * while `isBacWater` recognised the set, so a store publishing its BAC water
+ * while `isBacWater` recognised the set, so a store publishing its Recon water
  * under the other accepted slug served a 404 from /api/catalog/bac-water on
  * every page load — silently, since the cart checkboxes and the accessory block
  * simply do not render when the fetch fails. Reproduced in the browser: the
@@ -25,7 +25,7 @@ import type { Product, ProductDose } from "@/lib/catalog-types";
  */
 // "bac-water" IS THE CANONICAL SLUG NOW, AND THE OLD ONES STAY RESOLVABLE.
 //
-// The product has always been called BAC Water on the page; only the URL still
+// The product has always been called Recon Water on the page; only the URL still
 // said "bacteriostatic-water", and a slug is not private — it was the canonical
 // tag, the og:url, the breadcrumb, the sku in the Product schema and the
 // sitemap entry. Every occurrence of the long word on the live site traced
@@ -34,7 +34,7 @@ import type { Product, ProductDose } from "@/lib/catalog-types";
 // The older slugs are kept, not retired. They are what a shared link, a
 // bookmark and Google's index still point at, and dropping them would 404 all
 // three. Order matters: index 0 is what the app treats as canonical.
-export const BAC_WATER_SLUG_CANDIDATES = ["bac-water", "bacteriostatic-water", "bac-water-30ml"] as const;
+export const BAC_WATER_SLUG_CANDIDATES = ["recon-water", "bac-water", "bacteriostatic-water", "bac-water-30ml"] as const;
 
 /** The SKU the cross-sell offers when more than one is published. */
 export const BAC_WATER_SLUG = BAC_WATER_SLUG_CANDIDATES[0];
@@ -69,18 +69,18 @@ export function canonicalCartSlug(slug: string): string {
 }
 
 /**
- * IS THIS PRODUCT ITSELF BACTERIOSTATIC WATER?
+ * IS THIS PRODUCT ITSELF RECON WATER?
  *
  * Used only to stop the cross-sell offering a product to itself. The catalogue
- * currently carries TWO published bacteriostatic water SKUs —
+ * currently carries TWO published recon water SKUs —
  * "bacteriostatic-water" (Solvents & Solutions) and "bac-water-30ml"
  * (Laboratory Supplies) — so matching the single offered slug left the other
- * one able to trigger a BAC Water offer for BAC Water.
+ * one able to trigger a Recon Water offer for Recon Water.
  *
  * The name check is a deliberate safety net rather than a classification: this
  * is an EXCLUSION, so the cost of matching too much is one missed cross-sell,
  * while the cost of matching too little is a recursive offer. It also means a
- * third BAC Water SKU added later is excluded on the day it is created,
+ * third Recon Water SKU added later is excluded on the day it is created,
  * without anyone having to remember this file.
  *
  * Note this is the only place a name is inspected anywhere in the cross-sell.
@@ -89,12 +89,18 @@ export function canonicalCartSlug(slug: string): string {
  */
 const BAC_WATER_SLUGS = new Set<string>(BAC_WATER_SLUG_CANDIDATES);
 
+// Matches the product under every name it has traded under. "recon" is listed
+// because the catalogue row is named "Recon water" now, and this guard reads
+// the NAME as well as the slug -- dropping the old words would un-match every
+// stored cart line and order that still carries them.
+const RECON_WATER_PATTERN = /bacteriostatic|bac[-\s]?water|recon[-\s]?water/;
+
 export function isBacWater(product: { slug?: string; name?: string } | string | null | undefined) {
   const slug = (typeof product === "string" ? product : product?.slug ?? "").toLowerCase();
   const name = (typeof product === "string" ? "" : product?.name ?? "").toLowerCase();
   if (!slug && !name) return false;
   if (BAC_WATER_SLUGS.has(slug)) return true;
-  return /bacteriostatic|bac[-\s]?water/.test(slug) || /bacteriostatic|bac[-\s]?water/.test(name);
+  return RECON_WATER_PATTERN.test(slug) || RECON_WATER_PATTERN.test(name);
 }
 
 function toPriceNumber(value?: string) {
@@ -114,7 +120,7 @@ export type BacWaterDoseOffer = {
   cartKey: string;
 };
 
-/** The size to spotlight ("Most Popular") across every BAC Water surface. */
+/** The size to spotlight ("Most Popular") across every Recon Water surface. */
 export const BAC_WATER_FEATURED_SUFFIX = "30ml";
 
 export function isFeaturedBacWaterOffer(offer: BacWaterDoseOffer) {
@@ -137,7 +143,7 @@ export function getBacWaterDoseOffers(product: Product | null | undefined): BacW
     });
 }
 
-/** The options bag addToCart expects for a specific BAC Water dose. */
+/** The options bag addToCart expects for a specific Recon Water dose. */
 export function bacWaterAddOptions(product: Product, offer: BacWaterDoseOffer) {
   return {
     variantId: offer.dose.id,
@@ -152,7 +158,7 @@ export function bacWaterAddOptions(product: Product, offer: BacWaterDoseOffer) {
 
 
 /**
- * The published BAC water product, whichever accepted slug the store uses.
+ * The published Recon water product, whichever accepted slug the store uses.
  *
  * Takes the lookup as an argument so this stays client-safe and directly
  * testable — the route passes `getCatalogProductBySlug`, which already filters
@@ -180,11 +186,11 @@ export async function resolveBacWaterProduct(
 }
 
 /**
- * WHAT THE CART'S BAC WATER CHECKBOX SAYS ABOUT ITS OWN STATE.
+ * WHAT THE CART'S RECON WATER CHECKBOX SAYS ABOUT ITS OWN STATE.
  *
  * The control is a toggle: ticked means "this size is in your cart", and
  * unticking removes it. It rendered one set of words for both states — "Add
- * 10 mL BAC Water   +$14.99" — so a shopper who already had the bottle saw a
+ * 10 mL Recon Water   +$14.99" — so a shopper who already had the bottle saw a
  * ticked box under the heading "Complete your order", offering to add the thing
  * sitting in the line above it, at a price prefixed with a plus. Reported from
  * a phone as looking like a double charge, which is exactly what it looks like.
@@ -200,14 +206,14 @@ export function bacWaterCheckboxCopy(input: {
 }): { label: string; price: string; ariaLabel: string } {
   if (input.inCart) {
     return {
-      label: `${input.sizeLabel} BAC Water — in your cart`,
+      label: `${input.sizeLabel} Recon Water — in your cart`,
       price: input.displayPrice,
-      ariaLabel: `Remove ${input.sizeLabel} BAC Water from your order`,
+      ariaLabel: `Remove ${input.sizeLabel} Recon Water from your order`,
     };
   }
   return {
-    label: `Add ${input.sizeLabel} BAC Water`,
+    label: `Add ${input.sizeLabel} Recon Water`,
     price: `+${input.displayPrice}`,
-    ariaLabel: `Add ${input.sizeLabel} BAC Water to your order`,
+    ariaLabel: `Add ${input.sizeLabel} Recon Water to your order`,
   };
 }

@@ -80,7 +80,7 @@ export type CartItem = {
    * Snapshot of the product's requires_reconstitution flag, taken when the
    * line was added. Product metadata only.
    *
-   * It does NOT control the BAC Water cross-sell: that offer is shown for
+   * It does NOT control the Recon Water cross-sell: that offer is shown for
    * every published product whatever form it ships in, because the catalogue
    * holds no formulation data to classify from and a hand-maintained flag
    * would be silently wrong the first time someone forgot to set it.
@@ -1646,7 +1646,7 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
             productName: product.name,
             productCategory: product.category,
             variantLabel: resolved?.doseLabel ?? null,
-            // Carried on the event because the BAC Water sheet reacts to this
+            // Carried on the event because the Recon Water sheet reacts to this
             // dispatch synchronously, before React has re-rendered and updated
             // the cart it would otherwise have to look the product up in.
             // Reading the flag from a stale cart is how the sheet silently

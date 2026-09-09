@@ -170,7 +170,7 @@ describe("the terms the recipient reads", () => {
 
   it("states the product, the minimum and the deadline", () => {
     const verdict = validateCampaignGift(
-      { ...base, rewardKind: "free_product", productSlug: "bac-water", quantity: 1, minSubtotalCents: 3500, label: "Free BAC water" },
+      { ...base, rewardKind: "free_product", productSlug: "bac-water", quantity: 1, minSubtotalCents: 3500, label: "Free Recon water" },
       PRODUCTS,
     );
     expect(verdict.ok).toBe(true);
@@ -187,7 +187,7 @@ describe("the terms the recipient reads", () => {
 
   it("says two are added when the gift grants two", () => {
     const verdict = validateCampaignGift(
-      { ...base, rewardKind: "free_product", productSlug: "bac-water", quantity: 2, label: "Free BAC water" },
+      { ...base, rewardKind: "free_product", productSlug: "bac-water", quantity: 2, label: "Free Recon water" },
       PRODUCTS,
     );
     if (!verdict.ok) throw new Error(verdict.error);

@@ -52,7 +52,7 @@ export const RECOVERY_RECENT_BUYER_MS = 30 * 24 * 3_600_000;
 /**
  * The smallest cart worth attaching a free vial to.
  *
- * BAC Water is $14.99 retail. Against a $20 basket the gift is a loss dressed
+ * Recon Water is $14.99 retail. Against a $20 basket the gift is a loss dressed
  * as a recovery, and the shopper most likely to take it is the one who was
  * going to buy the $20 anyway. $35 is a little over two vials and matches the
  * floor every other product gift in OFFER_CATALOG already uses.
@@ -99,7 +99,7 @@ export interface RecoveryOfferPlan {
    *
    * A STABLE IDENTIFIER, NOT A DESCRIPTION. It reads `cart_recovery_bac_water`
    * for historical reasons and now files a gift that may be a GLOW, a GHK-Cu
-   * and a BAC Water together. That is deliberate: the key is what the
+   * and a Recon Water together. That is deliberate: the key is what the
    * one-live-offer index and the 30-day gift cooldown key on, so renaming it
    * would orphan every live token and reset every cooldown. What the gift
    * actually grants is recorded on the row, which is the only thing the
@@ -249,7 +249,7 @@ function describeGifts(gifts: RecoveryGiftItem[]): string {
  * one.
  *
  * `names` maps slug to the product's real name, so the label reads "GLOW +
- * GHK-Cu + BAC Water" rather than a list of slugs. A slug missing from it falls
+ * GHK-Cu + Recon Water" rather than a list of slugs. A slug missing from it falls
  * back to the slug itself: an ugly label is a cosmetic problem, while
  * withholding the gift over a missing name would be a real one.
  *

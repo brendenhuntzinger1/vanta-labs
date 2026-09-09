@@ -2000,7 +2000,7 @@ export function cartRecoveryGiftTemplate(input: {
   // THE SUBJECT NAMES WHAT THEY LEFT. It is the only part of this most people
   // will ever read, and "we added something extra" says nothing they can act
   // on. The lead item is the first line that is not the gift itself — someone
-  // who already has BAC Water in the basket should see the peptide they were
+  // who already has Recon Water in the basket should see the peptide they were
   // actually deciding about, not the water.
   const giftNoun = input.giftLabel.toLowerCase().replace(/^\d+\s+free\s+/, "").trim();
   const leadItem = input.items.find((item) => !item.name.toLowerCase().includes(giftNoun))
@@ -2117,7 +2117,7 @@ export function cartRecoveryT24hTemplate(input: { name: string; items: Array<{ n
   const hasGift = giftLabel.length > 0;
   // THE SUBJECT MUST NAME THE GIFT THAT IS ACTUALLY ATTACHED.
   //
-  // These lines said "a free BAC Water" outright. That was true while the
+  // These lines said "a free Recon Water" outright. That was true while the
   // ladder gifted one vial to every cart; it is false the moment a band gifts a
   // GHK-Cu, and it was still false in the SUBJECT while the terms paragraph
   // underneath named all three products correctly. Caught by sending a real
@@ -2126,13 +2126,13 @@ export function cartRecoveryT24hTemplate(input: { name: string; items: Array<{ n
   // ever going to notice.
   //
   // The label is built by the sweep from live product names, so it is already
-  // "TB-500 5mg + GHK-Cu 50mg + Bacteriostatic Water 30ml". A leading "free" is
+  // "TB-500 5mg + GHK-Cu 50mg + Recon Water 30ml". A leading "free" is
   // stripped so "a free X" never reads "a free free X".
   const giftName = giftLabel.replace(/^free\s+/i, "");
   // A SUBJECT LINE HAS ABOUT SIXTY CHARACTERS BEFORE AN INBOX TRUNCATES IT.
   //
   // Naming three products in full produced "Last note: a free TB-500 5mg +
-  // GHK-Cu 50mg + Bacteriostatic Water 30ml with your order" — 85 characters,
+  // GHK-Cu 50mg + Recon Water 30ml with your order" — 85 characters,
   // so the reader sees neither the last gift nor the point. A count reads
   // better and survives: "3 free gifts". The body still names every item, and
   // so does the terms line the checkout enforces.
@@ -2189,10 +2189,10 @@ export function cartRecoveryT24hTemplate(input: { name: string; items: Array<{ n
       titleHtml: hasGift
         ? (giftCount > 1 ? `${giftCount} free gifts, on us` : `A free ${escapeHtml(giftName)}, on us`)
         : "Still saved for you",
-      // THE BODY USED TO SAY "a vial of BAC Water" NO MATTER WHAT WAS MINTED.
+      // THE BODY USED TO SAY "a vial of Recon Water" NO MATTER WHAT WAS MINTED.
       // That was the same defect as the old subject line and worse, because it
       // is the sentence the shopper reads first: a $520 cart was told it had a
-      // BAC Water coming while the gift box beneath it, the terms line, and the
+      // Recon Water coming while the gift box beneath it, the terms line, and the
       // checkout all said GHK-Cu. It now names what was actually granted.
       bodyHtml: `${hi.html}`
         + (hasGift
@@ -2260,7 +2260,7 @@ export function cartRecoveryT72hTemplate(input: {
   const hasGift = giftLabel.length > 0;
   // THE SUBJECT MUST NAME THE GIFT THAT IS ACTUALLY ATTACHED.
   //
-  // These lines said "a free BAC Water" outright. That was true while the
+  // These lines said "a free Recon Water" outright. That was true while the
   // ladder gifted one vial to every cart; it is false the moment a band gifts a
   // GHK-Cu, and it was still false in the SUBJECT while the terms paragraph
   // underneath named all three products correctly. Caught by sending a real
@@ -2269,13 +2269,13 @@ export function cartRecoveryT72hTemplate(input: {
   // ever going to notice.
   //
   // The label is built by the sweep from live product names, so it is already
-  // "TB-500 5mg + GHK-Cu 50mg + Bacteriostatic Water 30ml". A leading "free" is
+  // "TB-500 5mg + GHK-Cu 50mg + Recon Water 30ml". A leading "free" is
   // stripped so "a free X" never reads "a free free X".
   const giftName = giftLabel.replace(/^free\s+/i, "");
   // A SUBJECT LINE HAS ABOUT SIXTY CHARACTERS BEFORE AN INBOX TRUNCATES IT.
   //
   // Naming three products in full produced "Last note: a free TB-500 5mg +
-  // GHK-Cu 50mg + Bacteriostatic Water 30ml with your order" — 85 characters,
+  // GHK-Cu 50mg + Recon Water 30ml with your order" — 85 characters,
   // so the reader sees neither the last gift nor the point. A count reads
   // better and survives: "3 free gifts". The body still names every item, and
   // so does the terms line the checkout enforces.

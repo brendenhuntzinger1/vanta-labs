@@ -154,8 +154,8 @@ export default async function ProductDetailPage({
   // Resolved server-side so the promo banner is in the first paint. Fetched in
   // the browser it arrived late and pushed the whole product panel down the
   // page. A failure resolves to null — no banner, never a broken product page.
-  // BAC Water cross-sell (accessory block + Frequently Bought Together).
-  // Null on the BAC Water page itself, or until the product exists in the DB.
+  // Recon Water cross-sell (accessory block + Frequently Bought Together).
+  // Null on the Recon Water page itself, or until the product exists in the DB.
   // Resolved across every accepted slug: a single hard-coded slug silently
   // dropped the accessory block on a catalogue publishing the other one.
   const bacWater = isBacWater(product.slug)

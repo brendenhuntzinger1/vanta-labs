@@ -7,11 +7,11 @@ const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
 const UPSELL = read("src/components/bac-water-upsell.tsx");
 
 // The offer is intentionally broad: every published product may be offered
-// bacteriostatic water, whatever form it ships in, and the customer declines if
+// recon water, whatever form it ships in, and the customer declines if
 // they do not need it. The catalogue holds no formulation data to classify
 // from, so a form-gated offer would depend on a hand-maintained flag that goes
 // silently wrong the first time somebody forgets to set it.
-describe("BAC Water is offered for any published product", () => {
+describe("Recon Water is offered for any published product", () => {
   it("does not gate the offer on requires_reconstitution", () => {
     expect(UPSELL).not.toContain("needsReconstitution");
     expect(UPSELL).not.toMatch(/if \(detail\.requiresReconstitution !== true\) return;/);
@@ -32,18 +32,18 @@ describe("BAC Water is offered for any published product", () => {
 });
 
 // A cross-sell that offers a product to itself is a loop.
-describe("bacteriostatic water is excluded from its own offer", () => {
-  it("matches both published BAC Water SKUs, not just the offered slug", () => {
+describe("recon water is excluded from its own offer", () => {
+  it("matches both published Recon Water SKUs, not just the offered slug", () => {
     expect(isBacWater("bacteriostatic-water")).toBe(true);
     expect(isBacWater("bac-water-30ml")).toBe(true);
-    expect(isBacWater({ slug: "bac-water-30ml", name: "Bacteriostatic Water 30ml" })).toBe(true);
+    expect(isBacWater({ slug: "bac-water-30ml", name: "Recon Water 30ml" })).toBe(true);
   });
 
-  it("matches a future BAC Water SKU by name as a safety net", () => {
+  it("matches a future Recon Water SKU by name as a safety net", () => {
     // Over-matching costs one missed cross-sell; under-matching is a recursive
     // offer, so exclusion errs wide on purpose.
-    expect(isBacWater({ slug: "bac-water-10ml", name: "Bacteriostatic Water 10mL" })).toBe(true);
-    expect(isBacWater({ slug: "sterile-diluent", name: "Bacteriostatic Water (BAC)" })).toBe(true);
+    expect(isBacWater({ slug: "bac-water-10ml", name: "Recon Water 10mL" })).toBe(true);
+    expect(isBacWater({ slug: "sterile-diluent", name: "Recon Water (BAC)" })).toBe(true);
   });
 
   it("does not match ordinary products", () => {
@@ -72,12 +72,12 @@ describe("bacteriostatic water is excluded from its own offer", () => {
 describe("the copy stays optional and research-use only", () => {
   it("never claims the product requires reconstitution", () => {
     expect(UPSELL).not.toMatch(/supplied in lyophilized form/i);
-    // The copy now says "BAC water" rather than the long form, matching the
+    // The copy now says "Recon water" rather than the long form, matching the
     // product name, the descriptions and the slug. What the assertion is
     // actually protecting is unchanged: the offer must READ as optional, never
     // as a requirement, so both phrasings of the demand are still refused.
     expect(UPSELL).not.toMatch(/you need bac(teriostatic)?[-\s]?water/i);
-    expect(UPSELL).toContain("Need BAC water?");
+    expect(UPSELL).toContain("Need Recon water?");
     expect(UPSELL).toContain("Add it if your");
   });
 

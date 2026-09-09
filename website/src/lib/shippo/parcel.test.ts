@@ -437,7 +437,7 @@ describe("liquid weight guardrail", () => {
 // under-declares the parcel.
 //
 // Only IMPOSSIBLE values are overridden. The catalogue's real measurements
-// (bacteriostatic water 10 mL at 1.06 oz, 30 mL at 2.30 oz) sit well above
+// (recon water 10 mL at 1.06 oz, 30 mL at 2.30 oz) sit well above
 // their fluid floors and must pass through untouched.
 // ---------------------------------------------------------------------------
 describe("physically impossible stored liquid weight", () => {
@@ -522,7 +522,7 @@ describe("agreement with the measured catalogue", () => {
   });
 
   it("still leaves a correctly-stored liquid weight untouched", () => {
-    // Bacteriostatic water already carries the right figure.
+    // Recon water already carries the right figure.
     expect(lineWeightOz({ doseLabel: "10mL", productWeightOz: 1.06 })).toBe(1.06);
   });
 });

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // AN OFFER THAT GRANTS MORE THAN ONE UNIT.
 //
 // The catalogue could name the product but not the count, and quoteOrder wrote
-// `quantity: 1` as a literal — so "two free BAC Water" could be promised in an
+// `quantity: 1` as a literal — so "two free Recon Water" could be promised in an
 // email and never shipped. The count now lives on the reward, is written onto
 // the row at mint time, and is what the till reads.
 //
@@ -44,7 +44,7 @@ beforeEach(() => {
 });
 
 describe("the Labor Day two-vial gift", () => {
-  it("is a known offer key granting two BAC Water", async () => {
+  it("is a known offer key granting two Recon Water", async () => {
     const { OFFER_CATALOG, isOfferKey } = await import("@/lib/offers/customer-offers");
     const { BAC_WATER_SLUG } = await import("@/lib/bac-water");
 
@@ -59,9 +59,9 @@ describe("the Labor Day two-vial gift", () => {
 
     const terms = describeOfferTerms("labor_day_bac_water_2", "2026-09-15T05:30:00Z");
 
-    // Plural, because two vials described as "a free BAC Water" is the same
+    // Plural, because two vials described as "a free Recon Water" is the same
     // copy-versus-till mismatch describeOfferTerms exists to prevent.
-    expect(terms).toContain("2 free BAC Water are added to your order");
+    expect(terms).toContain("2 free Recon Water are added to your order");
     expect(terms).toContain("September 15");
     expect(terms).toContain("$35");
   });
@@ -144,7 +144,7 @@ describe("the 72-hour follow-up gift", () => {
     const { describeOfferTerms } = await import("@/lib/offers/customer-offers");
     const terms = describeOfferTerms("labor_day_bac_water_2_40", "2026-09-15T16:30:00Z");
     expect(terms).toContain("40% off");
-    expect(terms).toContain("2 free BAC Water are added to your order");
+    expect(terms).toContain("2 free Recon Water are added to your order");
     expect(terms).toContain("$35 or more");
   });
 

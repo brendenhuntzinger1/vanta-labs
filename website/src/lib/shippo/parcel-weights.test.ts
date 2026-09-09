@@ -75,15 +75,15 @@ describe("quantity multiplication", () => {
 });
 
 describe("the real catalogue", () => {
-  it("1 x 10ml bacteriostatic water", () => {
+  it("1 x 10ml recon water", () => {
     expect(parcel([{ quantity: 1, productWeightOz: BAC_10_OZ }])).toBe(expected([BAC_10_OZ, 1]));
   });
 
-  it("1 x 30ml bacteriostatic water", () => {
+  it("1 x 30ml recon water", () => {
     expect(parcel([{ quantity: 1, productWeightOz: BAC_30_OZ }])).toBe(expected([BAC_30_OZ, 1]));
   });
 
-  it("2 peptides + 1 x 10ml BAC water", () => {
+  it("2 peptides + 1 x 10ml Recon water", () => {
     expect(
       parcel([
         { quantity: 2, productWeightOz: PEPTIDE_OZ },

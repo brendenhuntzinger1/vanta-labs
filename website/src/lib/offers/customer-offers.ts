@@ -143,14 +143,14 @@ export const OFFER_CATALOG = {
     ttlDays: 30,
   },
   winback_60_bac_water_10: {
-    label: "10% off + free BAC water",
+    label: "10% off + free Recon water",
     // THE SLUG COMES FROM bac-water.ts, IT IS NOT TYPED HERE. quoteOrder
     // resolves the gift with an exact `candidate.slug === offer.product_slug`
     // and has no candidate-list fallback, so a stale literal does not degrade —
     // the product half silently does not apply and only the percentage lands.
     // That is exactly what happened: this entry still said
     // "bacteriostatic-water" after rename-bac-water-slug.sql moved production
-    // to "bac-water", so the day-40 mail promised "a free BAC Water on us" and
+    // to "bac-water", so the day-40 mail promised "a free Recon Water on us" and
     // shipped none. The catalogue mock in offer-percent-competition.test.ts
     // carried the same stale literal, so the suite stayed green throughout.
     reward: { kind: "free_product_percent", productSlug: BAC_WATER_SLUG, percent: 10 } as OfferReward,
@@ -160,7 +160,7 @@ export const OFFER_CATALOG = {
     ttlDays: 30,
   },
   winback_60_bac_water_15: {
-    label: "15% off + free BAC water",
+    label: "15% off + free Recon water",
     reward: { kind: "free_product_percent", productSlug: BAC_WATER_SLUG, percent: 15 } as OfferReward,
     // The vial is cheap, so the percentage is the real gift here; the floor
     // is the same half-a-vial the other discount gifts use.
@@ -168,7 +168,7 @@ export const OFFER_CATALOG = {
     ttlDays: 30,
   },
   /**
-   * TWO VIALS OF BAC WATER, FOR THE LABOR DAY CART RECOVERY.
+   * TWO VIALS OF RECON WATER, FOR THE LABOR DAY CART RECOVERY.
    *
    * Issued by hand to two named abandoned carts rather than by an automation,
    * so it carries no `winback_` prefix — nothing on the retention ladder points
@@ -176,7 +176,7 @@ export const OFFER_CATALOG = {
    *
    * The two carts want opposite halves of the same mechanism, which is why the
    * gift is expressed as a count rather than as two separate offers: one cart
-   * holds no BAC Water and receives two, the other already holds two and has
+   * holds no Recon Water and receives two, the other already holds two and has
    * those made free. quote-order decides which from the cart, not from here.
    *
    * The floor is the same half-a-vial the other product gifts use — the vials
@@ -184,7 +184,7 @@ export const OFFER_CATALOG = {
    * guard against a token being spent on a basket of nothing, not a hurdle.
    */
   labor_day_bac_water_2: {
-    label: "2 free BAC Water",
+    label: "2 free Recon Water",
     reward: { kind: "free_product", productSlug: BAC_WATER_SLUG, quantity: 2 } as OfferReward,
     minSubtotalCents: 3500,
     // Long enough to outlast the Labor Day promotion it rides beside, so the
@@ -205,7 +205,7 @@ export const OFFER_CATALOG = {
    *
    * The two free vials ride ALONGSIDE it rather than competing, because a $0
    * product line is not in the discount race at all — which is what makes
-   * "40% off AND two free BAC Water" expressible without touching the
+   * "40% off AND two free Recon Water" expressible without touching the
    * store-wide stacking rule that every other customer depends on.
    *
    * What it must NOT be sold as is "Buy 2 Get 1 plus 40%". The customer gets
@@ -215,7 +215,7 @@ export const OFFER_CATALOG = {
    * it sits beside.
    */
   labor_day_bac_water_2_40: {
-    label: "2 free BAC Water",
+    label: "2 free Recon Water",
     reward: { kind: "free_product_percent", productSlug: BAC_WATER_SLUG, percent: 40, quantity: 2 } as OfferReward,
     minSubtotalCents: 3500,
     ttlDays: 5,
@@ -248,7 +248,7 @@ export const OFFER_CATALOG = {
    * margin on the largest cart before shipping and card fees.
    */
   labor_day_bac_water_2_70: {
-    label: "2 free BAC Water",
+    label: "2 free Recon Water",
     reward: { kind: "free_product_percent", productSlug: BAC_WATER_SLUG, percent: 70, quantity: 2 } as OfferReward,
     minSubtotalCents: 3500,
     ttlDays: 5,
@@ -288,7 +288,7 @@ export const OFFER_CATALOG = {
    * points at it and nothing should.
    */
   cart_recovery_bac_water: {
-    label: "Free BAC Water",
+    label: "Free Recon Water",
     reward: { kind: "free_product", productSlug: BAC_WATER_SLUG, quantity: 1 } as OfferReward,
     minSubtotalCents: 3500,
     ttlDays: 10,

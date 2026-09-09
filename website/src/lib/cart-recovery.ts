@@ -1367,7 +1367,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
   // quoteOrder already skips an unshippable gift item at the till, and the rest
   // of a multi-item gift still lands — but that is the WRONG PLACE for this to
   // be the only check. The email is written first: without this, a band naming
-  // an out-of-stock product mails "TB-500 + GHK-Cu + BAC Water" and the
+  // an out-of-stock product mails "TB-500 + GHK-Cu + Recon Water" and the
   // checkout hands over two of the three. Promising what cannot ship is the one
   // failure this whole programme is least able to afford, because the customer
   // reads the promise and then counts the box.
@@ -1610,8 +1610,8 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       // promotion is running instead of competing with it for the one discount
       // slot — the reason a percentage does not belong here is measured, not
       // preferred (10% was worth $0 to the two largest carts under Buy 2 Get 1).
-      // THE BAND DECIDES THE GIFT. A $61 cart is offered a BAC Water and a
-      // $520 cart a GHK-Cu and a BAC Water, because one flat gift under-serves
+      // THE BAND DECIDES THE GIFT. A $61 cart is offered a Recon Water and a
+      // $520 cart a GHK-Cu and a Recon Water, because one flat gift under-serves
       // the carts holding most of the money and over-serves the rest.
       const giftKey = plan.offerKey;
       const giftConfig = recoveryGiftConfig(shippableGifts(plan.gifts), catalogueNameBySlug);

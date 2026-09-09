@@ -157,7 +157,7 @@ describe("the redesigned page is composed, not assembled from cards", () => {
     // reader. Measured on the harness build, with no cookie:
     //
     //     alt="BPC-157 10mg"
-    //     alt="Bacteriostatic Water 30ml"
+    //     alt="Recon Water 30ml"
     //
     // The photographs stay — their URLs are opaque storage UUIDs that name
     // nothing, and the composition is the page's whole visual language. The

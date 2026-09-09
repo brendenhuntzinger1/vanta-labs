@@ -129,7 +129,7 @@ const PRODUCTS = {
   // pair agreed with each other and disagreed with the database: the gift
   // resolved here and resolved to nothing live. Both now take the slug from
   // bac-water.ts, which is the only place that decides it.
-  [BAC_WATER_SLUG]: { name: "BAC Water", category: "Supplies", price: "$9.99", stockStatus: "In Stock", image: "/w.png", description: "" },
+  [BAC_WATER_SLUG]: { name: "Recon Water", category: "Supplies", price: "$9.99", stockStatus: "In Stock", image: "/w.png", description: "" },
 } as const;
 
 vi.mock("@/lib/catalog", () => ({
@@ -293,13 +293,13 @@ describe("a 15% gift against the other discounts", () => {
   });
 });
 
-describe("10% off + a free BAC water", () => {
+describe("10% off + a free Recon water", () => {
   it("keeps the free vial and drops the 10% from its description when a bigger discount wins", async () => {
     state.offer = bacWater10();
     const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SAVE50" });
     expect(q.discountAmount).toBe(40);
-    expect(q.lineItems.find((line) => line.gift)?.product.name).toBe("BAC Water");
-    expect(q.appliedOffer?.description).toBe("BAC Water");
+    expect(q.lineItems.find((line) => line.gift)?.product.name).toBe("Recon Water");
+    expect(q.appliedOffer?.description).toBe("Recon Water");
     expect(q.appliedOffer?.productApplied).toBe(true);
     expect(q.appliedOffer?.percentApplied).toBe(false);
   });
@@ -308,7 +308,7 @@ describe("10% off + a free BAC water", () => {
     state.offer = bacWater10();
     const q = await quote([{ id: "peptide-b", quantity: 2 }]);
     expect(q.discountAmount).toBe(8);
-    expect(q.appliedOffer?.description).toBe("BAC Water + 10% off");
+    expect(q.appliedOffer?.description).toBe("Recon Water + 10% off");
     expect(q.appliedOffer?.percentApplied).toBe(true);
     expect(q.discountLabel).toBe("10% gift");
   });
@@ -352,7 +352,7 @@ describe("a free-shipping gift", () => {
 // min_subtotal_cents).
 //
 // That derivation is the whole point. A hand-typed product_slug is exactly how
-// the BAC Water gift broke: the catalogue said "bacteriostatic-water" after
+// the Recon Water gift broke: the catalogue said "bacteriostatic-water" after
 // production had renamed the product to "bac-water", and every fixture in this
 // file agreed with the catalogue, so the suite was green while a live gift
 // resolved to no product at all. Deriving from the catalogue means a stale slug
@@ -392,15 +392,15 @@ describe("the retention ladder as production configures it", () => {
 
   // Day 40 — winback_30. The vial must actually be in the order, not merely
   // promised: this is the assertion the stale slug would have failed.
-  it("day 40 (winback_60_bac_water_15) adds a real $0 BAC Water AND takes 15% off", async () => {
+  it("day 40 (winback_60_bac_water_15) adds a real $0 Recon Water AND takes 15% off", async () => {
     state.offer = mintedRow("winback_60_bac_water_15");
     const q = await quote([{ id: "peptide-b", quantity: 2 }]);
     const gift = q.lineItems.find((line) => line.gift);
-    expect(gift?.product.name).toBe("BAC Water");
+    expect(gift?.product.name).toBe("Recon Water");
     expect(gift?.product.price).toBe(0);
     expect(gift?.quantity).toBe(1);
     expect(q.discountAmount).toBe(12);
-    expect(q.appliedOffer?.description).toBe("BAC Water + 15% off");
+    expect(q.appliedOffer?.description).toBe("Recon Water + 15% off");
     expect(q.appliedOffer?.productApplied).toBe(true);
     expect(q.appliedOffer?.percentApplied).toBe(true);
   });

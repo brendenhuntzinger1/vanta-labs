@@ -115,7 +115,7 @@ const PLATFORMS = [
 ] as const;
 
 /** The tagged landing URL the admin ad-URL builder produces, for one platform. */
-function landingUrl(platform: (typeof PLATFORMS)[number], path = "/products/bac-water") {
+function landingUrl(platform: (typeof PLATFORMS)[number], path = "/products/recon-water") {
   const params = new URLSearchParams({
     utm_source: platform.utmSource,
     utm_medium: "paid_social",
@@ -152,7 +152,7 @@ describe("the access wall hands the portal a tagged URL", () => {
     expect(location.searchParams.get("next")).toBe(landingUrl(PLATFORMS[1]));
   });
 
-  it.each(["/", "/products", "/products/bac-water"])(
+  it.each(["/", "/products", "/products/recon-water"])(
     "sends %s to the same portal, so every ad destination has one arrival screen",
     async (path) => {
       const { response, location } = await adClick(landingUrl(PLATFORMS[1], path));
@@ -207,7 +207,7 @@ describe("a visitor who bounces at the portal", () => {
     const { location } = await adClick(landingUrl(PLATFORMS[1]));
     const touch = captureAtPortal(location, PLATFORMS[1].referrer);
 
-    // NOT /products/bac-water. The visitor genuinely never reached it, and this
+    // NOT /products/recon-water. The visitor genuinely never reached it, and this
     // file's governing rule is that absence of evidence is stored as absence —
     // a landing path they never saw would be an invention. Which page the ad
     // pointed at stays recoverable from `next`, which page_url keeps verbatim,
@@ -219,8 +219,8 @@ describe("a visitor who bounces at the portal", () => {
     // The guard rail on the whole change: carrying parameters must not make a
     // visit look paid when it never carried anything. An organic arrival at a
     // protected page redirects with only `next` on it.
-    const { location } = await adClick("/products/bac-water");
-    expect(location.searchParams.get("next")).toBe("/products/bac-water");
+    const { location } = await adClick("/products/recon-water");
+    expect(location.searchParams.get("next")).toBe("/products/recon-water");
     expect([...location.searchParams.keys()]).toEqual(["next"]);
     expect(captureAtPortal(location, "https://www.google.com/")).toBeNull();
   });
@@ -272,7 +272,7 @@ describe("a visitor who signs in and converts", () => {
 
   it.each(PLATFORMS)("restores the $name ad's original destination", async (platform) => {
     const { restored } = await funnel(platform);
-    expect(restored.pathname).toBe("/products/bac-water");
+    expect(restored.pathname).toBe("/products/recon-water");
     expect(restored.searchParams.get("utm_campaign")).toBe("launch");
     expect(restored.searchParams.get(platform.clickIdKey)).toBe(platform.clickIdValue);
   });
@@ -295,7 +295,7 @@ describe("a visitor who signs in and converts", () => {
     // First touch is the moment the ad delivered them. Signing in is not a new
     // campaign, so it must not overwrite it.
     expect(record.first!.landingPath).toBe("/account/login");
-    expect(record.last!.landingPath).toBe("/products/bac-water");
+    expect(record.last!.landingPath).toBe("/products/recon-water");
     expect(record.first!.ttclid).toBe(PLATFORMS[1].clickIdValue);
     expect(record.last!.ttclid).toBe(PLATFORMS[1].clickIdValue);
   });
@@ -320,7 +320,7 @@ describe("a visitor who signs in and converts", () => {
 describe("carrying ad parameters is safe and stable", () => {
   it("does not let a crafted parameter move the destination", async () => {
     const { location } = await adClick(
-      "/products/bac-water?utm_source=tiktok&next=https://evil.example/steal&redirect=//evil.example",
+      "/products/recon-water?utm_source=tiktok&next=https://evil.example/steal&redirect=//evil.example",
     );
 
     // The pathname is assigned by middleware, never read from the request, and
@@ -337,7 +337,7 @@ describe("carrying ad parameters is safe and stable", () => {
     const next = location.searchParams.get("next")!;
     expect(safeInternalPath(next, "/")).toBe(next);
     expect(new URL(next, ORIGIN).origin).toBe(ORIGIN);
-    expect(new URL(next, ORIGIN).pathname).toBe("/products/bac-water");
+    expect(new URL(next, ORIGIN).pathname).toBe("/products/recon-water");
   });
 
   it.each([
@@ -353,7 +353,7 @@ describe("carrying ad parameters is safe and stable", () => {
   });
 
   it("refuses to forward parameters it does not know", async () => {
-    const { location } = await adClick("/products/bac-water?utm_source=tiktok&session_token=secret&admin=1");
+    const { location } = await adClick("/products/recon-water?utm_source=tiktok&session_token=secret&admin=1");
     expect(location.searchParams.get("utm_source")).toBe("tiktok");
     // Only the known ad keys move up. Anything else stays inside `next`, where
     // it is inert, rather than being republished onto a new URL.
@@ -363,7 +363,7 @@ describe("carrying ad parameters is safe and stable", () => {
 
   it("strips control characters out of a crafted value", async () => {
     const { response, location } = await adClick(
-      `/products/bac-water?utm_campaign=${encodeURIComponent("launch\r\nX-Injected: 1")}`,
+      `/products/recon-water?utm_campaign=${encodeURIComponent("launch\r\nX-Injected: 1")}`,
     );
     // Nothing that could split a header survives into one. Lowercased because
     // a campaign tag goes through normalizeCampaignTag, same as the parser.
@@ -379,7 +379,7 @@ describe("carrying ad parameters is safe and stable", () => {
     // parser — while the order row holds `hook_a`, and the creative shows spend
     // against zero revenue.
     const { location } = await adClick(
-      "/products/bac-water?utm_source=TikTok&utm_campaign=Summer_Launch&utm_content=Hook_A&ttclid=TT_Click_Id_KeepCase",
+      "/products/recon-water?utm_source=TikTok&utm_campaign=Summer_Launch&utm_content=Hook_A&ttclid=TT_Click_Id_KeepCase",
     );
 
     expect(location.searchParams.get("utm_source")).toBe("tiktok");
@@ -402,7 +402,7 @@ describe("carrying ad parameters is safe and stable", () => {
       // template string on a URL and, from there, into a column as though it
       // were a campaign.
       const { location } = await adClick(
-        `/products/bac-water?utm_campaign=${encodeURIComponent(macro)}&utm_source=tiktok`,
+        `/products/recon-water?utm_campaign=${encodeURIComponent(macro)}&utm_source=tiktok`,
       );
       expect(location.searchParams.has("utm_campaign")).toBe(false);
       // The tags either side of it still travel — one bad value is not a reason
@@ -417,12 +417,12 @@ describe("carrying ad parameters is safe and stable", () => {
     // produce the same touch as never having met it. Compared field by field
     // rather than by eye, so a future divergence between copyAdParams and the
     // parser fails here instead of silently splitting the join.
-    const raw = "/products/bac-water?utm_source=TikTok&utm_medium=Paid_Social&utm_campaign=Launch"
+    const raw = "/products/recon-water?utm_source=TikTok&utm_medium=Paid_Social&utm_campaign=Launch"
       + "&utm_content=Hook_A&utm_term=Peptide&ttclid=TT_9&SCCID=Snap_9";
 
     const direct = parseAttributionTouch({
       search: new URL(raw, ORIGIN).search,
-      pathname: "/products/bac-water",
+      pathname: "/products/recon-water",
       referrer: null,
       now: NOW,
     });
@@ -437,7 +437,7 @@ describe("carrying ad parameters is safe and stable", () => {
   });
 
   it("caps an absurdly long value rather than reflecting it whole", async () => {
-    const { location } = await adClick(`/products/bac-water?utm_campaign=${"a".repeat(4000)}`);
+    const { location } = await adClick(`/products/recon-water?utm_campaign=${"a".repeat(4000)}`);
     expect(location.searchParams.get("utm_campaign")!.length).toBe(512);
   });
 
@@ -446,7 +446,7 @@ describe("carrying ad parameters is safe and stable", () => {
     // arrives, one spelling leaves — so the parser's any-case read and the
     // stored column agree.
     for (const spelling of ["ScCid", "sccid", "SCCID"]) {
-      const { location } = await adClick(`/products/bac-water?utm_source=snapchat&${spelling}=snap-9`);
+      const { location } = await adClick(`/products/recon-water?utm_source=snapchat&${spelling}=snap-9`);
       expect(location.searchParams.get("ScCid")).toBe("snap-9");
       expect(captureAtPortal(location, null)!.scCid).toBe("snap-9");
     }

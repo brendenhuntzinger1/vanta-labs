@@ -814,7 +814,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     //
     // `free_products` / `free_products_percent` carry `gift_items`, which is
     // how the top of the cart-recovery ladder can offer a GLOW *and* a GHK-Cu
-    // *and* a BAC Water. At this store's real dose costs that is the cheapest
+    // *and* a Recon Water. At this store's real dose costs that is the cheapest
     // strong offer available — three vials cost less than a tenth of what a
     // percentage costs on the same cart — and it was the one shape the schema
     // could not express.
@@ -874,7 +874,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
 
       // A GIFT OF SOMETHING ALREADY IN THE CART FREES THOSE UNITS.
       //
-      // "The BAC Water in your cart is on us" and "here are two more bottles
+      // "The Recon Water in your cart is on us" and "here are two more bottles
       // of water" are different promises, and only the first is what anyone
       // means. So the gift is satisfied from the basket first and only the
       // shortfall is added as new stock. A cart holding none of the product
@@ -957,7 +957,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     };
 
     // EVERY ITEM IS ATTEMPTED, AND A FAILURE IS PER ITEM. If the GLOW at the
-    // top of the ladder is out of stock, the GHK-Cu and the BAC Water beside it
+    // top of the ladder is out of stock, the GHK-Cu and the Recon Water beside it
     // still land — a partly-granted gift is better than none, and the shopper
     // sees exactly what was added rather than a promise the till ignored.
     const grantedNames: string[] = [];

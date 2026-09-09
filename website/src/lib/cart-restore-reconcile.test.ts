@@ -33,7 +33,7 @@ import { reconcileRestoredCart, type ReconcileCatalogueEntry } from "@/lib/cart-
 const CATALOGUE = new Map<string, ReconcileCatalogueEntry>([
   ["bac-water", {
     slug: "bac-water",
-    name: "BAC Water (0.9% Benzyl Alcohol)",
+    name: "Recon Water (0.9% Benzyl Alcohol)",
     unitPrice: 14.99,
     image: "/images/bac-water.jpg",
     doses: [
@@ -86,7 +86,7 @@ describe("a line whose product no longer exists", () => {
 describe("a renamed product follows its rename instead of dying", () => {
   it("repairs bacteriostatic-water to the canonical bac-water", () => {
     const result = reconcileRestoredCart(
-      [{ slug: "bacteriostatic-water", name: "Bacteriostatic Water", quantity: 1, unitPrice: 14.99 }],
+      [{ slug: "bacteriostatic-water", name: "Recon Water", quantity: 1, unitPrice: 14.99 }],
       CATALOGUE,
       aliases,
     );
@@ -102,7 +102,7 @@ describe("a renamed product follows its rename instead of dying", () => {
       CATALOGUE,
       aliases,
     );
-    expect(result.items[0].name).toBe("BAC Water (0.9% Benzyl Alcohol)");
+    expect(result.items[0].name).toBe("Recon Water (0.9% Benzyl Alcohol)");
   });
 
   // A repaired line must not carry the OLD product's variant id across: dose
@@ -126,12 +126,12 @@ describe("a dose that no longer resolves", () => {
   // different SKU. A cart we hand back must not contain one.
   it("is dropped, not silently swapped for the default", () => {
     const result = reconcileRestoredCart(
-      [{ slug: "bac-water", variantId: "bw-99", name: "BAC Water", quantity: 1, unitPrice: 14.99 }],
+      [{ slug: "bac-water", variantId: "bw-99", name: "Recon Water", quantity: 1, unitPrice: 14.99 }],
       CATALOGUE,
       aliases,
     );
     expect(result.items).toEqual([]);
-    expect(result.dropped).toEqual([{ name: "BAC Water (0.9% Benzyl Alcohol)", reason: "variant_gone" }]);
+    expect(result.dropped).toEqual([{ name: "Recon Water (0.9% Benzyl Alcohol)", reason: "variant_gone" }]);
   });
 
   it("keeps a dose that still exists, priced from that dose", () => {
@@ -141,7 +141,7 @@ describe("a dose that no longer resolves", () => {
       aliases,
     );
     expect(result.items).toEqual([{
-      slug: "bac-water", variantId: "bw-30", name: "BAC Water (0.9% Benzyl Alcohol)",
+      slug: "bac-water", variantId: "bw-30", name: "Recon Water (0.9% Benzyl Alcohol)",
       quantity: 2, unitPrice: 24.99, image: "/images/bac-water.jpg",
     }]);
   });
@@ -230,7 +230,7 @@ describe("the shape of the answer", () => {
   it("is a no-op on a cart that is entirely healthy", () => {
     const stored = [
       { slug: "glp-3", name: "GLP-3", quantity: 2, unitPrice: 113.99 },
-      { slug: "bac-water", variantId: "bw-10", name: "BAC Water (0.9% Benzyl Alcohol)", quantity: 1, unitPrice: 14.99, image: "/images/bac-10.jpg" },
+      { slug: "bac-water", variantId: "bw-10", name: "Recon Water (0.9% Benzyl Alcohol)", quantity: 1, unitPrice: 14.99, image: "/images/bac-10.jpg" },
     ];
     const result = reconcileRestoredCart(stored, CATALOGUE, aliases);
     expect(result.dropped).toEqual([]);

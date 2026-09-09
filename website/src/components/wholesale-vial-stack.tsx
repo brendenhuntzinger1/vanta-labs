@@ -29,7 +29,7 @@ import { PLACEHOLDER_IMAGE_PATHS, resolveProductImage } from "@/lib/product-imag
  * access-policy.ts put every product behind an account and left /wholesale
  * exempt — recruitment cannot sit behind a login — so this alt became the one
  * place a compound name still reached an anonymous reader. Measured on the
- * harness build: "BPC-157 10mg" and "Bacteriostatic Water 30ml" in the HTML of
+ * harness build: "BPC-157 10mg" and "Recon Water 30ml" in the HTML of
  * a page served to anyone, on a store whose entire catalogue is gated.
  *
  * The name is removed from the TYPE rather than from the call site, so it

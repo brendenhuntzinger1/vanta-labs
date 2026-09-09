@@ -831,7 +831,7 @@ export function AdminEmailClient({
                         className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
                         value={form.giftLabel}
                         onChange={(event) => setForm({ ...form, giftLabel: event.target.value })}
-                        placeholder="Free BAC water"
+                        placeholder="Free Recon water"
                       />
                     </label>
                     <label className="block">

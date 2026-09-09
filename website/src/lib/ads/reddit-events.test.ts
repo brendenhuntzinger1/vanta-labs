@@ -65,7 +65,7 @@ describe("buildRedditPurchase", () => {
     itemCount: 2,
     items: [
       { slug: "bpc-157", variantId: "dose-1", name: "BPC-157", category: "Peptides" },
-      { slug: "bac-water", name: "BAC Water" },
+      { slug: "bac-water", name: "Recon Water" },
     ],
   };
 
@@ -83,7 +83,7 @@ describe("buildRedditPurchase", () => {
     expect(event?.properties.itemCount).toBe(2);
     expect(event?.properties.products).toEqual([
       { id: "bpc-157::dose-1", name: "BPC-157", category: "Peptides" },
-      { id: "bac-water", name: "BAC Water" },
+      { id: "bac-water", name: "Recon Water" },
     ]);
   });
 

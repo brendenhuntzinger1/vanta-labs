@@ -27,7 +27,7 @@ describe("compliance gate — hard prohibitions", () => {
     ["administration", { script: "VO: inject once and wait" }],
     ["dosing with a schedule", { caption: "250mcg per day for eight weeks" }],
     ["protocol language", { script: "VO: an eight week cycle length" }],
-    ["reconstitution", { script: "VO: reconstitute with bacteriostatic water" }],
+    ["reconstitution", { script: "VO: reconstitute with recon water" }],
     ["medical claim", { hook: "It heals faster." }],
     ["body composition", { caption: "serious muscle gain" }],
     ["guaranteed outcome", { hook: "Guaranteed to work." }],

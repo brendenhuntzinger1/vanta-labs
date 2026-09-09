@@ -6,11 +6,11 @@ import type { BxgyPromotion } from "@/lib/bxgy-engine";
 // A GIFT OF MORE THAN ONE UNIT, AND A GIFT OF SOMETHING ALREADY IN THE CART.
 //
 // Until now an offer's product half was hard-coded to `quantity: 1`, so "two
-// free BAC Water" was not expressible at all — the catalogue could name the
+// free Recon Water" was not expressible at all — the catalogue could name the
 // product and nothing could name the count.
 //
 // The second half is the one that is easy to get wrong. A shopper who is
-// promised "the BAC Water in your cart is on us" and is instead handed two MORE
+// promised "the Recon Water in your cart is on us" and is instead handed two MORE
 // vials has been given the wrong thing: they wanted their basket cheaper, not
 // four bottles of water. So a product gift is satisfied from what the cart
 // already holds FIRST, and only the shortfall is added as new stock:
@@ -85,7 +85,7 @@ vi.mock("@/lib/supabase-server", () => {
 
 // Real prices, so the two carts below are the two real carts.
 const PRODUCTS = {
-  "bac-water": { name: "BAC Water (0.9% Benzyl Alcohol)", category: "Supplies", price: "$14.99", stockStatus: "In Stock", image: "/w.png", description: "" },
+  "bac-water": { name: "Recon Water (0.9% Benzyl Alcohol)", category: "Supplies", price: "$14.99", stockStatus: "In Stock", image: "/w.png", description: "" },
   "glp-3": { name: "GLP-3", category: "Research Peptides", price: "$69.99", stockStatus: "In Stock", image: "/g.png", description: "" },
   "hgh-gh-191": { name: "HGH GH-191", category: "Research Peptides", price: "$64.99", stockStatus: "In Stock", image: "/h.png", description: "" },
 } as const;
@@ -142,7 +142,7 @@ function promotion(id: string): BxgyPromotion {
   return { ...found, enabled: true };
 }
 
-/** A stored customer_offers row granting `quantity` free BAC Water. */
+/** A stored customer_offers row granting `quantity` free Recon Water. */
 function bacWaterOffer(quantity: number | null | undefined, overrides: Record<string, unknown> = {}) {
   const row: Record<string, unknown> = {
     id: "offer-1",
@@ -257,7 +257,7 @@ describe("how many units a product gift grants", () => {
 
 describe("a gift of something the cart already holds", () => {
   it("frees the units already in the basket rather than adding more", async () => {
-    // Heidi's real cart: GLP-3 10mg plus two BAC Water. "Both your BAC Water
+    // Heidi's real cart: GLP-3 10mg plus two Recon Water. "Both your Recon Water
     // are on us" has to mean the two she chose, not two more.
     offerState.offer = bacWaterOffer(2);
 
@@ -311,7 +311,7 @@ describe("a gift of something the cart already holds", () => {
 describe("what the rest of the cart is allowed to see", () => {
   it("does not let an absorbed unit also earn a Buy X Get Y reward", async () => {
     // Without absorption Heidi's three units (GLP-3 + 2 BAC) form one Buy 2
-    // Get 1 group and the engine frees her cheapest unit — a BAC Water. If the
+    // Get 1 group and the engine frees her cheapest unit — a Recon Water. If the
     // absorbed units stayed eligible she would be given the same vial twice and
     // the store would book the discount for a unit it had already donated.
     promotionState.promotions = [promotion("buy-2-get-1-free")];

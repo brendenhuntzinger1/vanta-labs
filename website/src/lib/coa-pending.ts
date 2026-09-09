@@ -36,7 +36,7 @@ const PENDING_SLUGS = new Set<string>(COA_TESTING_PENDING_SLUGS);
 /**
  * Is this product one whose COA is still being tested?
  *
- * Slug only, never name: unlike the BAC Water exclusion this drives a CLAIM
+ * Slug only, never name: unlike the Recon Water exclusion this drives a CLAIM
  * shown to customers, so matching too much is the expensive direction. A name
  * regex for "HGH" would also catch an unrelated growth-hormone SKU added later
  * and tell shoppers its documented COA was still in a laboratory.

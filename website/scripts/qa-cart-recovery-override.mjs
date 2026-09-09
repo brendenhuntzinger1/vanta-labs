@@ -15,10 +15,10 @@
 // The carts are four DIFFERENT shapes of the same gift, which is the
 // whole reason to run all of them rather than one:
 //
-//   Heath    10 x HGH GH-191, no BAC Water in the cart
+//   Heath    10 x HGH GH-191, no Recon Water in the cart
 //            -> two vials are ADDED. Buy 2 Get 1 must still free three of his
 //               ten, and the bundle tier must still lose to it.
-//   Heidi    GLP-3 10mg + 2 x BAC Water
+//   Heidi    GLP-3 10mg + 2 x Recon Water
 //            -> her own two are ABSORBED, not duplicated. The promotion must
 //               then see one paid unit, not three, and grant nothing.
 //   Candace  1 x B12, a small cart
@@ -80,7 +80,7 @@ const PRODUCTS = [
     { id: "55544dc9-b7b6-4bf1-a2f4-50b62d0e6e49", label: "10mg", cents: 6999, cost: 1047, qty: 36, isDefault: true },
     { id: "fcea0b5c-62f8-4e28-b9d0-a4898c28303c", label: "30mg", cents: 16999, cost: 1875, qty: 49 },
   ] },
-  { slug: "bac-water", name: "BAC Water (0.9% Benzyl Alcohol)", doses: [
+  { slug: "bac-water", name: "Recon Water (0.9% Benzyl Alcohol)", doses: [
     { id: "06126d6b-bbc4-4ae3-bc99-d6a4119aa514", label: "10mL", cents: 1499, cost: 143, qty: 92, isDefault: true, tracked: false },
   ] },
   { slug: "b12", name: "B12", doses: [
@@ -114,7 +114,7 @@ const CARTS = [
     name: "Heidi",
     valueCents: 9847,
     items: [
-      { slug: "bac-water", name: "BAC Water (0.9% Benzyl Alcohol)", quantity: 2, unitPrice: 14.99, variantId: "06126d6b-bbc4-4ae3-bc99-d6a4119aa514" },
+      { slug: "bac-water", name: "Recon Water (0.9% Benzyl Alcohol)", quantity: 2, unitPrice: 14.99, variantId: "06126d6b-bbc4-4ae3-bc99-d6a4119aa514" },
       { slug: "glp-3", name: "GLP-3", quantity: 1, unitPrice: 69.99, variantId: "55544dc9-b7b6-4bf1-a2f4-50b62d0e6e49" },
     ],
     // Both vials absorbed, so she pays for the GLP-3 alone — and the promotion
@@ -135,7 +135,7 @@ const CARTS = [
     stage: "t72h",
     items: [
       { slug: "glp-3", name: "GLP-3", quantity: 3, unitPrice: 169.99, variantId: "fcea0b5c-62f8-4e28-b9d0-a4898c28303c" },
-      { slug: "bac-water", name: "BAC Water (0.9% Benzyl Alcohol)", quantity: 1, unitPrice: 14.99, variantId: "06126d6b-bbc4-4ae3-bc99-d6a4119aa514" },
+      { slug: "bac-water", name: "Recon Water (0.9% Benzyl Alcohol)", quantity: 1, unitPrice: 14.99, variantId: "06126d6b-bbc4-4ae3-bc99-d6a4119aa514" },
     ],
     // THE PARTIAL-ABSORB SHAPE, and the only cart that has it: her one vial is
     // freed and a second is added. Her three GLP-3 then stand alone as the paid
@@ -420,7 +420,7 @@ async function main() {
       assert(message, `no message captured for ${cart.email}`);
       // The subject has to name what THIS shopper left, not a generic line.
       assert(
-        message.subject.includes(cart.subjectItem) && message.subject.includes("2 free BAC Water"),
+        message.subject.includes(cart.subjectItem) && message.subject.includes("2 free Recon Water"),
         `subject was ${JSON.stringify(message.subject)}`,
       );
       assert(message.subject.length <= 60, `subject is ${message.subject.length} chars, too long to survive a phone`);
@@ -434,7 +434,7 @@ async function main() {
 
     await step("the message states the gift, the perks and the enforced terms", async () => {
       const body = `${message.html} ${message.text ?? ""}`;
-      assert(/2 free BAC Water/i.test(body), "the gift is not stated");
+      assert(/2 free Recon Water/i.test(body), "the gift is not stated");
       assert(/\$35 or more/.test(body), "the minimum the till enforces is not stated");
       assert(/Free shipping/i.test(body), "free shipping is not stated");
       assert(/2-day shipping, on us/i.test(body), "the expedited-shipping promise is not stated");
@@ -602,9 +602,9 @@ async function main() {
       assert(units === cart.expectFreeBac, `expected ${cart.expectFreeBac} free units, found ${units}`);
       assert(
         (quoted.giftLines ?? []).every((line) => /bac water/i.test(line.name)),
-        `a gift line is not BAC Water: ${JSON.stringify(quoted.giftLines)}`,
+        `a gift line is not Recon Water: ${JSON.stringify(quoted.giftLines)}`,
       );
-      return `${units} free BAC Water shown`;
+      return `${units} free Recon Water shown`;
     });
 
     await step("the promotion behaves as it should for this cart's shape", async () => {
@@ -629,11 +629,11 @@ async function main() {
       );
       const bac = rows.filter((r) => String(r.product_id).split("::")[0] === "bac-water");
       const bacUnits = bac.reduce((sum, r) => sum + Number(r.quantity), 0);
-      assert(bacUnits === cart.expectBacUnits, `pick list holds ${bacUnits} BAC Water, expected ${cart.expectBacUnits}`);
+      assert(bacUnits === cart.expectBacUnits, `pick list holds ${bacUnits} Recon Water, expected ${cart.expectBacUnits}`);
       // Every vial is free: Heidi's two are the ones that would otherwise be
       // charged for while two more were added alongside them.
       for (const line of bac) {
-        assert(Number(line.unit_price) === 0, `a BAC Water line is charged $${line.unit_price}`);
+        assert(Number(line.unit_price) === 0, `a Recon Water line is charged $${line.unit_price}`);
         assert(Number(line.unit_cost_cents) > 0, "the gift's COGS was not booked");
       }
       const named = rows.map((r) => `${r.product_name} x${r.quantity} @ $${Number(r.unit_price).toFixed(2)}`);

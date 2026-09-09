@@ -55,8 +55,9 @@ const PUBLIC_ACCOUNT_PATHS = new Set([
  * string is carried by the clone, so a referral or campaign link survives.
  */
 const RENAMED_PRODUCT_SLUGS = new Map<string, string>([
-  ["/products/bacteriostatic-water", "/products/bac-water"],
-  ["/products/bac-water-30ml", "/products/bac-water"],
+  ["/products/bacteriostatic-water", "/products/recon-water"],
+  ["/products/bac-water-30ml", "/products/recon-water"],
+  ["/products/bac-water", "/products/recon-water"],
 ]);
 
 const MAINTENANCE_CACHE_TTL_MS = 15_000;
@@ -886,8 +887,8 @@ export async function middleware(request: NextRequest) {
 
   // A RENAMED PRODUCT KEEPS ITS OLD ADDRESS WORKING.
   //
-  // BAC Water's slug was "bacteriostatic-water" and is now "bac-water". The
-  // page always said BAC Water; the URL was the last place the long word
+  // Recon Water's slug was "bacteriostatic-water" and is now "bac-water". The
+  // page always said Recon Water; the URL was the last place the long word
   // survived, and because a slug is echoed into the canonical tag, og:url, the
   // breadcrumb, the Product schema's sku and the sitemap, that one string was
   // every occurrence of it on the live site.

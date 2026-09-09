@@ -20,7 +20,7 @@ import { selectStackImages } from "@/components/wholesale-vial-stack";
 // Measured on the harness build, in the HTML served with no cookie at all:
 //
 //     alt="BPC-157 10mg"
-//     alt="Bacteriostatic Water 30ml"
+//     alt="Recon Water 30ml"
 //
 // The photographs stay — their URLs are opaque storage UUIDs and the
 // composition is the page's whole visual language. The NAMES do not.

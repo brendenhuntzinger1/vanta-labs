@@ -53,11 +53,11 @@ vi.mock("@/lib/supabase-server", () => {
 });
 
 // The reported basket, at its reported prices: two GLP-1 at $44.99 (which earn
-// the 5% two-unit tier) and one $14.99 BAC Water (which does not, and is
+// the 5% two-unit tier) and one $14.99 Recon Water (which does not, and is
 // therefore the cheapest unit and the one the promotion gives away).
 const PRODUCTS = {
   "glp-1": { name: "GLP-1", category: "Research Peptides", price: "$44.99", stockStatus: "In Stock", image: "/a.png", description: "" },
-  "bac-water": { name: "BAC Water", category: "Accessories", price: "$14.99", stockStatus: "In Stock", image: "/b.png", description: "" },
+  "bac-water": { name: "Recon Water", category: "Accessories", price: "$14.99", stockStatus: "In Stock", image: "/b.png", description: "" },
 } as const;
 
 vi.mock("@/lib/catalog", () => ({

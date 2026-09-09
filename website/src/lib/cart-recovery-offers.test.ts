@@ -65,7 +65,7 @@ describe("the first two messages never carry an incentive", () => {
 });
 
 describe("the third message carries the gift, and only the gift", () => {
-  it("plans the free BAC Water and no percentage", () => {
+  it("plans the free Recon Water and no percentage", () => {
     const plan = at({ stage: "t24h" });
     expect(plan.offerKey).toBe("cart_recovery_bac_water");
     expect(plan.coupon).toBe(false);

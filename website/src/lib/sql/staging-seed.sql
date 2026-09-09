@@ -58,11 +58,11 @@ values
    'CJC-2404D', '99.1%', 'Growth-hormone releasing hormone analog, 2mg per vial.',
    '2026-04-20', 'Janoshik Analytical', 'https://example.com/coa/cjc-2404d.pdf',
    'C165H269N47O46', 1000, 5),
-  ('bac-water-30ml', 'Bacteriostatic Water 30ml', 'Laboratory Supplies',
-   'Sterile bacteriostatic water for reconstitution, 30ml.',
+  ('bac-water-30ml', 'Recon Water 30ml', 'Laboratory Supplies',
+   'Sterile recon water for reconstitution, 30ml.',
    'Laboratory supply for reconstitution of lyophilized research compounds.',
    1299, 0, 200, 'VL-BAC-30', true, true, false, 'In Stock',
-   'BAC-2407', null, 'Sterile bacteriostatic water for reconstitution, 30ml.',
+   'BAC-2407', null, 'Sterile recon water for reconstitution, 30ml.',
    '2026-07-01', 'In-house QC', null, null, 300, 5)
 on conflict (slug) do update set
   name = excluded.name,

@@ -19,7 +19,7 @@ vi.mock("@/lib/catalog", () => ({
     { id: "p-bpc", slug: "bpc-157", name: "BPC-157", category: "Healing", image: "/images/bpc.png", doses: [] },
     { id: "p-hgh", slug: "hgh-gh-191", name: "HGH GH-191", category: "Growth Hormone", image: "/images/hgh.png", doses: [] },
     { id: "p-hcg", slug: "hcg", name: "HCG", category: "Specialty", image: "/images/hcg.png", doses: [] },
-    { id: "p-bac", slug: "bacteriostatic-water", name: "BAC Water", category: "Solvents", image: "/images/bac.png", doses: [] },
+    { id: "p-bac", slug: "bacteriostatic-water", name: "Recon Water", category: "Solvents", image: "/images/bac.png", doses: [] },
   ],
 }));
 

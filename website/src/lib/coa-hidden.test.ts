@@ -10,7 +10,7 @@ import {
 // ---------------------------------------------------------------------------
 // PRODUCTS THE OWNER HAS NOT SENT FOR TESTING MUST NOT SIT IN THE COA LIBRARY.
 //
-// HGH, HCG and bacteriostatic water were never part of the batch submitted to
+// HGH, HCG and recon water were never part of the batch submitted to
 // the laboratory, so a "Documentation Pending" card for each of them is a
 // promise the store is not in a position to make. The library takes a hidden
 // list from admin; until the owner saves one, the code default is exactly
@@ -28,7 +28,7 @@ describe("the default hidden list", () => {
     const setup = readFileSync(join(process.cwd(), "src/lib/sql/SETUP-run-all.sql"), "utf8");
     const bacWater = readFileSync(join(process.cwd(), "src/lib/bac-water.ts"), "utf8");
     for (const slug of DEFAULT_COA_HIDDEN_PRODUCT_SLUGS) {
-      // The retired HGH slug and the second BAC water slug live in the
+      // The retired HGH slug and the second Recon water slug live in the
       // reconciliation / cross-sell lists rather than the seed; either source
       // counts, an invented slug does not.
       expect(setup.includes(`'${slug}'`) || bacWater.includes(`"${slug}"`)).toBe(true);

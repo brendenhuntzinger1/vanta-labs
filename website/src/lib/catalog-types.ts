@@ -104,11 +104,11 @@ export type Product = {
   reconstitutionNote?: string;
   /**
    * Operator-set in Admin. True when the product ships lyophilized and
-   * bacteriostatic water may be needed for laboratory reconstitution.
+   * recon water may be needed for laboratory reconstitution.
    *
    * Never inferred from the name, the category or a dose label. This is the
-   * ONLY thing that qualifies a product for the BAC Water cross-sell — the
-   * previous rule was "any product that is not BAC Water itself", which
+   * ONLY thing that qualifies a product for the Recon Water cross-sell — the
+   * previous rule was "any product that is not Recon Water itself", which
    * offered reconstitution water for liquids too.
    *
    * Optional on the type so a cart persisted before this column existed reads

@@ -24,7 +24,7 @@ import { BAC_WATER_SLUG, canonicalCartSlug } from "@/lib/bac-water";
 // ---------------------------------------------------------------------------
 
 describe("canonicalCartSlug", () => {
-  it("migrates every retired BAC Water slug to the canonical one", () => {
+  it("migrates every retired Recon Water slug to the canonical one", () => {
     expect(canonicalCartSlug("bacteriostatic-water")).toBe(BAC_WATER_SLUG);
     expect(canonicalCartSlug("bac-water-30ml")).toBe(BAC_WATER_SLUG);
     expect(canonicalCartSlug(BAC_WATER_SLUG)).toBe(BAC_WATER_SLUG);

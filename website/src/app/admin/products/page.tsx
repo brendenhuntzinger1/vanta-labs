@@ -1085,7 +1085,7 @@ function ProductEditor({
             water cross-sell. Off by default and never inferred from the name
             or category, so a liquid product cannot start recommending a
             reconstitution step just because it was added to the catalogue. */}
-        <label className="flex items-center gap-2 rounded-lg border border-zinc-800 p-2 text-xs text-zinc-300" title="Ships lyophilized — offer bacteriostatic water for laboratory reconstitution">
+        <label className="flex items-center gap-2 rounded-lg border border-zinc-800 p-2 text-xs text-zinc-300" title="Ships lyophilized — offer recon water for laboratory reconstitution">
           <input type="checkbox" checked={Boolean(draft.requiresReconstitution)} onChange={(e) => setDraft((prev) => ({ ...prev, requiresReconstitution: e.target.checked }))} />
           Lyophilized
         </label>
@@ -1139,7 +1139,7 @@ function ProductEditor({
           <input value={draft.peptideSequence ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, peptideSequence: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2 font-mono" placeholder="GEPPPGKPADDAGLV..." />
         </label>
         <label className="text-xs text-zinc-400">Reconstitution note
-          <input value={draft.reconstitutionNote ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, reconstitutionNote: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" placeholder="Reconstitute with bacteriostatic water." />
+          <input value={draft.reconstitutionNote ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, reconstitutionNote: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" placeholder="Reconstitute with recon water." />
         </label>
         <div className="space-y-2">
           <div className="flex items-center justify-between">
