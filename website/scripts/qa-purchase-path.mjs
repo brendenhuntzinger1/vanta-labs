@@ -973,6 +973,80 @@ async function main() {
   });
 
   // ---- 6. Membership billing emails --------------------------------------
+  section("5b. Retrying checkout");
+  // On 2026-09-09 one shopper reached the card form four times in 3.5 minutes
+  // and left four orders with four stock holds behind: the idempotency key
+  // lived in a ref that a full-page navigation destroyed, and the page cleared
+  // it on purpose before that navigation anyway. This drives the REAL button,
+  // not /api/checkout/create-session directly, because the key is resolved on
+  // the client and that is precisely what the earlier steps bypass.
+  await step("a shopper who backs out of the card form and tries again lands on the SAME order", async () => {
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true, ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const p = await ctx.newPage();
+    p.setDefaultTimeout(20000);
+    const RETRY_EMAIL = `retry.${stamp}@example.test`;
+    try {
+      await createConfirmedCustomer(RETRY_EMAIL, SHOPPER_PASSWORD, "Retry Shopper");
+      await signInThroughPortal(p, RETRY_EMAIL, SHOPPER_PASSWORD);
+      await passAgeGate(p);
+      assert(await addFirstProductToCart(p), "could not add a product to the cart");
+
+      const fillAndSubmit = async () => {
+        await p.goto(`${BASE}/checkout`, { waitUntil: "domcontentloaded" });
+        await p.waitForTimeout(2500);
+        assert(!/\/account\/login/.test(p.url()), "checkout bounced the shopper to the portal");
+        const fill = async (sel, v) => {
+          const el = await p.$(sel);
+          if (el && !(await el.inputValue().catch(() => ""))) await el.fill(v);
+        };
+        await fill('input[autocomplete="email"]', RETRY_EMAIL);
+        await fill('input[autocomplete="tel"]', "4075550123");
+        await fill('input[autocomplete="shipping name"]', "Retry Shopper");
+        await fill('input[autocomplete="shipping address-line1"]', "1 Harness Way");
+        await fill('input[autocomplete*="address-level2"]', "Orlando");
+        const st = await p.$('input[autocomplete*="address-level1"], select[autocomplete*="address-level1"]');
+        if (st) {
+          if ((await st.evaluate((e) => e.tagName)) === "SELECT") {
+            await st.selectOption({ label: "Florida" }).catch(() => st.selectOption("FL").catch(() => {}));
+          } else if (!(await st.inputValue())) {
+            await st.fill("FL");
+          }
+        }
+        await fill('input[autocomplete*="postal-code"]', "32801");
+        for (const box of await p.$$("input[type=checkbox]")) {
+          if (!(await box.isChecked())) await box.click().catch(() => {});
+        }
+        await p.waitForTimeout(400);
+        const clicked = await p.evaluate(() => {
+          const b = [...document.querySelectorAll("button")]
+            .find((x) => /Continue to secure payment/i.test(x.textContent || "") && !x.disabled);
+          if (b) { b.click(); return true; }
+          return false;
+        });
+        assert(clicked, "no enabled 'Continue to secure payment' button");
+        await p.waitForURL(/\/checkout\/pay\//, { timeout: 30000 });
+        return new URL(p.url()).pathname.split("/checkout/pay/")[1];
+      };
+
+      const first = await fillAndSubmit();
+      // The shopper's move: back to checkout, press the button again.
+      const second = await fillAndSubmit();
+      assert(first === second, `the retry created a second order: ${first} then ${second}`);
+      const n = (await q("select count(*)::int as n from orders where customer_email = $1", [RETRY_EMAIL])).rows[0].n;
+      assert(n === 1, `expected one order row for the shopper, found ${n}`);
+
+      // A CHANGED cart must not be deduped against the old attempt.
+      await addFirstProductToCart(p);
+      const third = await fillAndSubmit();
+      assert(third !== first, "a changed cart resumed the old order instead of creating a new one");
+      const m = (await q("select count(*)::int as n from orders where customer_email = $1", [RETRY_EMAIL])).rows[0].n;
+      assert(m === 2, `expected two order rows after the changed cart, found ${m}`);
+      return `two submits -> ${first} once; changed cart -> a second order`;
+    } finally {
+      await ctx.close();
+    }
+  });
+
   section("6. Membership billing emails");
 
   await step("a renewal receipt goes to the member who was charged", async () => {
