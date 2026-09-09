@@ -100,8 +100,29 @@ values ('55555555-5555-5555-5555-555555555555','ghk-cu','GHK-Cu 50mg','Research 
 insert into products (id, slug, name, category, price_cents, product_cost_cents, stock_status,
   inventory_quantity, is_active, is_published, is_enabled, track_inventory, short_description,
   image_url, position)
-values ('66666666-6666-6666-6666-666666666666','recon-water','Recon Water 30ml','Accessories',
+values ('66666666-6666-6666-6666-666666666666','recon-water','Recon Water','Accessories',
   1499,300,'In Stock',200,true,true,true,true,'Synthetic harness product (the reconstitution upsell).','/images/product-placeholder.png',6);
+
+-- THE DOSE, WITHOUT WHICH THE UPSELL CANNOT BE SEEN.
+--
+-- BacWaterAccessoryBlock, FrequentlyBoughtTogether and the cart checkboxes all
+-- render from getBacWaterDoseOffers(), which returns [] for a product with no
+-- doses -- so every one of them returned null here and the accessory upsell was
+-- invisible in the harness while working perfectly in production. That is not a
+-- passing test, it is an unrunnable one: browser verification of the upsell was
+-- reported as "could not verify" for exactly this reason.
+--
+-- Mirrors production: one 10mL dose, default, in stock. Deliberately 10mL and
+-- not 30mL -- production carries no 30mL row, so BAC_WATER_FEATURED_SUFFIX
+-- ('30ml') flags nothing and no "Most Popular" badge appears on the upsell.
+-- Seeding 30mL here would light that badge up in the harness and hide the fact
+-- that production never shows it. The product name dropped its size for the
+-- same reason: a row called "Recon Water 30ml" holding a 10mL dose reads as a
+-- bug every time someone opens this file.
+insert into product_doses (id, product_id, label, slug_suffix, price_cents, inventory_quantity,
+  stock_status, is_default, is_enabled, track_inventory, position, sku)
+values ('66666661-0000-4000-8000-000000000001','66666666-6666-6666-6666-666666666666','10mL','10ml',
+  1499,92,'In Stock',true,true,true,0,'RECON-10');
 
 -- Ambassadors: all three discount resolutions.
 insert into ambassadors (id, name, email, referral_code, commission_percent, customer_discount_percent, status, approved_at)
