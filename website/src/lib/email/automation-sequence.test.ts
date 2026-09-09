@@ -15,7 +15,7 @@ import { AUTOMATION_QUIET_MS } from "@/lib/email/frequency";
 // and asserts the calendar the owner specified:
 //
 //   day 0 purchase → day 14 follow-up → day 30 free shipping
-//                  → day 40 10% + BAC water → day 50 free GHK-Cu
+//                  → day 40 10% + Recon water → day 50 free GHK-Cu
 //
 // and that a purchase at ANY point stops the rest of that cycle and starts a
 // fresh one from the new order. The audit of 2026-09-04 found production at

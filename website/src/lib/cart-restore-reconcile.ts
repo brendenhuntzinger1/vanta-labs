@@ -79,7 +79,7 @@ type StoredLine = {
  *
  * `aliases` resolves a slug that no longer exists to the slugs it may have been
  * renamed to — passed in rather than imported so this stays pure and so the
- * only alias family the app actually has (BAC Water's) is named in one place.
+ * only alias family the app actually has (Recon Water's) is named in one place.
  */
 export function reconcileRestoredCart(
   stored: ReadonlyArray<StoredLine>,

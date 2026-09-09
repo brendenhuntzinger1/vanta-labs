@@ -65,7 +65,7 @@ export type OfferReward =
   /**
    * `quantity` defaults to one and is the number of units granted, not a
    * multiplier on anything else. A cart that already holds the product has
-   * those units freed instead of being handed duplicates — "the BAC Water in
+   * those units freed instead of being handed duplicates — "the Recon Water in
    * your cart is on us" and "here are two more bottles of water" are different
    * promises, and only the first is what anyone means. See THE FREE UNIT in
    * quote-order.ts for how the absorb-then-add split works.
@@ -82,7 +82,7 @@ export type OfferReward =
    * SEVERAL DIFFERENT PRODUCTS, free.
    *
    * The single-product kinds grant N units of ONE thing, which cannot express
-   * "a GLOW and a GHK-Cu and a BAC Water" — the top of the cart-recovery
+   * "a GLOW and a GHK-Cu and a Recon Water" — the top of the cart-recovery
    * ladder. At this store's real dose costs that three-vial gift costs less
    * than a tenth of what a percentage costs on the same cart, so it is the
    * cheapest strong offer available and worth its own shape.
@@ -130,7 +130,7 @@ export function describeGiftTerms(config: GiftConfig, expiresAt: string): string
   // The single-product kinds derive their wording from the catalogue entry's
   // label, stripping the "free" and any leading count so the sentence reads
   // "a free X is added". A multi-item gift cannot be reconstructed that way —
-  // "a free GLOW + GHK-Cu + BAC Water is added" is wrong in both number and
+  // "a free GLOW + GHK-Cu + Recon Water is added" is wrong in both number and
   // grammar — so the caller builds the label from real product names and this
   // states it whole. It is still the SAME config the mint wrote onto the row,
   // which is the property that keeps the email and the till in agreement.

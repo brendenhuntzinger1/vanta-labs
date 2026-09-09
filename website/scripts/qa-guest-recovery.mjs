@@ -116,7 +116,7 @@ async function main() {
     valid.body?.items?.some((i) => i.name === "BPC-157 10mg")
     && !JSON.stringify(valid.body?.items ?? []).includes("SPOOFED"));
   check("the renamed slug is repaired rather than left to break checkout",
-    valid.body?.items?.some((i) => i.slug === "bac-water"));
+    valid.body?.items?.some((i) => i.slug === "recon-water"));
   check("the dead line is dropped and the shopper is told which",
     !valid.body?.items?.some((i) => i.slug === "discontinued-thing")
     && String(valid.body?.notice ?? "").includes("Discontinued Thing"));

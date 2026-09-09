@@ -67,7 +67,7 @@ beforeEach(() => {
   state.lookups = [];
   state.catalogue = [
     { slug: "bpc-157-10mg", name: "BPC-157", price: "$69.00", image: "/images/bpc.jpg", doses: [] },
-    { slug: "bac-water", name: "BAC Water (0.9% Benzyl Alcohol)", price: "$14.99", image: "/images/bac.jpg", doses: [] },
+    { slug: "bac-water", name: "Recon Water (0.9% Benzyl Alcohol)", price: "$14.99", image: "/images/bac.jpg", doses: [] },
   ];
   state.catalogueThrows = false;
   state.catalogueAsked = [];
@@ -191,10 +191,10 @@ describe("the restore page applies what the endpoint armed", () => {
 // ---------------------------------------------------------------------------
 
 describe("reconciling the stored snapshot against the live catalogue", () => {
-  it("follows the BAC Water rename instead of restoring a slug that cannot be bought", async () => {
+  it("follows the Recon Water rename instead of restoring a slug that cannot be bought", async () => {
     state.cart = { id: "cart-eli", items: [
       { slug: "bpc-157-10mg", name: "BPC-157", quantity: 1, unitPrice: 69 },
-      { slug: "bacteriostatic-water", name: "Bacteriostatic Water", quantity: 1, unitPrice: 14.99 },
+      { slug: "bacteriostatic-water", name: "Recon Water", quantity: 1, unitPrice: 14.99 },
     ], email: "eli@example.test", customerName: "Eli", sessionId: "s", status: "active" };
 
     const body = await (await GET(request("cart-eli"))).json();
@@ -246,7 +246,7 @@ describe("reconciling the stored snapshot against the live catalogue", () => {
   // restore over a transient catalogue read would lose the sale outright.
   it("restores the stored snapshot untouched when the catalogue cannot be read", async () => {
     state.catalogueThrows = true;
-    state.cart = { id: "c", items: [{ slug: "bacteriostatic-water", name: "Bacteriostatic Water", quantity: 1, unitPrice: 14.99 }], email: "e@e.test", customerName: null, status: "active" };
+    state.cart = { id: "c", items: [{ slug: "bacteriostatic-water", name: "Recon Water", quantity: 1, unitPrice: 14.99 }], email: "e@e.test", customerName: null, status: "active" };
     const body = await (await GET(request("c"))).json();
     expect(body.success).toBe(true);
     expect(body.items[0].slug).toBe("bacteriostatic-water");

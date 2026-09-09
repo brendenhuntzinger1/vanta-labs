@@ -268,7 +268,7 @@ describe("the replaced stage", () => {
     // THE SUBJECT NAMES WHAT THEY LEFT AND WHAT THEY GET. A generic line is
     // the one thing a recovery email cannot afford: it is the only part most
     // recipients ever read.
-    expect(state.sends[0].subject).toBe("Your BPC-157 + 2 free BAC Water");
+    expect(state.sends[0].subject).toBe("Your BPC-157 + 2 free Recon Water");
     expect(state.sends[0].subject.length).toBeLessThanOrEqual(60);
     // And nothing from the generic one.
     expect(state.sends[0].subject).not.toBe("Your cart is still saved");
@@ -301,9 +301,9 @@ describe("the replaced stage", () => {
     await runAbandonedCartSweep();
 
     const { html, text } = state.sends[0];
-    expect(html).toContain("2 free BAC Water");
+    expect(html).toContain("2 free Recon Water");
     // describeOfferTerms output — the store's own statement, not copy typed here.
-    expect(text).toContain("2 free BAC Water are added to your order");
+    expect(text).toContain("2 free Recon Water are added to your order");
     expect(text).toContain("$35 or more");
     expect(text).toContain("for this email address only");
   });
@@ -579,7 +579,7 @@ describe("a replaced stage whose gift also carries a percentage", () => {
     expect(result.t72hSent).toBe(1);
     const sent = state.sends[0];
     expect(sent.subject).toBe("40% off your BPC-157");
-    expect(sent.html).toContain("40% off, plus 2 free BAC Water");
+    expect(sent.html).toContain("40% off, plus 2 free Recon Water");
     expect(sent.html).toContain("Claim my 40% off");
   });
 
@@ -599,7 +599,7 @@ describe("a replaced stage whose gift also carries a percentage", () => {
     expect(body).not.toContain("Buy 2 Get 1");
     // And the terms still state both halves the till will honour.
     expect(state.sends[0].text).toContain("40% off");
-    expect(state.sends[0].text).toContain("2 free BAC Water are added to your order");
+    expect(state.sends[0].text).toContain("2 free Recon Water are added to your order");
   });
 
   // FOUR REAL OVERRIDE ROWS WERE WAITING TO SEND WITH THIS EXACT SHAPE.

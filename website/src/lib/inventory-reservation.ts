@@ -369,7 +369,7 @@ async function countFinalizedHolds(orderId: string): Promise<number> {
  * a count, so nothing about the movement reached `inventory_transactions` — the
  * admin's inventory history showed a shelf that only ever moved when a human
  * touched it. On 2026-08-27 the operator, seeing no sale row for the store's
- * first real customer order, decremented BAC Water a second time by hand. The
+ * first real customer order, decremented Recon Water a second time by hand. The
  * automatic deduction had already run.
  *
  * `quantity_before` is derived from the observed after-value and the units this

@@ -91,7 +91,7 @@ insert into products (id, slug, name, category, price_cents, product_cost_cents,
 values ('55555555-5555-5555-5555-555555555555','ghk-cu','GHK-Cu 50mg','Research Peptides',
   4799,2288,'In Stock',60,true,true,true,true,'Synthetic harness product (the win-back gift).','/images/product-placeholder.png',5);
 
--- BAC WATER. The cart drawer's accessory upsell fetches /api/catalog/bac-water
+-- RECON WATER. The cart drawer's accessory upsell fetches /api/catalog/bac-water
 -- on every page that renders the site chrome — including /admin — so without
 -- this row every harness run logs a 404 that exists nowhere in production, and
 -- any test watching for network errors has to learn to ignore a real one.
@@ -100,7 +100,7 @@ values ('55555555-5555-5555-5555-555555555555','ghk-cu','GHK-Cu 50mg','Research 
 insert into products (id, slug, name, category, price_cents, product_cost_cents, stock_status,
   inventory_quantity, is_active, is_published, is_enabled, track_inventory, short_description,
   image_url, position)
-values ('66666666-6666-6666-6666-666666666666','bacteriostatic-water','Bacteriostatic Water 30ml','Accessories',
+values ('66666666-6666-6666-6666-666666666666','recon-water','Recon Water 30ml','Accessories',
   1499,300,'In Stock',200,true,true,true,true,'Synthetic harness product (the reconstitution upsell).','/images/product-placeholder.png',6);
 
 -- Ambassadors: all three discount resolutions.

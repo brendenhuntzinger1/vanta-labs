@@ -31,7 +31,7 @@ vi.mock("@/lib/cart-recovery-overrides", async (importOriginal) => ({
       stage: "t24h",
       offerKey: "labor_day_bac_water_2_70",
       perks: ["Free shipping", "2-day shipping, on us"],
-      note: "last chance: 70% (= Buy 2 Get 1 + 40% stacked) + 2 BAC Water",
+      note: "last chance: 70% (= Buy 2 Get 1 + 40% stacked) + 2 Recon Water",
       consumedAt: null,
     },
   ]]),
@@ -65,7 +65,7 @@ vi.mock("@/lib/catalog", () => ({
         { id: "dose-big", label: "20mg", price: "$169.99", isDefault: false },
       ],
     },
-    { slug: "bac-water", name: "BAC Water (0.9% Benzyl Alcohol)", price: "$14.99", doses: [] },
+    { slug: "bac-water", name: "Recon Water (0.9% Benzyl Alcohol)", price: "$14.99", doses: [] },
   ]),
 }));
 
@@ -82,7 +82,7 @@ const CART = {
   id: "cart-nikki", email: "shopper@example.test", customer_name: "Nikki",
   items: [
     { slug: "glp-3", name: "GLP-3", quantity: 3, unitPrice: 169.99, variantId: "dose-big" },
-    { slug: "bac-water", name: "BAC Water", quantity: 1, unitPrice: 14.99 },
+    { slug: "bac-water", name: "Recon Water", quantity: 1, unitPrice: 14.99 },
   ],
   // The STALE snapshot, lower than the live basket.
   cart_value_cents: 48416,
@@ -137,7 +137,7 @@ describe("the resend that was about to go out", () => {
 
     await resendCartRecoveryEmail("cart-nikki", "t24h");
 
-    expect(`${state.html} ${state.text}`).toContain("2 free BAC Water");
+    expect(`${state.html} ${state.text}`).toContain("2 free Recon Water");
     expect(state.html).toContain("70%");
   });
 });

@@ -3,7 +3,7 @@
  *
  * The six hardcoded segments in audience.ts could answer six questions.
  * Anything else — "spent over $200 AND hasn't ordered in 60 days", "bought
- * peptides but never bacteriostatic water" — needed a code change and a deploy.
+ * peptides but never recon water" — needed a code change and a deploy.
  * This is the general form of the same idea.
  *
  * The structure is the one every ESP converged on, because it is the one

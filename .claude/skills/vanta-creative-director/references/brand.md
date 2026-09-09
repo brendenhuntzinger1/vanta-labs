@@ -57,7 +57,7 @@ Real mechanics that exist on the site and can be referenced:
 - Ambassador/referral programme with personal codes
 - Coupon codes, quantity bundle pricing, subscribe-and-save
 - Back-in-stock notifications
-- Bacteriostatic water as a companion accessory
+- Recon water as a companion accessory *(never call it bacteriostatic water or BAC water in creative — the product was renamed for compliance)*
 
 **Never attach a specific price, percentage, threshold or benefit to any of these in creative without re-verifying against the live store.** Multi-buy promotions are admin toggles that default to OFF and are frequently not running.
 

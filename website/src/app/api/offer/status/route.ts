@@ -49,7 +49,7 @@ export async function GET(request: Request) {
   // Cart-recovery gifts file under a stable slot key that happens to BE a
   // catalogue key (`cart_recovery_bac_water`, kept so the one-live-offer index
   // and the 30-day cooldown do not reset). So the catalogue branch below
-  // matched and the cart banner said "Free BAC Water" for a gift of three
+  // matched and the cart banner said "Free Recon Water" for a gift of three
   // different products. The row is what the checkout honours, so the row is
   // what the banner must name. Caught by taking a real top-band recovery email
   // through the click and reading what the cart said.

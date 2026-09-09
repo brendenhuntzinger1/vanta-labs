@@ -152,7 +152,7 @@ async function mintToken(email, offerKey, automationKey) {
   const shapes = {
     winback_60_percent_15: { kind: "percent", slug: null, percent: 15, min: 3500 },
     winback_60_free_shipping: { kind: "free_shipping", slug: null, percent: null, min: 3500 },
-    winback_60_bac_water_10: { kind: "free_product_percent", slug: "bacteriostatic-water", percent: 10, min: 3500 },
+    winback_60_bac_water_10: { kind: "free_product_percent", slug: "recon-water", percent: 10, min: 3500 },
     winback_60_free_ghkcu: { kind: "free_product", slug: "ghk-cu", percent: null, min: 6000 },
   };
   const shape = shapes[offerKey];
@@ -277,7 +277,7 @@ async function main() {
   await q(`update email_automations set offer_key = case key when 'welcome_no_purchase' then 'winback_60_percent_15' when 'replenishment' then 'winback_60_free_shipping' when 'winback_30' then 'winback_60_bac_water_10' when 'winback_60' then 'winback_60_free_ghkcu' else null end`);
   await q(`update email_automations set cta_path = '/account/orders', cta_label = 'REORDER NOW' where key = 'replenishment'`);
   await q(`update email_automations set cta_path = '/products' where key <> 'replenishment' and (cta_path is null or cta_path = '')`);
-  await q(`update products set inventory_quantity = 900, stock_status = 'In Stock' where slug in ('bpc-157-10mg','ghk-cu','bacteriostatic-water')`);
+  await q(`update products set inventory_quantity = 900, stock_status = 'In Stock' where slug in ('bpc-157-10mg','ghk-cu','recon-water')`);
   await q(`update product_doses set inventory_quantity = 900, stock_status = 'In Stock'`).catch(() => {});
   await q(`delete from inventory_reservations`).catch(() => {});
   await q(`delete from coupons where code like 'QA%-${stamp.toUpperCase()}'`).catch(() => {});
@@ -450,18 +450,18 @@ async function main() {
     return `two live gifts: ${offers.map((o) => o.offer_key).join(", ")}`;
   });
 
-  await step("the day-40 gift prices 10% off AND adds the free BAC water", async () => {
+  await step("the day-40 gift prices 10% off AND adds the free Recon water", async () => {
     const qt = await quote({ email: C, items: [BPC], offerToken: cTokenB });
     assert(qt.ok && qt.quote.discountAmount === 6.9, `discount ${qt.quote?.discountAmount}`);
     assert(qt.quote.offer?.percentApplied === true && qt.quote.offer?.productApplied === true && /10% off/.test(qt.quote.offer?.description ?? ""), `offer ${JSON.stringify(qt.quote?.offer)}`);
-    assert(qt.quote.giftLines?.length === 1 && /^Bacteriostatic Water/.test(qt.quote.giftLines[0].name), `gift lines ${JSON.stringify(qt.quote?.giftLines)}`);
+    assert(qt.quote.giftLines?.length === 1 && /^Recon Water/.test(qt.quote.giftLines[0].name), `gift lines ${JSON.stringify(qt.quote?.giftLines)}`);
     return `−$6.90 + free ${qt.quote.giftLines[0].name}`;
   });
 
   await step("buying with it redeems the day-40 gift, kills the day-30 gift, and credits win-back 1 by the redeemed gift", async () => {
     c2 = await checkoutApi({ email: C, items: [BPC], offerToken: cTokenB, automationCookie: cAutomation });
     const lines = await linesOf(c2);
-    assert(lines.some((l) => l.slug.startsWith("bacteriostatic-water") && Number(l.unit_price) === 0), `lines ${JSON.stringify(lines)}`);
+    assert(lines.some((l) => l.slug.startsWith("recon-water") && Number(l.unit_price) === 0), `lines ${JSON.stringify(lines)}`);
     await payOrder(c2);
     const offers = await offersOf(C);
     const shipping = offers.find((o) => o.offer_key === "winback_60_free_shipping");

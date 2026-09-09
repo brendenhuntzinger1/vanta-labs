@@ -1,3 +1,5 @@
+import { BAC_WATER_SLUG } from "@/lib/bac-water";
+
 // No `server-only`: the admin band editor is a Client Component and shows the
 // operator the cost, the net margin and the perceived value of a band WHILE
 // they are editing it. A margin they only learn after saving is a margin they
@@ -7,7 +9,7 @@
  * WHAT A RECOVERY OFFER IS WORTH, BY CART SIZE.
  *
  * WHY BANDS AT ALL. The ladder used to be flat: every abandoned cart got the
- * same free BAC Water at 24h and the same 10% + BAC Water at 72h, whether it
+ * same free Recon Water at 24h and the same 10% + Recon Water at 72h, whether it
  * held $40 or $520. Measured against the real carts on 2026-09-08, that is the
  * wrong shape — 8 of 30 carts are $300+ and they hold 57% of every dollar this
  * store has ever had walk out. A flat offer under-serves the carts that matter
@@ -18,7 +20,7 @@
  * dollar than a percentage does:
  *
  *     GHK-Cu      costs $3.65   shows $39.99    11.0x
- *     BAC Water   costs $1.43   shows $14.99    10.5x
+ *     Recon Water   costs $1.43   shows $14.99    10.5x
  *     KLOW        costs $25.07  shows $119.99    4.8x
  *     a percentage                               1.0x, and it scales with the cart
  *
@@ -88,27 +90,27 @@ export const MAX_GIFT_QUANTITY = 5;
 export const DEFAULT_RECOVERY_TIERS: RecoveryTier[] = [
   {
     minCents: 3_500,
-    stage3: [{ slug: "bac-water", quantity: 1 }],
+    stage3: [{ slug: BAC_WATER_SLUG, quantity: 1 }],
     stage4: { gifts: [{ slug: "ghk-cu", quantity: 1 }], percent: 0 },
   },
   {
     minCents: 10_000,
     stage3: [{ slug: "ghk-cu", quantity: 1 }],
-    stage4: { gifts: [{ slug: "ghk-cu", quantity: 1 }, { slug: "bac-water", quantity: 1 }], percent: 10 },
+    stage4: { gifts: [{ slug: "ghk-cu", quantity: 1 }, { slug: BAC_WATER_SLUG, quantity: 1 }], percent: 10 },
   },
   {
     minCents: 25_000,
-    stage3: [{ slug: "ghk-cu", quantity: 1 }, { slug: "bac-water", quantity: 1 }],
-    stage4: { gifts: [{ slug: "ghk-cu", quantity: 1 }, { slug: "bac-water", quantity: 1 }], percent: 10 },
+    stage3: [{ slug: "ghk-cu", quantity: 1 }, { slug: BAC_WATER_SLUG, quantity: 1 }],
+    stage4: { gifts: [{ slug: "ghk-cu", quantity: 1 }, { slug: BAC_WATER_SLUG, quantity: 1 }], percent: 10 },
   },
   {
     minCents: 50_000,
-    stage3: [{ slug: "ghk-cu", quantity: 1 }, { slug: "bac-water", quantity: 1 }],
+    stage3: [{ slug: "ghk-cu", quantity: 1 }, { slug: BAC_WATER_SLUG, quantity: 1 }],
     stage4: {
       gifts: [
         { slug: "klow", quantity: 1 },
         { slug: "ghk-cu", quantity: 1 },
-        { slug: "bac-water", quantity: 1 },
+        { slug: BAC_WATER_SLUG, quantity: 1 },
       ],
       percent: 0,
     },

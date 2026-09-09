@@ -301,7 +301,7 @@ export function ProductDetailClient({
     : null;
 
   // Which dose gets the "★ Most Popular" badge. GLP-3 spotlights its 30mg; the
-  // other GLP lines keep their 10mg badge; BAC Water highlights the 30mL; every
+  // other GLP lines keep their 10mg badge; Recon Water highlights the 30mL; every
   // other two-dose product highlights its higher-priced dose.
   const mostPopularDoseId = useMemo(() => {
     const doses = product.doses ?? [];

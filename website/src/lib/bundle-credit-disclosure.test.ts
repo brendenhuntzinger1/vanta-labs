@@ -4,7 +4,7 @@
 // Reported from a phone, cart contents visible in the screenshot:
 //
 //     GLP-1                       x2      $85.48
-//     BAC Water (0.9% Benzyl…)    x1      $14.99
+//     Recon Water (0.9% Benzyl…)    x1      $14.99
 //     Subtotal                            $100.47
 //     Buy 2 Get 1 Free                    -$10.49
 //

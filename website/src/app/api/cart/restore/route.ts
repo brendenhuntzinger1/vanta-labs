@@ -20,7 +20,7 @@ export const dynamic = "force-dynamic";
 /**
  * THE SLUGS A RETIRED ONE MAY HAVE BECOME.
  *
- * BAC Water is the only product that has ever been renamed here, and its
+ * Recon Water is the only product that has ever been renamed here, and its
  * rename is what made this necessary: production moved to `bac-water`,
  * `bacteriostatic-water` stopped being a products row, and carts holding the
  * old slug became unbuyable. Every candidate but the stored one is offered, in

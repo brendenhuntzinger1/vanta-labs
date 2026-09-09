@@ -22,7 +22,7 @@ import type { Product } from "@/lib/catalog-types";
 //     isBacWater()  accepts {"bacteriostatic-water", "bac-water-30ml"}
 //     route         queries BAC_WATER_SLUG = "bacteriostatic-water"
 //
-// With the store's BAC water published under the other accepted slug:
+// With the store's Recon water published under the other accepted slug:
 //
 //     slug = bac-water-30ml        -> GET /api/catalog/bac-water  404
 //     slug = bacteriostatic-water  -> GET /api/catalog/bac-water  200
@@ -40,7 +40,7 @@ const product = (slug: string): Product =>
   ({
     id: `id-${slug}`,
     slug,
-    name: "Bacteriostatic Water 30ml",
+    name: "Recon Water 30ml",
     category: "Solvents & Solutions",
     price: "$19.00",
     stockStatus: "In Stock",
@@ -60,7 +60,7 @@ const product = (slug: string): Product =>
   }) as unknown as Product;
 
 describe("the offered slug and the recognised slugs are one list", () => {
-  it("every candidate the resolver will try is recognised as BAC water", () => {
+  it("every candidate the resolver will try is recognised as Recon water", () => {
     for (const slug of BAC_WATER_SLUG_CANDIDATES) {
       expect(isBacWater(slug)).toBe(true);
     }
@@ -76,7 +76,7 @@ describe("the offered slug and the recognised slugs are one list", () => {
   });
 });
 
-describe("resolving the published BAC water product", () => {
+describe("resolving the published Recon water product", () => {
   it("returns the preferred slug when it is published", async () => {
     const lookup = vi.fn(async (slug: string) =>
       slug === "bacteriostatic-water" ? product(slug) : null,
@@ -108,7 +108,7 @@ describe("resolving the published BAC water product", () => {
     expect(lookup).toHaveBeenCalledTimes(1);
   });
 
-  it("returns null when the store genuinely publishes no BAC water", async () => {
+  it("returns null when the store genuinely publishes no Recon water", async () => {
     const lookup = vi.fn(async () => null);
 
     expect(await resolveBacWaterProduct(lookup)).toBeNull();
@@ -138,7 +138,8 @@ describe("resolving the published BAC water product", () => {
   it("prefers the canonical slug, and keeps the renamed-from slugs resolvable", () => {
     // Old links, bookmarks and Google's index still point at the previous
     // slugs; dropping them would 404 all three.
-    expect(BAC_WATER_SLUG_CANDIDATES[0]).toBe("bac-water");
+    expect(BAC_WATER_SLUG_CANDIDATES[0]).toBe("recon-water");
+    expect(BAC_WATER_SLUG_CANDIDATES).toContain("bac-water");
     expect(BAC_WATER_SLUG_CANDIDATES).toContain("bacteriostatic-water");
   });
 });
@@ -172,7 +173,7 @@ describe("negative control: the single-slug lookup really did 404", () => {
 // A slug is not an internal detail. Next echoes it into the canonical tag,
 // og:url, the BreadcrumbList and the Product schema's sku, and the sitemap
 // publishes it — which is why "bacteriostatic-water" was every occurrence of
-// that word on the public site while the page itself said BAC Water throughout.
+// that word on the public site while the page itself said Recon Water throughout.
 //
 // Renaming it without a redirect would 404 every shared link, every bookmark
 // and everything Google holds.
@@ -182,8 +183,9 @@ describe("the renamed product URL redirects rather than breaking", () => {
   const code = middleware.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/.*$/gm, " ");
 
   it("maps the old slugs to the new one", () => {
-    expect(code).toContain('["/products/bacteriostatic-water", "/products/bac-water"]');
-    expect(code).toContain('["/products/bac-water-30ml", "/products/bac-water"]');
+    expect(code).toContain('["/products/bacteriostatic-water", "/products/recon-water"]');
+    expect(code).toContain('["/products/bac-water-30ml", "/products/recon-water"]');
+    expect(code).toContain('["/products/bac-water", "/products/recon-water"]');
   });
 
   it("redirects permanently, so search engines move the URL", () => {
@@ -207,6 +209,6 @@ describe("the renamed product URL redirects rather than breaking", () => {
     );
     expect(response.status).toBe(308);
     expect(new URL(response.headers.get("location") ?? "", "https://www.vantalabsresearch.com").pathname)
-      .toBe("/products/bac-water");
+      .toBe("/products/recon-water");
   });
 });

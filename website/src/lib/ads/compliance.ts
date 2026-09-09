@@ -94,7 +94,7 @@ const RULES: Rule[] = [
   {
     id: "reconstitution/instructions",
     severity: "block",
-    pattern: w("reconstitut(?:e|ion|ing)|mix with (?:bacteriostatic|bac|sterile)|dilut(?:e|ion) (?:with|instructions)|draw (?:up|into)"),
+    pattern: w("reconstitut(?:e|ion|ing)|mix with (?:bacteriostatic|bac|recon|sterile)|dilut(?:e|ion) (?:with|instructions)|draw (?:up|into)"),
     why: "Preparation-for-use instructions.",
     remedy: "Remove from advertising. Handling documentation belongs on the site, not in an ad.",
   },

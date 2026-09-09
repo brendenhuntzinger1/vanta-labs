@@ -147,7 +147,7 @@ export async function readQuantityAfter(adjustment: InventoryAdjustment): Promis
  *    the admin's own manual edits were logged, so the ledger showed a shelf that
  *    only ever moved when a human touched it. On 2026-08-27 the operator, seeing
  *    no sale row for the store's first real customer order, manually decremented
- *    BAC Water a SECOND time — the automatic decrement had already run. An
+ *    Recon Water a SECOND time — the automatic decrement had already run. An
  *    invisible movement is how a correct system produces a wrong count.
  */
 /** Who moved the stock, for the ledger. The webhook is the default because it

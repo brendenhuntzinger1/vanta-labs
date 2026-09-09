@@ -5,7 +5,7 @@ import { customerSafeMessage } from "@/lib/safe-error";
 
 export const dynamic = "force-dynamic";
 
-// The BAC Water cross-sell surfaces (cart checkboxes, add-to-cart nudge) are
+// The Recon Water cross-sell surfaces (cart checkboxes, add-to-cart nudge) are
 // client-rendered and only need this one product, so they get a dedicated
 // lightweight lookup instead of pulling the whole catalog.
 export async function GET() {

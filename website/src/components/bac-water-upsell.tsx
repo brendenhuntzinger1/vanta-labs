@@ -21,7 +21,7 @@ function formatUsd(value: number) {
 // Shared fetch for client-only surfaces (cart checkboxes, nudge popup).
 // Module-level cache: the drawer, cart page, and popup can all mount in one
 // session and the catalog is only hit once. The product-page surfaces skip
-// this entirely — they get BAC Water via SSR props.
+// this entirely — they get Recon Water via SSR props.
 // -------------------------------------------------------------------------
 let cachedOffer: Product | null | undefined;
 let pendingFetch: Promise<Product | null> | null = null;
@@ -80,10 +80,10 @@ function useBacWaterProduct() {
 
 // -------------------------------------------------------------------------
 // Product page — "Recommended Accessories", right below Add to Cart.
-// Light lab theme. Hidden on the BAC Water page itself.
+// Light lab theme. Hidden on the Recon Water page itself.
 // -------------------------------------------------------------------------
 /**
- * WHO GETS OFFERED BACTERIOSTATIC WATER.
+ * WHO GETS OFFERED RECON WATER.
  *
  * Every published, sellable product, whatever form it ships in — deliberately.
  * An earlier version gated this on a requires_reconstitution flag, which meant
@@ -104,7 +104,7 @@ function useBacWaterProduct() {
  * storefront surfaces that only exist for products the catalogue already
  * returned, and getBacWaterDoseOffers() drops sizes that are out of stock.
  *
- * The only exclusion is bacteriostatic water itself — see isBacWater().
+ * The only exclusion is recon water itself — see isBacWater().
  */
 export function BacWaterAccessoryBlock({ bacWater, host }: { bacWater: Product | null; host: Product | null }) {
   const { addToCart } = useCart();
@@ -133,7 +133,7 @@ export function BacWaterAccessoryBlock({ bacWater, host }: { bacWater: Product |
             className="vl-focus-ring group flex w-full items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-[#181818] px-4 py-3.5 text-left transition duration-200 hover:border-white/[0.14] active:scale-[0.99]"
           >
             <span className="min-w-0 text-sm">
-              <span className="font-medium text-white">BAC Water {offer.sizeLabel}</span>
+              <span className="font-medium text-white">Recon Water {offer.sizeLabel}</span>
               <span className="ml-1.5 text-[#a3a3a3]">+{offer.displayPrice}</span>
               {isFeaturedBacWaterOffer(offer) ? (
                 <span className="ml-2 inline-flex items-center align-middle text-[10px] font-semibold uppercase tracking-wide text-[color:var(--accent-gold)]">
@@ -157,7 +157,7 @@ export function BacWaterAccessoryBlock({ bacWater, host }: { bacWater: Product |
         ))}
       </div>
       <p className="mt-3.5 text-xs leading-5 text-[#a3a3a3]">
-        Over 70% of customers add BAC Water to complete their order.
+        Over 70% of customers add Recon Water to complete their order.
       </p>
     </div>
   );
@@ -206,7 +206,7 @@ export function FrequentlyBoughtTogether({
       stockStatusOverride: productDose?.stockStatus ?? product.stockStatus,
     });
     addToCart(bacWater, 1, null, bacWaterAddOptions(bacWater, selectedOffer));
-    setConfirmation(`Added ${product.name}${productDose ? ` (${productDose.label})` : ""} + BAC Water ${selectedOffer.sizeLabel} to cart.`);
+    setConfirmation(`Added ${product.name}${productDose ? ` (${productDose.label})` : ""} + Recon Water ${selectedOffer.sizeLabel} to cart.`);
     setTimeout(() => setConfirmation(null), 3000);
   };
 
@@ -222,7 +222,7 @@ export function FrequentlyBoughtTogether({
           </span>
           <span aria-hidden="true" className="text-white/35">+</span>
           <span className="inline-flex flex-wrap items-center gap-1.5">
-            <span className="font-medium text-white">BAC Water</span>
+            <span className="font-medium text-white">Recon Water</span>
             {offers.map((offer) => (
               <button
                 key={offer.cartKey}
@@ -269,7 +269,7 @@ export function BacWaterCartCheckboxes() {
   const offers = useMemo(() => getBacWaterDoseOffers(bacWater), [bacWater]);
 
   // Offer it while the basket holds anything that is not itself bacteriostatic
-  // water. A cart containing only BAC Water must not be offered more of it.
+  // water. A cart containing only Recon Water must not be offered more of it.
   const hasNonBacWaterItem = items.some((item) => !isBacWater(item));
   if (!bacWater || offers.length === 0 || !hasNonBacWaterItem) return null;
 
@@ -315,9 +315,9 @@ export function BacWaterCartCheckboxes() {
 }
 
 // -------------------------------------------------------------------------
-// Global "Don't forget BAC Water" popup. Mounted once in the root layout;
+// Global "Don't forget Recon Water" popup. Mounted once in the root layout;
 // listens for the add_to_cart analytics event every add already fires, and
-// shows at most once per browser session — never when BAC Water is the item
+// shows at most once per browser session — never when Recon Water is the item
 // being added or is already in the cart.
 // -------------------------------------------------------------------------
 const NUDGE_SESSION_KEY = "vl-bac-water-nudge-shown";
@@ -347,11 +347,11 @@ export function BacWaterAddedPopup() {
         requiresReconstitution?: boolean;
       }>).detail;
       if (detail?.eventType !== "add_to_cart") return;
-      // Adding BAC Water must never raise another BAC Water offer.
+      // Adding Recon Water must never raise another Recon Water offer.
       if (!detail.productSlug || isBacWater(detail.productSlug)) return;
       if (!bacWaterRef.current) return;
       // No physical-form check. Any published product the customer just added
-      // may be offered bacteriostatic water; they can decline it.
+      // may be offered recon water; they can decline it.
       // Already have it? Do not pester.
       if (itemsRef.current.some((item) => isBacWater(item))) return;
       try {
@@ -431,7 +431,7 @@ export function BacWaterAddedPopup() {
           ) : null}
           <div className="min-w-0">
             <p id="bac-water-nudge-title" className="vl2-serif text-[1.35rem] leading-tight text-white">
-              Need BAC water?
+              Need Recon water?
             </p>
             {/* A statement about laboratory practice, not a purchase statistic.
                 There is no order-history query behind this component, so it
@@ -443,7 +443,7 @@ export function BacWaterAddedPopup() {
         {/* Deliberately optional. The offer now appears for products of any
             form, so it must never assert that THIS product needs it. */}
         <p className="mt-3.5 text-[0.8125rem] leading-6 text-white/55">
-          BAC water is available separately for laboratory use. Add it if your
+          Recon water is available separately for laboratory use. Add it if your
           protocol calls for it.
         </p>
 
@@ -458,7 +458,7 @@ export function BacWaterAddedPopup() {
                 className={`vl-bac-offer vl-focus-ring flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left ${featured ? "is-featured" : ""}`}
               >
                 <span className="flex min-w-0 items-center gap-2">
-                  <span className="text-[0.9375rem] font-medium text-white">BAC Water {offer.sizeLabel}</span>
+                  <span className="text-[0.9375rem] font-medium text-white">Recon Water {offer.sizeLabel}</span>
                   {featured ? <span className="vl-bac-flag">Most Popular</span> : null}
                 </span>
                 <span className="shrink-0 text-[0.9375rem] font-semibold text-[color:var(--accent-gold-bright)]">

@@ -213,7 +213,7 @@ describe("packed weight resolution", () => {
   });
 
   it("reports a product with no doses on its own weight", async () => {
-    seedProduct({ id: "water", name: "Bacteriostatic Water", shipping_weight_oz: 1.4 });
+    seedProduct({ id: "water", name: "Recon Water", shipping_weight_oz: 1.4 });
 
     const [line] = await getInventoryRows();
     expect(line.doseId).toBeNull();

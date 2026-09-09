@@ -31,7 +31,7 @@ export async function PATCH(request: Request) {
     // Checked against the LIVE catalogue, because quoteOrder resolves a gift
     // with an exact slug match and no fallback — a band naming a retired
     // product would promise a vial the till never adds, which is exactly how a
-    // rename once shipped a percentage and no BAC Water for weeks.
+    // rename once shipped a percentage and no Recon Water for weeks.
     if (body.tiers !== undefined) {
       const products = await listGiftableProducts();
       // An empty catalogue read means "could not check", not "nothing is on

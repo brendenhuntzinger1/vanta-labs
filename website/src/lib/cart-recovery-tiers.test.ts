@@ -9,6 +9,7 @@ import {
   validateRecoveryTiers,
   type RecoveryTier,
 } from "@/lib/cart-recovery-tiers";
+import { BAC_WATER_SLUG } from "@/lib/bac-water";
 
 // ---------------------------------------------------------------------------
 // THE LADDER USED TO BE FLAT, AND THE MONEY IS NOT.
@@ -23,7 +24,11 @@ import {
 // offer), and what a band costs (the number the owner decides on).
 // ---------------------------------------------------------------------------
 
-const SLUGS = new Set(["bac-water", "ghk-cu", "klow", "glow"]);
+// Keyed off the constant, never a literal. offers/customer-offers.ts records
+// the last rename shipping a broken gift with a GREEN suite, because the
+// catalogue mock carried the same stale slug the code did -- both sides wrong
+// together, so nothing disagreed. Deriving the key makes that impossible here.
+const SLUGS = new Set([BAC_WATER_SLUG, "ghk-cu", "klow", "glow"]);
 
 // This store's real figures, from product_doses.product_cost_cents and the
 // observed average postage. Deliberately the live numbers rather than round
@@ -31,8 +36,8 @@ const SLUGS = new Set(["bac-water", "ghk-cu", "klow", "glow"]);
 const ECONOMICS = {
   productCostRatio: 0.163,
   postageCents: 793,
-  giftCostCents: { "bac-water": 143, "ghk-cu": 365, klow: 2507, glow: 2154 },
-  giftRetailCents: { "bac-water": 1499, "ghk-cu": 3999, klow: 11999, glow: 10999 },
+  giftCostCents: { [BAC_WATER_SLUG]: 143, "ghk-cu": 365, klow: 2507, glow: 2154 },
+  giftRetailCents: { [BAC_WATER_SLUG]: 1499, "ghk-cu": 3999, klow: 11999, glow: 10999 },
 };
 
 describe("which band a cart falls in", () => {
@@ -204,7 +209,7 @@ describe("what the editor refuses", () => {
   });
 
   it(`refuses more than ${MAX_GIFT_ITEMS_PER_STAGE} products in one gift`, () => {
-    const gifts = ["bac-water", "ghk-cu", "klow", "glow", "bac-water"].map((slug) => ({ slug, quantity: 1 }));
+    const gifts = [BAC_WATER_SLUG, "ghk-cu", "klow", "glow", BAC_WATER_SLUG].map((slug) => ({ slug, quantity: 1 }));
     expect(validateRecoveryTiers([{ ...base, stage4: { gifts, percent: 0 } }], SLUGS).ok).toBe(false);
   });
 

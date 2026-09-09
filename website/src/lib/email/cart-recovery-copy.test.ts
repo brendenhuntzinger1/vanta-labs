@@ -8,7 +8,7 @@ import { cartRecoveryT24hTemplate, cartRecoveryT72hTemplate } from "@/lib/email/
 // Every case here is a sentence that was actually sent, wrong, and found by
 // walking a real cart through the sweep and reading the delivered message:
 //
-//   "there is a vial of BAC Water on it from us"  — hardcoded, while the offer
+//   "there is a vial of Recon Water on it from us"  — hardcoded, while the offer
 //        row, the terms line and the checkout all said GHK-Cu. The band ladder
 //        made the constant false the day it shipped.
 //   "A free GHK-Cu 50mg with your GHK-Cu 50mg"    — the lead cart line and the
@@ -32,18 +32,18 @@ describe("stage 3 names the gift that was actually minted", () => {
     const mail = cartRecoveryT24hTemplate({ ...cart, giftLabel: "GHK-Cu 50mg", offerTerms: "Your gift: GHK-Cu 50mg" });
     const whole = `${mail.subject} ${mail.html} ${mail.text}`;
     expect(whole).toContain("GHK-Cu 50mg");
-    expect(whole).not.toMatch(/BAC Water|Bacteriostatic/i);
+    expect(whole).not.toMatch(/Recon Water|Bacteriostatic/i);
   });
 
   it("counts a multi-product gift instead of listing it in the subject, and still lists it in the body", () => {
     const mail = cartRecoveryT24hTemplate({
       ...cart,
-      giftLabel: "KLOW + GHK-Cu 50mg + Bacteriostatic Water 30ml",
-      offerTerms: "Your gift: KLOW + GHK-Cu 50mg + Bacteriostatic Water 30ml",
+      giftLabel: "KLOW + GHK-Cu 50mg + Recon Water 30ml",
+      offerTerms: "Your gift: KLOW + GHK-Cu 50mg + Recon Water 30ml",
     });
     expect(mail.subject).toContain("3 free gifts");
     expect(mail.subject.length).toBeLessThan(60);
-    expect(mail.html).toContain("Bacteriostatic Water 30ml");
+    expect(mail.html).toContain("Recon Water 30ml");
   });
 
   // The whole point of the collision guard: the gift half survives, the cart
@@ -104,10 +104,10 @@ describe("stage 4 describes only what was minted", () => {
   const base = { ...cart, couponCode: "", expiresAt: "September 18, 2026", giftLabel: "", offerTerms: "" };
 
   it("carries the gift and the percentage together when both were minted", () => {
-    const mail = cartRecoveryT72hTemplate({ ...base, couponCode: "VL10", discountPercent: 10, giftLabel: "GHK-Cu 50mg + Bacteriostatic Water 30ml", offerTerms: "t" });
+    const mail = cartRecoveryT72hTemplate({ ...base, couponCode: "VL10", discountPercent: 10, giftLabel: "GHK-Cu 50mg + Recon Water 30ml", offerTerms: "t" });
     expect(mail.subject).toBe("Last note: 10% off and 2 free gifts");
     expect(mail.html).toContain("VL10");
-    expect(mail.html).toContain("Bacteriostatic Water 30ml");
+    expect(mail.html).toContain("Recon Water 30ml");
   });
 
   it("promises no code when none was minted", () => {

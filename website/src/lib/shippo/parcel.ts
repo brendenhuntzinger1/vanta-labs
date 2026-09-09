@@ -29,7 +29,7 @@ import type { ShippoParcel } from "@/lib/shippo/types";
  *
  * NOT YET WEIGHED. 10 g is a plausible figure for a 3ml glass vial with
  * stopper and crimp (commonly 8-12 g empty; the peptide itself is milligrams),
- * but it is an estimate until one is put on a scale. Bacteriostatic water is
+ * but it is an estimate until one is put on a scale. Recon water is
  * heavier and carries its own per-SKU value -- it is NOT covered by this
  * fallback.
  *

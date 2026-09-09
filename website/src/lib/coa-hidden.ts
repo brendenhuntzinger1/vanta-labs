@@ -4,7 +4,7 @@ import { COA_TESTING_PENDING_SLUGS } from "@/lib/coa-pending";
 // -------------------------------------------------------------------------
 // PRODUCTS KEPT OUT OF THE PUBLIC COA LIBRARY.
 //
-// Some products were never sent for testing — bacteriostatic water is a
+// Some products were never sent for testing — recon water is a
 // solvent, and the HGH and HCG lines were not part of the batch submitted to
 // the laboratory. Listing them as "Documentation Pending" beside the tested
 // compounds reads as a promise of a report that is not coming, so the owner
