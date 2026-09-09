@@ -33,7 +33,11 @@ export type EmailBlock =
   | { type: "heading"; text: string }
   | { type: "paragraph"; text: string }
   | { type: "list"; items: string[] }
-  | { type: "button"; label: string; url: string; variant?: EmailCtaVariant }
+  /**
+   * A button carries a LABEL ONLY. Its destination is the campaign's tracked
+   * CTA, supplied at render time — see renderBlocks.
+   */
+  | { type: "button"; label: string; variant?: EmailCtaVariant }
   | { type: "image"; url: string; alt?: string }
   | { type: "divider" }
   | { type: "spacer" };
@@ -59,7 +63,16 @@ function isSafeUrl(url: string): boolean {
 
 type Rendered = { html: string; text: string };
 
-function renderBlock(block: EmailBlock): Rendered | null {
+/**
+ * What a body needs from its campaign in order to render.
+ *
+ * `ctaUrl` is the campaign's TRACKED click URL — the one that runs through
+ * /api/email/click, records the click and arms the offer cookie. A button block
+ * gets its destination from here and nowhere else.
+ */
+export type RenderBlocksOptions = { ctaUrl?: string };
+
+function renderBlock(block: EmailBlock, options: RenderBlocksOptions): Rendered | null {
   switch (block?.type) {
     case "heading": {
       const text = clean((block as { text?: unknown }).text);
@@ -95,7 +108,13 @@ function renderBlock(block: EmailBlock): Rendered | null {
 
     case "button": {
       const label = clean((block as { label?: unknown }).label);
-      const url = clean((block as { url?: unknown }).url);
+      // THE DESTINATION IS THE CAMPAIGN'S, NEVER THE BLOCK'S. A block that
+      // carried its own URL produced a link around /api/email/click: the click
+      // went uncounted and — the part that actually costs money — the offer
+      // cookie that arms a campaign's gift was never set, so an email could
+      // promise a gift the store then did not apply. A `url` on a body saved
+      // before this change is deliberately ignored rather than honoured.
+      const url = clean(options.ctaUrl);
       if (!label || !url || !isSafeUrl(url)) return null;
       const html = renderCtaButton({ label, url, variant: (block as { variant?: EmailCtaVariant }).variant });
       if (!html) return null;
@@ -135,8 +154,10 @@ function renderBlock(block: EmailBlock): Rendered | null {
 }
 
 /** Render blocks into the HTML body and its plain-text twin. */
-export function renderBlocks(blocks: EmailBlock[]): Rendered {
-  const parts = (blocks ?? []).map(renderBlock).filter((part): part is Rendered => part !== null);
+export function renderBlocks(blocks: EmailBlock[], options: RenderBlocksOptions = {}): Rendered {
+  const parts = (blocks ?? [])
+    .map((block) => renderBlock(block, options))
+    .filter((part): part is Rendered => part !== null);
 
   return {
     html: parts.map((part) => part.html).join(""),
@@ -170,4 +191,52 @@ export function parseBlocks(input: unknown): EmailBlock[] | null {
     .filter((block): block is EmailBlock =>
       Boolean(block) && typeof block === "object" && known.has(String((block as { type?: unknown }).type)))
     .slice(0, MAX_BLOCKS);
+}
+
+/**
+ * Plain text to blocks, for the composer's mode switch.
+ *
+ * An operator who has typed three paragraphs and clicks "Blocks" should find
+ * three paragraphs, not an empty canvas. Blank-line separated, matching the
+ * paragraph rule campaignTemplate already applies to a plain-text body — so the
+ * conversion produces the same email the text body would have.
+ */
+export function blocksFromPlainText(text: string): EmailBlock[] {
+  return String(text ?? "")
+    .split(/\n\s*\n/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => ({ type: "paragraph" as const, text: part }));
+}
+
+/**
+ * Blocks back to plain text, for the switch in the other direction.
+ *
+ * Words only: a divider and a spacer have none, and emitting a placeholder for
+ * them would put "---" in the operator's draft. A button contributes its label
+ * rather than its URL, because this is the text an operator edits, not the
+ * plain-text part of the email (renderBlocks builds that, and it does include
+ * the URL).
+ */
+export function plainTextFromBlocks(blocks: EmailBlock[]): string {
+  return (blocks ?? [])
+    .map((block) => {
+      switch (block?.type) {
+        case "heading":
+        case "paragraph":
+          return clean((block as { text?: unknown }).text);
+        case "list":
+          return Array.isArray((block as { items?: unknown }).items)
+            ? ((block as { items: unknown[] }).items).map(clean).filter(Boolean).join("\n")
+            : "";
+        case "button":
+          return clean((block as { label?: unknown }).label);
+        case "image":
+          return clean((block as { alt?: unknown }).alt);
+        default:
+          return "";
+      }
+    })
+    .filter(Boolean)
+    .join("\n\n");
 }

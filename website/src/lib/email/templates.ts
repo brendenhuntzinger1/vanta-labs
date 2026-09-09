@@ -1,3 +1,4 @@
+import { parseBlocks, renderBlocks } from "@/lib/email/blocks";
 import type { EmailTemplate } from "@/lib/email/types";
 import { formatDisplayDate } from "@/lib/format-date";
 import { DEFAULT_CARD_PROCESSING_FEE } from "@/lib/payment-methods";
@@ -2544,14 +2545,38 @@ export function campaignTemplate(input: {
     ? `<p style="margin:16px 0 0;padding:12px 14px;border:1px solid rgba(255,255,255,0.14);border-radius:12px;font-size:13px;line-height:1.5;color:#d4d4d8;">${escapeHtml(offerTerms)}</p>`
     : "";
 
-  const paragraphs = bodyText
-    .split(/\n\s*\n/)
-    .map((block) => block.trim())
-    .filter(Boolean)
-    // Single newlines inside a paragraph become <br/>, so a short list typed in
-    // the composer survives instead of collapsing onto one line.
-    .map((block) => `<p>${escapeHtml(block).replace(/\n/g, "<br/>")}</p>`)
-    .join("");
+  // A BLOCK BODY IS STILL A BODY, AND STILL ONLY THE BODY.
+  //
+  // Blocks replace the paragraph region and nothing else: the layout, the CTA
+  // button, the promo panel, the offer terms and the postal footer below are
+  // untouched, so a block campaign passes every standard a hand-written one
+  // does because it goes through the same renderLayout call.
+  //
+  // Stored in `body` rather than a new column: that column is text, a block
+  // body IS the body, and parseBlocks answers null for anything that is not a
+  // JSON array of known blocks — which makes the discriminator total. "Hello"
+  // is not JSON; "[1,2,3]" is JSON but yields no blocks. Both fall through to
+  // the plain-text path below, unchanged.
+  const parsedBlocks = parseBlocks(bodyText);
+  // The campaign's OWN tracked CTA is handed down, so a button block links
+  // through /api/email/click like the footer button does — recording the click
+  // and arming the offer cookie. Without this a mid-email button would be a
+  // plain link around the tracker, and a campaign carrying a gift would promise
+  // one the store never applies.
+  const blocks = parsedBlocks && parsedBlocks.length > 0
+    ? renderBlocks(parsedBlocks, { ctaUrl: input.ctaUrl })
+    : null;
+
+  const paragraphs = blocks
+    ? blocks.html
+    : bodyText
+      .split(/\n\s*\n/)
+      .map((block) => block.trim())
+      .filter(Boolean)
+      // Single newlines inside a paragraph become <br/>, so a short list typed in
+      // the composer survives instead of collapsing onto one line.
+      .map((block) => `<p>${escapeHtml(block).replace(/\n/g, "<br/>")}</p>`)
+      .join("");
 
   const code = input.promoCode?.trim();
   const codeBlock = code
@@ -2577,7 +2602,10 @@ export function campaignTemplate(input: {
   const text = toText([
     input.headline,
     "",
-    bodyText.trim(),
+    // The blocks' own plain-text twin, produced in the same pass as their HTML
+    // so the two cannot drift. Falling back to the raw body would print the
+    // stored JSON into the email.
+    blocks ? blocks.text : bodyText.trim(),
     code ? "" : null,
     code ? `Code: ${code}` : null,
     offerTerms ? "" : null,

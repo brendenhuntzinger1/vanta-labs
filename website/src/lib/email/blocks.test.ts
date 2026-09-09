@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { renderBlocks, parseBlocks, BLOCK_TYPES, type EmailBlock } from "@/lib/email/blocks";
+const CTA = "https://vantalabsresearch.com/api/email/click?c=1&e=a%40b.test&s=sig";
+
+/**
+ * Un-escape the way template-standards.test.ts does before comparing a URL:
+ * escapeHtml turns `&` into `&amp;` in an href, which is correct HTML and not a
+ * different link.
+ */
+const unescape = (html: string) => html.replace(/&amp;/g, "&");
+
+import { renderBlocks, parseBlocks, blocksFromPlainText, plainTextFromBlocks, BLOCK_TYPES, type EmailBlock } from "@/lib/email/blocks";
 
 // ---------------------------------------------------------------------------
 // BLOCK-COMPOSED CAMPAIGN BODIES.
@@ -34,8 +43,22 @@ describe("rendering", () => {
     expect(out.text).toContain("The full catalogue is back.");
   });
 
+  // ------------------------------------------------------------------
+  // A BUTTON BLOCK CARRIES NO URL OF ITS OWN, AND THAT IS THE POINT.
+  //
+  // It renders the CAMPAIGN'S tracked CTA link. A block that took a raw URL
+  // produced a link that bypassed /api/email/click — so the click went
+  // uncounted, and, far worse, the offer cookie that arms a campaign's gift
+  // was never set. An email promising a gift, with a button that lands the
+  // customer somewhere the gift is not applied, is the same class of defect
+  // cart-recovery-coupon-leak.test.ts exists to prevent.
+  //
+  // Reusing the campaign's own destination also removes the two-competing-CTAs
+  // problem: a mid-email button and the footer button now go to the same
+  // tracked place.
+  // ------------------------------------------------------------------
   it("renders a button as a real button rather than a naked anchor", () => {
-    const out = renderBlocks([{ type: "button", label: "Browse the catalog", url: "https://vantalabsresearch.com/products" }]);
+    const out = renderBlocks([{ type: "button", label: "Browse the catalog" }], { ctaUrl: CTA });
 
     // renderCtaButton's table wrapper is what template-standards uses to tell a
     // real CTA from a bare <a>. Reusing it means blocks pass the same check.
@@ -43,15 +66,38 @@ describe("rendering", () => {
     expect(out.html).toContain("Browse the catalog");
   });
 
+  it("points the button at the campaign's tracked CTA, not a URL of its own", () => {
+    const out = renderBlocks([{ type: "button", label: "Shop" }], { ctaUrl: CTA });
+    expect(unescape(out.html)).toContain(CTA);
+  });
+
+  it("renders no button at all when the campaign has no CTA to point at", () => {
+    // A campaign can be sent with no button (both CTA fields cleared). A block
+    // button with nowhere to go is dropped rather than rendered dead.
+    const out = renderBlocks([{ type: "button", label: "Shop" }], { ctaUrl: "" });
+    expect(out.html).not.toContain("Shop");
+  });
+
+  it("ignores a url an old stored block still carries", () => {
+    // Bodies saved before this change may still have a `url`. It must not win:
+    // the whole point is that the tracked destination is the only one.
+    const out = renderBlocks(
+      [{ type: "button", label: "Shop", url: "https://evil.example.com" } as EmailBlock],
+      { ctaUrl: CTA },
+    );
+    expect(out.html).not.toContain("evil.example.com");
+    expect(unescape(out.html)).toContain(CTA);
+  });
+
   // THE STANDARD MOST EASILY BROKEN BY A BLOCK EDITOR. A link that exists only
   // in the HTML is invisible to anyone reading the plain-text part.
   it("repeats every link from the HTML in the text part", () => {
     const out = renderBlocks([
-      { type: "button", label: "Shop", url: "https://vantalabsresearch.com/products" },
+      { type: "button", label: "Shop" },
       { type: "paragraph", text: "Questions? Reply to this email." },
-    ]);
+    ], { ctaUrl: CTA });
 
-    const urls = [...out.html.matchAll(/href="([^"]+)"/g)].map((match) => match[1]);
+    const urls = [...out.html.matchAll(/href="([^"]+)"/g)].map((match) => unescape(match[1]));
     expect(urls.length).toBeGreaterThan(0);
     for (const url of urls) expect(out.text).toContain(url);
   });
@@ -108,8 +154,8 @@ describe("operator-typed content cannot become markup", () => {
   });
 
   // A javascript: URL in a button is the one that actually reaches a customer.
-  it("drops a button whose URL is not a real web address", () => {
-    const out = renderBlocks([{ type: "button", label: "Click", url: "javascript:alert(1)" }]);
+  it("drops a button whose campaign CTA is not a real web address", () => {
+    const out = renderBlocks([{ type: "button", label: "Click" }], { ctaUrl: "javascript:alert(1)" });
 
     expect(out.html).not.toContain("javascript:");
   });
@@ -119,7 +165,7 @@ describe("nothing renders as a broken value", () => {
   it.each([
     ["a heading with no text", { type: "heading" }],
     ["a paragraph with no text", { type: "paragraph" }],
-    ["a button with no label", { type: "button", url: "https://vantalabsresearch.com" }],
+    ["a button with no label", { type: "button" }],
     ["a list with no items", { type: "list" }],
     ["an image with no url", { type: "image", alt: "x" }],
     ["an unknown block type", { type: "carousel", slides: 3 }],
@@ -175,5 +221,61 @@ describe("parseBlocks", () => {
   it("caps the number of blocks so one body cannot be unbounded", () => {
     const many = Array.from({ length: 500 }, () => ({ type: "paragraph", text: "x" }));
     expect(parseBlocks(many)?.length).toBeLessThanOrEqual(100);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SWITCHING BETWEEN PLAIN TEXT AND BLOCKS MUST NOT DESTROY WORK.
+//
+// The composer offers both. An operator who has typed three paragraphs and then
+// clicks "Blocks" should find three paragraphs, not an empty canvas — and one
+// who built blocks and clicks back should find their words, not JSON. A mode
+// switch that silently discards the draft is the kind of thing somebody
+// discovers after retyping it.
+// ---------------------------------------------------------------------------
+
+describe("converting plain text to blocks", () => {
+  it("makes one paragraph block per blank-line-separated paragraph", () => {
+    const blocks = blocksFromPlainText("First para.\n\nSecond para.");
+
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toEqual({ type: "paragraph", text: "First para." });
+    expect(blocks[1]).toEqual({ type: "paragraph", text: "Second para." });
+  });
+
+  it("keeps a single newline inside one paragraph", () => {
+    const blocks = blocksFromPlainText("Line one\nLine two");
+    expect(blocks).toHaveLength(1);
+    expect((blocks[0] as { text: string }).text).toBe("Line one\nLine two");
+  });
+
+  it("returns no blocks for empty text rather than one empty block", () => {
+    expect(blocksFromPlainText("")).toEqual([]);
+    expect(blocksFromPlainText("   \n\n  ")).toEqual([]);
+  });
+});
+
+describe("converting blocks back to plain text", () => {
+  it("keeps the words from every block that has words", () => {
+    const text = plainTextFromBlocks([
+      { type: "heading", text: "Restock" },
+      { type: "paragraph", text: "It is back." },
+      { type: "list", items: ["One", "Two"] },
+      { type: "button", label: "Shop" },
+    ]);
+
+    expect(text).toContain("Restock");
+    expect(text).toContain("It is back.");
+    expect(text).toContain("One");
+    expect(text).toContain("Shop");
+  });
+
+  it("round-trips paragraphs without gaining or losing any", () => {
+    const original = "First para.\n\nSecond para.\n\nThird.";
+    expect(plainTextFromBlocks(blocksFromPlainText(original))).toBe(original);
+  });
+
+  it("emits nothing for blocks that carry no words", () => {
+    expect(plainTextFromBlocks([{ type: "divider" }, { type: "spacer" }])).toBe("");
   });
 });

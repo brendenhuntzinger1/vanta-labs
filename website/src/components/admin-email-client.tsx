@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { SegmentRuleBuilder } from "@/components/admin-segment-rule-builder";
+import { BlockComposer } from "@/components/admin-block-composer";
+import { parseBlocks, blocksFromPlainText, plainTextFromBlocks } from "@/lib/email/blocks";
 import {
   GIFT_REWARD_KINDS,
   validateCampaignGift,
@@ -180,6 +182,12 @@ export function AdminEmailClient({
     () => segments.find((segment) => segment.value === form.segment) ?? segments[0],
     [segments, form.segment],
   );
+
+  // Blocks or plain text, read from the body itself. parseBlocks answers null
+  // for anything that is not a JSON array of known blocks, which makes this
+  // total: a plain-text body cannot be mistaken for blocks, and a block body
+  // cannot be mistaken for prose.
+  const bodyIsBlocks = useMemo(() => parseBlocks(form.body) !== null, [form.body]);
 
   // Recomputed as the operator types. It is a pure function over the form —
   // no request, no debounce — so the verdict moves with the copy instead of
@@ -668,17 +676,63 @@ export function AdminEmailClient({
               />
             </label>
 
-            <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Message</span>
-              <textarea
-                rows={7}
-                className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
-                data-testid="field-body"
-                value={form.body}
-                onChange={(event) => setForm({ ...form, body: event.target.value })}
-                placeholder={"Plain text. Leave a blank line between paragraphs.\n\nNo HTML — the branded layout is applied automatically."}
-              />
-            </label>
+            <div className="block">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Message</span>
+                {/*
+                  THE MODE IS DERIVED FROM THE BODY, NOT HELD BESIDE IT. A
+                  separate piece of state could disagree with what is stored,
+                  and the stored value is what sends.
+                */}
+                <div className="ml-auto flex items-center gap-1">
+                  <button
+                    type="button"
+                    data-testid="body-mode-text"
+                    aria-pressed={!bodyIsBlocks}
+                    className={`rounded-lg border px-2.5 py-1 text-[11px] font-semibold ${
+                      bodyIsBlocks ? "border-white/10 text-zinc-400 hover:border-white/25 hover:text-white" : "border-white/30 text-white"
+                    }`}
+                    onClick={() => {
+                      // Convert rather than clear: an operator who built blocks
+                      // and clicks back should find their words, not JSON.
+                      if (!bodyIsBlocks) return;
+                      setForm({ ...form, body: plainTextFromBlocks(parseBlocks(form.body) ?? []) });
+                    }}
+                  >
+                    Plain text
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="body-mode-blocks"
+                    aria-pressed={bodyIsBlocks}
+                    className={`rounded-lg border px-2.5 py-1 text-[11px] font-semibold ${
+                      bodyIsBlocks ? "border-white/30 text-white" : "border-white/10 text-zinc-400 hover:border-white/25 hover:text-white"
+                    }`}
+                    onClick={() => {
+                      if (bodyIsBlocks) return;
+                      setForm({ ...form, body: JSON.stringify(blocksFromPlainText(form.body)) });
+                    }}
+                  >
+                    Blocks
+                  </button>
+                </div>
+              </div>
+
+              {bodyIsBlocks ? (
+                <div className="mt-2">
+                  <BlockComposer value={form.body} onChange={(json) => setForm({ ...form, body: json })} />
+                </div>
+              ) : (
+                <textarea
+                  rows={7}
+                  className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                  data-testid="field-body"
+                  value={form.body}
+                  onChange={(event) => setForm({ ...form, body: event.target.value })}
+                  placeholder={"Plain text. Leave a blank line between paragraphs.\n\nNo HTML — the branded layout is applied automatically."}
+                />
+              )}
+            </div>
           </div>
 
           <div className="space-y-3">
