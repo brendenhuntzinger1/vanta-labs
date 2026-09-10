@@ -27,12 +27,12 @@ const TONE: Record<HealthStatus, string> = {
   AVAILABLE: "text-emerald-300 border-emerald-400/30 bg-emerald-400/[0.07]",
   FAIL: "text-red-300 border-red-400/30 bg-red-400/[0.07]",
   NOT_VERIFIED: "text-[color:var(--accent-gold)] border-[color:var(--accent-gold)]/30 bg-[color:var(--accent-gold)]/[0.07]",
-  NOT_AVAILABLE: "text-white/45 border-white/10 bg-white/[0.02]",
-  NOT_TESTED: "text-white/45 border-white/10 bg-white/[0.02]",
+  NOT_AVAILABLE: "text-white/50 border-white/10 bg-white/[0.02]",
+  NOT_TESTED: "text-white/50 border-white/10 bg-white/[0.02]",
 };
 
 const TIER_TONE = {
-  CODE: "text-white/35",
+  CODE: "text-white/50",
   PRODUCTION: "text-sky-300/70",
   SNAP: "text-[color:var(--accent-gold)]/80",
 } as const;
@@ -79,7 +79,7 @@ export function SnapTrackingHealth() {
         <p className="text-xs text-white/50">
           <span className="font-mono text-emerald-300">{green}</span> green ·{" "}
           <span className="font-mono text-red-300">{red}</span> failing ·{" "}
-          <span className="font-mono text-white/40">{checks.length - green - red}</span> untested
+          <span className="font-mono text-white/50">{checks.length - green - red}</span> untested
         </p>
         <button
           type="button"
@@ -91,7 +91,7 @@ export function SnapTrackingHealth() {
       </div>
 
       <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
-        <p className="text-[10px] uppercase tracking-[0.14em] text-white/35">
+        <p className="text-[10px] uppercase tracking-[0.14em] text-white/50">
           Why Snapchat says &ldquo;we can&rsquo;t detect it&rdquo;
         </p>
         <p className="mt-1 text-xs leading-6 text-white/55">{snapDetectorExplanation(snap)}</p>
@@ -103,7 +103,7 @@ export function SnapTrackingHealth() {
         ))}
       </div>
 
-      <p className="text-xs leading-6 text-white/40">
+      <p className="text-xs leading-6 text-white/50">
         Pixel <span className="font-mono text-white/60">{SNAP_PIXEL_ID}</span>. The cookie-choice buttons on the TikTok
         board apply here too — both pixels read the same stored consent.
       </p>

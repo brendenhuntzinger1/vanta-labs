@@ -50,9 +50,9 @@ const UNPAID_STATUSES = ["pending", "pending_payment", "awaiting_verification", 
 function StatTile({ label, value, sub, href }: { label: string; value: string; sub?: string; href?: string }) {
   const inner = (
     <div className="vl-panel-soft h-full rounded-xl p-4 transition-colors duration-200 hover:border-white/20">
-      <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">{label}</p>
+      <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-400">{label}</p>
       <p className="mt-2 text-2xl font-semibold text-white">{value}</p>
-      {sub ? <p className="mt-1 text-xs text-zinc-500">{sub}</p> : null}
+      {sub ? <p className="mt-1 text-xs text-zinc-400">{sub}</p> : null}
     </div>
   );
   return href ? (
@@ -159,7 +159,7 @@ export default async function AccountDashboardPage() {
       <section className="vl-fade-up vl-panel overflow-hidden rounded-2xl p-5 sm:p-7">
         <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
-            <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Dashboard</p>
+            <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-400">Dashboard</p>
             <h1 className="vl2-serif mt-2 text-3xl text-white sm:text-4xl">Welcome back, {firstName}.</h1>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <span className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium ${status.cls}`}>
@@ -177,7 +177,7 @@ export default async function AccountDashboardPage() {
           <div className="shrink-0 sm:text-right">
             {isPaid ? (
               <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
-                <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">
+                <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-400">
                   {membership.cancelAtPeriodEnd ? "Access until" : "Next billing"}
                 </p>
                 <p className="mt-1 text-sm font-semibold text-white">
@@ -269,7 +269,7 @@ export default async function AccountDashboardPage() {
             </div>
           </>
         )}
-        <p className="mt-2 text-xs text-zinc-500">
+        <p className="mt-2 text-xs text-zinc-400">
           Redeem points at checkout — {POINTS_PER_DOLLAR_REDEMPTION} points = $1 off. <Link href="/account/rewards" className="text-cyan-300 underline-offset-2 hover:underline">See rewards →</Link>
         </p>
       </section>
@@ -286,7 +286,7 @@ export default async function AccountDashboardPage() {
         {recentOrders.length === 0 ? (
           <div className="mt-4 rounded-xl border border-dashed border-white/12 bg-white/[0.02] p-8 text-center">
             <p className="text-sm text-zinc-300">No orders yet</p>
-            <p className="mx-auto mt-1.5 max-w-sm text-xs text-zinc-500">When you place your first order it&apos;ll appear here with tracking, invoices, and one-tap reorder.</p>
+            <p className="mx-auto mt-1.5 max-w-sm text-xs text-zinc-400">When you place your first order it&apos;ll appear here with tracking, invoices, and one-tap reorder.</p>
             <Link href="/products" className="vl2-btn-secondary vl-focus-ring mt-5 inline-flex px-5 py-2.5 text-xs">Browse products</Link>
           </div>
         ) : (
@@ -301,7 +301,7 @@ export default async function AccountDashboardPage() {
                   >
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-white">Order {displayOrderReference(order.orderNumber, order.orderId)}</p>
-                      <p className="mt-0.5 text-xs text-zinc-500">
+                      <p className="mt-0.5 text-xs text-zinc-400">
                         {formatDisplayDate(order.createdAt, "medium")} · {order.items.length} item{order.items.length === 1 ? "" : "s"}
                       </p>
                     </div>
@@ -325,7 +325,7 @@ export default async function AccountDashboardPage() {
           <div className="mt-4 flex flex-col gap-2 border-t border-white/10 pt-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-medium text-white">Quick reorder</p>
-              <p className="text-xs text-zinc-500">Add the items from your most recent order back to the cart.</p>
+              <p className="text-xs text-zinc-400">Add the items from your most recent order back to the cart.</p>
             </div>
             <ReorderButton orderId={lastOrder.orderId} />
           </div>
@@ -338,7 +338,7 @@ export default async function AccountDashboardPage() {
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold text-white">Popular right now</h2>
-              <p className="mt-0.5 text-xs text-zinc-500">Best sellers across the Vanta Labs catalog.</p>
+              <p className="mt-0.5 text-xs text-zinc-400">Best sellers across the Vanta Labs catalog.</p>
             </div>
             <Link href="/products" className="vl-focus-ring text-xs text-cyan-300 underline-offset-2 hover:underline">Shop all →</Link>
           </div>
@@ -376,14 +376,14 @@ export default async function AccountDashboardPage() {
             <Link href="/account/rewards" className="vl-focus-ring text-xs text-cyan-300 underline-offset-2 hover:underline">All →</Link>
           </div>
           {pointsHistory.length === 0 ? (
-            <p className="mt-4 text-sm text-zinc-500">No activity yet — your rewards will show up here.</p>
+            <p className="mt-4 text-sm text-zinc-400">No activity yet — your rewards will show up here.</p>
           ) : (
             <ul className="mt-3 divide-y divide-white/10">
               {pointsHistory.map((entry) => (
                 <li key={entry.id} className="flex items-center justify-between py-2.5 text-sm">
                   <div className="min-w-0">
                     <p className="truncate text-zinc-200">{LEDGER_REASON_LABELS[entry.reason] ?? entry.reason}</p>
-                    <p className="text-xs text-zinc-500">{formatDisplayDate(entry.createdAt, "medium")}</p>
+                    <p className="text-xs text-zinc-400">{formatDisplayDate(entry.createdAt, "medium")}</p>
                   </div>
                   <span className={entry.amount >= 0 ? "font-semibold text-emerald-300" : "font-semibold text-rose-300"}>
                     {entry.amount >= 0 ? "+" : ""}{entry.amount.toLocaleString("en-US")}
@@ -415,7 +415,7 @@ export default async function AccountDashboardPage() {
 
           {activeCoupons.length > 0 ? (
             <div className="mt-5 border-t border-white/10 pt-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Available coupons</p>
+              <p className="text-xs uppercase tracking-[0.2em] text-zinc-400">Available coupons</p>
               <div className="mt-2.5 flex flex-wrap gap-2">
                 {activeCoupons.map((coupon) => (
                   <span key={coupon.code} className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-xs text-zinc-200">

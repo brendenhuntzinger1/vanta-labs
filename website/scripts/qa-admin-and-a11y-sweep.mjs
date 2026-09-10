@@ -153,15 +153,84 @@ const A11Y = () => {
   /** Composite a translucent colour over what is behind it, as a renderer does. */
   const over = (fg, bg) => [0, 1, 2].map((i) => Math.round(fg[i] * fg[3] + bg[i] * (1 - fg[3])));
 
-  // Walk up for the first background with real opacity.
-  const bgOf = (el) => {
-    let node = el;
-    while (node) {
-      const c = toRgba(getComputedStyle(node).backgroundColor);
-      if (c && c[3] > 0.5) return [c[0], c[1], c[2]];
-      node = node.parentElement;
+  /**
+   * Every colour token in a background-image, so a gradient can be composited
+   * rather than stepped over. `[^()]*` is enough nesting because the only
+   * parentheses inside a gradient belong to its own colour functions.
+   */
+  const STOPS = /(?:rgba?|hsla?|oklab|oklch|lab|lch|color)\([^()]*\)|#[0-9a-fA-F]{3,8}\b|\btransparent\b/g;
+
+  /**
+   * THE BACKDROP UNDER THE GLYPHS, GRADIENTS INCLUDED.
+   *
+   * The walk used to stop at the first ancestor with an opaque background-color
+   * and ignore background-image entirely, which reported the BUY BUTTON — #111
+   * on a white-to-#d9d9d9 gradient, about 15:1 — as 1.03:1, because its
+   * background-color is transparent and the walk sailed through to the
+   * near-black page behind it.
+   *
+   * Bailing out on any background-image fixes that and costs more than it
+   * saves: this site paints most of its panels with a barely-there
+   * `linear-gradient(165deg, rgba(255,255,255,0.04), …)`, so bailing marked
+   * twenty-seven elements unmeasurable on eight routes — text that is perfectly
+   * assessable, and would then have been unmeasured rather than proven.
+   *
+   * So the layers are composited instead. A gradient's painted colour varies
+   * along its length, and which end sits under any given glyph is not knowable
+   * from the DOM, so BOTH extremes are built and the worse ratio is the answer.
+   * That is the conservative reading: a gradient passes only if it passes at
+   * its least favourable stop.
+   *
+   * A url() or an unparseable image is still not assessable, and still says so.
+   */
+  const backdropsOf = (el) => {
+    const layers = [];
+    let base = null;
+    for (let node = el; node; node = node.parentElement) {
+      const cs = getComputedStyle(node);
+      const image = cs.backgroundImage;
+      if (image && image !== "none") {
+        if (/url\(/.test(image)) return { unmeasurable: image.slice(0, 28) };
+        const stops = (image.match(STOPS) || [])
+          .map((token) => (token === "transparent" ? [0, 0, 0, 0] : toRgba(token)))
+          .filter(Boolean)
+          .filter((c) => c[3] > 0);
+        if (!stops.length && !/gradient/.test(image)) return { unmeasurable: image.slice(0, 28) };
+        if (stops.length) {
+          const byLum = [...stops].sort((a, b) => lum(a) - lum(b));
+          layers.push({ dark: byLum[0], light: byLum[byLum.length - 1] });
+        }
+      }
+      const c = toRgba(cs.backgroundColor);
+      if (c && c[3] > 0) {
+        if (c[3] > 0.5) { base = [c[0], c[1], c[2]]; break; }
+        layers.push({ dark: c, light: c });
+      }
     }
-    return [11, 11, 11];
+    // The page's own ground when nothing opaque was found on the way up.
+    if (!base) base = [11, 11, 11];
+
+    // Bottom-up: the outermost layer is painted first.
+    const stack = (pick) => layers.reduceRight((under, layer) => over(layer[pick], under), base);
+    return { candidates: [stack("dark"), stack("light")] };
+  };
+
+  /**
+   * Hidden from the accessibility tree, so exempt from 1.4.3 the way axe-core
+   * treats it: aria-hidden text is not read, and the sighted-reader case it
+   * still covers is "pure decoration", which the success criterion names as
+   * incidental. /research draws a ghosted serif ordinal — 02, 03, 04 — behind
+   * each card at 12% white. It is aria-hidden, it repeats the order the cards
+   * are already in, and it is 1.35:1 by design. Judged as body text it is the
+   * worst failure on the site; judged as the watermark it is, it is not text
+   * the criterion applies to. Lifting it to 3:1 would not fix an accessibility
+   * defect, it would delete a design element and call that a fix.
+   */
+  const ariaHidden = (el) => {
+    for (let node = el; node; node = node.parentElement) {
+      if (node.getAttribute && node.getAttribute("aria-hidden") === "true") return true;
+    }
+    return false;
   };
 
   const contrastIssues = [];
@@ -188,14 +257,25 @@ const A11Y = () => {
       continue;
     }
 
+    if (ariaHidden(el)) continue;
+
     const fgRaw = toRgba(cs.color);
     if (!fgRaw) continue;
-    const bg = bgOf(el);
+    const backdrop = backdropsOf(el);
+    if (backdrop.unmeasurable) {
+      notAssessable.push(`${el.tagName.toLowerCase()} "${(el.textContent || "").trim().slice(0, 24)}" (text over ${backdrop.unmeasurable})`);
+      continue;
+    }
+
     // Text at 70% white over a dark page is what the eye actually sees, so the
-    // ratio is computed on the composited colour rather than on the declared one.
-    const fg = over(fgRaw, bg);
-    const l1 = lum(fg); const l2 = lum(bg);
-    const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+    // ratio is computed on the composited colour rather than on the declared
+    // one — and against the least favourable backdrop the gradient can present.
+    let ratio = Infinity;
+    for (const candidate of backdrop.candidates) {
+      const fg = over(fgRaw, candidate);
+      const l1 = lum(fg); const l2 = lum(candidate);
+      ratio = Math.min(ratio, (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05));
+    }
     const size = parseFloat(cs.fontSize);
     const bold = Number(cs.fontWeight) >= 700;
     const large = size >= 24 || (size >= 18.66 && bold);
@@ -216,7 +296,12 @@ const A11Y = () => {
       footer: document.querySelectorAll("footer").length,
     },
     lang: document.documentElement.getAttribute("lang") || "",
-    contrast: contrastIssues.slice(0, 4),
+    // THE COUNT TRAVELS WITH THE SAMPLE. This used to hand back four items and
+    // the report printed two of them, so a route with 29 failures and a route
+    // with 2 read identically. The audit that found this set chased nine
+    // findings and there were a hundred and thirty-one.
+    contrast: contrastIssues.slice(0, 6),
+    contrastCount: contrastIssues.length,
     notAssessable: notAssessable.slice(0, 3),
     contrastChecked: sample.length,
   };
@@ -371,7 +456,9 @@ console.log("\n### static accessibility (chromium 1440x900, signed in)");
       if (r.skips.length) finding("P3", "a11y", `${route} skips a heading level`, r.skips.join(", "));
       if (!r.landmarks.main) finding("P3", "a11y", `${route} has no <main> landmark`, "");
       if (!r.lang) finding("P3", "a11y", `${route} has no lang attribute`, "");
-      if (r.contrast.length) finding("P2", "a11y", `${route} has text below WCAG AA contrast`, r.contrast.slice(0, 2).join(" | "));
+      if (r.contrast.length) {
+        finding("P2", "a11y", `${route} has ${r.contrastCount} element(s) below WCAG AA contrast`, r.contrast.slice(0, 3).join(" | "));
+      }
       if (r.notAssessable.length) {
         transport.push(`a11y ${route}: ${r.notAssessable.length} gradient-clipped element(s) not contrast-assessable from the DOM — ${r.notAssessable[0]}`);
       }

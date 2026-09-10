@@ -40,7 +40,7 @@ export function MemberRemoveButton({
   const isFree = billingCycle === "free";
 
   if (alreadyRemoved) {
-    return <span className="text-xs text-zinc-500">Removed · ending</span>;
+    return <span className="text-xs text-zinc-400">Removed · ending</span>;
   }
 
   if (isFree) {

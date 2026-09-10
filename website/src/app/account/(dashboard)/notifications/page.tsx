@@ -54,7 +54,7 @@ export default async function AccountNotificationsPage() {
   return (
     <div className="space-y-5">
       <header className="vl-fade-up">
-        <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Account</p>
+        <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-400">Account</p>
         <h1 className="vl2-serif mt-1.5 text-3xl text-white sm:text-4xl">Notifications</h1>
         <p className="mt-2 text-sm text-zinc-400">Order updates, rewards, and membership activity — all in one place.</p>
       </header>
@@ -63,7 +63,7 @@ export default async function AccountNotificationsPage() {
         <section className="vl-panel rounded-2xl p-10 text-center">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-white/12 bg-white/[0.03] text-2xl">🔔</div>
           <h2 className="mt-5 text-lg font-semibold text-white">You&apos;re all caught up</h2>
-          <p className="mx-auto mt-2 max-w-sm text-sm text-zinc-500">Updates about your orders, points, and membership will show up here.</p>
+          <p className="mx-auto mt-2 max-w-sm text-sm text-zinc-400">Updates about your orders, points, and membership will show up here.</p>
         </section>
       ) : (
         <section className="vl-panel rounded-2xl p-3 sm:p-4">
@@ -76,9 +76,9 @@ export default async function AccountNotificationsPage() {
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-white">{n.title}</p>
-                    {n.body ? <p className="mt-0.5 text-xs text-zinc-500">{n.body}</p> : null}
+                    {n.body ? <p className="mt-0.5 text-xs text-zinc-400">{n.body}</p> : null}
                   </div>
-                  <span className="shrink-0 text-[11px] text-zinc-500">{timeAgo(n.createdAt)}</span>
+                  <span className="shrink-0 text-[11px] text-zinc-400">{timeAgo(n.createdAt)}</span>
                 </div>
               );
               return (

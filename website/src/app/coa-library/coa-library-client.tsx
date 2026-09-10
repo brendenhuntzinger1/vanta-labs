@@ -116,7 +116,7 @@ function StatusBadge({ verified }: { verified: boolean }) {
 function SpecCell({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
-      <dt className="text-[11px] uppercase tracking-[0.15em] text-white/32">{label}</dt>
+      <dt className="text-[11px] uppercase tracking-[0.15em] text-white/50">{label}</dt>
       <dd className="mt-1 truncate text-[13px] font-medium text-white/90">{value}</dd>
     </div>
   );
@@ -175,10 +175,10 @@ function ProductCoaCard({
       </div>
 
       <div className="flex flex-1 flex-col p-5 sm:p-6">
-        <p className="text-[11px] uppercase tracking-[0.18em] text-white/32">{product.category}</p>
+        <p className="text-[11px] uppercase tracking-[0.18em] text-white/50">{product.category}</p>
         <h3 className="mt-2 flex flex-wrap items-baseline gap-x-2 text-[1.15rem] leading-snug text-white sm:text-xl">
           {product.name}
-          {product.strength && strengths.length === 0 ? <span className="text-sm text-white/40">{product.strength}</span> : null}
+          {product.strength && strengths.length === 0 ? <span className="text-sm text-white/50">{product.strength}</span> : null}
         </h3>
         {strengths.length > 0 ? (
           <ul className="mt-2.5 flex flex-wrap gap-1.5" aria-label="Documented doses">
@@ -202,7 +202,7 @@ function ProductCoaCard({
               ))}
           </dl>
         ) : (
-          <p className="mt-5 text-[13px] leading-6 text-white/38">
+          <p className="mt-5 text-[13px] leading-6 text-white/50">
             {/* A pending card used to say only that documentation was absent,
                 which reads as an omission. For the products we know are still
                 awaiting testing, say why and what happens next instead. */}
@@ -218,7 +218,7 @@ function ProductCoaCard({
               </button>
               <Link
                 href={`/products/${product.slug}`}
-                className="vl-focus-ring mt-3 flex min-h-[36px] items-center justify-center rounded-lg text-[12px] text-white/38 transition hover:text-white/80"
+                className="vl-focus-ring mt-3 flex min-h-[36px] items-center justify-center rounded-lg text-[12px] text-white/50 transition hover:text-white/80"
               >
                 View product
               </Link>
@@ -230,7 +230,7 @@ function ProductCoaCard({
               </Link>
               <Link
                 href="/contact"
-                className="vl-focus-ring mt-3 flex min-h-[36px] items-center justify-center rounded-lg text-[12px] text-white/38 transition hover:text-white/80"
+                className="vl-focus-ring mt-3 flex min-h-[36px] items-center justify-center rounded-lg text-[12px] text-white/50 transition hover:text-white/80"
               >
                 Request documentation
               </Link>
@@ -367,7 +367,7 @@ function CoaViewer({
             <p className="vl2-eyebrow">Certificate of Analysis</p>
             <h2 id="coa-viewer-title" className="vl2-serif mt-1.5 truncate text-2xl text-white sm:text-3xl">
               {product.name}
-              {activeStrength ? <span className="ml-2 text-base text-white/40">{activeStrength}</span> : null}
+              {activeStrength ? <span className="ml-2 text-base text-white/50">{activeStrength}</span> : null}
             </h2>
           </div>
           <button
@@ -450,7 +450,7 @@ function CoaViewer({
                     <path d="M15 6l-6 6 6 6" />
                   </svg>
                 </button>
-                <span className="min-w-[3.5rem] text-center font-mono text-xs text-white/45" aria-live="polite">
+                <span className="min-w-[3.5rem] text-center font-mono text-xs text-white/50" aria-live="polite">
                   {activeIndex + 1} / {documents.length}
                 </span>
                 <button
@@ -486,7 +486,7 @@ function CoaViewer({
                       <path d="M6 12h12" />
                     </svg>
                   </button>
-                  <span className="min-w-[3.25rem] text-center font-mono text-xs text-white/45">
+                  <span className="min-w-[3.25rem] text-center font-mono text-xs text-white/50">
                     {Math.round(zoom * 100)}%
                   </span>
                   <button
@@ -522,7 +522,7 @@ function CoaViewer({
           <CoaDocument document={activeDocument} fileUrl={fileUrl} zoom={zoom} expanded={expanded} />
 
           {activeDocument.fileKind === "link" ? null : (
-            <p className="mt-2.5 text-center text-[11px] text-white/28">
+            <p className="mt-2.5 text-center text-[11px] text-white/50">
               Preview not loading? Open the full document below.
             </p>
           )}
@@ -532,7 +532,7 @@ function CoaViewer({
               .filter((entry): entry is [string, string] => Boolean(entry[1]))
               .map(([label, value]) => (
                 <div key={label} className="flex items-baseline justify-between gap-3 border-b border-white/[0.055] pb-2.5">
-                  <dt className="text-[12px] uppercase tracking-[0.12em] text-white/32">{label}</dt>
+                  <dt className="text-[12px] uppercase tracking-[0.12em] text-white/50">{label}</dt>
                   <dd className="min-w-0 break-words text-right text-[13px] font-medium text-white">{value}</dd>
                 </div>
               ))}
@@ -703,7 +703,7 @@ export function CoaLibraryPageClient({ snapshot }: { snapshot: CoaLibrarySnapsho
                 ))}
               </ul>
             ) : (
-              <p className="mx-auto mt-9 max-w-lg text-[13px] leading-6 text-white/38">
+              <p className="mx-auto mt-9 max-w-lg text-[13px] leading-6 text-white/50">
                 Batch records are published here as testing is completed. Contact our team for
                 documentation on a specific batch in the meantime.
               </p>
@@ -717,13 +717,13 @@ export function CoaLibraryPageClient({ snapshot }: { snapshot: CoaLibrarySnapsho
             <section className="mx-auto max-w-[1180px] px-5 sm:px-6 lg:px-10">
               <label className="vl-coa-search vl-focus-ring relative mx-auto flex max-w-2xl items-center">
                 <span className="sr-only">{SEARCH_PLACEHOLDER}</span>
-                <SearchIcon className="pointer-events-none absolute left-5 h-[18px] w-[18px] text-white/30" />
+                <SearchIcon className="pointer-events-none absolute left-5 h-[18px] w-[18px] text-white/50" />
                 <input
                   type="search"
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder={SEARCH_PLACEHOLDER}
-                  className="h-[54px] w-full rounded-full bg-transparent pl-[3.25rem] pr-5 text-[15px] text-white outline-none placeholder:text-white/33 sm:h-[58px]"
+                  className="h-[54px] w-full rounded-full bg-transparent pl-[3.25rem] pr-5 text-[15px] text-white outline-none placeholder:text-white/50 sm:h-[58px]"
                 />
               </label>
             </section>
@@ -749,7 +749,7 @@ export function CoaLibraryPageClient({ snapshot }: { snapshot: CoaLibrarySnapsho
               ) : (
                 <div className="mx-auto max-w-lg rounded-3xl border border-white/[0.07] bg-white/[0.012] px-6 py-16 text-center">
                   <h2 className="vl2-serif text-xl text-white sm:text-2xl">No matching records</h2>
-                  <p className="mt-3 text-sm leading-7 text-white/42">
+                  <p className="mt-3 text-sm leading-7 text-white/50">
                     Nothing matched that search. Try a product name, a compound, or a batch number, or
                     clear it and browse the full archive.
                   </p>
@@ -768,7 +768,7 @@ export function CoaLibraryPageClient({ snapshot }: { snapshot: CoaLibrarySnapsho
           <section className="mx-auto max-w-[1180px] px-5 pb-24 pt-8 sm:px-6 lg:px-10">
             <div className="mx-auto max-w-xl rounded-3xl border border-white/[0.07] bg-white/[0.012] px-6 py-16 text-center">
               <h2 className="vl2-serif text-2xl text-white sm:text-3xl">The archive is being prepared</h2>
-              <p className="mt-4 text-sm leading-7 text-white/45">
+              <p className="mt-4 text-sm leading-7 text-white/50">
                 Batch documentation will be published here as it is released. Contact our team and we
                 will provide the testing records available for the batch you are researching.
               </p>

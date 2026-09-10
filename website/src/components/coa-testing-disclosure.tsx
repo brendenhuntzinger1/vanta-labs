@@ -46,13 +46,13 @@ export function CoaTestingDisclosure({ hasPublishedRecords }: { hasPublishedReco
           {POINTS.map((point) => (
             <div key={point.title}>
               <h3 className="text-[15px] font-semibold text-white">{point.title}</h3>
-              <p className="mt-2.5 text-[13px] leading-6 text-white/45">{point.body}</p>
+              <p className="mt-2.5 text-[13px] leading-6 text-white/50">{point.body}</p>
             </div>
           ))}
         </div>
 
         <div className="mt-12 border-t border-white/[0.06] pt-8">
-          <p className="max-w-3xl text-[13px] leading-6 text-white/40">
+          <p className="max-w-3xl text-[13px] leading-6 text-white/50">
             {hasPublishedRecords
               ? "Additional batch records are added as testing is completed. To protect commercial relationships, manufacturing and laboratory partner details are not published beyond what appears on each report."
               : "Batch-specific reports are being prepared and will appear here as they are released. To protect commercial relationships, manufacturing partner details are not published."}{" "}
@@ -66,7 +66,7 @@ export function CoaTestingDisclosure({ hasPublishedRecords }: { hasPublishedReco
             and we&apos;ll provide the documentation available for it.
           </p>
 
-          <p className="mt-6 text-[11px] leading-5 text-white/25">
+          <p className="mt-6 text-[11px] leading-5 text-white/50">
             All Vanta Labs compounds are supplied strictly for laboratory research use. Not for human
             or veterinary use.
           </p>

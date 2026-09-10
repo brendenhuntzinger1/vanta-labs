@@ -94,7 +94,7 @@ export function VaultLoginForm({ passcodeRequired }: { passcodeRequired: boolean
     <div className="vl-page-shell min-h-screen bg-zinc-950 px-4 py-12 text-zinc-100 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-md">
         <div className="vl-panel rounded-[1.8rem] border border-white/15 p-6 sm:p-8">
-          <p className="text-[11px] uppercase tracking-[0.28em] text-zinc-500">Access</p>
+          <p className="text-[11px] uppercase tracking-[0.28em] text-zinc-400">Access</p>
           <h1 className="mt-3 text-2xl font-semibold text-white">Secure Console</h1>
           <p className="mt-2 text-sm text-zinc-400">Restricted access only.</p>
 
@@ -128,7 +128,7 @@ export function VaultLoginForm({ passcodeRequired }: { passcodeRequired: boolean
               <input type="text" name="_vl_u" autoComplete="username" tabIndex={-1} aria-hidden="true" style={{ position: "absolute", opacity: 0, height: 0, width: 0, pointerEvents: "none" }} />
               <input type="password" name="_vl_p" autoComplete="new-password" tabIndex={-1} aria-hidden="true" style={{ position: "absolute", opacity: 0, height: 0, width: 0, pointerEvents: "none" }} />
 
-              <label className="block text-xs uppercase tracking-[0.16em] text-zinc-500">
+              <label className="block text-xs uppercase tracking-[0.16em] text-zinc-400">
                 Username
                 <input
                   className="vl-input mt-2 w-full px-3 py-2"
@@ -144,7 +144,7 @@ export function VaultLoginForm({ passcodeRequired }: { passcodeRequired: boolean
                 />
               </label>
 
-              <label className="block text-xs uppercase tracking-[0.16em] text-zinc-500">
+              <label className="block text-xs uppercase tracking-[0.16em] text-zinc-400">
                 Password
                 <input
                   className="vl-input mt-2 w-full px-3 py-2"
@@ -160,7 +160,7 @@ export function VaultLoginForm({ passcodeRequired }: { passcodeRequired: boolean
               </label>
 
               {passcodeRequired ? (
-                <label className="block text-xs uppercase tracking-[0.16em] text-zinc-500">
+                <label className="block text-xs uppercase tracking-[0.16em] text-zinc-400">
                   6-Digit Passcode
                   <input
                     className="vl-input mt-2 w-full px-3 py-2 tracking-[0.5em]"
@@ -180,7 +180,7 @@ export function VaultLoginForm({ passcodeRequired }: { passcodeRequired: boolean
                 // Say what is actually enforced. Demanding six digits the server
                 // never checks taught operators to believe in a second factor
                 // that did not exist.
-                <p className="text-xs text-zinc-500" data-testid="vault-passcode-not-configured">
+                <p className="text-xs text-zinc-400" data-testid="vault-passcode-not-configured">
                   No login passcode is configured yet, so sign-in is username and password only. Set one under
                   Admin → Team to require a 6-digit code.
                 </p>

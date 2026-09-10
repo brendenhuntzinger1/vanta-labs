@@ -57,7 +57,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ or
         <div>
           <Link href="/account/orders" className="vl-focus-ring text-xs text-zinc-400 underline-offset-2 hover:text-white">← All orders</Link>
           <h1 className="vl2-serif mt-2 text-2xl text-white sm:text-3xl">Order {displayOrderReference(order.orderNumber, order.orderId)}</h1>
-          <p className="mt-1 text-sm text-zinc-500">Placed {formatDisplayDate(order.createdAt, "long")}</p>
+          <p className="mt-1 text-sm text-zinc-400">Placed {formatDisplayDate(order.createdAt, "long")}</p>
         </div>
       </div>
 
@@ -96,7 +96,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ or
           {order.shipment?.trackingNumber ? (
             <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/[0.02] p-3.5">
               <div>
-                <p className="text-xs text-zinc-500">{order.shipment.carrier ?? "Carrier"}</p>
+                <p className="text-xs text-zinc-400">{order.shipment.carrier ?? "Carrier"}</p>
                 <p className="text-sm text-white">{order.shipment.trackingNumber}</p>
               </div>
               {order.shipment.trackingUrl ? (
@@ -120,8 +120,8 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ or
               </Link>
               <div className="min-w-0 flex-1">
                 <Link href={`/products/${item.slug}`} className="block truncate text-sm font-medium text-white hover:text-cyan-200">{item.productName}</Link>
-                {item.variantLabel ? <p className="text-xs text-zinc-500">{item.variantLabel}</p> : null}
-                <p className="mt-0.5 text-xs text-zinc-500">Qty {item.quantity} · {money(item.unitPrice, order.currency)} each</p>
+                {item.variantLabel ? <p className="text-xs text-zinc-400">{item.variantLabel}</p> : null}
+                <p className="mt-0.5 text-xs text-zinc-400">Qty {item.quantity} · {money(item.unitPrice, order.currency)} each</p>
               </div>
               <p className="shrink-0 text-sm font-medium text-white">{money(item.lineTotal, order.currency)}</p>
             </li>
@@ -209,20 +209,20 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ or
         <section className="vl-panel rounded-2xl p-5 sm:p-6">
           <h2 className="text-lg font-semibold text-white">Shipping &amp; payment</h2>
           <div className="mt-3">
-            <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Ship to</p>
+            <p className="text-xs uppercase tracking-[0.18em] text-zinc-400">Ship to</p>
             {addressLines.length ? (
               <div className="mt-1.5 text-sm text-zinc-300">
                 {addressLines.map((line, i) => (
                   <p key={i} className={i === 0 ? "font-medium text-white" : "text-zinc-400"}>{line}</p>
                 ))}
-                {order.phone ? <p className="mt-1 text-zinc-500">{order.phone}</p> : null}
+                {order.phone ? <p className="mt-1 text-zinc-400">{order.phone}</p> : null}
               </div>
             ) : (
-              <p className="mt-1.5 text-sm text-zinc-500">No shipping address on file.</p>
+              <p className="mt-1.5 text-sm text-zinc-400">No shipping address on file.</p>
             )}
           </div>
           <div className="mt-5 border-t border-white/10 pt-4">
-            <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Payment method</p>
+            <p className="text-xs uppercase tracking-[0.18em] text-zinc-400">Payment method</p>
             <p className="mt-1.5 text-sm text-zinc-300">{order.paymentMethod ?? "—"}</p>
           </div>
         </section>

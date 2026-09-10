@@ -65,7 +65,7 @@ export function CheckoutPreflight() {
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-zinc-300">Checkout preflight</h2>
-          <p className="mt-1 max-w-2xl text-xs leading-6 text-zinc-500">
+          <p className="mt-1 max-w-2xl text-xs leading-6 text-zinc-400">
             Asks the payment provider for a checkout session, exactly as checkout does. Nothing is charged, no order is
             created and no stock is held — a session is not a payment. Run this before a real test order.
           </p>

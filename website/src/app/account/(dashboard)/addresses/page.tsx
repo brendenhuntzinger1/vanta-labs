@@ -16,7 +16,7 @@ export default async function AccountAddressesPage() {
   return (
     <div className="space-y-5">
       <header className="vl-fade-up">
-        <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Account</p>
+        <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-400">Account</p>
         <h1 className="vl2-serif mt-1.5 text-3xl text-white sm:text-4xl">Saved addresses</h1>
         {/* Checkout does not read these yet (it collects the address on the
             page, including a State the address book has no column for), so this

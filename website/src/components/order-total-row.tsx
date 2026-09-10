@@ -31,7 +31,7 @@ export function OrderTotalRow({ amount, initialPaid }: { amount: string; initial
         <span className="text-lg font-semibold tabular-nums text-white">{amount}</span>
       </div>
       {!paid ? (
-        <p className="mt-2 text-xs leading-5 text-white/45">
+        <p className="mt-2 text-xs leading-5 text-white/50">
           Not yet charged — this is the amount due once your payment is confirmed.
         </p>
       ) : null}

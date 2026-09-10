@@ -127,7 +127,7 @@ export function ContactPageClient() {
               <a href={mailtoHref} className="mt-2 inline-block text-base text-white transition hover:text-white/70">
                 {SUPPORT_EMAIL}
               </a>
-              <p className="mt-1 text-sm text-white/45">Subject defaults to {SUPPORT_SUBJECT}.</p>
+              <p className="mt-1 text-sm text-white/50">Subject defaults to {SUPPORT_SUBJECT}.</p>
             </div>
 
             <div>

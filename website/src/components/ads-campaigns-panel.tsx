@@ -95,16 +95,16 @@ export function AdsCampaignsPanel() {
   }, [load]);
 
   if (busy && !state) {
-    return <p className="rounded-xl border border-dashed border-white/10 px-4 py-6 text-center text-xs text-white/40">Loading…</p>;
+    return <p className="rounded-xl border border-dashed border-white/10 px-4 py-6 text-center text-xs text-white/50">Loading…</p>;
   }
 
   if (state && !state.connected) {
     return (
-      <div className="rounded-xl border border-dashed border-white/10 px-4 py-6 text-xs leading-6 text-white/45">
+      <div className="rounded-xl border border-dashed border-white/10 px-4 py-6 text-xs leading-6 text-white/50">
         <p className="text-white/70">Not connected.</p>
         <p className="mt-1">{state.reason}</p>
         {state.missing?.length ? (
-          <p className="mt-2 font-mono text-[11px] text-white/40">missing: {state.missing.join(", ")}</p>
+          <p className="mt-2 font-mono text-[11px] text-white/50">missing: {state.missing.join(", ")}</p>
         ) : null}
       </div>
     );
@@ -125,7 +125,7 @@ export function AdsCampaignsPanel() {
   const rows = rollUp(state?.rows ?? []);
   if (rows.length === 0) {
     return (
-      <div className="rounded-xl border border-dashed border-white/10 px-4 py-6 text-center text-xs leading-6 text-white/40">
+      <div className="rounded-xl border border-dashed border-white/10 px-4 py-6 text-center text-xs leading-6 text-white/50">
         Connected — TikTok returned no campaign activity for the last 30 days. That means no spend, not no connection.
       </div>
     );
@@ -133,13 +133,13 @@ export function AdsCampaignsPanel() {
 
   return (
     <div className="space-y-3">
-      <p className="text-[11px] text-white/35">
+      <p className="text-[11px] text-white/50">
         {state?.range ? `${state.range.since} → ${state.range.until}` : null}
         {state?.writesEnabled ? null : " · read-only (writes require TIKTOK_ADS_WRITE_ENABLED)"}
       </p>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[760px] text-left text-xs">
-          <thead className="text-white/40">
+          <thead className="text-white/50">
             <tr>
               {["Campaign", "Spend", "Impr.", "CPM", "Clicks", "CTR", "CPC", "Conv.", "CPA"].map((header) => (
                 <th key={header} className="pb-2 font-medium uppercase tracking-[0.1em]">{header}</th>

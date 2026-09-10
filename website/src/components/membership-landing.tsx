@@ -224,7 +224,7 @@ function SavingsCalculator({ tiers }: { tiers: MembershipTier[] }) {
       <h3 className="vl2-serif mt-2 text-2xl text-white">What membership is worth to you — today</h3>
 
       {usingCart ? (
-        <p className="mt-2 text-xs text-white/45">Calculated from your current cart. Add or remove products and this updates instantly.</p>
+        <p className="mt-2 text-xs text-white/50">Calculated from your current cart. Add or remove products and this updates instantly.</p>
       ) : (
         <label className="mt-5 block text-sm text-white/60">
           Your typical monthly order: <span className="font-semibold text-white">${simulatedSpend}</span>
@@ -276,9 +276,9 @@ function SavingsCalculator({ tiers }: { tiers: MembershipTier[] }) {
         </span>
       </div>
       {todayValue >= 0 ? (
-        <p className="mt-2 text-xs text-white/45">The membership pays for itself on this order alone — everything after is pure savings.</p>
+        <p className="mt-2 text-xs text-white/50">The membership pays for itself on this order alone — everything after is pure savings.</p>
       ) : (
-        <p className="mt-2 text-xs text-white/45">Add {formatCartCurrency(Math.max(0, Math.ceil(((monthlyCost - credit - shippingSavings) / Math.max(0.01, tier.memberDiscountPercent / 100) - basis) * 100) / 100))} more to your cart and membership pays for itself today.</p>
+        <p className="mt-2 text-xs text-white/50">Add {formatCartCurrency(Math.max(0, Math.ceil(((monthlyCost - credit - shippingSavings) / Math.max(0.01, tier.memberDiscountPercent / 100) - basis) * 100) / 100))} more to your cart and membership pays for itself today.</p>
       )}
     </div>
   );
@@ -353,7 +353,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
             Member pricing on every vial, monthly store credit, free priority shipping, and first access to new
             compounds — a membership that pays for itself on your first order.
           </p>
-          <div className="mt-5 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-[10px] uppercase tracking-[0.18em] text-white/40">
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-[10px] uppercase tracking-[0.18em] text-white/50">
             <span>✓ Join today</span>
             <span>✓ Cancel anytime</span>
             <span>✓ Benefits start immediately</span>
@@ -430,10 +430,10 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
                   <h3 className="vl2-serif mt-1.5 text-2xl text-white">{tier.name}</h3>
                   <p className="mt-3 flex flex-wrap items-baseline gap-x-2 text-4xl text-white vl2-serif">
                     {showComparePrice ? (
-                      <span className="text-base font-normal text-white/35 line-through">{money(tier.compareMonthlyPriceCents)}</span>
+                      <span className="text-base font-normal text-white/50 line-through">{money(tier.compareMonthlyPriceCents)}</span>
                     ) : null}
                     <span>{money(price)}</span>
-                    {price > 0 ? <span className="text-sm font-normal text-white/45">/{billingCycle === "monthly" ? "mo" : "yr"}</span> : null}
+                    {price > 0 ? <span className="text-sm font-normal text-white/50">/{billingCycle === "monthly" ? "mo" : "yr"}</span> : null}
                   </p>
                   {showAnnualSavings ? (
                     <p className="mt-1 text-xs text-white/55">Save {money(annualSavingsCents)} a year · lock in current pricing</p>
@@ -442,14 +442,14 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
                   {tier.memberDiscountPercent > 0 ? (
                     <div className="mt-5 border border-white/10 bg-white/[0.03] px-4 py-3.5">
                       <p className="text-sm font-semibold text-white">{tier.memberDiscountPercent}% member pricing</p>
-                      <p className="text-[11px] text-white/45">pay {moneyWhole(10000 - Math.round(10000 * (tier.memberDiscountPercent / 100)))} on every $100, on everything</p>
+                      <p className="text-[11px] text-white/50">pay {moneyWhole(10000 - Math.round(10000 * (tier.memberDiscountPercent / 100)))} on every $100, on everything</p>
                     </div>
                   ) : null}
 
                   {tier.monthlyStoreCreditCents > 0 ? (
                     <div className="mt-2 border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.05] px-4 py-3.5">
                       <p className="text-sm font-semibold text-[color:var(--accent-gold)]">{money(tier.monthlyStoreCreditCents)}/mo store credit</p>
-                      <p className="text-[11px] text-white/45">
+                      <p className="text-[11px] text-white/50">
                         {tier.storeCreditMinOrderCents > 0
                           ? `redeem on orders of ${money(tier.storeCreditMinOrderCents)}+`
                           : "redeem on any order"}
@@ -459,12 +459,12 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
 
                   {avgMonthlySavingsCents > 0 ? (
                     <p className="mt-3 text-xs text-white/60">
-                      ≈ {money(avgMonthlySavingsCents)}/mo in savings <span className="text-white/35">at $200/mo in orders</span>
+                      ≈ {money(avgMonthlySavingsCents)}/mo in savings <span className="text-white/50">at $200/mo in orders</span>
                     </p>
                   ) : null}
 
                   <div className="mt-4">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/40">Best for</p>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/50">Best for</p>
                     <ul className="mt-1.5 space-y-1 text-xs text-white/60">
                       {bestFor.map((line) => (
                         <li key={line}>• {line}</li>
@@ -479,7 +479,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
                       cannot, so a shopper always sees the real discount, the
                       real credit, and its true minimum-order condition. */}
                   <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-3.5">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/40">What you get</p>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/50">What you get</p>
                     <dl className="mt-2 space-y-1.5 text-xs">
                       {/* Member pricing and store credit are DELIBERATELY absent:
                           both are already the two highlight boxes immediately
@@ -515,7 +515,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
                       ) : null}
                     </dl>
                     {tier.monthlyStoreCreditCents > 0 ? (
-                      <p className="mt-2.5 border-t border-white/10 pt-2 text-[10px] leading-4 text-white/40">
+                      <p className="mt-2.5 border-t border-white/10 pt-2 text-[10px] leading-4 text-white/50">
                         Store credit is granted monthly and does not roll over.
                       </p>
                     ) : null}
@@ -530,7 +530,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
                     <ul className="mt-5 space-y-3 border-t border-white/10 pt-5 text-sm leading-6 text-white/70 sm:mt-6">
                       {shownBenefits.map((benefit) => (
                         <li key={benefit} className="flex items-start gap-2.5">
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-[color:var(--accent-gold)]/70">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-[color:var(--accent-gold)]/75">
                             <path d="m5 13 4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
                           </svg>
                           {/* Strip any leading emoji/symbols from admin-entered benefit copy —
@@ -569,9 +569,9 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
                     >
                       Join {tier.name}
                     </Link>
-                    <p className="mt-2.5 text-center text-[10px] uppercase tracking-[0.14em] text-white/40">Join today · Cancel anytime · Benefits start immediately</p>
+                    <p className="mt-2.5 text-center text-[10px] uppercase tracking-[0.14em] text-white/50">Join today · Cancel anytime · Benefits start immediately</p>
                     {!isSignedInCustomer ? (
-                      <p className="mt-1 text-center text-[10px] text-white/35">Free account included — track your savings, credit &amp; points in your dashboard</p>
+                      <p className="mt-1 text-center text-[10px] text-white/50">Free account included — track your savings, credit &amp; points in your dashboard</p>
                     ) : null}
                   </div>
                 </div>
@@ -599,7 +599,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
               credit, and points on every order. Cancel anytime from your dashboard — you keep every
               benefit through the period you&apos;ve paid for.
             </p>
-            <div className="mt-6 flex flex-wrap justify-center gap-x-8 gap-y-2 text-[10px] uppercase tracking-[0.14em] text-white/45">
+            <div className="mt-6 flex flex-wrap justify-center gap-x-8 gap-y-2 text-[10px] uppercase tracking-[0.14em] text-white/50">
               <span>Cancel Anytime</span>
               <span>No Hidden Fees</span>
               <span>Secure Checkout</span>
@@ -609,7 +609,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
 
         <ScrollReveal delayMs={80}>
           <div className="mt-16 border border-white/15 bg-white/[0.02] p-6 sm:p-10">
-            <p className="text-center text-[10px] font-medium uppercase tracking-[0.32em] text-white/45">Elite Research Exclusive</p>
+            <p className="text-center text-[10px] font-medium uppercase tracking-[0.32em] text-white/50">Elite Research Exclusive</p>
             <h2 className="vl2-serif mt-3 text-center text-3xl font-bold text-white sm:text-4xl">
               Exclusive Buy In Bulk Savings
             </h2>
@@ -650,13 +650,13 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
                 already state every one of these values per tier, so on mobile
                 this is redundant rather than missing. Shown from sm up, where
                 there is room to read it. */}
-            <p className="mt-3 text-center text-sm text-white/45 sm:hidden">
+            <p className="mt-3 text-center text-sm text-white/50 sm:hidden">
               Every benefit is listed on each plan above.
             </p>
             <div className="mt-6 hidden overflow-x-auto border border-white/10 sm:block">
               <table className="w-full min-w-[560px] text-left text-sm">
                 <thead>
-                  <tr className="border-b border-white/10 text-white/45">
+                  <tr className="border-b border-white/10 text-white/50">
                     <th className="px-5 py-4 font-normal">Benefit</th>
                     {tiers.map((tier) => (
                       <th key={tier.id} className="px-5 py-4 text-center font-normal text-white/70">{tier.name}</th>

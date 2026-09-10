@@ -129,9 +129,9 @@ export function ReferralCodeManager({
   return (
     <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
       <div className="flex items-center justify-between">
-        <p className="text-[11px] uppercase tracking-[0.25em] text-zinc-500">Your Referral Code</p>
+        <p className="text-[11px] uppercase tracking-[0.25em] text-zinc-400">Your Referral Code</p>
         {lastChangedAt ? (
-          <p className="text-[11px] text-zinc-500">Last changed {formatDisplayDate(lastChangedAt, "medium")}</p>
+          <p className="text-[11px] text-zinc-400">Last changed {formatDisplayDate(lastChangedAt, "medium")}</p>
         ) : null}
       </div>
 
@@ -175,11 +175,11 @@ export function ReferralCodeManager({
           </label>
 
           <div className="mt-2 min-h-[20px] text-xs">
-            {check.status === "checking" ? <span className="text-zinc-500">Checking…</span> : null}
+            {check.status === "checking" ? <span className="text-zinc-400">Checking…</span> : null}
             {check.status === "available" && !check.current ? (
               <span className="text-emerald-300">✓ Available — will become <span className="font-mono">{previewCode}</span> → <span className="text-zinc-400">{base}{previewCode}</span></span>
             ) : null}
-            {check.status === "available" && check.current ? <span className="text-zinc-500">That&apos;s already your current code.</span> : null}
+            {check.status === "available" && check.current ? <span className="text-zinc-400">That&apos;s already your current code.</span> : null}
             {check.status === "unavailable" ? <span className="text-rose-300">{check.error}</span> : null}
           </div>
 

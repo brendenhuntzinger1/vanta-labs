@@ -222,7 +222,7 @@ function ProductsPageContent({ initialProducts }: { initialProducts: Product[] }
           <div className="flex flex-col gap-2.5 rounded-2xl border border-white/[0.07] bg-white/[0.02] p-2.5 backdrop-blur-xl sm:flex-row sm:items-center sm:gap-2 sm:p-2">
             <label className="relative flex-1">
               <span className="sr-only">Search products</span>
-              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" className="pointer-events-none absolute left-3.5 top-1/2 h-[17px] w-[17px] -translate-y-1/2 text-white/30">
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" className="pointer-events-none absolute left-3.5 top-1/2 h-[17px] w-[17px] -translate-y-1/2 text-white/50">
                 <circle cx="11" cy="11" r="7" /><path d="m20 20-3.6-3.6" />
               </svg>
               <input
@@ -230,7 +230,7 @@ function ProductsPageContent({ initialProducts }: { initialProducts: Product[] }
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
                 placeholder="Search compounds"
-                className="h-11 w-full rounded-xl border border-white/[0.07] bg-black/25 pl-10 pr-3 text-[16px] text-white placeholder:text-white/30 outline-none transition-colors duration-200 focus:border-[color:var(--accent-gold)]/45 focus:bg-black/40 sm:text-sm"
+                className="h-11 w-full rounded-xl border border-white/[0.07] bg-black/25 pl-10 pr-3 text-[16px] text-white placeholder:text-white/50 outline-none transition-colors duration-200 focus:border-[color:var(--accent-gold)]/45 focus:bg-black/40 sm:text-sm"
               />
             </label>
 
@@ -328,7 +328,7 @@ function ProductsPageContent({ initialProducts }: { initialProducts: Product[] }
               {stockFilter ? (
                 <button type="button" onClick={() => setStockFilter(false)} className="vl-filter-chip">In Stock<span aria-hidden="true">×</span></button>
               ) : null}
-              <button type="button" onClick={clearAllFilters} className="ml-1 text-[11px] uppercase tracking-[0.16em] text-white/40 transition-colors hover:text-white">
+              <button type="button" onClick={clearAllFilters} className="ml-1 text-[11px] uppercase tracking-[0.16em] text-white/50 transition-colors hover:text-white">
                 Clear all
               </button>
             </div>
@@ -348,12 +348,12 @@ function ProductsPageContent({ initialProducts }: { initialProducts: Product[] }
               <div className="mx-auto mb-5 h-1 w-10 rounded-full bg-white/15" />
               <div className="flex items-center justify-between">
                 <h2 className="text-base font-semibold text-white">Filters</h2>
-                <button type="button" onClick={clearAllFilters} className="text-[11px] uppercase tracking-[0.16em] text-white/40 transition-colors hover:text-white">
+                <button type="button" onClick={clearAllFilters} className="text-[11px] uppercase tracking-[0.16em] text-white/50 transition-colors hover:text-white">
                   Clear all
                 </button>
               </div>
 
-              <p className="mt-5 text-[11px] uppercase tracking-[0.18em] text-white/35">Category</p>
+              <p className="mt-5 text-[11px] uppercase tracking-[0.18em] text-white/50">Category</p>
               <div className="mt-2.5 flex flex-wrap gap-2">
                 {categories.map((category) => (
                   <button
@@ -367,7 +367,7 @@ function ProductsPageContent({ initialProducts }: { initialProducts: Product[] }
                 ))}
               </div>
 
-              <p className="mt-6 text-[11px] uppercase tracking-[0.18em] text-white/35">Show</p>
+              <p className="mt-6 text-[11px] uppercase tracking-[0.18em] text-white/50">Show</p>
               <div className="mt-2.5 flex flex-wrap gap-2">
                 {hasBestSellers ? (
                   <button type="button" aria-pressed={bestSellersOnly} onClick={() => setBestSellersOnly((prev) => !prev)} className={`vl-filter-toggle h-10 ${bestSellersOnly ? "is-on" : ""}`}>
@@ -388,7 +388,7 @@ function ProductsPageContent({ initialProducts }: { initialProducts: Product[] }
 
         <section className="mt-8">
           <div className="mb-5 flex items-center justify-between">
-            <p className="text-sm text-white/45">
+            <p className="text-sm text-white/50">
               {isLoading ? "Loading catalog…" : `${visibleProducts.length} product${visibleProducts.length === 1 ? "" : "s"}`}
             </p>
             {/* Clearing lives with the active-filter chips above and, on a
@@ -554,7 +554,7 @@ function CatalogFallback({ products }: { products: Product[] }) {
         <div className="h-[13.5rem] sm:h-[15.5rem]" aria-hidden="true" />
         <section className="mt-8">
           <div className="mb-5 flex items-center justify-between">
-            <p className="text-sm text-white/45">
+            <p className="text-sm text-white/50">
               {ordered.length} product{ordered.length === 1 ? "" : "s"}
             </p>
           </div>

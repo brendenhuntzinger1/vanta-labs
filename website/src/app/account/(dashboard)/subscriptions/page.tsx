@@ -121,7 +121,7 @@ export default async function AccountSubscriptionsPage() {
   return (
     <div className="space-y-5">
       <header className="vl-fade-up">
-        <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Account</p>
+        <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-400">Account</p>
         <h1 className="vl2-serif mt-1.5 text-3xl text-white sm:text-4xl">Subscription</h1>
         <p className="mt-2 text-sm text-zinc-400">Manage your membership plan, billing, and payment.</p>
       </header>
@@ -142,7 +142,7 @@ export default async function AccountSubscriptionsPage() {
         <section className="vl-panel rounded-2xl p-5 sm:p-7">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Plan on record</p>
+              <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-400">Plan on record</p>
               <h2 className="mt-1 text-2xl font-semibold text-white">{membership.tier.name}</h2>
               <p className="mt-1 text-sm capitalize text-zinc-400">{membership.billingCycle} billing</p>
             </div>
@@ -158,7 +158,7 @@ export default async function AccountSubscriptionsPage() {
           </div>
 
           <div className="mt-5 rounded-xl border border-white/10 bg-white/[0.02] p-4">
-            <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Currently applied to your orders</p>
+            <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-400">Currently applied to your orders</p>
             <ul className="mt-2.5 space-y-1.5 text-sm text-zinc-400">
               <li>Member pricing — <span className="text-zinc-300">not applied</span></li>
               <li>Monthly store credit — <span className="text-zinc-300">not applied</span></li>
@@ -179,7 +179,7 @@ export default async function AccountSubscriptionsPage() {
         <section className="vl-panel rounded-2xl p-5 sm:p-7">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Current plan</p>
+              <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-400">Current plan</p>
               <h2 className="mt-1 text-2xl font-semibold text-white">{membership.tier.name}</h2>
               <p className="mt-1 text-sm capitalize text-zinc-400">{membership.billingCycle} billing</p>
               {membership.pendingTier?.name ? (
@@ -200,13 +200,13 @@ export default async function AccountSubscriptionsPage() {
           <div className="mt-5 grid gap-3 sm:grid-cols-3">
             {membership.tier.memberDiscountPercent > 0 ? (
               <div className="vl-panel-soft rounded-xl p-4">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Member pricing</p>
+                <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-400">Member pricing</p>
                 <p className="mt-1.5 text-xl font-semibold text-white">{membership.tier.memberDiscountPercent}% off</p>
               </div>
             ) : null}
             {membership.tier.monthlyStoreCreditCents > 0 ? (
               <div className="vl-panel-soft rounded-xl p-4">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Monthly credit</p>
+                <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-400">Monthly credit</p>
                 <p className="mt-1.5 text-xl font-semibold text-emerald-300">{money(membership.tier.monthlyStoreCreditCents)}/mo</p>
                 {/* The line above is the tier ENTITLEMENT, not money the member
                     holds. Checkout spends the BALANCE, which can differ (already
@@ -223,7 +223,7 @@ export default async function AccountSubscriptionsPage() {
               </div>
             ) : null}
             <div className="vl-panel-soft rounded-xl p-4">
-              <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Points</p>
+              <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-400">Points</p>
               <p className="mt-1.5 text-xl font-semibold text-white">{membership.tier.pointsPerDollar}× per $1</p>
             </div>
           </div>
@@ -244,7 +244,7 @@ export default async function AccountSubscriptionsPage() {
       <section className="vl-panel rounded-2xl p-5 sm:p-6">
         <h2 className="text-lg font-semibold text-white">Billing history</h2>
         {billingHistory.length === 0 ? (
-          <p className="mt-3 text-sm text-zinc-500">No billing activity yet.</p>
+          <p className="mt-3 text-sm text-zinc-400">No billing activity yet.</p>
         ) : (
           <ul className="mt-3 divide-y divide-white/10">
             {billingHistory.map((event) => {
@@ -263,7 +263,7 @@ export default async function AccountSubscriptionsPage() {
                 <li key={event.id} className="flex items-center justify-between py-2.5 text-sm">
                   <div className="min-w-0">
                     <p className="truncate text-zinc-200">{EVENT_LABELS[event.eventType] ?? event.eventType.replace(/_/g, " ")}</p>
-                    <p className="text-xs text-zinc-500">
+                    <p className="text-xs text-zinc-400">
                       {formatDate(event.createdAt)}
                       {/* NEVER the stored failure_reason verbatim. It carries the
                           processor's raw JSON envelope (request_id, decline_code)
@@ -282,7 +282,7 @@ export default async function AccountSubscriptionsPage() {
             })}
           </ul>
         )}
-        <p className="mt-4 border-t border-white/10 pt-3 text-[11px] leading-5 text-zinc-500">
+        <p className="mt-4 border-t border-white/10 pt-3 text-[11px] leading-5 text-zinc-400">
           Only charges marked <span className="text-emerald-300">Paid</span> took money from your account. Failed attempts never charge you, and plan changes are recorded here at $0.
         </p>
       </section>

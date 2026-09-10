@@ -106,12 +106,12 @@ export function MembershipBillingPanel({ membership }: { membership: CustomerMem
 
   return (
     <div className="mt-5 vl-panel-soft rounded-xl p-4">
-      <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Billing</p>
+      <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-400">Billing</p>
 
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         {membership.introStatus === "active" && membership.introEndsAt ? (
           <div>
-            <p className="text-xs text-zinc-500">Intro period</p>
+            <p className="text-xs text-zinc-400">Intro period</p>
             <p className="mt-1 text-sm text-white">
               {introDaysLeft === null
                 ? `Ends ${formatDate(membership.introEndsAt)}`
@@ -124,20 +124,20 @@ export function MembershipBillingPanel({ membership }: { membership: CustomerMem
           <div>
             {/* Annual never rebills, so "next billing date" would promise a
                 charge that is not coming. It is an access-through date. */}
-            <p className="text-xs text-zinc-500">{isAnnual ? "Access through" : "Next billing date"}</p>
+            <p className="text-xs text-zinc-400">{isAnnual ? "Access through" : "Next billing date"}</p>
             <p className="mt-1 text-sm text-white">{formatDate(membership.nextBillingAt)}</p>
           </div>
         ) : null}
 
         {membership.nextBillingAmountCents !== null && !isAnnual ? (
           <div>
-            <p className="text-xs text-zinc-500">Next billing amount</p>
+            <p className="text-xs text-zinc-400">Next billing amount</p>
             <p className="mt-1 text-sm text-white">{money(membership.nextBillingAmountCents)}</p>
           </div>
         ) : null}
 
         <div>
-          <p className="text-xs text-zinc-500">Payment method</p>
+          <p className="text-xs text-zinc-400">Payment method</p>
           {/* "Not connected yet" read as a failure to a member who had just
               paid. Two different situations were collapsed into one label: a
               card IS vaulted for renewals, or the membership was paid once at
@@ -147,7 +147,7 @@ export function MembershipBillingPanel({ membership }: { membership: CustomerMem
             {membership.hasPaymentMethod ? "Card on file" : "Paid at checkout"}
           </p>
           {!membership.hasPaymentMethod ? (
-            <p className="mt-1 text-xs text-zinc-500">
+            <p className="mt-1 text-xs text-zinc-400">
               No card is stored, so this membership won&apos;t renew automatically.
             </p>
           ) : null}
@@ -173,7 +173,7 @@ export function MembershipBillingPanel({ membership }: { membership: CustomerMem
           >
             {isResuming ? "Restoring…" : "Keep my membership"}
           </button>
-          <p className="mt-2 text-[11px] text-zinc-500">You won&apos;t be charged now — this just turns renewal back on.</p>
+          <p className="mt-2 text-[11px] text-zinc-400">You won&apos;t be charged now — this just turns renewal back on.</p>
         </div>
       ) : membership.status === "cancelled" ? null : (
         <button
@@ -188,7 +188,7 @@ export function MembershipBillingPanel({ membership }: { membership: CustomerMem
 
       {message ? <p className="mt-3 text-xs text-zinc-400">{message}</p> : null}
 
-      <p className="mt-4 border-t border-white/10 pt-3 text-[11px] leading-5 text-zinc-500">
+      <p className="mt-4 border-t border-white/10 pt-3 text-[11px] leading-5 text-zinc-400">
         {isAnnual
           ? "Your annual membership covers one year and does not auto-renew — you'll never be charged again without buying another year. Annual memberships are non-refundable."
           : "You can cancel anytime to stop auto-renewal and keep access through your current month. Membership charges are non-refundable."}

@@ -102,11 +102,11 @@ export function CouponPromoBanner({ initialCoupon }: { initialCoupon?: FeaturedC
 
       <div className="relative flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[9px] font-semibold uppercase tracking-[0.24em] text-[color:var(--accent-gold)]/60 sm:text-[10px]">Limited-time offer</p>
+          <p className="text-[9px] font-semibold uppercase tracking-[0.24em] text-[color:var(--accent-gold)]/75 sm:text-[10px]">Limited-time offer</p>
           <p className="vl2-serif text-lg leading-tight text-white sm:text-2xl">
             {discountHeadline(coupon)} <span className="text-xs font-normal tracking-normal text-white/60 sm:text-sm">your order</span>
           </p>
-          {ends ? <p className="text-[10px] text-white/40 sm:text-[11px]">{ends}</p> : null}
+          {ends ? <p className="text-[10px] text-white/50 sm:text-[11px]">{ends}</p> : null}
         </div>
 
         <button

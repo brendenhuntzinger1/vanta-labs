@@ -169,7 +169,7 @@ function CheckoutProgress({ onPayment }: { onPayment: boolean }) {
                   <span className={`h-1.5 w-1.5 rounded-full transition-colors duration-300 ${active ? "bg-[color:var(--accent-gold)]" : "bg-white/25"}`} />
                 )}
               </span>
-              <span className={`whitespace-nowrap text-xs transition-colors duration-300 ${active || done ? "text-white/85" : "text-white/35"}`}>{label}</span>
+              <span className={`whitespace-nowrap text-xs transition-colors duration-300 ${active || done ? "text-white/85" : "text-white/50"}`}>{label}</span>
             </div>
             {index === 0 ? (
               <span className="h-px flex-1 overflow-hidden bg-white/10">
@@ -211,7 +211,7 @@ function TrustRow({ className = "" }: { className?: string }) {
       {trustPoints().map((label: string) => (
         <div key={label} className="flex items-center gap-2.5">
           <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-gold)" strokeWidth="1.4" className="h-4 w-4 flex-shrink-0 opacity-70" aria-hidden>{TRUST_ICONS[label] ?? null}</svg>
-          <span className="text-[11px] leading-tight text-white/45">{label}</span>
+          <span className="text-[11px] leading-tight text-white/50">{label}</span>
         </div>
       ))}
     </div>
@@ -877,7 +877,7 @@ export default function CheckoutPage() {
         <main className="vl-nav-clearance mx-auto max-w-3xl px-5 pb-24 pt-20 sm:px-6 sm:pt-24 lg:px-12">
           <div className="rounded-2xl border border-white/[0.06] bg-white/[0.015] p-5 sm:p-7">
             <CheckoutProgress onPayment />
-            <p className="mt-6 text-[10px] uppercase tracking-[0.34em] text-white/35">Almost there</p>
+            <p className="mt-6 text-[10px] uppercase tracking-[0.34em] text-white/50">Almost there</p>
             <h1 className="vl2-serif mt-2.5 text-[1.85rem] leading-tight text-white sm:text-4xl">Send your {createdOrder.method.label} payment</h1>
             <p className="mt-3 text-sm leading-relaxed text-white/50">
               Your order is reserved. Send the exact amount, then submit your payment details below so we can verify and ship it.
@@ -894,7 +894,7 @@ export default function CheckoutPage() {
             />
           </div>
 
-          <Link href="/products" className="mt-8 inline-flex text-sm text-white/40 transition hover:text-white">
+          <Link href="/products" className="mt-8 inline-flex text-sm text-white/50 transition hover:text-white">
             Continue shopping
           </Link>
         </main>
@@ -915,10 +915,10 @@ export default function CheckoutPage() {
   // rail so the two can never drift apart.
   const summaryLines = (
     <div className="space-y-2.5 text-sm">
-      <div className="flex justify-between"><span className="text-white/45">Items</span><span className="text-white/70 tabular-nums">{orderCount}</span></div>
-      <div className="flex justify-between"><span className="text-white/45">Subtotal</span><span className="text-white/80 tabular-nums" data-testid="summary-subtotal">{formatCartCurrency(shownSubtotal)}</span></div>
+      <div className="flex justify-between"><span className="text-white/50">Items</span><span className="text-white/70 tabular-nums">{orderCount}</span></div>
+      <div className="flex justify-between"><span className="text-white/50">Subtotal</span><span className="text-white/80 tabular-nums" data-testid="summary-subtotal">{formatCartCurrency(shownSubtotal)}</span></div>
       <div className="flex justify-between">
-        <span className="text-white/45">Shipping</span>
+        <span className="text-white/50">Shipping</span>
         {/* "(member)" names the PERK as the reason. With free shipping sitewide
             on, the reason is the store's own giveaway that every shopper gets,
             so crediting the plan for it would tell a paying member their
@@ -926,15 +926,15 @@ export default function CheckoutPage() {
         <span className="text-white/80 tabular-nums" data-testid="summary-shipping">{shownShipping === 0 && memberFreeShipping && !isFreeShippingSitewide(shippingConfig) ? "Free (member)" : shownShipping === 0 ? "Free" : formatCartCurrency(shownShipping)}</span>
       </div>
       {shippingProtectionFee > 0 ? (
-        <div className="flex justify-between"><span className="text-white/45">Shipping protection</span><span className="text-white/80 tabular-nums">+{formatCartCurrency(shippingProtectionFee)}</span></div>
+        <div className="flex justify-between"><span className="text-white/50">Shipping protection</span><span className="text-white/80 tabular-nums">+{formatCartCurrency(shippingProtectionFee)}</span></div>
       ) : null}
       {shownTaxAmount > 0 ? (
         <div className="flex justify-between">
-          <span className="text-white/45">Sales tax{taxQuote.state ? ` · ${taxQuote.state} ${taxQuote.ratePercent}%` : ""}</span>
+          <span className="text-white/50">Sales tax{taxQuote.state ? ` · ${taxQuote.state} ${taxQuote.ratePercent}%` : ""}</span>
           <span className="text-white/80 tabular-nums" data-testid="summary-tax">{formatCartCurrency(shownTaxAmount)}</span>
         </div>
       ) : taxQuote.reason === "no_state" && isDomesticCountry(form.country) && salesTaxConfig.nexusStates.length > 0 ? (
-        <div className="flex justify-between"><span className="text-white/45">Sales tax</span><span className="text-white/30">Enter address</span></div>
+        <div className="flex justify-between"><span className="text-white/50">Sales tax</span><span className="text-white/50">Enter address</span></div>
       ) : null}
       {shownDiscount > 0 ? (
         <div className="text-emerald-300" data-testid="summary-discount">
@@ -950,7 +950,7 @@ export default function CheckoutPage() {
         <div className="flex justify-between text-emerald-300" data-testid="summary-points"><span>Points redeemed</span><span className="tabular-nums">−{formatCartCurrency(shownPointsDiscount)}</span></div>
       ) : null}
       {shownCardFeeAmount > 0 ? (
-        <div className="flex justify-between"><span className="text-white/45">{cardFeeConfig?.label ?? "Card processing fee"} ({cardFee.percentage}%)</span><span className="text-white/80 tabular-nums">+{formatCartCurrency(shownCardFeeAmount)}</span></div>
+        <div className="flex justify-between"><span className="text-white/50">{cardFeeConfig?.label ?? "Card processing fee"} ({cardFee.percentage}%)</span><span className="text-white/80 tabular-nums">+{formatCartCurrency(shownCardFeeAmount)}</span></div>
       ) : null}
       {autoBestDiscountApplied ? (
         <p className="pt-1 text-[11px] text-emerald-300/70">✓ Your best available discount was applied automatically.</p>
@@ -961,18 +961,18 @@ export default function CheckoutPage() {
   const productLines = items.map((item) => (
     <div key={item.key} className="flex items-start gap-3">
       <div className="relative h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg border border-white/[0.06] bg-black/40">
-        {item.image ? <Image src={item.image} alt={item.name} fill sizes="56px" className="object-cover" /> : <div className="flex h-full w-full items-center justify-center text-[10px] text-white/30">No image</div>}
+        {item.image ? <Image src={item.image} alt={item.name} fill sizes="56px" className="object-cover" /> : <div className="flex h-full w-full items-center justify-center text-[10px] text-white/50">No image</div>}
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm text-white">{item.name}</p>
-        {item.doseLabel ? <p className="mt-0.5 text-xs text-white/40">{item.doseLabel}</p> : null}
+        {item.doseLabel ? <p className="mt-0.5 text-xs text-white/50">{item.doseLabel}</p> : null}
         <div className="mt-1.5 flex items-center gap-2.5">
           <div className="flex items-center rounded-full border border-white/[0.08] bg-black/30 text-xs text-white/80">
             <button type="button" onClick={() => { haptic(); updateQuantity(item.key, item.quantity - 1); }} className="vl-focus-ring inline-flex h-8 w-8 items-center justify-center rounded-l-full transition hover:text-white active:scale-90" aria-label={`Decrease ${item.name} quantity`}>−</button>
             <span className="min-w-6 text-center font-semibold tabular-nums">{item.quantity}</span>
             <button type="button" onClick={() => { haptic(); updateQuantity(item.key, item.quantity + 1); }} className="vl-focus-ring inline-flex h-8 w-8 items-center justify-center rounded-r-full transition hover:text-white active:scale-90" aria-label={`Increase ${item.name} quantity`}>+</button>
           </div>
-          <button type="button" onClick={() => { haptic(12); removeFromCart(item.key); }} className="vl-focus-ring rounded px-1 py-1 text-xs text-white/35 transition hover:text-rose-300" aria-label={`Remove ${item.name} from cart`}>Remove</button>
+          <button type="button" onClick={() => { haptic(12); removeFromCart(item.key); }} className="vl-focus-ring rounded px-1 py-1 text-xs text-white/50 transition hover:text-rose-300" aria-label={`Remove ${item.name} from cart`}>Remove</button>
         </div>
       </div>
       {/* Struck-through full total when a quantity tier moved this line, as the
@@ -980,7 +980,7 @@ export default function CheckoutPage() {
           the prices the shopper remembered, with nothing saying why. */}
       <div className="text-right">
         {bundleDiscountRate(item.quantity, bundleConfig) > 0 ? (
-          <p className="text-[11px] text-white/35 line-through tabular-nums">{formatCartCurrency(item.price * item.quantity)}</p>
+          <p className="text-[11px] text-white/50 line-through tabular-nums">{formatCartCurrency(item.price * item.quantity)}</p>
         ) : null}
         <p className="text-sm text-white/75 tabular-nums">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig))}</p>
       </div>
@@ -1038,7 +1038,7 @@ export default function CheckoutPage() {
             {" "}— applied to this order
           </p>
           {offerQuote?.assumedBoundEmail ? (
-            <p className="mt-1 text-xs text-white/45">
+            <p className="mt-1 text-xs text-white/50">
               Shown for the email this offer was sent to. Enter that address above to keep it.
             </p>
           ) : null}
@@ -1060,7 +1060,7 @@ export default function CheckoutPage() {
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm text-white">{line.name}</p>
-        {line.variantLabel ? <p className="mt-0.5 text-xs text-white/40">{line.variantLabel}</p> : null}
+        {line.variantLabel ? <p className="mt-0.5 text-xs text-white/50">{line.variantLabel}</p> : null}
         <p className="mt-1.5 text-xs text-[color:var(--accent-gold)]">
           Your one-time gift{line.quantity > 1 ? ` × ${line.quantity}` : ""}
         </p>
@@ -1078,9 +1078,9 @@ export default function CheckoutPage() {
         {/* Compact hero — ~40% shorter than before, so the form starts almost
             immediately on a phone. */}
         <header className="pb-6">
-          <p className="text-[10px] uppercase tracking-[0.34em] text-white/35">Secure checkout</p>
+          <p className="text-[10px] uppercase tracking-[0.34em] text-white/50">Secure checkout</p>
           <h1 className="vl2-serif mt-2 text-[1.85rem] leading-[1.1] text-white sm:text-[2.5rem]">Complete your order</h1>
-          <p className="mt-2 max-w-xl text-sm leading-relaxed text-white/45">
+          <p className="mt-2 max-w-xl text-sm leading-relaxed text-white/50">
             Transparent totals, encrypted payment, and full batch traceability.
           </p>
           <div className="mt-5 max-w-md">
@@ -1132,7 +1132,7 @@ export default function CheckoutPage() {
             >
               <span className="flex items-center gap-2 text-sm text-white/70">
                 Order summary
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={`h-4 w-4 text-white/35 transition-transform duration-300 ${summaryOpen ? "rotate-180" : ""}`} aria-hidden><path d="m6 9 6 6 6-6" /></svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={`h-4 w-4 text-white/50 transition-transform duration-300 ${summaryOpen ? "rotate-180" : ""}`} aria-hidden><path d="m6 9 6 6 6-6" /></svg>
               </span>
               <span className="text-base font-semibold text-white tabular-nums" data-testid="summary-total-mobile">{formatCartCurrency(finalTotal)}</span>
             </button>
@@ -1172,7 +1172,7 @@ export default function CheckoutPage() {
                 />
               </div>
               {emailLockedToAccount ? (
-                <p className="mt-2 pl-1 text-[11px] text-white/35">Using your account email.</p>
+                <p className="mt-2 pl-1 text-[11px] text-white/50">Using your account email.</p>
               ) : null}
             </CheckoutSection>
 
@@ -1261,7 +1261,7 @@ export default function CheckoutPage() {
                 />
               </div>
 
-              <p className="mt-4 flex items-center gap-2 text-[11px] text-white/35">
+              <p className="mt-4 flex items-center gap-2 text-[11px] text-white/50">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3.5 w-3.5 flex-shrink-0" aria-hidden><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z" strokeLinejoin="round" /><circle cx="7" cy="17" r="1.5" /><circle cx="17.5" cy="17" r="1.5" /></svg>
                 {/* With free shipping sitewide on there is no threshold and no
                     fallback rate left to quote, and quoting one here beside a
@@ -1292,7 +1292,7 @@ export default function CheckoutPage() {
                     />
                     <span className="min-w-0 flex-1">
                       <span className="block text-sm font-medium text-white">Shipping protection</span>
-                      <span className="block text-xs text-white/40">Protect against loss, theft, or damage.</span>
+                      <span className="block text-xs text-white/50">Protect against loss, theft, or damage.</span>
                     </span>
                     <span className="flex-shrink-0 text-sm text-white/70 tabular-nums">+{formatCartCurrency(calculateShippingProtectionFee(subtotal, shippingProtectionPercent))}</span>
                   </label>
@@ -1300,12 +1300,12 @@ export default function CheckoutPage() {
                     type="button"
                     onClick={() => setProtectionOpen((o) => !o)}
                     aria-expanded={protectionOpen}
-                    className="vl-focus-ring px-4 pb-1 text-[11px] text-white/35 underline-offset-2 hover:text-white/60"
+                    className="vl-focus-ring px-4 pb-1 text-[11px] text-white/50 underline-offset-2 hover:text-white/60"
                   >
                     {protectionOpen ? "Hide details" : "View details"}
                   </button>
                   <Collapse open={protectionOpen}>
-                    <p className="px-4 pb-4 pt-1 text-xs leading-relaxed text-white/40">
+                    <p className="px-4 pb-4 pt-1 text-xs leading-relaxed text-white/50">
                       Store-backed coverage: we&apos;ll replace or refund items lost, stolen, or damaged in transit.{" "}
                       <a href="/legal/shipping" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-white/70">See terms</a>
                     </p>
@@ -1349,13 +1349,13 @@ export default function CheckoutPage() {
                 <span className="text-sm text-white/70">
                   {isSignedIn ? "Referral, coupon, or rewards points?" : "Have a referral or coupon code?"}
                 </span>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={`h-4 w-4 text-white/35 transition-transform duration-300 ${savingsOpen ? "rotate-180" : ""}`} aria-hidden><path d="m6 9 6 6 6-6" /></svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={`h-4 w-4 text-white/50 transition-transform duration-300 ${savingsOpen ? "rotate-180" : ""}`} aria-hidden><path d="m6 9 6 6 6-6" /></svg>
               </button>
               <Collapse open={savingsOpen}>
                 <div className="space-y-5 px-5 pb-5 sm:px-6 sm:pb-6">
                   {/* Referral */}
                   <div>
-                    <p className="mb-2 text-[10px] uppercase tracking-[0.24em] text-white/35">Referral code</p>
+                    <p className="mb-2 text-[10px] uppercase tracking-[0.24em] text-white/50">Referral code</p>
                     {/* THE FIELD IS ALWAYS OPEN.
                         It used to be replaced, while any promotion ran, by
                         "<promotion> is active — referral discounts can't be
@@ -1374,7 +1374,7 @@ export default function CheckoutPage() {
                         aria-label="Referral code"
                         placeholder="VANTA10"
                         autoCapitalize="characters"
-                        className="w-full flex-1 rounded-xl border border-white/[0.10] bg-black/30 px-4 py-3 text-[16px] text-white outline-none transition placeholder:text-white/25 focus:border-white/40 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.05)]"
+                        className="w-full flex-1 rounded-xl border border-white/[0.10] bg-black/30 px-4 py-3 text-[16px] text-white outline-none transition placeholder:text-white/50 focus:border-white/40 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.05)]"
                       />
                       <button type="button" onClick={() => applyReferralCode(effectiveReferralInput)} disabled={isApplyingReferral} className="vl-focus-ring flex-shrink-0 rounded-xl border border-white/[0.12] bg-white/[0.04] px-5 text-xs font-semibold uppercase tracking-wide text-white/80 transition hover:bg-white/[0.08] disabled:opacity-50">
                         {isApplyingReferral ? "…" : "Apply"}
@@ -1382,15 +1382,15 @@ export default function CheckoutPage() {
                     </div>
                     {referralSuccess ? <p className="mt-2 text-xs text-emerald-300">{referralSuccess}</p> : null}
                     {referralError ? <p className="mt-2 text-xs text-rose-300">{referralError}</p> : null}
-                    {referralStatusText ? <p className={`mt-2 text-xs ${referralNeedsMoreToQualify ? "text-amber-300/80" : "text-white/45"}`}>{referralStatusText}</p> : null}
+                    {referralStatusText ? <p className={`mt-2 text-xs ${referralNeedsMoreToQualify ? "text-amber-300/80" : "text-white/50"}`}>{referralStatusText}</p> : null}
                     {referralCode ? (
-                      <button type="button" aria-label="Remove referral code" onClick={() => { clearReferralCode(); setReferralInput(""); }} className="vl-focus-ring mt-2 text-xs text-white/35 transition hover:text-white">Remove code</button>
+                      <button type="button" aria-label="Remove referral code" onClick={() => { clearReferralCode(); setReferralInput(""); }} className="vl-focus-ring mt-2 text-xs text-white/50 transition hover:text-white">Remove code</button>
                     ) : null}
                   </div>
 
                   {/* Coupon */}
                   <div>
-                    <p className="mb-2 text-[10px] uppercase tracking-[0.24em] text-white/35">Coupon code</p>
+                    <p className="mb-2 text-[10px] uppercase tracking-[0.24em] text-white/50">Coupon code</p>
                     {/* ALWAYS OPEN, FOR THE SAME REASON.
                         Two refusals used to live here — one for a live
                         promotion, one reading "A referral code is applied.
@@ -1412,7 +1412,7 @@ export default function CheckoutPage() {
                         aria-label="Coupon code"
                         placeholder="SAVE10"
                         autoCapitalize="characters"
-                        className="w-full flex-1 rounded-xl border border-white/[0.10] bg-black/30 px-4 py-3 text-[16px] text-white outline-none transition placeholder:text-white/25 focus:border-white/40 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.05)]"
+                        className="w-full flex-1 rounded-xl border border-white/[0.10] bg-black/30 px-4 py-3 text-[16px] text-white outline-none transition placeholder:text-white/50 focus:border-white/40 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.05)]"
                       />
                       <button type="button" onClick={() => applyCouponCode(effectiveCouponInput)} disabled={isApplyingCoupon} className="vl-focus-ring flex-shrink-0 rounded-xl border border-white/[0.12] bg-white/[0.04] px-5 text-xs font-semibold uppercase tracking-wide text-white/80 transition hover:bg-white/[0.08] disabled:opacity-50">
                         {isApplyingCoupon ? "…" : "Apply"}
@@ -1429,21 +1429,21 @@ export default function CheckoutPage() {
                         beside a total the code did not move is what made the old
                         copy misleading. */}
                     {couponDetails && shownCouponOutcome?.controlsPrice ? (
-                      <p className="mt-2 text-xs text-white/45">{couponHeadline(couponDetails, formatCartCurrency)}</p>
+                      <p className="mt-2 text-xs text-white/50">{couponHeadline(couponDetails, formatCartCurrency)}</p>
                     ) : null}
                     {/* Always removable. A code that arrived from a restore link, or
                         was typed before a promotion loaded, must never leave the
                         shopper stuck behind a code the order cannot carry. */}
                     {couponCode ? (
-                      <button type="button" aria-label="Remove coupon code" onClick={() => { clearCouponCode(); setCouponInput(""); }} className="vl-focus-ring mt-2 text-xs text-white/35 transition hover:text-white">Remove code</button>
+                      <button type="button" aria-label="Remove coupon code" onClick={() => { clearCouponCode(); setCouponInput(""); }} className="vl-focus-ring mt-2 text-xs text-white/50 transition hover:text-white">Remove code</button>
                     ) : null}
                   </div>
 
                   {/* Points */}
                   {isSignedIn ? (
                     <div>
-                      <p className="mb-2 text-[10px] uppercase tracking-[0.24em] text-white/35">Rewards points</p>
-                      <p className="text-xs text-white/45">
+                      <p className="mb-2 text-[10px] uppercase tracking-[0.24em] text-white/50">Rewards points</p>
+                      <p className="text-xs text-white/50">
                         <span className="text-white/80">{pointsBalance.toLocaleString("en-US")}</span> available ({formatCartCurrency(pointsToDollars(pointsBalance))} value).
                       </p>
                       {referralDiscountApplied ? (
@@ -1461,16 +1461,16 @@ export default function CheckoutPage() {
                             value={pointsToRedeem || ""}
                             onChange={(event) => setPointsToRedeem(Number(event.target.value) || 0)}
                             placeholder="0"
-                            className="w-32 rounded-xl border border-white/[0.10] bg-black/30 px-4 py-3 text-[16px] text-white outline-none transition placeholder:text-white/25 focus:border-white/40 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.05)]"
+                            className="w-32 rounded-xl border border-white/[0.10] bg-black/30 px-4 py-3 text-[16px] text-white outline-none transition placeholder:text-white/50 focus:border-white/40 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.05)]"
                           />
                           <button type="button" onClick={() => setPointsToRedeem(pointsBalance)} className="vl-focus-ring rounded-xl border border-white/[0.12] bg-white/[0.04] px-4 py-3 text-xs font-semibold uppercase tracking-wide text-white/80 transition hover:bg-white/[0.08]">Use max</button>
                           {pointsToRedeem > 0 ? <span className="text-xs text-emerald-300 tabular-nums">−{formatCartCurrency(pointsRedeemedDiscount)}</span> : null}
                         </div>
                       ) : null}
-                      {pointsToEarn > 0 ? <p className="mt-2 text-[11px] text-white/35">You&apos;ll earn ~{pointsToEarn.toLocaleString("en-US")} points on this order.</p> : null}
+                      {pointsToEarn > 0 ? <p className="mt-2 text-[11px] text-white/50">You&apos;ll earn ~{pointsToEarn.toLocaleString("en-US")} points on this order.</p> : null}
                     </div>
                   ) : (
-                    <p className="text-xs text-white/40">
+                    <p className="text-xs text-white/50">
                       <Link href="/account/login" className="text-white/70 underline underline-offset-4 hover:text-white">Sign in</Link> to earn and redeem rewards points.
                     </p>
                   )}
@@ -1482,7 +1482,7 @@ export default function CheckoutPage() {
             <CheckoutSection innerRef={confirmationsRef} step="04" title="Required confirmations" subtitle="Both are required to place a research order. Untick either one to withhold it.">
               <div className="overflow-hidden rounded-xl border border-white/[0.06]">
                 <div className="flex items-center justify-between bg-white/[0.02] px-4 py-2.5">
-                  <span className="text-[11px] text-white/40">Confirm to continue</span>
+                  <span className="text-[11px] text-white/50">Confirm to continue</span>
                   <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums ${allAcknowledged ? "bg-[color:var(--accent-gold)]/20 text-[color:var(--accent-gold-strong)]" : "bg-white/[0.06] text-white/50"}`}>
                     {acknowledgedCount} of {REQUIRED_CONFIRMATIONS.length}
                   </span>
@@ -1501,14 +1501,14 @@ export default function CheckoutPage() {
                         <button
                           type="button"
                           onClick={(e) => { e.preventDefault(); setOpenLegal((prev) => ({ ...prev, [item.key]: !prev[item.key] })); }}
-                          className="vl-focus-ring flex-shrink-0 rounded px-1 text-[11px] text-white/35 underline-offset-2 hover:text-white/70"
+                          className="vl-focus-ring flex-shrink-0 rounded px-1 text-[11px] text-white/50 underline-offset-2 hover:text-white/70"
                           aria-expanded={Boolean(openLegal[item.key])}
                         >
                           {openLegal[item.key] ? "Hide" : "View details"}
                         </button>
                       </label>
                       <Collapse open={Boolean(openLegal[item.key])}>
-                        <p className="pl-8 pr-1 pt-2 text-xs leading-relaxed text-white/40">
+                        <p className="pl-8 pr-1 pt-2 text-xs leading-relaxed text-white/50">
                           {item.body}
                           {item.policyHref ? (
                             <>
@@ -1532,10 +1532,10 @@ export default function CheckoutPage() {
 
               <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm text-white/60">
                 <input type="checkbox" checked={marketingOptIn} onChange={(e) => { haptic(); setMarketingTouched(true); setMarketingChoice(e.target.checked); }} className="mt-0.5 h-[1.15rem] w-[1.15rem] flex-shrink-0 accent-[color:var(--accent-gold)]" />
-                <span className="text-xs leading-relaxed">Email me exclusive offers, coupons &amp; restock alerts. <span className="text-white/30">Optional — unsubscribe anytime.</span></span>
+                <span className="text-xs leading-relaxed">Email me exclusive offers, coupons &amp; restock alerts. <span className="text-white/50">Optional — unsubscribe anytime.</span></span>
               </label>
 
-              <p className="mt-4 text-[11px] leading-relaxed text-white/30">
+              <p className="mt-4 text-[11px] leading-relaxed text-white/50">
                 By placing your order, you agree to our{" "}
                 <a href="/legal/terms" target="_blank" rel="noopener noreferrer" className="text-white/50 underline underline-offset-2 hover:text-white">Terms &amp; Conditions</a>{" "}
                 and{" "}
@@ -1547,7 +1547,7 @@ export default function CheckoutPage() {
           {/* ---------------- Right column: summary (sticky on desktop) ------- */}
           <aside className="hidden h-fit lg:sticky lg:top-24 lg:block">
             <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-6">
-              <p className="text-[10px] uppercase tracking-[0.28em] text-white/35">Order summary</p>
+              <p className="text-[10px] uppercase tracking-[0.28em] text-white/50">Order summary</p>
 
               {!isHydrated ? (
                 // Don't flash "No items in cart" before localStorage hydrates — a
@@ -1564,7 +1564,7 @@ export default function CheckoutPage() {
                   ))}
                 </div>
               ) : items.length === 0 ? (
-                <div className="mt-5 rounded-xl border border-dashed border-white/[0.10] p-6 text-center text-sm text-white/35">No items in cart.</div>
+                <div className="mt-5 rounded-xl border border-dashed border-white/[0.10] p-6 text-center text-sm text-white/50">No items in cart.</div>
               ) : (
                 <div className="mt-5 space-y-4 border-b border-white/[0.06] pb-5">{productLines}{giftProductLines}{offerNotice}</div>
               )}
@@ -1574,7 +1574,7 @@ export default function CheckoutPage() {
               <div className="my-5 h-px bg-white/[0.06]" />
 
               <div className="flex items-end justify-between">
-                <span className="text-xs uppercase tracking-[0.24em] text-white/40">Total</span>
+                <span className="text-xs uppercase tracking-[0.24em] text-white/50">Total</span>
                 <span className="text-[2rem] font-semibold leading-none tracking-tight text-white tabular-nums" data-testid="summary-total">{formatCartCurrency(finalTotal)}</span>
               </div>
 
@@ -1633,7 +1633,7 @@ export default function CheckoutPage() {
 
               <TrustRow className="mt-6 border-t border-white/[0.06] pt-5" />
 
-              <Link href="/cart" className="mt-5 inline-flex text-xs text-white/35 transition hover:text-white">
+              <Link href="/cart" className="mt-5 inline-flex text-xs text-white/50 transition hover:text-white">
                 ← Back to cart
               </Link>
             </div>
@@ -1644,7 +1644,7 @@ export default function CheckoutPage() {
             still land immediately before the sticky CTA. */}
         <div className="mt-6 rounded-2xl border border-white/[0.06] bg-white/[0.015] p-5 lg:hidden">
           <TrustRow />
-          <Link href="/cart" className="mt-5 inline-flex text-xs text-white/35 transition hover:text-white">← Back to cart</Link>
+          <Link href="/cart" className="mt-5 inline-flex text-xs text-white/50 transition hover:text-white">← Back to cart</Link>
         </div>
       </main>
 
@@ -1657,7 +1657,7 @@ export default function CheckoutPage() {
             <p className="mb-2 text-center text-[11px] text-rose-300" role="alert">{checkoutMessage}</p>
           ) : null}
           <div className="mb-2.5 flex items-baseline justify-between">
-            <span className="text-[11px] uppercase tracking-[0.24em] text-white/40">Total</span>
+            <span className="text-[11px] uppercase tracking-[0.24em] text-white/50">Total</span>
             <span className="text-xl font-semibold text-white tabular-nums" data-testid="summary-total-sticky">{formatCartCurrency(finalTotal)}</span>
           </div>
           <button
@@ -1673,7 +1673,7 @@ export default function CheckoutPage() {
             )}
             {ctaLabel}
           </button>
-          <p className="mt-2 text-center text-[10px] text-white/25">
+          <p className="mt-2 text-center text-[10px] text-white/50">
             {/* Gated on the SAME predicate as the express button. Keying this
                 off the feature flag alone advertised Apple Pay on desktop
                 Chrome and, worse, to an iPhone on an unregistered host where

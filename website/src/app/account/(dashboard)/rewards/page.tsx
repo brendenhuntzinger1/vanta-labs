@@ -52,7 +52,7 @@ export default async function AccountRewardsPage() {
   return (
     <div className="space-y-5">
       <header className="vl-fade-up">
-        <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Account</p>
+        <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-400">Account</p>
         <h1 className="vl2-serif mt-1.5 text-3xl text-white sm:text-4xl">Rewards</h1>
         <p className="mt-2 text-sm text-zinc-400">Earn points on every order and redeem them for money off at checkout.</p>
       </header>
@@ -70,16 +70,16 @@ export default async function AccountRewardsPage() {
             </p>
           </div>
           <div className="vl-panel-soft rounded-xl p-5">
-            <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Earn rate</p>
+            <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-400">Earn rate</p>
             <p className="mt-2 text-3xl font-semibold text-white">{membership.tier.pointsPerDollar}×</p>
-            <p className="mt-1 text-sm text-zinc-500">
+            <p className="mt-1 text-sm text-zinc-400">
               points per $1{pointsMultiplier.multiplier > 1 ? ` · ${pointsMultiplier.eventName} (${pointsMultiplier.multiplier}× active)` : ""}
             </p>
           </div>
           <div className="vl-panel-soft rounded-xl p-5">
-            <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Redemption</p>
+            <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-400">Redemption</p>
             <p className="mt-2 text-3xl font-semibold text-white">{POINTS_PER_DOLLAR_REDEMPTION} = $1</p>
-            <p className="mt-1 text-sm text-zinc-500">applied at checkout</p>
+            <p className="mt-1 text-sm text-zinc-400">applied at checkout</p>
           </div>
         </div>
 
@@ -117,7 +117,7 @@ export default async function AccountRewardsPage() {
         {pointsHistory.length === 0 ? (
           <div className="mt-4 rounded-xl border border-dashed border-white/12 bg-white/[0.02] p-8 text-center">
             <p className="text-sm text-zinc-300">No activity yet</p>
-            <p className="mx-auto mt-1.5 max-w-sm text-xs text-zinc-500">Place an order to start earning points — they&apos;ll show up here.</p>
+            <p className="mx-auto mt-1.5 max-w-sm text-xs text-zinc-400">Place an order to start earning points — they&apos;ll show up here.</p>
             <Link href="/products" className="vl2-btn-secondary vl-focus-ring mt-5 inline-flex px-5 py-2.5 text-xs">Shop products</Link>
           </div>
         ) : (
@@ -126,7 +126,7 @@ export default async function AccountRewardsPage() {
               <li key={entry.id} className="flex items-center justify-between py-2.5 text-sm">
                 <div className="min-w-0">
                   <p className="truncate text-zinc-200">{LEDGER_REASON_LABELS[entry.reason] ?? entry.reason}</p>
-                  <p className="text-xs text-zinc-500">{formatDisplayDate(entry.createdAt, "datetime") ?? ""}</p>
+                  <p className="text-xs text-zinc-400">{formatDisplayDate(entry.createdAt, "datetime") ?? ""}</p>
                 </div>
                 <span className={entry.amount >= 0 ? "font-semibold text-emerald-300" : "font-semibold text-rose-300"}>
                   {entry.amount >= 0 ? "+" : ""}{entry.amount.toLocaleString("en-US")}

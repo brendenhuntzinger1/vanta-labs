@@ -269,7 +269,7 @@ export function AccountSettingsClient({
                 <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" />
               </label>
               <label className="text-sm text-zinc-300">
-                Phone <span className="text-zinc-500">(optional)</span>
+                Phone <span className="text-zinc-400">(optional)</span>
                 <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(555) 123-4567" autoComplete="tel" className="vl-input mt-1 w-full px-3 py-2" />
               </label>
             </div>
@@ -347,7 +347,7 @@ export function AccountSettingsClient({
               </svg>
             </div>
             <p className="mt-3 text-sm font-medium text-white">Secure checkout is arriving soon</p>
-            <p className="mx-auto mt-1.5 max-w-md text-sm text-zinc-500">
+            <p className="mx-auto mt-1.5 max-w-md text-sm text-zinc-400">
               Once our payment processor is connected, you&apos;ll be able to securely save cards here for one-tap checkout and membership billing. Your card details are never stored on our servers.
             </p>
           </div>
@@ -365,7 +365,7 @@ export function AccountSettingsClient({
             <label className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-4 text-sm text-zinc-200">
               <span>
                 Product news and promotions
-                <span className="mt-0.5 block text-xs text-zinc-500">New drops, restocks, and member offers.</span>
+                <span className="mt-0.5 block text-xs text-zinc-400">New drops, restocks, and member offers.</span>
               </span>
               <input
                 type="checkbox"
@@ -395,17 +395,17 @@ export function AccountSettingsClient({
               className="vl-focus-ring rounded-xl border border-white/10 bg-white/[0.02] p-4 transition-colors duration-200 hover:border-white/25"
             >
               <p className="text-sm font-medium text-white">Download my data</p>
-              <p className="mt-1 text-xs text-zinc-500">Request a copy of your account information.</p>
+              <p className="mt-1 text-xs text-zinc-400">Request a copy of your account information.</p>
             </a>
             <a
               href={`mailto:support@vantalabsresearch.com?subject=${encodeURIComponent("Account deletion request")}&body=${encodeURIComponent(`Please delete my account and associated personal data (${initialEmail}).`)}`}
               className="vl-focus-ring rounded-xl border border-rose-400/20 bg-rose-400/[0.03] p-4 transition-colors duration-200 hover:border-rose-400/40"
             >
               <p className="text-sm font-medium text-rose-200">Delete my account</p>
-              <p className="mt-1 text-xs text-zinc-500">Permanently remove your account and data.</p>
+              <p className="mt-1 text-xs text-zinc-400">Permanently remove your account and data.</p>
             </a>
           </div>
-          <p className="mt-4 border-t border-white/10 pt-3 text-[11px] leading-5 text-zinc-500">
+          <p className="mt-4 border-t border-white/10 pt-3 text-[11px] leading-5 text-zinc-400">
             See our <Link href="/legal/privacy" className="text-cyan-300 underline-offset-2 hover:underline">Privacy Policy</Link> for how we handle and protect your data.
           </p>
         </section>

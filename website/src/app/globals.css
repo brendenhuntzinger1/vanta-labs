@@ -2089,7 +2089,7 @@ body[data-cookie-banner="true"] .vl-bottom-bar {
   font-weight: 600;
   letter-spacing: 0.28em;
   text-transform: uppercase;
-  color: #6b6b64;
+  color: #8a8a82;
 }
 
 .vl2-lab-panel {
@@ -2591,7 +2591,7 @@ textarea {
   transition: border-color 200ms ease, box-shadow 200ms ease, background-color 200ms ease;
 }
 
-.vl-auth-field::placeholder { color: rgba(255, 255, 255, 0.28); }
+.vl-auth-field::placeholder { color: rgba(255, 255, 255, 0.5); }
 
 .vl-auth-field:hover:not(:focus) { border-color: rgba(255, 255, 255, 0.15); }
 
@@ -3044,7 +3044,7 @@ select.vl-auth-field {
 }
 
 .vl-filter-chip:hover { color: #ffffff; border-color: rgba(255, 255, 255, 0.2); }
-.vl-filter-chip span { color: rgba(255, 255, 255, 0.4); }
+.vl-filter-chip span { color: rgba(255, 255, 255, 0.5); }
 
 .vl-filter-sheet {
   background: linear-gradient(180deg, rgba(24, 25, 30, 0.97) 0%, rgba(13, 14, 17, 0.99) 100%);
@@ -3496,7 +3496,7 @@ select.vl-auth-field {
 .vl-coa-badge[data-verified="false"] {
   border-color: rgba(255, 255, 255, 0.11);
   background: rgba(255, 255, 255, 0.035);
-  color: rgba(255, 255, 255, 0.44);
+  color: rgba(255, 255, 255, 0.55);
 }
 
 /* ——— Card CTA — the strongest thing on the card ——————————————————————— */
@@ -3877,7 +3877,7 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   border-color: rgba(255, 255, 255, 0.09);
   background: rgba(255, 255, 255, 0.018);
 }
-.vl-search-input::placeholder { color: rgba(255, 255, 255, 0.34); }
+.vl-search-input::placeholder { color: rgba(255, 255, 255, 0.5); }
 .vl-search-input:focus {
   border-color: rgba(199, 174, 94, 0.4);
   box-shadow: 0 0 0 1px rgba(199, 174, 94, 0.12);
@@ -4902,7 +4902,7 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   margin: -0.375rem -0.375rem 0 0;
   flex-shrink: 0;
   border-radius: 999px;
-  color: rgba(255, 255, 255, 0.45);
+  color: rgba(255, 255, 255, 0.55);
   transition: color 200ms ease, background-color 200ms ease;
 }
 
@@ -4944,7 +4944,7 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   margin-top: 0.45rem;
   font-size: 0.75rem;
   line-height: 1.6;
-  color: rgba(255, 255, 255, 0.38);
+  color: rgba(255, 255, 255, 0.55);
 }
 
 @media (min-width: 40rem) {
@@ -4969,7 +4969,7 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   border-top: 1px solid rgba(255, 255, 255, 0.07);
   font-size: 0.75rem;
   line-height: 1.6;
-  color: rgba(255, 255, 255, 0.38);
+  color: rgba(255, 255, 255, 0.55);
 }
 
 /* ---------------------------------------------------------------------------

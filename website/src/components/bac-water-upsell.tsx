@@ -220,7 +220,7 @@ export function FrequentlyBoughtTogether({
             {productDose ? ` · ${productDose.label}` : ""}
             <span className="ml-1.5 font-normal text-[#a3a3a3]">{productPriceLabel}</span>
           </span>
-          <span aria-hidden="true" className="text-white/35">+</span>
+          <span aria-hidden="true" className="text-white/50">+</span>
           <span className="inline-flex flex-wrap items-center gap-1.5">
             <span className="font-medium text-white">Recon Water</span>
             {offers.map((offer) => (
@@ -305,7 +305,7 @@ export function BacWaterCartCheckboxes() {
                 />
                 <span className="text-sm text-white">{copy.label}</span>
               </span>
-              <span className={`whitespace-nowrap text-sm ${inCart ? "text-[#6f6f6f]" : "text-[#a3a3a3]"}`}>{copy.price}</span>
+              <span className={`whitespace-nowrap text-sm ${inCart ? "text-[#8f8f8f]" : "text-[#a3a3a3]"}`}>{copy.price}</span>
             </label>
           );
         })}
@@ -417,7 +417,7 @@ export function BacWaterAddedPopup() {
             type="button"
             onClick={() => setIsOpen(false)}
             aria-label="Close"
-            className="vl-focus-ring -mr-1.5 -mt-1.5 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white/45 transition hover:bg-white/[0.06] hover:text-white"
+            className="vl-focus-ring -mr-1.5 -mt-1.5 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white/50 transition hover:bg-white/[0.06] hover:text-white"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" className="h-4 w-4"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
@@ -469,14 +469,14 @@ export function BacWaterAddedPopup() {
           })}
         </div>
 
-        <p className="mt-3.5 text-center text-[10px] uppercase tracking-[0.14em] text-white/30">
+        <p className="mt-3.5 text-center text-[10px] uppercase tracking-[0.14em] text-white/50">
           Research use only · Not for human consumption
         </p>
 
         <button
           type="button"
           onClick={() => setIsOpen(false)}
-          className="vl-focus-ring mt-1.5 w-full rounded-xl py-3 text-center text-xs text-white/45 transition hover:text-white"
+          className="vl-focus-ring mt-1.5 w-full rounded-xl py-3 text-center text-xs text-white/50 transition hover:text-white"
         >
           No thanks, continue shopping
         </button>

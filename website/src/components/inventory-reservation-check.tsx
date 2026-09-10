@@ -48,7 +48,7 @@ export function InventoryReservationCheck() {
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-zinc-300">Inventory reservation</h2>
-          <p className="mt-1 max-w-2xl text-xs leading-6 text-zinc-500">
+          <p className="mt-1 max-w-2xl text-xs leading-6 text-zinc-400">
             Checks the live database for the objects that stop two customers buying the same last unit. Read-only — it
             reads two columns, one table and the schema the database publishes about itself, and calls none of the
             reservation functions.
@@ -64,7 +64,7 @@ export function InventoryReservationCheck() {
       </header>
 
       {busy && !data ? (
-        <p className="mt-4 text-xs text-zinc-500">Checking…</p>
+        <p className="mt-4 text-xs text-zinc-400">Checking…</p>
       ) : data?.error ? (
         <p className="mt-4 font-mono text-xs text-rose-300">{data.error}</p>
       ) : (

@@ -59,7 +59,7 @@ export function AdUrlBuilder({ siteUrl, products }: { siteUrl: string; products:
   }
 
   const field = "w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none focus:border-white/25";
-  const labelClass = "mb-1 block text-[10px] uppercase tracking-[0.16em] text-white/35";
+  const labelClass = "mb-1 block text-[10px] uppercase tracking-[0.16em] text-white/50";
 
   return (
     <div className="space-y-4">
@@ -130,7 +130,7 @@ export function AdUrlBuilder({ siteUrl, products }: { siteUrl: string; products:
               {copied ? "Copied" : "Copy"}
             </button>
           </div>
-          <p className="mt-2 text-[11px] leading-5 text-white/40">
+          <p className="mt-2 text-[11px] leading-5 text-white/50">
             Paste into <span className="text-white/70">{PLATFORM_FIELD[platform] ?? "the ad's destination URL field"}</span>.
             {platform === "snapchat" ? (
               <>

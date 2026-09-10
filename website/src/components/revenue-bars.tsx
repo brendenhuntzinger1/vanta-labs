@@ -13,7 +13,7 @@ export function RevenueBars({ title, points, colorClass }: { title: string; poin
     <div className="vl-panel rounded-2xl p-4 sm:p-5">
       <div className="mb-4 flex items-center justify-between">
         <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">{title}</h3>
-        <span className="text-xs text-zinc-500">{points.length} points</span>
+        <span className="text-xs text-zinc-400">{points.length} points</span>
       </div>
       <div className="flex h-48 items-end gap-1.5 overflow-x-auto pb-1">
         {points.map((point) => {
@@ -27,7 +27,7 @@ export function RevenueBars({ title, points, colorClass }: { title: string; poin
                   title={`${point.label}: $${point.value.toFixed(2)}`}
                 />
               </div>
-              <p className="text-[10px] text-zinc-500">{point.label}</p>
+              <p className="text-[10px] text-zinc-400">{point.label}</p>
             </div>
           );
         })}

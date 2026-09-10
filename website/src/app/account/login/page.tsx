@@ -84,7 +84,7 @@ export default async function AccountLoginPage({
             </ul>
           </div>
 
-          <p className="relative text-[10px] uppercase tracking-[0.2em] text-white/35">For laboratory research use only</p>
+          <p className="relative text-[10px] uppercase tracking-[0.2em] text-white/50">For laboratory research use only</p>
         </section>
 
         {/* Form panel. px-4 keeps a 16px gutter on the narrowest phone, and the
@@ -101,7 +101,7 @@ export default async function AccountLoginPage({
             </Suspense>
 
             {/* Mobile-only trust line. The desktop panel already says this. */}
-            <p className="mt-6 text-center text-[11px] uppercase tracking-[0.2em] text-white/25 lg:hidden">
+            <p className="mt-6 text-center text-[11px] uppercase tracking-[0.2em] text-white/50 lg:hidden">
               For laboratory research use only
             </p>
           </div>

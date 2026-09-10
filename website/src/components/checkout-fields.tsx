@@ -19,7 +19,7 @@ const FIELD_ERROR = "border-rose-400/50 focus:border-rose-400/70 focus:shadow-[0
 // Floating label: sits mid-height when empty, shrinks to the top once the field
 // has content or focus.
 const LABEL_BASE =
-  "pointer-events-none absolute left-4 z-10 origin-left text-white/40 transition-all duration-200 ease-out motion-reduce:transition-none";
+  "pointer-events-none absolute left-4 z-10 origin-left text-white/50 transition-all duration-200 ease-out motion-reduce:transition-none";
 const LABEL_FLOAT =
   "top-[1.15rem] text-[15px] peer-focus:top-[0.45rem] peer-focus:text-[11px] peer-focus:tracking-wide peer-focus:text-white/55 peer-[:not(:placeholder-shown)]:top-[0.45rem] peer-[:not(:placeholder-shown)]:text-[11px] peer-[:not(:placeholder-shown)]:tracking-wide";
 
@@ -130,7 +130,7 @@ export function SelectField({
         >
           {children}
         </select>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-white/35" aria-hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-white/50" aria-hidden>
           <path d="m6 9 6 6 6-6" />
         </svg>
       </div>
@@ -173,10 +173,10 @@ export function CheckoutSection({
   return (
     <section ref={innerRef} className="rounded-2xl border border-white/[0.06] bg-white/[0.015] p-5 sm:p-6">
       <div className="flex items-baseline gap-3">
-        <span className="text-[11px] font-semibold tabular-nums text-[color:var(--accent-gold)]/70">{step}</span>
+        <span className="text-[11px] font-semibold tabular-nums text-[color:var(--accent-gold)]/75">{step}</span>
         <div>
           <h2 className="text-base font-semibold tracking-tight text-white sm:text-lg">{title}</h2>
-          {subtitle ? <p className="mt-0.5 text-xs text-white/40">{subtitle}</p> : null}
+          {subtitle ? <p className="mt-0.5 text-xs text-white/50">{subtitle}</p> : null}
         </div>
       </div>
       <div className="mt-5">{children}</div>

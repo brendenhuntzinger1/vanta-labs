@@ -327,7 +327,7 @@ export function CartPageClient() {
                             {item.doseLabel ? `${item.doseLabel}${item.batchNumber ? " • " : ""}` : ""}{item.batchNumber ? `Batch ${item.batchNumber}` : ""}
                           </p>
                         </div>
-                        <button type="button" onClick={() => removeFromCart(item.key)} className="-my-2 px-1 py-2 text-sm text-white/45 transition hover:text-white">
+                        <button type="button" onClick={() => removeFromCart(item.key)} className="-my-2 px-1 py-2 text-sm text-white/50 transition hover:text-white">
                           Remove
                         </button>
                       </div>
@@ -347,7 +347,7 @@ export function CartPageClient() {
                           both surfaces. */}
                       <div className="text-right">
                         {bundleDiscountRate(item.quantity, bundleConfig) > 0 ? (
-                          <p className="text-xs text-white/40 line-through tabular-nums">{formatCartCurrency(item.price * item.quantity)}</p>
+                          <p className="text-xs text-white/50 line-through tabular-nums">{formatCartCurrency(item.price * item.quantity)}</p>
                         ) : null}
                         <p className="text-base text-white sm:text-lg tabular-nums">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig))}</p>
                         {bundleDiscountRate(item.quantity, bundleConfig) > 0 ? (
@@ -430,8 +430,8 @@ export function CartPageClient() {
                     aria-label="Add shipping protection"
                   />
                   <span>
-                    <span className="block font-medium text-white">Shipping Protection <span className="font-normal text-[color:var(--accent-gold)]">(Recommended)</span> <span className="font-normal text-white/45">· optional</span></span>
-                    <span className="block text-xs text-white/45">Replace or refund items lost, stolen, or damaged in transit.</span>
+                    <span className="block font-medium text-white">Shipping Protection <span className="font-normal text-[color:var(--accent-gold)]">(Recommended)</span> <span className="font-normal text-white/50">· optional</span></span>
+                    <span className="block text-xs text-white/50">Replace or refund items lost, stolen, or damaged in transit.</span>
                   </span>
                 </span>
                 {/* The PROSPECTIVE fee, not the applied one. `shippingProtectionFee`
@@ -471,7 +471,7 @@ export function CartPageClient() {
                   <span>+{formatCartCurrency(shippingProtectionFee)}</span>
                 </div>
               ) : null}
-              <div className="flex justify-between text-white/40">
+              <div className="flex justify-between text-white/50">
                 <span>Sales tax</span>
                 <span>Calculated at checkout</span>
               </div>
@@ -489,7 +489,7 @@ export function CartPageClient() {
                 </p>
               ) : null}
               {pendingChargeNotice({ cardFee, taxPending: false }) ? (
-                <p className="text-xs text-white/40">{pendingChargeNotice({ cardFee, taxPending: false })}</p>
+                <p className="text-xs text-white/50">{pendingChargeNotice({ cardFee, taxPending: false })}</p>
               ) : null}
               {autoBestDiscountApplied ? (
                 <p className="text-xs text-emerald-300/80">✓ We&apos;ve automatically applied your best available discount.</p>
@@ -514,7 +514,7 @@ export function CartPageClient() {
 
                 No delivery date, no transit estimate and no guarantee is
                 stated, because none is configured anywhere in this codebase. */}
-            <ul className="mt-5 space-y-1.5 border-t border-white/10 pt-4 text-xs leading-5 text-white/45">
+            <ul className="mt-5 space-y-1.5 border-t border-white/10 pt-4 text-xs leading-5 text-white/50">
               <li>{DESTINATIONS_SENTENCE}</li>
               <li>
                 {freeShipSitewide

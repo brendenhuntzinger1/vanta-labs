@@ -28,7 +28,7 @@ export default async function AccountOrdersPage() {
   return (
     <div className="space-y-5">
       <header className="vl-fade-up">
-        <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Account</p>
+        <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-400">Account</p>
         <h1 className="vl2-serif mt-1.5 text-3xl text-white sm:text-4xl">Your orders</h1>
         <p className="mt-2 text-sm text-zinc-400">
           {orders.length === 0 ? "Everything you order will live here." : `${orders.length} order${orders.length === 1 ? "" : "s"} · track, reorder, and download receipts.`}
@@ -39,7 +39,7 @@ export default async function AccountOrdersPage() {
         <section className="vl-panel rounded-2xl p-10 text-center">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-white/12 bg-white/[0.03] text-2xl">📦</div>
           <h2 className="mt-5 text-lg font-semibold text-white">No orders yet</h2>
-          <p className="mx-auto mt-2 max-w-sm text-sm text-zinc-500">
+          <p className="mx-auto mt-2 max-w-sm text-sm text-zinc-400">
             When you place your first order it&apos;ll appear here with live tracking, receipts, and one-tap reorder.
           </p>
           <Link href="/products" className="vl2-btn-primary vl-focus-ring mt-6 inline-flex px-6 py-3 text-sm">Browse products</Link>
@@ -55,9 +55,9 @@ export default async function AccountOrdersPage() {
               <section key={order.orderId} className="vl-panel overflow-hidden rounded-2xl">
                 <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 p-5 sm:px-6">
                   <div>
-                    <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Order</p>
+                    <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-400">Order</p>
                     <p className="mt-1 text-sm font-semibold text-white">{displayOrderReference(order.orderNumber, order.orderId)}</p>
-                    <p className="mt-1 text-xs text-zinc-500">{formatDisplayDate(order.createdAt, "long")}</p>
+                    <p className="mt-1 text-xs text-zinc-400">{formatDisplayDate(order.createdAt, "long")}</p>
                   </div>
                   <div className="text-right">
                     {/* THE AMOUNT IS ONLY SHOWN WHEN IT WAS ACTUALLY TAKEN.

@@ -80,7 +80,7 @@ export default async function ResubmitPaymentPage({ params }: { params: Promise<
         </section>
 
         {alreadyPaid || isRefunded ? (
-          <Link href="/products" className="mt-8 inline-flex text-sm text-white/45 transition hover:text-white">
+          <Link href="/products" className="mt-8 inline-flex text-sm text-white/50 transition hover:text-white">
             Continue shopping
           </Link>
         ) : isManual && method ? (

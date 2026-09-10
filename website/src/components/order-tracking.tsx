@@ -31,7 +31,7 @@ export function OrderTracking({
     return (
       <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
         <p className={`text-sm font-medium ${progress.refunded ? "text-amber-200" : "text-zinc-300"}`}>{progress.headline}</p>
-        <p className="mt-1 text-xs text-zinc-500">
+        <p className="mt-1 text-xs text-zinc-400">
           {progress.refunded ? "A refund has been issued for this order." : "This order was cancelled and will not ship."}
         </p>
       </div>
@@ -44,7 +44,7 @@ export function OrderTracking({
         <div className="mb-4 flex items-center justify-between">
           <p className="text-sm font-medium text-white">{progress.headline}</p>
           {estimatedDelivery ? (
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-zinc-400">
               Est. delivery {formatDisplayDate(estimatedDelivery, "short")}
             </p>
           ) : null}

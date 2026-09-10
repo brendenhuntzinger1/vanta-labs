@@ -102,7 +102,7 @@ function Flow() {
       {rows.map(([what, means], i) => (
         <li key={what} className="grid gap-1 border-l border-white/10 pl-4 sm:grid-cols-[220px_1fr] sm:gap-4">
           <span className="text-sm font-semibold text-white">
-            <span className="mr-2 text-[10px] text-zinc-500">{String(i + 1).padStart(2, "0")}</span>
+            <span className="mr-2 text-[10px] text-zinc-400">{String(i + 1).padStart(2, "0")}</span>
             {what}
           </span>
           <span className="text-sm leading-6 text-zinc-400">{means}</span>
@@ -164,11 +164,11 @@ export function FulfillmentOwnerGuide({
                 {advice ? (
                   <dl className="mt-2.5 space-y-1 text-sm">
                     <div className="flex gap-2">
-                      <dt className="shrink-0 text-zinc-500">You:</dt>
+                      <dt className="shrink-0 text-zinc-400">You:</dt>
                       <dd className="text-zinc-300">{advice.you}</dd>
                     </div>
                     <div className="flex gap-2">
-                      <dt className="shrink-0 text-zinc-500">Don&apos;t:</dt>
+                      <dt className="shrink-0 text-zinc-400">Don&apos;t:</dt>
                       <dd className="text-zinc-300">{advice.dont}</dd>
                     </div>
                   </dl>
@@ -472,9 +472,9 @@ export function FulfillmentOwnerGuide({
         aria-expanded={open}
         className="inline-flex items-center gap-2 rounded-lg border border-white/12 bg-white/[0.03] px-3 py-1.5 text-xs text-zinc-300 transition hover:border-white/25 hover:text-white"
       >
-        <span aria-hidden="true" className="text-zinc-500">?</span>
+        <span aria-hidden="true" className="text-zinc-400">?</span>
         Owner Guide
-        <span aria-hidden="true" className="text-zinc-500">{open ? "−" : "+"}</span>
+        <span aria-hidden="true" className="text-zinc-400">{open ? "−" : "+"}</span>
       </button>
 
       {open ? (

@@ -76,9 +76,9 @@ function StatCard({ label, value, sub, featured = false, accent }: { label: stri
     : "border-white/10 bg-white/[0.02]";
   return (
     <div className={`rounded-2xl border p-4 ${ring}`}>
-      <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">{label}</p>
+      <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-400">{label}</p>
       <p className={`mt-2 font-semibold text-white ${featured ? "text-2xl sm:text-3xl" : "text-xl"}`}>{value}</p>
-      {sub ? <p className="mt-1 text-xs text-zinc-500">{sub}</p> : null}
+      {sub ? <p className="mt-1 text-xs text-zinc-400">{sub}</p> : null}
     </div>
   );
 }
@@ -147,7 +147,7 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(199,174,94,0.10),transparent_55%)]" />
         <div className="relative">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Ambassador Portal</p>
+            <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-400">Ambassador Portal</p>
             <span className="rounded-full border border-emerald-400/40 bg-emerald-400/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-200">
               {liveSummary.accountStatus === "approved" ? "Active" : liveSummary.accountStatus}
             </span>
@@ -189,7 +189,7 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
           <ReferralCodeManager initialCode={liveSummary.referralCode} referralLink={liveSummary.referralLink} />
         </div>
         <div className="mt-5 border-t border-white/10 pt-5">
-          <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Share to</p>
+          <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-400">Share to</p>
           <div className="mt-3">
             <ReferralShare referralLink={liveSummary.referralLink} code={liveSummary.referralCode} />
           </div>
@@ -224,14 +224,14 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
         </div>
 
         {filteredCommissions.length === 0 ? (
-          <p className="mt-6 text-sm text-zinc-500">
+          <p className="mt-6 text-sm text-zinc-400">
             {liveSummary.recentOrders.length === 0 ? "No commissions yet — share your link to start earning." : "No commissions match your filters."}
           </p>
         ) : (
           <div className="mt-4 overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
-                <tr className="text-left text-[11px] uppercase tracking-[0.12em] text-zinc-500">
+                <tr className="text-left text-[11px] uppercase tracking-[0.12em] text-zinc-400">
                   <th className="px-2 py-2 font-medium">Order</th>
                   <th className="px-2 py-2 font-medium">Date</th>
                   <th className="px-2 py-2 font-medium">Customer</th>
@@ -265,13 +265,13 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
       <section className="vl-panel rounded-2xl p-5 sm:p-6">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-white">Payout history</h2>
-          <span className="text-xs text-zinc-500">Paid every two weeks</span>
+          <span className="text-xs text-zinc-400">Paid every two weeks</span>
         </div>
         {liveSummary.payoutHistory.length > 0 ? (
           <div className="mt-4 overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
-                <tr className="text-left text-[11px] uppercase tracking-[0.12em] text-zinc-500">
+                <tr className="text-left text-[11px] uppercase tracking-[0.12em] text-zinc-400">
                   <th className="px-2 py-2 font-medium">Date</th>
                   <th className="px-2 py-2 text-right font-medium">Amount</th>
                   <th className="px-2 py-2 font-medium">Note</th>
@@ -289,7 +289,7 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
             </table>
           </div>
         ) : (
-          <p className="mt-3 text-sm text-zinc-500">No payouts yet. Commissions are held for {holdDuration}, then paid on a biweekly basis.</p>
+          <p className="mt-3 text-sm text-zinc-400">No payouts yet. Commissions are held for {holdDuration}, then paid on a biweekly basis.</p>
         )}
       </section>
 
@@ -312,7 +312,7 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
       {liveSummary.marketingResources.length > 0 ? (
         <section className="vl-panel rounded-2xl p-5 sm:p-6">
           <h2 className="text-lg font-semibold text-white">Marketing resources</h2>
-          <p className="mt-1 text-xs text-zinc-500">Approved assets and links to help you promote — from the Vanta Labs team.</p>
+          <p className="mt-1 text-xs text-zinc-400">Approved assets and links to help you promote — from the Vanta Labs team.</p>
           <div className="mt-4 grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
             {liveSummary.marketingResources.map((resource) => (
               <a key={`${resource.title}-${resource.url}`} href={resource.url} target="_blank" rel="noreferrer" className="vl-focus-ring rounded-xl border border-white/10 bg-white/[0.02] p-4 transition-colors duration-200 hover:border-cyan-400/40">

@@ -34,12 +34,12 @@ const TONE: Record<HealthStatus, string> = {
   AVAILABLE: "text-emerald-300 border-emerald-400/30 bg-emerald-400/[0.07]",
   FAIL: "text-red-300 border-red-400/30 bg-red-400/[0.07]",
   NOT_VERIFIED: "text-[color:var(--accent-gold)] border-[color:var(--accent-gold)]/30 bg-[color:var(--accent-gold)]/[0.07]",
-  NOT_AVAILABLE: "text-white/45 border-white/10 bg-white/[0.02]",
-  NOT_TESTED: "text-white/45 border-white/10 bg-white/[0.02]",
+  NOT_AVAILABLE: "text-white/50 border-white/10 bg-white/[0.02]",
+  NOT_TESTED: "text-white/50 border-white/10 bg-white/[0.02]",
 };
 
 const TIER_TONE = {
-  CODE: "text-white/35",
+  CODE: "text-white/50",
   PRODUCTION: "text-sky-300/70",
   TIKTOK: "text-[color:var(--accent-gold)]/80",
 } as const;
@@ -115,8 +115,8 @@ function OrderInspector() {
 
   return (
     <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-      <p className="text-[10px] uppercase tracking-[0.14em] text-white/35">Inspect an order&rsquo;s Purchase event</p>
-      <p className="mt-1 text-xs leading-6 text-white/45">
+      <p className="text-[10px] uppercase tracking-[0.14em] text-white/50">Inspect an order&rsquo;s Purchase event</p>
+      <p className="mt-1 text-xs leading-6 text-white/50">
         Shows exactly what a real order reports, and sends nothing. Purchase fires only when the order&rsquo;s own
         payment status is paid, so this is the way to confirm the most important event without creating a conversion.
       </p>
@@ -126,7 +126,7 @@ function OrderInspector() {
           onChange={(event) => setOrderId(event.target.value)}
           placeholder="Order ID"
           aria-label="Order ID"
-          className="min-w-[12rem] flex-1 rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-xs text-white placeholder:text-white/25"
+          className="min-w-[12rem] flex-1 rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-xs text-white placeholder:text-white/50"
         />
         <button
           type="button"
@@ -223,7 +223,7 @@ export function AdsTrackingHealth() {
 
   if (!server) {
     return (
-      <p className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-xs text-white/40">
+      <p className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-xs text-white/50">
         {error ? `Could not run the server checks — ${error}` : "Running checks…"}
       </p>
     );
@@ -240,7 +240,7 @@ export function AdsTrackingHealth() {
         <p className="text-xs text-white/50">
           <span className="font-mono text-emerald-300">{green}</span> green ·{" "}
           <span className="font-mono text-red-300">{red}</span> failing ·{" "}
-          <span className="font-mono text-white/40">{checks.length - green - red}</span> untested
+          <span className="font-mono text-white/50">{checks.length - green - red}</span> untested
         </p>
         <button
           type="button"
@@ -253,7 +253,7 @@ export function AdsTrackingHealth() {
 
       {action ? (
         <div className="rounded-xl border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.05] px-4 py-3">
-          <p className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--accent-gold)]/70">Next action</p>
+          <p className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--accent-gold)]/75">Next action</p>
           <p className="mt-1 text-sm leading-6 text-white/80">{action}</p>
         </div>
       ) : null}
@@ -267,10 +267,10 @@ export function AdsTrackingHealth() {
       <OrderInspector />
 
       <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-        <p className="text-[10px] uppercase tracking-[0.14em] text-white/35">
+        <p className="text-[10px] uppercase tracking-[0.14em] text-white/50">
           Cookie choice in this browser — <span className="font-mono text-white/70">{browser.consent}</span>
         </p>
-        <p className="mt-1 text-xs leading-6 text-white/45">
+        <p className="mt-1 text-xs leading-6 text-white/50">
           The pixel does not load until this says <span className="font-mono text-white/70">accepted</span>, and the
           banner only appears while no choice is stored — so a Decline made once is invisible and never asked again.
           These write the same value the banner writes, for this browser only.
@@ -301,8 +301,8 @@ export function AdsTrackingHealth() {
       </div>
 
       <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-        <p className="text-[10px] uppercase tracking-[0.14em] text-white/35">Live TikTok check</p>
-        <p className="mt-1 text-xs leading-6 text-white/45">
+        <p className="text-[10px] uppercase tracking-[0.14em] text-white/50">Live TikTok check</p>
+        <p className="mt-1 text-xs leading-6 text-white/50">
           Sends one server event and reports TikTok&rsquo;s own response. The test code routes it to Test Events instead of
           your reporting, and it is required for exactly that reason — without it this would post a fabricated purchase
           into production numbers. Find it in Events Manager → your pixel → Test Events.
@@ -313,7 +313,7 @@ export function AdsTrackingHealth() {
             onChange={(e) => setTestCode(e.target.value)}
             placeholder="TEST12345"
             aria-label="TikTok test event code"
-            className="min-w-[12rem] flex-1 rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-xs text-white placeholder:text-white/25"
+            className="min-w-[12rem] flex-1 rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-xs text-white placeholder:text-white/50"
           />
           <button
             type="button"

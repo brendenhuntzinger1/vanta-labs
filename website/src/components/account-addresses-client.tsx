@@ -97,7 +97,7 @@ export function AccountAddressesClient({ initialAddresses }: { initialAddresses:
         <section key={address.id} className="vl-panel rounded-2xl p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              {address.label ? <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">{address.label}</p> : null}
+              {address.label ? <p className="text-xs uppercase tracking-[0.2em] text-zinc-400">{address.label}</p> : null}
               <p className="mt-1 text-sm font-semibold text-white">{address.fullName}</p>
               <p className="mt-1 text-sm text-zinc-400">{address.address}</p>
               <p className="text-sm text-zinc-400">{address.city}, {address.postalCode}</p>

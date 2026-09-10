@@ -175,14 +175,14 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
         </section>
 
         <section className="mt-4 rounded-2xl border border-white/10 px-5 py-5 sm:px-6">
-          <h2 className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/45">Order summary</h2>
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/50">Order summary</h2>
 
           <ul className="mt-4 space-y-2.5">
             {items.map((item, index) => (
               <li key={index} className="flex items-baseline justify-between gap-4">
                 <span className="min-w-0 text-sm text-white/85">
                   {item.product_name ?? "Item"}
-                  <span className="text-white/40"> × {item.quantity ?? 1}</span>
+                  <span className="text-white/50"> × {item.quantity ?? 1}</span>
                 </span>
                 <span className="flex-shrink-0 text-sm tabular-nums text-white/85">{money(Number(item.line_total ?? 0))}</span>
               </li>
@@ -257,7 +257,7 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
           </Link>
         </div>
 
-        <p className="mt-6 text-center text-xs leading-6 text-white/40">
+        <p className="mt-6 text-center text-xs leading-6 text-white/50">
           Questions about your order?{" "}
           <Link
             href="/contact"

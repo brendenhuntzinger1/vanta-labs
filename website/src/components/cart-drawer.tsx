@@ -405,7 +405,7 @@ export function CartDrawer() {
         {/* Header */}
         <div className="flex items-center justify-between px-5 pt-5 pb-4 sm:px-6">
           <div>
-            <p className="text-[10px] uppercase tracking-[0.34em] text-zinc-500">Cart</p>
+            <p className="text-[10px] uppercase tracking-[0.34em] text-zinc-400">Cart</p>
             <h2 id="cart-drawer-title" className="mt-1.5 text-[1.65rem] font-semibold leading-none tracking-tight text-white">Your order</h2>
           </div>
           <button
@@ -426,10 +426,10 @@ export function CartDrawer() {
           {isHydrated && items.length === 0 ? (
             <div className="flex flex-col items-center rounded-[1.5rem] border border-white/[0.06] bg-white/[0.02] px-6 py-14 text-center">
               <div className="flex h-14 w-14 items-center justify-center rounded-full border border-white/[0.08] bg-white/[0.03]">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" className="h-6 w-6 text-zinc-500"><path d="M6 6h15l-1.5 9h-12z" strokeLinejoin="round" /><circle cx="9" cy="20" r="1.4" /><circle cx="18" cy="20" r="1.4" /><path d="M6 6 5 3H3" strokeLinecap="round" /></svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" className="h-6 w-6 text-zinc-400"><path d="M6 6h15l-1.5 9h-12z" strokeLinejoin="round" /><circle cx="9" cy="20" r="1.4" /><circle cx="18" cy="20" r="1.4" /><path d="M6 6 5 3H3" strokeLinecap="round" /></svg>
               </div>
               <p className="mt-5 text-lg font-medium text-white">Your cart is empty</p>
-              <p className="mt-2 text-sm text-zinc-500">Add products to begin building an order.</p>
+              <p className="mt-2 text-sm text-zinc-400">Add products to begin building an order.</p>
               <Link
                 href="/products"
                 onClick={closeCart}
@@ -464,7 +464,7 @@ export function CartDrawer() {
                         <p className="text-sm text-zinc-400">
                           You&apos;re <span className="font-semibold text-white">${shippingProgress.amountToFreeShipping.toFixed(2)}</span> away from
                         </p>
-                        <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-zinc-500 tabular-nums">{Math.round(shippingProgress.progressPercentage)}%</span>
+                        <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-zinc-400 tabular-nums">{Math.round(shippingProgress.progressPercentage)}%</span>
                       </div>
                       <p className="mt-0.5 text-xs font-semibold uppercase tracking-[0.24em] text-[color:var(--accent-gold)]">Free shipping</p>
                       <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
@@ -501,7 +501,7 @@ export function CartDrawer() {
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
                               <h3 className="truncate text-sm font-semibold text-white">{item.name}</h3>
-                              {subtitle ? <p className="mt-0.5 truncate text-xs text-zinc-500">{subtitle}</p> : null}
+                              {subtitle ? <p className="mt-0.5 truncate text-xs text-zinc-400">{subtitle}</p> : null}
                             </div>
                             <div className="flex-shrink-0 text-right">
                               {activeRate > 0 ? (
@@ -541,7 +541,7 @@ export function CartDrawer() {
                               type="button"
                               onClick={() => { haptic(12); removeFromCart(item.key); }}
                               aria-label={`Remove ${item.name} from cart`}
-                              className="vl-focus-ring -mx-1 inline-flex min-h-11 items-center rounded-md px-3 py-1.5 text-xs text-zinc-500 transition hover:text-rose-300 sm:mx-0 sm:min-h-0 sm:px-2"
+                              className="vl-focus-ring -mx-1 inline-flex min-h-11 items-center rounded-md px-3 py-1.5 text-xs text-zinc-400 transition hover:text-rose-300 sm:mx-0 sm:min-h-0 sm:px-2"
                             >
                               Remove
                             </button>
@@ -688,12 +688,12 @@ export function CartDrawer() {
                   className="vl-focus-ring flex w-full items-center justify-between px-4 py-3.5 text-left"
                 >
                   <span className="text-sm text-zinc-300">Have a referral or coupon code?</span>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={`h-4 w-4 text-zinc-500 transition-transform duration-300 ${codesOpen ? "rotate-180" : ""}`}><path d="m6 9 6 6 6-6" /></svg>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={`h-4 w-4 text-zinc-400 transition-transform duration-300 ${codesOpen ? "rotate-180" : ""}`}><path d="m6 9 6 6 6-6" /></svg>
                 </button>
                 <Collapse open={codesOpen}>
                   <div className="space-y-4 px-4 pb-4">
                     <div>
-                      <label className="mb-1.5 block text-[10px] uppercase tracking-[0.24em] text-zinc-500">Referral code</label>
+                      <label className="mb-1.5 block text-[10px] uppercase tracking-[0.24em] text-zinc-400">Referral code</label>
                       <div className="flex gap-2">
                         <input
                           type="text"
@@ -719,13 +719,13 @@ export function CartDrawer() {
                               a percentage. At 390px it wraps, and without flex-shrink-0 the
                               Remove button was squeezed onto its own wrapped characters. */}
                           <span className={referralNeedsMoreToQualify ? "text-amber-300/80" : undefined}>{referralStatusText}</span>
-                          <button type="button" onClick={clearReferralCode} className="flex-shrink-0 text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
+                          <button type="button" onClick={clearReferralCode} className="flex-shrink-0 text-zinc-400 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
                         </p>
                       ) : null}
                     </div>
 
                     <div>
-                      <label className="mb-1.5 block text-[10px] uppercase tracking-[0.24em] text-zinc-500">Coupon code</label>
+                      <label className="mb-1.5 block text-[10px] uppercase tracking-[0.24em] text-zinc-400">Coupon code</label>
                       <div className="flex gap-2">
                         <input
                           type="text"
@@ -753,7 +753,7 @@ export function CartDrawer() {
                         <p className="mt-1.5 flex items-center justify-between text-xs text-zinc-400">
                           {/* Offer size shown only while the coupon controls the price. */}
                           <span>{shownCouponOutcome?.controlsPrice ? couponHeadline(couponDetails, formatCartCurrency) : couponDetails.code}</span>
-                          <button type="button" onClick={clearCouponCode} className="text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
+                          <button type="button" onClick={clearCouponCode} className="text-zinc-400 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
                         </p>
                       ) : null}
                     </div>
@@ -774,7 +774,7 @@ export function CartDrawer() {
                     />
                     <span className="min-w-0 flex-1">
                       <span className="block text-sm font-medium text-white">Shipping protection</span>
-                      <span className="block text-xs text-zinc-500">Protect against loss, theft, or damage.</span>
+                      <span className="block text-xs text-zinc-400">Protect against loss, theft, or damage.</span>
                     </span>
                     <span className="flex-shrink-0 text-sm font-medium text-zinc-300 tabular-nums">+{formatCartCurrency(calculateShippingProtectionFee(subtotal, shippingProtectionPercent))}</span>
                   </label>
@@ -782,12 +782,12 @@ export function CartDrawer() {
                     type="button"
                     onClick={() => setProtectionOpen((o) => !o)}
                     aria-expanded={protectionOpen}
-                    className="vl-focus-ring px-4 pb-1 text-[11px] text-zinc-500 underline-offset-2 hover:text-zinc-300"
+                    className="vl-focus-ring px-4 pb-1 text-[11px] text-zinc-400 underline-offset-2 hover:text-zinc-300"
                   >
                     {protectionOpen ? "Hide details" : "View details"}
                   </button>
                   <Collapse open={protectionOpen}>
-                    <p className="px-4 pb-4 pt-1 text-xs leading-relaxed text-zinc-500">
+                    <p className="px-4 pb-4 pt-1 text-xs leading-relaxed text-zinc-400">
                       Store-backed coverage: we&apos;ll replace or refund items lost, stolen, or damaged in transit — no claim runaround.{" "}
                       <a href="/legal/shipping" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-zinc-300">See terms</a>
                     </p>
@@ -802,7 +802,7 @@ export function CartDrawer() {
                   className={`rounded-2xl border bg-white/[0.02] transition-all duration-300 ${highlightConfirm && !allAcknowledged ? "border-[color:var(--accent-gold)]/60 shadow-[0_0_0_3px_rgba(199,174,94,0.18)]" : allAcknowledged ? "border-white/[0.06]" : "border-[color:var(--accent-gold)]/25"}`}
                 >
                   <div className="flex items-center justify-between px-4 pt-3.5 pb-1">
-                    <p className="text-[10px] uppercase tracking-[0.24em] text-zinc-500">Required to purchase</p>
+                    <p className="text-[10px] uppercase tracking-[0.24em] text-zinc-400">Required to purchase</p>
                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums ${allAcknowledged ? "bg-emerald-400/12 text-emerald-300" : "bg-[color:var(--accent-gold)]/12 text-[color:var(--accent-gold)]"}`}>
                       {acknowledgedCount} of {REQUIRED_CONFIRMATIONS.length}
                     </span>
@@ -821,13 +821,13 @@ export function CartDrawer() {
                           <button
                             type="button"
                             onClick={(e) => { e.preventDefault(); toggleLegal(item.key); }}
-                            className="vl-focus-ring flex-shrink-0 text-[11px] text-zinc-500 underline-offset-2 hover:text-zinc-300"
+                            className="vl-focus-ring flex-shrink-0 text-[11px] text-zinc-400 underline-offset-2 hover:text-zinc-300"
                           >
                             {openLegal[item.key] ? "Hide" : "View details"}
                           </button>
                         </label>
                         <Collapse open={Boolean(openLegal[item.key])}>
-                          <p className="pl-8 pr-1 pt-2 text-xs leading-relaxed text-zinc-500">
+                          <p className="pl-8 pr-1 pt-2 text-xs leading-relaxed text-zinc-400">
                             {item.body}
                             {item.policyHref ? (
                               <>
@@ -880,7 +880,7 @@ export function CartDrawer() {
                       <dt>
                         {line.name}{line.variantLabel ? ` · ${line.variantLabel}` : ""}
                         {line.quantity > 1 ? ` × ${line.quantity}` : ""}{" "}
-                        <span className="text-zinc-500">(gift)</span>
+                        <span className="text-zinc-400">(gift)</span>
                       </dt>
                       <dd className="tabular-nums">Free</dd>
                     </div>
@@ -929,7 +929,7 @@ export function CartDrawer() {
                 ) : null}
                 <div className="my-4 h-px bg-white/[0.06]" />
                 <div className="flex items-end justify-between">
-                  <span className="text-xs uppercase tracking-[0.24em] text-zinc-500">Total</span>
+                  <span className="text-xs uppercase tracking-[0.24em] text-zinc-400">Total</span>
                   <span className="text-[2rem] font-semibold leading-none tracking-tight text-white tabular-nums" data-testid="cart-total">{formatCartCurrency(shownTotal)}</span>
                 </div>
                 <p className="mt-3 text-[11px] leading-relaxed text-zinc-600">
@@ -948,12 +948,12 @@ export function CartDrawer() {
                   sales tax and shipping once it has the address. Labelling it
                   "Total" there would read as a bait-and-switch when Apple Pay
                   shows a higher number. */}
-              <span className="text-xs uppercase tracking-[0.24em] text-zinc-500">{showExpressSlot ? "Subtotal" : "Total"}</span>
+              <span className="text-xs uppercase tracking-[0.24em] text-zinc-400">{showExpressSlot ? "Subtotal" : "Total"}</span>
               <span className="text-xl font-semibold text-white tabular-nums" data-testid="cart-sticky-total">{formatCartCurrency(shownTotal)}</span>
             </div>
 
             {showExpressSlot ? (
-              <p className="mb-3 flex items-start gap-1.5 text-[11px] leading-snug text-zinc-500">
+              <p className="mb-3 flex items-start gap-1.5 text-[11px] leading-snug text-zinc-400">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mt-[0.15rem] h-3.5 w-3.5 flex-shrink-0" aria-hidden>
                   <circle cx="12" cy="12" r="9" /><path d="M12 16v-4M12 8h.01" />
                 </svg>
@@ -1003,7 +1003,7 @@ export function CartDrawer() {
                 <button
                   type="button"
                   onClick={() => { clearReferralCode(); setReferralInput(""); }}
-                  className="vl-focus-ring w-full py-1 text-center text-[11px] text-zinc-500 hover:text-zinc-300"
+                  className="vl-focus-ring w-full py-1 text-center text-[11px] text-zinc-400 hover:text-zinc-300"
                 >
                   Remove code
                 </button>

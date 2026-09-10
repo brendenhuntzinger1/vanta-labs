@@ -166,7 +166,7 @@ function FaqAccordion({ items }: { items?: ProductFaqItem[] }) {
               onClick={() => setOpenIndex(open ? null : idx)}
             >
               <span className="font-medium">{item.question}</span>
-              <span className={`shrink-0 text-white/45 transition-transform duration-200 ${open ? "rotate-180" : ""}`}>▼</span>
+              <span className={`shrink-0 text-white/50 transition-transform duration-200 ${open ? "rotate-180" : ""}`}>▼</span>
             </button>
             {/* role="region" is what the ARIA authoring practices ask for on a
                 disclosure's panel, and it is safe at this size — the guidance
@@ -441,7 +441,7 @@ export function ProductDetailClient({
                   />
                 ) : (
                   <div className="flex h-full items-center justify-center">
-                    <div className="border border-white/[0.08] px-4 py-1.5 text-xs uppercase tracking-[0.2em] text-white/45">Image pending</div>
+                    <div className="border border-white/[0.08] px-4 py-1.5 text-xs uppercase tracking-[0.2em] text-white/50">Image pending</div>
                   </div>
                 )}
               </div>
@@ -456,13 +456,13 @@ export function ProductDetailClient({
               <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-3 rounded-[14px] border border-white/[0.06] bg-white/[0.02] px-5 py-4">
                 {selectedPurity && selectedPurity !== "Pending" ? (
                   <div>
-                    <p className="text-[10px] uppercase tracking-[0.2em] text-white/35">Purity</p>
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-white/50">Purity</p>
                     <p className="mt-1 text-[0.9375rem] font-semibold text-white">{selectedPurity}</p>
                   </div>
                 ) : null}
                 {selectedBatchNumber ? (
                   <div>
-                    <p className="text-[10px] uppercase tracking-[0.2em] text-white/35">Batch</p>
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-white/50">Batch</p>
                     <p className="mt-1 font-mono text-[0.8125rem] text-white/85">{selectedBatchNumber}</p>
                   </div>
                 ) : null}
@@ -547,7 +547,7 @@ export function ProductDetailClient({
                 >
                   <p className="text-sm leading-7 text-[#a3a3a3]">{product.longDescription ?? product.description}</p>
                   {product.molecularFormula && (
-                    <p className="mt-4 text-xs text-white/45">Molecular Formula: <span className="text-white">{product.molecularFormula}</span></p>
+                    <p className="mt-4 text-xs text-white/50">Molecular Formula: <span className="text-white">{product.molecularFormula}</span></p>
                   )}
                   <div className="mt-5 border border-white/[0.08] bg-[#141414] p-4 text-xs leading-6 text-[#a3a3a3]">
                     <strong className="text-white">Research Use Only.</strong> This compound is intended strictly for laboratory research purposes. Not for human or veterinary use.
@@ -578,14 +578,14 @@ export function ProductDetailClient({
                       .filter(([, value]) => value && String(value).trim().length > 0)
                       .map(([label, value]) => (
                         <div key={label} className="flex justify-between gap-3 border-b border-white/[0.06] pb-2 last:border-0">
-                          <dt className="text-white/45">{label}</dt>
+                          <dt className="text-white/50">{label}</dt>
                           <dd className="min-w-0 break-words text-right font-medium text-white">{value}</dd>
                         </div>
                       ))}
                   </dl>
                   {product.peptideSequence && product.peptideSequence.trim().length > 0 && (
                     <div className="mt-4 border-t border-white/[0.06] pt-4">
-                      <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Amino Acid Sequence</p>
+                      <p className="text-[10px] uppercase tracking-[0.2em] text-white/50">Amino Acid Sequence</p>
                       <div className="mt-2 overflow-x-auto">
                         <code className="block whitespace-pre-wrap break-all font-mono text-xs leading-6 text-white">{product.peptideSequence}</code>
                       </div>
@@ -643,11 +643,11 @@ export function ProductDetailClient({
                   ) : null}
                   <div className="mt-5 grid gap-3 sm:grid-cols-2">
                     <div className="border border-white/[0.08] p-4">
-                      <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Purity</p>
+                      <p className="text-[10px] uppercase tracking-[0.2em] text-white/50">Purity</p>
                       <p className="mt-1.5 text-xl font-semibold text-white">{selectedPurity ?? "Pending"}</p>
                     </div>
                     <div className="border border-white/[0.08] p-4">
-                      <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Batch</p>
+                      <p className="text-[10px] uppercase tracking-[0.2em] text-white/50">Batch</p>
                       <p className="mt-1.5 text-sm font-medium text-white">{selectedBatchNumber}</p>
                     </div>
                   </div>
@@ -667,7 +667,7 @@ export function ProductDetailClient({
                       the newest sits first and the rest stay reachable. */}
                   {coaDocuments.length > 0 ? (
                     <div className="mt-6 border-t border-white/[0.08] pt-5">
-                      <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">
+                      <p className="text-[10px] uppercase tracking-[0.2em] text-white/50">
                         Published batch records
                       </p>
                       <ul className="mt-3 space-y-2">
@@ -678,7 +678,7 @@ export function ProductDetailClient({
                           >
                             <div className="min-w-0">
                               <p className="font-mono text-[13px] text-white">{doc.batchNumber}</p>
-                              <p className="mt-0.5 text-xs text-white/45">
+                              <p className="mt-0.5 text-xs text-white/50">
                                 {[doc.strength, doc.purity, formatCoaTestDate(doc.testDate), doc.labName]
                                   .filter(Boolean)
                                   .join(" · ") || "Certificate of Analysis"}
@@ -726,7 +726,7 @@ export function ProductDetailClient({
             <div className="vl2-lab-panel p-6 sm:p-7">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-[11px] uppercase tracking-[0.3em] text-white/45">{product.category}</p>
+                  <p className="text-[11px] uppercase tracking-[0.3em] text-white/50">{product.category}</p>
                   <h1 className="vl2-serif mt-2 text-3xl text-white">{product.name}</h1>
                 </div>
                 {/* Only shown when inventory enforcement is on and stock is sold out —
@@ -745,7 +745,7 @@ export function ProductDetailClient({
                   named `bpc-157-10mg` shows it to every visitor. The harness
                   seeds exactly that shape, which is how it surfaced. */}
               {doseFromSlug && (
-                <p className="mt-1 text-xs text-white/45">
+                <p className="mt-1 text-xs text-white/50">
                   {product.labName ? `${doseFromSlug} · ${product.labName}` : doseFromSlug}
                 </p>
               )}
@@ -777,7 +777,7 @@ export function ProductDetailClient({
                   somebody tapped it. The badge above says "Research Use Only";
                   this says what that means, next to Add to Cart, without a
                   tap. */}
-              <p className="mt-2 text-[11px] leading-5 text-white/40">{RESEARCH_USE_SENTENCE}</p>
+              <p className="mt-2 text-[11px] leading-5 text-white/50">{RESEARCH_USE_SENTENCE}</p>
 
               {/* Trust row — third-party proof + guarantee, right next to the
                   buy decision (not hidden inside a tab). */}
@@ -845,7 +845,7 @@ export function ProductDetailClient({
               <div className="mt-6 flex items-end gap-3">
                 <p className="text-4xl font-semibold text-white">{selectedPrice}</p>
                 {selectedCompareAtPrice && (
-                  <p className="mb-1 text-base text-white/45 line-through">{selectedCompareAtPrice}</p>
+                  <p className="mb-1 text-base text-white/50 line-through">{selectedCompareAtPrice}</p>
                 )}
               </div>
 

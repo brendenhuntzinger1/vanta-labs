@@ -69,13 +69,13 @@ export default async function ArticlePage({ params }: { params: Promise<{ slug: 
       />
       <SiteHeaderV2 />
       <main className="vl-nav-clearance mx-auto max-w-3xl px-6 pb-24 pt-32 lg:px-12">
-        <Link href="/research" className="text-xs text-white/45 transition hover:text-white">← Research Library</Link>
+        <Link href="/research" className="text-xs text-white/50 transition hover:text-white">← Research Library</Link>
         <p className="vl2-eyebrow mt-6">Research Library</p>
         <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">{article.title}</h1>
         <p className="mt-2 text-xs text-white/70">Updated: {article.updated}</p>
         <div className="mt-8 space-y-4">{renderBody(article.body)}</div>
 
-        <div className="mt-12 rounded-xl border border-white/10 bg-white/[0.02] p-5 text-xs leading-6 text-white/45">
+        <div className="mt-12 rounded-xl border border-white/10 bg-white/[0.02] p-5 text-xs leading-6 text-white/50">
           For laboratory research use only. Not for human or animal use. This content is educational and does not
           constitute medical advice.
         </div>

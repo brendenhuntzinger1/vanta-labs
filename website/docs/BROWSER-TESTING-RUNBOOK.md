@@ -761,6 +761,59 @@ under "these are NOT verified". Read them. A skip is a check that did not run �
 treating it as a pass is precisely the false confidence these scripts exist to
 remove.
 
+### What `qa:sweep`'s contrast numbers mean, and what they used to hide
+
+A DOM contrast probe fails in three directions, and this one has been wrong in
+all three. Recorded here because each looked like a site defect and was not.
+
+**A colour it cannot parse reads as black.** Tailwind 4 emits `oklab()`, and a
+regex that scrapes the first three numbers out of it reads white-at-70% as
+`rgb(0,0,0)`. Fifteen "failures" on text sitting at about 15:1. Fixed by
+painting the colour to a canvas and reading the pixel back, which handles every
+syntax the browser supports, now and later.
+
+**A background it cannot see reads as the page behind it.** `background-clip:
+text` and a gradient `background` both leave `backgroundColor` transparent, so
+the walk up the tree sails past them. That reported the /products `h1` — a white
+gradient — as the worst failure on the site, and later reported the BUY BUTTON,
+`#111` on a white-to-`#d9d9d9` gradient at about 15:1, as **1.03:1**. Gradient
+backgrounds are now composited: both extreme stops are built and the worse ratio
+wins, so a gradient passes only if it passes at its least favourable end. Text
+painted THROUGH a gradient still cannot be judged from the DOM and is reported
+as not-assessable, which is not the same as passing.
+
+Bailing out on any `background-image` was the first attempt at that and cost
+more than it saved: this site paints most panels with a barely-there
+`linear-gradient(165deg, rgba(255,255,255,0.04), …)`, so bailing marked
+twenty-seven perfectly assessable elements unmeasurable across eight routes.
+Compositing them recovered twenty-six and immediately found a real defect none
+of them had ever been judged for — the COA library's "Documentation Pending"
+badge at 4.28:1.
+
+**Decoration reads as body text.** /research draws a ghosted serif ordinal
+behind each card at 12% white and /wholesale a ghosted wordmark where a photo
+would go. Both are `aria-hidden`, both are 1.15–1.35:1 by design, and WCAG 1.4.3
+names pure decoration as incidental. The probe now skips what is out of the
+accessibility tree, the way axe-core does. Lifting those to 3:1 would not fix an
+accessibility defect; it would delete a design element and call that a fix.
+
+**And the report truncated.** The probe kept four failures per route and the
+report printed two, so a route with 29 and a route with 2 read identically. The
+audit chased nine findings; measuring exhaustively found **one hundred and
+thirty-one**, across the product page, research, cart, checkout, the COA
+library, membership and every page of the account area. The count now travels
+with the sample. If you are checking contrast by hand, measure everything and
+count it — do not trust a capped list.
+
+The floor this site holds, measured rather than assumed: on backgrounds from
+`rgb(5)` to about `rgb(42)` (which is `bg-white/5` over `#111`, the lightest
+panel composited anywhere), `text-white/45` is 4.36:1 and `text-white/50` is
+4.79:1. So **/50 is the minimum for body copy**, `text-zinc-400` replaces
+`text-zinc-500` (3.60:1), and accent-gold text sits at `/75`. `src/lib/
+customer-text-meets-aa-contrast.test.ts` holds that line in under a second
+without a browser, including the `color: rgba(255,255,255,…)` declarations in
+`globals.css` that no class-based check can see.
+
 ### If qa:journey fails at signup
 
 Its own signup is being throttled. Each run presents a distinct client IP

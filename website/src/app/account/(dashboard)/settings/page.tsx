@@ -22,7 +22,7 @@ export default async function AccountSettingsPage() {
   return (
     <div className="space-y-5">
       <header className="vl-fade-up">
-        <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Account</p>
+        <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-400">Account</p>
         <h1 className="vl2-serif mt-1.5 text-3xl text-white sm:text-4xl">Settings</h1>
         <p className="mt-2 text-sm text-zinc-400">Manage your profile, security, addresses, payments, notifications, and privacy.</p>
       </header>

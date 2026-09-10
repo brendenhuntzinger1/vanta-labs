@@ -33,7 +33,7 @@ export function AdsSectionTabs({ sections, initial }: { sections: AdsSection[]; 
               onClick={() => setActive(section.id)}
               aria-current={selected ? "page" : undefined}
               className={`rounded-lg px-3 py-2 text-xs transition ${
-                selected ? "bg-white/[0.08] text-white" : "text-white/45 hover:text-white/80"
+                selected ? "bg-white/[0.08] text-white" : "text-white/50 hover:text-white/80"
               }`}
             >
               {section.label}

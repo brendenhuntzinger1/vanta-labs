@@ -46,7 +46,7 @@ function currency(value: number) {
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="border border-white/10 p-4">
-      <p className="text-[11px] uppercase tracking-[0.18em] text-white/45">{label}</p>
+      <p className="text-[11px] uppercase tracking-[0.18em] text-white/50">{label}</p>
       <p className="mt-2 text-2xl text-white sm:text-3xl">{value}</p>
     </div>
   );
@@ -319,7 +319,7 @@ export function PartnerProgramLanding({ initialStats, terms }: { initialStats: P
                       <input type="text" inputMode="numeric" value={followerCount} onChange={(event) => setFollowerCount(event.target.value.replace(/[^\d,]/g, ""))} placeholder="e.g. 12,500" className="vl-input w-full px-4 py-3" />
                     </label>
                   </div>
-                  <p className="mt-3 text-xs text-white/35">Your preferred code is used if it&apos;s available — otherwise we&apos;ll assign one and an admin can adjust it on approval.</p>
+                  <p className="mt-3 text-xs text-white/50">Your preferred code is used if it&apos;s available — otherwise we&apos;ll assign one and an admin can adjust it on approval.</p>
                   <button
                     type="button"
                     disabled={loading || !firstName.trim() || !lastName.trim() || !applicantPhone.trim()}

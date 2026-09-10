@@ -30,14 +30,14 @@ type Status = { kind: "idle" | "sending" } | { kind: "sent" } | { kind: "error";
 // than fields, which is the look a commercial enquiry form should avoid.
 const field =
   "w-full rounded-lg border border-white/[0.10] bg-[#0f0f0f] px-4 py-3 text-sm text-white " +
-  "placeholder:text-white/25 transition outline-none " +
+  "placeholder:text-white/50 transition outline-none " +
   "focus:border-[color:var(--accent-gold)]/50 focus:ring-2 focus:ring-[color:var(--accent-gold)]/20";
 
 function Label({ htmlFor, children, required }: { htmlFor: string; children: React.ReactNode; required?: boolean }) {
   return (
-    <label htmlFor={htmlFor} className="mb-2 block text-[11px] uppercase tracking-[0.16em] text-white/45">
+    <label htmlFor={htmlFor} className="mb-2 block text-[11px] uppercase tracking-[0.16em] text-white/50">
       {children}
-      {required ? <span className="ml-1 text-[color:var(--accent-gold)]/70">*</span> : null}
+      {required ? <span className="ml-1 text-[color:var(--accent-gold)]/75">*</span> : null}
     </label>
   );
 }
@@ -203,7 +203,7 @@ export function WholesaleForm() {
         {status.kind === "sending" ? "Sending…" : "Request wholesale pricing"}
       </button>
 
-      <p className="text-center text-[11px] leading-5 text-white/30">
+      <p className="text-center text-[11px] leading-5 text-white/50">
         Submitting sends your details to the Vanta Labs team. Pricing is issued after review — nothing is ordered or
         charged here.
       </p>

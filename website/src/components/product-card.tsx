@@ -82,7 +82,7 @@ export function ProductCard({
             </span>
           ) : null}
           {soldOut ? (
-            <span className="absolute right-3 top-3 z-10 rounded-full border border-white/[0.09] bg-black/60 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-white/45 backdrop-blur-md">
+            <span className="absolute right-3 top-3 z-10 rounded-full border border-white/[0.09] bg-black/60 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-white/50 backdrop-blur-md">
               Out of Stock
             </span>
           ) : null}
@@ -107,7 +107,7 @@ export function ProductCard({
 
         <div className="flex flex-1 flex-col p-3 sm:p-5">
           <div className="flex items-center justify-between gap-2">
-            <p className="vl2-eyebrow text-[10px] text-white/45">{product.category}</p>
+            <p className="vl2-eyebrow text-[10px] text-white/50">{product.category}</p>
           </div>
 
           <h3 className="mt-1.5 line-clamp-2 text-[0.9375rem] font-medium leading-snug tracking-[-0.005em] text-white sm:mt-2 sm:text-xl">{product.name}</h3>
@@ -251,7 +251,7 @@ export function ProductCard({
         {!soldOut && showMemberPricing && memberQuote && !isMember ? (
           <Link
             href="/membership"
-            className="vl-focus-ring col-span-2 -mb-1 inline-flex items-center justify-center gap-1 py-1 text-[11px] text-[color:var(--accent-gold)]/70 transition hover:text-[color:var(--accent-gold)]"
+            className="vl-focus-ring col-span-2 -mb-1 inline-flex items-center justify-center gap-1 py-1 text-[11px] text-[color:var(--accent-gold)]/75 transition hover:text-[color:var(--accent-gold)]"
           >
             Become a member &amp; save {formatCartCurrency(memberQuote.savings)} today →
           </Link>

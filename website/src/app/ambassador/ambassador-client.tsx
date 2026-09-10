@@ -199,7 +199,7 @@ export function AmbassadorPageClient({ terms }: { terms: PublicProgramTerms }) {
                   placeholder="you@domain.com"
                 />
               </label>
-              <p className="text-sm leading-6 text-white/45 sm:col-span-2">
+              <p className="text-sm leading-6 text-white/50 sm:col-span-2">
                 You&apos;ll add your platform, audience, and payout details in the partner portal after creating your
                 account.
               </p>

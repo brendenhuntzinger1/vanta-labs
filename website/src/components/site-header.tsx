@@ -101,7 +101,7 @@ export function SiteHeader() {
                     className="vl-focus-ring block rounded-xl px-3 py-2.5 transition hover:bg-white/8"
                   >
                     <span className="block text-sm font-medium text-zinc-100">{link.label}</span>
-                    <span className="block text-xs text-zinc-500">{link.detail}</span>
+                    <span className="block text-xs text-zinc-400">{link.detail}</span>
                   </Link>
                 ))}
               </div>
@@ -209,7 +209,7 @@ export function SiteHeader() {
             </form>
 
             <div className="flex flex-col gap-2">
-              <p className="vl-eyebrow px-2 text-[10px] text-zinc-500">Shop</p>
+              <p className="vl-eyebrow px-2 text-[10px] text-zinc-400">Shop</p>
               {SHOP_LINKS.map((link) => (
                 <Link
                   key={link.href}

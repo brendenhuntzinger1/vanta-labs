@@ -188,7 +188,7 @@ function SidebarLink({ item, pathname }: { item: NavItem; pathname: string }) {
           : "border border-transparent text-zinc-400 hover:bg-white/[0.04] hover:text-white"
       }`}
     >
-      <span className={active ? "text-cyan-200" : "text-zinc-500 transition-colors duration-200 group-hover:text-white"}>
+      <span className={active ? "text-cyan-200" : "text-zinc-400 transition-colors duration-200 group-hover:text-white"}>
         <item.icon className="h-5 w-5" />
       </span>
       {item.label}
@@ -268,7 +268,7 @@ function BottomTab({ item, pathname }: { item: NavItem; pathname: string }) {
       href={item.href}
       aria-current={active ? "page" : undefined}
       className={`vl-focus-ring flex min-h-[52px] flex-1 flex-col items-center justify-center gap-1 rounded-xl transition-colors duration-200 ${
-        active ? "text-cyan-200" : "text-zinc-500"
+        active ? "text-cyan-200" : "text-zinc-400"
       }`}
     >
       <item.icon className="h-[22px] w-[22px]" />
@@ -336,7 +336,7 @@ function MobileNav({
             onClick={() => setSheetOpen(true)}
             aria-haspopup="dialog"
             aria-expanded={sheetOpen}
-            className="vl-focus-ring flex min-h-[52px] flex-1 flex-col items-center justify-center gap-1 rounded-xl text-zinc-500 transition-colors duration-200"
+            className="vl-focus-ring flex min-h-[52px] flex-1 flex-col items-center justify-center gap-1 rounded-xl text-zinc-400 transition-colors duration-200"
           >
             <IconMore className="h-[22px] w-[22px]" />
             <span className="text-[10px] font-medium tracking-wide">More</span>

@@ -98,7 +98,7 @@ export default function PartnerPendingPage() {
         <h1 className="vl-display mt-3 text-3xl font-semibold text-white sm:text-4xl">{copy.title}</h1>
         <p className="mt-4 text-sm text-zinc-300 sm:text-base">{copy.body}</p>
         {status === "pending" ? (
-          <p className="mt-3 text-sm text-zinc-500">
+          <p className="mt-3 text-sm text-zinc-400">
             While waiting, you can still browse products and prepare content for your launch.
           </p>
         ) : null}

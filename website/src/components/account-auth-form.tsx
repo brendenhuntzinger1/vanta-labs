@@ -1077,7 +1077,7 @@ export function AccountAuthForm() {
 
             <div className="my-6 flex items-center gap-3" aria-hidden="true">
               <span className="h-px flex-1 bg-white/[0.06]" />
-              <span className="text-[0.6875rem] uppercase tracking-[0.2em] text-white/30">or</span>
+              <span className="text-[0.6875rem] uppercase tracking-[0.2em] text-white/50">or</span>
               <span className="h-px flex-1 bg-white/[0.06]" />
             </div>
           </>
@@ -1128,7 +1128,7 @@ export function AccountAuthForm() {
             as the route back to their own account and land on a password form
             they never set a password for. "Sign in with email" names the door
             it actually opens, which is the whole point of having three. */}
-        <p className="mt-5 text-center text-[0.875rem] text-white/45">
+        <p className="mt-5 text-center text-[0.875rem] text-white/50">
           Already have an account?{" "}
           <button
             type="button"
@@ -1175,7 +1175,7 @@ export function AccountAuthForm() {
           </label>
         </div>
 
-        <p className="mt-6 text-center text-[0.75rem] leading-5 text-white/35">
+        <p className="mt-6 text-center text-[0.75rem] leading-5 text-white/50">
           By continuing, you agree to our{" "}
           <Link href="/legal/terms" className="py-3.5 underline underline-offset-2 decoration-white/20 transition-colors hover:text-white/60">Terms</Link>
           {" "}and{" "}
@@ -1237,14 +1237,14 @@ export function AccountAuthForm() {
             <button
               type="button"
               onClick={() => { setLoginMethod("email"); setOtpSent(false); resetTransientState(); }}
-              className={`rounded-[11px] px-3 py-2.5 text-[0.8125rem] font-medium transition-colors duration-200 ${loginMethod === "email" ? "bg-white/[0.10] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.10)]" : "text-white/45 hover:text-white/75"}`}
+              className={`rounded-[11px] px-3 py-2.5 text-[0.8125rem] font-medium transition-colors duration-200 ${loginMethod === "email" ? "bg-white/[0.10] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.10)]" : "text-white/50 hover:text-white/75"}`}
             >
               Email
             </button>
             <button
               type="button"
               onClick={() => { setLoginMethod("phone"); resetTransientState(); }}
-              className={`rounded-[11px] px-3 py-2.5 text-[0.8125rem] font-medium transition-colors duration-200 ${loginMethod === "phone" ? "bg-white/[0.10] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.10)]" : "text-white/45 hover:text-white/75"}`}
+              className={`rounded-[11px] px-3 py-2.5 text-[0.8125rem] font-medium transition-colors duration-200 ${loginMethod === "phone" ? "bg-white/[0.10] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.10)]" : "text-white/50 hover:text-white/75"}`}
             >
               Phone
             </button>
@@ -1256,7 +1256,7 @@ export function AccountAuthForm() {
             <label className="block">
               <span className="mb-2 block text-[0.8125rem] font-medium text-white/70">Email</span>
               <span className="relative block">
-                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="pointer-events-none absolute left-4 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-white/35">
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="pointer-events-none absolute left-4 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-white/50">
                   <rect x="2.5" y="4.5" width="19" height="15" rx="2.5" />
                   <path d="m3 6.5 9 6 9-6" />
                 </svg>
@@ -1274,7 +1274,7 @@ export function AccountAuthForm() {
             <label className="block">
               <span className="mb-2 block text-[0.8125rem] font-medium text-white/70">Password</span>
               <span className="relative block">
-                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="pointer-events-none absolute left-4 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-white/35">
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="pointer-events-none absolute left-4 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-white/50">
                   <rect x="4" y="10.5" width="16" height="10" rx="2.5" />
                   <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
                 </svg>
@@ -1292,7 +1292,7 @@ export function AccountAuthForm() {
                   onClick={() => setShowPassword((current) => !current)}
                   aria-label={showPassword ? "Hide password" : "Show password"}
                   aria-pressed={showPassword}
-                  className="vl-focus-ring absolute right-1.5 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-[10px] text-white/40 transition-colors duration-200 hover:text-white/80"
+                  className="vl-focus-ring absolute right-1.5 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-[10px] text-white/50 transition-colors duration-200 hover:text-white/80"
                 >
                   <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="h-[18px] w-[18px]">
                     <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />
@@ -1334,7 +1334,7 @@ export function AccountAuthForm() {
                 />
               </label>
             ) : (
-              <p className="text-[0.8125rem] leading-5 text-white/45">No password needed — we&apos;ll text you a 6-digit code to sign in.</p>
+              <p className="text-[0.8125rem] leading-5 text-white/50">No password needed — we&apos;ll text you a 6-digit code to sign in.</p>
             )}
           </>
         ) : null}
@@ -1384,7 +1384,7 @@ export function AccountAuthForm() {
               className="vl-auth-check mt-0.5"
               data-testid="signup-marketing-opt-in"
             />
-            <span>Email me product news, restocks and offers. <span className="text-white/40">Optional — unsubscribe anytime.</span></span>
+            <span>Email me product news, restocks and offers. <span className="text-white/50">Optional — unsubscribe anytime.</span></span>
           </label>
         </div>
       ) : null}
@@ -1450,7 +1450,7 @@ export function AccountAuthForm() {
         <div className="mt-7">
           <div className="flex items-center gap-3" aria-hidden="true">
             <span className="h-px flex-1 bg-white/[0.08]" />
-            <span className="text-[0.6875rem] uppercase tracking-[0.2em] text-white/35">or continue with</span>
+            <span className="text-[0.6875rem] uppercase tracking-[0.2em] text-white/50">or continue with</span>
             <span className="h-px flex-1 bg-white/[0.08]" />
           </div>
 
@@ -1527,7 +1527,7 @@ export function AccountAuthForm() {
               {/* Names only the providers actually on offer. Telling someone what
                   "Google or Apple" does with their data, on a screen showing one
                   button, describes a choice they were never given. */}
-              <p className="mt-4 text-[0.75rem] leading-5 text-white/40">
+              <p className="mt-4 text-[0.75rem] leading-5 text-white/50">
                 Signing in with{" "}
                 {isGoogleSignInEnabled() && isAppleSignInEnabled()
                   ? "Google or Apple"
@@ -1559,14 +1559,14 @@ export function AccountAuthForm() {
             setMode("portal");
             resetTransientState();
           }}
-          className="vl-focus-ring inline-flex min-h-6 items-center gap-1.5 rounded-[6px] text-[0.8125rem] text-white/40 transition-colors duration-200 hover:text-white/70"
+          className="vl-focus-ring inline-flex min-h-6 items-center gap-1.5 rounded-[6px] text-[0.8125rem] text-white/50 transition-colors duration-200 hover:text-white/70"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-3.5 w-3.5" aria-hidden="true">
             <path d="M19 12H5M11 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
           All sign-in options
         </button>
-        <p className="text-[0.875rem] text-white/45">
+        <p className="text-[0.875rem] text-white/50">
           {mode === "signup" ? "Already have an account?" : "New to Vanta Labs?"}{" "}
           <button
             type="button"
@@ -1595,7 +1595,7 @@ export function AccountAuthForm() {
           <p className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
             <Link
               href="/account/forgot-password"
-              className="vl-focus-ring inline-flex min-h-[36px] items-center rounded-[6px] px-1 text-[0.875rem] text-white/45 underline-offset-4 transition-colors duration-200 hover:text-white/80 hover:underline"
+              className="vl-focus-ring inline-flex min-h-[36px] items-center rounded-[6px] px-1 text-[0.875rem] text-white/50 underline-offset-4 transition-colors duration-200 hover:text-white/80 hover:underline"
             >
               Forgot your password?
             </Link>
@@ -1603,7 +1603,7 @@ export function AccountAuthForm() {
               type="button"
               onClick={handleResendConfirmation}
               disabled={loading}
-              className="vl-focus-ring inline-flex min-h-[36px] items-center rounded-[6px] px-1 text-[0.875rem] text-white/45 underline-offset-4 transition-colors duration-200 hover:text-white/80 hover:underline disabled:cursor-not-allowed disabled:opacity-60"
+              className="vl-focus-ring inline-flex min-h-[36px] items-center rounded-[6px] px-1 text-[0.875rem] text-white/50 underline-offset-4 transition-colors duration-200 hover:text-white/80 hover:underline disabled:cursor-not-allowed disabled:opacity-60"
             >
               Resend confirmation email
             </button>

@@ -54,7 +54,7 @@ export default async function ResearchLibraryPage() {
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
               <span className="vl2-eyebrow text-[10px] text-[color:var(--accent-gold)]">Start here</span>
               <span aria-hidden="true" className="h-px w-8 bg-white/15" />
-              <span className="text-[11px] uppercase tracking-[0.16em] text-white/35">{lead.minutes} min read</span>
+              <span className="text-[11px] uppercase tracking-[0.16em] text-white/50">{lead.minutes} min read</span>
             </div>
             <h2 className="vl2-serif mt-4 max-w-3xl text-[1.75rem] leading-[1.15] text-white transition-colors duration-200 group-hover:text-white sm:text-[2.25rem]">
               {lead.title}
@@ -77,7 +77,7 @@ export default async function ResearchLibraryPage() {
                   <span aria-hidden="true" className="vl2-serif text-[1.75rem] leading-none text-white/12">
                     {String(index + 2).padStart(2, "0")}
                   </span>
-                  <span className="text-[11px] uppercase tracking-[0.16em] text-white/30">{article.minutes} min</span>
+                  <span className="text-[11px] uppercase tracking-[0.16em] text-white/50">{article.minutes} min</span>
                 </div>
                 <h2 className="vl2-serif mt-5 text-[1.25rem] leading-[1.25] text-white">{article.title}</h2>
                 <p className="mt-3 flex-1 text-[0.875rem] leading-6 text-white/50">{article.excerpt}</p>
@@ -92,7 +92,7 @@ export default async function ResearchLibraryPage() {
           </div>
         ) : null}
 
-        <p className="mt-14 border-t border-white/[0.06] pt-6 text-[11px] uppercase tracking-[0.2em] text-white/25">
+        <p className="mt-14 border-t border-white/[0.06] pt-6 text-[11px] uppercase tracking-[0.2em] text-white/50">
           For laboratory research use only
         </p>
       </main>

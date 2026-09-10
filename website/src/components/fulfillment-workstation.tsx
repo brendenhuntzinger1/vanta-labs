@@ -249,18 +249,18 @@ export function FulfillmentWorkstation({
               key={h.id}
               className={`vl-panel rounded-xl p-4 ${h.id === "exceptions" && h.count > 0 ? "border-rose-500/30" : ""}`}
             >
-              <p className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">{h.label}</p>
+              <p className="text-[11px] uppercase tracking-[0.14em] text-zinc-400">{h.label}</p>
               <p className={`mt-1 font-mono text-3xl tabular-nums ${h.id === "exceptions" && h.count > 0 ? "text-rose-300" : "text-white"}`}>
                 {h.count}
               </p>
-              <p className="mt-1 text-xs leading-5 text-zinc-500">{h.hint}</p>
+              <p className="mt-1 text-xs leading-5 text-zinc-400">{h.hint}</p>
             </div>
           ))}
         </div>
         {/* The detailed pipeline, kept visible. Nothing was removed — this is
             the same data the four cards above summarise. */}
         <details className="mt-3">
-          <summary className="cursor-pointer text-xs text-zinc-500 hover:text-zinc-300">
+          <summary className="cursor-pointer text-xs text-zinc-400 hover:text-zinc-300">
             Detailed pipeline
           </summary>
           <div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-4">
@@ -298,7 +298,7 @@ export function FulfillmentWorkstation({
                   >
                     {order.orderNumber ?? order.orderId}
                   </Link>
-                  <span className="text-xs text-zinc-500">{order.customerName}</span>
+                  <span className="text-xs text-zinc-400">{order.customerName}</span>
                   {order.exceptions.map((reason) => (
                     <Pill key={reason} tone="crit">{reasonMap.get(reason)?.label ?? reason}</Pill>
                   ))}
@@ -380,7 +380,7 @@ export function FulfillmentWorkstation({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold text-white">Ready to Fulfill</h2>
-            <p className="mt-1 text-xs text-zinc-500">{ready.length} paid, eligible, unbatched.</p>
+            <p className="mt-1 text-xs text-zinc-400">{ready.length} paid, eligible, unbatched.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -437,12 +437,12 @@ export function FulfillmentWorkstation({
                     Priority
                   </span>
                 ) : null}
-                <span className="text-xs text-zinc-500">{order.customerName}</span>
+                <span className="text-xs text-zinc-400">{order.customerName}</span>
                 <span className="ml-auto text-xs text-zinc-600">{order.destination}</span>
               </label>
             </li>
           ))}
-          {ready.length === 0 ? <li className="text-xs text-zinc-500">Nothing waiting.</li> : null}
+          {ready.length === 0 ? <li className="text-xs text-zinc-400">Nothing waiting.</li> : null}
         </ul>
       </section>
 
@@ -491,7 +491,7 @@ export function FulfillmentWorkstation({
               </li>
             ))}
           </ul>
-          <p className="mt-3 text-[11px] text-zinc-500">
+          <p className="mt-3 text-[11px] text-zinc-400">
             Nothing on this screen spends money. Postage is bought in Shippo; every button here
             only reads, quotes or prints.
           </p>
@@ -515,7 +515,7 @@ export function FulfillmentWorkstation({
       {review ? (
         <section className="vl-panel vl-no-print rounded-xl p-5">
           <h2 className="text-sm font-semibold text-white">Label review</h2>
-          <p className="mt-1 text-xs text-zinc-500">
+          <p className="mt-1 text-xs text-zinc-400">
             Quoted, not bought. Nothing on this screen has spent anything.
           </p>
 
@@ -592,14 +592,14 @@ export function FulfillmentWorkstation({
               Print pick list
             </button>
           </div>
-          <p className="mt-1 text-xs text-zinc-500">
+          <p className="mt-1 text-xs text-zinc-400">
             {pickList.totalUnits} units across {pickList.lines.length} products, for {pickList.orderCount} orders.
             One walk per product.
           </p>
           <div className="mt-4 overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-white/10 text-left text-[11px] uppercase tracking-wider text-zinc-500">
+                <tr className="border-b border-white/10 text-left text-[11px] uppercase tracking-wider text-zinc-400">
                   <th className="pb-2 vl-print-only-cell">✓</th>
                   <th className="pb-2">Product</th>
                   <th className="pb-2 text-right">Units</th>
@@ -617,7 +617,7 @@ export function FulfillmentWorkstation({
                       <span className="ml-2 font-mono text-[10px] text-zinc-600">{line.productId}</span>
                     </td>
                     <td className="py-2 text-right font-mono text-lg tabular-nums text-white">{line.quantity}</td>
-                    <td className="py-2 text-right font-mono text-xs tabular-nums text-zinc-500">{line.orderCount}</td>
+                    <td className="py-2 text-right font-mono text-xs tabular-nums text-zinc-400">{line.orderCount}</td>
                   </tr>
                 ))}
               </tbody>
@@ -647,7 +647,7 @@ export function FulfillmentWorkstation({
           </ul>
 
           <div className="mt-5 flex flex-wrap gap-4 text-xs">
-            <span className="text-zinc-500">
+            <span className="text-zinc-400">
               Shipping:{" "}
               <span className="text-zinc-200">
                 {packing.carrier || packing.service
@@ -655,13 +655,13 @@ export function FulfillmentWorkstation({
                   : "not yet assigned"}
               </span>
             </span>
-            <span className="text-zinc-500">
+            <span className="text-zinc-400">
               Label: {packing.hasLabel
                 ? <span className="text-emerald-300">purchased ✓</span>
                 : <span className="text-amber-300">not bought yet</span>}
             </span>
             {packing.trackingNumber ? (
-              <span className="font-mono text-zinc-500">{packing.trackingNumber}</span>
+              <span className="font-mono text-zinc-400">{packing.trackingNumber}</span>
             ) : null}
           </div>
 
@@ -714,11 +714,11 @@ export function FulfillmentWorkstation({
               {(orders as QueueOrder[]).slice(0, 15).map((order) => (
                 <li key={order.orderId} className="flex items-center gap-2 text-xs">
                   <span className="font-mono text-zinc-300">{order.orderNumber ?? order.orderId}</span>
-                  <span className="text-zinc-500">{order.fulfillmentLabel}</span>
+                  <span className="text-zinc-400">{order.fulfillmentLabel}</span>
                   {order.trackingNumber ? <span className="ml-auto font-mono text-zinc-600">{order.trackingNumber}</span> : null}
                 </li>
               ))}
-              {(orders as QueueOrder[]).length === 0 ? <li className="text-xs text-zinc-500">Empty.</li> : null}
+              {(orders as QueueOrder[]).length === 0 ? <li className="text-xs text-zinc-400">Empty.</li> : null}
             </ul>
           </div>
         ))}

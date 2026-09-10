@@ -130,7 +130,7 @@ export default async function CheckoutPayPage({
         <VeyraCheckout sessionId={cs} orderId={orderId} />
       </div>
 
-      <p className="mt-8 text-xs text-white/40">
+      <p className="mt-8 text-xs text-white/50">
         Leaving this page before payment completes will not charge you. Your order is held until
         payment is confirmed.
       </p>

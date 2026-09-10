@@ -19,7 +19,7 @@ export default async function AccountWishlistPage() {
   return (
     <div className="space-y-5">
       <header className="vl-fade-up">
-        <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Account</p>
+        <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-400">Account</p>
         <h1 className="vl2-serif mt-1.5 text-3xl text-white sm:text-4xl">Wishlist</h1>
         <p className="mt-2 text-sm text-zinc-400">
           {products.length === 0 ? "Save products to keep an eye on them." : `${products.length} saved item${products.length === 1 ? "" : "s"} · add to cart in one tap.`}

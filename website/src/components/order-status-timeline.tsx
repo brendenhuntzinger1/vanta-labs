@@ -54,7 +54,7 @@ export function OrderStatusTimeline({ fulfillmentStatus }: { fulfillmentStatus: 
                   ? "border-emerald-300/60 bg-emerald-400/20 text-emerald-200"
                   : done
                     ? "border-emerald-300/40 bg-emerald-400/15 text-emerald-300"
-                    : "border-white/15 bg-[#0b0b0b] text-white/25"
+                    : "border-white/15 bg-[#0b0b0b] text-white/50"
               }`}
             >
               {reached ? "✓" : ""}
@@ -62,7 +62,7 @@ export function OrderStatusTimeline({ fulfillmentStatus }: { fulfillmentStatus: 
 
             <span
               className={`mt-2 px-1 text-[11px] leading-tight ${
-                active ? "font-semibold text-white" : reached ? "text-white/70" : "text-white/35"
+                active ? "font-semibold text-white" : reached ? "text-white/70" : "text-white/50"
               }`}
             >
               {label}

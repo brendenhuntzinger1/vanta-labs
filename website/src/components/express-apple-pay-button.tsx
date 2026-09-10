@@ -696,7 +696,7 @@ export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavai
           className="vl-apple-pay-button"
           style={APPLE_PAY_APPEARANCE}
         />
-        <p className="text-center text-[11px] text-zinc-500">
+        <p className="text-center text-[11px] text-zinc-400">
           Confirm the three required statements above to use Apple Pay.
         </p>
       </div>

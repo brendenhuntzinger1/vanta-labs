@@ -102,7 +102,7 @@ export function PaymentOutcome({
           shopper retried within the same checkout. True, and worth a footnote,
           but never the headline — the headline is that they paid. */}
       {isPaid && failureKind === "processor_declined" ? (
-        <p className="text-[11px] text-zinc-500">First attempt was declined; this order then paid.</p>
+        <p className="text-[11px] text-zinc-400">First attempt was declined; this order then paid.</p>
       ) : null}
 
       {!isPaid && paidRetry ? (

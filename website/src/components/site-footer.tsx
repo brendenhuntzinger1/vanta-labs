@@ -97,7 +97,7 @@ export function SiteFooter() {
                 here is the one change that covers the whole site — including
                 the catalogue and the home page, where a chip reading "RESEARCH
                 USE ONLY" was previously the only thing said on the subject. */}
-            <p className="mt-3 max-w-md text-xs leading-6 text-white/45">{RESEARCH_USE_SENTENCE}</p>
+            <p className="mt-3 max-w-md text-xs leading-6 text-white/50">{RESEARCH_USE_SENTENCE}</p>
           </div>
 
           <FooterColumn title="Shop" links={FOOTER_COLUMNS.shop} />
@@ -114,7 +114,7 @@ export function SiteFooter() {
               support@vantalabsresearch.com
             </a>
           </p>
-          <p className="text-white/45">© 2026 {BRAND_LEGAL_NAME}. All Rights Reserved.</p>
+          <p className="text-white/50">© 2026 {BRAND_LEGAL_NAME}. All Rights Reserved.</p>
         </div>
       </div>
     </footer>

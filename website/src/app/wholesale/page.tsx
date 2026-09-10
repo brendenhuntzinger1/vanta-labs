@@ -122,7 +122,7 @@ export default async function WholesalePage() {
                 <a href="#wholesale-request" className={PRIMARY_CTA}>Request wholesale pricing</a>
                 <Link href="/products" className={SECONDARY_CTA}>View catalog</Link>
               </div>
-              <p className="mt-8 text-[11px] uppercase tracking-[0.2em] text-white/25">
+              <p className="mt-8 text-[11px] uppercase tracking-[0.2em] text-white/50">
                 For laboratory research use only
               </p>
             </div>
@@ -158,7 +158,12 @@ export default async function WholesalePage() {
                   aria-hidden="true"
                   className="pointer-events-none absolute h-[60%] w-[60%] rounded-full bg-[color:var(--accent-gold)]/[0.06] blur-3xl"
                 />
-                <p className="vl2-display relative text-center text-[64px] leading-none text-white/[0.07] sm:text-[92px]">
+                {/* Decorative, and marked so. It is the stand-in for a photo
+                    that does not exist, ghosted to 7% — a screen reader
+                    announcing "VANTA LABS" here reads a watermark as content,
+                    and a contrast probe reads it as 1.15:1 text. Neither is
+                    what it is. */}
+                <p aria-hidden="true" className="vl2-display relative text-center text-[64px] leading-none text-white/[0.07] sm:text-[92px]">
                   VANTA
                   <span className="block">LABS</span>
                 </p>
@@ -172,7 +177,7 @@ export default async function WholesalePage() {
             the structure that four bordered boxes used to. */}
         <section className="mx-auto mt-24 max-w-[1280px] px-4 sm:mt-32 sm:px-6 lg:px-12">
           <div className="max-w-xl">
-            <p className="vl2-eyebrow text-white/35">The program</p>
+            <p className="vl2-eyebrow text-white/50">The program</p>
             <h2 className="vl2-display mt-4 text-[28px] leading-tight text-white sm:text-[40px]">
               Built around your requirement
             </h2>
@@ -181,11 +186,11 @@ export default async function WholesalePage() {
           <div className="mt-12 grid gap-x-14 gap-y-10 sm:grid-cols-2">
             {BENEFITS.map((benefit) => (
               <div key={benefit.n} className="border-t border-white/[0.08] pt-6">
-                <span className="font-mono text-[11px] tracking-[0.2em] text-[color:var(--accent-gold)]/60">
+                <span className="font-mono text-[11px] tracking-[0.2em] text-[color:var(--accent-gold)]/75">
                   {benefit.n}
                 </span>
                 <h3 className="mt-4 text-lg text-white">{benefit.title}</h3>
-                <p className="mt-2.5 max-w-md text-sm leading-7 text-white/45">{benefit.body}</p>
+                <p className="mt-2.5 max-w-md text-sm leading-7 text-white/50">{benefit.body}</p>
               </div>
             ))}
           </div>
@@ -222,7 +227,7 @@ export default async function WholesalePage() {
             ) : null}
 
             <div className={hasBulkImage || bulkImages.length > 0 ? "order-1 lg:order-2" : ""}>
-              <p className="vl2-eyebrow text-white/35">Bulk orders</p>
+              <p className="vl2-eyebrow text-white/50">Bulk orders</p>
               <h2 className="vl2-display mt-4 max-w-md text-[28px] leading-tight text-white sm:text-[40px]">
                 Built around your volume
               </h2>
@@ -248,7 +253,7 @@ export default async function WholesalePage() {
             rather than four boxes each drawing their own outline. */}
         <section className="mx-auto mt-24 max-w-[1280px] px-4 sm:mt-32 sm:px-6 lg:px-12">
           <div className="max-w-xl">
-            <p className="vl2-eyebrow text-white/35">How it works</p>
+            <p className="vl2-eyebrow text-white/50">How it works</p>
             <h2 className="vl2-display mt-4 text-[28px] leading-tight text-white sm:text-[40px]">Four steps</h2>
           </div>
 
@@ -263,11 +268,11 @@ export default async function WholesalePage() {
                   aria-hidden="true"
                   className="absolute -top-[3px] left-0 hidden h-[7px] w-[7px] rounded-full bg-[color:var(--accent-gold)]/70 lg:block"
                 />
-                <span className="font-mono text-[11px] tracking-[0.2em] text-[color:var(--accent-gold)]/60 lg:block lg:pt-8">
+                <span className="font-mono text-[11px] tracking-[0.2em] text-[color:var(--accent-gold)]/75 lg:block lg:pt-8">
                   {step.n}
                 </span>
                 <h3 className="mt-3 text-base text-white lg:mt-4">{step.title}</h3>
-                <p className="mt-2 max-w-[22rem] text-sm leading-6 text-white/45">{step.body}</p>
+                <p className="mt-2 max-w-[22rem] text-sm leading-6 text-white/50">{step.body}</p>
               </li>
             ))}
           </ol>
@@ -287,7 +292,7 @@ export default async function WholesalePage() {
                 Every request is reviewed before pricing is issued. Nothing is ordered or charged here.
               </p>
               <div className="mt-8 border-t border-white/[0.08] pt-6">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-white/35">Prefer email?</p>
+                <p className="text-[11px] uppercase tracking-[0.18em] text-white/50">Prefer email?</p>
                 <a
                   href="mailto:support@vantalabsresearch.com"
                   className="vl-focus-ring mt-2 inline-block text-sm text-white/70 underline-offset-4 transition hover:text-white hover:underline"
@@ -311,7 +316,7 @@ export default async function WholesalePage() {
             <h2 className="vl2-display mx-auto max-w-2xl text-[26px] leading-tight text-white sm:text-[38px]">
               Planning a larger order?
             </h2>
-            <p className="mx-auto mt-4 max-w-md text-sm leading-7 text-white/45">
+            <p className="mx-auto mt-4 max-w-md text-sm leading-7 text-white/50">
               Tell us what you need and we&rsquo;ll review the request.
             </p>
             <a href="#wholesale-request" className={`${PRIMARY_CTA} mt-9`}>Request wholesale pricing</a>

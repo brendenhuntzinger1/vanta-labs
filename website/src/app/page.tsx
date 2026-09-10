@@ -201,7 +201,7 @@ export default async function HomePage() {
               {[...HERO_ATTESTATIONS, ...trustPoints().filter((p: string) => p === COA_SHORT)].map((claim, index) => (
                 <li key={claim} className="inline-flex items-center gap-2.5">
                   {index > 0 ? (
-                    <span aria-hidden="true" className="text-[color:var(--accent-gold)]/60">·</span>
+                    <span aria-hidden="true" className="text-[color:var(--accent-gold)]/75">·</span>
                   ) : null}
                   {claim}
                 </li>
@@ -230,7 +230,7 @@ export default async function HomePage() {
                     className="vl2-product-card vl-focus-ring flex h-full flex-col justify-between p-6"
                   >
                     <p className="text-base text-white">{category}</p>
-                    <span className="mt-6 inline-flex items-center gap-1.5 text-[0.68rem] uppercase tracking-[0.16em] text-white/45">
+                    <span className="mt-6 inline-flex items-center gap-1.5 text-[0.68rem] uppercase tracking-[0.16em] text-white/50">
                       Explore
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3 w-3">
                         <path d="M5 12h14M13 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
