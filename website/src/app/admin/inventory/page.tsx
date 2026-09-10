@@ -2,8 +2,10 @@ import { redirect } from "next/navigation";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { canManageInventory } from "@/lib/admin-roles";
 import { getInventoryRows } from "@/lib/admin-inventory";
+import { getInventoryWatchlist } from "@/lib/admin-inventory-watchlist";
 import { isInventoryTrackingActive } from "@/lib/inventory-settings";
 import { AdminInventoryClient } from "@/components/admin-inventory-client";
+import { AdminInventoryWatchlist } from "@/components/admin-inventory-watchlist";
 import { failedReads, settleRead, UNKNOWN_FIGURE } from "@/lib/admin-read";
 import { AdminReadFailureNotice } from "@/components/admin-data-notices";
 
@@ -20,14 +22,15 @@ export default async function AdminInventoryPage() {
   // a database that did not answer must say so instead.
   const rowsRead = await settleRead("Inventory", getInventoryRows);
   const rows = rowsRead.ok ? rowsRead.value : [];
+  // Same convention as the rows above: a watch list that failed to load must
+  // say so, because an empty one reads as "nothing needs ordering" — the most
+  // expensive thing this screen could get wrong.
+  const watchlistRead = await settleRead("Reorder watch list", getInventoryWatchlist);
   // Stock is only enforced once inventory tracking is switched on. Until then
   // these numbers are a reference and never gate sales (see resolveStockStatus
   // in catalog.ts). Vanta Labs owns these counts now — nothing external feeds
   // them.
   const inventoryTrackingActive = await isInventoryTrackingActive();
-  const lowStockCount = inventoryTrackingActive
-    ? rows.filter((row) => row.isLowStock || row.isOutOfStock).length
-    : 0;
 
   return (
     <div className="vl-page-shell min-h-screen bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.1),transparent_52%),linear-gradient(145deg,#04060f_0%,#0b1324_50%,#060911_100%)] px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
@@ -39,12 +42,20 @@ export default async function AdminInventoryPage() {
             {!rowsRead.ok
               ? `Stock counts could not be loaded (${UNKNOWN_FIGURE}). Nothing below is evidence that the shelf is stocked.`
               : inventoryTrackingActive
-              ? `Live stock counts from every product and variant, with per-line low-stock thresholds.${lowStockCount > 0 ? ` ${lowStockCount} line${lowStockCount === 1 ? "" : "s"} need attention.` : " Everything is stocked above threshold."}`
+              // ONE COUNT OF "WHAT NEEDS ATTENTION" ON THIS SCREEN, AND THE
+              // WATCH LIST OWNS IT. This sentence used to append its own tally
+              // of lines at or below threshold, which now sits directly above a
+              // panel counting something broader (anything emptying inside the
+              // reorder horizon) and disagreed with it out loud — 1 versus 4 on
+              // the harness catalogue. Two numbers for one question is how an
+              // owner learns to trust neither.
+              ? "Live stock counts from every product and variant, with per-line low-stock thresholds. What needs ordering is ranked in the watch list below."
               : "Inventory tracking is off. The counts below are a reference only — they don't gate sales, and every product stays purchasable. Populate real quantities here, then turn tracking on in Settings to start enforcing them."}
           </p>
         </section>
 
-        <AdminReadFailureNotice failures={failedReads([rowsRead])} />
+        <AdminReadFailureNotice failures={failedReads([rowsRead, watchlistRead])} />
+        {watchlistRead.ok ? <AdminInventoryWatchlist watchlist={watchlistRead.value} /> : null}
         {rowsRead.ok ? (
           <AdminInventoryClient initialRows={rows} canManage={canManageInventory(session.role)} inventoryTrackingActive={inventoryTrackingActive} />
         ) : null}
