@@ -380,6 +380,83 @@ async function placeOrder(page, cart) {
   return { row: await orderRow(latest.order_id), response: created };
 }
 
+/**
+ * Make sure the catalogue can actually supply this run.
+ *
+ * Every PAID order here decrements real stock, so consecutive runs walk the
+ * seeded catalogue down to zero — after which reserve_inventory correctly
+ * refuses, createCheckoutSession correctly CANCELS the order, and four steps
+ * fail reporting "should be payment_failed, not canceled". That is the harness
+ * having made the shop unsellable, and it reads exactly like a payment defect.
+ *
+ * Topping up is a fixture operation on a throwaway database (this script refuses
+ * to run against anything but loopback) and it only ever ADDS units. Holds are
+ * left strictly alone — reserved_quantity belongs to whatever is in flight.
+ */
+async function ensureStockForRun(minimum = 60) {
+  // NEVER STOCK THE PARENT OF A DOSE-STOCKED PRODUCT.
+  //
+  // Most of this catalogue — and 31 of 36 live products — carries zero on the
+  // parent and the real stock on each dose. A blanket top-up gave those parents
+  // units they never have, so sellableLines() offered the PARENT as a sellable
+  // line; the cart used it, quote-order resolved the sale to the dose, the
+  // decrement moved the dose, and the assertion that read the parent saw no
+  // movement at all. The fixture has to preserve the production shape or it
+  // invents failures of its own.
+  const { rowCount } = await q(
+    `update products p set inventory_quantity = $1
+      where coalesce(p.is_published,true) and coalesce(p.is_enabled,true)
+        and not coalesce(p.is_archived,false) and coalesce(p.price_cents,0) > 0
+        and coalesce(p.inventory_quantity,0) < $1
+        and not exists (select 1 from product_doses d where d.product_id = p.id)`,
+    [minimum],
+  );
+  const doses = await q(
+    `update product_doses set inventory_quantity = $1
+      where coalesce(price_cents,0) > 0 and coalesce(inventory_quantity,0) < $1`,
+    [minimum],
+  );
+  return rowCount + (doses.rowCount ?? 0);
+}
+
+/**
+ * Clear the consent banner before reading a page's text.
+ *
+ * The banner is an overlay, so `document.body.innerText` on a freshly loaded
+ * account page can be almost entirely cookie copy — which made an assertion
+ * about the order's own wording fail on a page that was rendering it correctly.
+ * Best-effort: if there is no banner there is nothing to do.
+ */
+async function dismissConsent(page) {
+  await page.evaluate(() => {
+    const button = [...document.querySelectorAll("button")]
+      .find((b) => /^(accept|accept all|allow all|got it|ok)$/i.test((b.textContent ?? "").trim()));
+    if (button) button.click();
+  }).catch(() => {});
+  await page.waitForTimeout(500);
+}
+
+/**
+ * Wait for stock to move by `expected`, rather than reading once after a sleep.
+ *
+ * The paid path commits inventory as part of settling the webhook, but the read
+ * that follows a fixed `waitForTimeout` can still land before the decrement is
+ * visible — which reported "stock moved by 0" on an order whose dose had in fact
+ * gone from 60 to 57 and whose inventory_committed_at was set. A clock was
+ * standing in for a condition, which is the failure the browser runbook spends a
+ * page warning about.
+ */
+async function waitForStockDrop(cart, before, expected, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  let latest = before;
+  while (Date.now() < deadline) {
+    latest = await stockOf(cart);
+    if (before.qty - latest.qty >= expected) return before.qty - latest.qty;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return before.qty - latest.qty;
+}
+
 async function stockOf(cart) {
   const [slug, doseId] = String(cart.items[0].id).split("::");
   if (doseId) {
@@ -411,6 +488,12 @@ async function main() {
   console.log(`base ${BASE}   shopper ${SHOPPER}`);
   if (!HARNESS_LOG) console.log("WARNING: no harness log found — every email assertion will SKIP.");
 
+  // Before the carts are chosen: a previous run's PAID orders have really
+  // decremented this catalogue, and an exhausted line makes every later step
+  // fail as though checkout were broken.
+  const toppedUp = await ensureStockForRun();
+  if (toppedUp) console.log(`topped up ${toppedUp} product line(s) so this run can be served`);
+
   const lines = await sellableLines();
   const highCart = cartClearing(lines, THRESHOLD * 100);
   const lowCart = cartClearing(lines.slice().reverse(), 2000);
@@ -418,6 +501,7 @@ async function main() {
   await createConfirmedCustomer(SHOPPER, PASSWORD, "High Value Buyer");
   await passAgeGate(page);
   await signIn(page, SHOPPER, PASSWORD);
+  await dismissConsent(page);
 
   // ---- 1. A high-value order is created and handed to the processor -------
   section(`1. An order over $${THRESHOLD} reaches the processor at all`);
@@ -563,10 +647,12 @@ async function main() {
     assert(after.paid_at, "a paid order carries no paid_at");
     assert(after.provider_event_id, "a paid order carries no provider_event_id");
     assert(after.paid_side_effects_at, "the paid side-effects latch was never claimed");
-    const stockAfter = await stockOf(highCart);
-    const moved = stockBefore.qty - stockAfter.qty;
+    const moved = await waitForStockDrop(highCart, stockBefore, highCart.items[0].quantity);
+    const stockNow = await stockOf(highCart);
     assert(moved === highCart.items[0].quantity,
-      `stock moved by ${moved}, expected ${highCart.items[0].quantity}`);
+      `stock moved by ${moved}, expected ${highCart.items[0].quantity} `
+      + `(line ${highCart.items[0].id}: before qty=${stockBefore.qty} reserved=${stockBefore.reserved}, `
+      + `now qty=${stockNow.qty} reserved=${stockNow.reserved})`);
     const mail = mailSince(before);
     if (mail) {
       const receipts = mail.filter((m) => /order confirm|thank you for your order/i.test(m.subject));
@@ -690,6 +776,72 @@ async function main() {
     assert(/SECURE PAYMENT/i.test(text),
       `an unpaid order was denied the card form: ${text.slice(0, 160)}`);
     return `${row.order_number} still reaches secure payment`;
+  });
+
+  // ---- 6. What the customer sees afterwards ------------------------------
+  section("6. The declined order in the customer's own account");
+
+  await step("a declined order is not presented as a live, paid order", async () => {
+    if (!declinedOrder) return SKIP("no declined order");
+    // Until this was fixed the account pages asked `isUnpaid()`, whose list does
+    // not contain payment_failed — so a declined order rendered with the
+    // Ordered->Delivered stepper, a row reading "Total paid", a Reorder button
+    // and a downloadable invoice, for a card that was never charged.
+    await page.goto(`${BASE}/account/orders/${encodeURIComponent(declinedOrder.order_id)}`,
+      { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(2500);
+    await dismissConsent(page);
+    const text = await page.evaluate(() => document.body.innerText);
+
+    assert(/payment not completed/i.test(text),
+      `the declined order does not say payment failed: ${text.slice(0, 200)}`);
+    assert(!/\bTotal paid\b/.test(text),
+      'the declined order still claims "Total paid"');
+    assert(!/Download invoice/i.test(text),
+      "a declined order still offers an invoice download");
+    // And it must tell the shopper the one thing that actually recovers the sale.
+    assert(/approve/i.test(text) && /bank/i.test(text),
+      "the declined order does not mention approving a bank prompt before retrying");
+    return "says payment not completed, no Total paid, no invoice, bank-approval guidance present";
+  });
+
+  await step("the declined order's invoice endpoint refuses to issue a receipt", async () => {
+    if (!declinedOrder) return SKIP("no declined order");
+    const result = await page.evaluate(async (id) => {
+      const r = await fetch(`/account/orders/${encodeURIComponent(id)}/invoice`);
+      return { status: r.status, body: (await r.text()).slice(0, 200) };
+    }, declinedOrder.order_id);
+    assert(result.status === 400,
+      `the invoice endpoint answered ${result.status} for a declined order`);
+    assert(!/Total paid/i.test(result.body), "the refusal body still mentions Total paid");
+    return `refused with ${result.status}`;
+  });
+
+  await step("a PAID order still shows its tracker and its invoice", async () => {
+    if (!retryOrder || retryOrder.payment_status !== "paid") return SKIP("no paid order");
+    // The other half of the guard: none of the above may cost a real customer
+    // the receipt for a payment they actually made.
+    await page.goto(`${BASE}/account/orders/${encodeURIComponent(retryOrder.order_id)}`,
+      { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(2500);
+    await dismissConsent(page);
+    const text = await page.evaluate(() => document.body.innerText);
+    assert(/\bTotal paid\b/.test(text), "a paid order no longer shows Total paid");
+    assert(/Download invoice/i.test(text), "a paid order no longer offers its invoice");
+    assert(!/payment not completed/i.test(text), "a paid order is described as not completed");
+
+    const invoice = await page.evaluate(async (id) => {
+      const r = await fetch(`/account/orders/${encodeURIComponent(id)}/invoice`);
+      const body = await r.text();
+      // The whole document, not a slice: the "Total paid" row sits well past the
+      // doctype, head and stylesheet, so a truncated read reports a healthy
+      // invoice as a broken one.
+      return { status: r.status, hasTotalPaid: /Total paid/i.test(body), length: body.length };
+    }, retryOrder.order_id);
+    assert(invoice.status === 200, `the invoice answered ${invoice.status} for a PAID order`);
+    assert(invoice.hasTotalPaid,
+      `the paid order's invoice (${invoice.length} bytes) does not state Total paid`);
+    return "tracker, Total paid and a working invoice all intact";
   });
 
   // ---- Give the stock back ----------------------------------------------

@@ -12,9 +12,21 @@ export interface OrderProgress {
   cancelled: boolean;
   refunded: boolean;
   awaitingPayment: boolean;
-  activeIndex: number;
+  /**
+   * The payment was ATTEMPTED and did not complete — distinct from
+   * awaitingPayment, which means nobody has tried yet.
+   *
+   * This did not exist, and `awaitingPayment = !paid && !cancelled && !refunded`
+   * therefore swallowed payment_failed: a declined order was headlined "Awaiting
+   * payment" and, because payment_failed is absent from UNPAID_STATUSES, the
+   * account pages treated it as a live order — tracking stepper, "Total paid",
+   * Reorder, and a downloadable invoice for a card that was never charged.
+   * Twenty-one production rows were in that state when this was found.
+   */
+  failed: boolean;
   steps: TrackStep[];
   headline: string;
+  activeIndex: number;
 }
 
 const STEP_DEFS = [
@@ -50,7 +62,12 @@ export function getOrderProgress(paymentStatus: string, fulfillmentStatus: strin
   const cancelled = pay === "canceled" || pay === "cancelled" || ful === "cancelled";
   const refunded = pay === "refunded" || pay === "partially_refunded";
   const paid = pay === "paid";
-  const awaitingPayment = !paid && !cancelled && !refunded;
+  // An ATTEMPT that did not complete. payment_rejected is the manual lane's
+  // equivalent (an operator refused submitted proof).
+  const failed = pay === "payment_failed" || pay === "payment_rejected";
+  // "Nobody has paid yet" now genuinely means that, rather than "anything that
+  // is not paid, cancelled or refunded".
+  const awaitingPayment = !paid && !cancelled && !refunded && !failed;
 
   let activeIndex = 0; // Ordered
   if (paid) activeIndex = 1; // Confirmed
@@ -76,13 +93,16 @@ export function getOrderProgress(paymentStatus: string, fulfillmentStatus: strin
   let headline = "Order placed";
   if (cancelled) headline = "Order cancelled";
   else if (refunded) headline = pay === "partially_refunded" ? "Partially refunded" : "Order refunded";
+  // Before refunded/cancelled? No — a refund or a cancel is a later, stronger
+  // fact about the same order, and only an order that was paid can be either.
+  else if (failed) headline = "Payment not completed";
   else if (awaitingPayment) headline = "Awaiting payment";
   else if (activeIndex === 4) headline = "Delivered";
   else if (activeIndex === 3) headline = "On the way";
   else if (activeIndex === 2) headline = "Being prepared";
   else headline = "Payment confirmed";
 
-  return { cancelled, refunded, awaitingPayment, activeIndex, steps, headline };
+  return { cancelled, refunded, awaitingPayment, failed, activeIndex, steps, headline };
 }
 
 export function statusLabel(value: string): string {

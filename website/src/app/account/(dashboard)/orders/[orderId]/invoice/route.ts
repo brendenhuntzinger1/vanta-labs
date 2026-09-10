@@ -2,7 +2,7 @@ import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { ownershipEmail } from "@/lib/order-ownership";
 import { getCustomerOrderDetail } from "@/lib/account-orders";
-import { isUnpaid } from "@/lib/order-status";
+import { hasCapturedPayment } from "@/lib/ledger";
 import { displayOrderReference } from "@/lib/order-reference";
 import { formatDisplayDate } from "@/lib/format-date";
 import { buildInvoiceTotals } from "@/lib/invoice-totals";
@@ -25,9 +25,16 @@ export async function GET(_request: Request, context: { params: Promise<{ orderI
   if (!order) {
     return new Response("Order not found", { status: 404 });
   }
-  // An unpaid order has no invoice — it's a receipt of payment.
-  if (isUnpaid(order.paymentStatus)) {
-    return new Response("This order has no invoice yet — payment hasn't been completed.", { status: 400 });
+  // An invoice is a RECEIPT OF PAYMENT, so only a payment that happened earns
+  // one. This gated on isUnpaid, whose list is pending / pending_payment /
+  // awaiting_verification / unverified / unpaid — and payment_failed is in none
+  // of them. A DECLINED order therefore produced a full invoice headed "Total
+  // paid $269.35" for a card that was never charged, downloadable by the
+  // customer. hasCapturedPayment is the set that actually means money moved
+  // (paid / partially_refunded / refunded) and is what the profit ledger already
+  // uses, so this asks the same question the accounts do.
+  if (!hasCapturedPayment(order.paymentStatus)) {
+    return new Response("This order has no invoice — no payment was completed for it.", { status: 400 });
   }
 
   const c = order.currency;

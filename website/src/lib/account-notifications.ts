@@ -2,6 +2,7 @@ import { getCustomerOrders } from "@/lib/customer-account";
 import { getPointsHistory } from "@/lib/membership";
 import { getMembershipBillingHistory } from "@/lib/membership-billing";
 import { isUnpaid } from "@/lib/order-status";
+import { customerSafeFailureReason } from "@/lib/safe-error";
 
 export type NotificationTone = "info" | "success" | "warning";
 export interface AccountNotification {
@@ -92,7 +93,13 @@ export async function getCustomerNotifications(userId: string, email?: string | 
       tone,
       icon: failed ? "alert" : "billing",
       title,
-      body: failed && event.failureReason ? event.failureReason : null,
+      // SANITISED, the way the subscriptions page that shows the same value
+      // already does it. This rendered the processor's raw failure string
+      // verbatim to the customer — which carries decline codes, request ids and,
+      // when the gateway is misconfigured, internal notes naming environment
+      // variables. customerSafeFailureReason is the existing helper for exactly
+      // this and returns null when nothing safe remains.
+      body: failed ? customerSafeFailureReason(event.failureReason) : null,
       createdAt: event.createdAt,
       href: "/account/subscriptions",
     });

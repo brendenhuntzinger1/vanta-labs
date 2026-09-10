@@ -60,9 +60,18 @@ export default async function AccountOrdersPage() {
                     <p className="mt-1 text-xs text-zinc-500">{formatDisplayDate(order.createdAt, "long")}</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-lg font-semibold text-white">{money(order.amountPaid, order.currency)}</p>
+                    {/* THE AMOUNT IS ONLY SHOWN WHEN IT WAS ACTUALLY TAKEN.
+                        A declined order rendered this as plainly as a paid one,
+                        so a shopper whose card was never charged saw the order
+                        total presented as money they had paid. */}
+                    {progress.failed ? (
+                      <p className="text-lg font-semibold text-zinc-400">{money(order.amountPaid, order.currency)} <span className="text-xs font-normal">not charged</span></p>
+                    ) : (
+                      <p className="text-lg font-semibold text-white">{money(order.amountPaid, order.currency)}</p>
+                    )}
                     <span className={`mt-1 inline-block rounded-full px-2.5 py-0.5 text-[11px] ${
-                      unpaid ? "bg-amber-300/15 text-amber-200"
+                      progress.failed ? "bg-red-400/15 text-red-200"
+                      : unpaid ? "bg-amber-300/15 text-amber-200"
                       : progress.activeIndex === 4 ? "bg-emerald-400/15 text-emerald-300"
                       : progress.cancelled || progress.refunded ? "bg-zinc-500/15 text-zinc-400"
                       : "bg-cyan-400/12 text-cyan-200"

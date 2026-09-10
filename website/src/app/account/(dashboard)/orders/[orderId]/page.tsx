@@ -5,7 +5,7 @@ import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { ownershipEmail } from "@/lib/order-ownership";
 import { getCustomerOrderDetail } from "@/lib/account-orders";
-import { isUnpaid } from "@/lib/order-status";
+import { getOrderProgress, isUnpaid } from "@/lib/order-status";
 import { OrderTracking } from "@/components/order-tracking";
 import { ReorderButton } from "@/components/reorder-button";
 import { displayOrderReference } from "@/lib/order-reference";
@@ -39,6 +39,13 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ or
   }
 
   const unpaid = isUnpaid(order.paymentStatus);
+  // A DECLINED order is neither "unpaid" nor live. isUnpaid's list does not
+  // include payment_failed, so this page used to fall into the `else` branch for
+  // one — rendering the tracking stepper, a "Total paid" row and a Download
+  // invoice button for a card that was never charged. getOrderProgress now says
+  // so directly.
+  const progress = getOrderProgress(order.paymentStatus, order.fulfillmentStatus);
+  const failed = progress.failed;
   const addressLines = [order.customerName, order.shippingAddress, order.shippingAddress2, [order.city, order.state, order.postalCode].filter(Boolean).join(", "), order.country].filter(Boolean) as string[];
 
   return (
@@ -51,7 +58,24 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ or
         </div>
       </div>
 
-      {unpaid ? (
+      {failed ? (
+        <section className="vl-panel rounded-2xl border-red-400/20 p-5">
+          <p className="text-sm font-semibold text-red-200">Payment not completed</p>
+          <p className="mt-1 text-xs text-zinc-400">
+            This payment did not go through, so this order was not placed and nothing was shipped.
+            Your bank may have asked you to approve the purchase — if so, approve it and then place
+            the order again. You can also use a different card.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2.5">
+            <Link href="/products" className="vl2-btn-primary vl-focus-ring inline-flex px-5 py-2.5 text-xs font-semibold">
+              Shop again
+            </Link>
+            <Link href="/contact" className="vl2-btn-secondary vl-focus-ring inline-flex px-4 py-2 text-xs">
+              Contact support
+            </Link>
+          </div>
+        </section>
+      ) : unpaid ? (
         <section className="vl-panel rounded-2xl border-amber-300/20 p-5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -112,11 +136,19 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ or
             <Row label="Shipping" value={order.shippingAmount > 0 ? money(order.shippingAmount, order.currency) : "Free"} />
             {order.handlingFee > 0 ? <Row label="Handling" value={money(order.handlingFee, order.currency)} /> : null}
             {order.taxAmount > 0 ? <Row label="Tax" value={money(order.taxAmount, order.currency)} /> : null}
-            <Row label="Total paid" value={money(order.amountPaid, order.currency)} strong />
+            {/* "Total paid" is a claim about money having changed hands. The
+                order-confirmation page already reasoned its way to this and
+                withholds the claim until the backend says it happened; these
+                account pages were missed. */}
+            <Row
+              label={failed ? "Order total (not charged)" : "Total paid"}
+              value={money(order.amountPaid, order.currency)}
+              strong
+            />
             {order.refundAmount > 0 ? <Row label="Refunded" value={`−${money(order.refundAmount, order.currency)}`} accent="positive" /> : null}
           </div>
           <div className="mt-4 flex flex-wrap gap-2.5 border-t border-white/10 pt-4">
-            {!unpaid ? (
+            {!unpaid && !failed ? (
               <>
                 <a href={`/account/orders/${encodeURIComponent(order.orderId)}/invoice`} target="_blank" rel="noopener noreferrer" className="vl2-btn-secondary vl-focus-ring inline-flex px-4 py-2 text-xs">
                   Download invoice
