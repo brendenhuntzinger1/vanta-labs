@@ -15,6 +15,7 @@ import { runCouponHygiene } from "@/lib/coupon-hygiene";
 import { resealPlaintextControlSecrets } from "@/lib/admin-control";
 import { repairUnredeemedPaidOffers } from "@/lib/offers/customer-offer-repair";
 import { ingestAdSpend } from "@/lib/ads/spend-ingest";
+import { repairMissingPurchaseReports } from "@/lib/ads/purchase-report-repair";
 import { handleCronRequest, type CronJobMap } from "@/lib/cron-runner";
 
 export const dynamic = "force-dynamic";
@@ -140,6 +141,15 @@ const JOBS: CronJobMap = {
   // hours, because the platforms restate a few times a day and 192 requests
   // daily would buy nothing.
   adSpendIngest: { label: "ad_spend_ingest", run: ingestAdSpend },
+  // Report paid orders whose customer never opened the confirmation page.
+  //
+  // That page is the ONLY thing that asks /api/ads/purchase-event/[orderId],
+  // and being asked is what sends the conversion — so a customer who pays and
+  // closes the tab is never reported and nothing looked again. Absence-keyed
+  // and idempotent: it asks which paid orders hold no tiktok row on
+  // ad_purchase_events_sent, and the route's own per-platform INSERT claim is
+  // what keeps one sale exactly one conversion when it does ask.
+  adPurchaseReportRepair: { label: "ad_purchase_report_repair", run: repairMissingPurchaseReports },
 };
 
 /**
