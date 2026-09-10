@@ -33,6 +33,15 @@ const THROTTLE_MS = 6 * 60 * 60 * 1000;
 const ALERT_TYPE = "checkout_repeated_failure";
 
 /**
+ * How many recent unpaid attempts to read for one shopper.
+ *
+ * Named because the alert counts what this returns: the cap and the test
+ * for having HIT the cap have to be the same number, and two bare 20s in
+ * different places is how they stop being.
+ */
+const CHECKOUT_FAILURE_SCAN = 20;
+
+/**
  * A stable, non-reversible handle for one shopper.
  *
  * The alert must be correlatable across firings without carrying the shopper's
@@ -85,7 +94,7 @@ export async function reportRepeatedCheckoutFailure(email: string): Promise<void
       .eq("customer_email", normalized)
       .gte("created_at", since)
       .order("created_at", { ascending: false })
-      .limit(20);
+      .limit(CHECKOUT_FAILURE_SCAN);
 
     if (error || !data) return;
     const attempts = data.length;
@@ -103,6 +112,9 @@ export async function reportRepeatedCheckoutFailure(email: string): Promise<void
       type: ALERT_TYPE,
       severity: "warning",
       message: `One shopper has left ${attempts} orders unpaid within the hour. That is either a card being repeatedly declined or checkout failing for them; from the store's side those look the same. Worth checking while they are still on the site.`,
+      // Read under `.limit(20)`: a shopper past twenty attempts in the hour
+      // reports as twenty, so the count is a floor once the cap is reached.
+      scan: { truncated: attempts >= CHECKOUT_FAILURE_SCAN, scanned: attempts },
       context: {
         shopper: shopperKey(normalized),
         attempts,

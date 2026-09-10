@@ -573,6 +573,10 @@ export async function repairIncompleteRefunds(options?: {
         message:
           `${failures.length} refund side-effect(s) could not be completed. `
           + "Revenue, loyalty points or store credit may not reflect these refunds.",
+        // collectRepairablePages already returns `truncated` — a window with
+        // more candidates than the scan reads leaves refunds unexamined, so
+        // this count is a floor rather than the backlog.
+        scan: { truncated, scanned: result.scanned },
         context: { failures: failures.slice(0, 25), totalFailed: failures.length, signature },
       }).catch((alertError) => {
         console.error("Unable to record a refund-effect repair alert", alertError);

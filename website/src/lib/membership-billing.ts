@@ -2349,6 +2349,8 @@ async function alertOnStalledPastDueMembers(now: Date): Promise<number> {
       `${rows.length} member(s) have been past_due for over ${PAST_DUE_STALL_DAYS} days with no successful renewal `
       + `(${veyraOwned} billed by the processor, ${rows.length - veyraOwned} billed locally). `
       + "Locally-billed rows are never retried; processor-billed rows depend on its dunning. Review and contact these members.",
+    // Read under `.limit(PAST_DUE_STALL_SCAN)`; at the cap this undercounts.
+    scan: { truncated: rows.length >= PAST_DUE_STALL_SCAN, scanned: rows.length },
     context: {
       count: rows.length,
       veyraOwned,

@@ -128,7 +128,12 @@ export function overRepresentedDomain(
  */
 interface AuthUserListing {
   users: AuthUserLike[];
-  complete: boolean;
+  /**
+   * Same word, same meaning as BoundedRead.truncated in supabase-page.ts: the
+   * read stopped before the source was exhausted. Kept identical so a caller
+   * can hand it straight to recordSystemAlert's `scan` with no translation.
+   */
+  truncated: boolean;
 }
 
 interface AuthUserLike {
@@ -210,19 +215,19 @@ async function listAllAuthUsers(): Promise<AuthUserListing> {
     const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: PAGE_SIZE });
     if (error) {
       console.error("[auth-health] unable to list users", error);
-      return { users: collected, complete: false };
+      return { users: collected, truncated: true };
     }
     const users = (data?.users ?? []) as AuthUserLike[];
     collected.push(...users);
     // A short page is the end of the table — the only way to finish knowing we
     // saw everything.
-    if (users.length < PAGE_SIZE) return { users: collected, complete: true };
+    if (users.length < PAGE_SIZE) return { users: collected, truncated: false };
   }
 
   // Ran out of pages with a full page still coming. Not an error, but not the
   // whole table either, and a caller that treats it as complete draws the same
   // false conclusion a failed page does.
-  return { users: collected, complete: false };
+  return { users: collected, truncated: true };
 }
 
 export async function alertOnStalledSignups(): Promise<StalledSignupSummary> {
@@ -242,7 +247,7 @@ export async function alertOnStalledSignups(): Promise<StalledSignupSummary> {
   // scanned, and a truncated scan makes that denominator fiction. The stalled
   // accounts themselves are still real — each one was read from a row — so the
   // alert still fires, merely undercounted, which is the safe direction.
-  const skewed = listing.complete ? overRepresentedDomain(summary) : null;
+  const skewed = listing.truncated ? null : overRepresentedDomain(summary);
   const pct = (share: number) => `${Math.round(share * 100)}%`;
   const domainNote = skewed
     ? ` ${skewed.stalled} of them are @${skewed.domain}, which is ${pct(skewed.stalledShare)} of the`
@@ -307,6 +312,9 @@ export async function alertOnStalledSignups(): Promise<StalledSignupSummary> {
       scannedDomains: summary.scannedDomains,
       oldestCreatedAt: summary.oldestCreatedAt,
     },
+    // Labelled rather than withheld: each stalled account was read from a real
+    // row, so a short listing undercounts but never invents one.
+    scan: { truncated: listing.truncated, scanned: summary.scanned },
     dedupeWindowMs: ALERT_DEDUPE_MS,
   });
 
@@ -462,10 +470,10 @@ export function summarisePartnersLockedOut(
  * are withheld, and only when the listing is known to be short.
  */
 export function canConcludeLockout(input: {
-  complete: boolean;
+  truncated: boolean;
   summary: Pick<LockedOutPartnerSummary, "partners">;
 }): boolean {
-  if (input.complete) return true;
+  if (!input.truncated) return true;
   return input.summary.partners.every((partner) => partner.reason === "no_auth_user");
 }
 
@@ -495,7 +503,7 @@ export async function alertOnPartnersLockedOut(): Promise<LockedOutPartnerSummar
 
   // A short listing turns every ambassador into a lockout. Say nothing rather
   // than name twenty people who are signing in fine — see canConcludeLockout.
-  if (!canConcludeLockout({ complete: listing.complete, summary })) {
+  if (!canConcludeLockout({ truncated: listing.truncated, summary })) {
     console.error(
       "[auth-health] partner lockout check skipped: auth user listing was incomplete",
       { partners: partners.length, usersSeen: listing.users.length, lockedOut: summary.lockedOut },
@@ -523,6 +531,11 @@ export async function alertOnPartnersLockedOut(): Promise<LockedOutPartnerSummar
       checked: summary.checked,
       partners: summary.partners,
     },
+    // Always false by the time we reach here — canConcludeLockout above
+    // withholds the alert outright on a short listing, because truncation can
+    // MANUFACTURE a lockout rather than merely hide one. Declared anyway so the
+    // row records that the question was asked and answered.
+    scan: { truncated: false, scanned: listing.users.length },
     dedupeWindowMs: ALERT_DEDUPE_MS,
   });
 

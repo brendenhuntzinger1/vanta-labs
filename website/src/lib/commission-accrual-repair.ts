@@ -630,6 +630,12 @@ export async function repairMissingCommissionAccruals(options?: {
         + "credited, or the commission expense is missing from profit. If this names a missing partners row, create "
         + "it and the sweep clears the backlog on its next run. If it names a check-constraint violation, apply "
         + "src/lib/sql/referral-orders-commission-lifecycle.sql — the sweep will clear the backlog on its next run.",
+      // The flag this file already kept for itself, now said in the alert
+      // too: past MAX_CANDIDATE_SCAN there are paid orders this run did not
+      // look at, so the count is a floor. It has its own
+      // commission_accrual_scan_truncated alert as well — that one reports
+      // the truncation, this makes the COUNT honest about it.
+      scan: { truncated: Boolean(result.scanTruncated), scanned: result.scanned },
       context: { failures: failures.slice(0, 25), totalFailed: failures.length },
     }).catch((alertError) => {
       console.error("Unable to record a commission-accrual repair alert", alertError);

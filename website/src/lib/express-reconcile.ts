@@ -542,6 +542,11 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
       type: BACKLOG_ALERT_TYPE,
       severity: "warning",
       message: `${stale} order(s) have been unresolved at the payment processor for over 24h. Most are abandoned checkouts, which need nothing: no money moved and their stock was released long ago. Worth a look only if the count keeps climbing, which would point at the processor being unreadable rather than at shoppers walking away.`,
+      // THIS FILE ALREADY KNEW: "A FAILED READ IS NOT AN EMPTY BACKLOG".
+      // It carries readError for exactly that reason, and the deadline can
+      // stop the work loop part-way too — either leaves `stale` short of the
+      // real backlog, which is the direction that reads as reassuring.
+      scan: { truncated: Boolean(readError) || ranOutOfTime, scanned: orders.length },
       context: { stale, unresolved, checked: orders.length },
     });
   }

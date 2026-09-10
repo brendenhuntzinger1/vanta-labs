@@ -152,6 +152,9 @@ export async function runCronGroup(options: CronGroupOptions): Promise<Record<st
         stalled: stalled.map((name) => jobs[name].label),
         finished: names.filter((name) => !unfinished.has(name)).map((name) => jobs[name].label),
       },
+      // The job map is configured in this process rather than read from
+      // anywhere, so this count is over a set complete by construction.
+      scan: { truncated: false, scanned: Object.keys(jobs).length },
       dedupeWindowMs: CRON_ALERT_DEDUPE_MS,
     });
   }
@@ -171,6 +174,9 @@ export async function runCronGroup(options: CronGroupOptions): Promise<Record<st
       context: Object.fromEntries(
         failed.map(([name, result]) => [jobs[name].label, describeError((result as PromiseRejectedResult).reason)]),
       ),
+      // The job map is configured in this process rather than read from
+      // anywhere, so this count is over a set complete by construction.
+      scan: { truncated: false, scanned: Object.keys(jobs).length },
       dedupeWindowMs: CRON_ALERT_DEDUPE_MS,
     });
   }

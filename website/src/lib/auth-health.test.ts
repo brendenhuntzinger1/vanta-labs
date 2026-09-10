@@ -369,7 +369,7 @@ describe("an incomplete auth-user listing", () => {
 
     expect(summary.lockedOut).toBe(2);
     expect(summary.partners.every((p) => p.reason === "auth_user_missing")).toBe(true);
-    expect(canConcludeLockout({ complete: false, summary }),
+    expect(canConcludeLockout({ truncated: true, summary }),
       "an incomplete listing must never support a lockout conclusion").toBe(false);
   });
 
@@ -380,7 +380,7 @@ describe("an incomplete auth-user listing", () => {
       NOW,
     );
     expect(summary.lockedOut).toBe(1);
-    expect(canConcludeLockout({ complete: true, summary })).toBe(true);
+    expect(canConcludeLockout({ truncated: false, summary })).toBe(true);
   });
 
   it("allows a complete listing to clear an ambassador who has signed in", () => {
@@ -399,6 +399,6 @@ describe("an incomplete auth-user listing", () => {
     // told about.
     const summary = summarisePartnersLockedOut([approved("NOLINK", null)], [], NOW);
     expect(summary.partners[0].reason).toBe("no_auth_user");
-    expect(canConcludeLockout({ complete: false, summary })).toBe(true);
+    expect(canConcludeLockout({ truncated: true, summary })).toBe(true);
   });
 });

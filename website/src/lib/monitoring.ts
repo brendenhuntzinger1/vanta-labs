@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
 import { getBusinessSettings, getControlSnapshot } from "@/lib/admin-control";
+import { describeScan, qualifyPopulationClaim, type ScanCompleteness } from "@/lib/alert-scan-completeness";
 
 // Lightweight operational monitoring. Failure paths across the app call
 // recordSystemAlert() to persist a durable alert row (viewable in admin) and,
@@ -79,17 +80,40 @@ export async function recordSystemAlert(input: {
    * /admin/status re-opens the type immediately.
    */
   dedupeWindowMs?: number;
+  /**
+   * How completely the scan behind this alert read its source.
+   *
+   * REQUIRED WHENEVER THE MESSAGE COUNTS A POPULATION — "9 account(s)",
+   * "3 order(s)", "20 approved ambassador(s)". Such a sentence is only true if
+   * the whole population was read, and three alerts on 2026-09-09/10 stated one
+   * from data that could not support it. alert-population-claims.test.ts finds
+   * counted claims and fails the build when one arrives without this.
+   *
+   * A caller whose finding could be MANUFACTURED by the short read should
+   * withhold the alert instead of labelling it; see canConcludeLockout in
+   * auth-health.ts for that shape. This field is for the other case, where the
+   * finding is real but may be undercounted.
+   */
+  scan?: ScanCompleteness;
 }): Promise<void> {
   if (input.dedupeWindowMs && input.dedupeWindowMs > 0) {
     if (await alreadyReportedWithin(input.type, input.dedupeWindowMs)) return;
   }
 
+  // Qualified ONCE, here, so every surface an alert reaches — the row, the
+  // Sentry event, the operator email — carries the same sentence. Doing it at
+  // the call sites would let the three drift apart, which is how the row would
+  // end up honest and the email that wakes somebody at 3am would not.
+  const message = qualifyPopulationClaim(input.message, input.scan);
+  const scanContext = describeScan(input.scan);
+  const context = scanContext ? { ...(input.context ?? {}), ...scanContext } : input.context ?? {};
+
   try {
     await supabaseAdmin.from("system_alerts").insert({
       type: input.type,
       severity: input.severity,
-      message: input.message.slice(0, 2000),
-      context: input.context ?? {},
+      message: message.slice(0, 2000),
+      context,
       created_at: new Date().toISOString(),
     });
   } catch {
@@ -109,10 +133,10 @@ export async function recordSystemAlert(input: {
     const { sentryEnabled } = await import("@/lib/sentry-init");
     if (sentryEnabled()) {
       const Sentry = await import("@sentry/nextjs");
-      Sentry.captureMessage(`${input.type}: ${input.message}`, {
+      Sentry.captureMessage(`${input.type}: ${message}`, {
         level: input.severity === "critical" ? "error" : input.severity,
         tags: { alert_type: input.type, source: "system_alert" },
-        extra: input.context ?? {},
+        extra: context,
       });
     }
   } catch {
@@ -138,12 +162,12 @@ export async function recordSystemAlert(input: {
       const configuredAlertEmail = await getAlertEmailSetting();
       const recipient = configuredAlertEmail || process.env.ALERT_EMAIL?.trim() || (await getBusinessSettings()).supportEmail;
       if (recipient) {
-        const contextJson = JSON.stringify(input.context ?? {}, null, 2);
+        const contextJson = JSON.stringify(context, null, 2);
         await sendEmail({
           to: recipient,
           subject: `⚠ Vanta Labs alert: ${input.type}`,
-          html: `<p><strong>${escapeHtml(input.type)}</strong></p><p>${escapeHtml(input.message)}</p><pre style="font-size:12px;white-space:pre-wrap;">${escapeHtml(contextJson)}</pre>`,
-          text: `${input.type}\n${input.message}\n\n${contextJson}`,
+          html: `<p><strong>${escapeHtml(input.type)}</strong></p><p>${escapeHtml(message)}</p><pre style="font-size:12px;white-space:pre-wrap;">${escapeHtml(contextJson)}</pre>`,
+          text: `${input.type}\n${message}\n\n${contextJson}`,
         });
       }
     } catch {

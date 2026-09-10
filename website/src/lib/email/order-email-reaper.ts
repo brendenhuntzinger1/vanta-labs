@@ -158,6 +158,9 @@ export async function reapStrandedOrderEmails(
           ? `${unrecoverable.length} could NOT be re-queued (order unreadable, no address, or an email this cannot rebuild) — `
             + "resend those by hand from the order page: " + unrecoverable.slice(0, 20).join(", ")
           : ""),
+      // An UPDATE ... RETURNING with no limit: every row matching the filter
+      // is released and returned, so this count is the whole population.
+      scan: { truncated: false, scanned: rows.length },
       context: {
         orders: rows.map((row) => `${String(row.order_id ?? "?")}:${String(row.kind ?? "?")}`).slice(0, 20),
         orderIds: [...new Set(rows.map((row) => String(row.order_id ?? "")).filter(Boolean))].slice(0, 20),

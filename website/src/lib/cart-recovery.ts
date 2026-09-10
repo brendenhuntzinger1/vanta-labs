@@ -930,6 +930,14 @@ function elapsedFor(row: DueCartRow, now: number): number {
  */
 const CART_SWEEP_BUDGET = 200;
 const CART_SCAN_PAGE = 500;
+
+/**
+ * How many unrecognised-status carts to read before reporting.
+ *
+ * Named so the alert can say whether it hit the cap: the count it prints
+ * is only a total while this many rows were not returned.
+ */
+const STRAY_STATUS_SCAN = 50;
 const CART_MAX_SCAN = 5000;
 
 /** Which (cart, stage) slots are already claimed, and when, for a page of carts. */
@@ -1466,7 +1474,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       .from("abandoned_carts")
       .select("id, status, cart_value_cents")
       .not("status", "in", `(${CART_STATUSES.join(",")})`)
-      .limit(50);
+      .limit(STRAY_STATUS_SCAN);
     const rows = (strays ?? []) as Array<{ id: string; status: string | null; cart_value_cents: number | null }>;
     result.unknownStatus = rows.length;
     if (rows.length > 0) {
@@ -1479,6 +1487,8 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
           + `recognise (${[...new Set(rows.map((row) => String(row.status)))].join(", ")}). They receive no further `
           + "recovery stage and cannot be closed by a purchase. Add the status to CART_STATUS_OPEN or "
           + "CART_STATUS_TERMINAL in cart-recovery.ts, then migrate the rows.",
+        // Read under STRAY_STATUS_SCAN; at the cap there are more unseen.
+        scan: { truncated: rows.length >= STRAY_STATUS_SCAN, scanned: rows.length },
         context: { statuses: [...new Set(rows.map((row) => String(row.status)))], count: rows.length, valueCents },
         // One standing problem is not forty-eight criticals a day.
         dedupeWindowMs: 6 * 60 * 60 * 1000,
