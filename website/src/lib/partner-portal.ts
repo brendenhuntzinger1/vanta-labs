@@ -569,8 +569,26 @@ export async function autoApproveEligibleCommissions() {
         return false;
       }
 
-      const orderStatus = orderStatusById.get(row.order_id);
-      if (orderStatus !== "paid") {
+      // THE ORDER STILL HAS TO BE ONE THAT EARNED THE COMMISSION — but "earned"
+      // is wider than the literal string "paid", and this line used to test the
+      // string.
+      //
+      // Two groups were excluded that should never have been. PAID_ORDER_
+      // STATUSES also contains "completed" and "succeeded"; a processor that
+      // reports either left the commission pending for ever. And
+      // REVENUE_ORDER_STATUSES adds "partially_refunded", which ledger.ts:27-38
+      // records as the owner's explicit decision: a $200 order refunded by $50
+      // is $150 of revenue, the sale still counts, and the commission on what
+      // the customer kept is still owed.
+      //
+      // That second case is the common one, not an edge case, because the hold
+      // period exists precisely to span the refund window — so a partial refund
+      // usually lands while the commission is still pending, and stranded it
+      // permanently at `pending` with no error and no admin surface saying why.
+      //
+      // Every sibling call site in this file (lines 1327, 1559, 1722) already
+      // uses isRevenueOrderStatus. This one did not.
+      if (!isRevenueOrderStatus(orderStatusById.get(row.order_id))) {
         return false;
       }
 
@@ -936,28 +954,41 @@ export async function getPartnerProgramStats(): Promise<PartnerProgramStats> {
 
   const hasApprovalData = approvalDurations.length > 0;
 
-  // partner_program_stats holds an admin-configured baseline (set once,
-  // e.g. before launch, to avoid showing a discouraging "$0 everything" to
-  // prospective partners). It is a FLOOR that real tracked activity builds
-  // on top of, not a static override that would hide genuine growth:
-  //   - money-sum metrics (total paid, average earnings) ADD the real
-  //     tracked total/average on top of the baseline, so every real payout
-  //     is still accurately reflected in what's displayed.
-  //   - "top payout" is a MAX against the baseline, since it represents a
-  //     single real high-water mark, not a running sum.
-  //   - approval time uses the real average once any real approval has
-  //     happened (faster or slower than the baseline), since averaging a
-  //     baseline duration with real durations wouldn't be meaningful.
-  const baselineTotalCommissionsPaid = overrides.get("total_commissions_paid_base") ?? 0;
-  const baselineAveragePartnerEarnings = overrides.get("average_partner_earnings_base") ?? 0;
-  const baselineTopPartnerPayout = overrides.get("top_partner_payout_base") ?? 0;
+  // THE THREE MONEY METRICS REPORT TRACKED REALITY AND NOTHING ELSE.
+  //
+  // partner_program_stats holds an admin-configured baseline, and these three
+  // figures used to be built on top of it — the total and the average ADDED it,
+  // the top payout took a MAX against it. The reason was recorded honestly in
+  // the comment that used to sit here: it existed "to avoid showing a
+  // discouraging '$0 everything' to prospective partners".
+  //
+  // That is the problem, not the justification. These numbers are rendered on
+  // the PUBLIC /partner page, under the labels "Total Commissions Paid",
+  // "Average Partner Earnings" and "Top Partner Payout", to people deciding
+  // whether to join. A figure an admin typed in, presented under those labels,
+  // is a representation about what partners actually earn — and earnings claims
+  // to prospective participants are the category regulators treat most harshly
+  // (FTC Act §5; the Business Opportunity Rule; several states have their own
+  // earnings-claim rules on top). "It is only a floor, real payouts add to it"
+  // is not a defence anyone gets to make after the fact: the reader is told
+  // commissions were paid, and they were not.
+  //
+  // So the baseline no longer touches money. An empty programme now reports
+  // zero, and partner-program-landing.tsx omits a money card whose value is
+  // zero rather than printing "$0.00" — which solves the discouraging-zero
+  // problem the baseline was invented for, without inventing a number.
+  //
+  // Approval time KEEPS its baseline. It is a service-level expectation rather
+  // than an earnings claim, an unlaunched programme has no honest measurement
+  // to show instead, and it already yields to the real average the moment one
+  // approval exists.
   const baselineAverageApprovalTimeHours = overrides.get("average_approval_time_hours_base") ?? PRELAUNCH_PARTNER_PROGRAM_STATS.averageApprovalTimeHours;
 
   return {
-    totalCommissionsPaid: roundMoney(baselineTotalCommissionsPaid + totalCommissionsPaid),
-    averagePartnerEarnings: roundMoney(baselineAveragePartnerEarnings + averagePartnerEarnings),
+    totalCommissionsPaid: roundMoney(totalCommissionsPaid),
+    averagePartnerEarnings: roundMoney(averagePartnerEarnings),
     averageApprovalTimeHours: hasApprovalData ? averageApprovalTimeHours : baselineAverageApprovalTimeHours,
-    topPartnerPayout: roundMoney(Math.max(baselineTopPartnerPayout, topPartnerPayout)),
+    topPartnerPayout: roundMoney(topPartnerPayout),
   };
 }
 

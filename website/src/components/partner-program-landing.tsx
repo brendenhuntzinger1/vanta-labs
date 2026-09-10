@@ -370,13 +370,34 @@ export function PartnerProgramLanding({ initialStats, terms }: { initialStats: P
 
           <div className="vl2-glass p-6 sm:p-8">
             <h2 className="vl2-eyebrow">Program Stats</h2>
+            {/*
+              A MONEY CARD APPEARS ONLY ONCE THERE IS MONEY TO REPORT.
+
+              These three figures used to be floored by an admin-set baseline so
+              the panel never showed "$0.00" to a prospective partner. That made
+              them earnings claims about payouts that had not happened — see the
+              long note in getPartnerProgramStats(). The baseline is gone from
+              the money metrics, so the honest value for an unlaunched programme
+              is zero, and the honest presentation of zero is to say nothing at
+              all rather than to advertise it.
+
+              Approval time always renders: it is a service expectation, it has
+              a defensible pre-launch default, and it is the one stat a partner
+              deciding whether to apply can actually use.
+            */}
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <StatCard label="Total Commissions Paid" value={currency(stats.totalCommissionsPaid)} />
-              <StatCard label="Average Partner Earnings" value={currency(stats.averagePartnerEarnings)} />
+              {stats.totalCommissionsPaid > 0 ? (
+                <StatCard label="Total Commissions Paid" value={currency(stats.totalCommissionsPaid)} />
+              ) : null}
+              {stats.averagePartnerEarnings > 0 ? (
+                <StatCard label="Average Partner Earnings" value={currency(stats.averagePartnerEarnings)} />
+              ) : null}
               <StatCard label="Average Approval Time" value={`${stats.averageApprovalTimeHours.toFixed(1)} hrs`} />
-              <div className="sm:col-span-2">
-                <StatCard label="Top Partner Payout" value={currency(stats.topPartnerPayout)} />
-              </div>
+              {stats.topPartnerPayout > 0 ? (
+                <div className="sm:col-span-2">
+                  <StatCard label="Top Partner Payout" value={currency(stats.topPartnerPayout)} />
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
