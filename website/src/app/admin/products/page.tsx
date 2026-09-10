@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -119,9 +119,19 @@ function statusClasses(product: Product) {
   return "bg-emerald-500/15 text-emerald-300 border-emerald-500/30";
 }
 
-function toDoseInput(dose: ProductDose, index: number) {
+/**
+ * Editor state -> API payload.
+ *
+ * `baseline` is the stock this dose held when the server last handed it to us.
+ * It travels with the save so the server can tell "the admin changed stock"
+ * from "the admin changed something else and stock came along for the ride" —
+ * the latter used to revert every sale that landed while the form was open.
+ * See DoseInput.inventoryQuantityAtLoad in src/lib/admin-products.ts.
+ */
+function toDoseInput(dose: ProductDose, index: number, baseline?: Map<string, number>) {
   return {
     id: dose.id,
+    inventoryQuantityAtLoad: dose.id ? baseline?.get(dose.id) : undefined,
     label: dose.label,
     slugSuffix: dose.slugSuffix,
     sku: dose.sku ?? "",
@@ -211,6 +221,22 @@ function VariantEditor({
 export default function AdminProductsPage() {
   const router = useRouter();
   const [products, setProducts] = useState<Product[]>([]);
+  // THE STOCK EACH DOSE HELD WHEN THE SERVER LAST SENT IT.
+  //
+  // Not state: nothing renders from it and it must never trigger a re-render.
+  // It is stamped from every server payload (initial load and post-save) and
+  // read only when building a save, so an edit compares against what this page
+  // actually loaded rather than against whatever the row says now.
+  const stockAtLoadRef = useRef<Map<string, number>>(new Map());
+  const rememberStockAtLoad = useCallback((rows: Product[]) => {
+    const next = new Map(stockAtLoadRef.current);
+    for (const product of rows) {
+      for (const dose of product.doses ?? []) {
+        if (dose.id) next.set(dose.id, Number(dose.inventoryQuantity ?? 0));
+      }
+    }
+    stockAtLoadRef.current = next;
+  }, []);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -273,6 +299,7 @@ export default function AdminProductsPage() {
         throw new Error(json.error ?? "Unable to load products");
       }
       const rows = json.rows ?? [];
+      rememberStockAtLoad(rows);
       setProducts(rows);
       if (selectedProductId && !rows.some((row) => row.id === selectedProductId)) {
         setSelectedProductId(rows[0]?.id ?? null);
@@ -613,7 +640,7 @@ export default function AdminProductsPage() {
           imageUrl: nextProduct.coverImage,
           seoTitle: nextProduct.seoTitle,
           seoDescription: nextProduct.seoDescription,
-          doses: (nextProduct.doses ?? []).map(toDoseInput),
+          doses: (nextProduct.doses ?? []).map((dose, index) => toDoseInput(dose, index, stockAtLoadRef.current)),
         },
       }),
     });
@@ -629,6 +656,10 @@ export default function AdminProductsPage() {
 
     const savedProduct = json.product;
 
+    // The save returned the row as it now stands, so that becomes the new
+    // baseline — otherwise a second save would compare against the pre-save
+    // value and be refused.
+    rememberStockAtLoad([savedProduct]);
     setProducts((prev) => prev.map((product) => (product.id === savedProduct.id ? savedProduct : product)));
     setMessage("Product saved.");
     clearMessageSoon();

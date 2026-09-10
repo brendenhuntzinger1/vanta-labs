@@ -7,6 +7,7 @@ import type { Product, ProductBadge, ProductDose, ProductFaqItem, ProductImage }
 import { parseProductFaq } from "@/lib/product-faq";
 import { resolveProductImage } from "@/lib/product-image";
 import { imageExtensionFor, MAX_PRODUCT_IMAGE_BYTES, sniffImageType } from "@/lib/image-upload-safety";
+import { CustomerFacingError } from "@/lib/safe-error";
 
 export type AdminProductStatusFilter = "all" | "published" | "draft" | "archived" | "disabled";
 
@@ -22,6 +23,28 @@ export type DoseInput = {
    *  customers. Feeds profit calculations only. */
   productCostCents?: number | null;
   inventoryQuantity: number;
+  /**
+   * The stock count this dose HELD WHEN THE EDITOR LOADED IT.
+   *
+   * Stock is not an editor-owned field like a price or a label; it is
+   * operational state that checkout, the reservation sweeper and Admin →
+   * Inventory all write. The product form nonetheless shows it and posts it
+   * back, so an ordinary save — renaming a dose, fixing a typo, uploading a COA
+   * — re-asserted whatever number the page happened to load, silently reverting
+   * every sale that had landed in between.
+   *
+   * Carrying the load-time value lets the save tell the two cases apart: equal
+   * means the admin did not touch stock and the write is skipped entirely, so a
+   * concurrent sale survives; different means the admin meant it, and the write
+   * goes through as a compare-and-set against this value so a sale landing
+   * mid-edit is refused loudly instead of being overwritten.
+   *
+   * Optional because an older client (or a create) may not send it. When it is
+   * absent the previous behaviour is kept for INSERTS, where there is no
+   * existing stock to lose, and the write is skipped for UPDATES, where there
+   * is.
+   */
+  inventoryQuantityAtLoad?: number;
   stockStatus?: Product["stockStatus"];
   batchNumber?: string;
   coaUrl?: string;
@@ -350,6 +373,12 @@ async function getNextProductPosition() {
  * field for any of them, so an editor payload can only ever reset them to their
  * schema defaults. They are preserved on update and left to default only when a
  * dose is genuinely new.
+ *
+ * `inventory_quantity` and `stock_status` are the SAME KIND of thing and were in
+ * here anyway, which is the whole defect: every save re-asserted the stock count
+ * the page had loaded, so an ordinary edit silently reverted any sale that
+ * landed while the form was open. They now come from `stockValuesForWrite()`,
+ * which returns them only when the admin actually changed the number.
  */
 function editableDoseValues(dose: DoseInput, index: number, doses: DoseInput[]) {
   return {
@@ -360,8 +389,6 @@ function editableDoseValues(dose: DoseInput, index: number, doses: DoseInput[]) 
     compare_at_price_cents: Math.max(0, Math.round(dose.compareAtPriceCents ?? 0)),
     sale_price_cents: Math.max(0, Math.round(dose.salePriceCents ?? 0)),
     product_cost_cents: dose.productCostCents == null ? null : Math.max(0, Math.round(dose.productCostCents)),
-    inventory_quantity: Math.max(0, Math.round(dose.inventoryQuantity)),
-    stock_status: normalizeStockStatus(dose.stockStatus, dose.inventoryQuantity),
     batch_number: dose.batchNumber ?? null,
     coa_url: dose.coaUrl ?? null,
     image_url: dose.imageUrl ?? null,
@@ -370,6 +397,35 @@ function editableDoseValues(dose: DoseInput, index: number, doses: DoseInput[]) 
     is_enabled: dose.isEnabled ?? true,
     position: dose.position ?? index,
     updated_at: new Date().toISOString(),
+  };
+}
+
+/**
+ * The stock columns, ONLY when the admin actually changed them.
+ *
+ * `intent` separates the two cases that must not share a rule:
+ *
+ *   "insert" — a brand new dose. There is no existing stock to lose, so the
+ *              submitted number is the truth and is always written.
+ *   "update" — an existing dose. The number is written only when it differs
+ *              from what the editor loaded. Equal means the admin left the
+ *              field alone, and re-writing it is exactly how a sale that landed
+ *              mid-edit used to get reverted. An absent baseline is treated as
+ *              "did not touch it", which is the safe direction: a stale client
+ *              loses the ability to edit stock from this form, rather than
+ *              silently corrupting it.
+ */
+export function stockValuesForWrite(dose: DoseInput, intent: "insert" | "update") {
+  const submitted = Math.max(0, Math.round(dose.inventoryQuantity));
+
+  if (intent === "update") {
+    if (dose.inventoryQuantityAtLoad == null) return {};
+    if (Math.max(0, Math.round(dose.inventoryQuantityAtLoad)) === submitted) return {};
+  }
+
+  return {
+    inventory_quantity: submitted,
+    stock_status: normalizeStockStatus(dose.stockStatus, dose.inventoryQuantity),
   };
 }
 
@@ -402,6 +458,7 @@ async function createDoseRows(
     id: dose.id ?? randomUUID(),
     product_id: productId,
     ...editableDoseValues(dose, index, allDoses),
+    ...stockValuesForWrite(dose, "insert"),
     created_at: new Date().toISOString(),
   }));
 
@@ -1151,7 +1208,13 @@ export async function replaceProductDoses(productId: string, doses: DoseInput[])
   );
 
   const claimed = new Set<string>();
-  const updates: Array<{ id: string; values: ReturnType<typeof editableDoseValues> }> = [];
+  const updates: Array<{
+    id: string;
+    values: ReturnType<typeof editableDoseValues> & { inventory_quantity?: number; stock_status?: string };
+    /** Set only when the admin changed stock, and then it is the value to compare-and-set against. */
+    expectedInventory: number | null;
+    label: string;
+  }> = [];
   // The index travels WITH the dose. `position` and `is_default` are derived
   // from where a dose sits in the admin's whole list, so a subset must not be
   // re-indexed from zero (review finding 3).
@@ -1165,19 +1228,51 @@ export async function replaceProductDoses(productId: string, doses: DoseInput[])
 
     if (match && !claimed.has(match.id)) {
       claimed.add(match.id);
-      updates.push({ id: match.id, values: editableDoseValues(dose, index, doses) });
+      const stock = stockValuesForWrite(dose, "update");
+      updates.push({
+        id: match.id,
+        values: { ...editableDoseValues(dose, index, doses), ...stock },
+        expectedInventory:
+          "inventory_quantity" in stock ? Math.max(0, Math.round(dose.inventoryQuantityAtLoad ?? 0)) : null,
+        label: dose.label.trim() || dose.slugSuffix.trim() || match.id,
+      });
     } else {
       inserts.push({ dose, index });
     }
   });
 
   for (const update of updates) {
-    const { error } = await supabaseAdmin
-      .from("product_doses")
-      .update(update.values)
-      .eq("id", update.id);
+    // A DELIBERATE STOCK EDIT IS A COMPARE-AND-SET, NOT A BLIND WRITE.
+    //
+    // When the admin genuinely changed the number we still must not overwrite a
+    // sale that landed while the form was open. Constraining the update to the
+    // row still holding the value the editor loaded means the write applies or
+    // it does not — and if it does not, the admin is told, rather than the sale
+    // being silently reverted. Everything else in the payload (price, label,
+    // COA, position) writes unconditionally as before.
+    const query = supabaseAdmin.from("product_doses").update(update.values).eq("id", update.id);
+    const { data, error } =
+      update.expectedInventory == null
+        ? await query.select("id")
+        : await query.eq("inventory_quantity", update.expectedInventory).select("id");
+
     if (error) {
       throw error;
+    }
+
+    if (update.expectedInventory != null && (!Array.isArray(data) || data.length === 0)) {
+      const { data: current } = await supabaseAdmin
+        .from("product_doses")
+        .select("inventory_quantity")
+        .eq("id", update.id)
+        .maybeSingle();
+
+      throw new CustomerFacingError(
+        `Stock for "${update.label}" changed while you were editing — it is now `
+        + `${current?.inventory_quantity ?? "unknown"}, not the ${update.expectedInventory} this form loaded. `
+        + "Nothing was saved for this dose. Reopen the product and re-apply your change, "
+        + "or set stock from Admin → Inventory, which keeps the ledger.",
+      );
     }
   }
 
