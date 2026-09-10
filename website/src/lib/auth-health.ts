@@ -53,6 +53,15 @@ export interface StalledSignupSummary {
   stalled: number;
   /** Mailbox domains of the stalled accounts, with counts. Never full addresses. */
   domains: Record<string, number>;
+  /**
+   * Every signup that fell in the same window — past the grace period, inside
+   * the lookback — whether or not it confirmed. The denominator without which
+   * `domains` cannot be read: five stalled Gmail accounts is a provider
+   * refusing us if Gmail sent five signups that week, and ordinary attrition
+   * if it sent eighty.
+   */
+  signups: number;
+  signupsByDomain: Record<string, number>;
   oldestCreatedAt: string | null;
   alerted: boolean;
 }
@@ -86,30 +95,119 @@ export function summariseStalledSignups(users: AuthUserLike[], now: number): Omi
   const lookbackAfter = now - STALLED_SIGNUP_LOOKBACK_MS;
 
   const domains: Record<string, number> = {};
+  const signupsByDomain: Record<string, number> = {};
   let stalled = 0;
+  let signups = 0;
   let oldest: string | null = null;
 
   for (const user of users) {
+    const createdAt = user.created_at ? Date.parse(user.created_at) : NaN;
+    if (!Number.isFinite(createdAt)) continue;
+    if (createdAt > stalledBefore) continue;   // still within the grace window
+    if (createdAt < lookbackAfter) continue;   // old enough to be a change of mind
+
+    // In the window, so it counts towards the denominator whatever happened next.
+    const domain = domainOf(user.email);
+    signups += 1;
+    signupsByDomain[domain] = (signupsByDomain[domain] ?? 0) + 1;
+
     // `confirmed_at` is a generated column in newer GoTrue and can be set by a
     // phone confirmation; either one means this person got in.
     if (user.email_confirmed_at || user.confirmed_at) continue;
     // Someone who has signed in does not need the confirmation link.
     if (user.last_sign_in_at) continue;
 
-    const createdAt = user.created_at ? Date.parse(user.created_at) : NaN;
-    if (!Number.isFinite(createdAt)) continue;
-    if (createdAt > stalledBefore) continue;   // still within the grace window
-    if (createdAt < lookbackAfter) continue;   // old enough to be a change of mind
-
     stalled += 1;
-    const domain = domainOf(user.email);
     domains[domain] = (domains[domain] ?? 0) + 1;
     if (!oldest || createdAt < Date.parse(oldest)) {
       oldest = user.created_at ?? null;
     }
   }
 
-  return { scanned: users.length, stalled, domains, oldestCreatedAt: oldest };
+  return { scanned: users.length, stalled, domains, signups, signupsByDomain, oldestCreatedAt: oldest };
+}
+
+// ---------------------------------------------------------------------------
+// WHICH PROVIDER TO LOOK AT, IF ANY.
+//
+// This note used to name whichever domain had the MOST stalled accounts, with
+// "check whether that provider is rejecting or spam-filing our sending
+// domain". On 2026-09-10 that read "5 of them are @gmail.com". Gmail had sent
+// eighty-odd signups that week and confirmed more than ninety percent of them;
+// iCloud had sent six and confirmed two. The alert sent the operator to the
+// provider that was fine, and said nothing about the one that was not.
+//
+// The largest count is not the outlier. The worst SHARE is — and only when the
+// sample is big enough for a share to mean anything, which is why a mistyped
+// domain (one signup, one stall, a hundred percent) never qualifies.
+// ---------------------------------------------------------------------------
+
+/** A provider needs this many signups in the window before its share means anything. */
+const PROVIDER_MIN_SIGNUPS = 3;
+/** And this many stalled, so a single address cannot indict a domain. */
+const PROVIDER_MIN_STALLED = 2;
+/** Its stalled share must reach this, and be this multiple of the overall share. */
+const PROVIDER_OUTLIER_SHARE = 0.5;
+const PROVIDER_OUTLIER_MULTIPLE = 3;
+/** Past this overall share nothing stands out because everything is failing: that is our sending. */
+const EVERY_PROVIDER_SHARE = 0.5;
+
+/**
+ * The sentence that tells the operator where to look, and the domains it names.
+ *
+ * Three answers. A provider whose stalled share is out of line with the rest is
+ * named, with its own figures and the overall ones beside them. If no provider
+ * stands out but most signups are stalling, the problem is upstream of every
+ * provider — our domain, our sender, our link — and the note says so. And if
+ * neither, the stalled accounts are in proportion to signups, which is spam
+ * folders and changed minds, and the note says that too rather than sending
+ * anyone to inspect a mailbox provider that is behaving normally.
+ */
+export function describeStalledProviders(
+  summary: Pick<StalledSignupSummary, "stalled" | "signups" | "domains" | "signupsByDomain">,
+): { note: string; outliers: string[] } {
+  const { stalled, signups, domains, signupsByDomain } = summary;
+  const overallShare = signups > 0 ? stalled / signups : 0;
+  const shareOf = (domain: string) => (domains[domain] ?? 0) / Math.max(1, signupsByDomain[domain] ?? 0);
+
+  const outliers = Object.keys(domains)
+    .filter((domain) => {
+      const stalledHere = domains[domain] ?? 0;
+      const signupsHere = signupsByDomain[domain] ?? 0;
+      if (stalledHere < PROVIDER_MIN_STALLED || signupsHere < PROVIDER_MIN_SIGNUPS) return false;
+      const share = stalledHere / signupsHere;
+      return share >= PROVIDER_OUTLIER_SHARE && share >= PROVIDER_OUTLIER_MULTIPLE * overallShare;
+    })
+    .sort((a, b) => shareOf(b) - shareOf(a));
+
+  if (outliers.length > 0) {
+    const named = outliers
+      .map((domain) => `${domains[domain]} of the ${signupsByDomain[domain]} @${domain}`)
+      .join(" and ");
+    return {
+      outliers,
+      note:
+        ` ${named} signups in the window are stalled, against ${stalled} of ${signups} overall — check`
+        + " whether that provider is rejecting or spam-filing our sending domain.",
+    };
+  }
+
+  if (signups >= PROVIDER_MIN_SIGNUPS && overallShare >= EVERY_PROVIDER_SHARE) {
+    return {
+      outliers,
+      note:
+        ` ${stalled} of ${signups} signups in the window are stalled, across every provider — that points`
+        + " at our own sending (domain, sender address, or the link itself) rather than at any one mailbox provider.",
+    };
+  }
+
+  return {
+    outliers,
+    note:
+      ` No single provider stands out: ${stalled} of ${signups} signups in the window are stalled and they`
+      + " are spread in proportion to signups, so this is more likely spam-folder placement or customers who"
+      + " changed their mind than a provider refusing us.",
+  };
 }
 
 /**
@@ -145,11 +243,8 @@ export async function alertOnStalledSignups(): Promise<StalledSignupSummary> {
     return { ...summary, alerted: false };
   }
 
-  const worstDomain = Object.entries(summary.domains).sort((a, b) => b[1] - a[1])[0];
-  const domainNote = worstDomain && worstDomain[1] > 1
-    ? ` ${worstDomain[1]} of them are @${worstDomain[0]} — check whether that provider is rejecting`
-      + " or spam-filing our sending domain."
-    : "";
+  // Not the domain with the most stalled accounts — see describeStalledProviders.
+  const providers = describeStalledProviders(summary);
 
   await recordSystemAlert({
     type: "signup_confirmation_stalled",
@@ -157,7 +252,7 @@ export async function alertOnStalledSignups(): Promise<StalledSignupSummary> {
     message:
       `${summary.stalled} account(s) have been waiting on an email confirmation for more than `
       + `${Math.round(STALLED_SIGNUP_AFTER_MS / 3_600_000)}h and have never signed in.`
-      + domainNote
+      + providers.note
       // AN ALERT THAT NAMES THE WRONG SYSTEM IS WORSE THAN NO ALERT.
       //
       // This used to read "Confirmation email is sent by Supabase Auth, not by
@@ -189,6 +284,9 @@ export async function alertOnStalledSignups(): Promise<StalledSignupSummary> {
       stalled: summary.stalled,
       scanned: summary.scanned,
       domains: summary.domains,
+      signups: summary.signups,
+      signupsByDomain: summary.signupsByDomain,
+      providerOutliers: providers.outliers,
       oldestCreatedAt: summary.oldestCreatedAt,
     },
     dedupeWindowMs: ALERT_DEDUPE_MS,
