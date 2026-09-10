@@ -26,7 +26,8 @@
     "qa:amounts:mobile": "QA_VIEWPORT=mobile node scripts/qa-amount-matrix.mjs",
     "qa:edge": "node scripts/qa-checkout-edge-matrix.mjs",
     "qa:crawl": "node scripts/qa-customer-crawl.mjs",
-    "qa:matrix": "node scripts/qa-surface-matrix.mjs"
+    "qa:matrix": "node scripts/qa-surface-matrix.mjs",
+    "qa:sweep": "node scripts/qa-admin-and-a11y-sweep.mjs"
   },
   "dependencies": {
     "@basis-theory/basis-theory-js": "^4.30.2",
