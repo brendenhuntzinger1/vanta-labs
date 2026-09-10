@@ -11,6 +11,7 @@ import {
 } from "@/lib/email/templates";
 import { isMarketingSuppressed, sendMarketingEmail } from "@/lib/email/marketing";
 import { claimMarketingSend } from "@/lib/email/frequency";
+import { internalAddressConfig, isInternalAddress } from "@/lib/email/internal-addresses";
 import {
   findLiveCouponForCart,
   loadRecoveryCatalogue,
@@ -103,7 +104,25 @@ export async function listAbandonedCarts(limit = 100): Promise<AbandonedCartRow[
 
 export interface CartRecoveryStats {
   totalAbandoned: number;
+  /**
+   * Carts closed by ANY paid order from that address inside the window.
+   *
+   * "Did they come back" — not "did we bring them back". Keep the two apart
+   * when rendering: this one reported ten recoveries on 2026-09-10 of which
+   * none could be credited to a recovery email.
+   */
   totalRecovered: number;
+  /**
+   * Carts where one of this cart's OWN recovery emails was clicked.
+   *
+   * The number to judge the programme by. See the derivation in
+   * getCartRecoveryStats.
+   */
+  attributedRecovered: number;
+  /** Distinct orders behind `totalRecovered` — one purchase is one recovery. */
+  recoveredOrderCount: number;
+  /** Carts left out of every figure here because the address is ours. */
+  internalCartsExcluded: number;
   recoveryPercent: number;
   potentialLostRevenueCents: number;
   /**
@@ -130,7 +149,9 @@ export async function getCartRecoveryStats(): Promise<CartRecoveryStats> {
   // the recovery rate of whichever 1000 carts came back as though it were the
   // store's. `id` is the deterministic page key; `first_seen_at` is not unique,
   // so paging on it alone could repeat or skip a cart across a boundary.
-  const { rows } = await readAllRowsBounded<{
+  const { rows: allCartRows } = await readAllRowsBounded<{
+    id: string;
+    email: string | null;
     status: string;
     cart_value_cents: number | null;
     first_seen_at: string;
@@ -138,18 +159,39 @@ export async function getCartRecoveryStats(): Promise<CartRecoveryStats> {
   }>(
     (from, to) => supabaseAdmin
       .from("abandoned_carts")
-      .select("status, cart_value_cents, first_seen_at, recovered_order_id")
+      .select("id, email, status, cart_value_cents, first_seen_at, recovered_order_id")
       .order("id", { ascending: true })
       .range(from, to) as unknown as PromiseLike<{
-        data: { status: string; cart_value_cents: number | null; first_seen_at: string; recovered_order_id: string | null }[] | null;
+        data: { id: string; email: string | null; status: string; cart_value_cents: number | null; first_seen_at: string; recovered_order_id: string | null }[] | null;
         error: unknown;
       }>,
     { maxRows: MAX_RECOVERY_ROWS, label: "cart recovery stats read" },
   );
 
+  // OUR OWN TESTING IS NOT CUSTOMER BEHAVIOUR. The owner's two addresses were
+  // 25% of carts and 60% of reported recoveries, and they "recover" at 54.5%
+  // against 13.8% for real customers because the owner completes the carts
+  // they open while testing. Reporting only — internal addresses still receive
+  // every message. See email/internal-addresses.ts.
+  const internalConfig = internalAddressConfig();
+  const rows = allCartRows.filter((row) => !isInternalAddress(row.email, internalConfig));
+  const internalCartsExcluded = allCartRows.length - rows.length;
+
   const totalAbandoned = rows.length;
   const recoveredRows = rows.filter((row) => row.status === "recovered");
   const totalRecovered = recoveredRows.length;
+
+  // ONE ORDER IS ONE RECOVERY, however many carts it closed.
+  //
+  // A shopper who opens four carts and then buys once had ONE order recovered,
+  // not four. Production carried exactly this: order-b8a56a42 was the
+  // recovered_order_id of four separate carts, so the cart count reported four
+  // recoveries for one purchase while the revenue tile — which reads orders
+  // through `.in()` and therefore de-duplicates for free — counted it once.
+  // The two tiles disagreed, and the count was the one that was wrong.
+  const recoveredOrderCount = new Set(
+    recoveredRows.map((row) => row.recovered_order_id).filter((id): id is string => Boolean(id)),
+  ).size;
   const potentialLostRevenueCents = rows
     .filter((row) => row.status === "active")
     .reduce((sum, row) => sum + Number(row.cart_value_cents ?? 0), 0);
@@ -205,7 +247,8 @@ export async function getCartRecoveryStats(): Promise<CartRecoveryStats> {
   // Paged for the same reason as the cart read: the open and click rates are
   // ratios over the WHOLE of this table, and a capped read makes them the rates
   // of one arbitrary page.
-  const { rows: sentEmails } = await readAllRowsBounded<{
+  const { rows: allSentEmails } = await readAllRowsBounded<{
+    abandoned_cart_id: string;
     stage: string;
     sent_at: string | null;
     opened_at: string | null;
@@ -214,14 +257,48 @@ export async function getCartRecoveryStats(): Promise<CartRecoveryStats> {
   }>(
     (from, to) => supabaseAdmin
       .from("abandoned_cart_emails")
-      .select("stage, sent_at, opened_at, clicked_at, coupon_id")
+      .select("abandoned_cart_id, stage, sent_at, opened_at, clicked_at, coupon_id")
       .order("id", { ascending: true })
       .range(from, to) as unknown as PromiseLike<{
-        data: { stage: string; sent_at: string | null; opened_at: string | null; clicked_at: string | null; coupon_id: string | null }[] | null;
+        data: { abandoned_cart_id: string; stage: string; sent_at: string | null; opened_at: string | null; clicked_at: string | null; coupon_id: string | null }[] | null;
         error: unknown;
       }>,
     { maxRows: MAX_RECOVERY_ROWS, label: "cart recovery email read" },
   );
+
+  // The same exclusion as the carts above, or the open and click rates would
+  // still be measured over our own reading of our own mail.
+  //
+  // EXCLUDE THE KNOWN-INTERNAL, rather than keeping only the known-external.
+  // The two are not equivalent and the difference is F-A-14 again: the cart
+  // read is bounded, so keeping only emails whose cart came back in it would
+  // silently drop every email belonging to a cart beyond that bound and report
+  // the open rate of whatever fitted. An email whose cart is unknown here is
+  // counted, which is the same direction internal-addresses.ts argues for —
+  // over-exclusion hides real behaviour and is the harder failure to notice.
+  const internalCartIds = new Set(
+    allCartRows.filter((row) => isInternalAddress(row.email, internalConfig)).map((row) => row.id),
+  );
+  const sentEmails = allSentEmails.filter((row) => !internalCartIds.has(row.abandoned_cart_id));
+
+  // WHAT THE PROGRAMME CAN ACTUALLY TAKE CREDIT FOR.
+  //
+  // `totalRecovered` counts a cart as recovered whenever a paid order arrives
+  // from that address inside the window — click or no click, email or no
+  // email. That answers "did they come back", which is worth knowing and is
+  // NOT the same question as "did we bring them back". On 2026-09-10 the
+  // dashboard reported ten recoveries; six were the owner, two of the
+  // remaining four had been sent no recovery email AT ALL, one was an
+  // ambassador referral, and the last never opened either message.
+  //
+  // A cart counts here only if one of its own recovery emails was clicked.
+  // That is the weakest claim that is still a claim, and it is the number to
+  // judge the programme by; the looser one stays beside it, labelled for what
+  // it is, because a fall in either is worth seeing.
+  const clickedCartIds = new Set(
+    allSentEmails.filter((row) => row.clicked_at).map((row) => row.abandoned_cart_id),
+  );
+  const attributedRecovered = recoveredRows.filter((row) => clickedCartIds.has(row.id)).length;
 
   // Per stage, in sequence order, so the funnel reads top to bottom.
   const stageOrder = ["t30m", "t12h", "t24h", "t72h"];
@@ -284,6 +361,9 @@ export async function getCartRecoveryStats(): Promise<CartRecoveryStats> {
   return {
     totalAbandoned,
     totalRecovered,
+    attributedRecovered,
+    recoveredOrderCount,
+    internalCartsExcluded,
     recoveryPercent: totalAbandoned > 0 ? Math.round((totalRecovered / totalAbandoned) * 1000) / 10 : 0,
     potentialLostRevenueCents,
     revenueRecoveredCents,

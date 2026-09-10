@@ -119,13 +119,31 @@ describe("an operator pressing refresh", () => {
   });
 });
 
-describe("the sweep's failure alert", () => {
-  it("carries a dedupe window, like the timeout alert beside it", () => {
-    const route = readFileSync(
-      join(process.cwd(), "src/app/api/cron/sweep/route.ts"),
-      "utf8",
-    );
-    const block = route.slice(route.indexOf('type: "cron_sweep_failed"'));
+describe("a scheduled job's failure alert", () => {
+  // ONE STANDING PROBLEM IS NOT FORTY-EIGHT CRITICALS A DAY.
+  //
+  // A job failing for a durable cause — a provider plan limit, a revoked
+  // grant, a broken migration — used to write 48 unresolved criticals and send
+  // 48 operator emails a day, burying the genuine ones underneath. Both alerts
+  // must therefore carry a dedupe window.
+  //
+  // The alerting moved out of the sweep route into cron-runner.ts when
+  // lifecycle mail was given its own schedule, so this now reads it there —
+  // which also means one assertion covers BOTH schedules instead of only the
+  // sweep, and a future third one gets it for free.
+  const runner = readFileSync(join(process.cwd(), "src/lib/cron-runner.ts"), "utf8");
+
+  it.each(["_failed", "_timeout"])("carries a dedupe window on the %s alert", (suffix) => {
+    const block = runner.slice(runner.indexOf(`type: \`cron_\${group}${suffix}\``));
+    expect(block).not.toBe("");
     expect(block.slice(0, block.indexOf("});"))).toContain("dedupeWindowMs");
+  });
+
+  it("bounds a silent outage to a handful of ticks rather than half a day", () => {
+    // Six hours behind a 30-minute schedule hid up to twelve consecutive
+    // missed ticks — and for cart recovery a missed tick can close a stage
+    // window permanently, so the message is never sent at all rather than sent
+    // late.
+    expect(runner).toContain("CRON_ALERT_DEDUPE_MS = 2 * 60 * 60 * 1000");
   });
 });

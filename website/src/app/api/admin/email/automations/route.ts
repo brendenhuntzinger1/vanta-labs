@@ -3,6 +3,8 @@ import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest
 import { canManageEmailCampaigns } from "@/lib/admin-roles";
 import { isAutomationKey } from "@/lib/email/automations";
 import { normalizeSitePathInput } from "@/lib/email/cta-path";
+import { ctaPathReachesStore } from "@/lib/email/link-grant";
+import { findCopyComplianceIssueIn } from "@/lib/email/copy-compliance";
 import { isOfferKey } from "@/lib/offers/customer-offers";
 import { getSiteUrl } from "@/lib/env";
 import { supabaseAdmin } from "@/lib/supabase-server";
@@ -49,6 +51,53 @@ export async function PATCH(request: Request) {
   if (ctaPath === null) {
     return NextResponse.json(
       { success: false, error: "The button link must point at this site — a path like /products, or its full https:// address." },
+      { status: 400 },
+    );
+  }
+  // THE BRAND'S OWN COPY RULES, CHECKED WHERE THEY CAN STOP SOMETHING.
+  //
+  // brand.md and compliance.md both state "no emojis, no exclamation marks"
+  // absolutely, and nothing checked either — so this automation shipped for
+  // weeks with the headline "RESEARCH. TESTED. TRANSPARENT 🧪" to 54
+  // recipients, at the worst open rate of any message the store sends. An
+  // emoji in a subject line is a spam signal as well as off-voice.
+  const copyIssue = findCopyComplianceIssueIn([
+    { label: "Subject", value: subject },
+    { label: "Headline", value: headline },
+    { label: "Message", value: messageBody },
+    { label: "Button text", value: String(body.ctaLabel ?? "") },
+  ]);
+  if (copyIssue) {
+    return NextResponse.json({ success: false, error: copyIssue }, { status: 400 });
+  }
+
+  // A DESTINATION THE RECIPIENT CANNOT REACH IS NOT A DESTINATION.
+  //
+  // This store is account-only by default, and an email grant opens the
+  // catalogue and the checkout — deliberately NOT order history or any other
+  // account surface, because a forwarded email would then hand a stranger
+  // somebody's addresses and order totals.
+  //
+  // So a stored cta_path outside that set sends the recipient to a sign-in
+  // page. It is not hypothetical: `post_purchase` and `replenishment` both
+  // pointed at /account/orders, and `replenishment` carried a real paid
+  // incentive (free shipping + 10%) into that dead end. Between them they
+  // produced 0 clicks on 75 sends, and nothing anywhere said why.
+  //
+  // ctaPathReachesStore already answered this question and was wired to
+  // nothing on the write path — the check existed, the save ignored it. It is
+  // a refusal rather than a warning because the failure it prevents is
+  // invisible from the admin: the message sends, the click is recorded, and
+  // only the conversion is missing.
+  if (ctaPath && !ctaPathReachesStore(ctaPath)) {
+    return NextResponse.json(
+      {
+        success: false,
+        error:
+          `Recipients cannot reach ${ctaPath} from an email — the store needs an account and that page is not one an `
+          + "email link can open, so they would land on the sign-in page instead. Point the button at the home page, "
+          + "/products, /research, a product page, or /cart.",
+      },
       { status: 400 },
     );
   }

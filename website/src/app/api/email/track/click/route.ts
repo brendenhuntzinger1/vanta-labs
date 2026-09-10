@@ -15,6 +15,7 @@ import {
   encodeCartRecoveryCookie,
 } from "@/lib/email/cart-recovery-links";
 import { utmForCartRecovery } from "@/lib/email/utm";
+import { attachEmailLinkGrant } from "@/lib/email/recipient-attestation";
 
 export const dynamic = "force-dynamic";
 
@@ -59,6 +60,7 @@ export async function GET(request: NextRequest) {
     } catch {
       // Non-fatal - the redirect still needs to happen.
     }
+    // (the second read below covers a repeat click, which is still a click)
     if (!clickedCartId) {
       // A SECOND CLICK ON THE SAME EMAIL IS STILL A CLICK. The update above is
       // conditioned on clicked_at being null so the timestamp keeps meaning
@@ -110,6 +112,37 @@ export async function GET(request: NextRequest) {
   // Tagged last, after the guest-grant parameter is attached, so nothing
   // downstream rewrites the query string out from under it.
   const response = NextResponse.redirect(utmForCartRecovery(destination, clickedStage));
+
+  // A RECOVERY CLICKER MAY ALSO BROWSE, NOT ONLY CHECK OUT.
+  //
+  // The guest grant above is cart-scoped by design: /cart, /checkout and the
+  // endpoints those need, and nothing else. That is right for the button, and
+  // it is wrong for everything else a recovery email points at. The 12-hour
+  // message is built around the COA library, and the link answering the
+  // objection that message exists to answer landed every reader on a sign-in
+  // page — verified in production, signed out: /coa-library 307s to
+  // /account/login. The same was true of any shopper who wanted to add one
+  // more item before checking out.
+  //
+  // So the recovery tracker now does what the campaign and automation trackers
+  // already did: mint the ordinary marketing browse grant beside the cart one.
+  // attachEmailLinkGrant checks attestation server-side and FAILS CLOSED, so
+  // this waves nobody past the 21+ and research-use-only representations —
+  // someone who has never made them still meets the sign-in form, which is
+  // correct. Best-effort and never blocks the redirect.
+  if (clickedCartId) {
+    try {
+      const { data } = await supabaseAdmin
+        .from("abandoned_carts")
+        .select("email")
+        .eq("id", clickedCartId)
+        .maybeSingle();
+      const recipient = String((data as { email?: string | null } | null)?.email ?? "").trim();
+      if (recipient) await attachEmailLinkGrant(response, recipient);
+    } catch {
+      // The cart grant already covers the journey the button is for.
+    }
+  }
 
   if (grant) {
     response.cookies.set({

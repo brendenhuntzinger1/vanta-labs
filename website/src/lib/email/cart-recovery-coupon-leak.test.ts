@@ -111,6 +111,12 @@ vi.mock("@/lib/supabase-server", () => {
       const b: Record<string, unknown> = {
         select: () => b,
         eq: () => b,
+        // The sweep selects NON-TERMINAL statuses (CART_STATUS_OPEN) rather
+        // than equality with 'active' — a single-status filter froze four carts
+        // worth $1,980.90 mid-sequence with nothing to report it.
+        in: () => b,
+        not: () => b,
+        limit: () => b,
         gte: () => b,
         or: () => b,
         order: () => b,

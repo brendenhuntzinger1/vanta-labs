@@ -1794,15 +1794,39 @@ function recoveryCartRowHtml(item: RecoveryCartLine) {
     + `</tr>`;
 }
 
+/**
+ * "CART TOTAL" WAS NOT THE TOTAL, AND THE SHOPPER READ IT AS ONE.
+ *
+ * Driven in a browser on 2026-09-10 as a guest on a real recovery link: the
+ * email said "Cart total: $185.99" and the checkout asked for $210.99 — 13.4%
+ * more, being $15.00 shipping, a pre-ticked $10.75 shipping protection and a
+ * 3% card service fee. The ITEM prices were honest; the subtotal was even
+ * lower than the email's figure ($179.09, a bundle discount). What was
+ * dishonest was the word "total" on a number that excludes everything added
+ * afterwards.
+ *
+ * This is the one line every recovery stage renders, so naming it correctly
+ * here fixes all four at once — and the disclosure sits with the figure rather
+ * than in each template's prose, where three of the four would have been
+ * missed.
+ *
+ * WHY NOT SHOW THE REAL ALL-IN TOTAL INSTEAD. Shipping needs an address the
+ * cart does not have, and the card fee depends on a payment method not yet
+ * chosen. A confident wrong number is worse than an honest partial one; an
+ * estimate that moves at checkout is the same broken promise with extra steps.
+ */
+const CHECKOUT_COST_DISCLOSURE = "Shipping, tax and any options are added at checkout.";
+
 function cartSummaryHtml(items: RecoveryCartLine[], cartValueCents: number) {
   const rows = items.map(recoveryCartRowHtml).join("");
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" `
     + `style="margin:18px 0 0;border-top:1px solid rgba(255,255,255,0.10);">${rows}</table>`
     + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" `
     + `style="border-top:1px solid rgba(255,255,255,0.10);margin-top:2px;">`
-    + `<tr><td style="padding:14px 0 0;color:#a3a3a3;font-size:14px;">Cart total</td>`
+    + `<tr><td style="padding:14px 0 0;color:#a3a3a3;font-size:14px;">Items total</td>`
     + `<td style="padding:14px 0 0;text-align:right;color:#ffffff;font-size:16px;font-weight:700;">`
-    + `${money(cartValueCents / 100)}</td></tr></table>`;
+    + `${money(cartValueCents / 100)}</td></tr></table>`
+    + `<p style="margin:8px 0 0;color:#a3a3a3;font-size:12px;line-height:1.5;">${CHECKOUT_COST_DISCLOSURE}</p>`;
 }
 
 function cartSummaryText(items: RecoveryCartLine[], cartValueCents: number): string[] {
@@ -1814,7 +1838,8 @@ function cartSummaryText(items: RecoveryCartLine[], cartValueCents: number): str
       return `${i.name} x ${quantity}${total}`;
     }),
     "",
-    `Cart total: ${money(cartValueCents / 100)}`,
+    `Items total: ${money(cartValueCents / 100)}`,
+    CHECKOUT_COST_DISCLOSURE,
   ];
 }
 
@@ -1870,7 +1895,14 @@ export function cartRecoveryT30mTemplate(input: { name: string; items: Array<{ n
     html: renderLayout({
       preheader: "Everything you selected, at the price you saw.",
       titleHtml: "Still in your cart",
-      bodyHtml: `${hi.html}<p style="margin:0;">You left this behind. Nothing has been cleared, and the prices are the ones you saw.</p>`
+      // "…and the prices are the ones you saw" USED TO END THIS SENTENCE.
+      //
+      // True of the line items, false of the amount due, and a shopper reads
+      // it as the amount due — which is how a $185.99 email became a $210.99
+      // checkout for someone who had already abandoned once over cost. The
+      // item-price promise is the true and useful half, so it is kept and the
+      // total is disclosed honestly by cartSummaryHtml below.
+      bodyHtml: `${hi.html}<p style="margin:0;">You left this behind. Nothing has been cleared, and your items are held at the price you saw.</p>`
         + `${cartSummaryHtml(input.items, input.cartValueCents)}`,
       ctaLabel: "Complete my order",
       ctaUrl: input.restoreUrl,
@@ -1879,7 +1911,7 @@ export function cartRecoveryT30mTemplate(input: { name: string; items: Array<{ n
     text: toText([
       hi.text,
       hi.text ? "" : null,
-      "You left this behind. Nothing has been cleared, and the prices are the ones you saw.",
+      "You left this behind. Nothing has been cleared, and your items are held at the price you saw.",
       "",
       ...cartSummaryText(input.items, input.cartValueCents),
       "",

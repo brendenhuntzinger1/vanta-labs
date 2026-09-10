@@ -246,9 +246,21 @@ export function AdminCartRecoveryClient({
             <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Total Abandoned</p>
             <p className="mt-2 text-2xl font-semibold text-white">{stats.totalAbandoned}</p>
           </div>
+          {/* THE NUMBER THE PROGRAMME CAN ACTUALLY TAKE CREDIT FOR, first and
+              on its own, because the looser one beside it read as this for
+              months. On 2026-09-10 the tile below said ten; none of the ten
+              could be credited to a recovery email. */}
           <div className="vl-panel-soft rounded-xl p-4">
-            <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Total Recovered</p>
+            <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Recovered By Email</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{stats.attributedRecovered}</p>
+            <p className="mt-1 text-[11px] text-zinc-500">clicked a reminder, then bought</p>
+          </div>
+          <div className="vl-panel-soft rounded-xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Closed After A Reminder</p>
             <p className="mt-2 text-2xl font-semibold text-white">{stats.totalRecovered}</p>
+            <p className="mt-1 text-[11px] text-zinc-500">
+              any purchase in the window{stats.recoveredOrderCount !== stats.totalRecovered ? ` · ${stats.recoveredOrderCount} order${stats.recoveredOrderCount === 1 ? "" : "s"}` : ""}
+            </p>
           </div>
           <div className="vl-panel-soft rounded-xl p-4">
             <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Recovery Rate</p>
@@ -269,7 +281,18 @@ export function AdminCartRecoveryClient({
           <div className="vl-panel-soft rounded-xl p-4">
             <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Open / Click Rate</p>
             <p className="mt-2 text-2xl font-semibold text-white">{stats.openRatePercent}% / {stats.clickRatePercent}%</p>
+            {/* Opens are inflated at the top by Apple Mail Privacy Protection
+                and missing at the bottom where images are blocked. The click
+                rate is the one worth optimising against. */}
+            <p className="mt-1 text-[11px] text-zinc-500">clicks are the reliable half</p>
           </div>
+          {stats.internalCartsExcluded > 0 ? (
+            <div className="vl-panel-soft rounded-xl p-4">
+              <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Internal Excluded</p>
+              <p className="mt-2 text-2xl font-semibold text-white">{stats.internalCartsExcluded}</p>
+              <p className="mt-1 text-[11px] text-zinc-500">our own carts, left out of every figure here</p>
+            </div>
+          ) : null}
           <div className="vl-panel-soft rounded-xl p-4">
             <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Coupon Redemption Rate</p>
             <p className="mt-2 text-2xl font-semibold text-white">{stats.couponRedemptionRatePercent}%</p>

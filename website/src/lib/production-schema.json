@@ -22,7 +22,8 @@
     "status",
     "recovered_order_id",
     "created_at",
-    "restored_at"
+    "restored_at",
+    "checkout_started_at"
   ],
   "ad_action_log": [
     "action_id",
