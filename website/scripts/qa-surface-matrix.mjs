@@ -283,8 +283,20 @@ async function runDevice(engine, browser, device) {
   page.on("response", (r) => { if (r.status() >= 400) badRequests.push(`${r.status()} ${r.url().replace(BASE, "").slice(0, 80)}`); });
   page.on("requestfailed", (r) => {
     const err = r.failure()?.errorText ?? "";
-    // net::ERR_ABORTED is what a navigation away looks like, not a failure.
-    if (!/ERR_ABORTED|NS_BINDING_ABORTED/.test(err)) {
+    // AN ABORT IS A NAVIGATION, NOT A FAILURE — and each engine words it
+    // differently, which is how the first full run produced three P2s that
+    // were nothing at all:
+    //
+    //   Chromium  net::ERR_ABORTED
+    //   Firefox   NS_BINDING_ABORTED / NS_ERROR_ABORT
+    //   WebKit    "Load request cancelled"
+    //
+    // The three it caught were a Next RSC prefetch (?_rsc=...) cancelled when
+    // the page navigated away, and a fire-and-forget /api/analytics/track
+    // beacon cut off by the same navigation. Both are the browser working. The
+    // tell was in the shape: each appeared on exactly ONE route in exactly ONE
+    // engine, and a real defect reproduces across engines.
+    if (!/ERR_ABORTED|NS_BINDING_ABORTED|NS_ERROR_ABORT|Load request cancelled|cancelled/i.test(err)) {
       badRequests.push(`FAILED ${err} ${r.url().replace(BASE, "").slice(0, 70)}`);
     }
   });
