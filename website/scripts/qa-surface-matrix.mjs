@@ -368,8 +368,30 @@ async function runDevice(engine, browser, device) {
     if (probe.textLength < 40 && nav.status < 400) {
       finding("P1", tag, "rendered almost nothing", `${probe.textLength} chars, landed ${landed}`, route);
     }
-    if (pageErrors.length) {
-      finding("P1", tag, "threw an uncaught error", pageErrors[0], route);
+    // AN RSC PREFETCH THAT CANNOT LOAD IS THE TLS PROXY, NOT THE PAGE.
+    //
+    // WebKit reports a failed same-origin fetch of a Next RSC prefetch
+    // (?_rsc=...) as an uncaught "Fetch API cannot load ... due to access
+    // control checks". Same origin, so there is no CORS decision to make; it is
+    // the self-signed pair that scripts/tls-proxy.mjs serves, which
+    // ignoreHTTPSErrors covers for navigations but not reliably for fetch().
+    //
+    // The evidence that it is transport is that it does not reproduce: run 1 of
+    // this matrix saw it 0 times in 924 measurements and run 2 saw it twice, on
+    // different routes, in one engine at one viewport. A real uncaught error
+    // does not move around like that.
+    //
+    // NARROW ON PURPOSE. Every other uncaught error is still a P1 — an
+    // exception a customer's browser threw is exactly what this sweep is for,
+    // and blanket-suppressing pageerror would gut it. Only prefetch fetches are
+    // reclassified, and they are recorded rather than dropped.
+    const prefetchNoise = pageErrors.filter((e) => /_rsc=/.test(e) && /Fetch API cannot load|access control checks/i.test(e));
+    const realPageErrors = pageErrors.filter((e) => !prefetchNoise.includes(e));
+    if (prefetchNoise.length) {
+      transport.push(`${tag} ${route}: RSC prefetch blocked by the TLS proxy (${prefetchNoise[0].slice(0, 70)})`);
+    }
+    if (realPageErrors.length) {
+      finding("P1", tag, "threw an uncaught error", realPageErrors[0], route);
     }
     const realConsole = consoleErrors.filter((e) => !/429|Too Many Requests/.test(e));
     if (realConsole.length) {
