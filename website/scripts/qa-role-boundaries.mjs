@@ -166,7 +166,20 @@ async function customerSession(email, password) {
   if (!token.rows.length) throw new Error(`no auth user for ${email}`);
 
   // Mint through the shim's password grant, exactly as the browser does.
-  const res = await fetch(`${BASE.replace(":3000", ":54321")}/auth/v1/token?grant_type=password`, {
+  // THE AUTH HOST IS DERIVED, NOT STRING-SWAPPED.
+  //
+  // This was `BASE.replace(":3000", ":54321")`, which silently does NOTHING for
+  // any BASE that is not on port 3000 — so pointing the suite at the TLS
+  // harness (https://127.0.0.1:3443) posted the sign-in to the Next app, got
+  // HTML back, and reported every seeded role as unable to sign in:
+  //
+  //     ! verified (qa.verified@example.test): SyntaxError: Unexpected token '<'
+  //
+  // which reads as "the seed did not run" and sends you to re-seed accounts
+  // that are already there. QA_GOTRUE_URL names it outright; the swap remains
+  // the default so nothing that worked before changes.
+  const gotrueBase = process.env.QA_GOTRUE_URL ?? BASE.replace(":3000", ":54321");
+  const res = await fetch(`${gotrueBase}/auth/v1/token?grant_type=password`, {
     method: "POST",
     headers: { "Content-Type": "application/json", apikey: "harness" },
     body: JSON.stringify({ email, password }),
