@@ -461,27 +461,6 @@ function normalizeOrderPayload(payload: string) {
 }
 
 /**
- * How much the processor says it captured, in DOLLARS — or null when the
- * delivery carries no amount in any shape it uses.
- *
- * PAY-02. The paid-amount assertion read only the flat top-level `amount` the
- * internal/mock gateway sends. A real VeyraGate envelope has none: its charge
- * object rides under `data` (or `data.object`) and states money in MINOR
- * UNITS — `amount_cents` is the list price, `amount_charged_cents` /
- * `amount_captured_cents` what was actually taken (the same fields
- * membership-webhook.ts reads). So on every live delivery the assertion saw 0,
- * compared nothing, and advanced the order to fulfilment whatever had been
- * captured — the "held out of fulfilment on a mismatch" path was unreachable.
- *
- * NULL IS NOT ZERO, AND NOT A MISMATCH. The express reconcile sweep replays
- * `payment.succeeded` with no amount at all on purpose, because the session's
- * amount_cents is the address-independent figure; a missing amount must skip
- * the assertion, never fail it. Only a present, positive amount is compared.
- *
- * Used by the PAID branch only. The refund branch reads the refund amount its
- * own way (resolveRefundOutcome) and is deliberately untouched here.
- */
-/**
  * WHICH CHECKOUT SESSION A CAPTURE BELONGS TO — or null when it does not say.
  *
  * The processor mints one session per payment attempt, so the session id is the
@@ -515,6 +494,27 @@ export function resolveWebhookCaptureSessionId(eventPayload: {
   return null;
 }
 
+/**
+ * How much the processor says it captured, in DOLLARS — or null when the
+ * delivery carries no amount in any shape it uses.
+ *
+ * PAY-02. The paid-amount assertion read only the flat top-level `amount` the
+ * internal/mock gateway sends. A real VeyraGate envelope has none: its charge
+ * object rides under `data` (or `data.object`) and states money in MINOR
+ * UNITS — `amount_cents` is the list price, `amount_charged_cents` /
+ * `amount_captured_cents` what was actually taken (the same fields
+ * membership-webhook.ts reads). So on every live delivery the assertion saw 0,
+ * compared nothing, and advanced the order to fulfilment whatever had been
+ * captured — the "held out of fulfilment on a mismatch" path was unreachable.
+ *
+ * NULL IS NOT ZERO, AND NOT A MISMATCH. The express reconcile sweep replays
+ * `payment.succeeded` with no amount at all on purpose, because the session's
+ * amount_cents is the address-independent figure; a missing amount must skip
+ * the assertion, never fail it. Only a present, positive amount is compared.
+ *
+ * Used by the PAID branch only. The refund branch reads the refund amount its
+ * own way (resolveRefundOutcome) and is deliberately untouched here.
+ */
 export function resolveWebhookPaidAmount(eventPayload: {
   amount?: number;
   data?: {
