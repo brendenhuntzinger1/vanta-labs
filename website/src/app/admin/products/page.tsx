@@ -312,7 +312,7 @@ export default function AdminProductsPage() {
     } finally {
       setLoading(false);
     }
-  }, [authState, categoryFilter, search, selectedProductId, statusFilter]);
+  }, [authState, categoryFilter, rememberStockAtLoad, search, selectedProductId, statusFilter]);
 
   const handleImportFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
