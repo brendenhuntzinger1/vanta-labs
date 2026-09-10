@@ -4,6 +4,7 @@ import { getCoaLibrarySnapshot } from "@/lib/coa";
 import type { CoaLibrarySnapshot } from "@/lib/coa-types";
 import { CoaLibraryPageClient } from "./coa-library-client";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { requestHasEmailLinkGrant } from "@/lib/email/link-grant-server";
 import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
@@ -44,8 +45,22 @@ export default async function Page() {
   // is the layer that makes sure the snapshot is never READ for a signed-out
   // request, because reading it would serialise every compound and lot number
   // into the RSC payload whether or not the markup rendered them.
+  // A SESSION *OR* A MARKETING-LINK GRANT, exactly as /products does it.
+  //
+  // link-grant.ts put "/coa-library" on the grant allowlist deliberately, with
+  // the reason recorded there: the 12-hour recovery message is built entirely
+  // around this page and is the best-opening message the system sends at 59%.
+  // The wall was opened; this guard was not, so the grant was minted, the
+  // visitor passed middleware, and THIS line redirected them to a sign-in page
+  // anyway — the fix fully defeated, one layer further down, with the
+  // abandoned-cart programme going on recording clicks and zero conversions on
+  // the one link that answers the objection email exists to answer.
+  //
+  // The grant is signed, expiring, carries no identity, and is only ever minted
+  // for an address whose account already made the 21+ and research-use
+  // representations. Batch certificates hold nothing personal.
   const viewer = await getAuthenticatedUser().catch(() => null);
-  if (!viewer) {
+  if (!viewer && !(await requestHasEmailLinkGrant())) {
     redirect("/account/login?next=%2Fcoa-library");
   }
 

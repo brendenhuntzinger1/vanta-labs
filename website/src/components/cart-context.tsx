@@ -412,7 +412,7 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
   const [referralCode, setReferralCode] = useState<string | null>(null);
-  const [referralDetails, setReferralDetails] = useState<ReferralCode | null>(null);
+  const [referralDetailsState, setReferralDetails] = useState<ReferralCode | null>(null);
   const [referralError, setReferralError] = useState<string | null>(null);
   const [referralSuccess, setReferralSuccess] = useState<string | null>(null);
   const [couponCode, setCouponCode] = useState<string | null>(null);
@@ -457,6 +457,36 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
   // authoritative server discount — a hardcoded value here would trip the
   // anti-tamper "Altered total" guard the moment an admin changed the percent.
   const [referralDiscountPercent, setReferralDiscountPercent] = useState(10);
+
+  // THE OFFERED PERCENT IS DERIVED, NOT STORED.
+  //
+  // An ambassador either has her own rate or INHERITS the programme default, and
+  // that default arrives asynchronously: the promotions read that supplies it
+  // lands well after the cart has validated the code. Resolving once, at
+  // validation time, therefore froze whatever default happened to be in hand —
+  // the initial 10 above, most often — and the effect that did the resolving did
+  // not depend on referralDiscountPercent and could not re-run anyway, because
+  // its own early return exits as soon as referralDetails is set. eslint has
+  // been reporting that missing dependency all along.
+  //
+  // What the shopper saw was a percentage and a total on the cart page that the
+  // checkout page then contradicted — the same customer-visible symptom as the
+  // incident referral-code-customer-discount.sql was written to fix, arriving
+  // through a different door.
+  //
+  // Deriving it at render time removes the staleness by construction: there is
+  // no second copy to go out of date, no re-fetch, and no setState in an effect
+  // (which this repo lints as an error, and rightly). An ambassador with her own
+  // explicit rate resolves to that rate whatever the default does.
+  const referralDetails = useMemo<ReferralCode | null>(() => {
+    if (!referralDetailsState) return null;
+    const resolved = resolveAmbassadorCustomerDiscount(
+      referralDetailsState.rawCustomerDiscountPercent,
+      referralDiscountPercent,
+    );
+    if (resolved === referralDetailsState.customerDiscountPercent) return referralDetailsState;
+    return { ...referralDetailsState, customerDiscountPercent: resolved };
+  }, [referralDetailsState, referralDiscountPercent]);
   // Admin-configured minimum merchandise subtotal to use a referral code —
   // loaded from the same config the server enforces so the client gate matches
   // the real charge (a hardcoded value drifts the moment an admin changes it).
@@ -1010,6 +1040,9 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
             validatedReferral.customerDiscountPercent,
             referralDiscountPercent,
           ),
+          // The override BEFORE resolution, so the effect below can redo the
+          // resolution when the programme default arrives — see its comment.
+          rawCustomerDiscountPercent: validatedReferral.customerDiscountPercent,
           ambassadorName: validatedReferral.ambassadorName,
           ambassadorId: validatedReferral.ambassadorId,
         });
@@ -1039,7 +1072,15 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
     // referralProgramEnabled does move when the promotions read succeeds after
     // sign-in, so this would recover by that route today. Naming signedIn makes
     // it explicit rather than a chain through another effect's state.
-  }, [isHydrated, referralCode, referralDetails, referralProgramEnabled, signedIn]);
+    //
+    // referralDiscountPercent is named because the initial resolution above
+    // reads it. It changes nothing behaviourally — the early return exits as
+    // soon as referralDetails is set, and the OFFERED percent is derived by the
+    // memo near the top of this provider rather than by this effect — but an
+    // unlisted dependency is how the staleness got in, and a suppressed warning
+    // is how it would get back in.
+  }, [isHydrated, referralCode, referralDetails, referralDiscountPercent, referralProgramEnabled, signedIn]);
+
 
   // A DEFINITE "OFF" CLEARS THE CODE, AND ONLY A DEFINITE ONE.
   //
@@ -1661,8 +1702,30 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
     // the product page, so the two never merged, and the packing slip named no
     // strength. Resolving the default dose here — the one place every caller
     // funnels through — makes a grid add and a product-page add the same line.
+    // ...AND IT HAS TO BE A DOSE THE SHOPPER CAN ACTUALLY BUY.
+    //
+    // This took the default dose unconditionally, which contradicts the very
+    // rule that put an "Add to Cart" on the card. mapProductRow (catalog.ts:290)
+    // reports a product as In Stock when ANY enabled dose is sellable, precisely
+    // so a product whose default dose sold out while another still had units is
+    // not hidden from the grid and from Google. The card then offered Add to
+    // Cart, this line added the sold-out default, and the shopper was refused —
+    // after the entire address form, with a message naming the whole product as
+    // sold out when only one strength was.
+    //
+    // So resolve the dose the card was talking about: prefer the default when it
+    // is sellable, otherwise the first enabled dose that is. "Limited" is
+    // buyable and counts; "Reserved" and "Out of Stock" do not.
+    //
+    // If nothing is sellable the default is still used, deliberately — the
+    // product genuinely is sold out, and the refusal should come from the one
+    // place that owns it rather than from a silently different line here.
+    const sellable = (dose: { isEnabled?: boolean; stockStatus?: string }) =>
+      dose.isEnabled !== false && (dose.stockStatus === "In Stock" || dose.stockStatus === "Limited");
+
+    const defaultDose = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0];
     const fallbackDose = !options?.variantId
-      ? product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0]
+      ? (defaultDose && sellable(defaultDose) ? defaultDose : product.doses?.find(sellable) ?? defaultDose)
       : undefined;
     const resolved = fallbackDose
       ? {
