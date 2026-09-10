@@ -276,6 +276,20 @@ interface ScrubbableEvent {
  */
 export function scrubEvent<T extends ScrubbableEvent>(event: T): T {
   // 1. Identity is never attached. We diagnose defects, not people.
+  //
+  // AND SO "USERS IMPACTED" IN SENTRY IS ALWAYS 0 FOR THIS PROJECT. There is
+  // nothing left to count distinct users by, so the column reads zero for an
+  // error that touched one shopper and for one that touched all of them.
+  //
+  // Worth stating because it has been quoted the other way: eight comments
+  // across this codebase cite "zero users impacted" as evidence that some error
+  // was harmless enough to filter. It never was evidence. Those particular
+  // calls happen to be right for other reasons — see the frame and signature
+  // analysis in sentry-init.ts — but the number contributed nothing to any of
+  // them. Do not reach for it again.
+  //
+  // If reach ever needs measuring, add a per-session opaque id deliberately.
+  // Attaching identity to get the count back is not the trade to make.
   delete event.user;
 
   // 2. Request payloads: keep the path, discard everything that carries data.

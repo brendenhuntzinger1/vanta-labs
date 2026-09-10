@@ -245,3 +245,53 @@ describe("the configuration declines what we deliberately did not enable", () =>
     expect(init).toMatch(/export function sentryEnabled\(\)/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// "USERS IMPACTED: 0" IS NOT A MEASUREMENT HERE, AND WE KEPT READING IT AS ONE.
+//
+// scrubEvent deletes event.user on every event, in beforeSend, by design — the
+// privacy rule at the top of sentry-privacy.ts is the whole reason. The
+// consequence is that Sentry has NOTHING to count distinct users by, so every
+// issue in this project displays "Users: 0" whether it touched nobody or every
+// shopper on the site.
+//
+// That number is nonetheless quoted as evidence in eight places across five
+// files — "with zero users impacted", "affecting zero users" — and always in
+// support of the same conclusion: that an error is harmless and can be dropped.
+// It cannot support that, because it would read zero either way.
+//
+// The filtering decisions it was attached to are still sound: they rest on
+// independent evidence — a JSON-LD reader reported at identical coordinates on
+// two differently sized pages, `toLowerCase` appearing nowhere in the served
+// HTML, a stack whose frames are all the host app's injected logger. None of
+// that needs the user count, which is exactly why nobody noticed it was inert.
+//
+// This pins the fact so the next person reading an issue list knows what the
+// column is worth. To actually measure reach, add something non-identifying —
+// a per-session opaque id — deliberately; do NOT start attaching identity.
+// ---------------------------------------------------------------------------
+
+describe("the user count Sentry shows for this project", () => {
+  it("is structurally zero, because identity never survives beforeSend", () => {
+    const scrubbed = scrubEvent({
+      user: { id: "cus_123", email: "shopper@example.com", ip_address: "203.0.113.7" },
+      message: "hydration failed",
+    } as Parameters<typeof scrubEvent>[0]);
+
+    expect(scrubbed.user, "identity reached Sentry — the privacy rule is broken")
+      .toBeUndefined();
+  });
+
+  it("stays zero even when the event names a user in a field of its own", () => {
+    // The deletion is of event.user specifically. Anything that reintroduced a
+    // countable identity under another key would both break the privacy rule
+    // and make the count meaningful again — either way, deliberately, not by
+    // accident. This asserts the first half.
+    const scrubbed = scrubEvent({
+      user: { id: "cus_456" },
+      tags: { customer_id: "cus_456" },
+    } as Parameters<typeof scrubEvent>[0]);
+
+    expect(scrubbed.user).toBeUndefined();
+  });
+});
