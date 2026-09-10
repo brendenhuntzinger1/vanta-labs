@@ -717,6 +717,43 @@ by slug, and most of this catalogue is dose-stocked.
 design and the flood tests prove nothing. `setup-local-harness.sh` applies it;
 if you see `UNENFORCED` in the output, that table is missing.
 
+### Point the `qa:` family at :3000, and the BROWSERS at :3443
+
+The TLS harness exists for one reason: WebKit refuses to store a `Secure`
+session cookie over plain http, so any claim about an ENGINE has to be made
+against `https://127.0.0.1:3443`. That is a browser concern.
+
+The `qa:` suites are not browser-engine tests. They drive the app over HTTP and
+several of them carry hard assumptions about port 3000 — `qa-customer-journey`
+says so in its own header ("Drives the local harness at 127.0.0.1:3000"), and
+both it and `qa-role-boundaries` locate GoTrue by string-replacing `":3000"`
+with `":54321"`, which silently does nothing for any other port.
+
+Setting `QA_BASE_URL=https://127.0.0.1:3443` for them therefore produces
+FAILURES THAT LOOK LIKE PRODUCT DEFECTS. Measured 2026-09-10 against a build
+that was green on the default base minutes earlier:
+
+| Suite | What it reported | What was true |
+|---|---|---|
+| `qa:roles` | all six seeded roles cannot sign in, "run qa:seed first" | they were seeded and confirmed; the sign-in POST went to the Next app and got HTML |
+| `qa:abuse` | "the confirmation hop can be turned into an open redirect" | every off-site target was neutralised to `/account`; the check compared the landing host against a `BASE` on a different port |
+| `qa:journey` | 3 failures — an email change that does not take, orders detaching from an account, sign-in broken in a webview | 70/70 on the default base, same commit |
+
+Three suites, three different-shaped false alarms, one cause. The open-redirect
+one is the dangerous shape: a security failure that reads as real, on a control
+that is working.
+
+So:
+
+    npm run qa:all                                   # default base, :3000
+    QA_GOTRUE_URL=https://127.0.0.1:54443 \
+      QA_BASE_URL=https://127.0.0.1:3443 npm run qa:roles   # if you must use TLS
+    PLAYWRIGHT_BROWSERS_PATH=/tmp/pw-engines npm run qa:matrix   # engines, :3443
+
+`qa-role-boundaries` now accepts `QA_GOTRUE_URL` so it can at least be pointed
+at a TLS harness deliberately. The others have not been made base-agnostic;
+until they are, run them where they were written to run.
+
 ### Reading the output
 
 Steps report PASS, FAIL or **SKIP**, and skips are printed again at the end
