@@ -42,6 +42,8 @@ const STYLES = {
   short: { month: "short", day: "numeric" },
   /** Sep 3, 2026, 8:00 PM */
   datetime: { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" },
+  /** Sep 3, 8:00 PM — a dense operational log where the year is ambient. */
+  datetimeShort: { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" },
 } as const satisfies Record<string, Intl.DateTimeFormatOptions>;
 
 export type DateStyle = keyof typeof STYLES;
@@ -80,4 +82,52 @@ function startOfDayUtcMs(date: Date): number {
   }).format(date);
   // en-CA yields YYYY-MM-DD.
   return Date.parse(`${parts}T00:00:00Z`);
+}
+
+/**
+ * The wall-clock offset of `DISPLAY_TIME_ZONE` at a given instant, in ms.
+ *
+ * Derived from the formatter rather than hardcoded, so it is -4 in EDT and -5
+ * in EST without this file owning a DST calendar.
+ */
+function zoneOffsetMs(utcMs: number): number {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: DISPLAY_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(utcMs));
+  const at = (type: string) => Number(parts.find((part) => part.type === type)?.value);
+  // Some ICU builds render midnight as hour 24 under hour12:false.
+  return Date.UTC(at("year"), at("month") - 1, at("day"), at("hour") % 24, at("minute"), at("second")) - utcMs;
+}
+
+/**
+ * An `<input type="datetime-local">` value read as Eastern, returned as a UTC ISO string.
+ *
+ * WHY THIS EXISTS: a datetime-local input yields a bare wall clock — "2026-09-15T14:30",
+ * no zone. `new Date(value)` resolves that against whatever zone the *browser* is in, so
+ * the campaign scheduler quietly scheduled a different instant depending on where the
+ * operator was sitting, while every timestamp rendered back to them was pinned to
+ * Eastern. Picking "2:30 PM" and being shown "2:30 PM" is only honest if both mean the
+ * same zone.
+ *
+ * The offset is measured twice because the first measurement is taken at the wrong
+ * instant: near a DST boundary the naive guess can land on the other side of the change,
+ * and re-measuring at the corrected instant settles it.
+ */
+export function easternWallClockToUtcIso(local: string | null | undefined): string | null {
+  if (!local) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(local.trim());
+  if (!match) return null;
+  const [, year, month, day, hour, minute, second] = match;
+  const asIfUtc = Date.UTC(+year, +month - 1, +day, +hour, +minute, second ? +second : 0);
+  if (Number.isNaN(asIfUtc)) return null;
+  let utcMs = asIfUtc - zoneOffsetMs(asIfUtc);
+  utcMs = asIfUtc - zoneOffsetMs(utcMs);
+  return new Date(utcMs).toISOString();
 }

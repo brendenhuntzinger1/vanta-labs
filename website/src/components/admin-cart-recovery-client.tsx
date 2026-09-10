@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import type { AbandonedCartRow, CartRecoveryStats, RecoveryTrendPoint } from "@/lib/admin-cart-recovery";
 import type { CartRecoveryConfig } from "@/lib/admin-control";
 import type { GiftableProduct } from "@/lib/admin-cart-recovery";
+import { formatDisplayDate } from "@/lib/format-date";
 import {
   DEFAULT_RECOVERY_TIERS,
   MAX_GIFT_ITEMS_PER_STAGE,
@@ -520,7 +521,7 @@ export function AdminCartRecoveryClient({
                 <tr key={cart.id} className="border-t border-white/10">
                   <td className="py-2 pr-4 text-zinc-200">{cart.email}</td>
                   <td className="py-2 pr-4 text-zinc-200">{money(cart.cartValueCents)}</td>
-                  <td className="py-2 pr-4 text-zinc-400">{new Date(cart.firstSeenAt).toLocaleString()}</td>
+                  <td className="py-2 pr-4 text-zinc-400">{formatDisplayDate(cart.firstSeenAt, "datetime") ?? "—"}</td>
                   <td className="py-2 pr-4 text-zinc-400">{cart.status}</td>
                   <td className="py-2 pr-4 text-zinc-400">{cart.stagesSent.join(", ") || "—"}</td>
                   <td className="py-2 pr-4">

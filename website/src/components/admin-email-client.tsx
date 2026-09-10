@@ -10,6 +10,7 @@ import {
   type CampaignGiftSpec,
 } from "@/lib/offers/campaign-gift";
 import { describeGiftTerms } from "@/lib/offers/gift-terms";
+import { easternWallClockToUtcIso, formatDisplayDate } from "@/lib/format-date";
 import { ctaPathReachesStore } from "@/lib/email/link-grant";
 import type { CampaignSummary, EmailDashboard } from "@/lib/admin-email";
 import type { AutomationRow } from "@/lib/email/automations";
@@ -373,6 +374,15 @@ export function AdminEmailClient({
       );
       if (!confirmed) return;
     }
+    // The picker hands back a bare wall clock. Read it as Eastern — the zone every
+    // timestamp on this page is rendered in — so "2:30 PM" schedules the 2:30 PM
+    // the operator just saw, whatever zone their laptop is set to.
+    const scheduledIso = mode === "schedule" ? easternWallClockToUtcIso(scheduleAt) : null;
+    if (mode === "schedule" && !scheduledIso) {
+      setMessage({ tone: "error", text: "That schedule time isn't a valid date." });
+      return;
+    }
+
     await run(async () => {
     const id = await saveCampaign();
     if (!id) return;
@@ -380,7 +390,7 @@ export function AdminEmailClient({
     const response = await fetch(`/api/admin/email/campaigns/${id}/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(mode === "now" ? { mode: "now" } : { mode: "schedule", scheduledAt: new Date(scheduleAt).toISOString() }),
+      body: JSON.stringify(mode === "now" ? { mode: "now" } : { mode: "schedule", scheduledAt: scheduledIso }),
     });
     const data = await response.json().catch(() => null);
 
@@ -1058,7 +1068,7 @@ export function AdminEmailClient({
             </label>
 
             <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Schedule for</span>
+              <span className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Schedule for (ET)</span>
               <div className="mt-1 flex gap-2">
                 <input
                   type="datetime-local"
@@ -1653,14 +1663,14 @@ export function AdminEmailClient({
                           </span>
                           {row.status !== "subscribed" && (row.leftAt || row.unsubscribedFrom) ? (
                             <span className="ml-2 text-[11px] text-zinc-500">
-                              {row.leftAt ? new Date(row.leftAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : ""}
+                              {row.leftAt ? formatDisplayDate(row.leftAt, "medium") ?? "" : ""}
                               {row.unsubscribedFrom ? ` · from ${row.unsubscribedFrom.replace(/^automation:/, "").replace(/^campaign:.*/, "a campaign").replace(/_/g, " ")}` : ""}
                             </span>
                           ) : null}
                         </td>
                         <td className="px-3 py-2 text-zinc-400">{describeSubscriberSource(row.source)}</td>
                         <td className="px-3 py-2 text-zinc-400">
-                          {row.since ? new Date(row.since).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}
+                          {formatDisplayDate(row.since, "medium") ?? "—"}
                         </td>
                       </tr>
                     ))}

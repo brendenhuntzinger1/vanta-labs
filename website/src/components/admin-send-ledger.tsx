@@ -1,3 +1,4 @@
+import { formatDisplayDate } from "@/lib/format-date";
 import type { SendLedger, SendLedgerRow } from "@/lib/email/send-ledger";
 
 /**
@@ -12,12 +13,17 @@ import type { SendLedger, SendLedgerRow } from "@/lib/email/send-ledger";
  * never measured".
  */
 
+/**
+ * Every stamp on this panel, in Eastern.
+ *
+ * This is a SERVER component, so the bare toLocale* calls that used to live here
+ * ran on Vercel — in UTC. A campaign sent at 8:30pm Florida time was logged as
+ * 2026-09-09T00:30:00Z and rendered "Sep 9 12:30 AM": the wrong hour, and for
+ * anything sent after 8pm ET the wrong DAY, which made the ledger disagree with
+ * the operator's own memory of when they pressed send.
+ */
 function shortDate(value: string | null): string {
-  if (!value) return "—";
-  const at = new Date(value);
-  if (Number.isNaN(at.getTime())) return "—";
-  return at.toLocaleDateString("en-US", { month: "short", day: "numeric" })
-    + " " + at.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return formatDisplayDate(value, "datetimeShort") ?? "—";
 }
 
 /** A count with its denominator, never a bare percentage over an unknown base. */
@@ -123,7 +129,7 @@ export function AdminSendLedger({ ledger }: { ledger: SendLedger }) {
                   <th className="py-2 pr-3">Bounced</th>
                   <th className="py-2 pr-3" title="Over the sends that carry open tracking">Opened</th>
                   <th className="py-2 pr-3">Clicked</th>
-                  <th className="py-2 pr-3">Last sent</th>
+                  <th className="py-2 pr-3">Last sent <span className="font-normal text-zinc-600">(ET)</span></th>
                 </tr>
               </thead>
               <tbody className="text-zinc-300">
@@ -159,7 +165,7 @@ export function AdminSendLedger({ ledger }: { ledger: SendLedger }) {
                 <tr className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">
                   <th className="py-2 pr-3">Recipient</th>
                   <th className="py-2 pr-3">Message</th>
-                  <th className="py-2 pr-3">Sent</th>
+                  <th className="py-2 pr-3">Sent <span className="font-normal text-zinc-600">(ET)</span></th>
                   <th className="py-2 pr-3">Delivery</th>
                   <th className="py-2 pr-3">Opened</th>
                   <th className="py-2 pr-3">Clicked</th>

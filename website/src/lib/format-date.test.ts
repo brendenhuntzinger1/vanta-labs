@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DISPLAY_TIME_ZONE, daysUntil, formatDisplayDate } from "./format-date";
+import { DISPLAY_TIME_ZONE, daysUntil, easternWallClockToUtcIso, formatDisplayDate } from "./format-date";
 
 describe("formatDisplayDate", () => {
   it("reports the US evening date, not the UTC one it rolls over into", () => {
@@ -91,5 +91,70 @@ describe("daysUntil", () => {
   it("returns null for junk", () => {
     expect(daysUntil(null, now)).toBeNull();
     expect(daysUntil("nope", now)).toBeNull();
+  });
+});
+
+describe("formatDisplayDate — datetimeShort", () => {
+  it("renders a compact stamp with the time, in Eastern", () => {
+    // 8:30 PM Tuesday in Florida, stored as the next UTC day.
+    expect(formatDisplayDate("2026-09-09T00:30:00Z", "datetimeShort")).toBe("Sep 8, 8:30 PM");
+  });
+
+  it("does not depend on the machine's timezone", () => {
+    // The send ledger is a SERVER component: this runs on Vercel, in UTC. Before
+    // this style existed it called toLocaleTimeString with no zone and reported
+    // "Sep 9 12:30 AM" for the send above — wrong hour and wrong day.
+    const original = process.env.TZ;
+    const seen = new Set<string>();
+    for (const tz of ["UTC", "America/Los_Angeles", "Asia/Tokyo"]) {
+      process.env.TZ = tz;
+      seen.add(String(formatDisplayDate("2026-09-09T00:30:00Z", "datetimeShort")));
+    }
+    process.env.TZ = original;
+    expect(seen.size).toBe(1);
+    expect([...seen][0]).toBe("Sep 8, 8:30 PM");
+  });
+
+  it("tracks DST rather than a fixed -5", () => {
+    expect(formatDisplayDate("2026-07-04T18:00:00Z", "datetimeShort")).toBe("Jul 4, 2:00 PM"); // EDT
+    expect(formatDisplayDate("2026-01-04T18:00:00Z", "datetimeShort")).toBe("Jan 4, 1:00 PM"); // EST
+  });
+});
+
+describe("easternWallClockToUtcIso", () => {
+  it("reads a datetime-local value as Eastern, not as the browser's zone", () => {
+    // The campaign scheduler's <input type="datetime-local"> yields a bare wall
+    // clock with no zone. `new Date(value)` used to resolve it against whatever
+    // zone the browser happened to be in, so the same "2:30 PM" scheduled a
+    // different instant depending on where the operator was sitting.
+    expect(easternWallClockToUtcIso("2026-09-15T14:30")).toBe("2026-09-15T18:30:00.000Z"); // EDT, -4
+    expect(easternWallClockToUtcIso("2026-01-15T14:30")).toBe("2026-01-15T19:30:00.000Z"); // EST, -5
+  });
+
+  it("is stable wherever the browser is", () => {
+    const original = process.env.TZ;
+    const seen = new Set<string>();
+    for (const tz of ["UTC", "America/Los_Angeles", "Asia/Tokyo", "America/New_York"]) {
+      process.env.TZ = tz;
+      seen.add(String(easternWallClockToUtcIso("2026-09-15T14:30")));
+    }
+    process.env.TZ = original;
+    expect(seen.size).toBe(1);
+  });
+
+  it("round-trips back through the display formatter", () => {
+    const iso = easternWallClockToUtcIso("2026-09-15T14:30");
+    expect(formatDisplayDate(iso, "datetimeShort")).toBe("Sep 15, 2:30 PM");
+  });
+
+  it("handles midnight and the seconds-bearing form", () => {
+    expect(easternWallClockToUtcIso("2026-09-15T00:00")).toBe("2026-09-15T04:00:00.000Z");
+    expect(easternWallClockToUtcIso("2026-09-15T14:30:00")).toBe("2026-09-15T18:30:00.000Z");
+  });
+
+  it("returns null for junk rather than an Invalid Date", () => {
+    expect(easternWallClockToUtcIso("")).toBeNull();
+    expect(easternWallClockToUtcIso("nope")).toBeNull();
+    expect(easternWallClockToUtcIso(null)).toBeNull();
   });
 });
