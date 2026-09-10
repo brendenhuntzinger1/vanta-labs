@@ -194,24 +194,34 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     const raw = error instanceof Error ? error.message : "Unable to create checkout session";
-    // Translate the internal underpayment-guard string into an actionable,
-    // non-alarming message (it can trip on a stale membership/credit preview).
-    const message = raw === "Altered total detected"
-      ? "A discount on your order is no longer available, so your total has been updated. Please refresh this page to see the current total, then place your order."
-      : raw;
     // Shopper-actionable text (coupon rejected, item out of stock, referral
     // minimum) still reaches the customer verbatim. Anything that names the
     // processor, an env var or a database detail does not: an unconfigured
     // gateway used to answer a completed checkout with "Missing VEYRA_API_BASE
     // environment variable."
+    //
+    // THE ERROR ITSELF IS PASSED, NOT ITS MESSAGE. This line read
+    // `customerSafeMessage(message, …)` — a string — and every other caller in
+    // the app passes the error. The difference is invisible until it matters:
+    // customerSafeMessage returns a CustomerFacingError's text untouched, which
+    // is the ONLY way a message longer than safe-error's 200-character stack-dump
+    // limit can reach a shopper, and flattening to a string threw that class
+    // away before the check could see it. Reproduced against the harness: the
+    // held-stock wording was written, thrown, and silently replaced by the
+    // generic fallback below.
     console.error("[checkout/create-session]", error);
     return NextResponse.json(
       {
         success: false,
-        error: customerSafeMessage(
-          message,
-          "We couldn't start checkout just now. No charge was made and no order was placed — please try again in a moment.",
-        ),
+        // Translate the internal underpayment-guard string into an actionable,
+        // non-alarming message (it can trip on a stale membership/credit
+        // preview). It is our own words already, so it needs no sanitising.
+        error: raw === "Altered total detected"
+          ? "A discount on your order is no longer available, so your total has been updated. Please refresh this page to see the current total, then place your order."
+          : customerSafeMessage(
+            error,
+            "We couldn't start checkout just now. No charge was made and no order was placed — please try again in a moment.",
+          ),
       },
       { status: 400 },
     );

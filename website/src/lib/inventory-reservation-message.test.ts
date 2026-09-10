@@ -7,6 +7,10 @@ function line(overrides: Partial<UnavailableLine> = {}): UnavailableLine {
     variantId: null,
     quantity: 3,
     available: 1,
+    // Null throughout: these cases are about a shelf that is genuinely short,
+    // not one whose units are held. The held-shelf wording has its own file,
+    // inventory-held-is-not-sold-out.test.ts.
+    onHand: null,
     name: "BPC-157 10mg",
     ...overrides,
   };

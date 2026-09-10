@@ -19,6 +19,7 @@ import {
   claimPromotionRedemption,
   releasePromotionRedemption,
 } from "@/lib/bxgy-promotions";
+import { CustomerFacingError } from "@/lib/safe-error";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 import type {
@@ -602,7 +603,17 @@ export async function createCheckoutSession(
    // Name the item and the number left. "Something sold out" makes the customer
    // guess which line and by how much, which is how a fixable cart becomes an
    // abandoned one.
-   throw new Error(describeUnavailable(reservation.unavailable));
+   //
+   // THROWN AS A CustomerFacingError, NOT A PLAIN Error, and that is not
+   // decoration. safe-error.ts rejects any message over 200 characters as a
+   // probable stack dump, and the held-stock wording — which has to name the
+   // item AND explain that the shopper's own unfinished payment is holding it —
+   // runs past that. A plain Error was therefore replaced, silently, by "We
+   // couldn't start checkout just now", which is the generic message this whole
+   // line exists to avoid. Reproduced against the harness: the fix landed, the
+   // shopper still saw the fallback. The class is the documented way to say
+   // "this text was written for the person reading it".
+   throw new CustomerFacingError(describeUnavailable(reservation.unavailable));
  }
 
  // Hold the non-cash tender the same way, and for the same reason. The quote

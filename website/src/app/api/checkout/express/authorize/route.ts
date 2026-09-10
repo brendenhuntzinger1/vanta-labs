@@ -380,8 +380,11 @@ export async function POST(request: Request) {
   if (!reservation.ok) {
     await cancelOrder(claimed.order_id);
     // Same detail as the standard checkout, plus the reassurance that matters
-    // most in a wallet sheet: no money moved.
-    const message = `${describeUnavailable(reservation.unavailable)} No charge was made.`;
+    // most in a wallet sheet: no money moved. Appended only when the detail does
+    // not already say it — the held-stock wording carries its own "you have not
+    // been charged", and stacking the two read like a stutter.
+    const detail = describeUnavailable(reservation.unavailable);
+    const message = /not been charged|no charge/i.test(detail) ? detail : `${detail} No charge was made.`;
     await finish(sessionId, { ok: false, outcome: "refused", message }, "failed");
     return refuse(message);
   }
