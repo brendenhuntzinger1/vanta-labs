@@ -657,6 +657,41 @@ async function main() {
     return `${row.order_number} paid:false pending:true`;
   });
 
+  // ---- 5. The pay link cannot charge a settled order twice ---------------
+  section("5. Re-opening a pay link");
+
+  await step("a PAID order's pay link sends the shopper to their receipt, not a card form", async () => {
+    if (!retryOrder || retryOrder.payment_status !== "paid") return SKIP("no paid order");
+    // Anyone can arrive here after paying: a reload, the back button, an old
+    // email. The page used to read only the `cs` parameter, so it rendered a
+    // working card iframe for a settled order and the only thing that moved the
+    // shopper off it was a client poll 2.5s later — or never, if that request
+    // failed. A second payment for one purchase was two clicks away.
+    await page.goto(`${BASE}/checkout/pay/${encodeURIComponent(retryOrder.order_id)}?cs=vs_stale_session`,
+      { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(2500);
+    const url = page.url();
+    const text = await page.evaluate(() => document.body.innerText);
+    assert(/\/order-confirmation\//.test(url),
+      `a paid order's pay link stayed on ${url} instead of redirecting to the receipt`);
+    assert(!/SECURE PAYMENT/i.test(text), "a paid order was still shown the secure-payment form");
+    return "redirected to /order-confirmation";
+  });
+
+  await step("an UNPAID order's pay link still serves the card form", async () => {
+    // The guard must be narrow. A shopper who genuinely has a payment to make
+    // must still get the form — that is the working path this whole audit exists
+    // to protect.
+    const { row } = await placeOrder(page, lowCart);
+    await page.goto(`${BASE}/checkout/pay/${encodeURIComponent(row.order_id)}?cs=${encodeURIComponent(String(row.payment_id))}`,
+      { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(2500);
+    const text = await page.evaluate(() => document.body.innerText);
+    assert(/SECURE PAYMENT/i.test(text),
+      `an unpaid order was denied the card form: ${text.slice(0, 160)}`);
+    return `${row.order_number} still reaches secure payment`;
+  });
+
   // ---- Give the stock back ----------------------------------------------
   //
   // EVERY ORDER THIS FILE LEAVES PENDING IS STILL HOLDING UNITS, and the holds

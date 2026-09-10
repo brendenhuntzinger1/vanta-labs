@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import type { Metadata } from "next";
+import { supabaseAdmin } from "@/lib/supabase-server";
 import VeyraCheckout from "./VeyraCheckout";
 
 export const metadata: Metadata = {
@@ -43,6 +45,43 @@ export default async function CheckoutPayPage({
         </Link>
       </main>
     );
+  }
+
+  // DO NOT SERVE A LIVE CARD FORM FOR AN ORDER THAT HAS ALREADY BEEN PAID.
+  //
+  // This page checked only that `cs` was present. Nothing read the order's
+  // payment state, so a settled order still rendered a working card iframe —
+  // and the only thing that moved the shopper off it was the client-side poll,
+  // 2.5 seconds later at the earliest and never at all if the request failed.
+  // Anyone who reloads a pay link after paying, returns to it from history, or
+  // follows it from an old email is shown a form that can charge them again for
+  // a purchase they have completed.
+  //
+  // Only the CAPTURED case redirects. A declined or cancelled order deliberately
+  // still renders: the poll already reports it as terminal, and VeyraCheckout
+  // says so and offers a route back to checkout — which is better than a bare
+  // redirect that explains nothing. Best-effort by design: a read failure must
+  // never stand between a shopper and a card form they legitimately need.
+  // `redirect()` SIGNALS BY THROWING, so it must not be called inside the
+  // try: this function's own catch would swallow the redirect and fall straight
+  // through to rendering the card form — the exact bug being fixed, hidden
+  // behind error handling that looks careful. The read is guarded; the redirect
+  // is not.
+  let alreadyCaptured = false;
+  try {
+    const { data: order } = await supabaseAdmin
+      .from("orders")
+      .select("payment_status")
+      .eq("order_id", String(orderId ?? "").trim())
+      .maybeSingle();
+    const status = String(order?.payment_status ?? "").toLowerCase();
+    alreadyCaptured = status === "paid" || status === "partially_refunded" || status === "refunded";
+  } catch {
+    // Fall through to the card form. An unreachable database is not a reason to
+    // strand a shopper who still has a payment to make.
+  }
+  if (alreadyCaptured) {
+    redirect(`/order-confirmation/${encodeURIComponent(orderId)}`);
   }
 
   return (
