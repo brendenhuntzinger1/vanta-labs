@@ -22,6 +22,7 @@ import { refundStoreCreditForOrder } from "@/lib/store-credit";
 import { pointsToDollars } from "@/lib/points-math";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { isPaymentStatusDemotion } from "@/lib/order-status";
+import { hasCapturedPayment } from "@/lib/ledger";
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
@@ -201,7 +202,31 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       // whether the money arrived.
       const updatePayload: Record<string, unknown> = { updated_at: now };
       if (body.paymentStatus) {
-        updatePayload.payment_status = String(body.paymentStatus);
+        // ALLOW-LIST, BECAUSE THIS WROTE WHATEVER ARRIVED.
+        //
+        // `String(body.paymentStatus)` put any value at all into the column, and
+        // the admin's own dropdown shipped "failed" — which nothing reads. The
+        // real value is "payment_failed": the reconcile sweep, the order-status
+        // route, getOrderProgress and every account surface match on it, so an
+        // order set to "failed" from this screen was invisible to all of them
+        // and would sit unreconciled for ever.
+        //
+        // Only the non-money states belong here. Entering or leaving a money
+        // state is already refused above (isPaymentStatusDemotion) and belongs
+        // to the refund and cancel actions, which run the reversals.
+        const ADMIN_WRITABLE_PAYMENT_STATUSES = new Set(["pending_payment", "payment_failed", "canceled"]);
+        const requested = String(body.paymentStatus).trim().toLowerCase();
+        if (!ADMIN_WRITABLE_PAYMENT_STATUSES.has(requested)) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: `"${String(body.paymentStatus)}" is not a payment status this action can set. `
+                + "Use pending_payment, payment_failed or canceled — or the refund action for money states.",
+            },
+            { status: 400 },
+          );
+        }
+        updatePayload.payment_status = requested;
       }
       if (typeof body.trackingNumber === "string") {
         updatePayload.tracking_number = body.trackingNumber.trim() || null;
@@ -452,6 +477,27 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       // double-reverse points/credit.
       if (String(order.payment_status) === "refunded") {
         return NextResponse.json({ success: false, error: "This order has already been fully refunded." }, { status: 400 });
+      }
+
+      // YOU CANNOT REFUND MONEY THAT WAS NEVER TAKEN.
+      //
+      // The line above refuses a SECOND refund, but nothing refused a first one
+      // on an order that had never been paid. Refunding a pending_payment or
+      // payment_failed order wrote payment_status = 'refunded', emailed the
+      // customer a refund confirmation for a charge that never happened, and —
+      // worst of it — made the order permanently unpayable: 'refunded' is a
+      // money-terminal state, so the real payment.succeeded webhook arriving
+      // afterwards is recorded against the existing status and dropped. The
+      // customer is then charged by the processor with nothing to show for it.
+      //
+      // hasCapturedPayment is the same set the ledger and the invoice route use
+      // (paid / partially_refunded / refunded), so this asks the question the
+      // accounts already ask. An unpaid order is cancelled, not refunded.
+      if (!hasCapturedPayment(String(order.payment_status))) {
+        return NextResponse.json({
+          success: false,
+          error: "This order was never paid, so there is nothing to refund. Cancel it instead.",
+        }, { status: 400 });
       }
 
       const amountPaid = roundMoney(Number(order.amount_paid ?? 0));
