@@ -38,6 +38,25 @@ export interface OrderStatusBody {
   /** The server's own verdict: !isPaid && !failed. */
   pending?: unknown;
   status?: unknown;
+  /** Coarse reason, present only on a terminal failure. */
+  failureKind?: unknown;
+}
+
+/**
+ * How confident we are about WHY a payment did not complete.
+ *
+ * "declined" is the only value that licenses saying a bank refused the card.
+ * Everything else — an abandoned verification, an expired session, an order an
+ * operator retired — reaches the same payment_failed status with no bank
+ * involved, and on this store most of them do: of eighteen failed orders,
+ * sixteen had no processor event at all.
+ */
+export type FailureKind = "declined" | "unknown";
+
+export function failureKindFromStatus(body: unknown): FailureKind {
+  if (!body || typeof body !== "object") return "unknown";
+  const kind = String((body as OrderStatusBody).failureKind ?? "").toLowerCase();
+  return kind === "processor_declined" ? "declined" : "unknown";
 }
 
 export function decideFromOrderStatus(body: unknown): PollDecision {

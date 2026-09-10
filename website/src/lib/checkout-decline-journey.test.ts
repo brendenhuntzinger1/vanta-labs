@@ -153,33 +153,67 @@ describe("the decline message tells the shopper the three things they need", () 
   // fails on the component's own identifiers instead of on the copy.
   const branchStart = page.indexOf('decision === "failed"');
   const declineBranch = page.slice(branchStart, page.indexOf("\n      }", branchStart));
-  // The shopper-visible sentence alone, for the wording assertions.
-  const declineCopy = (declineBranch.match(/setMessage\(\s*"([^"]+)"/) ?? ["", ""])[1];
 
-  it("says the payment did not go through", () => {
-    expect(declineCopy).toMatch(/did not go through/i);
+  // THE COPY MOVED OUT OF THE BRANCH, and that is the point of the change these
+  // assertions were rewritten for. The page used to hold ONE sentence, asserting
+  // that a BANK declined the card and that the card was NOT CHARGED — neither of
+  // which is knowable from payment_failed alone. That status is also written for
+  // an abandoned verification, an expired session, a processor event carrying no
+  // reason, and an order retired by hand; on this store sixteen of eighteen
+  // failed orders had no processor event at all.
+  //
+  // So there are now two texts, chosen by what the server actually knows, and
+  // the assertions below check each says what it is entitled to say.
+  const messages = (() => {
+    const start = page.indexOf("const DECLINE_MESSAGE");
+    const block = page.slice(start, page.indexOf("};", start));
+    const declined = (block.match(/declined:\s*\n?\s*"([\s\S]*?)",\n\s*unknown:/) ?? ["", ""])[1];
+    const unknown = (block.match(/unknown:\s*\n?\s*"([\s\S]*?)",?\s*$/) ?? ["", ""])[1];
+    // The sources concatenate with +, so strip the quoting between fragments.
+    const clean = (t: string) => t.replace(/"\s*\+\s*"/g, "").replace(/\s+/g, " ").trim();
+    return { declined: clean(declined), unknown: clean(unknown) };
+  })();
+
+  it("both texts say the payment did not complete", () => {
+    expect(messages.declined).toMatch(/declined/i);
+    expect(messages.unknown).toMatch(/didn't go through|did not go through/i);
   });
 
-  it("says explicitly that the card was NOT charged", () => {
-    // The single most valuable sentence on the page. A shopper who retries
-    // without it believes they may now be charged twice.
-    expect(declineCopy).toMatch(/not been charged/i);
+  it("claims the card was not charged ONLY when the processor said it declined", () => {
+    // The single most valuable sentence on the page — and the one it was least
+    // entitled to. Keep it where a bank genuinely refused, and nowhere else: a
+    // stalled 3-D Secure step and an expired session both land on the same
+    // status, and neither tells us whether an authorisation is outstanding.
+    expect(messages.declined).toMatch(/not charged|not been charged/i);
+    expect(messages.unknown).not.toMatch(/not charged|not been charged/i);
   });
 
-  it("tells them what to do next", () => {
-    expect(declineCopy).toMatch(/refresh|try again|different card/i);
+  it("tells them what to do next, in both", () => {
+    expect(messages.declined).toMatch(/try again|different card/i);
+    expect(messages.unknown).toMatch(/try again|different card|contact us/i);
+  });
+
+  it("tells them to approve their bank's prompt first — the step that recovers the sale", () => {
+    // Nowhere in the customer-facing product said this, and it is exactly how
+    // David's decline became a paid order 71 seconds later.
+    for (const text of [messages.declined, messages.unknown]) {
+      expect(text).toMatch(/bank/i);
+      expect(text).toMatch(/approve/i);
+    }
   });
 
   it("never names the payment processor to the shopper", () => {
     // Same rule the iframe-load failure already follows: Vanta Labs is the only
     // brand a customer sees at the moment of payment.
-    expect(declineCopy).not.toMatch(/veyra/i);
+    expect(messages.declined).not.toMatch(/veyra/i);
+    expect(messages.unknown).not.toMatch(/veyra/i);
   });
 
   it("is a real sentence, not an empty match", () => {
-    // Guards the extraction above: if the branch is refactored so the regex
-    // stops matching, every wording assertion would vacuously pass on "".
-    expect(declineCopy.length).toBeGreaterThan(40);
+    // Guards the extraction above: if the copy is refactored so the regexes stop
+    // matching, every wording assertion would vacuously pass on "".
+    expect(messages.declined.length).toBeGreaterThan(40);
+    expect(messages.unknown.length).toBeGreaterThan(40);
   });
 
   it("announces the decline once and keeps watching for settlement", () => {
@@ -195,7 +229,11 @@ describe("the poll consumes the decision helper rather than re-reading fields", 
   const page = read(PAY_PAGE);
 
   it("routes the response through decideFromOrderStatus", () => {
-    expect(page).toMatch(/decideFromOrderStatus\(await response\.json\(\)\)/);
+    // The body is parsed once and passed to BOTH helpers now — the decision and
+    // the failure kind — so this no longer expects the call to be inlined.
+    expect(page).toMatch(/const body = await response\.json\(\)/);
+    expect(page).toMatch(/decideFromOrderStatus\(body\)/);
+    expect(page).toMatch(/failureKindFromStatus\(body\)/);
   });
 
   it("no longer reads `paid` directly in the poll", () => {

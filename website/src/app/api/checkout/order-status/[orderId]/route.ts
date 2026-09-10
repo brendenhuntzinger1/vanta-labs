@@ -53,7 +53,7 @@ export async function GET(
 
   const { data } = await supabaseAdmin
     .from("orders")
-    .select("order_number, payment_status, payment_method")
+    .select("order_number, payment_status, payment_method, payment_failure_kind")
     .eq("order_id", String(orderId ?? "").trim())
     .maybeSingle();
 
@@ -89,6 +89,14 @@ export async function GET(
       // replacing it, so neither caller can be broken by the other's needs.
       paid: isPaid,
       pending: !isPaid && !failed,
+      // WHY it failed, coarsely, so the page can stop asserting facts it does
+      // not have. The row already records this; the response simply never
+      // carried it, so every decline surface said "your bank declined this" and
+      // "your card has not been charged" for states where neither is knowable —
+      // an abandoned verification, an expired session, an order retired by hand.
+      // Three values only: what the customer is told turns on the distinction
+      // between "a bank refused" and "we do not know", and nothing finer.
+      failureKind: failed ? (String(data.payment_failure_kind ?? "other") || "other") : null,
       orderNumber: isPaid ? (data.order_number ?? null) : null,
     },
     { headers: { "cache-control": "no-store" } },

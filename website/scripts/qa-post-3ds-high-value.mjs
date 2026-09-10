@@ -609,7 +609,28 @@ async function main() {
     }, declinedOrder.order_id);
     assert(body.json && body.json.paid === false && body.json.pending === false,
       `order-status said ${JSON.stringify(body.json)} — the page cannot tell this is terminal`);
-    return "paid:false pending:false (terminal)";
+    // WHY it failed, too. Without this the payment page had only "it failed",
+    // so every decline surface asserted a BANK had refused and that the card was
+    // NOT charged — neither of which payment_failed alone can support, and on
+    // this store sixteen of eighteen failures had no processor event at all.
+    assert(typeof body.json.failureKind === "string" && body.json.failureKind.length > 0,
+      `order-status returned no failureKind: ${JSON.stringify(body.json)}`);
+    return `paid:false pending:false (terminal), failureKind=${body.json.failureKind}`;
+  });
+
+  await step("the shopper is told a bank refused only when a bank actually did", async () => {
+    if (!declinedOrder) return SKIP("no declined order");
+    // This decline came from a webhook carrying insufficient_funds, so the
+    // stronger wording is licensed here. The unknown case gets the softer text —
+    // both are pinned in checkout-decline-journey.test.ts; what this proves is
+    // that the SERVER hands the page the distinction at all.
+    const body = await page.evaluate(async (id) => {
+      const r = await fetch(`/api/checkout/order-status/${encodeURIComponent(id)}`, { cache: "no-store" });
+      return await r.json().catch(() => null);
+    }, declinedOrder.order_id);
+    assert(body?.failureKind === "processor_declined",
+      `a webhook-confirmed decline reported failureKind=${body?.failureKind}`);
+    return "processor_declined, so the bank wording is earned";
   });
 
   // ---- 3. David's journey: decline -> bank approval -> retry -> paid ------
