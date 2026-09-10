@@ -18,7 +18,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const fetchSession = vi.fn();
 const processPaymentWebhook = vi.fn(async () => ({ duplicate: false }));
 const releaseInventoryForOrder = vi.fn(async () => {});
-const recordSystemAlert = vi.fn(async () => {});
+const recordSystemAlert = vi.fn(async (_alert?: { type?: string; severity?: string; context?: Record<string, unknown> }) => {});
 const orderUpdate = vi.fn();
 
 let pendingRows: Array<{
@@ -27,6 +27,9 @@ let pendingRows: Array<{
   created_at: string;
   /** Omitted reads as the card lane, which is what the column holds for it. */
   payment_method?: string | null;
+  /** Omitted reads as pending_payment, the ordinary backlog row. */
+  payment_status?: string | null;
+  payment_failed_at?: string | null;
 }> = [];
 /** Captured filters from the SELECT, so the query's own safety rails are asserted. */
 let selectFilters: Record<string, unknown[]> = {};
@@ -40,6 +43,7 @@ function makeOrdersQuery() {
   q.select = chain("select");
   q.eq = chain("eq");
   q.not = chain("not");
+  q.or = chain("or");
   q.lt = chain("lt");
   q.order = chain("order");
   // Page 0 returns the rows; every later page is empty so paging terminates.
@@ -58,6 +62,17 @@ function makeOrdersQuery() {
   };
   return q;
 }
+
+/**
+ * Whether a guarded UPDATE finds the row in the state it asserted.
+ *
+ * false models the race this job must survive: a webhook flipped the order to
+ * paid between this sweep's read and its write, so the `eq(payment_status,
+ * 'pending_payment')` guard matches zero rows. The retirement must then do
+ * NOTHING — in particular it must not release the hold on units the paid order
+ * has already committed.
+ */
+let updateMatchesRows = true;
 
 /** Which SELECT page (if any) comes back as a database error. */
 let readErrorOnPage: number | null = null;
@@ -91,12 +106,28 @@ vi.mock("@/lib/supabase-server", () => ({
         update: (payload: unknown) => {
           const captured: Record<string, unknown> = { payload };
           const upd: Record<string, unknown> = {};
+          // ROWS-AFFECTED IS THE WHOLE POINT, so the double reports it.
+          //
+          // This fake used to resolve `{ error: null }` with no data, which is
+          // what PostgREST returns when a guarded UPDATE matches NOTHING as well
+          // as when it matches a row. Code that read only the error therefore
+          // could not tell "retired" from "refused", and a test against this
+          // double could not see the difference either.
+          const settle = () => {
+            orderUpdate(captured);
+            const rows = updateMatchesRows ? [{ order_id: captured.eq_order_id }] : [];
+            return { data: rows, error: null };
+          };
           upd.eq = (col: string, val: unknown) => {
             captured[`eq_${col}`] = val;
-            // Two .eq() calls chain; the second resolves the statement.
+            // Two .eq() calls chain; the second completes the statement — which
+            // the caller then either awaits directly or terminates with .select().
             if (Object.keys(captured).filter((k) => k.startsWith("eq_")).length >= 2) {
-              orderUpdate(captured);
-              return Promise.resolve({ error: null });
+              const done: Record<string, unknown> = {
+                select: () => Promise.resolve(settle()),
+                then: (resolve: (v: unknown) => unknown) => Promise.resolve(settle()).then(resolve),
+              };
+              return done;
             }
             return upd;
           };
@@ -141,6 +172,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   selectFilters = {};
   lastAlertAt = null;
+  updateMatchesRows = true;
   readErrorOnPage = null;
   pagesRead = 0;
   pendingRows = [{ order_id: "order-1", payment_id: "cs_live_1", created_at: OLD }];
@@ -378,11 +410,144 @@ describe("a checkout the processor never resolves is retired after a week", () =
   });
 });
 
+// ---------------------------------------------------------------------------
+// A CHARGED ORDER THAT READS "DECLINED" IS THE WORST STATE IN THE SYSTEM.
+//
+// The sweep polled pending_payment ONLY, which left David's 2026-09-09 shape
+// unrecoverable: decline on the first card, pay on the second card in the SAME
+// session, then lose that success webhook. The order is already payment_failed,
+// so nothing ever looked at it again — card charged, order reads declined, stock
+// released, no alert anywhere.
+// ---------------------------------------------------------------------------
+describe("a recently-declined order whose session actually took the money", () => {
+  it("is settled through the real webhook handler", async () => {
+    pendingRows = [{
+      order_id: "order-failed-but-paid",
+      payment_id: "vs_charged_after_decline",
+      created_at: OLD,
+      payment_status: "payment_failed",
+      payment_failed_at: OLD,
+    }];
+    providerSays("paid");
+
+    const result = await reconcileVeyraPendingPayments();
+
+    expect(result.settled).toBe(1);
+    // Settled by replaying a SIGNED event through processPaymentWebhook, so it
+    // inherits the exactly-once claim rather than flipping the row here.
+    expect(processPaymentWebhook).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells an operator, because the shopper was told the opposite", async () => {
+    pendingRows = [{
+      order_id: "order-failed-but-paid",
+      payment_id: "vs_charged_after_decline",
+      created_at: OLD,
+      payment_status: "payment_failed",
+      payment_failed_at: OLD,
+    }];
+    providerSays("paid");
+
+    await reconcileVeyraPendingPayments();
+
+    const alert = recordSystemAlert.mock.calls.map(([a]) => a).find(
+      (a) => a?.type === "payment_recovered_after_failure");
+    expect(alert).toBeDefined();
+    expect(alert?.severity).toBe("critical");
+  });
+
+  it("is never retired again, and never releases its stock a second time", async () => {
+    // The row is ALREADY payment_failed and its hold is already gone. Re-running
+    // the retirement would match zero rows (miscounted as a race) and a second
+    // release would act on a hold that no longer exists.
+    pendingRows = [{
+      order_id: "order-declined-and-still-declined",
+      payment_id: "vs_really_declined",
+      created_at: OLD,
+      payment_status: "payment_failed",
+      payment_failed_at: OLD,
+    }];
+    providerSays("failed");
+
+    const result = await reconcileVeyraPendingPayments();
+
+    expect(result.failedOut).toBe(0);
+    expect(releaseInventoryForOrder).not.toHaveBeenCalled();
+    expect(orderUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not count an ordinary decline toward the unresolved backlog", async () => {
+    // An ordinary decline is not an unknown charge, and must not raise the
+    // "orders pending at the processor" warning.
+    pendingRows = [{
+      order_id: "order-plain-decline",
+      payment_id: "vs_plain",
+      created_at: ANCIENT,
+      payment_status: "payment_failed",
+      payment_failed_at: ANCIENT,
+    }];
+    providerSays("open");
+
+    const result = await reconcileVeyraPendingPayments();
+
+    expect(result.unresolved).toBe(0);
+    const backlog = recordSystemAlert.mock.calls.map(([a]) => a).find(
+      (a) => a?.type === "payment_reconcile_backlog");
+    expect(backlog).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE RETIREMENT THAT LOSES A RACE MUST DO NOTHING.
+//
+// PostgREST reports no error when a guarded UPDATE matches zero rows, so
+// `if (!error)` treated "the guard correctly refused" as "the order was
+// retired": it released the inventory hold and counted a failure. When the
+// reason the guard refused is that a webhook had just paid the order, that
+// release returns units the paid order has already committed — an oversell
+// produced by the one job whose purpose is to protect a charged order.
+// ---------------------------------------------------------------------------
+describe("a retirement that loses the race to a webhook", () => {
+  it("does not release the inventory hold of an order that just became paid", async () => {
+    pendingRows = [{ order_id: "order-raced", payment_id: "vs_raced", created_at: OLD }];
+    providerSays("failed");
+    updateMatchesRows = false;   // the row moved under us
+
+    const result = await reconcileVeyraPendingPayments();
+
+    expect(releaseInventoryForOrder).not.toHaveBeenCalled();
+    expect(result.failedOut).toBe(0);
+    expect(result.raced).toBe(1);
+  });
+
+  it("still retires and releases when the guard genuinely matches", async () => {
+    // The guard must stay narrow: an ordinary dead session is still retired.
+    pendingRows = [{ order_id: "order-really-dead", payment_id: "vs_dead", created_at: OLD }];
+    providerSays("failed");
+
+    const result = await reconcileVeyraPendingPayments();
+
+    expect(releaseInventoryForOrder).toHaveBeenCalledWith("order-really-dead");
+    expect(result.failedOut).toBe(1);
+    expect(result.raced).toBeUndefined();
+  });
+});
+
 describe("the query only ever considers orders that can be reconciled", () => {
   it("selects unpaid orders that carry a session id, newest first", async () => {
     providerSays("open");
     await reconcileVeyraPendingPayments();
-    expect(selectFilters.eq).toEqual(["payment_status", "pending_payment"]);
+    // The status rail is now an OR, not a single eq: pending_payment, plus a
+    // RECENTLY-failed order that may have been charged on a retry whose webhook
+    // was lost. It must still be impossible for the read to return an order
+    // whose money has settled — a paid or refunded row here would be polled and
+    // could be re-settled or retired.
+    const statusFilter = String(selectFilters.or?.[0] ?? "");
+    expect(statusFilter).toContain("payment_status.eq.pending_payment");
+    expect(statusFilter).toContain("payment_status.eq.payment_failed");
+    expect(statusFilter).toContain("payment_failed_at.gte.");
+    expect(statusFilter).not.toContain("eq.paid");
+    expect(statusFilter).not.toContain("refunded");
     // The read no longer excludes session-less rows, and this assertion used to
     // require that it did. "Nothing to ask the processor about" is true of
     // POLLING and the loop still skips them for it — but as a READ filter it
