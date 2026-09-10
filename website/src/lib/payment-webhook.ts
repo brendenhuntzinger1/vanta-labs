@@ -2307,8 +2307,22 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   // its default — which the upsert below would then write over a real order.
   // The demotion guard further down only covers payment_failed/canceled, so it
   // does not catch this.
-  if (orderRecord && !isRecognisedMoneyEvent(eventPayload.type ?? "")) {
-    const existingStatus = (orderRecord.payment_status ?? "pending_payment") as OrderStatus;
+  //
+  // IT DOES NOT REQUIRE THE ORDER TO EXIST, and requiring it was a second way to
+  // the same phantom. Written as `orderRecord && !isRecognisedMoneyEvent(...)`,
+  // this refused only when there was already a row to protect; with no row it
+  // fell straight through to the upsert, and a payout.paid or
+  // dispute.evidence_required carrying any order reference the processor
+  // happened to attach INSERTED the very row the guard above exists to prevent —
+  // no customer, no email, no address, no items, $0 total, sitting in Needs
+  // Fulfillment. The two guards were written for the same defect and only one of
+  // them was closed.
+  //
+  // A recognised money event that names an unknown order still creates one, and
+  // deliberately: a charge is a fact about money and deserves a row even when
+  // checkout never wrote one. Subscription noise is not.
+  if (!isRecognisedMoneyEvent(eventPayload.type ?? "")) {
+    const existingStatus = (orderRecord?.payment_status ?? "pending_payment") as OrderStatus;
     await markEventProcessed(eventId, orderId, existingStatus);
     return {
       duplicate: false,
@@ -2966,10 +2980,30 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           qualifyingSubtotal: subtotal,
           paymentStatus: nextStatus,
           providerEventId: eventId,
-          customerEmail: eventPayload.customer?.email,
-          shippingAddress: eventPayload.customer?.address,
-          city: eventPayload.customer?.city,
-          postalCode: eventPayload.customer?.postalCode,
+          // AND SO IS THE IDENTITY, for exactly the same reason.
+          //
+          // These four feed detectCommissionFraudSignal, which counts how often
+          // one email or one shipping address has been used under a single
+          // referral code — the self-dealing pattern — and does nothing at all
+          // without them:
+          //
+          //     if (input.customerEmail) { ...count... }
+          //     normalizeAddressKey(address, city, postcode) -> "||" -> skipped
+          //
+          // They were read from `eventPayload.customer`, which a live charge
+          // does not carry: only our own mock gateway populates it, and it does
+          // so by reading these very columns back out of the database. So on
+          // every real card order both were undefined, both branches were
+          // skipped, and the check returned "not flagged" without counting
+          // anything. The manual lane reads the order row and has always worked;
+          // the two had silently diverged.
+          //
+          // The payload stays as the fallback, like the attribution above, for
+          // the webhook-before-order case.
+          customerEmail: orderRecord?.customer_email ? String(orderRecord.customer_email) : eventPayload.customer?.email,
+          shippingAddress: orderRecord?.shipping_address ? String(orderRecord.shipping_address) : eventPayload.customer?.address,
+          city: orderRecord?.city ? String(orderRecord.city) : eventPayload.customer?.city,
+          postalCode: orderRecord?.postal_code ? String(orderRecord.postal_code) : eventPayload.customer?.postalCode,
         });
       } catch (commissionError) {
         // Same reasoning as the manual lane above: reach the operator, not just
