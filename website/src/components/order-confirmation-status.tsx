@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { OrderStatusTimeline } from "@/components/order-status-timeline";
+import { DECLINE_MESSAGE, failureKindFromStatus, type FailureKind } from "@/lib/checkout-poll-decision";
 
 /**
  * Lead-in for the order line's email clause.
@@ -27,12 +28,16 @@ export const EMAIL_CONFIRMATION_LEAD = "we'll email your confirmation to";
  * (Cash App / Zelle, where the customer really does still owe payment) show a
  * Complete-payment CTA.
  */
+/** How often to keep asking once the fast confirmation window has passed. */
+const SLOW_POLL_MS = 30_000;
+
 export function OrderConfirmationStatus({
   orderId,
   orderNumber,
   maskedEmail,
   initialPaid,
   initialFailed,
+  initialFailureKind = "unknown",
   isManual,
   fulfillmentStatus,
 }: {
@@ -48,12 +53,19 @@ export function OrderConfirmationStatus({
    * declined was thanked for an order that will never ship and told not to pay.
    */
   initialFailed: boolean;
+  /**
+   * How much is known about WHY it failed, from the row the server already read.
+   * Seeds the first paint so it never asserts a bank decline it cannot support,
+   * and never has to correct itself a poll later.
+   */
+  initialFailureKind?: FailureKind;
   isManual: boolean;
   fulfillmentStatus: string | null;
 }) {
   const [paid, setPaid] = useState(initialPaid);
   const [failed, setFailed] = useState(initialFailed);
   const [timedOut, setTimedOut] = useState(false);
+  const [failureKind, setFailureKind] = useState<FailureKind>(initialFailureKind);
   const attempts = useRef(0);
 
   // Poll only for a not-yet-paid CARD order (the webhook-lag case). Manual
@@ -64,14 +76,14 @@ export function OrderConfirmationStatus({
     if (paid || failed || isManual) return;
     let active = true;
     let timer: number | undefined;
-    const MAX_ATTEMPTS = 20; // ~60s at 3s
+    const MAX_ATTEMPTS = 20; // ~60s at 3s, after which SLOW_POLL_MS takes over
 
     const tick = async () => {
       if (!active) return;
       attempts.current += 1;
       try {
         const res = await fetch(`/api/checkout/order-status/${encodeURIComponent(orderId)}`, { cache: "no-store" });
-        const json = (await res.json()) as { isPaid?: boolean; pending?: boolean };
+        const json = (await res.json()) as { isPaid?: boolean; pending?: boolean; failureKind?: unknown };
         if (active && json?.isPaid) {
           setPaid(true);
           // Announce it so measurement can react without polling this order
@@ -85,6 +97,7 @@ export function OrderConfirmationStatus({
         // applies — so a truncated or older response keeps polling rather than
         // announcing a decline.
         if (active && json?.pending === false) {
+          setFailureKind(failureKindFromStatus(json));
           setFailed(true);
           return;
         }
@@ -92,16 +105,28 @@ export function OrderConfirmationStatus({
         /* transient — keep polling */
       }
       if (!active) return;
+      // KEEP WATCHING, SLOWLY, RATHER THAN STOPPING.
+      //
+      // This used to `return` here, so the page settled on "Thank you for your
+      // order — no need to pay again" for ever, whatever happened next. A
+      // webhook arriving a minute later (the second real production order took
+      // 47 seconds from mount, and a slow one exceeds this window) never
+      // repainted, and neither did a late failure. The shopper was left reading
+      // a sentence that had stopped being true.
       if (attempts.current >= MAX_ATTEMPTS) {
         setTimedOut(true);
-        return;
       }
-      timer = window.setTimeout(tick, 3000);
+      timer = window.setTimeout(tick, attempts.current >= MAX_ATTEMPTS ? SLOW_POLL_MS : 3000);
     };
 
     timer = window.setTimeout(tick, 2500);
+    // iOS freezes timers in a backgrounded tab, which is routine while a bank
+    // app is open. Re-ask the moment we are visible again.
+    const recheck = () => { if (document.visibilityState === "visible") void tick(); };
+    document.addEventListener("visibilitychange", recheck);
     return () => {
       active = false;
+      document.removeEventListener("visibilitychange", recheck);
       if (timer) window.clearTimeout(timer);
     };
   }, [paid, failed, isManual, orderId]);
@@ -152,7 +177,12 @@ export function OrderConfirmationStatus({
           Order <span className="font-semibold text-white">{orderNumber}</span>.
         </p>
         <p className="mt-2 text-sm leading-6 text-white/50">
-          Your card has not been charged and this order will not ship. This is usually the bank declining the transaction — go back to checkout to place the order again, or contact support if you think this is a mistake.
+          {/* The SAME sentence the payment page shows, from one shared source, and
+              chosen by what the server actually knows. This branch used to assert
+              "your card has not been charged" and "usually the bank declining"
+              for EVERY failure — including the ones where no bank was ever asked,
+              which on this store is most of them. */}
+          {DECLINE_MESSAGE[failureKind]} This order will not ship.
         </p>
         <Link href="/checkout" className="vl2-btn-primary vl-focus-ring mt-5 flex w-full items-center justify-center px-6 py-3.5 text-sm">
           Back to checkout →
@@ -195,12 +225,23 @@ export function OrderConfirmationStatus({
   // tell them to pay again.
   return (
     <>
-      <div className={`${icon} border-cyan-300/40 bg-cyan-400/15 text-xl`}>✓</div>
-      <p className="vl2-eyebrow mt-4 text-cyan-200">Order received</p>
-      <h1 className={heading}>Thank you for your order</h1>
+      {/* NOT a tick, and not "thank you". This branch is reached when the
+          payment has NOT been confirmed inside the window, so it may yet fail —
+          and it used to congratulate the shopper on an order that might never
+          pay, then stop watching so the words could never be corrected. The page
+          now keeps polling slowly, so this state repaints to paid or to failed
+          when the answer arrives. */}
+      <div className={`${icon} border-cyan-300/40 bg-cyan-400/15`}>
+        <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-cyan-200/40 border-t-cyan-200" aria-hidden="true" />
+      </div>
+      <p className="vl2-eyebrow mt-4 text-cyan-200" role="status" aria-live="polite">Payment not yet confirmed</p>
+      <h1 className={heading}>Order received</h1>
       {orderLine}
       <p className="mt-2 text-sm leading-6 text-white/50">
-        Your payment is still being confirmed — this can occasionally take a minute. You&apos;ll get an email as soon as it clears; there&apos;s no need to pay again.
+        We&apos;re still confirming this payment with your bank — this page updates on its own. Please
+        don&apos;t pay again; you&apos;ll get an email the moment it clears. If nothing arrives shortly,{" "}
+        <Link href="/contact" className="underline underline-offset-4 hover:text-white">contact us</Link>{" "}
+        and we&apos;ll check it for you.
       </p>
     </>
   );

@@ -165,8 +165,11 @@ describe("the decline message tells the shopper the three things they need", () 
   // So there are now two texts, chosen by what the server actually knows, and
   // the assertions below check each says what it is entitled to say.
   const messages = (() => {
-    const start = page.indexOf("const DECLINE_MESSAGE");
-    const block = page.slice(start, page.indexOf("};", start));
+    // The copy moved into the shared module both surfaces import, so the
+    // payment page and the confirmation page cannot describe one event two ways.
+    const shared = read("src/lib/checkout-poll-decision.ts");
+    const start = shared.indexOf("export const DECLINE_MESSAGE");
+    const block = shared.slice(start, shared.indexOf("};", start));
     const declined = (block.match(/declined:\s*\n?\s*"([\s\S]*?)",\n\s*unknown:/) ?? ["", ""])[1];
     const unknown = (block.match(/unknown:\s*\n?\s*"([\s\S]*?)",?\s*$/) ?? ["", ""])[1];
     // The sources concatenate with +, so strip the quoting between fragments.

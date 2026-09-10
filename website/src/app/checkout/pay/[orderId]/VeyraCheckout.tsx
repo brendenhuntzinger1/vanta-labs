@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { decideFromOrderStatus, failureKindFromStatus, type FailureKind } from "@/lib/checkout-poll-decision";
+import { DECLINE_MESSAGE, decideFromOrderStatus, failureKindFromStatus } from "@/lib/checkout-poll-decision";
 
 // On-site card entry. Veyra's documented integration is "create a session
 // server-side and mount the iframe" — the shopper never leaves this domain and
@@ -101,33 +101,6 @@ const READY_FALLBACK_MS = 4_000;
  * worse than saying nothing, because it reads as his mistake. So the sentence is
  * conditional, and it carries a way out for the case where nothing appears.
  */
-/**
- * What a shopper is told when a payment did not complete.
- *
- * Split by how much we actually know, because the page used to assert two
- * things it could not: that a BANK declined the card, and that the card was NOT
- * CHARGED. Neither is knowable from `payment_failed` alone — that status is also
- * written for an abandoned verification, an expired checkout session, a
- * processor event carrying no reason at all, and an order an operator retired
- * by hand. On this store the unknown case is the common one: of eighteen failed
- * orders, sixteen had no processor event behind them.
- *
- * Both texts carry the sentence that actually recovers the sale, and which no
- * customer-facing surface had anywhere. It is exactly how David's decline became
- * a paid order 71 seconds later: his bank pushed him an approval, he approved
- * it, and his retry went through.
- */
-const DECLINE_MESSAGE: Record<FailureKind, string> = {
-  declined:
-    "Your bank declined this payment, so your card was not charged. If your bank has just asked you to "
-    + "confirm the purchase — by text or in its app — approve it and then try again below. You can also "
-    + "use a different card.",
-  unknown:
-    "This payment didn't go through. If your bank has just asked you to confirm the purchase — by text or "
-    + "in its app — approve it and then try again below. You can also use a different card, or contact us "
-    + "and we'll sort it out.",
-};
-
 const VERIFICATION_MESSAGE =
   "Your bank is asking you to confirm this payment. If a verification step appears in the form below — "
   + "a code by text, or your banking app — complete it, and please don't close or refresh this page while "
