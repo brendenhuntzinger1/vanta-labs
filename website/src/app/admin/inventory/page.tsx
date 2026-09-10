@@ -2,8 +2,10 @@ import { redirect } from "next/navigation";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { canManageInventory } from "@/lib/admin-roles";
 import { getInventoryRows } from "@/lib/admin-inventory";
+import { getInventoryWatchlist } from "@/lib/admin-inventory-watchlist";
 import { isInventoryTrackingActive } from "@/lib/inventory-settings";
 import { AdminInventoryClient } from "@/components/admin-inventory-client";
+import { AdminInventoryWatchlist } from "@/components/admin-inventory-watchlist";
 import { failedReads, settleRead, UNKNOWN_FIGURE } from "@/lib/admin-read";
 import { AdminReadFailureNotice } from "@/components/admin-data-notices";
 
@@ -20,6 +22,10 @@ export default async function AdminInventoryPage() {
   // a database that did not answer must say so instead.
   const rowsRead = await settleRead("Inventory", getInventoryRows);
   const rows = rowsRead.ok ? rowsRead.value : [];
+  // Same convention as the rows above: a watch list that failed to load must
+  // say so, because an empty one reads as "nothing needs ordering" — the most
+  // expensive thing this screen could get wrong.
+  const watchlistRead = await settleRead("Reorder watch list", getInventoryWatchlist);
   // Stock is only enforced once inventory tracking is switched on. Until then
   // these numbers are a reference and never gate sales (see resolveStockStatus
   // in catalog.ts). Vanta Labs owns these counts now — nothing external feeds
@@ -44,7 +50,8 @@ export default async function AdminInventoryPage() {
           </p>
         </section>
 
-        <AdminReadFailureNotice failures={failedReads([rowsRead])} />
+        <AdminReadFailureNotice failures={failedReads([rowsRead, watchlistRead])} />
+        {watchlistRead.ok ? <AdminInventoryWatchlist watchlist={watchlistRead.value} /> : null}
         {rowsRead.ok ? (
           <AdminInventoryClient initialRows={rows} canManage={canManageInventory(session.role)} inventoryTrackingActive={inventoryTrackingActive} />
         ) : null}

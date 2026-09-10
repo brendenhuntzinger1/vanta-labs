@@ -7,7 +7,7 @@ import { getProfitWindowMetrics, getProfitDashboard } from "@/lib/admin-profit";
 import { getRevenueMetrics } from "@/lib/admin-revenue";
 import { getAdminOrderRows } from "@/lib/admin-orders";
 import { listAdminProducts } from "@/lib/admin-products";
-import { getLowStockCount } from "@/lib/admin-inventory";
+import { getReorderCount } from "@/lib/admin-inventory-watchlist";
 import { getReconciliationFlagCount } from "@/lib/admin-reconciliation";
 import { getBucketCounts } from "@/lib/fulfillment-queues";
 import { getOpenCriticalAlertCount } from "@/lib/monitoring";
@@ -59,7 +59,7 @@ export default async function AdminHomePage() {
     onlineVisitorsRead,
     revenueWindowsRead,
     revenueMetricsRead,
-    lowStockRead,
+    reorderRead,
     reconciliationFlagRead,
     profitWindowsRead,
     workRead,
@@ -72,7 +72,7 @@ export default async function AdminHomePage() {
     settleRead("Visitors online", getCurrentOnlineVisitorCount),
     settleRead("Revenue windows", getRevenueWindowMetrics),
     settleRead("Order counts", getRevenueMetrics),
-    settleRead("Low stock", getLowStockCount),
+    settleRead("Needs reorder", getReorderCount),
     settleRead("Reconciliation flags", getReconciliationFlagCount),
     settleRead("Net profit", getProfitWindowMetrics),
     // What is waiting for a human. Same buckets the workstation renders, so the
@@ -97,7 +97,7 @@ export default async function AdminHomePage() {
     partnersRead,
     revenueWindowsRead,
     revenueMetricsRead,
-    lowStockRead,
+    reorderRead,
     reconciliationFlagRead,
     onlineVisitorsRead,
     workRead,
@@ -225,9 +225,14 @@ export default async function AdminHomePage() {
             </p>
           </div>
           <Link href="/admin/inventory" className="vl-panel rounded-2xl p-4 transition hover:border-white/25">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Low Stock</p>
-            <p className={lowStockRead.ok && lowStockRead.value > 0 ? "mt-2 text-2xl font-semibold text-amber-300" : "mt-2 text-2xl font-semibold text-white"}>
-              {figure(lowStockRead, String)}
+            {/* Counts lines that are out, or that empty before a resupply could
+                land — the two states that need a purchase order today. "Order
+                soon" is deliberately not here: a dashboard number that includes
+                things which are merely approaching is a number you learn to
+                ignore. The watch list itself has the full ranking. */}
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Needs Reorder</p>
+            <p className={reorderRead.ok && reorderRead.value > 0 ? "mt-2 text-2xl font-semibold text-amber-300" : "mt-2 text-2xl font-semibold text-white"}>
+              {figure(reorderRead, String)}
             </p>
           </Link>
           <Link href="/admin/reconciliation" className="vl-panel rounded-2xl p-4 transition hover:border-white/25">

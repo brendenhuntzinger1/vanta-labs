@@ -223,10 +223,10 @@ export async function getInventoryRows(): Promise<InventoryLine[]> {
   return lines.sort((a, b) => a.productName.localeCompare(b.productName));
 }
 
-export async function getLowStockCount(): Promise<number> {
-  const rows = await getInventoryRows();
-  return rows.filter((row) => row.isLowStock || row.isOutOfStock).length;
-}
+// The dashboard's stock figure now comes from getReorderCount()
+// (admin-inventory-watchlist.ts), which counts what needs a purchase order
+// rather than every line under its threshold. getLowStockCount() was its only
+// caller and is gone with it.
 
 // ----------------------------------------------------- enforcement guard ----
 
