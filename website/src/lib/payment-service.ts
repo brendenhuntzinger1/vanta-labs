@@ -22,6 +22,8 @@ import {
 import { CustomerFacingError } from "@/lib/safe-error";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
+import { isPaidOrderStatus } from "@/lib/ledger";
+
 import type {
  CartItemInput,
  CustomerInput,
@@ -295,9 +297,57 @@ export async function createCheckoutSession(
        .not("payment_status", "in", "(canceled,cancelled,payment_failed)")
        .maybeSingle();
      if (existing) {
+       // A KEY IDENTIFIES ONE PURCHASE, NOT ONE SHOPPER.
+       //
+       // Resuming on a key match alone meant a shopper whose first attempt
+       // failed, who then changed something — removed an item, fixed the
+       // address, applied a code — and submitted again was silently put back on
+       // the ORIGINAL order at the ORIGINAL amount. They were charged for a
+       // purchase they had already decided against.
+       //
+       // The client now derives the key from the submitted payload, so an
+       // edited submit arrives with a new key and never reaches this branch.
+       // This is the backstop for anything that does not: if the money the
+       // shopper is being asked for now differs from what the resumed order
+       // holds, that key does not describe this purchase, and resuming it would
+       // charge the wrong amount. Refuse rather than guess — the shopper is
+       // told to try again, and a fresh key creates the right order.
+       //
+       // A PAID ORDER IS NOT THIS GUARD'S BUSINESS, AND MUST NOT BE REFUSED.
+       //
+       // If the key's order has already settled, the answer the shopper needs is
+       // "you have already paid for this" — resumeExistingOrder reports
+       // alreadyPaid and the page routes them to their receipt. Refusing here
+       // would tell someone who HAS been charged that nothing was charged and
+       // invite them to order again, which is the exact double-charge that
+       // checkout-paid-order-is-never-recharged.test.ts exists to prevent. Its
+       // three assertions caught this within a minute of the guard being added.
+       //
+       // So this only speaks about an order still awaiting payment, where the
+       // amount is a quote rather than a settlement.
+       const settled = isPaidOrderStatus(String(existing.payment_status ?? ""));
+       // Compared in integer cents. A float compare on money is how a
+       // half-penny becomes a mismatch, or a real mismatch rounds away.
+       const existingCents = Math.round(Number(existing.amount_paid ?? 0) * 100);
+       const quotedCents = Math.round(finalTotal * 100);
+       if (!settled && existingCents > 0 && existingCents !== quotedCents) {
+         throw new CustomerFacingError(
+           "Your basket changed since this checkout started, so we did not reuse the earlier order. "
+           + "Please place the order again — nothing has been charged.",
+         );
+       }
        return await resumeExistingOrder(existing);
      }
-   } catch {
+   } catch (error) {
+     // A DELIBERATE REFUSAL MUST NOT BE SWALLOWED BY THE FALLBACK.
+     //
+     // This catch exists for a missing column or a failed lookup, where
+     // carrying on and creating the order normally is right. The basket-changed
+     // guard above throws on purpose, and letting it land here would do the
+     // opposite of what it is for: fall through and insert a SECOND order
+     // against the same idempotency_key, which the unique index then refuses
+     // with a database error the shopper cannot act on.
+     if (error instanceof CustomerFacingError) throw error;
      // Column missing or lookup failed — proceed to create normally.
    }
  }

@@ -540,11 +540,23 @@ export default function CheckoutPage() {
   // pass the state check and create two orders (each taking an inventory hold).
   // This ref updates immediately, closing that window.
   const submitLatchRef = useRef(false);
-  // Idempotency key for this checkout submit. Generated once, reused across
-  // retries of the SAME order attempt (so a lost response + retry can't create
-  // two orders), and cleared only after a real success so a later distinct
-  // order gets a fresh key.
-  const idempotencyKeyRef = useRef<string | null>(null);
+  // IDEMPOTENCY KEY, BOUND TO THE PURCHASE IT WAS MINTED FOR.
+  //
+  // The key exists so a lost response plus a retry cannot create two orders. It
+  // used to be minted once and reused until a success, which made it a key for
+  // the SESSION rather than for the submit — and the server resumes any live
+  // order carrying the key without checking the basket still matches. So a
+  // shopper whose first attempt failed, who then went back and changed
+  // something — removed an item, fixed the address, applied a code — and
+  // submitted again was silently resumed onto the ORIGINAL order: original
+  // cart, original amount, original address. They were charged for a purchase
+  // they had already decided against, and the confirmation showed it.
+  //
+  // The signature is the whole submitted payload minus the key itself, so
+  // anything that changes what is bought, what it costs or where it goes mints
+  // a new key, while a genuine retry of the identical submit reuses it and
+  // still dedupes. Cleared on success as before.
+  const idempotencyRef = useRef<{ key: string; signature: string } | null>(null);
   // Lets a failed validation scroll the shopper back up to the form fields
   // (with their inline errors) instead of leaving them at the submit button.
   const shippingSectionRef = useRef<HTMLElement | null>(null);
@@ -719,11 +731,6 @@ export default function CheckoutPage() {
 
     if (isSubmitting || submitLatchRef.current) return;
     submitLatchRef.current = true;
-    if (!idempotencyKeyRef.current) {
-      idempotencyKeyRef.current = typeof crypto !== "undefined" && crypto.randomUUID
-        ? crypto.randomUUID()
-        : `idem-${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    }
 
     haptic(12);
     setCheckoutState("loading");
@@ -769,10 +776,22 @@ export default function CheckoutPage() {
         expectedTotal: postedTotal,
         paymentMethod: selectedMethodId || undefined,
         complianceAcknowledgements: acknowledgements,
-        idempotencyKey: idempotencyKeyRef.current,
       };
 
-      const result = await createSecureCheckoutSession(payload);
+      // Mint (or reuse) the key against THIS payload — see idempotencyRef.
+      const signature = JSON.stringify(payload);
+      if (!idempotencyRef.current || idempotencyRef.current.signature !== signature) {
+        idempotencyRef.current = {
+          signature,
+          key: typeof crypto !== "undefined" && crypto.randomUUID
+            ? crypto.randomUUID()
+            : `idem-${Date.now()}-${Math.round(Math.random() * 1e9)}`,
+        };
+      }
+      const result = await createSecureCheckoutSession({
+        ...payload,
+        idempotencyKey: idempotencyRef.current.key,
+      });
 
       // Manual (non-card) methods: stay on-page and show the payment
       // instructions panel. None ship enabled today (card only), so this branch
@@ -782,7 +801,7 @@ export default function CheckoutPage() {
         if (method) {
           // Order placed — this attempt is done; a later distinct order gets a
           // fresh idempotency key.
-          idempotencyKeyRef.current = null;
+          idempotencyRef.current = null;
           setCreatedOrder({
             orderId: result.orderId,
             orderNumber: result.orderNumber,
@@ -806,7 +825,7 @@ export default function CheckoutPage() {
       // check would otherwise tell a shopper who has already paid that their
       // card was not charged and invite them to try again.
       if (result.alreadyPaid) {
-        idempotencyKeyRef.current = null;
+        idempotencyRef.current = null;
         window.location.assign(`/order-confirmation/${encodeURIComponent(result.orderId)}`);
         return;
       }
@@ -839,7 +858,7 @@ export default function CheckoutPage() {
       // The submit latch is deliberately LEFT ENGAGED here: the page unloads on
       // redirect, so re-enabling the button would only open a duplicate-order
       // window while the redirect is still in flight.
-      idempotencyKeyRef.current = null;
+      idempotencyRef.current = null;
       window.location.assign(result.hostedCheckoutUrl);
     } catch (error) {
       // Only an ERROR reopens the button for a retry (which reuses the same
