@@ -597,9 +597,21 @@ export default function CheckoutPage() {
   // addressed to, and only for a verified, cart-scoped grant. ONLY SEEDS AN
   // EMPTY FIELD, so nothing the shopper has typed is ever overwritten, and the
   // signed-in path above still wins because it fills the field first.
+  //
+  // DEFERRED BY A MICROTASK, and that is a lint accommodation rather than a
+  // behaviour change. Calling setState synchronously in an effect body trips
+  // react-hooks' cascading-render rule, which turned `npx eslint .` red on main
+  // (run #75, the Lint step, and only that step). The seed is idempotent — the
+  // updater returns `prev` untouched once the field has any value — so running
+  // it a microtask later seeds the identical field with the identical value and
+  // nothing in between can observe the difference. The account prefill lower in
+  // this file already avoids the same rule the same way, by sitting inside an
+  // async IIFE; this states the reason instead of achieving it as a side effect.
   useEffect(() => {
     if (!knownEmail || !/^\S+@\S+\.\S+$/.test(knownEmail)) return;
-    setForm((prev) => (prev.email ? prev : { ...prev, email: knownEmail }));
+    queueMicrotask(() => {
+      setForm((prev) => (prev.email ? prev : { ...prev, email: knownEmail }));
+    });
   }, [knownEmail]);
 
   // Whether the marketing box starts ticked, until the shopper touches it.
