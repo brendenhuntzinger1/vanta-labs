@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
-import { canManageProducts } from "@/lib/admin-roles";
-import { bulkUpdateAdminProducts, createAdminProduct, listAdminProducts, type AdminProductStatusFilter, type ProductCreateInput } from "@/lib/admin-products";
+import { canManageProducts, canViewProfit } from "@/lib/admin-roles";
+import { bulkUpdateAdminProducts, createAdminProduct, listAdminProducts, withoutCostFields, type AdminProductStatusFilter, type ProductCreateInput } from "@/lib/admin-products";
 
 function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
@@ -24,7 +24,17 @@ export async function GET(request: Request) {
     const status = (url.searchParams.get("status") ?? "all") as AdminProductStatusFilter;
 
     const rows = await listAdminProducts({ search, category, status });
-    return NextResponse.json({ success: true, rows });
+    // COST DATA IS MANAGER+, EVEN ON A READ.
+    //
+    // Every write path here checks canManageProducts, but this read checked
+    // nothing beyond "is an admin", so a `staff` session could pull the whole
+    // catalogue with per-SKU unit cost, suggested retail and the profit floor in
+    // the payload — the exact data admin-roles.ts:53-58 says that role must not
+    // see. The catalogue itself stays readable, because staff need it.
+    return NextResponse.json({
+      success: true,
+      rows: canViewProfit(session.role) ? rows : withoutCostFields(rows as Array<Record<string, unknown>>),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to load products";
     return NextResponse.json({ success: false, error: message }, { status: 400 });

@@ -291,6 +291,54 @@ async function fetchProductRelations(productIds: string[]) {
   return { imagesByProductId, dosesByProductId };
 }
 
+/**
+ * Strip internal cost and margin data from admin product rows.
+ *
+ * admin-roles.ts:53-58 states the rule and the reason: profit and COGS-derived
+ * figures are manager+ "so the lowest-privilege staff role can't read the
+ * store's margins". Every WRITE path here honours it — POST and PATCH both call
+ * canManageProducts — but the two READ routes had no capability check at all, so
+ * a `staff` session could GET the whole catalogue with per-SKU unit cost,
+ * supplier margin, suggested retail and the per-product profit floor in the
+ * payload. That is precisely the data the control exists to withhold.
+ *
+ * Refusing the read outright would be the wrong trade. Staff plausibly need the
+ * catalogue to do their job — fulfilment, support, checking what a customer
+ * ordered — and none of that needs a cost. So the row is served and the money
+ * fields are removed, which is the narrowest thing that satisfies the rule.
+ *
+ * Removed rather than zeroed: a 0 reads as "this costs nothing" and would feed
+ * a margin calculation somewhere downstream as fact. Absent is what it is.
+ */
+/** The product-level fields that reveal cost, margin or the profit floor. */
+const COST_FIELDS = [
+  "productCostCents",
+  "suggestedRetailCents",
+  "minSellingPriceCents",
+  "minProfitCents",
+  "minProfitPercent",
+] as const;
+
+export function withoutCostFields<T extends Record<string, unknown>>(rows: T[]): T[] {
+  const omit = (source: Record<string, unknown>, keys: readonly string[]) => {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(source)) {
+      if (!keys.includes(key)) out[key] = value;
+    }
+    return out;
+  };
+
+  return rows.map((row) => {
+    const rest = omit(row, COST_FIELDS);
+    const doses = rest.doses;
+    if (Array.isArray(doses)) {
+      rest.doses = doses.map((dose) =>
+        (dose && typeof dose === "object" ? omit(dose as Record<string, unknown>, ["productCostCents"]) : dose));
+    }
+    return rest as T;
+  });
+}
+
 export async function listAdminProducts(input: {
   search?: string;
   category?: string;

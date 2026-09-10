@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { canManageProducts } from "@/lib/admin-roles";
+import { canManageProducts, canViewProfit } from "@/lib/admin-roles";
 import {
   deleteAdminProduct,
   getAdminProductById,
@@ -13,6 +13,7 @@ import {
   uploadProductImageToStorage,
   addProductImageFromUrl,
   deleteProductImage,
+  withoutCostFields,
   type ProductUpdateInput,
 } from "@/lib/admin-products";
 
@@ -33,7 +34,14 @@ export async function GET(_: Request, context: { params: Promise<{ productId: st
   try {
     const { productId } = await context.params;
     const product = await getAdminProductById(productId);
-    return NextResponse.json({ success: true, product });
+    // Same rule as the list endpoint: the product is readable by any admin, its
+    // cost and margin are not. See withoutCostFields.
+    return NextResponse.json({
+      success: true,
+      product: canViewProfit(session.role) || !product
+        ? product
+        : withoutCostFields([product as Record<string, unknown>])[0],
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to load product";
     return NextResponse.json({ success: false, error: message }, { status: 400 });
