@@ -66,6 +66,36 @@ const WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET ?? "harness-webhook-se
 const DEFAULT_HARNESS_LOG = `${process.env.QA_LOG_DIR ?? "/tmp/vanta-qa"}/harness.log`;
 const HARNESS_LOG = process.env.QA_HARNESS_LOG
   ?? (existsSync(DEFAULT_HARNESS_LOG) ? DEFAULT_HARNESS_LOG : null);
+
+/**
+ * WHERE THE SENT MAIL ACTUALLY IS, UNDER EITHER PROVIDER.
+ *
+ * Every email assertion below used to read ONLY the app's stdout, matching the
+ * line NoopEmailProvider prints ("Not sent: ..."). That provider runs ONLY when
+ * no real one is configured — so the moment the harness is pointed at
+ * scripts/smtp-sink.mjs, which docs/BROWSER-TESTING-RUNBOOK.md tells you to do
+ * for the marketing, lifecycle and gift suites, every step here reads a log
+ * that cannot contain what it is looking for.
+ *
+ * The two halves of that runbook therefore contradicted each other, and only
+ * one configuration could be right at a time. Measured 2026-09-10: with the
+ * documented SMTP sink running, three steps of qa:journey reported "no email
+ * composed" for three emails that had been composed, addressed and delivered
+ * perfectly well — and because qa:all chains on &&, the run stopped there and
+ * qa:purchase, qa:highvalue, qa:amounts, qa:edge, qa:crawl and qa:abuse never
+ * ran at all.
+ *
+ * BOTH providers append to captured-emails.jsonl — the noop one writes it as it
+ * declines to send, the sink writes it on delivery — so that file is the one
+ * surface that is true in either configuration. Prefer it; keep the stdout
+ * reader as the fallback for a harness running the noop provider with no
+ * capture directory set, so this is strictly more capable than before and never
+ * less.
+ */
+const MAIL_CAPTURE = `${process.env.EMAIL_CAPTURE_DIR ?? process.env.QA_LOG_DIR ?? "/tmp/vanta-qa"}/captured-emails.jsonl`;
+/** One resolution, used by BOTH the offset and the reader, so they cannot disagree. */
+const mailSource = () => (existsSync(MAIL_CAPTURE) ? MAIL_CAPTURE : HARNESS_LOG);
+
 const VEYRA_LOG = process.env.QA_VEYRA_LOG ?? `${process.env.QA_LOG_DIR ?? "/tmp/vanta-qa"}/veyra.log`;
 
 if (!/127\.0\.0\.1|localhost/.test(BASE)) {
@@ -132,13 +162,43 @@ async function step(name, fn) {
   }
 }
 
-const logOffset = () => (HARNESS_LOG && existsSync(HARNESS_LOG) ? statSync(HARNESS_LOG).size : 0);
+const logOffset = () => {
+  const source = mailSource();
+  return source && existsSync(source) ? statSync(source).size : 0;
+};
 
 /** Emails the app composed since `offset`. Mirrors qa-purchase-path.mjs. */
 function mailSince(offset) {
-  if (!HARNESS_LOG || !existsSync(HARNESS_LOG)) return null;
-  const buf = readFileSync(HARNESS_LOG);
+  const source = mailSource();
+  if (!source || !existsSync(source)) return null;
+  // Sliced as BYTES, not characters. statSync().size is a byte count and
+  // String.prototype.slice counts UTF-16 code units, so a source containing an
+  // em dash (every "Delivered — order" line has one) drifts the two apart and
+  // the window silently starts past the lines being looked for. That reported
+  // "no email composed" for emails that had been composed perfectly well.
+  const buf = readFileSync(source);
   const text = buf.subarray(Math.min(offset, buf.length)).toString("utf8");
+
+  if (source === MAIL_CAPTURE) {
+    // One JSON object per delivered message. A half-written trailing line, or a
+    // window that opened mid-line, simply does not parse and is dropped rather
+    // than throwing and failing a step for a reason that is not about email.
+    return text
+      .split("\n")
+      .map((line) => {
+        if (!line.trim()) return null;
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .map((m) => ({ subject: String(m.subject ?? ""), to: String(m.to ?? "") }));
+  }
+
+  // The address runs to end-of-line; the trailing full stop is the log's, not
+  // part of the address.
   return [...text.matchAll(/Not sent: "([^"]+)" to (\S+?)\.?\s*$/gm)]
     .map((m) => ({ subject: m[1], to: m[2] }));
 }

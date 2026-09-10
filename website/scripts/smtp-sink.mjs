@@ -23,6 +23,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const args = process.argv.slice(2);
 const arg = (name, fallback) => {
@@ -71,10 +72,47 @@ function unfold(headerBlock) {
   return headerBlock.replace(/\r?\n[ \t]+/g, " ");
 }
 
-function decodeWord(value) {
-  return value.replace(/=\?[^?]+\?([BbQq])\?([^?]*)\?=/g, (_, kind, text) => {
-    if (kind.toLowerCase() === "b") return Buffer.from(text, "base64").toString("utf8");
-    return text.replace(/_/g, " ").replace(/=([0-9A-Fa-f]{2})/g, (__, hex) => String.fromCharCode(parseInt(hex, 16)));
+export function decodeWord(value) {
+  // RFC 2047 section 6.2: linear whitespace BETWEEN two adjacent encoded-words
+  // is a folding artifact and must be DROPPED — it exists only so a long header
+  // can be wrapped, and it is not part of the text. This decoder used to leave
+  // it in, and nodemailer folds at 75 characters, which lands mid-token: an
+  // order-delivered subject came back as "VL-JOURNEY-178 9044828937". A reader
+  // comparing that against the order would report the site as sending broken
+  // receipts. It was the capture breaking them.
+  //
+  // Only the between-two-encoded-words case is collapsed. Whitespace separating
+  // an encoded word from ordinary text is real and stays.
+  const joined = value.replace(/(\?=)[ \t]+(?==\?)/g, "$1");
+
+  return joined.replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, (_, charset, kind, text) => {
+    const encoding = /^utf-?8$/i.test(String(charset).trim()) ? "utf8" : "latin1";
+
+    if (kind.toLowerCase() === "b") {
+      return Buffer.from(text, "base64").toString(encoding);
+    }
+
+    // BYTES, THEN UTF-8 — the same rule decodeBody already follows, and for the
+    // same reason. String.fromCharCode per escaped byte decoded each byte of a
+    // multi-byte character as its own Latin-1 code point, so every "—" in a
+    // captured subject came out as mojibake. The fix was applied to the body
+    // when it was found there and never to the headers, which is why the body
+    // of a captured message read correctly while its subject did not.
+    //
+    // In Q encoding "_" stands for a space (RFC 2047 section 4.2); a literal
+    // underscore arrives as "=5F", which this loop reads as a hex escape, so
+    // substituting first cannot corrupt one.
+    const source = text.replace(/_/g, " ");
+    const bytes = [];
+    for (let i = 0; i < source.length; i += 1) {
+      if (source[i] === "=" && /^[0-9A-Fa-f]{2}$/.test(source.slice(i + 1, i + 3))) {
+        bytes.push(parseInt(source.slice(i + 1, i + 3), 16));
+        i += 2;
+      } else {
+        bytes.push(...Buffer.from(source[i], "utf8"));
+      }
+    }
+    return Buffer.from(bytes).toString(encoding);
   });
 }
 
@@ -86,7 +124,7 @@ function decodeWord(value) {
  * multipart/alternative) and records the raw message alongside, so anything it
  * gets wrong is still recoverable by whoever is reading the file.
  */
-function parseMessage(raw) {
+export function parseMessage(raw) {
   const split = raw.indexOf("\r\n\r\n") >= 0 ? raw.indexOf("\r\n\r\n") : raw.indexOf("\n\n");
   const headerBlock = unfold(raw.slice(0, split < 0 ? raw.length : split));
   const body = split < 0 ? "" : raw.slice(split + (raw.includes("\r\n\r\n") ? 4 : 2));
@@ -241,8 +279,13 @@ const server = createServer((socket) => {
   socket.on("error", () => {});
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`[smtp-sink] listening on ${HOST}:${PORT}`);
-  console.log(`[smtp-sink] capturing to ${CAPTURE_FILE}`);
-  console.log("[smtp-sink] ACCEPTS EVERYTHING AND DELIVERS NOTHING. Loopback only.");
-});
+// Only bind a port when this file is RUN. Imported — which is how the decoder
+// below is unit-tested — it must not open a socket, or the suite would fight
+// the sink a browser session already has listening on 2525.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  server.listen(PORT, HOST, () => {
+    console.log(`[smtp-sink] listening on ${HOST}:${PORT}`);
+    console.log(`[smtp-sink] capturing to ${CAPTURE_FILE}`);
+    console.log("[smtp-sink] ACCEPTS EVERYTHING AND DELIVERS NOTHING. Loopback only.");
+  });
+}

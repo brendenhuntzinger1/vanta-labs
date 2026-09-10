@@ -193,4 +193,6 @@ for pair in "pgrst-shim.mjs:scripts/gotrue-shim.mjs" "harness-server.mjs:.next/B
 done
 
 echo
-echo "Logs in $LOGDIR. Export QA_HARNESS_LOG=$LOGDIR/harness.log for the email assertions."
+echo "Logs in $LOGDIR. The email assertions read $LOGDIR/captured-emails.jsonl, which"
+echo "both providers write, so they need no extra variable. QA_HARNESS_LOG is only the"
+echo "fallback for a noop-provider harness with no EMAIL_CAPTURE_DIR set."

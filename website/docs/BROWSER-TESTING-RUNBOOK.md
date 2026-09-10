@@ -607,16 +607,52 @@ brand-new order, and every order sits at `payment_status = 'canceled'` — which
 reads exactly like a payment bug and is not one. `qa:purchase` then fails at
 "the order is canceled, not paid".
 
-**`EMAIL_CAPTURE_DIR=/tmp/vanta-qa` in `.env.test.local`, and email DISABLED in
-the Control Center.** The email assertions read what the customer would read
-(`providers/noop.ts` writes `captured-emails.jsonl`), and the noop provider only
-runs when no real provider is configured. A leftover `email.provider = smtp`
-control value beats the env var, so the app tries a dead SMTP host, nothing is
-captured, and every email step reports `SKIP — no harness log configured`. Three
-of `qa:purchase`'s eighteen steps skipped that way for exactly this reason, and
-a skip is not a pass. The capture now records `headers` too, so
-`List-Unsubscribe` on a marketing send — and its absence on a receipt — can be
-read rather than assumed.
+**`EMAIL_CAPTURE_DIR=/tmp/vanta-qa` in `.env.test.local`.** The email assertions
+read what the customer would read: `captured-emails.jsonl`. Point a real SMTP
+host at a dead port and nothing is captured, and every email step reports
+`SKIP — no harness log configured`. Three of `qa:purchase`'s eighteen steps
+skipped that way, and a skip is not a pass. The capture records `headers` too,
+so `List-Unsubscribe` on a marketing send — and its absence on a receipt — can
+be read rather than assumed.
+
+**Which provider is running no longer decides whether these steps work, and it
+used to.** This section said to disable email so `providers/noop.ts` would run,
+because `qa:journey`, `qa:purchase` and `qa:highvalue` scraped the app's stdout
+for the line the *noop* provider prints (`Not sent: "<subject>" to <address>.`).
+The "Marketing email" section below tells you to do the opposite — run the SMTP
+sink — because campaigns and automations refuse to send while email is off. Both
+instructions were right about their own half and the two could not hold at once,
+so `qa:all` was only ever valid under one of them.
+
+Measured 2026-09-10 with the documented sink running: three steps of
+`qa:journey` reported `no shipping email composed` / `no delivery email
+composed` / `no change-of-address email composed` for three emails that had been
+composed, addressed and delivered perfectly well — they were sitting in
+`captured-emails.jsonl` the whole time. `qa:all` chains on `&&`, so the run
+stopped there and `qa:purchase`, `qa:highvalue`, `qa:amounts`, `qa:edge`,
+`qa:crawl` and `qa:abuse` never ran at all. That reads as a broken email system
+and a broken shipping pipeline. It was neither.
+
+All three now read `captured-emails.jsonl`, which **both** providers write — the
+noop one as it declines to send, `smtp-sink.mjs` on delivery — and fall back to
+the stdout reader only when no capture file exists. So the suites are correct
+under either configuration, and you no longer have to choose which half of this
+runbook to obey.
+
+**`smtp-sink.mjs` also used to corrupt the subject line it captured**, which is
+worth knowing because the corruption looked like a product defect. Its RFC 2047
+header decoder read Q-encoded bytes as Latin-1 (so every `—` became mojibake)
+and kept the whitespace between two adjacent encoded-words, which RFC 2047 §6.2
+requires be dropped. Nodemailer folds at 75 characters, so that landed mid-token
+— in an order number:
+
+    on the wire   =?UTF-8?Q?Delivered_=E2=80=94_order_VL-JOURNEY-178?= =?UTF-8?Q?9044828937?=
+    correct       Delivered — order VL-JOURNEY-1789044828937
+    captured      Delivered â order VL-JOURNEY-178 9044828937
+
+Anyone comparing that against the order would report the site as sending
+receipts with broken order numbers. It does not. Fixed, with
+`src/lib/harness-email-capture-fidelity.test.ts` holding it.
 
 **`VANTA_TEST_DATABASE_URL` for the concurrency proofs.**
 
