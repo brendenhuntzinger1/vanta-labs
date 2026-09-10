@@ -418,11 +418,31 @@ export async function sendRenderedMarketingEmail(input: {
     return { success: false, suppressed: true, error: "Address cannot receive mail (provider test domain)" };
   }
   if (!input.unsubscribeUrl) {
-    const { data: suppressed } = await supabaseAdmin
+    const { data: suppressed, error: suppressionError } = await supabaseAdmin
       .from("email_suppressions")
       .select("email")
       .eq("email", email)
       .maybeSingle();
+
+    // FAILS CLOSED, exactly as the choke point above does.
+    //
+    // This re-check took only `data` and dropped `error` on the floor, so an
+    // unreadable suppression table was indistinguishable from "not suppressed"
+    // and the send went out. That is the one outcome this module's own header
+    // says it exists to prevent, and the worst variant of it is mailing someone
+    // who pressed "report spam" — the most damaging signal a mailbox provider
+    // can take from a sender, and one that costs deliverability for everyone
+    // else on the domain.
+    //
+    // The asymmetry is the whole argument: marketing mail has a retry queue and
+    // a next tick, so refusing costs a delay. Sending to a suppressed address
+    // cannot be taken back.
+    if (suppressionError) {
+      await releaseHeldClaim(input.claimedLogId);
+      console.error("[marketing] suppression check unavailable; refusing to send", redactEmailForLog(email), suppressionError);
+      return { success: false, suppressed: false, error: "Suppression list unavailable; consent could not be verified" };
+    }
+
     if (suppressed) {
       await releaseHeldClaim(input.claimedLogId);
       return { success: false, suppressed: true, error: "Recipient has unsubscribed from marketing emails" };

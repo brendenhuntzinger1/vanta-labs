@@ -11,6 +11,7 @@ import { readAllRowsBounded } from "@/lib/supabase-page";
 import { mergeSubscriberDirectory, type SubscriberDirectory } from "@/lib/email/subscriber-directory";
 import { validateCampaignGift, type CampaignGiftSpec } from "@/lib/offers/campaign-gift";
 import { isOfferKey } from "@/lib/offers/customer-offers";
+import { parseSegmentRule } from "@/lib/email/segment-rules";
 
 /**
  * Reporting for the admin Email tab.
@@ -391,6 +392,40 @@ export function validateCampaignInput(input: Record<string, unknown>): { ok: tru
     };
   }
 
+  // SEGMENT_PARAM CARRIES TWO DIFFERENT THINGS, AND ONE OF THEM DOES NOT FIT.
+  //
+  // For most segments it is a short scalar — a category slug — and 80 characters
+  // is generous. For segment "rule" it is the audience rule's JSON, and 80
+  // characters is not merely tight, it is impossible. The smallest rule
+  // parseSegmentRule will accept is one group, one condition, one filter:
+  //
+  //   {"groups":[{"conditions":[{"junction":"and","filters":[{"field":"orderCount","operator":"moreThan","value":1}]}]}]}
+  //
+  // which serialises to 115 characters. Every rule was cut mid-token into
+  // invalid JSON, so parseSegmentRule returned null and the audience resolved to
+  // nobody. Measured, not estimated — see marketing-consent-and-audience.test.ts,
+  // which builds that rule and asserts the parser accepts it whole and rejects
+  // it truncated.
+  // The custom-audience rule builder has therefore never been usable: a create
+  // was rejected with a message the operator could not act on, and an edit
+  // silently stored a rule that selects no one, ending as a campaign whose
+  // recipient count is zero.
+  //
+  // The 80 came from when this column only ever held a category slug and was
+  // never revisited when the rule feature started sharing it. The column is free
+  // text; the rule gets the same budget as the campaign body.
+  const segment = text(input.segment, 40) || "all";
+  const segmentParam = text(input.segmentParam, segment === "rule" ? 8000 : 80) || null;
+
+  // AND AN UNREADABLE RULE IS REFUSED AT SAVE TIME, NOT AT SEND TIME.
+  //
+  // resolveAudience parses the rule when the campaign is SENT, by which point
+  // the only symptom is a send that reaches nobody. Parsing it here means the
+  // operator is told while they are still looking at the builder.
+  if (segment === "rule" && !parseSegmentRule(segmentParam)) {
+    return { ok: false, error: "That audience rule could not be read. Add at least one condition and try again." };
+  }
+
   return {
     ok: true,
     value: {
@@ -402,8 +437,8 @@ export function validateCampaignInput(input: Record<string, unknown>): { ok: tru
       promoCode: text(input.promoCode, 60) || null,
       ctaLabel: text(input.ctaLabel, 40) || "SHOP NOW",
       ctaPath: ctaPathRaw,
-      segment: text(input.segment, 40) || "all",
-      segmentParam: text(input.segmentParam, 80) || null,
+      segment,
+      segmentParam,
       offerKey,
       offerCustom,
     },
