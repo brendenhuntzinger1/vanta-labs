@@ -68,20 +68,54 @@ export default async function CheckoutPayPage({
   // behind error handling that looks careful. The read is guarded; the redirect
   // is not.
   let alreadyCaptured = false;
+  let currentSessionId: string | null = null;
   try {
     const { data: order } = await supabaseAdmin
       .from("orders")
-      .select("payment_status")
+      .select("payment_status, payment_id")
       .eq("order_id", String(orderId ?? "").trim())
       .maybeSingle();
     const status = String(order?.payment_status ?? "").toLowerCase();
     alreadyCaptured = status === "paid" || status === "partially_refunded" || status === "refunded";
+    currentSessionId = order?.payment_id ? String(order.payment_id) : null;
   } catch {
     // Fall through to the card form. An unreachable database is not a reason to
     // strand a shopper who still has a payment to make.
   }
   if (alreadyCaptured) {
     redirect(`/order-confirmation/${encodeURIComponent(orderId)}`);
+  }
+
+  // ONE ORDER, ONE LIVE CARD FORM.
+  //
+  // resumeExistingOrder mints a BRAND NEW processor session every time an unpaid
+  // order is resumed, and repoints orders.payment_id at it. Nothing on our side
+  // voids the session it replaced, and whether the processor does is not
+  // something we can see from here.
+  //
+  // Until this check, that left the superseded session fully chargeable. A tab
+  // still holding the old link — a second tab, the back button, a restored
+  // browser session, an older email — served a working card form for an unpaid
+  // order alongside the new one. Two live forms for one order, and the only
+  // thing between that and two real charges was the shopper not paying twice.
+  // The duplicate-capture alert added by this audit notices that AFTER the money
+  // has moved; this stops it moving.
+  //
+  // A REDIRECT, NOT A REFUSAL. Sending them to the order's current session keeps
+  // the same order, mints nothing, and collapses however many tabs are open onto
+  // ONE session — which a processor can refuse a second capture on. It cannot
+  // refuse two captures across two sessions, because to it that is two payments.
+  //
+  // NARROW ON PURPOSE. It fires only when the order positively names a DIFFERENT
+  // session. A missing payment_id, or the read above having failed, still
+  // renders the form: a shopper with a real payment to make must always reach it.
+  // One hop at most, since after the redirect `cs` IS the current session.
+  //
+  // Outside the try for the reason the block above gives: redirect() signals by
+  // throwing, so inside it the catch would swallow it and fall through to
+  // rendering the very form this prevents.
+  if (currentSessionId && currentSessionId !== cs) {
+    redirect(`/checkout/pay/${encodeURIComponent(orderId)}?cs=${encodeURIComponent(currentSessionId)}`);
   }
 
   return (

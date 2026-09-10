@@ -629,6 +629,88 @@ async function doubleSubmission() {
       await context.close();
     }
 
+    // --- ONE ORDER, TWO SESSIONS: the real double-charge shape ---------------
+    //
+    // Resuming an unpaid order mints a fresh processor session and repoints the
+    // order at it, leaving the previous one live. A tab still holding that older
+    // link used to serve a fully working card form for the same unpaid order. Two
+    // live forms, one order. A processor refuses a second capture on ONE session;
+    // it cannot refuse two captures across two, because to it that is two
+    // payments. So the only place this can be closed is here.
+    {
+      const shopper = await makeShopper("twosess");
+      const cart = await aCart();
+      const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1280, height: 900 }, extraHTTPHeaders: { "x-real-ip": freshIp() } });
+      const page = await context.newPage();
+      await admitAndSignIn(page, shopper);
+
+      // Same idempotency key twice, which is what a resume is: one order, and a
+      // second processor session minted for it.
+      const key = `twosess-${randomUUID()}`;
+      const first = await createSession(page, shopper, cart, key);
+      const firstSession = first.body?.paymentId;
+      const second = await createSession(page, shopper, cart, key);
+      const secondSession = second.body?.paymentId;
+
+      const orderId = first.body?.orderId;
+      record(
+        "resuming an order keeps ONE order",
+        Boolean(orderId) && orderId === second.body?.orderId,
+        `${first.body?.orderNumber} returned twice`,
+      );
+
+      const row = await orderRow(orderId);
+      const superseded = firstSession && secondSession && firstSession !== secondSession
+        ? firstSession
+        : null;
+      if (!superseded) {
+        record("a resume mints a second session", null, "the provider returned the same session id, so there is nothing to supersede");
+      } else {
+        record(
+          "the order now points at the newer session",
+          String(row.payment_id) === String(secondSession),
+          `order is on ${String(row.payment_id).slice(0, 18)}…`,
+        );
+
+        // THE ASSERTION THAT MATTERS. The older link must not still be a payable
+        // card form.
+        await page.goto(onThisOrigin(`${BASE}/checkout/pay/${orderId}?cs=${superseded}`), { waitUntil: "domcontentloaded" });
+        await page.waitForTimeout(2500);
+        const landedOn = new URL(page.url()).searchParams.get("cs");
+        record(
+          "the superseded payment link cannot be paid, it lands on the live session",
+          landedOn === String(secondSession),
+          landedOn === String(secondSession)
+            ? "redirected onto the order's current session"
+            : `stayed on cs=${String(landedOn).slice(0, 18)}…`,
+        );
+
+        // And the live one must still work, because that is the shopper who
+        // genuinely has a payment to make.
+        await page.goto(onThisOrigin(`${BASE}/checkout/pay/${orderId}?cs=${secondSession}`), { waitUntil: "domcontentloaded" });
+        await dismissConsent(page);
+        await page.waitForTimeout(2500);
+        record(
+          "the current payment link still serves the card form",
+          Boolean(await page.$("#secure-card-entry")),
+          "#secure-card-entry present on the live session",
+        );
+      }
+
+      // Settling once leaves exactly one paid order however many links existed.
+      const beforePay = await orderRow(orderId);
+      await settle(orderId, String(beforePay.payment_id));
+      const finalRows = await ordersFor(shopper.email);
+      const paid = finalRows.filter((r) => r.payment_status === "paid");
+      record(
+        "one order, one payment, whatever was left open",
+        paid.length === 1,
+        `${paid.length} paid of ${finalRows.length}`,
+      );
+
+      await context.close();
+    }
+
     // --- refresh mid-payment, then submit again ------------------------------
     {
       const shopper = await makeShopper("refresh");
