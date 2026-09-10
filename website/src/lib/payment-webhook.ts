@@ -676,7 +676,7 @@ async function releaseEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, order_number, order_type, membership_tier_id, membership_cycle, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, shipping_protection_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, shipping_address, city, postal_code, points_redeemed, store_credit_redeemed_cents, inventory_committed_at, payment_failure_kind, payment_failure_code, payment_failure_reason")
+    .select("id, order_id, order_number, order_type, membership_tier_id, membership_cycle, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, shipping_protection_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, shipping_address, city, postal_code, points_redeemed, store_credit_redeemed_cents, inventory_committed_at, payment_failure_kind, payment_failure_code, payment_failure_reason, currency")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -685,6 +685,36 @@ async function getOrderByOrderId(orderId: string) {
   }
 
   return data;
+}
+
+/**
+ * Every field in the envelope that could be an amount, with the path it sat at.
+ *
+ * Recorded in the amount-mismatch alert because payment_events stores no
+ * payload: without it, each mismatch is reasoned about from memory and the
+ * question of what the processor's nested figure actually MEANS stays open
+ * forever. Read-only, tolerant of any shape, and it never throws — an exception
+ * here would cost the alert it is decorating.
+ */
+function rawAmountFields(payload: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const visit = (node: unknown, path: string, depth: number) => {
+    if (depth > 3 || node === null || typeof node !== "object") return;
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      const here = path ? `${path}.${key}` : key;
+      if (/amount|total|currency/i.test(key) && (typeof value === "number" || typeof value === "string")) {
+        out[here] = value;
+      } else if (value && typeof value === "object") {
+        visit(value, here, depth + 1);
+      }
+    }
+  };
+  try {
+    visit(payload, "", 0);
+  } catch {
+    // Decoration must never break the alert it decorates.
+  }
+  return out;
 }
 
 /**
@@ -2498,8 +2528,21 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     const fromFlat = Number.isFinite(flatAmount) && flatAmount > 0;
     const holdOnMismatch = amountDisagrees && fromFlat;
 
+    // CURRENCY WAS NEVER COMPARED ANYWHERE.
+    //
+    // The amount is asserted but the unit it is denominated in was not, so
+    // "249.90" settled in another currency would have read as agreement. Every
+    // production row is USD and the store hard-pins USD at checkout
+    // (create-session passes currency: "USD"), so this is a latent gap rather
+    // than a live fault — which is why it ALERTS and does not hold. Holding a
+    // real capture out of fulfilment on a field no live envelope has been
+    // confirmed to populate is the more expensive mistake.
+    const eventCurrency = String((eventPayload as { currency?: unknown }).currency ?? "").trim().toUpperCase();
+    const recordedCurrency = String(orderRecord.currency ?? "").trim().toUpperCase();
+    const currencyDisagrees = Boolean(eventCurrency && recordedCurrency && eventCurrency !== recordedCurrency);
+
     const nowIso = new Date().toISOString();
-    const { error: flipError } = await supabaseAdmin
+    const { data: flipped, error: flipError } = await supabaseAdmin
       .from("orders")
       .update({
         payment_status: "paid",
@@ -2510,19 +2553,53 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         updated_at: nowIso,
       })
       .eq("order_id", orderId)
-      .neq("payment_status", "paid");
+      .neq("payment_status", "paid")
+      .select("id");
     if (flipError) {
       throw flipError;
     }
+    // Did THIS delivery perform the transition? A redelivery of an already-paid
+    // order matches zero rows, and the alerts below describe a transition — so
+    // without this they re-fire on every retry. A processor that retries five
+    // times over a day sent five critical emails for one fact.
+    const flipApplied = (flipped?.length ?? 0) > 0;
 
-    if (amountDisagrees) {
+    if (currencyDisagrees && flipApplied) {
+      await recordSystemAlert({
+        type: "payment_currency_mismatch",
+        severity: "critical",
+        message: `Order ${orderId} was recorded in ${recordedCurrency} but the processor reported ${eventCurrency}. `
+          + "The order is marked paid and has NOT been held; confirm which currency was actually captured before fulfilling.",
+        context: { order_id: orderId, event_id: eventId, event_currency: eventCurrency, recorded_currency: recordedCurrency },
+      }).catch(() => {});
+    }
+
+    if (amountDisagrees && flipApplied) {
       await recordSystemAlert({
         type: "payment_amount_mismatch",
         severity: holdOnMismatch ? "critical" : "warning",
         message: holdOnMismatch
           ? `Order ${orderId} was paid for $${(eventAmount ?? 0).toFixed(2)} but checkout recorded $${recordedAmount.toFixed(2)}. The order is marked paid and held out of fulfilment pending review.`
           : `Order ${orderId}: the processor's charge object states $${(eventAmount ?? 0).toFixed(2)} but checkout recorded $${recordedAmount.toFixed(2)}. The order is marked paid and has NOT been held: this figure comes from the nested charge object, whose meaning against the recorded total is not yet confirmed on a live delivery. If the customer's card was charged the recorded total, the nested figure is the pre-shipping session amount and this stays advisory; if the card was really charged the stated figure, review the order and promote this check to a hold (payment-webhook.ts, holdOnMismatch).`,
-        context: { order_id: orderId, event_amount: eventAmount, recorded_amount: recordedAmount, event_id: eventId, held: holdOnMismatch, amount_source: fromFlat ? "flat" : "nested" },
+        // THE RAW FIELDS, SO THE OPEN QUESTION IS ANSWERABLE FROM DATA.
+        //
+        // Whether the nested figure is the CAPTURED total or the checkout
+        // session's pre-shipping amount is the one fact that decides whether
+        // this check can be promoted from advisory to a hold — and payment_events
+        // persists no payload, so every previous occurrence left nothing to
+        // read. Recording which field carried which number turns the next real
+        // mismatch into evidence instead of another guess.
+        context: {
+          order_id: orderId,
+          event_amount: eventAmount,
+          recorded_amount: recordedAmount,
+          event_id: eventId,
+          held: holdOnMismatch,
+          amount_source: fromFlat ? "flat" : "nested",
+          raw_amount_fields: rawAmountFields(eventPayload),
+          event_currency: eventCurrency || null,
+          recorded_currency: recordedCurrency || null,
+        },
       });
     }
   }
@@ -2570,7 +2647,12 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       shippingAddress: eventPayload.customer?.address ?? orderRecord?.shipping_address ?? undefined,
       city: eventPayload.customer?.city ?? orderRecord?.city ?? undefined,
       postalCode: eventPayload.customer?.postalCode ?? orderRecord?.postal_code ?? undefined,
-      currency: eventPayload.currency ?? "USD",
+      // FALL BACK TO THE ROW, NOT TO "USD". This read `eventPayload.currency ?? "USD"`,
+      // so every non-paid event — a first-attempt decline, a refund — stamped USD
+      // over whatever the order actually held. Harmless while the store pins USD
+      // at checkout, and silently destructive the day it does not. The identity
+      // fields beside it already take this shape for the same reason.
+      currency: eventPayload.currency ?? orderRecord?.currency ?? undefined,
       subtotal,
       shippingAmount,
       discountAmount,

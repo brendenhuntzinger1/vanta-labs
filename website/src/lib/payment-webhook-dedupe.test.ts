@@ -379,6 +379,53 @@ beforeEach(() => {
 // Both tests below drive the same deterministic interleave.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
+// AN ALERT DESCRIBES A TRANSITION, SO IT FIRES ONCE PER TRANSITION.
+//
+// The amount-mismatch alert was raised whenever a paid delivery disagreed with
+// the recorded total — including on a REDELIVERY of an event whose transition
+// had already happened. Processors retry until they get a 2xx, so one bad
+// number produced one critical email per retry: five emails for one fact. The
+// flip is a compare-and-set, so whether THIS delivery performed the transition
+// is already knowable; it just was not being read.
+// ---------------------------------------------------------------------------
+describe("a mismatching amount is reported once, not once per redelivery", () => {
+  const mismatched = () => JSON.stringify({
+    type: "payment.succeeded",
+    amount: 999.99,   // flat shape: ours, so a disagreement is a real defect
+    data: { object: { metadata: { order_id: ORDER_ID } } },
+  });
+
+  it("alerts on the delivery that actually flips the order", async () => {
+    await deliver("evt-mismatch-1", mismatched());
+    const types = sideEffects.alert.mock.calls.map(([a]) => a?.type);
+    expect(types).toContain("payment_amount_mismatch");
+  });
+
+  it("stays quiet when a later delivery flips nothing", async () => {
+    await deliver("evt-mismatch-first", mismatched());
+    expect(state.paymentStatus).toBe("paid");
+    vi.clearAllMocks();
+
+    // A distinct event id, so the claim does not catch it; the flip matches zero
+    // rows because the order is already paid.
+    await deliver("evt-mismatch-redelivery", mismatched());
+
+    const types = sideEffects.alert.mock.calls.map(([a]) => a?.type);
+    expect(types).not.toContain("payment_amount_mismatch");
+  });
+
+  it("records the raw amount fields so the processor's shape can be settled from data", async () => {
+    await deliver("evt-mismatch-context", mismatched());
+    const alert = sideEffects.alert.mock.calls.map(([a]) => a).find((a) => a?.type === "payment_amount_mismatch");
+    const context = alert?.context as { raw_amount_fields?: Record<string, unknown> } | undefined;
+    // payment_events persists no payload, so the alert is the only record of
+    // which field carried which number.
+    expect(context?.raw_amount_fields).toBeDefined();
+    expect(context?.raw_amount_fields).toHaveProperty("amount", 999.99);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // THE RETRY THAT PAYS MUST NOT BE SILENT.
 //
 // payment_failed is deliberately NOT a money-terminal state, so a declined

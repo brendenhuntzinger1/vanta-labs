@@ -18,6 +18,7 @@ const storeCredit = sentinel("storeCredit");
 const cartRecovery = sentinel("cartRecovery");
 const commissions = sentinel("commissions");
 const commissionAccrualRepair = sentinel("commissionAccrualRepair");
+const inventoryCommitRepair = sentinel("inventoryCommitRepair");
 const reservations = sentinel("reservations");
 const emails = sentinel("emails");
 const paymentReconcile = sentinel("paymentReconcile");
@@ -49,6 +50,7 @@ vi.mock("@/lib/membership", () => ({ runBirthdayBonusSweep: () => birthdayBonus(
 vi.mock("@/lib/cart-recovery", () => ({ runAbandonedCartSweep: () => cartRecovery() }));
 vi.mock("@/lib/partner-portal", () => ({ autoApproveEligibleCommissions: () => commissions() }));
 vi.mock("@/lib/commission-accrual-repair", () => ({ repairMissingCommissionAccruals: () => commissionAccrualRepair() }));
+vi.mock("@/lib/inventory-commit-repair", () => ({ repairMissingInventoryCommits: () => inventoryCommitRepair() }));
 vi.mock("@/lib/inventory-reservation", () => ({
   expireStaleReservations: () => reservations(),
   // The REAL predicate, not a stub: the retry it gates is the behaviour under

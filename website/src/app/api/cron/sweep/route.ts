@@ -4,6 +4,7 @@ import { grantMonthlyStoreCreditSweep, runMembershipBillingSweep } from "@/lib/m
 import { runAbandonedCartSweep } from "@/lib/cart-recovery";
 import { autoApproveEligibleCommissions } from "@/lib/partner-portal";
 import { repairMissingCommissionAccruals } from "@/lib/commission-accrual-repair";
+import { repairMissingInventoryCommits } from "@/lib/inventory-commit-repair";
 import { expireStaleReservations, isTransientAuthRejection } from "@/lib/inventory-reservation";
 import { releaseAbandonedTenderHolds } from "@/lib/tender-reservation";
 import { retryPendingEmails } from "@/lib/email/retry-queue";
@@ -58,6 +59,15 @@ const JOBS = {
   // else retries it, so without this a single failed insert lost an
   // ambassador's commission permanently. Idempotent: it looks for ABSENCE.
   commissionAccrualRepair: { label: "commission_accrual_repair", run: repairMissingCommissionAccruals },
+  // Re-run the inventory commit for paid orders that never got one. The paid
+  // side-effects claim is taken BEFORE the effects run (so a redelivery cannot
+  // pay an ambassador twice) and nothing marks it complete, so an invocation
+  // killed mid-run leaves the order paid with its stock never decremented and
+  // the processor's retry finding the claim spent. Three of the four effects
+  // behind that claim already had a repair here; inventory did not, and it is
+  // the one that oversells in one direction and under-restocks in the other.
+  // Absence-keyed and idempotent, like the accrual repair above.
+  inventoryCommitRepair: { label: "inventory_commit_repair", run: repairMissingInventoryCommits },
   // Record the postage actually paid for any label whose cost never landed.
   // Same absence-based shape as commissionAccrualRepair: idempotent, and it
   // clears the existing backlog rather than only protecting future orders.
