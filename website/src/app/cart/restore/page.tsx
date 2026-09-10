@@ -8,7 +8,7 @@ import { SiteHeaderV2 } from "@/components/site-header-v2";
 function CartRestoreInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { restoreItems, restoreCoupon } = useCart();
+  const { restoreItems, restoreCoupon, setKnownEmail, isSignedIn } = useCart();
   const [message, setMessage] = useState("Restoring your cart...");
   // A RECONCILIATION NOTICE STOPS THE AUTOMATIC HOP TO /cart.
   //
@@ -61,6 +61,17 @@ function CartRestoreInner() {
         // Continue the cart's own session, so the tracker updates this cart
         // rather than opening a second one for the same shopper.
         restoreItems(result.items, { sessionId: result.sessionId ?? null });
+        // THE ADDRESS WE MAILED, INTO THE FIELD THAT WOULD OTHERWISE ASK FOR IT.
+        //
+        // knownEmail IS the guest checkout's email field. This used to be set
+        // only on the coupon branch below, so it arrived for the one stage that
+        // carries a code and for none of the other three: a guest who followed
+        // a real recovery link reached the checkout with an empty email box and
+        // had to retype, on a phone, the address the mail had just been sent to.
+        // A SIGNED-IN SHOPPER'S OWN ADDRESS WINS. The account check sets this
+        // from the session, and a forwarded recovery link must not be able to
+        // drop somebody else's address into a signed-in person's checkout.
+        if (result.email && !isSignedIn) setKnownEmail(result.email);
         // The recovery code the email promised, already validated server-side
         // against the address it is bound to; the checkout validates it again.
         if (result.coupon && result.email) restoreCoupon({ ...result.coupon, email: result.email });

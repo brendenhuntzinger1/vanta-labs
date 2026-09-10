@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import type { Product } from "@/lib/catalog-types";
 import type { ReferralCode } from "@/lib/referral-codes";
 import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
@@ -250,6 +251,16 @@ type CartContextValue = {
   clearCouponCode: () => void;
   clearCouponMessage: () => void;
   setKnownEmail: (email: string) => void;
+  /**
+   * The address we already know for this shopper, when we know one.
+   *
+   * Set from the session for a signed-in shopper, and — since the recovery
+   * link began handing it back — from the cart a recovery email was addressed
+   * to. The checkout reads it to seed an empty contact field, so a guest who
+   * followed a reminder is not asked on a phone for the address that reminder
+   * was sent to.
+   */
+  knownEmail: string;
 };
 
 const CartContext = createContext<CartContextValue | undefined>(undefined);
@@ -1163,6 +1174,48 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
 
     return () => clearTimeout(timeout);
   }, [isSignedIn, hasTrackableIdentity, trackedEmail, cartSessionId, items, customerName, subtotal]);
+
+  // REACHING THE CHECKOUT IS THE STEP THE FUNNEL COULD NOT SEE.
+  //
+  // A click was recorded, a restore was recorded and an order was recorded,
+  // and between the restore and the order there was nothing — so a shopper who
+  // followed a recovery link, got their cart back and then stalled at the
+  // checkout was indistinguishable from one who never clicked at all. Both are
+  // simply absent, which is the same ambiguity restored_at removed one step
+  // earlier.
+  //
+  // Fired from here rather than from the checkout page so nothing on the
+  // payment path changes: this component already owns the session id and the
+  // beacon, and the endpoint stamps a timestamp on a cart row keyed by that
+  // session. It reads no payment state and is read by nothing that prices,
+  // charges or fulfils.
+  //
+  // ONCE PER SESSION PER MOUNT, and the server stamps first-touch-only on top,
+  // so bouncing between cart and checkout is one arrival rather than five.
+  // THE PATHNAME IS A DEPENDENCY, NOT SOMETHING READ INSIDE THE EFFECT.
+  //
+  // Reading window.location.pathname here was wrong in a way that looked
+  // right: this provider mounts once at the app root and survives every
+  // client-side navigation, so an effect keyed only on the cart never re-ran
+  // when the shopper moved from /cart to /checkout — the pathname it read was
+  // whatever it had been at mount. Driven in a browser, the stamp silently
+  // never landed. usePathname makes the navigation itself the trigger.
+  const pathname = usePathname();
+  const checkoutStartSentRef = useRef(false);
+  useEffect(() => {
+    if (!cartSessionId || items.length === 0) return;
+    if (checkoutStartSentRef.current) return;
+    if (!pathname?.startsWith("/checkout")) return;
+    checkoutStartSentRef.current = true;
+    fetch("/api/cart/track", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: cartSessionId, items: [], reachedCheckout: true }),
+      keepalive: true,
+    }).catch(() => {
+      // Non-fatal: a missing funnel stamp must never affect a checkout.
+    });
+  }, [cartSessionId, items.length, pathname]);
 
   const totalQuantity = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
   // The promotions this cart may actually earn: the store-wide live list, minus
@@ -2218,6 +2271,7 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
     clearCouponCode,
     clearCouponMessage,
     setKnownEmail,
+    knownEmail,
   };
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;

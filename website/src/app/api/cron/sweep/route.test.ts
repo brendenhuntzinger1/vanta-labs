@@ -114,17 +114,20 @@ describe("the scheduled sweep", () => {
     const body = (await (await callSweep()).json()) as Record<string, { job?: string }>;
 
     expect(body.membershipBilling).toEqual({ job: "membership" });
-    expect(body.cartRecovery).toEqual({ job: "cartRecovery" });
     expect(body.storeCredit).toEqual({ job: "storeCredit" });
     expect(body.commissionApproval).toEqual({ job: "commissions" });
     expect(body.reservationsExpired).toEqual({ job: "reservations" });
     expect(body.tenderHoldsReleased).toEqual({ job: "tenderHolds" });
-    expect(body.emailRetry).toEqual({ job: "emails" });
     expect(body.paymentReconcile).toEqual({ job: "paymentReconcile" });
     // The two that were crossed.
     expect(body.shippoSync).toEqual({ job: "shippoSync" });
     expect(body.expressIntentsExpired).toEqual({ job: "expressIntents" });
     expect(body.shipmentRepair).toEqual({ job: "shipmentRepair" });
+    // Added by the payment audit, and asserted here rather than only mocked:
+    // the mock alone lets the route import the module, which is not the same as
+    // the job being wired into the map. A repair job that is registered and
+    // never runs is the exact shape of the defect it exists to repair.
+    expect(body.inventoryCommitRepair).toEqual({ job: "inventoryCommitRepair" });
     expect(body.shippingCostRepair).toEqual({ job: "shippingCostRepair" });
     expect(body.refundEffectRepair).toEqual({ job: "refundEffectRepair" });
     expect(body.signupConfirmations).toEqual({ job: "signupConfirmations" });
@@ -135,9 +138,28 @@ describe("the scheduled sweep", () => {
   it("runs every job exactly once", async () => {
     await callSweep();
 
-    for (const job of [membership, storeCredit, cartRecovery, commissions, reservations, tenderHolds, emails, paymentReconcile, expressIntents, shippoSync, shipmentRepair, shippingCostRepair, refundEffectRepair, signupConfirmations, partnerAccess, orderPushHealth]) {
+    for (const job of [membership, storeCredit, commissions, reservations, tenderHolds, paymentReconcile, expressIntents, shippoSync, shipmentRepair, inventoryCommitRepair, shippingCostRepair, refundEffectRepair, signupConfirmations, partnerAccess, orderPushHealth]) {
       expect(job).toHaveBeenCalledTimes(1);
     }
+  });
+
+  // CUSTOMER-FACING MAIL IS NOT THIS ROUTE'S WORK ANY MORE.
+  //
+  // It moved to /api/cron/lifecycle so a closing recovery window is never lost
+  // to a sweep that ran out of its 60-second budget. Asserted here rather than
+  // only there, because the failure this guards against is a job being added
+  // back to BOTH routes and quietly running twice.
+  it("no longer runs the lifecycle mail jobs", async () => {
+    const body = (await (await callSweep()).json()) as Record<string, unknown>;
+
+    expect(body.cartRecovery).toBeUndefined();
+    expect(body.emailRetry).toBeUndefined();
+    expect(body.emailAutomations).toBeUndefined();
+    expect(body.emailCampaigns).toBeUndefined();
+    expect(body.marketingQueue).toBeUndefined();
+    expect(body.orderEmailReaper).toBeUndefined();
+    expect(cartRecovery).not.toHaveBeenCalled();
+    expect(emails).not.toHaveBeenCalled();
   });
 
   // The point of the alert is that the operator can tell WHICH job broke without
@@ -237,11 +259,11 @@ describe("the scheduled sweep", () => {
     it("does NOT retry an ordinary failure — one retry is for auth, not for bugs", async () => {
       // A logic error must fail fast and loudly. Retrying it would double every
       // side effect the job had already performed before throwing.
-      cartRecovery.mockRejectedValueOnce(new Error("cannot read property of undefined"));
+      storeCredit.mockRejectedValueOnce(new Error("cannot read property of undefined"));
 
       await callSweep();
 
-      expect(cartRecovery).toHaveBeenCalledTimes(1);
+      expect(storeCredit).toHaveBeenCalledTimes(1);
       expect(recordSystemAlert).toHaveBeenCalledTimes(1);
     });
   });
@@ -348,7 +370,7 @@ describe("a sweep that runs out of time", () => {
     // A partial sweep is still information. The one that hung is named as such
     // rather than silently reported as an empty result.
     expect(body.shippoSync).toEqual({ job: "shippoSync" });
-    expect(body.membershipBilling).toEqual({ error: "did not finish before the sweep deadline" });
+    expect(body.membershipBilling).toEqual({ error: "did not finish before the deadline" });
   });
 
   it("collapses the repeat, because a sweep that overruns overruns every tick", async () => {

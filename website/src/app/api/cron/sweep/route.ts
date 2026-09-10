@@ -1,54 +1,54 @@
-import { timingSafeEqual } from "crypto";
-import { NextResponse } from "next/server";
 import { grantMonthlyStoreCreditSweep, runMembershipBillingSweep } from "@/lib/membership-billing";
-import { runAbandonedCartSweep } from "@/lib/cart-recovery";
 import { autoApproveEligibleCommissions } from "@/lib/partner-portal";
 import { repairMissingCommissionAccruals } from "@/lib/commission-accrual-repair";
 import { repairMissingInventoryCommits } from "@/lib/inventory-commit-repair";
-import { expireStaleReservations, isTransientAuthRejection } from "@/lib/inventory-reservation";
+import { expireStaleReservations } from "@/lib/inventory-reservation";
 import { releaseAbandonedTenderHolds } from "@/lib/tender-reservation";
-import { retryPendingEmails } from "@/lib/email/retry-queue";
 import { alertOnPartnersLockedOut, alertOnStalledSignups } from "@/lib/auth-health";
-import { reapStrandedOrderEmails } from "@/lib/email/order-email-reaper";
 import { expireStaleExpressIntents, reconcileVeyraPendingPayments } from "@/lib/express-reconcile";
 import { sweepMissingShipments, sweepUnsyncedOrders } from "@/lib/shippo/order-sync";
-import { runCampaignSweep } from "@/lib/email/campaign-sender";
-import { runAutomationSweep } from "@/lib/email/automations";
-import { drainMarketingSendQueue } from "@/lib/email/marketing-queue";
 import { repairMissingShippingCosts } from "@/lib/shipping-cost-repair";
 import { repairIncompleteRefunds } from "@/lib/refund-effect-repair";
 import { runOrderPushHealthCheck } from "@/lib/order-push-notification";
-import { recordSystemAlert } from "@/lib/monitoring";
-import { describeError } from "@/lib/operator-error";
 import { runBirthdayBonusSweep } from "@/lib/membership";
 import { runCouponHygiene } from "@/lib/coupon-hygiene";
 import { resealPlaintextControlSecrets } from "@/lib/admin-control";
 import { repairUnredeemedPaidOffers } from "@/lib/offers/customer-offer-repair";
 import { ingestAdSpend } from "@/lib/ads/spend-ingest";
+import { handleCronRequest, type CronJobMap } from "@/lib/cron-runner";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// Single scheduled entry point for every time-based job in the app. Protected
-// by CRON_SECRET rather than a user session, since nothing human-driven calls
-// this - see vercel.json for the schedule. Every job is individually
-// idempotent, so running this more often than necessary is always safe, and
-// running it less often just means coarser timing, not incorrect behavior.
+// The scheduled entry point for the app's time-based jobs, EXCEPT the ones
+// that put a message in front of a customer — those moved to
+// /api/cron/lifecycle so a closing recovery window is never lost to a sweep
+// that ran out of budget. See that route's header for why lifecycle mail is
+// the case that could not tolerate sharing. Protected by CRON_SECRET rather
+// than a user session, since nothing human-driven calls this; see vercel.json
+// for the schedule.
+//
+// Every job is individually idempotent, so running this more often than
+// necessary is always safe, and running it less often just means coarser
+// timing, not incorrect behavior.
 //
 // JOBS ARE KEYED, NOT POSITIONAL. This used to be a bare array whose results
 // were destructured into a matching list of names, with nothing tying one to
-// the other — inserting a job in the middle silently shifted every result after
-// it onto the wrong name, which had already happened once to the last two
-// entries. The response key, the alert label, and the function now travel
-// together in one object, so adding a job cannot mislabel an existing one.
-// The object key is the JSON response field; `label` is the operator-facing
-// name used in alerts. Both are contracts with something outside this file —
-// the response keys with anything reading the sweep output, the labels with the
+// the other — inserting a job in the middle silently shifted every result
+// after it onto the wrong name, which had already happened once to the last
+// two entries. The response key, the alert label, and the function travel
+// together in one object, so adding a job cannot mislabel an existing one. The
+// object key is the JSON response field; `label` is the operator-facing name
+// used in alerts. Both are contracts with something outside this file — the
+// response keys with anything reading the sweep output, the labels with the
 // alert an operator reads at 2am — so they are stated rather than derived from
 // each other.
-const JOBS = {
+//
+// The watchdog, the once-only retry after a transient PostgREST auth
+// rejection, and the alerting all live in cron-runner.ts, shared with the
+// lifecycle route so the two cannot drift apart.
+const JOBS: CronJobMap = {
   membershipBilling: { label: "membership_billing", run: runMembershipBillingSweep },
-  cartRecovery: { label: "cart_recovery", run: runAbandonedCartSweep },
   storeCredit: { label: "store_credit", run: grantMonthlyStoreCreditSweep },
   // Advance ambassador commissions past the CONFIGURED hold automatically
   // (ambassador.commission_hold_days, 30 in production), instead
@@ -67,6 +67,14 @@ const JOBS = {
   // behind that claim already had a repair here; inventory did not, and it is
   // the one that oversells in one direction and under-restocks in the other.
   // Absence-keyed and idempotent, like the accrual repair above.
+  // Re-run the inventory commit for paid orders that never got one. The paid
+  // side-effects claim is taken BEFORE the effects run (so a redelivery cannot
+  // pay an ambassador twice) and nothing marks it complete, so an invocation
+  // killed mid-run leaves the order paid with its stock never decremented and
+  // the processor's retry finding the claim spent. Three of the four effects
+  // behind that claim already had a repair here; inventory did not, and it is
+  // the one that oversells in one direction and under-restocks in the other.
+  // Absence-keyed and idempotent, like the accrual repair above.
   inventoryCommitRepair: { label: "inventory_commit_repair", run: repairMissingInventoryCommits },
   // Record the postage actually paid for any label whose cost never landed.
   // Same absence-based shape as commissionAccrualRepair: idempotent, and it
@@ -77,12 +85,6 @@ const JOBS = {
   refundEffectRepair: { label: "refund_effect_repair", run: repairIncompleteRefunds },
   // Reclaim inventory held by abandoned checkouts past their expiry window.
   reservationsExpired: { label: "reservation_expiry", run: expireStaleReservations },
-  // Release send-once slots stranded at 'sending' by a send that never
-  // finished (E-03). A stranded claim holds the partial unique index for ever
-  // and blocks that order's confirmation permanently. Jobs here run
-  // concurrently, so the release and the retry below may land in either order;
-  // whichever way, the next sweep pass delivers what this one unblocked.
-  orderEmailReaper: { label: "order_email_reaper", run: reapStrandedOrderEmails },
   // The same reclaim for money-like balances: store credit and points held by a
   // checkout that was cancelled, declined, or simply walked away from. Without
   // it a shopper's own credit stays locked to an order that will never settle.
@@ -93,8 +95,6 @@ const JOBS = {
   // dashboard page render on the exact UTC day — so in the ordinary case the
   // customer got neither the points nor an email. Idempotent per year.
   birthdayBonus: { label: "birthday_bonus", run: runBirthdayBonusSweep },
-  // Retry transactional emails (receipts/shipping) that failed to send.
-  emailRetry: { label: "email_retry", run: retryPendingEmails },
   // Settle charges whose confirmation webhook was lost. This is the only thing
   // standing between a charged card and an order that reads unpaid forever, so
   // a failure here is genuinely critical.
@@ -108,22 +108,11 @@ const JOBS = {
   // Repair orders that reached Shippo without their parcel. Nothing else
   // retries these -- every other path keys off shippo_order_id being NULL.
   shipmentRepair: { label: "shipment_repair", run: sweepMissingShipments },
-  // Marketing: advance any in-flight campaign by one batch, and start any
-  // campaign whose scheduled time has arrived. Self-limiting to a time budget
-  // so it cannot consume the whole 60s window.
-  emailCampaigns: { label: "email_campaigns", run: runCampaignSweep },
-  // Marketing: retention sequences (welcome, post-purchase, win-back).
-  emailAutomations: { label: "email_automations", run: runAutomationSweep },
-  // Marketing: deliver event mail (restock alerts, coupon announcements,
-  // membership welcome / win-back / birthday) that the frequency guard held
-  // back, once each recipient's quiet window has passed. Same guard on the
-  // way out, so a queued message can be deferred again but never skips it.
-  marketingQueue: { label: "marketing_queue", run: drainMarketingSendQueue },
   // Watch for signups stuck unconfirmed. The confirmation email is sent by
   // Supabase Auth rather than this app, so it appears in NONE of the email
-  // machinery above -- no retry row, no bounce event, no send log. An
-  // unconfirmed auth.users row is the only evidence a delivery problem leaves,
-  // and this is the only thing that looks at it.
+  // machinery -- no retry row, no bounce event, no send log. An unconfirmed
+  // auth.users row is the only evidence a delivery problem leaves, and this is
+  // the only thing that looks at it.
   signupConfirmations: { label: "signup_confirmation_watch", run: alertOnStalledSignups },
   couponHygiene: { label: "coupon_hygiene", run: runCouponHygiene },
   controlSecretReseal: { label: "control_secret_reseal", run: resealPlaintextControlSecrets },
@@ -151,9 +140,7 @@ const JOBS = {
   // hours, because the platforms restate a few times a day and 192 requests
   // daily would buy nothing.
   adSpendIngest: { label: "ad_spend_ingest", run: ingestAdSpend },
-} as const;
-
-type JobName = keyof typeof JOBS;
+};
 
 /**
  * When the watchdog gives up waiting, INSIDE the function budget.
@@ -164,169 +151,11 @@ type JobName = keyof typeof JOBS;
  */
 const SWEEP_DEADLINE_MS = 50_000;
 
-/** A sweep that overruns overruns every tick. Report the condition, once. */
-const SWEEP_TIMEOUT_ALERT_DEDUPE_MS = 6 * 60 * 60 * 1000;
-
-/** One retry after a momentary auth refusal, before the job counts as failed. */
-const JOB_AUTH_RETRY_DELAY_MS = 250;
-
-/**
- * Run one sweep job, retrying ONCE if Supabase refused it before it could run.
- *
- * PGRST303 "JWT issued at future" is a clock skew between the Vercel lambda and
- * Supabase's PostgREST, and it is REAL here — production raised three of these
- * on 2026-08-28, each killing a DIFFERENT job (commission_accrual_repair,
- * tender_hold_release, store_credit), plus two more the day before on
- * expire_stale_reservations. A different job each time is the signature of an
- * infrastructure blip hitting whatever happened to be running, not a bug in any
- * one job.
- *
- * inventory-reservation.ts already recognised this exact failure and retried it
- * (rpcWithAuthRetry, and the isTransientAuthRejection reused here) — but only
- * for its three RPCs. Every other job in this sweep had no such protection, so
- * a blip that inventory shrugged off took a whole job out for thirty minutes.
- *
- * Retrying a whole job is safe by this route's own stated invariant: "each is
- * individually idempotent, so the next tick simply picks them up again". One
- * retry, not a loop, for the same reason inventory gives: hammering an edge
- * that is already refusing makes an outage worse rather than shorter, and two
- * consecutive refusals are a real incident that should alert.
- */
-async function runJobWithAuthRetry(name: JobName): Promise<unknown> {
-  try {
-    return await (JOBS[name].run() as Promise<unknown>);
-  } catch (error) {
-    if (!isTransientAuthRejection(error)) throw error;
-    await new Promise((resolve) => setTimeout(resolve, JOB_AUTH_RETRY_DELAY_MS));
-    return await (JOBS[name].run() as Promise<unknown>);
-  }
-}
-
 export async function GET(request: Request) {
-  const secret = process.env.CRON_SECRET;
-  const authHeader = request.headers.get("authorization") ?? "";
-  const expected = `Bearer ${secret ?? ""}`;
-  // Constant-time compare (consistent with admin-auth) so the secret can't be
-  // recovered by response-timing analysis.
-  const authorized = Boolean(secret)
-    && authHeader.length === expected.length
-    && timingSafeEqual(Buffer.from(authHeader), Buffer.from(expected));
-  if (!authorized) {
-    return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
-  }
-
-  const names = Object.keys(JOBS) as JobName[];
-
-  // Settle each job into its own slot rather than awaiting Promise.allSettled,
-  // because the interesting case is the one where the await never returns —
-  // see the deadline below. This keeps whatever HAS finished readable at the
-  // moment the deadline fires.
-  const settled: Array<PromiseSettledResult<unknown> | null> = names.map(() => null);
-  const unfinished = new Set<JobName>(names);
-  const jobs = names.map((name, index) =>
-    Promise.resolve()
-      .then(() => runJobWithAuthRetry(name))
-      .then(
-        (value) => { settled[index] = { status: "fulfilled", value }; },
-        (reason: unknown) => { settled[index] = { status: "rejected", reason }; },
-      )
-      .finally(() => { unfinished.delete(name); }),
-  );
-
-  // THE WATCHDOG.
-  //
-  // maxDuration is 60 and every alert in this file is written AFTER the jobs
-  // finish — so the one failure mode that could never report itself was the
-  // sweep running out of time. The platform kills the function, nothing is
-  // written to system_alerts, no email goes out, and the HTTP response nobody
-  // reads never arrives either. A sweep that times out every tick looks exactly
-  // like a sweep that is not scheduled at all, which is the worst thing an
-  // operational alerting system can be unable to distinguish.
-  //
-  // Racing a deadline INSIDE the budget is what makes it reportable: at 50s
-  // there are still ten seconds to write the row and send the email. The jobs
-  // are not cancelled — there is no cancellation to hand them and each is
-  // individually idempotent, so the next tick simply picks them up again.
-  const raced = await Promise.race([
-    Promise.all(jobs).then(() => "finished" as const),
-    new Promise<"timed_out">((resolve) => {
-      const timer = setTimeout(() => resolve("timed_out"), SWEEP_DEADLINE_MS);
-      // Never let the watchdog itself be the reason the function stays alive.
-      timer.unref?.();
-    }),
-  ]);
-
-  if (raced === "timed_out") {
-    const stalled = [...unfinished];
-    await recordSystemAlert({
-      type: "cron_sweep_timeout",
-      severity: "critical",
-      message:
-        `The scheduled sweep was still running ${stalled.length} job(s) after ${Math.round(SWEEP_DEADLINE_MS / 1000)}s `
-        + `and will be cut off at the ${maxDuration}s function limit: `
-        + `${stalled.map((name) => JOBS[name].label).join(", ")}. `
-        + "Whatever those jobs do has not finished this tick, and if this repeats they are not running at all.",
-      context: {
-        deadlineSeconds: Math.round(SWEEP_DEADLINE_MS / 1000),
-        maxDurationSeconds: maxDuration,
-        stalled: stalled.map((name) => JOBS[name].label),
-        finished: names.filter((name) => !unfinished.has(name)).map((name) => JOBS[name].label),
-      },
-      // A sweep that times out does so every thirty minutes. That is ONE
-      // standing problem, not forty-eight criticals and forty-eight emails a
-      // day — the exact storm that buried the criticals on /admin/status.
-      dedupeWindowMs: SWEEP_TIMEOUT_ALERT_DEDUPE_MS,
-    });
-  }
-
-  // zip by index against the SAME array the calls were built from, so the
-  // pairing is derived rather than hand-maintained.
-  const results = names.map((name, index) => [name, settled[index]] as const);
-
-  // Surface any failed job as a durable, operator-visible alert (critical =
-  // emails the operator). Without this a rejected sweep only appeared in the
-  // HTTP response body that nobody reads, so renewals/recovery could silently
-  // stall. Best-effort and never throws.
-  const failed = results.filter(([, result]) => result?.status === "rejected");
-  if (failed.length > 0) {
-    await recordSystemAlert({
-      type: "cron_sweep_failed",
-      severity: "critical",
-      message: `Scheduled sweep had ${failed.length} failing job(s): ${failed.map(([name]) => JOBS[name].label).join(", ")}. Renewals, cart recovery, reservation expiry, or email retries may be stalled.`,
-      // describeError, NOT String(). A Supabase/PostgREST failure is a plain
-      // object, and String() on one is the literal "[object Object]" — which is
-      // exactly what this alert carried on 2026-08-28 for
-      // commission_accrual_repair, on the affiliate money path, with no other
-      // trace anywhere because the route still returns 200.
-      context: Object.fromEntries(
-        failed.map(([name, result]) => [JOBS[name].label, describeError((result as PromiseRejectedResult).reason)]),
-      ),
-      // ONE STANDING PROBLEM IS NOT FORTY-EIGHT CRITICALS.
-      //
-      // This alert had no dedupe window while the timeout alert fifteen lines
-      // above it has one, and for the identical reason. The sweep runs every
-      // thirty minutes, so a job that is failing for a durable cause — a
-      // provider plan limit, a revoked grant, a broken migration — wrote 48
-      // unresolved criticals and sent 48 operator emails a day, burying the
-      // genuine ones underneath. The same window as the timeout alert: long
-      // enough to stop a storm, short enough that a problem persisting across a
-      // working day is raised again.
-      dedupeWindowMs: SWEEP_TIMEOUT_ALERT_DEDUPE_MS,
-    });
-  }
-
-  return NextResponse.json({
-    success: true,
-    timedOut: raced === "timed_out",
-    ...Object.fromEntries(
-      results.map(([name, result]) => [
-        name,
-        result === null
-          ? { error: "did not finish before the sweep deadline" }
-          : result.status === "fulfilled"
-            ? result.value
-            : { error: describeError(result.reason) },
-      ]),
-    ),
+  return handleCronRequest(request, {
+    jobs: JOBS,
+    group: "sweep",
+    maxDurationSeconds: maxDuration,
+    deadlineMs: SWEEP_DEADLINE_MS,
   });
 }

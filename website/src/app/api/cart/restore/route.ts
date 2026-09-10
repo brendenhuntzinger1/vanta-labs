@@ -146,6 +146,24 @@ export async function GET(request: NextRequest) {
   // read that fails still restores the cart. The address handed back is the
   // one the CODE is bound to, and only when there is a code to bind it to.
   const coupon = cart.status === "active" ? await liveRecoveryCouponForCart(cart.id).catch(() => null) : null;
+
+  // THE ADDRESS WE MAILED, HANDED BACK SO THE CHECKOUT DOES NOT ASK FOR IT.
+  //
+  // This used to ride on the coupon and only the coupon, so it arrived for the
+  // one stage that carries a code and for none of the other three. Measured in
+  // a browser on 2026-09-10: a guest who followed a real recovery link reached
+  // the checkout with an EMPTY email field — the address the email had just
+  // been sent to — and had to retype it on a phone, at the single highest-
+  // intent moment in the whole funnel.
+  //
+  // GATED ON A VERIFIED GRANT FOR THIS CART, which is strictly tighter than
+  // the coupon path it replaces: that one returned an address whenever a code
+  // existed, whatever the caller held. A grant is cart-scoped, signed, and
+  // cannot be minted without a genuine link, so the only party it discloses
+  // the address to is one already holding an email sent to that address.
+  const grantedForThisCart = Boolean(grant && grant.cartId === id);
+  const knownEmail = coupon?.email ?? (grantedForThisCart ? cart.email : null);
+
   const body = NextResponse.json({
     success: true,
     items,
@@ -154,8 +172,9 @@ export async function GET(request: NextRequest) {
     // continues this cart instead of opening a second one for the tracker.
     sessionId: cart.sessionId,
     ...(coupon
-      ? { coupon: { code: coupon.code, discountType: coupon.discountType, discountValue: coupon.discountValue }, email: coupon.email }
+      ? { coupon: { code: coupon.code, discountType: coupon.discountType, discountValue: coupon.discountValue } }
       : {}),
+    ...(knownEmail ? { email: knownEmail } : {}),
   });
 
   // EXCHANGE THE PARAMETER FOR THE COOKIE. From here on the guest carries the

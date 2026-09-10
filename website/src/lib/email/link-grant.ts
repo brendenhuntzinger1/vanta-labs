@@ -242,6 +242,26 @@ export const EMAIL_GRANT_BROWSE_EXACT = new Set<string>([
   "/",
   "/products",
   "/research",
+  // THE COA LIBRARY, because an email already sends people to it.
+  //
+  // The 12-hour recovery message is built entirely around this page — "Every
+  // production batch is filed in our COA library. You can search it by
+  // product, batch or lot number and read the report itself, before you
+  // order" — and it is the best-opening message the system sends, at 59%.
+  // Verified against production on 2026-09-10, signed out:
+  //
+  //   GET /coa-library   307  /account/login?next=%2Fcoa-library
+  //
+  // So the one link answering the objection that email exists to answer landed
+  // every reader on a sign-in page. It is the same defect as the campaign and
+  // automation destinations, in the one place nobody had looked because it is
+  // a secondary link rather than the button.
+  //
+  // Safe to open on the same terms as the catalogue: batch certificates are
+  // product-safety documents, hold nothing personal, and are the evidence the
+  // brand asks to be judged on. The grant is still minted only for an attested
+  // recipient, so it opens no door the wall was protecting.
+  "/coa-library",
   // What the catalogue pages fetch. Anything missing here renders as an empty
   // shelf rather than an error, which is the failure mode that looks like a
   // working site and sells nothing.
@@ -252,6 +272,8 @@ export const EMAIL_GRANT_BROWSE_EXACT = new Set<string>([
 export const EMAIL_GRANT_BROWSE_PREFIXES = [
   "/products/",
   "/research/",
+  // A batch's own page, reached from the library above.
+  "/coa-library/",
 ];
 
 /** Does a grant cover this path? */

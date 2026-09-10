@@ -4,6 +4,8 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
 import { loadConsentedAudience } from "@/lib/email/audience";
 import { isSafeSitePath } from "@/lib/email/cta-path";
+import { ctaPathReachesStore } from "@/lib/email/link-grant";
+import { findCopyComplianceIssueIn } from "@/lib/email/copy-compliance";
 import { getSiteUrl } from "@/lib/env";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 import { mergeSubscriberDirectory, type SubscriberDirectory } from "@/lib/email/subscriber-directory";
@@ -316,12 +318,40 @@ export function validateCampaignInput(input: Record<string, unknown>): { ok: tru
   if (!headline) return { ok: false, error: "Headline is required." };
   if (!body) return { ok: false, error: "Message body is required." };
 
+  // The brand's own absolute copy rules — no emoji, no exclamation marks —
+  // checked here because they were written down and enforced nowhere, which is
+  // how an emoji reached 54 recipients in the highest-volume lifecycle email.
+  const copyIssue = findCopyComplianceIssueIn([
+    { label: "Subject", value: subject },
+    { label: "Headline", value: headline },
+    { label: "Preview text", value: text(input.previewText, 200) },
+    { label: "Message", value: body },
+    { label: "Button text", value: text(input.ctaLabel, 40) },
+  ]);
+  if (copyIssue) return { ok: false, error: copyIssue };
+
   const ctaPathRaw = text(input.ctaPath, 300) || "/products";
   // Same-origin only, decided by RESOLVING the path rather than by matching its
   // prefix — see lib/email/cta-path.ts for why `/\evil.com` defeats the
   // obvious-looking string test.
   if (!isSafeSitePath(ctaPathRaw, getSiteUrl())) {
     return { ok: false, error: "The button link must be a path on this site, like /products." };
+  }
+  // SAME-ORIGIN IS NOT THE SAME AS REACHABLE. The store needs an account, and
+  // an email grant opens the catalogue and the checkout but deliberately not
+  // order history or any other account surface — a forwarded email must not
+  // hand a stranger somebody's addresses and totals. So a path that passes the
+  // origin test above can still land every recipient on a sign-in page, which
+  // is what /account/orders did to two retention automations for their whole
+  // lives: 0 clicks on 75 sends, with nothing anywhere saying why.
+  if (!ctaPathReachesStore(ctaPathRaw)) {
+    return {
+      ok: false,
+      error:
+        `Recipients cannot reach ${ctaPathRaw} from an email — the store needs an account and that page is not one an `
+        + "email link can open, so they would land on the sign-in page instead. Point the button at the home page, "
+        + "/products, /research, a product page, or /cart.",
+    };
   }
 
   // THE GIFT. Either a catalogue key, or one the operator built, or neither —

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { clearAbandonedCart, trackCart } from "@/lib/cart-recovery";
+import { clearAbandonedCart, markCheckoutStarted, trackCart } from "@/lib/cart-recovery";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { rateLimitKeyForRequest } from "@/lib/request-ip";
@@ -42,12 +42,30 @@ export async function POST(request: Request) {
     customerName?: string;
     items?: Array<{ slug: string; variantId?: string; name: string; quantity: number; unitPrice: number; image?: string }>;
     cartValueCents?: number;
+    /** Set by the checkout page on arrival. Funnel instrumentation only. */
+    reachedCheckout?: boolean;
   } | null;
 
   if (!body?.sessionId || typeof body.sessionId !== "string" || !Array.isArray(body.items)) {
     return NextResponse.json({ success: false }, { status: 400 });
   }
   const sessionId = body.sessionId.slice(0, 200);
+
+  // REACHED THE CHECKOUT. Funnel instrumentation and nothing else: it stamps a
+  // timestamp on a cart row keyed by the session id, reads no payment state and
+  // is read by nothing that prices, charges or fulfils. Needs no identity for
+  // the same reason the exit path below does not — the session id is the proof,
+  // and it can only ever stamp a row that session already owns.
+  //
+  // Fired before the identity checks so it works for a guest who has not yet
+  // typed an address, which is precisely the shopper this metric exists to
+  // count. First touch only, so it cannot be inflated by re-firing.
+  if (body.reachedCheckout === true) {
+    await markCheckoutStarted(sessionId);
+    if (!Array.isArray(body.items) || body.items.length === 0) {
+      return NextResponse.json({ success: true, tracked: false, checkoutStarted: true });
+    }
+  }
 
   // The exit path needs no identity: the session id is the proof.
   if (body.items.length === 0) {

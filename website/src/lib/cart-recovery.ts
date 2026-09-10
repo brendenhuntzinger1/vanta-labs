@@ -12,6 +12,7 @@ import { claimMarketingSend } from "@/lib/email/frequency";
 import { plainGreetingName } from "@/lib/email/greeting-name";
 import { getCatalogProductsBySlugs, getStockLevelsBySlugs } from "@/lib/catalog";
 import { isPaidOrderStatus, isProductPurchaseOrder } from "@/lib/ledger";
+import { recordSystemAlert } from "@/lib/monitoring";
 import {
   cartRecoveryGiftTemplate,
   cartRecoveryT30mTemplate,
@@ -38,6 +39,54 @@ import {
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
+
+/**
+ * THE CART STATUS VOCABULARY, STATED ONCE.
+ *
+ * WHAT WENT WRONG. The sweep selected `.eq("status", "active")` and
+ * markAbandonedCartsRecovered filtered the same way. That is an ALLOWLIST OF
+ * ONE, so any status outside it removed a cart from the programme in both
+ * directions at once: no further stage could be sent to it, and no purchase
+ * could ever close it. Nothing alerted, because absence looks exactly like a
+ * quiet day.
+ *
+ * It was not hypothetical. On 2026-09-10 four carts sat at `held` —
+ * $1,980.90 in total, averaging $495 against a $185 norm, the largest a
+ * $950.07 cart that had received one of its four stages. Nothing in this
+ * repository writes `held` and nothing clears it; the rows outlived whatever
+ * put them there, and the sweep had no opinion about them because the filter
+ * could only ask one question.
+ *
+ * WHY THIS SHAPE. The two sets below partition the vocabulary, and the query
+ * sites now ask "is this cart still open?" rather than "is this cart active?".
+ * A status is either terminal by intent or it keeps sending, so the failure
+ * mode that produced the frozen carts — a status that is silently neither —
+ * cannot be expressed. `isOpenCartStatus` deliberately answers false for a
+ * status it does not know: reading an unknown as open would swap a silent
+ * stall for silent mailing, which is the worse of the two. Unknown statuses
+ * are reported by the stalled-cart watch instead, and the database's own CHECK
+ * constraint (abandoned-cart-status-vocabulary.sql) stops one being written at
+ * all.
+ */
+export const CART_STATUS_OPEN = ["active", "held"] as const;
+
+/** Closed for good. A terminal cart is never mailed and never re-opened. */
+export const CART_STATUS_TERMINAL = ["recovered", "cleared", "expired"] as const;
+
+/** Every status this system recognises. The two sets above partition it. */
+export const CART_STATUSES = [...CART_STATUS_OPEN, ...CART_STATUS_TERMINAL] as const;
+
+export type OpenCartStatus = (typeof CART_STATUS_OPEN)[number];
+
+/**
+ * Is this cart's sequence still running?
+ *
+ * False for terminal statuses AND for anything unrecognised — see the header
+ * for why unknown must not read as open.
+ */
+export function isOpenCartStatus(status: string | null | undefined): boolean {
+  return (CART_STATUS_OPEN as readonly string[]).includes(String(status ?? ""));
+}
 
 export interface AbandonedCartItemSnapshot {
   slug: string;
@@ -194,6 +243,41 @@ export async function markCartRestored(cartId: string): Promise<void> {
   }
 }
 
+/**
+ * THIS CART REACHED THE CHECKOUT.
+ *
+ * The step the funnel could not see. A click was recorded, a restore was
+ * recorded, and an order was recorded — and between the restore and the order
+ * there was nothing, so a shopper who got their cart back and then stalled at
+ * the checkout was indistinguishable from one who never clicked. Both are
+ * simply absent, which is the same ambiguity the restore stamp was added to
+ * remove one step earlier.
+ *
+ * KEYED ON THE BROWSER SESSION, not a cart id, because the checkout page knows
+ * which session it is serving and deliberately does not take a cart id from
+ * the client — one that did could be handed somebody else's.
+ *
+ * FIRST TOUCH ONLY, so the timestamp means "when they first got there", and so
+ * a shopper who bounces between cart and checkout is one arrival rather than
+ * five. Never throws: this is a bookkeeping write on a path the shopper is
+ * trying to buy through, and it records reaching a page — it reads nothing
+ * about payment and is read by nothing that prices, charges or fulfils.
+ */
+export async function markCheckoutStarted(sessionId: string): Promise<void> {
+  const id = String(sessionId ?? "").trim();
+  if (!id) return;
+  try {
+    await supabaseAdmin
+      .from("abandoned_carts")
+      .update({ checkout_started_at: new Date().toISOString() })
+      .eq("session_id", id)
+      .in("status", CART_STATUS_OPEN)
+      .is("checkout_started_at", null);
+  } catch (error) {
+    console.error("[cart-recovery] could not stamp a checkout start", id, error);
+  }
+}
+
 // Called from payment-webhook.ts's paid-status transition - stops every
 // future reminder immediately, since the sweep only ever looks at
 // status='active' rows.
@@ -214,7 +298,11 @@ export async function markAbandonedCartsRecovered(
     .from("abandoned_carts")
     .update({ status: "recovered", recovered_order_id: orderId })
     .eq("email", email.trim().toLowerCase())
-    .eq("status", "active");
+    // EVERY OPEN CART, not only the active ones. This filtered on 'active'
+    // alone, so a cart parked at any other non-terminal status could not be
+    // closed by a purchase — it stayed open for ever while the shopper who
+    // had already bought went on being counted as un-recovered.
+    .in("status", CART_STATUS_OPEN);
 
   if (error) throw error;
 }
@@ -385,6 +473,36 @@ interface DueCartRow {
   first_seen_at: string;
   /** Last cart change. Absent on rows written before the column existed. */
   last_updated_at?: string | null;
+  /** Selected so a scanned cart's status is readable rather than assumed. */
+  status?: string | null;
+}
+
+/**
+ * The same tracked link, pointed somewhere else.
+ *
+ * A recovery email has one tracked link built for it — the button — and any
+ * SECOND link in the message was a bare href, so its clicks were invisible.
+ * That mattered most on the 12-hour message, which is built around the COA
+ * library and opens better than anything else the system sends.
+ *
+ * Re-using the button's tracker rather than minting a second one is deliberate:
+ * the reservation id is what ties a click to a send and a stage, and a link
+ * carrying a different id would report as a different message. The destination
+ * is swapped and everything else — including the offer token, which stays in
+ * `o` and is set as an httpOnly cookie by the tracker — is preserved.
+ *
+ * Falls back to the destination itself if the tracked link will not parse, on
+ * the same principle the tracker follows: losing a click from a report is a
+ * rounding error, losing the click-through is a lost sale.
+ */
+function retargetTrackedLink(trackedUrl: string, destination: string): string {
+  try {
+    const url = new URL(trackedUrl);
+    url.searchParams.set("url", destination);
+    return url.toString();
+  } catch {
+    return destination;
+  }
 }
 
 function restoreUrl(cartId: string) {
@@ -609,6 +727,16 @@ export interface AbandonedCartSweepResult {
   eligible: number;
   /** Carts closed because a paid order turned up that the webhook had not linked. */
   recoveredLate: number;
+  /**
+   * Carts sitting at a status this system does not recognise.
+   *
+   * The frozen-cart incident was invisible precisely because nothing counted
+   * this. A cart outside the vocabulary is mailed by nothing and closed by
+   * nothing, and the only evidence it leaves is an absence. Counted every
+   * tick and alerted on, so the next one is reported the same day rather than
+   * found in an audit six weeks later.
+   */
+  unknownStatus: number;
   /** New sequences not started because the address was mailed about another cart recently. */
   heldForCooldown: number;
 }
@@ -1241,7 +1369,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
   const config = await getCartRecoveryControlConfig();
   const now = Date.now();
   const result: AbandonedCartSweepResult = {
-    t30mSent: 0, t12hSent: 0, t24hSent: 0, t72hSent: 0, scanned: 0, eligible: 0, recoveredLate: 0, heldForCooldown: 0,
+    t30mSent: 0, t12hSent: 0, t24hSent: 0, t72hSent: 0, scanned: 0, eligible: 0, recoveredLate: 0, heldForCooldown: 0, unknownStatus: 0,
   };
 
   // Only sweep carts new enough to still have a pending stage. The stage clock
@@ -1260,8 +1388,11 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
   for (let offset = 0; offset < CART_MAX_SCAN && candidates.length < CART_SWEEP_BUDGET; offset += CART_SCAN_PAGE) {
     const { data, error } = await supabaseAdmin
       .from("abandoned_carts")
-      .select("id, email, customer_name, items, cart_value_cents, first_seen_at, last_updated_at")
-      .eq("status", "active")
+      .select("id, email, customer_name, items, cart_value_cents, first_seen_at, last_updated_at, status")
+      // NON-TERMINAL, not equal-to-active. See CART_STATUS_OPEN: the old
+      // single-status filter froze four carts worth $1,980.90 mid-sequence
+      // with nothing to report it.
+      .in("status", CART_STATUS_OPEN)
       .or(`last_updated_at.gte.${oldestActivityIso},first_seen_at.gte.${oldestActivityIso}`)
       // Oldest first: the cart closest to ageing out of the window is the one
       // with the least time left to be recovered.
@@ -1321,6 +1452,40 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     }
 
     if (page.length < CART_SCAN_PAGE) break;
+  }
+
+  // THE WATCH THAT WOULD HAVE CAUGHT THE FROZEN CARTS ON DAY ONE.
+  //
+  // The scan above reads only OPEN carts, so by construction it can never see
+  // a cart that has fallen outside the vocabulary — which is exactly how four
+  // of them went unnoticed for days. One cheap count closes that blind spot.
+  // Never throws: a reporting query must not be able to stop the sweep that
+  // sends the mail.
+  try {
+    const { data: strays } = await supabaseAdmin
+      .from("abandoned_carts")
+      .select("id, status, cart_value_cents")
+      .not("status", "in", `(${CART_STATUSES.join(",")})`)
+      .limit(50);
+    const rows = (strays ?? []) as Array<{ id: string; status: string | null; cart_value_cents: number | null }>;
+    result.unknownStatus = rows.length;
+    if (rows.length > 0) {
+      const valueCents = rows.reduce((sum, row) => sum + (row.cart_value_cents ?? 0), 0);
+      await recordSystemAlert({
+        type: "cart_recovery_unknown_status",
+        severity: "critical",
+        message:
+          `${rows.length} abandoned cart(s) worth $${(valueCents / 100).toFixed(2)} sit at a status this system does not `
+          + `recognise (${[...new Set(rows.map((row) => String(row.status)))].join(", ")}). They receive no further `
+          + "recovery stage and cannot be closed by a purchase. Add the status to CART_STATUS_OPEN or "
+          + "CART_STATUS_TERMINAL in cart-recovery.ts, then migrate the rows.",
+        context: { statuses: [...new Set(rows.map((row) => String(row.status)))], count: rows.length, valueCents },
+        // One standing problem is not forty-eight criticals a day.
+        dedupeWindowMs: 6 * 60 * 60 * 1000,
+      });
+    }
+  } catch {
+    // Best-effort by design.
   }
 
   result.eligible = candidates.length;
@@ -1597,10 +1762,18 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
         cartId, stage, email,
         campaignType: "cart_recovery_t12h",
         templateKey: "cartRecoveryT12hTemplate",
+        // THE COA LINK GOES THROUGH THE TRACKER LIKE THE BUTTON DOES.
+        //
+        // This message is built around the COA library, and its link was a
+        // bare href — so the one click that proves the objection was answered
+        // was invisible in every report, on the best-opening email the system
+        // sends (59%). `url` is the tracked restore link, and swapping its
+        // destination keeps the same reservation id, so a click on either link
+        // records against this send and this stage.
         buildTemplate: (url) => cartRecoveryT12hTemplate({
           ...base,
           restoreUrl: url,
-          coaUrl: `${getSiteUrl()}/coa-library`,
+          coaUrl: retargetTrackedLink(url, `${getSiteUrl()}/coa-library`),
           batchNumber,
           supportEmail: SUPPORT_EMAIL,
         }),

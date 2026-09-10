@@ -249,6 +249,7 @@ export default function CheckoutPage() {
     pointsToRedeem,
     setPointsToRedeem,
     setKnownEmail,
+    knownEmail,
     clearCart,
     updateQuantity,
     removeFromCart,
@@ -583,6 +584,23 @@ export default function CheckoutPage() {
       setKnownEmail(form.email);
     }
   }, [form.email, setKnownEmail]);
+
+  // THE ADDRESS WE ALREADY MAILED, INTO THE FIELD THAT WOULD ASK FOR IT AGAIN.
+  //
+  // The prefill above this only runs for a signed-in account, so a GUEST who
+  // followed a recovery link reached the checkout with an empty email box —
+  // measured in a browser on 2026-09-10 — and had to retype, on a phone, the
+  // address the reminder had just been sent to. That is the highest-intent
+  // traffic in the store, at the step with the least patience.
+  //
+  // knownEmail is set by the restore page from the cart the email was
+  // addressed to, and only for a verified, cart-scoped grant. ONLY SEEDS AN
+  // EMPTY FIELD, so nothing the shopper has typed is ever overwritten, and the
+  // signed-in path above still wins because it fills the field first.
+  useEffect(() => {
+    if (!knownEmail || !/^\S+@\S+\.\S+$/.test(knownEmail)) return;
+    setForm((prev) => (prev.email ? prev : { ...prev, email: knownEmail }));
+  }, [knownEmail]);
 
   // Whether the marketing box starts ticked, until the shopper touches it.
   //
