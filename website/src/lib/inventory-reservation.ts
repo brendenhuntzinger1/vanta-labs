@@ -30,6 +30,17 @@ export interface UnavailableLine {
    * difference between adjusting the cart and abandoning it.
    */
   available: number | null;
+  /**
+   * Units physically on the shelf, BEFORE holds are subtracted, or null when it
+   * could not be read.
+   *
+   * `available` alone cannot tell a sold-out shelf from a full one whose units
+   * are all held by checkouts still in flight, and those two need opposite
+   * advice: edit the cart, versus go back and finish the payment you already
+   * started. Reported to the shopper only as that distinction — never as a
+   * number, for the reason describeUnavailable gives.
+   */
+  onHand: number | null;
   /** Product name, so the message can say WHICH item is short. */
   name: string | null;
 }
@@ -51,7 +62,7 @@ export interface ReserveResult {
 async function readAvailable(
   slug: string,
   variantId: string | null,
-): Promise<{ available: number | null; name: string | null }> {
+): Promise<{ available: number | null; onHand: number | null; name: string | null }> {
   try {
     if (variantId) {
       // The product's name rides along with the dose. "5mg just sold out" left
@@ -67,13 +78,14 @@ async function readAvailable(
           label: string | null;
           products?: { name?: string | null } | Array<{ name?: string | null }> | null;
         }>();
-      if (!data) return { available: null, name: null };
+      if (!data) return { available: null, onHand: null, name: null };
       const product = Array.isArray(data.products) ? data.products[0] : data.products;
       const productName = String(product?.name ?? "").trim();
       const label = String(data.label ?? "").trim();
       const name = [productName, label].filter(Boolean).join(" ");
       return {
         available: Math.max(0, Number(data.inventory_quantity ?? 0) - Number(data.reserved_quantity ?? 0)),
+        onHand: Math.max(0, Number(data.inventory_quantity ?? 0)),
         name: name || null,
       };
     }
@@ -82,14 +94,15 @@ async function readAvailable(
       .select("inventory_quantity, reserved_quantity, name")
       .eq("slug", slug)
       .maybeSingle<{ inventory_quantity: number | null; reserved_quantity: number | null; name: string | null }>();
-    if (!data) return { available: null, name: null };
+    if (!data) return { available: null, onHand: null, name: null };
     return {
       available: Math.max(0, Number(data.inventory_quantity ?? 0) - Number(data.reserved_quantity ?? 0)),
+      onHand: Math.max(0, Number(data.inventory_quantity ?? 0)),
       name: data.name ?? null,
     };
   } catch {
     // A failed lookup degrades the message, never the outcome.
-    return { available: null, name: null };
+    return { available: null, onHand: null, name: null };
   }
 }
 
@@ -107,13 +120,50 @@ export function describeUnavailable(lines: UnavailableLine[]): string {
   if (lines.length === 0) {
     return "Sorry — an item in your cart just sold out. Please adjust your cart and try again.";
   }
+  let anyHeld = false;
+  let anyShort = false;
   const parts = lines.map((line) => {
     const name = line.name ?? "An item in your cart";
-    if (line.available === null) return `${name} is no longer available`;
+    if (line.available === null) {
+      anyShort = true;
+      return `${name} is no longer available`;
+    }
+    // HELD, NOT SOLD. The units are on the shelf; a checkout that has not
+    // finished is holding them, and most often it is this shopper's own
+    // previous attempt — reproduced against the harness on 2026-09-10, where a
+    // shopper with a live pending order was told "we can't ship that many"
+    // about three units sitting in stock. Checked BEFORE the sold-out branch,
+    // because a shelf whose every unit is held reads as available === 0 and
+    // that is exactly where "just sold out" was furthest from the truth.
+    //
+    // Drawn from the shelf alone. No order is read and no customer is matched,
+    // so this cannot report anything about anybody else's checkout, and the
+    // wording is identical however many units are held — the same rule that
+    // keeps the count out of the sentence below.
+    if (line.onHand !== null && line.onHand >= line.quantity) {
+      anyHeld = true;
+      return `${name} is held by a checkout that hasn't finished yet`;
+    }
+    anyShort = true;
     if (line.available === 0) return `${name} just sold out`;
     return `we can't ship that many of ${name} right now`;
   });
-  return `${parts.join(". ")}. Please adjust your cart and try again.`;
+  // The action has to match the cause. "Adjust your cart" is the fix for a short
+  // shelf and useless for a held one — the cart is already correct, and the only
+  // thing that frees those units is finishing (or abandoning) the payment that
+  // holds them. A shopper who left a card form a few minutes ago still has it in
+  // their history, and that session stays valid for an hour, so Back is a real
+  // route to a completed order rather than advice to wait.
+  const advice: string[] = [];
+  if (anyHeld) {
+    advice.push(
+      "If you started a payment a few minutes ago, go back to that payment page and finish there — "
+      + "same cart, and you have not been charged. Otherwise the hold clears on its own; try again in "
+      + "a few minutes.",
+    );
+  }
+  if (anyShort) advice.push("Please adjust your cart and try again.");
+  return `${parts.join(". ")}. ${advice.join(" ")}`;
 }
 
 // Hold every line of an order, all-or-nothing. Idempotent per order (a refresh
@@ -174,7 +224,7 @@ export async function reserveInventoryForOrder(
       // else (true, or null from an environment without the RPC) allows the line.
       if (data === false) {
         const detail = await readAvailable(a.slug, a.variantId);
-        unavailable.push({ ...a, available: detail.available, name: detail.name });
+        unavailable.push({ ...a, available: detail.available, onHand: detail.onHand, name: detail.name });
       }
     } catch (error) {
       await reportInventoryRpcFailure("reserve_inventory", orderId, error);

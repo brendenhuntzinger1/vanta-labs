@@ -35,6 +35,15 @@ const RECONCILE_MAX_PAGES = 10;
 /** Past this a still-unknown charge needs a human, not another poll. */
 const RECONCILE_STALE_MS = 24 * 60 * 60 * 1000;
 /**
+ * How long after a decline a lost success is still worth asking about.
+ *
+ * A Veyra checkout session lives an hour, and a processor exhausts its webhook
+ * retries well inside a day. Twenty-four hours therefore covers every case where
+ * a charge on this session could still be unaccounted for, while keeping the
+ * ordinary decline — which is most of them — out of the poll queue after a day.
+ */
+const RECONCILE_FAILED_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+/**
  * When a still-unresolved checkout is retired as ABANDONED.
  *
  * The processor only calls a session dead (failed / expired / canceled) if it
@@ -143,6 +152,14 @@ interface PendingOrderRow {
   created_at: string;
   /** Null reads as the card lane; a manual method is never retired here. */
   payment_method?: string | null;
+  /**
+   * `pending_payment` for the ordinary backlog, or `payment_failed` for a
+   * recently-declined order being re-checked for a lost success (see the `.or`
+   * on the read). A failed row is only ever SETTLED here — never retired again,
+   * and never counted toward the unresolved backlog.
+   */
+  payment_status?: string | null;
+  payment_failed_at?: string | null;
 }
 
 export interface ReconcileResult {
@@ -152,6 +169,20 @@ export interface ReconcileResult {
   failedOut: number;
   /** Still genuinely unknown at the processor. */
   unresolved: number;
+  /**
+   * Retirements declined because the order had already moved (a webhook won).
+   * Absent when none — the sweep's output stays quiet on a clean run.
+   */
+  raced?: number;
+  /**
+   * Rows this run READ but never polled, because the work budget ran out.
+   *
+   * Reported because the loop is newest-first: what gets left behind is the
+   * OLDEST queue, and an unpolled row is also never retired by the 7-day rule,
+   * which lives inside the poll loop. A number that stays high tick after tick
+   * means the oldest pending orders are being starved and will sit for ever.
+   */
+  unpolled?: number;
 }
 
 async function fetchSessionStatus(sessionId: string): Promise<VeyraSessionStatus | null> {
@@ -182,6 +213,7 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
   // polled at all — money moved, order reads unpaid, stock released at
   // reservation expiry. That is the exact failure this file exists to prevent.
   const cutoff = new Date(Date.now() - RECONCILE_AFTER_MS).toISOString();
+  const failedLookback = new Date(Date.now() - RECONCILE_FAILED_LOOKBACK_MS).toISOString();
   const orders: PendingOrderRow[] = [];
   // A FAILED READ IS NOT AN EMPTY BACKLOG.
   //
@@ -202,8 +234,30 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
     const from = page * RECONCILE_PAGE;
     const { data, error } = await supabaseAdmin
       .from("orders")
-      .select("order_id, payment_id, created_at, payment_method")
-      .eq("payment_status", "pending_payment")
+      .select("order_id, payment_id, created_at, payment_method, payment_status, payment_failed_at")
+      // PENDING IS NOT THE ONLY WAY A CHARGED ORDER CAN READ UNPAID.
+      //
+      // This polled `pending_payment` alone, and that left the exact shape of
+      // David's 2026-09-09 purchase unrecoverable. A shopper whose first attempt
+      // is declined and who then pays on a SECOND card in the SAME session
+      // leaves an order already written payment_failed. If that success webhook
+      // is then lost, nothing in the system ever looks at the row again: this
+      // sweep excluded it, so the card is charged, the order reads declined, the
+      // stock is released, and no alert fires anywhere. That is the
+      // charged-but-invisible order this job exists to prevent, arriving through
+      // the one door it was not watching.
+      //
+      // A failed row is only reconsidered while a charge on its session is still
+      // plausible: it must still carry a session id, and it must have failed
+      // within RECONCILE_FAILED_LOOKBACK_MS. Outside that window a failed order
+      // is left alone, so the ordinary decline — by far the common case — is
+      // polled once or twice and then forgotten rather than for ever.
+      //
+      // Re-settling is safe by construction: the paid flip is a compare-and-set,
+      // the synthetic event id is deterministic, and paid_side_effects_at is
+      // single-use, so a late real webhook and this replay cannot both run the
+      // side effects.
+      .or(`payment_status.eq.pending_payment,and(payment_status.eq.payment_failed,payment_failed_at.gte.${failedLookback})`)
       // NO `.not("payment_id", "is", null)` — AND THAT EXCLUSION WAS A HOLE.
       //
       // It was true that a row without a session id has nothing to poll, and
@@ -242,6 +296,16 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
   let failedOut = 0;
   let unresolved = 0;
   let stale = 0;
+  /**
+   * Retirements this run DECLINED to make because the row had moved.
+   *
+   * A guarded UPDATE matching zero rows is the success case of the guard, not a
+   * failure — it means a webhook settled the order while this sweep was
+   * reading. Counted so it is visible rather than indistinguishable from "there
+   * was nothing to do", and because a rising number here means webhook
+   * deliveries and the sweep are contending for the same orders.
+   */
+  let raced = 0;
   let ranOutOfTime = false;
   // What this run actually POLLED, which is not the same as what it read once a
   // budget can end the loop early. `checked` reports this, so the number an
@@ -261,6 +325,13 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
 
     const sessionId = String(order.payment_id ?? "");
     if (!sessionId) continue;
+
+    // A row included by the failed-lookback is here for ONE question: did this
+    // session actually take the money? It is never retired again (it already
+    // is payment_failed) and it never counts toward the unresolved backlog,
+    // because an ordinary decline is not an unknown charge and must not raise
+    // the "orders pending at the processor" warning.
+    const reCheckingFailed = String(order.payment_status ?? "pending_payment") === "payment_failed";
 
     polled += 1;
     const session = await fetchSessionStatus(sessionId);
@@ -291,6 +362,19 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
           `reconcile-${order.order_id}`,
         );
         settled += 1;
+        if (reCheckingFailed) {
+          // This is the charged-but-invisible case actually being caught. The
+          // shopper was told the card was not charged and the stock was
+          // released, so an operator needs to know the order came back.
+          await recordSystemAlert({
+            type: "payment_recovered_after_failure",
+            severity: "critical",
+            message: `Order ${order.order_id} was recorded as FAILED but the processor reports its session as paid. `
+              + "Reconciliation has settled it. The shopper was told the card was not charged and the stock and "
+              + "store-credit holds were released when it failed, so confirm the order is fulfillable.",
+            context: { order_id: order.order_id, session_id: sessionId },
+          }).catch(() => {});
+        }
       } catch (settleError) {
         await recordSystemAlert({
           type: "express_reconcile_failed",
@@ -301,6 +385,12 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
       }
       continue;
     }
+
+    // Everything below RETIRES a pending order. A row we are only re-checking is
+    // already retired, so it stops here: re-running the write would match zero
+    // rows and be miscounted as a race, and re-releasing its inventory would be
+    // a second release of a hold that is already gone.
+    if (reCheckingFailed) continue;
 
     if (DEAD_SESSION_STATUSES.has(status)) {
       // The processor says this session is terminal and never captured, so the
@@ -315,7 +405,7 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
       // payment_failed and the admin could not tell them apart.
       const failure = classifyDeadSession(status, session);
       const retiredAt = new Date().toISOString();
-      const { error: failError } = await supabaseAdmin
+      const { data: retired, error: failError } = await supabaseAdmin
         .from("orders")
         .update({
           payment_status: "payment_failed",
@@ -326,10 +416,21 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
           updated_at: retiredAt,
         })
         .eq("order_id", order.order_id)
-        .eq("payment_status", "pending_payment");
-      if (!failError) {
+        .eq("payment_status", "pending_payment")
+        // READ ROWS-AFFECTED, NOT JUST THE ERROR. A guarded UPDATE that matches
+        // nothing is not an error in PostgREST: `error` is null either way. So
+        // `if (!failError)` ran the release on an order the guard had correctly
+        // REFUSED to retire — i.e. one a webhook had just flipped to paid
+        // between the read at the top of this sweep and this write. The hold on
+        // a paid order's units has already been finalized, so releasing it puts
+        // sold units back on the shelf: an oversell, from the one job whose
+        // purpose is to protect a charged order.
+        .select("order_id");
+      if (!failError && (retired?.length ?? 0) > 0) {
         await releaseInventoryForOrder(order.order_id);
         failedOut += 1;
+      } else if (!failError) {
+        raced += 1;
       }
       continue;
     }
@@ -342,7 +443,7 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
     // dead-session retirement above.
     if (Date.parse(order.created_at) < abandonFloor) {
       const retiredAt = new Date().toISOString();
-      const { error: abandonError } = await supabaseAdmin
+      const { data: abandoned, error: abandonError } = await supabaseAdmin
         .from("orders")
         .update({
           payment_status: "payment_failed",
@@ -355,10 +456,14 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
           updated_at: retiredAt,
         })
         .eq("order_id", order.order_id)
-        .eq("payment_status", "pending_payment");
-      if (!abandonError) {
+        .eq("payment_status", "pending_payment")
+        // Same reason as the dead-session write above.
+        .select("order_id");
+      if (!abandonError && (abandoned?.length ?? 0) > 0) {
         await releaseInventoryForOrder(order.order_id);
         failedOut += 1;
+      } else if (!abandonError) {
+        raced += 1;
       }
       continue;
     }
@@ -393,7 +498,7 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
     if (Date.parse(order.created_at) >= abandonFloor) continue;
 
     const retiredAt = new Date().toISOString();
-    const { error: orphanError } = await supabaseAdmin
+    const { data: orphaned, error: orphanError } = await supabaseAdmin
       .from("orders")
       .update({
         payment_status: "payment_failed",
@@ -406,10 +511,14 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
         updated_at: retiredAt,
       })
       .eq("order_id", order.order_id)
-      .eq("payment_status", "pending_payment");
-    if (!orphanError) {
+      .eq("payment_status", "pending_payment")
+      // Same reason as the two writes above.
+      .select("order_id");
+    if (!orphanError && (orphaned?.length ?? 0) > 0) {
       await releaseInventoryForOrder(order.order_id);
       failedOut += 1;
+    } else if (!orphanError) {
+      raced += 1;
     }
   }
 
@@ -453,7 +562,19 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
     throw asReconcileReadError(readError, { checked: polled, settled, failedOut, unresolved });
   }
 
-  return { checked: polled, settled, failedOut, unresolved };
+  // Only rows that HAVE a session were ever candidates for polling; the
+  // session-less ones are skipped by design and retired by the loop below, so
+  // counting them as starved would report a backlog that does not exist.
+  const pollable = orders.filter((order) => String(order.payment_id ?? "")).length;
+  const unpolled = Math.max(0, pollable - polled);
+  return {
+    checked: polled,
+    settled,
+    failedOut,
+    unresolved,
+    ...(raced > 0 ? { raced } : {}),
+    ...(unpolled > 0 ? { unpolled } : {}),
+  };
 }
 
 /**

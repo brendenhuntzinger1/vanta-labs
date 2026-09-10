@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { FULLY_TERMINAL_ORDER_STATES } from "@/lib/payment-types";
-import { extractProcessorFailure, type PaymentFailureDetail } from "@/lib/payment-failure";
+import { extractProcessorFailure, PAID_RETRY_WINDOW_MS, type PaymentFailureDetail } from "@/lib/payment-failure";
 
 /**
  * Statuses in which the shopper's money has been captured and the order must
@@ -112,6 +112,13 @@ export interface WebhookEventState {
   status: OrderStatus;
   providerStatus: string;
   duplicate: boolean;
+  /**
+   * True when this delivery was skipped because ANOTHER invocation holds the
+   * claim and has not finished — as opposed to a genuine duplicate of work that
+   * completed. The route turns this into a retryable status instead of a 200, so
+   * an owner that dies mid-flight does not take the event with it.
+   */
+  inFlight?: boolean;
 }
 
 export interface CommissionState {
@@ -454,6 +461,40 @@ function normalizeOrderPayload(payload: string) {
 }
 
 /**
+ * WHICH CHECKOUT SESSION A CAPTURE BELONGS TO — or null when it does not say.
+ *
+ * The processor mints one session per payment attempt, so the session id is the
+ * only thing in a delivery that separates ONE capture from ANOTHER. The
+ * envelope's own id does not: it differs per delivery, which is exactly why the
+ * dedupe keyed on it cannot tell a retry of one charge from a second real one.
+ *
+ * SEPARATE FROM resolveWebhookSessionId ON PURPOSE. That one feeds order
+ * MATCHING and reads only the live processor's nested metadata; teaching it the
+ * flat `paymentId` as well would change which order an internal-gateway delivery
+ * resolves to, and that path works. This one is read by the duplicate-capture
+ * check alone, where the flat field is the shape the internal gateway and the
+ * reconcile sweep actually send.
+ *
+ * ADVISORY ONLY. Nothing decides whether money moved from this — it exists so a
+ * second capture on an order that is already paid can be NOTICED. A delivery
+ * carrying no session id is not evidence of anything and yields null.
+ */
+export function resolveWebhookCaptureSessionId(eventPayload: {
+  paymentId?: string;
+  data?: {
+    metadata?: { veyragate_session_id?: string };
+    object?: { metadata?: { veyragate_session_id?: string } };
+  };
+}): string | null {
+  const charge = eventPayload.data?.object ?? eventPayload.data;
+  for (const candidate of [eventPayload.paymentId, charge?.metadata?.veyragate_session_id]) {
+    const value = String(candidate ?? "").trim();
+    if (value) return value;
+  }
+  return null;
+}
+
+/**
  * How much the processor says it captured, in DOLLARS — or null when the
  * delivery carries no amount in any shape it uses.
  *
@@ -594,7 +635,26 @@ const STALE_CLAIM_MS = 5 * 60 * 1000;
 // row with processed_at IS NULL is in-flight. If that claim is stale (its owner
 // crashed before markEventProcessed), it is reclaimed so the processor's retry
 // can finish the order instead of being skipped forever as a "duplicate".
-async function claimEvent(eventId: string, orderId: string, status: OrderStatus): Promise<boolean> {
+/**
+ * WHY THIS IS THREE ANSWERS AND NOT TWO.
+ *
+ * It used to return a boolean, and "already finished" and "someone else is
+ * still working on it" both came back as false — which the caller reported as
+ * `duplicate: true` and the route answered 200. A 200 tells the processor the
+ * event is delivered and it stops retrying. So if the in-flight owner then died
+ * before markEventProcessed (a crashed lambda, a timed-out cold start, a deploy
+ * mid-request), that event was never delivered again: the claim row sat
+ * unprocessed, the card was charged, and the order stayed pending_payment with
+ * nothing left to settle it but the half-hourly reconcile sweep.
+ *
+ * "processed" is genuinely delivered and 200 is correct. "in_flight" is not
+ * delivered yet, and the honest answer is "come back" — which is what the
+ * STALE_CLAIM_MS reclaim below was always written to serve, and could never be
+ * reached by a sender that had been told to stop.
+ */
+type EventClaim = "claimed" | "processed" | "in_flight";
+
+async function claimEvent(eventId: string, orderId: string, status: OrderStatus): Promise<EventClaim> {
   const nowIso = new Date().toISOString();
   const { error } = await supabaseAdmin.from("payment_events").insert({
     event_id: eventId,
@@ -605,7 +665,7 @@ async function claimEvent(eventId: string, orderId: string, status: OrderStatus)
   });
 
   if (!error) {
-    return true;
+    return "claimed";
   }
 
   if ((error as { code?: string }).code !== "23505") {
@@ -638,16 +698,17 @@ async function claimEvent(eventId: string, orderId: string, status: OrderStatus)
       claimed_at: nowIso,
       processed_at: null,
     });
-    return !retry.error;
+    return retry.error ? "in_flight" : "claimed";
   }
 
   if (existing.processed_at) {
-    return false; // genuinely already processed — a true duplicate
+    return "processed"; // genuinely already processed — a true duplicate
   }
 
   const staleBefore = new Date(Date.now() - STALE_CLAIM_MS).toISOString();
   if (String(existing.claimed_at ?? "") >= staleBefore) {
-    return false; // a recent, still-live claim is in flight — skip
+    // A recent, still-live claim. NOT a duplicate: nothing has finished yet.
+    return "in_flight";
   }
 
   // Stale unprocessed claim → retake it atomically. The guards ensure only ONE
@@ -664,7 +725,9 @@ async function claimEvent(eventId: string, orderId: string, status: OrderStatus)
     throw reclaimError;
   }
 
-  return Boolean(reclaimed && reclaimed.length > 0);
+  // Losing the reclaim race means another retry took it a moment ago and is now
+  // the in-flight owner — so this delivery is still undelivered, not a duplicate.
+  return reclaimed && reclaimed.length > 0 ? "claimed" : "in_flight";
 }
 
 // Undo a claim when processing fails partway, so the event isn't permanently
@@ -676,7 +739,7 @@ async function releaseEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, order_number, order_type, membership_tier_id, membership_cycle, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, shipping_protection_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, shipping_address, city, postal_code, points_redeemed, store_credit_redeemed_cents, inventory_committed_at, payment_failure_kind")
+    .select("id, order_id, order_number, order_type, membership_tier_id, membership_cycle, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, shipping_protection_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, shipping_address, city, postal_code, points_redeemed, store_credit_redeemed_cents, inventory_committed_at, payment_failure_kind, payment_failure_code, payment_failure_reason, currency")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -685,6 +748,64 @@ async function getOrderByOrderId(orderId: string) {
   }
 
   return data;
+}
+
+/**
+ * Every field in the envelope that could be an amount, with the path it sat at.
+ *
+ * Recorded in the amount-mismatch alert because payment_events stores no
+ * payload: without it, each mismatch is reasoned about from memory and the
+ * question of what the processor's nested figure actually MEANS stays open
+ * forever. Read-only, tolerant of any shape, and it never throws — an exception
+ * here would cost the alert it is decorating.
+ */
+function rawAmountFields(payload: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const visit = (node: unknown, path: string, depth: number) => {
+    if (depth > 3 || node === null || typeof node !== "object") return;
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      const here = path ? `${path}.${key}` : key;
+      if (/amount|total|currency/i.test(key) && (typeof value === "number" || typeof value === "string")) {
+        out[here] = value;
+      } else if (value && typeof value === "object") {
+        visit(value, here, depth + 1);
+      }
+    }
+  };
+  try {
+    visit(payload, "", 0);
+  } catch {
+    // Decoration must never break the alert it decorates.
+  }
+  return out;
+}
+
+/**
+ * Another order the SAME customer already paid inside the retry window.
+ *
+ * Used only to enrich an alert. A shopper who is told "that payment did not go
+ * through" and sent back to checkout may place a second order before the first
+ * one's money lands, so when a failed order reopens as paid this is the question
+ * an operator needs answered immediately: did this person pay twice?
+ *
+ * findPaidRetry in payment-failure.ts is the pure matcher over a candidate list
+ * (and is what the admin list uses); this is the one narrow read that fetches
+ * such a candidate from the webhook path. Never throws — it informs a warning.
+ */
+async function findPaidSiblingOrder(customerEmail: string | null, excludeOrderId: string): Promise<string | null> {
+  const email = String(customerEmail ?? "").trim().toLowerCase();
+  if (!email) return null;
+  const since = new Date(Date.now() - PAID_RETRY_WINDOW_MS).toISOString();
+  const { data } = await supabaseAdmin
+    .from("orders")
+    .select("order_id, order_number")
+    .eq("customer_email", email)
+    .eq("payment_status", "paid")
+    .gte("paid_at", since)
+    .neq("order_id", excludeOrderId)
+    .limit(1);
+  const row = data?.[0];
+  return row ? String(row.order_number ?? row.order_id) : null;
 }
 
 async function upsertOrderRecord(input: {
@@ -709,6 +830,29 @@ async function upsertOrderRecord(input: {
   fulfillmentStatus?: string;
   paidAt?: string | null;
   providerEventId?: string;
+  /**
+   * COMPARE-AND-SET: only write if the row is STILL in this status.
+   *
+   * Every ordering guard in processPaymentWebhook — the refund-terminal check,
+   * CAPTURED_PAYMENT_STATES, FULLY_TERMINAL_ORDER_STATES — is evaluated against
+   * a snapshot read once, near the top. The paid flip has always been a
+   * compare-and-set (`.neq("payment_status","paid")`); this write was not, so
+   * every one of those guards was advisory the moment two deliveries for one
+   * order overlapped. Two events with DISTINCT ids are not serialised by
+   * claimEvent, and on the card lane they are routine: a first-attempt decline
+   * and the shopper's immediate retry.
+   *
+   * Measured on the harness before this existed: of 20 orders each sent a
+   * concurrent payment.succeeded and payment.failed, 19 finished
+   * payment_status='payment_failed' with paid_at NULL and paid_side_effects_at
+   * SET — money captured, receipt sent, order reading declined, the stock hold
+   * released against committed units, and the shopper's store credit handed
+   * back.
+   *
+   * Omit it for a brand-new webhook-created row, where there is no prior status
+   * to assert.
+   */
+  expectedPaymentStatus?: string | null;
   /**
    * WHY the payment failed, in the processor's words — written only when this
    * upsert is recording a payment_failed status. Absent on every other event so
@@ -791,12 +935,20 @@ async function upsertOrderRecord(input: {
   };
 
   if (existingOrder) {
-    const { error } = await supabaseAdmin.from("orders").update(basePayload).eq("order_id", input.orderId);
+    let write = supabaseAdmin.from("orders").update(basePayload).eq("order_id", input.orderId);
+    if (input.expectedPaymentStatus !== undefined) {
+      write = input.expectedPaymentStatus === null
+        ? write.is("payment_status", null)
+        : write.eq("payment_status", input.expectedPaymentStatus);
+    }
+    // `.select()` is what makes the precondition readable: without it the
+    // caller cannot tell a write that matched from one that was refused.
+    const { data: updated, error } = await write.select("id");
     if (error) {
       throw error;
     }
 
-    return { id: existingOrder.id };
+    return { id: existingOrder.id, matched: (updated?.length ?? 0) > 0 };
   }
 
   const { data, error } = await supabaseAdmin.from("orders").insert({
@@ -808,7 +960,8 @@ async function upsertOrderRecord(input: {
     throw error;
   }
 
-  return { id: data.id };
+  // A fresh insert always "matched": there was no prior status to lose a race to.
+  return { id: data.id, matched: true };
 }
 
 async function upsertOrderItems(orderId: string, items?: Array<{
@@ -2032,8 +2185,14 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     // a human-readable scope for the claim row.
     const claimKey = `membership-${(membershipData.membership_id ?? "unknown").slice(0, 64)}`;
     const claimedMembershipEvent = await claimEvent(eventId, claimKey, "pending_payment");
-    if (!claimedMembershipEvent) {
-      return { duplicate: true, eventId, membership: true, handled: false };
+    if (claimedMembershipEvent !== "claimed") {
+      return {
+        duplicate: true,
+        eventId,
+        membership: true,
+        handled: false,
+        inFlight: claimedMembershipEvent === "in_flight",
+      };
     }
     const outcome = await handleMembershipEvent(rawEventType, membershipData);
     await markEventProcessed(eventId, claimKey, "pending_payment");
@@ -2057,13 +2216,17 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   // Claim the event up front (atomic) so concurrent duplicate deliveries can't
   // both run the paid side-effects below.
   const claimed = await claimEvent(eventId, orderId, nextStatus);
-  if (!claimed) {
+  if (claimed !== "claimed") {
     return {
       duplicate: true,
       eventId,
       orderId,
       status: nextStatus,
       providerStatus: eventPayload.status ?? eventPayload.type ?? "unknown",
+      // NOT DELIVERED YET, and the difference decides the HTTP status. An event
+      // whose owner is still working on it (or died mid-flight) must be retried
+      // by the sender; one that genuinely finished must not.
+      inFlight: claimed === "in_flight",
     } satisfies WebhookEventState;
   }
 
@@ -2144,8 +2307,22 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   // its default — which the upsert below would then write over a real order.
   // The demotion guard further down only covers payment_failed/canceled, so it
   // does not catch this.
-  if (orderRecord && !isRecognisedMoneyEvent(eventPayload.type ?? "")) {
-    const existingStatus = (orderRecord.payment_status ?? "pending_payment") as OrderStatus;
+  //
+  // IT DOES NOT REQUIRE THE ORDER TO EXIST, and requiring it was a second way to
+  // the same phantom. Written as `orderRecord && !isRecognisedMoneyEvent(...)`,
+  // this refused only when there was already a row to protect; with no row it
+  // fell straight through to the upsert, and a payout.paid or
+  // dispute.evidence_required carrying any order reference the processor
+  // happened to attach INSERTED the very row the guard above exists to prevent —
+  // no customer, no email, no address, no items, $0 total, sitting in Needs
+  // Fulfillment. The two guards were written for the same defect and only one of
+  // them was closed.
+  //
+  // A recognised money event that names an unknown order still creates one, and
+  // deliberately: a charge is a fact about money and deserves a row even when
+  // checkout never wrote one. Subscription noise is not.
+  if (!isRecognisedMoneyEvent(eventPayload.type ?? "")) {
+    const existingStatus = (orderRecord?.payment_status ?? "pending_payment") as OrderStatus;
     await markEventProcessed(eventId, orderId, existingStatus);
     return {
       duplicate: false,
@@ -2185,6 +2362,43 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       context: { orderId, eventId },
     }).catch(() => {});
   }
+
+  // THE RETRY THAT PAYS, AND WHY IT MUST NOT BE SILENT.
+  //
+  // payment_failed is deliberately absent from REFUND_TERMINAL_STATES, so a
+  // declined order that later pays is allowed straight through to the paid
+  // flip — which is correct, and is the single most important path this store
+  // has: on 2026-09-09 David's $269.35 came back insufficient_funds, his bank
+  // pushed him an approval, he approved it, and his retry paid 71 seconds
+  // later. That was the first order at or above $200 this store ever settled.
+  //
+  // But the reopen had no voice at all. By the time it happens the shopper has
+  // been TOLD the card was not charged and pushed back to checkout, the stock
+  // hold and the tender hold have both been released, and the admin queue has
+  // filed the order as failed. The money then arrives and nothing says so.
+  // Worse, the shopper who was told to try again may already have placed a
+  // second order — so this is also the one moment where a genuine double
+  // payment by one person is most likely, and nobody was looking.
+  //
+  // findPaidRetry already knows how to spot that sibling order. Warning, not
+  // critical: this is a GOOD outcome that needs eyes, not an incident.
+  if (nextStatus === "paid" && priorPaymentStatus === "payment_failed") {
+    const sibling = await findPaidSiblingOrder(orderRecord?.customer_email ? String(orderRecord.customer_email) : null, orderId)
+      .catch(() => null);
+    await recordSystemAlert({
+      type: "payment_captured_after_failure",
+      severity: "warning",
+      message:
+        `Order ${orderId} was recorded as failed and has now been paid — a retry the processor accepted, which is how a `
+        + "bank-approved purchase completes. The shopper was told the card was not charged, and the stock and "
+        + "store-credit holds were released when it failed, so confirm the order is fulfillable."
+        + (sibling
+          ? ` NOTE: ${sibling} was also paid by the same customer within the last 24 hours — check this is not a double payment.`
+          : ""),
+      context: { orderId, eventId, prior_status: priorPaymentStatus, possible_duplicate_order: sibling },
+    }).catch(() => {});
+  }
+
   if (nextStatus === "paid" && priorPaymentStatus && REFUND_TERMINAL_STATES.has(priorPaymentStatus) && !neverCaptured) {
     await markEventProcessed(eventId, orderId, priorPaymentStatus as OrderStatus);
     return {
@@ -2282,7 +2496,13 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       // claim refuses, a stranded one older than STALE_CLAIM_MS is reclaimed so
       // a crashed run still gets retried.
       const mine = await claimEvent(candidateKey, orderId, nextStatus);
-      if (!mine) {
+      if (mine !== "claimed") {
+        // DELIBERATELY NOT RETRYABLE, unlike the event claim above. This is the
+        // REFUND-IDENTITY claim: another delivery is applying (or has applied)
+        // this same refund, and the correct outcome for this one is to record
+        // itself as handled and change nothing. Asking the sender to retry would
+        // only re-race the same refund. Losing this claim never loses money — the
+        // refund is being applied by whoever holds it.
         await markEventProcessed(eventId, orderId, (priorPaymentStatus ?? nextStatus) as OrderStatus);
         return {
           duplicate: false,
@@ -2384,8 +2604,21 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     // — the reconcile sweep relies on that — it is never a mismatch.
     const eventAmount = resolveWebhookPaidAmount(eventPayload);
     const recordedAmount = roundMoney(Number(orderRecord.amount_paid ?? 0));
+    // COMPARED IN CENTS, because `Math.abs(a - b) > 0.01` on dollars is not the
+    // rule it looks like. Binary floating point cannot hold either operand
+    // exactly, so a difference of precisely one cent lands on either side of the
+    // threshold depending on the magnitudes involved. 194.99 − 194.98 evaluates
+    // to 0.010000000000019327 and trips it; 269.36 − 269.35 evaluates to
+    // 0.009999999999990905 and does not. On the flat/internal shape a trip HOLDS
+    // the order out of fulfilment, so that is a real parcel stopped over an
+    // artefact of the representation — and $194.98 is, precisely, the largest
+    // payment this store had ever taken.
+    //
+    // Integers say exactly what was meant — more than one cent apart — and say
+    // it identically at every amount. Same correction, and the same reason, as
+    // isUnderpaidTotal in quote-order.ts.
     const amountDisagrees = eventAmount !== null && eventAmount > 0 && recordedAmount > 0
-      && Math.abs(eventAmount - recordedAmount) > 0.01;
+      && Math.abs(Math.round(eventAmount * 100) - Math.round(recordedAmount * 100)) > 1;
     // WHICH SHAPE THE AMOUNT CAME FROM DECIDES WHETHER A MISMATCH HOLDS THE
     // ORDER. The flat `amount` is ours (internal gateway, harness), so a
     // disagreement there is a real defect and the order is held. The nested
@@ -2401,8 +2634,21 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     const fromFlat = Number.isFinite(flatAmount) && flatAmount > 0;
     const holdOnMismatch = amountDisagrees && fromFlat;
 
+    // CURRENCY WAS NEVER COMPARED ANYWHERE.
+    //
+    // The amount is asserted but the unit it is denominated in was not, so
+    // "249.90" settled in another currency would have read as agreement. Every
+    // production row is USD and the store hard-pins USD at checkout
+    // (create-session passes currency: "USD"), so this is a latent gap rather
+    // than a live fault — which is why it ALERTS and does not hold. Holding a
+    // real capture out of fulfilment on a field no live envelope has been
+    // confirmed to populate is the more expensive mistake.
+    const eventCurrency = String((eventPayload as { currency?: unknown }).currency ?? "").trim().toUpperCase();
+    const recordedCurrency = String(orderRecord.currency ?? "").trim().toUpperCase();
+    const currencyDisagrees = Boolean(eventCurrency && recordedCurrency && eventCurrency !== recordedCurrency);
+
     const nowIso = new Date().toISOString();
-    const { error: flipError } = await supabaseAdmin
+    const { data: flipped, error: flipError } = await supabaseAdmin
       .from("orders")
       .update({
         payment_status: "paid",
@@ -2413,19 +2659,115 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         updated_at: nowIso,
       })
       .eq("order_id", orderId)
-      .neq("payment_status", "paid");
+      .neq("payment_status", "paid")
+      .select("id");
     if (flipError) {
       throw flipError;
     }
+    // Did THIS delivery perform the transition? A redelivery of an already-paid
+    // order matches zero rows, and the alerts below describe a transition — so
+    // without this they re-fire on every retry. A processor that retries five
+    // times over a day sent five critical emails for one fact.
+    const flipApplied = (flipped?.length ?? 0) > 0;
 
-    if (amountDisagrees) {
+    // A SECOND, DIFFERENT CAPTURE ON AN ORDER THAT IS ALREADY PAID.
+    //
+    // Zero rows here means the order was paid before this delivery arrived. For
+    // a redelivery of the same charge that is exactly right, and the guard is
+    // doing its job — no second commission, no second email, no second
+    // decrement. But the same zero rows are returned when the processor has
+    // captured the card a SECOND time, and that case was absorbed in silence:
+    // the store keeps one order, the customer is out two payments, and nothing
+    // anywhere says so. Every downstream surface — the order page, the receipt,
+    // the admin row, the ledger — reports the single recorded amount, so there
+    // is no way to notice from the inside.
+    //
+    // It is reachable on this store. resumeExistingOrder mints a FRESH session
+    // for an order that is not yet paid and moves payment_id onto it, and NOTHING
+    // on our side voids the session it replaced — whether the processor does is
+    // not something we know. So a shopper with the earlier card form still open
+    // in another tab, or restored by their browser, may hold a second submittable
+    // form for one order. That is the same "just try again" behaviour behind
+    // David's and Andrew's repeat attempts on 2026-09-08.
+    //
+    // THE SESSION ID IS THE DISCRIMINATOR, not the event id: event ids differ
+    // per delivery, so they cannot separate a retry from a real second charge.
+    // The row is re-read rather than judged from the snapshot above, because the
+    // snapshot predates the concurrent delivery that won the flip and would
+    // report ITS session as ours.
+    //
+    // ALERT ONLY, DELIBERATELY. The order may already be picked, packed or
+    // shipped, and holding or refunding it from here would be acting on an
+    // inference about someone else's ledger. This says "check the processor",
+    // which is the only correct instruction. It is not deduped by type either:
+    // suppressing this on one order because another order raised it last hour is
+    // exactly the wrong trade for money that has actually moved.
+    if (!flipApplied) {
+      const incomingSession = resolveWebhookCaptureSessionId(eventPayload);
+      if (incomingSession) {
+        const { data: settledRow } = await supabaseAdmin
+          .from("orders")
+          .select("payment_id, amount_paid")
+          .eq("order_id", orderId)
+          .maybeSingle();
+        const settledSession = String(settledRow?.payment_id ?? "").trim();
+        if (settledSession && settledSession !== incomingSession) {
+          await recordSystemAlert({
+            type: "duplicate_capture_suspected",
+            severity: "critical",
+            message: `Order ${orderId} is already paid under payment session ${settledSession}, but a `
+              + `SECOND successful payment arrived under session ${incomingSession}. The customer may have `
+              + "been charged twice for one order. Check both sessions in the processor dashboard and refund "
+              + "the duplicate — the order itself has not been changed, and nothing has been shipped twice.",
+            context: {
+              order_id: orderId,
+              event_id: eventId,
+              settled_session_id: settledSession,
+              duplicate_session_id: incomingSession,
+              recorded_amount: roundMoney(Number(settledRow?.amount_paid ?? orderRecord.amount_paid ?? 0)),
+              duplicate_amount: resolveWebhookPaidAmount(eventPayload),
+            },
+          }).catch(() => {});
+        }
+      }
+    }
+
+    if (currencyDisagrees && flipApplied) {
+      await recordSystemAlert({
+        type: "payment_currency_mismatch",
+        severity: "critical",
+        message: `Order ${orderId} was recorded in ${recordedCurrency} but the processor reported ${eventCurrency}. `
+          + "The order is marked paid and has NOT been held; confirm which currency was actually captured before fulfilling.",
+        context: { order_id: orderId, event_id: eventId, event_currency: eventCurrency, recorded_currency: recordedCurrency },
+      }).catch(() => {});
+    }
+
+    if (amountDisagrees && flipApplied) {
       await recordSystemAlert({
         type: "payment_amount_mismatch",
         severity: holdOnMismatch ? "critical" : "warning",
         message: holdOnMismatch
           ? `Order ${orderId} was paid for $${(eventAmount ?? 0).toFixed(2)} but checkout recorded $${recordedAmount.toFixed(2)}. The order is marked paid and held out of fulfilment pending review.`
           : `Order ${orderId}: the processor's charge object states $${(eventAmount ?? 0).toFixed(2)} but checkout recorded $${recordedAmount.toFixed(2)}. The order is marked paid and has NOT been held: this figure comes from the nested charge object, whose meaning against the recorded total is not yet confirmed on a live delivery. If the customer's card was charged the recorded total, the nested figure is the pre-shipping session amount and this stays advisory; if the card was really charged the stated figure, review the order and promote this check to a hold (payment-webhook.ts, holdOnMismatch).`,
-        context: { order_id: orderId, event_amount: eventAmount, recorded_amount: recordedAmount, event_id: eventId, held: holdOnMismatch, amount_source: fromFlat ? "flat" : "nested" },
+        // THE RAW FIELDS, SO THE OPEN QUESTION IS ANSWERABLE FROM DATA.
+        //
+        // Whether the nested figure is the CAPTURED total or the checkout
+        // session's pre-shipping amount is the one fact that decides whether
+        // this check can be promoted from advisory to a hold — and payment_events
+        // persists no payload, so every previous occurrence left nothing to
+        // read. Recording which field carried which number turns the next real
+        // mismatch into evidence instead of another guess.
+        context: {
+          order_id: orderId,
+          event_amount: eventAmount,
+          recorded_amount: recordedAmount,
+          event_id: eventId,
+          held: holdOnMismatch,
+          amount_source: fromFlat ? "flat" : "nested",
+          raw_amount_fields: rawAmountFields(eventPayload),
+          event_currency: eventCurrency || null,
+          recorded_currency: recordedCurrency || null,
+        },
       });
     }
   }
@@ -2437,8 +2779,16 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   // paid delivery. Only a brand-new webhook-created order, or a non-paid status
   // change (refund/cancel/failed), needs the upsert.
   if (!orderRecord || nextStatus !== "paid") {
-    await upsertOrderRecord({
+    const written = await upsertOrderRecord({
       orderId,
+      // ONLY WRITE IF THE ROW IS STILL WHERE THE GUARDS ABOVE SAW IT.
+      //
+      // Every guard between the read at the top of this function and this line
+      // judged a snapshot. Asserting that snapshot here is what turns them from
+      // advisory into enforced — see expectedPaymentStatus on upsertOrderRecord
+      // for the 19-of-20 measurement that prompted it. A brand-new
+      // webhook-created row has no prior status, so it carries no precondition.
+      expectedPaymentStatus: orderRecord ? priorPaymentStatus : undefined,
       // EVERY field below falls back to the stored row, and that is the whole
       // point of this block.
       //
@@ -2465,7 +2815,12 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       shippingAddress: eventPayload.customer?.address ?? orderRecord?.shipping_address ?? undefined,
       city: eventPayload.customer?.city ?? orderRecord?.city ?? undefined,
       postalCode: eventPayload.customer?.postalCode ?? orderRecord?.postal_code ?? undefined,
-      currency: eventPayload.currency ?? "USD",
+      // FALL BACK TO THE ROW, NOT TO "USD". This read `eventPayload.currency ?? "USD"`,
+      // so every non-paid event — a first-attempt decline, a refund — stamped USD
+      // over whatever the order actually held. Harmless while the store pins USD
+      // at checkout, and silently destructive the day it does not. The identity
+      // fields beside it already take this shape for the same reason.
+      currency: eventPayload.currency ?? orderRecord?.currency ?? undefined,
       subtotal,
       shippingAmount,
       discountAmount,
@@ -2488,11 +2843,62 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         ? (() => {
             const failure = extractProcessorFailure(eventPayload);
             const recordedKind = orderRecord?.payment_failure_kind ? String(orderRecord.payment_failure_kind) : null;
+            // An UNEXPLAINED failure (no code, no message — kind "other") must
+            // never overwrite a story the row already tells better. The express
+            // lane records Veyra's decline code at authorisation and Veyra then
+            // delivers a bare payment.failed for the same session; replacing
+            // "insufficient_funds" with "the processor did not say why" loses the
+            // only fact anyone had. Leaving paymentFailure null skips the failure
+            // columns entirely — payment_failed_at is already on the row from the
+            // decline that explained itself.
+            //
+            // Only a recorded DECLINE is protected this way. "checkout_expired"
+            // asserts "No charge was attempted", and an arriving payment.failed
+            // contradicts that, so it still gives way to the neutral kind.
+            const explained = failure.kind !== "other";
+            const rowExplains = recordedKind === "processor_declined"
+              && Boolean(orderRecord?.payment_failure_code || orderRecord?.payment_failure_reason);
+            if (!explained && rowExplains) return null;
             return { ...failure, replaceDetail: recordedKind !== null && recordedKind !== failure.kind };
           })()
         : null,
       items: eventPayload.items,
     });
+
+    // THE ROW MOVED UNDER US: STOP, AND REVERSE NOTHING.
+    //
+    // Zero rows matched the precondition, so another delivery changed the
+    // order's money state between our read and our write — in practice a
+    // concurrent payment.succeeded. Everything below this point was reasoned
+    // from the stale snapshot, and the reversal block in particular decides
+    // whether to hand back the stock hold and the shopper's store credit by
+    // comparing against `priorPaymentStatus`. Running it now would release both
+    // against a CAPTURED payment.
+    //
+    // So this returns the way the ordering guards above do: record the event
+    // against the status the row actually holds, and alert, because a silent
+    // no-op here is how a genuine decline would disappear.
+    if (!written.matched) {
+      const fresh = await getOrderByOrderId(orderId);
+      const freshStatus = (fresh?.payment_status ?? priorPaymentStatus ?? "pending_payment") as OrderStatus;
+      await recordSystemAlert({
+        type: "payment_event_lost_race",
+        severity: "warning",
+        message: `Order ${orderId}: a ${eventPayload.type ?? "payment"} event was not applied because the order moved from `
+          + `${priorPaymentStatus ?? "unknown"} to ${freshStatus} while it was being processed. `
+          + `Nothing was reversed. The winning event's state stands.`,
+        context: { order_id: orderId, event_id: eventId, expected_status: priorPaymentStatus, actual_status: freshStatus, event_type: eventPayload.type ?? null },
+      }).catch(() => {});
+      await markEventProcessed(eventId, orderId, freshStatus);
+      return {
+        duplicate: false,
+        eventId,
+        orderId,
+        status: freshStatus,
+        providerStatus: eventPayload.status ?? eventPayload.type ?? "unknown",
+      } satisfies WebhookEventState;
+    }
+
     await upsertOrderItems(orderId, eventPayload.items);
 
     // A WEBHOOK-CREATED ORDER CANNOT KNOW ITS OWN TAX SPLIT — SAY SO RATHER
@@ -2587,10 +2993,30 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           qualifyingSubtotal: subtotal,
           paymentStatus: nextStatus,
           providerEventId: eventId,
-          customerEmail: eventPayload.customer?.email,
-          shippingAddress: eventPayload.customer?.address,
-          city: eventPayload.customer?.city,
-          postalCode: eventPayload.customer?.postalCode,
+          // AND SO IS THE IDENTITY, for exactly the same reason.
+          //
+          // These four feed detectCommissionFraudSignal, which counts how often
+          // one email or one shipping address has been used under a single
+          // referral code — the self-dealing pattern — and does nothing at all
+          // without them:
+          //
+          //     if (input.customerEmail) { ...count... }
+          //     normalizeAddressKey(address, city, postcode) -> "||" -> skipped
+          //
+          // They were read from `eventPayload.customer`, which a live charge
+          // does not carry: only our own mock gateway populates it, and it does
+          // so by reading these very columns back out of the database. So on
+          // every real card order both were undefined, both branches were
+          // skipped, and the check returned "not flagged" without counting
+          // anything. The manual lane reads the order row and has always worked;
+          // the two had silently diverged.
+          //
+          // The payload stays as the fallback, like the attribution above, for
+          // the webhook-before-order case.
+          customerEmail: orderRecord?.customer_email ? String(orderRecord.customer_email) : eventPayload.customer?.email,
+          shippingAddress: orderRecord?.shipping_address ? String(orderRecord.shipping_address) : eventPayload.customer?.address,
+          city: orderRecord?.city ? String(orderRecord.city) : eventPayload.customer?.city,
+          postalCode: orderRecord?.postal_code ? String(orderRecord.postal_code) : eventPayload.customer?.postalCode,
         });
       } catch (commissionError) {
         // Same reasoning as the manual lane above: reach the operator, not just

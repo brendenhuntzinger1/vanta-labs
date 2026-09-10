@@ -55,7 +55,7 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
   const [orderResult, paymentMethods, user, cardFeeConfig] = await Promise.all([
     supabaseAdmin
       .from("orders")
-      .select("order_id, order_number, subtotal, shipping_amount, handling_fee, tax_amount, discount_amount, shipping_protection_fee, card_processing_fee, store_credit_redeemed_cents, points_redeemed, amount_paid, payment_status, fulfillment_status, payment_method, customer_email, created_at, order_items(product_name, quantity, line_total)")
+      .select("order_id, order_number, subtotal, shipping_amount, handling_fee, tax_amount, discount_amount, shipping_protection_fee, card_processing_fee, store_credit_redeemed_cents, points_redeemed, amount_paid, payment_status, payment_failure_kind, fulfillment_status, payment_method, customer_email, created_at, order_items(product_name, quantity, line_total)")
       .eq("order_id", orderId)
       .maybeSingle(),
     // Each keeps the failure behaviour it had when it was awaited alone: a
@@ -153,6 +153,9 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
             maskedEmail={order.customer_email ? maskEmail(String(order.customer_email)) : null}
             initialPaid={isPaid}
             initialFailed={isFailed}
+            // The KIND, so the first paint says only what is known rather than
+            // defaulting to the softer wording and correcting itself a poll later.
+            initialFailureKind={String(order.payment_failure_kind ?? "") === "processor_declined" ? "declined" : "unknown"}
             isManual={isManual}
             fulfillmentStatus={order.fulfillment_status ? String(order.fulfillment_status) : null}
           />

@@ -167,9 +167,31 @@ describe("what the shopper is told while their bank is asking", () => {
     expect(copy).not.toMatch(/finish the verification step in the form/i);
   });
 
-  it("tells them what to do when nothing appears", () => {
-    expect(copy).toMatch(/nothing appears|does not appear|doesn't appear/i);
-    expect(copy).toMatch(/different card|contact/i);
+  it("tells them what to do when nothing appears — and gives them a way to do it", () => {
+    // The escape hatch moved OUT of the sentence and into the rendered banner,
+    // because as a sentence it was unusable: it said "use a different card"
+    // while the iframe's own pay button was greyed out and the page rendered no
+    // link at all, beside another sentence telling them not to refresh. Two
+    // shoppers sat in that state for twenty-four minutes on 2026-09-08.
+    //
+    // It is now shown on a timer, so a challenge that IS working keeps the
+    // shopper's attention on the form, and it carries real links.
+    expect(page).toMatch(/VERIFICATION_STALLED_MS/);
+    expect(page).toMatch(/verificationStalled/);
+    expect(page).toMatch(/Nothing appeared\?/i);
+    // Actual routes, not advice.
+    const banner = page.slice(page.indexOf("verificationStalled ?"), page.indexOf("</div>", page.indexOf("verificationStalled ?")));
+    expect(banner).toMatch(/href="\/checkout"/);
+    expect(banner).toMatch(/href="\/contact"/);
+  });
+
+  it("does not offer the way out until the challenge has actually stalled", () => {
+    // Offering it immediately would compete with a challenge the shopper is
+    // partway through, which is its own kind of dead end.
+    expect(page).toMatch(/setVerificationStalled\(false\)/);
+    const timer = page.match(/VERIFICATION_STALLED_MS = ([0-9_]+)/);
+    expect(timer).not.toBeNull();
+    expect(Number(String(timer?.[1]).replace(/_/g, ""))).toBeGreaterThanOrEqual(60_000);
   });
 });
 

@@ -19,6 +19,7 @@ import {
   claimPromotionRedemption,
   releasePromotionRedemption,
 } from "@/lib/bxgy-promotions";
+import { CustomerFacingError } from "@/lib/safe-error";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 import type {
@@ -193,6 +194,41 @@ export async function createCheckoutSession(
    const existingIsManual = isManualPaymentMethod(getPaymentMethodById(paymentMethods, String(existing.payment_method ?? "")));
    let existingHostedUrl = "";
    let existingPaymentId = existing.payment_id ? String(existing.payment_id) : "";
+   // AN ALREADY-PAID ORDER MUST NEVER BE HANDED A FRESH CARD FORM.
+   //
+   // The lookup below excluded only canceled/cancelled/payment_failed, so a
+   // PAID order matching this idempotency key reached here — and this block then
+   // minted a brand-new, chargeable processor session for it and returned
+   // status "pending_payment" with a live hosted URL. The shopper is sent to a
+   // card form for an order that is already settled; paying it charges them a
+   // second time for one purchase. The `.neq("payment_status","paid")` below
+   // protects the stored pointer but not the minting, which is the part that
+   // takes the money.
+   //
+   // The honest answer is the receipt. Returning no URL is not an option: the
+   // checkout page reads an empty url as "we couldn't reach the payment
+   // provider, so your card was not charged" — false, and it invites a retry.
+   const CAPTURED = new Set(["paid", "partially_refunded", "refunded"]);
+   const existingStatus = String(existing.payment_status ?? "").toLowerCase();
+   if (CAPTURED.has(existingStatus)) {
+     return {
+       orderId: String(existing.order_id),
+       orderNumber: String(existing.order_number),
+       status: "paid" as const,
+       alreadyPaid: true,
+       total: Number(existing.amount_paid ?? finalTotal),
+       subtotal,
+       shipping,
+       discountAmount,
+       paymentMethod: String(existing.payment_method ?? selectedMethod.id),
+       isManualPayment: existingIsManual,
+       cardProcessingFee: Number(existing.card_processing_fee ?? 0),
+       cardProcessingFeePercent: Number(existing.card_processing_fee_percent ?? 0),
+       paymentId: String(existing.payment_id ?? existing.order_id),
+       hostedCheckoutUrl: "",
+     };
+   }
+
    if (!existingIsManual) {
      try {
        const resumed = await provider.createCheckoutSession({
@@ -567,7 +603,17 @@ export async function createCheckoutSession(
    // Name the item and the number left. "Something sold out" makes the customer
    // guess which line and by how much, which is how a fixable cart becomes an
    // abandoned one.
-   throw new Error(describeUnavailable(reservation.unavailable));
+   //
+   // THROWN AS A CustomerFacingError, NOT A PLAIN Error, and that is not
+   // decoration. safe-error.ts rejects any message over 200 characters as a
+   // probable stack dump, and the held-stock wording — which has to name the
+   // item AND explain that the shopper's own unfinished payment is holding it —
+   // runs past that. A plain Error was therefore replaced, silently, by "We
+   // couldn't start checkout just now", which is the generic message this whole
+   // line exists to avoid. Reproduced against the harness: the fix landed, the
+   // shopper still saw the fallback. The class is the documented way to say
+   // "this text was written for the person reading it".
+   throw new CustomerFacingError(describeUnavailable(reservation.unavailable));
  }
 
  // Hold the non-cash tender the same way, and for the same reason. The quote

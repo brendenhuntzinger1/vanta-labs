@@ -176,3 +176,47 @@ describe("an event that DOES name an order is untouched by the guard", () => {
     expect(store().has("order-named-1")).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE SAME PHANTOM, ONE STEP FURTHER IN.
+//
+// The guard above catches an event that names NO order. There is a second way
+// to reach the same insert: an event that names an order which does not exist
+// here. The guard that stops '*' subscription noise from writing a money state
+// was written as `if (orderRecord && !isRecognisedMoneyEvent(...))` — it needed
+// the row to exist before it would refuse. With no row it fell straight through
+// to the upsert, and a payout.paid or dispute.evidence_required carrying any
+// order reference the processor happened to attach created exactly the row the
+// fix above removed: no customer, no email, no address, no items, $0, sitting in
+// Needs Fulfillment.
+//
+// An event that says nothing about money must write nothing, whether or not the
+// order it names exists.
+// ---------------------------------------------------------------------------
+describe("an unrecognised event that names an order we do not have", () => {
+  it("creates no phantom order for it either", async () => {
+    for (const type of ["payout.paid", "dispute.evidence_required", "something.new"]) {
+      const payload = JSON.stringify({ orderId: `order-ghost-${type}`, type });
+      await processPaymentWebhook(payload, sign(payload), SECRET, `evt-ghost-${type}`);
+    }
+
+    expect(store().size).toBe(0);
+  });
+
+  it("reports the event as handled, so the processor stops retrying it", async () => {
+    const payload = JSON.stringify({ orderId: "order-ghost-handled", type: "payout.paid" });
+    const result = await processPaymentWebhook(payload, sign(payload), SECRET, "evt-ghost-handled");
+
+    expect(result).toMatchObject({ duplicate: false });
+    expect(store().size).toBe(0);
+  });
+
+  it("still creates the order for a REAL money event that names one", async () => {
+    // The distinction that matters: a charge is a fact about money and deserves
+    // a row even if checkout never wrote one. Subscription noise is not.
+    const payload = JSON.stringify({ orderId: "order-real-money", type: "payment.failed" });
+    await processPaymentWebhook(payload, sign(payload), SECRET, "evt-real-money");
+
+    expect(store().has("order-real-money")).toBe(true);
+  });
+});

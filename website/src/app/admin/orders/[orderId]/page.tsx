@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { findPaidRetryForOrder } from "@/lib/admin-orders";
+import { describeProcessorTrace, getProcessorTrace } from "@/lib/admin-processor-trace";
 import { formatDisplayDate } from "@/lib/format-date";
 import { describePaymentStatus, describeRetryDelay } from "@/lib/payment-failure";
 import { PaymentOutcome } from "@/components/payment-status-badge";
@@ -82,6 +83,13 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
         order_type: data.order_type ? String(data.order_type) : null,
       });
   const isFailed = paymentStatus.toLowerCase() === "payment_failed";
+
+  // WHAT THE PROCESSOR WAS ASKED, AND WHAT IT EVER SAID BACK.
+  //
+  // Read for EVERY status, not just a failure: "this order settled from a real
+  // webhook" is as much worth knowing as "nothing was ever delivered". Best
+  // effort by construction — see admin-processor-trace.ts.
+  const processorTrace = await getProcessorTrace(data);
 
   // COGS/margin is manager+ only — the lowest-privilege staff role must not see
   // internal per-order profit. (The panel below already renders only when non-null.)
@@ -214,6 +222,53 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
             )}
           </section>
         ) : null}
+
+        {/* THE TWO FACTS THAT TOOK DAYS TO ESTABLISH BY HAND.
+            On 2026-09-08 five high-value orders died on a verification step, and
+            answering "which session was this?" and "did we ever hear anything
+            about it?" needed a SQL client — no admin screen showed either. The
+            second question is the decisive one: two of those orders had ZERO
+            payment_events, which is how we know the charge never reached the
+            issuer. Both values were already in the database the whole time. */}
+        <section data-processor-trace className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+          <p className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">Processor trace</p>
+          <p className="mt-2 text-sm text-zinc-300">{describeProcessorTrace(processorTrace, paymentStatus)}</p>
+          <dl className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div>
+              <dt className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">Payment session</dt>
+              {/* select-all so it can be copied into the processor's dashboard in
+                  one gesture; break-all so a long handle does not widen the page
+                  on a phone. */}
+              <dd className="mt-1 select-all break-all font-mono text-xs text-zinc-200">
+                {processorTrace.sessionId ?? "None — no session was ever opened"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">Settled by event</dt>
+              <dd className="mt-1 select-all break-all font-mono text-xs text-zinc-200">
+                {processorTrace.settlingEventId ?? "—"}
+              </dd>
+            </div>
+          </dl>
+          {processorTrace.events.length > 0 ? (
+            <ul className="mt-3 space-y-1.5">
+              {processorTrace.events.map((event) => (
+                <li key={event.eventId} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs">
+                  <span className="select-all break-all font-mono text-zinc-300">{event.eventId}</span>
+                  <span className="text-zinc-500">{event.status ?? "unknown"}</span>
+                  <span className="text-zinc-500">
+                    {event.claimedAt ? formatDisplayDate(event.claimedAt, "datetime") : "—"} ET
+                  </span>
+                  {/* An unprocessed delivery is the stranded-claim case the sweep
+                      reclaims. Saying so stops it being read as a clean record. */}
+                  <span className={event.processedAt ? "text-emerald-300/70" : "text-amber-300"}>
+                    {event.processedAt ? "processed" : "never finished"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
 
         {/* Customer and address live on the page now. They used to sit inside
             the fulfillment panel, which meant reading an address required

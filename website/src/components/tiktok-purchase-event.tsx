@@ -51,9 +51,27 @@ export function TikTokPurchaseEvent({
   advancedMatching?: { email?: string; phone_number?: string; external_id?: string } | null;
 }) {
   const settled = useRef(false);
+  /**
+   * THE ACTUAL IN-FLIGHT GUARD.
+   *
+   * `settled` is set AFTER the response comes back, so it has never guarded the
+   * window that matters. `/api/ads/purchase-event/[orderId]` is not a read — it
+   * sends the server-side TikTok and Reddit conversions as a side effect of
+   * being asked — and two overlapping asks are two conversions for one sale.
+   *
+   * Overlapping is reachable without anything exotic. The page opens while the
+   * order is still unpaid, so the first attempt returns "not paid" and marks
+   * nothing (deliberately: an unpaid order has to stay askable). The
+   * confirmation poll then announces `vanta:order-paid` three seconds later. If
+   * the first request is still in flight at that moment — a cold function, a slow
+   * network — the announcement starts a second one, both find the localStorage
+   * key unset, and both report the purchase. It is also the whole of the "two
+   * mounts in the same tick" case the comment above claims the ref covers.
+   */
+  const inFlight = useRef(false);
 
   const attempt = useCallback(async () => {
-    if (settled.current || !orderId) return;
+    if (settled.current || inFlight.current || !orderId) return;
     // Survives the unmount/remount a back button causes, which the ref does
     // not. Keyed on the order so a different order is unaffected.
     const store = browserFiredStore();
@@ -75,6 +93,10 @@ export function TikTokPurchaseEvent({
       return;
     }
 
+    // Claimed BEFORE the request and released in the finally below, so an
+    // unpaid answer leaves the order askable for the `vanta:order-paid`
+    // announcement that follows, while an overlapping ask is refused outright.
+    inFlight.current = true;
     try {
       const response = await fetch(`/api/ads/purchase-event/${encodeURIComponent(orderId)}`, { cache: "no-store" });
       if (!response.ok) return;
@@ -124,6 +146,8 @@ export function TikTokPurchaseEvent({
       // A failed check must never invent a conversion. Staying silent loses at
       // most one browser-side event; the server-side Events API is the durable
       // path for that gap.
+    } finally {
+      inFlight.current = false;
     }
   }, [orderId, advancedMatching]);
 

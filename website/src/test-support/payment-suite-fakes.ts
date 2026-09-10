@@ -205,9 +205,37 @@ export function supabaseServerModule() {
       },
       update: (payload: GenericRow) => {
         const filters: Record<string, string> = {};
+        /**
+         * PRECONDITIONS THE REAL DATABASE ENFORCES, ENFORCED HERE TOO.
+         *
+         * `eq`/`neq`/`is` on a column other than the row key are how this
+         * codebase writes a compare-and-set — the paid flip is
+         * `.update(...).eq("order_id", id).neq("payment_status","paid")`, and
+         * the non-paid write now carries `.eq("payment_status", prior)`. This
+         * fake used to record only `order_id` and treat `neq`/`is` as no-ops,
+         * so EVERY guarded update matched unconditionally: a compare-and-set
+         * that should have matched zero rows still wrote, and a regression test
+         * for a lost update passed against code that had none. The fake was
+         * lying in precisely the direction that hides the bug.
+         */
+        const rejections: Array<{ column: string; value: string | null }> = [];
+        const matches = (row: GenericRow | undefined) => {
+          for (const [column, value] of Object.entries(filters)) {
+            if (column === "order_id" || column === "event_id") continue;
+            const actual = row?.[column as keyof GenericRow];
+            if (String(actual ?? "") !== value) return false;
+          }
+          for (const { column, value } of rejections) {
+            const actual = row?.[column as keyof GenericRow];
+            if (value === null ? actual == null : String(actual ?? "") === value) return false;
+          }
+          return true;
+        };
         const apply = () => {
           if (table === "orders" && filters.order_id !== undefined) {
             const existing = state.orders.get(filters.order_id) ?? { id: `order-${filters.order_id}`, order_id: filters.order_id };
+            // Zero rows matched: the row is not in the state the caller asserted.
+            if (!matches(existing)) return { data: [], error: null };
             state.orders.set(filters.order_id, { ...existing, ...payload });
             return { data: [{ id: existing.id, order_id: filters.order_id }], error: null };
           }
@@ -228,8 +256,13 @@ export function supabaseServerModule() {
         // Chainable, awaitable builder supporting eq/neq/is/lt/gt + terminal select().
         const builder: Record<string, unknown> = {
           eq: (col: string, value: string) => { filters[col] = String(value); return builder; },
-          neq: () => builder,
-          is: () => builder,
+          neq: (col: string, value: string) => { rejections.push({ column: col, value: String(value) }); return builder; },
+          is: (col: string, value: unknown) => {
+            // `.is(col, null)` asserts NULL; anything else is treated as equality.
+            if (value === null) filters[col] = "";
+            else filters[col] = String(value);
+            return builder;
+          },
           lt: () => builder,
           gt: () => builder,
           select: () => apply(),

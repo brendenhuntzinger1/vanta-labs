@@ -264,7 +264,12 @@ export function AdminOrderActions({
             <option value="paid">Paid</option>
             <option value="partially_refunded">Partially Refunded</option>
             <option value="refunded">Refunded</option>
-            <option value="failed">Failed</option>
+            {/* payment_failed, NOT "failed". Nothing in the system reads the
+                latter — the reconcile sweep, the order-status route and every
+                account surface all match on payment_failed — so an order set
+                to "failed" from here was invisible to all of them. */}
+            <option value="payment_failed">Payment Failed</option>
+            <option value="canceled">Canceled</option>
           </select>
         </label>
         <label className="text-sm text-zinc-300">Fulfillment status

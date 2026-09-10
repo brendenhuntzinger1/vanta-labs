@@ -247,6 +247,70 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
     }
   };
 
+  /**
+   * CLAIM THE SEND BEFORE SENDING IT, not after.
+   *
+   * `sentPlatforms` above is a READ, and gating on a read is a check-then-act
+   * race: two requests that arrive together both see an empty ledger, both send,
+   * and both then write the row. One sale, two conversions, and the ledger ends
+   * up looking exactly as if everything had worked.
+   *
+   * It is not a theoretical race. `/api/ads/purchase-event/[orderId]` is asked
+   * by the confirmation page on mount AND again when the payment poll announces
+   * the order paid, so two asks a few seconds apart are the normal shape of a
+   * card order — and on the second real production order they landed 27 seconds
+   * apart, which only TikTok's own 48-hour dedup absorbed.
+   *
+   * The table is PRIMARY KEY (order_id, platform), so an INSERT is the claim:
+   * exactly one caller can create the row and a loser gets 23505. Recorded with
+   * delivered = false and updated by recordSend once the outcome is known, so the
+   * repair path can still tell a rejected send from a successful one.
+   *
+   * FAILS OPEN, like every other measurement path here: if the ledger cannot be
+   * written at all (table not applied, transient error) the send still happens,
+   * because losing a conversion to protect against a duplicate is the wrong way
+   * round for a table that is not the source of truth for anything.
+   */
+  const claimSend = async (platform: string, eventId: string): Promise<boolean> => {
+    try {
+      const { error } = await supabaseAdmin.from("ad_purchase_events_sent").insert({
+        order_id: String(order.order_id),
+        event_id: eventId,
+        platform,
+        delivered: false,
+        tiktok_code: null,
+      });
+      if (!error) return true;
+      // Somebody else holds it. Not an error worth logging — it is the guard
+      // working, and it is the common case on a refreshed confirmation page.
+      if ((error as { code?: string }).code === "23505") return false;
+      return true;
+    } catch {
+      return true;
+    }
+  };
+
+  /**
+   * Hand a claim back when the send never happened.
+   *
+   * Without this, a claim followed by a thrown send would leave a permanent
+   * `delivered: false` row that blocks every later attempt — trading a duplicate
+   * conversion for a lost one. Same reasoning as releaseEvent on the payment
+   * webhook's own claim.
+   */
+  const releaseSend = async (platform: string) => {
+    try {
+      await supabaseAdmin
+        .from("ad_purchase_events_sent")
+        .delete()
+        .eq("order_id", String(order.order_id))
+        .eq("platform", platform)
+        .eq("delivered", false);
+    } catch {
+      /* nothing to do — the next ask is refused, which is the safe direction */
+    }
+  };
+
   if (inspect) {
     // Admin-gated: it returns the customer's order value and line items, which
     // the anonymous bearer-token path above deliberately keeps to the single
@@ -293,28 +357,48 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   // pixel sends — so Reddit collapses the pair into one conversion rather than
   // reporting the sale twice. Awaited before the TikTok leg rather than beside
   // it because each is best-effort telemetry that must not fail the response.
-  if (redditPurchase && !sentPlatforms.has("reddit") && redditCredentialStatus().configured) {
-    const redditOutcome = await sendRedditConversion({
-      event: redditPurchase,
-      occurredAt: new Date(),
-      user: {
-        email: order.customer_email ? String(order.customer_email) : null,
-        externalId: order.customer_user_id ? String(order.customer_user_id) : null,
-        ipAddress: getRequestIpAddress(request) ?? null,
-        userAgent: request.headers.get("user-agent"),
-      },
-    });
-    redditDelivery = describeRedditResult(redditOutcome);
-    // Reddit sent and recorded nothing at all — only the TikTok leg wrote a
-    // row. So even once the conflict target above was right, Reddit alone
-    // would still have reported the sale again on every reopened link.
-    await recordSend("reddit", redditPurchase.properties.conversionId ?? String(order.order_id), redditOutcome.delivered, null);
-    if (!redditOutcome.delivered) {
-      console.error("[ads/reddit-conversions]", redditDelivery);
+  const redditEventId = redditPurchase?.properties.conversionId ?? String(order.order_id);
+  if (
+    redditPurchase
+    && !sentPlatforms.has("reddit")
+    && redditCredentialStatus().configured
+    // The claim, not the read. A concurrent ask is refused here rather than
+    // sending a second conversion for the same sale.
+    && await claimSend("reddit", redditEventId)
+  ) {
+    try {
+      const redditOutcome = await sendRedditConversion({
+        event: redditPurchase,
+        occurredAt: new Date(),
+        user: {
+          email: order.customer_email ? String(order.customer_email) : null,
+          externalId: order.customer_user_id ? String(order.customer_user_id) : null,
+          ipAddress: getRequestIpAddress(request) ?? null,
+          userAgent: request.headers.get("user-agent"),
+        },
+      });
+      redditDelivery = describeRedditResult(redditOutcome);
+      // Reddit sent and recorded nothing at all — only the TikTok leg wrote a
+      // row. So even once the conflict target above was right, Reddit alone
+      // would still have reported the sale again on every reopened link.
+      await recordSend("reddit", redditEventId, redditOutcome.delivered, null);
+      if (!redditOutcome.delivered) {
+        console.error("[ads/reddit-conversions]", redditDelivery);
+      }
+    } catch (sendError) {
+      // The send never happened, so the claim must not outlive it.
+      await releaseSend("reddit");
+      console.error("[ads/reddit-conversions] send threw", sendError);
     }
   }
 
-  if (event && !sentPlatforms.has("tiktok") && credentialStatus().configured) {
+  if (
+    event
+    && !sentPlatforms.has("tiktok")
+    && credentialStatus().configured
+    && await claimSend("tiktok", event.eventId)
+  ) {
+    try {
     const attribution = await getOrderAttribution(String(order.order_id)).catch(() => null);
     const outcome = await sendServerEvents([
       {
@@ -346,6 +430,11 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
     // Diagnostics only. No token, no customer data — describeResult is built
     // from a fixed field set precisely so this line cannot leak either.
     console.info(`[ads] order ${String(order.order_id)} — ${[serverDelivery, redditDelivery].filter(Boolean).join(" | ")}`);
+    } catch (sendError) {
+      // The send never happened, so the claim must not outlive it.
+      await releaseSend("tiktok");
+      console.error("[ads/tiktok-events-api] send threw", sendError);
+    }
   }
 
   return NextResponse.json(

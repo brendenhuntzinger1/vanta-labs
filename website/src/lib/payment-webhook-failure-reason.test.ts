@@ -72,17 +72,19 @@ describe("a declined charge records the processor's reason", () => {
     expect(typeof row.payment_failed_at).toBe("string");
   });
 
-  it("still records the kind when the processor gave no reason at all", async () => {
+  it("files a failure the processor never explained as unexplained, not as a bank decline", async () => {
+    // This used to expect "processor_declined" with no code and no reason — a
+    // badge reading "Declined by bank / processor" for an event that named no
+    // bank. The sweep's classifier stopped guessing that on 2026-09-08; the
+    // webhook path now agrees with it.
     seedOrder("order-silent");
     const payload = veyraFailure("order-silent", {});
     await processPaymentWebhook(payload, sign(payload), SECRET, "evt-silent-1");
 
     const row = read("order-silent");
     expect(row.payment_status).toBe("payment_failed");
-    expect(row.payment_failure_kind).toBe("processor_declined");
-    // Not written at all, rather than written as null — see the next test.
-    expect(row.payment_failure_code).toBeUndefined();
-    expect(row.payment_failure_reason).toBeUndefined();
+    expect(row.payment_failure_kind).toBe("other");
+    expect(row.payment_failure_reason).toMatch(/no decline code or message/i);
   });
 
   it("a later, sparser decline event keeps the richer reason already on the row", async () => {
@@ -105,9 +107,13 @@ describe("a declined charge records the processor's reason", () => {
     expect(row.payment_failure_reason).toBe("Insufficient funds");
   });
 
-  it("a decline landing on a row the sweep retired as EXPIRED replaces the expired reason, even with none of its own", async () => {
-    // Otherwise "The checkout session expired ... No charge was attempted."
-    // would sit under a "Declined by bank / processor" badge.
+  it("a failure landing on a row the sweep retired as EXPIRED displaces the 'no charge attempted' claim", async () => {
+    // "The checkout session expired ... No charge was attempted." cannot stand
+    // once the processor has sent a failure event for that session — something
+    // WAS attempted. But this event explained nothing, so the replacement is the
+    // neutral kind, not a bank decline: asserting "processor_declined" here was
+    // a claim about a bank that was never named. (It used to expect exactly
+    // that, with a null code and a null reason.)
     seedOrder("order-expired-then-declined", {
       payment_status: "payment_failed",
       payment_failure_kind: "checkout_expired",
@@ -118,9 +124,9 @@ describe("a declined charge records the processor's reason", () => {
     await processPaymentWebhook(payload, sign(payload), SECRET, "evt-expired-then-declined");
 
     const row = read("order-expired-then-declined");
-    expect(row.payment_failure_kind).toBe("processor_declined");
-    expect(row.payment_failure_code).toBeNull();
-    expect(row.payment_failure_reason).toBeNull();
+    expect(row.payment_failure_kind).toBe("other");
+    expect(row.payment_failure_reason).toMatch(/no decline code or message/i);
+    expect(row.payment_failure_reason).not.toMatch(/No charge was attempted/);
   });
 
   it("accepts the flat shape the internal mock gateway sends", async () => {

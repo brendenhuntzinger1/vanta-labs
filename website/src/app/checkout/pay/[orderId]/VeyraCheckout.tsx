@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { decideFromOrderStatus } from "@/lib/checkout-poll-decision";
+import { DECLINE_MESSAGE, decideFromOrderStatus, failureKindFromStatus } from "@/lib/checkout-poll-decision";
 
 // On-site card entry. Veyra's documented integration is "create a session
 // server-side and mount the iframe" — the shopper never leaves this domain and
@@ -104,8 +104,22 @@ const READY_FALLBACK_MS = 4_000;
 const VERIFICATION_MESSAGE =
   "Your bank is asking you to confirm this payment. If a verification step appears in the form below — "
   + "a code by text, or your banking app — complete it, and please don't close or refresh this page while "
-  + "you do. If nothing appears, this card can't finish the payment here: use a different card, or contact "
-  + "us and we'll sort it out.";
+  + "you do.";
+
+/**
+ * The escape hatch, shown once a verification has stalled.
+ *
+ * The banner told the shopper to "use a different card" while the iframe's own
+ * pay button was greyed out and this page rendered no link at all — so the
+ * instruction named an action that could not be taken, on a page whose other
+ * sentence says not to refresh. Two shoppers sat in exactly that state for
+ * twenty-four minutes on 2026-09-08 and lost five orders between them.
+ *
+ * It appears on a timer rather than immediately, because a challenge that IS
+ * working needs the shopper's attention on the form, not on a way out. Long
+ * enough to complete a real bank prompt; short enough that nobody is stranded.
+ */
+const VERIFICATION_STALLED_MS = 150_000;
 
 type MountHandle = { destroy?: () => void };
 
@@ -190,6 +204,10 @@ export default function VeyraCheckout({
   // The bank is mid-challenge. Orthogonal to `status`: the card form stays
   // mounted and the poll keeps running throughout.
   const [verifying, setVerifying] = useState(false);
+  // A verification that has produced no outcome for long enough that the shopper
+  // needs a way out. Orthogonal to `verifying`: the form stays mounted and the
+  // poll keeps running throughout.
+  const [verificationStalled, setVerificationStalled] = useState(false);
 
   const goToConfirmation = useCallback(
     (returnUrl?: string) => {
@@ -221,12 +239,14 @@ export default function VeyraCheckout({
         cache: "no-store",
       });
       if (!response.ok) return;
-      const decision = decideFromOrderStatus(await response.json());
+      const body = await response.json();
+      const decision = decideFromOrderStatus(body);
       if (decision === "settled") {
         goToConfirmation();
         return;
       }
       if (decision === "failed") {
+        const kind = failureKindFromStatus(body);
         // Announce it once. This used to set settledRef — the navigation
         // latch — which silenced the poll for good. The order is ALREADY
         // payment_failed the moment the shopper reloads as the message tells
@@ -238,9 +258,7 @@ export default function VeyraCheckout({
         if (declineShownRef.current) return;
         declineShownRef.current = true;
         setStatus("error");
-        setMessage(
-          "That payment did not go through, and your card has not been charged. This is usually the bank declining the transaction rather than a problem with your order. Refresh to try again, or use a different card.",
-        );
+        setMessage(DECLINE_MESSAGE[kind]);
       }
     } catch {
       // Keep polling. The next tick may succeed.
@@ -279,6 +297,14 @@ export default function VeyraCheckout({
             // 2026-09-08 before anyone knew the state existed.
             if (cancelled) return;
             setVerifying(true);
+            setVerificationStalled(false);
+            // Give the challenge a fair run, then offer a way out. Nothing else
+            // in this component can do it: the iframe is cross-origin, so a
+            // challenge that renders nothing looks identical to one the shopper
+            // is still working through.
+            window.setTimeout(() => {
+              if (!cancelled) setVerificationStalled(true);
+            }, VERIFICATION_STALLED_MS);
             // Report it, because we still cannot see whether the challenge is
             // completable inside the iframe — only that it started. This is the
             // measurement that tells us, on the next real order, whether
@@ -298,21 +324,24 @@ export default function VeyraCheckout({
             // wins and neither repaints the other.
             if (cancelled) return;
             setVerifying(false);
+            setVerificationStalled(false);
             if (declineShownRef.current) return;
             declineShownRef.current = true;
             setStatus("error");
             // The processor's own message is deliberately NOT shown: the SDK
             // states it never forwards a decline code, so anything it sends
             // here is generic text wearing a supplier's voice.
-            setMessage(
-              "That payment did not go through, and your card has not been charged. You can try again below, or use a different card.",
-            );
+            // The SDK told us directly, so a decline is what this is — but the
+            // SDK states it never forwards a decline code, so the text still
+            // says nothing about WHY, and it carries the bank-approval step.
+            setMessage(DECLINE_MESSAGE.declined);
           },
           onCancel: () => {
             // Backing out of a challenge is not a decline and must never be
             // announced as one — it only ends the verifying state.
             if (cancelled) return;
             setVerifying(false);
+            setVerificationStalled(false);
           },
         });
       })
@@ -425,7 +454,27 @@ export default function VeyraCheckout({
           aria-live="assertive"
           className="mb-4 border border-amber-400/40 bg-amber-400/10 px-4 py-3 text-sm text-amber-100"
         >
-          {VERIFICATION_MESSAGE}
+          <p>{VERIFICATION_MESSAGE}</p>
+          {/* THE WAY OUT, which this banner used to lack entirely.
+              It told the shopper to "use a different card" while the iframe's
+              own pay button was greyed out and there was no link on the page —
+              an instruction naming an action that could not be taken, beside a
+              sentence telling them not to refresh. Shown only once the
+              challenge has stalled, so a working one keeps their attention on
+              the form. */}
+          {verificationStalled ? (
+            <p className="mt-3 border-t border-amber-400/25 pt-3">
+              Nothing appeared? This card can&rsquo;t finish the payment here.{" "}
+              <a href="/checkout" className="font-semibold text-white underline underline-offset-4">
+                Start a fresh checkout
+              </a>{" "}
+              to try a different card, or{" "}
+              <a href="/contact" className="font-semibold text-white underline underline-offset-4">
+                contact us
+              </a>{" "}
+              and we&rsquo;ll sort it out.
+            </p>
+          ) : null}
         </div>
       )}
       <div ref={containerRef} id="secure-card-entry" className="min-h-[420px] w-full" />

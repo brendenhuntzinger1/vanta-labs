@@ -18,6 +18,7 @@ const storeCredit = sentinel("storeCredit");
 const cartRecovery = sentinel("cartRecovery");
 const commissions = sentinel("commissions");
 const commissionAccrualRepair = sentinel("commissionAccrualRepair");
+const inventoryCommitRepair = sentinel("inventoryCommitRepair");
 const reservations = sentinel("reservations");
 const emails = sentinel("emails");
 const paymentReconcile = sentinel("paymentReconcile");
@@ -49,6 +50,7 @@ vi.mock("@/lib/membership", () => ({ runBirthdayBonusSweep: () => birthdayBonus(
 vi.mock("@/lib/cart-recovery", () => ({ runAbandonedCartSweep: () => cartRecovery() }));
 vi.mock("@/lib/partner-portal", () => ({ autoApproveEligibleCommissions: () => commissions() }));
 vi.mock("@/lib/commission-accrual-repair", () => ({ repairMissingCommissionAccruals: () => commissionAccrualRepair() }));
+vi.mock("@/lib/inventory-commit-repair", () => ({ repairMissingInventoryCommits: () => inventoryCommitRepair() }));
 vi.mock("@/lib/inventory-reservation", () => ({
   expireStaleReservations: () => reservations(),
   // The REAL predicate, not a stub: the retry it gates is the behaviour under
@@ -121,6 +123,11 @@ describe("the scheduled sweep", () => {
     expect(body.shippoSync).toEqual({ job: "shippoSync" });
     expect(body.expressIntentsExpired).toEqual({ job: "expressIntents" });
     expect(body.shipmentRepair).toEqual({ job: "shipmentRepair" });
+    // Added by the payment audit, and asserted here rather than only mocked:
+    // the mock alone lets the route import the module, which is not the same as
+    // the job being wired into the map. A repair job that is registered and
+    // never runs is the exact shape of the defect it exists to repair.
+    expect(body.inventoryCommitRepair).toEqual({ job: "inventoryCommitRepair" });
     expect(body.shippingCostRepair).toEqual({ job: "shippingCostRepair" });
     expect(body.refundEffectRepair).toEqual({ job: "refundEffectRepair" });
     expect(body.signupConfirmations).toEqual({ job: "signupConfirmations" });
@@ -131,7 +138,7 @@ describe("the scheduled sweep", () => {
   it("runs every job exactly once", async () => {
     await callSweep();
 
-    for (const job of [membership, storeCredit, commissions, reservations, tenderHolds, paymentReconcile, expressIntents, shippoSync, shipmentRepair, shippingCostRepair, refundEffectRepair, signupConfirmations, partnerAccess, orderPushHealth]) {
+    for (const job of [membership, storeCredit, commissions, reservations, tenderHolds, paymentReconcile, expressIntents, shippoSync, shipmentRepair, inventoryCommitRepair, shippingCostRepair, refundEffectRepair, signupConfirmations, partnerAccess, orderPushHealth]) {
       expect(job).toHaveBeenCalledTimes(1);
     }
   });

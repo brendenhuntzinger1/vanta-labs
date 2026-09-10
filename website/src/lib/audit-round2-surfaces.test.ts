@@ -42,10 +42,33 @@ describe("PAY-04: a declined order is not thanked", () => {
   it("renders the failed state with no thanks and no 'no need to pay again'", () => {
     const html = render({ initialFailed: true });
     expect(html).toContain("Payment not completed");
-    expect(html).toContain("has not been charged");
     expect(html).toContain('href="/checkout"');
     expect(html).not.toMatch(/thank you/i);
     expect(html).not.toMatch(/no need to pay/i);
+  });
+
+  it("claims the card was not charged only when the processor said it declined", () => {
+    // This used to assert "has not been charged" for EVERY failure. The status
+    // is also written for an abandoned verification and an expired session,
+    // where an authorisation may well be outstanding — so the strong claim is
+    // now earned by the processor having actually said so, and the kind comes
+    // from the row the server already read.
+    const declined = render({ initialFailed: true, initialFailureKind: "declined" });
+    expect(declined).toMatch(/not charged/i);
+
+    const unknown = render({ initialFailed: true, initialFailureKind: "unknown" });
+    expect(unknown).not.toMatch(/not charged/i);
+    // Apostrophes render as &#x27; in static markup, so match the plain part.
+    expect(unknown).toMatch(/go through/i);
+  });
+
+  it("tells a declined shopper to approve their bank's prompt before retrying", () => {
+    // The step that recovers the sale, and which no customer-facing surface had.
+    for (const kind of ["declined", "unknown"] as const) {
+      const html = render({ initialFailed: true, initialFailureKind: kind });
+      expect(html).toMatch(/bank/i);
+      expect(html).toMatch(/approve/i);
+    }
   });
 
   it("still thanks a paid order", () => {

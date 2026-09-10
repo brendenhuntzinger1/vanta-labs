@@ -784,6 +784,21 @@ export default function CheckoutPage() {
         }
       }
 
+      // ALREADY PAID: the receipt, not a card form and not an error.
+      //
+      // An idempotency key can be replayed after the order has settled — a lost
+      // response, a back-navigation, a double tap whose first request won. The
+      // server used to resume such an order by minting a FRESH chargeable
+      // session, which is a second charge for one purchase; it now says so
+      // instead. This branch has to sit above the empty-url check, because that
+      // check would otherwise tell a shopper who has already paid that their
+      // card was not charged and invite them to try again.
+      if (result.alreadyPaid) {
+        idempotencyKeyRef.current = null;
+        window.location.assign(`/order-confirmation/${encodeURIComponent(result.orderId)}`);
+        return;
+      }
+
       // A card order with no payment session is a FAILURE, not a sale.
       //
       // This previously fell through to "treat the order as placed": clear the
