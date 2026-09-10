@@ -44,6 +44,8 @@ const STYLES = {
   datetime: { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" },
   /** Sep 3, 8:00 PM — a dense operational log where the year is ambient. */
   datetimeShort: { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" },
+  /** 8:00 PM — a "checked at"/"updated at" stamp, where the day is now. */
+  time: { hour: "numeric", minute: "2-digit" },
 } as const satisfies Record<string, Intl.DateTimeFormatOptions>;
 
 export type DateStyle = keyof typeof STYLES;

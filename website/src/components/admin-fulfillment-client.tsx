@@ -7,6 +7,7 @@ import type { FulfillmentRow } from "@/lib/admin-fulfillment";
 import { methodLabel } from "@/components/admin-payments-client";
 import { FulfillmentStatusPill } from "@/components/fulfillment-status-pill";
 import { fulfillmentStatusLabel, normalizeLegacyStatus } from "@/lib/order-pipeline";
+import { formatDisplayDate } from "@/lib/format-date";
 
 // ---------------------------------------------------------------------------
 // The pack-and-ship queue.
@@ -31,7 +32,7 @@ function formatDate(value: string | null) {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  return formatDisplayDate(date, "datetime") ?? "—";
 }
 
 function CopyButton({ value, label }: { value: string; label: string }) {

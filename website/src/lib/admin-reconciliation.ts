@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { expectedOrderTotal, isTotalMismatch, maxShippingProtectionFee } from "@/lib/reconciliation-math";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 import { pointsToDollars } from "@/lib/points-math";
+import { formatDisplayDate } from "@/lib/format-date";
 
 // "Reconciliation" here means internal ledger consistency - checking that
 // this store's own order/commission math holds together - not reconciling
@@ -256,7 +257,7 @@ export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
         orderId,
         customerEmail,
         type: "stale_pending",
-        detail: `Created ${new Date(createdMs).toLocaleString()}`,
+        detail: `Created ${formatDisplayDate(createdMs, "datetime") ?? "an unknown time"} ET`,
         createdAt,
       });
     }

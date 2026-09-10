@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import type { InventoryLine } from "@/lib/admin-inventory";
+import { formatDisplayDate } from "@/lib/format-date";
 
 // ---------------------------------------------------------------------------
 // The manual half of the Inventory page: the summary, the receive drawer, the
@@ -409,7 +410,7 @@ export function InventoryHistory() {
                   {rows.map((row) => (
                     <tr key={row.id} className="border-t border-white/10">
                       <td className="py-2 pr-4 text-[12px] text-zinc-400">
-                        {new Date(row.createdAt).toLocaleString()}
+                        {formatDisplayDate(row.createdAt, "datetime") ?? "—"}
                       </td>
                       <td className="py-2 pr-4 text-zinc-200">
                         {row.productName ?? "—"}

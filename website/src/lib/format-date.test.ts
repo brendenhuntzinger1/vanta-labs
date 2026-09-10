@@ -158,3 +158,27 @@ describe("easternWallClockToUtcIso", () => {
     expect(easternWallClockToUtcIso(null)).toBeNull();
   });
 });
+
+describe("formatDisplayDate — time", () => {
+  it("renders a bare clock time in Eastern", () => {
+    // 20:23Z is 4:23 PM in Florida — the reading that prompted this sweep.
+    expect(formatDisplayDate("2026-09-10T20:23:00Z", "time")).toBe("4:23 PM");
+  });
+
+  it("tracks DST rather than a fixed offset", () => {
+    expect(formatDisplayDate("2026-09-10T20:23:00Z", "time")).toBe("4:23 PM"); // EDT, -4
+    expect(formatDisplayDate("2026-01-10T20:23:00Z", "time")).toBe("3:23 PM"); // EST, -5
+  });
+
+  it("does not depend on the machine's timezone", () => {
+    const original = process.env.TZ;
+    const seen = new Set<string>();
+    for (const tz of ["UTC", "America/Los_Angeles", "Asia/Tokyo"]) {
+      process.env.TZ = tz;
+      seen.add(String(formatDisplayDate("2026-09-10T20:23:00Z", "time")));
+    }
+    process.env.TZ = original;
+    expect(seen.size).toBe(1);
+    expect([...seen][0]).toBe("4:23 PM");
+  });
+});

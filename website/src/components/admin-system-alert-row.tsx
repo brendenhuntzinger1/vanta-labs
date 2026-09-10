@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { AdminAlertResolveButton } from "@/components/admin-alert-resolve-button";
 import { extractAlertOrderIds, type SystemAlertRow } from "@/lib/monitoring";
+import { formatDisplayDate } from "@/lib/format-date";
 
 // ---------------------------------------------------------------------------
 // ONE ROW OF /admin/status, INCLUDING THE ORDERS THE ALERT IS ABOUT.
@@ -63,7 +64,7 @@ export function AdminSystemAlertRow({
         ) : null}
         <span className="text-xs text-zinc-500">
           {occurrences > 1 ? "latest " : ""}
-          {new Date(alert.created_at).toLocaleString()}
+          {formatDisplayDate(alert.created_at, "datetime") ?? "—"}
         </span>
         <span className="ml-auto">
           <AdminAlertResolveButton

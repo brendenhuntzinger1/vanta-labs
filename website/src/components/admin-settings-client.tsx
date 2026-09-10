@@ -10,6 +10,7 @@ import type { ShippingAddress } from "@/lib/shipping-origin";
 import type { BusinessSettings, WelcomeOffer } from "@/lib/admin-control";
 import { AdminShippingPackagesClient } from "@/components/admin-shipping-packages-client";
 import { AdminShippingOriginClient } from "@/components/admin-shipping-origin-client";
+import { formatDisplayDate } from "@/lib/format-date";
 
 function Labeled({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
@@ -565,7 +566,7 @@ export function AdminSettingsClient({
               </label>
 
               <p className="mt-2 text-[11px] text-rose-100/70">
-                Counts read from the database{readiness.checkedAt ? ` at ${new Date(readiness.checkedAt).toLocaleTimeString()}` : ""} and
+                Counts read from the database{readiness.checkedAt ? ` at ${formatDisplayDate(readiness.checkedAt, "time") ?? ""} ET` : ""} and
                 re-checked when you save.
               </p>
             </div>

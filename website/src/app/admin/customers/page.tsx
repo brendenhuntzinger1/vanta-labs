@@ -4,6 +4,7 @@ import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { getAdminCustomers } from "@/lib/admin-customers";
 import { failedReads, settleRead, UNKNOWN_FIGURE } from "@/lib/admin-read";
 import { AdminReadFailureNotice } from "@/components/admin-data-notices";
+import { formatDisplayDate } from "@/lib/format-date";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,7 @@ function money(value: number) {
 
 function fmtDate(v: string | null) {
   const d = v && v !== "null" ? new Date(v) : null;
-  return d && !isNaN(d.getTime()) ? d.toLocaleDateString() : "—";
+  return formatDisplayDate(d, "medium") ?? "—";
 }
 
 export default async function AdminCustomersPage({

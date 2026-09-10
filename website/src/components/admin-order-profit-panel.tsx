@@ -1,4 +1,5 @@
 import { AdminOrderShippingCostForm } from "@/components/admin-order-shipping-cost-form";
+import { formatDisplayDate } from "@/lib/format-date";
 
 // Server component. The one interactive element -- the manual shipping cost
 // entry -- is its own client component, so this panel still does not ship to
@@ -222,7 +223,7 @@ export function AdminOrderProfitPanel({
             {audit.map((entry) => (
               <li key={entry.id} className="flex flex-wrap justify-between gap-2">
                 <span>
-                  {new Date(entry.createdAt).toLocaleString()} · <span className="text-zinc-500">{entry.source}</span>
+                  {formatDisplayDate(entry.createdAt, "datetime") ?? "—"} · <span className="text-zinc-500">{entry.source}</span>
                 </span>
                 <span className="tabular-nums">
                   est {centsMoney(entry.estimatedCostCents)} → exact {centsMoney(entry.exactCostCents)}

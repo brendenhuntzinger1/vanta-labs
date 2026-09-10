@@ -11,6 +11,7 @@ import { US_STATE_TAX_TABLE } from "@/lib/sales-tax";
 import { describeEffectiveRate, PROCESSING_FEE_DEFAULT_PERCENT } from "@/lib/admin-control-shared";
 import { buildControlUpdates, type ControlUpdate } from "@/lib/admin-control-updates";
 import { DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
+import { formatDisplayDate } from "@/lib/format-date";
 
 type ControlSnapshot = Record<string, Record<string, unknown>>;
 
@@ -742,7 +743,7 @@ export function AdminControlCenterClient() {
                   <span className="text-zinc-300">
                     {pushStatus.kind === "pushover" ? "Pushover (direct)" : pushStatus.kind === "webhook" ? "Webhook fallback" : "Not configured"}
                   </span>
-                  <span className="text-zinc-500">checked {new Date(pushStatus.checkedAt).toLocaleTimeString()}</span>
+                  <span className="text-zinc-500">checked {formatDisplayDate(pushStatus.checkedAt, "time") ?? "—"} ET</span>
                   <button type="button" onClick={loadPushStatus} disabled={pushStatusLoading} className="vl-focus-ring text-zinc-400 underline disabled:opacity-60">
                     {pushStatusLoading ? "Checking…" : "Check again"}
                   </button>
