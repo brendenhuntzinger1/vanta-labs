@@ -5,6 +5,7 @@ import type { AdminPartnerRow } from "@/lib/partner-portal";
 import type { CommissionTierRule } from "@/lib/ambassador-commission";
 import type { AmbassadorMarketingResource, AmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import type { FraudReviewRow, PayoutHistoryRow } from "@/lib/admin-ambassadors";
+import { formatDisplayDate } from "@/lib/format-date";
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -49,7 +50,7 @@ const PROGRAM_SETTING_FIELDS = [
 ] as const;
 
 function formatDate(value: string) {
-  return new Date(value).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  return formatDisplayDate(value, "medium") ?? "—";
 }
 
 export function AdminPartnersClient({

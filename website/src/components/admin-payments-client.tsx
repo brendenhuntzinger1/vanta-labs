@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { AdminPaymentRow } from "@/lib/admin-payments";
+import { formatDisplayDate } from "@/lib/format-date";
 
 function money(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -28,7 +29,7 @@ export function methodLabel(method: string) {
 function formatDate(value: string | null) {
   if (!value) return "—";
   const date = new Date(value);
-  return date.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  return formatDisplayDate(date, "datetime") ?? "—";
 }
 
 function StatusBadge({ status }: { status: string }) {

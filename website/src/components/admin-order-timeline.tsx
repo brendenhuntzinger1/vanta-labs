@@ -1,3 +1,4 @@
+import { formatDisplayDate } from "@/lib/format-date";
 type AuditLogEntry = {
   id: string;
   action: string;
@@ -54,7 +55,7 @@ export function AdminOrderTimeline({ entries }: { entries: AuditLogEntry[] }) {
                 <p className="text-sm font-medium text-zinc-100">{actionLabel(entry.action)}</p>
                 {detail ? <p className="text-xs text-zinc-400">{detail}</p> : null}
                 <p className="mt-0.5 text-xs text-zinc-500">
-                  {new Date(entry.created_at).toLocaleString()}
+                  {formatDisplayDate(entry.created_at, "datetime") ?? "—"}
                   {performedBy ? ` • ${performedBy}` : ""}
                 </p>
               </li>

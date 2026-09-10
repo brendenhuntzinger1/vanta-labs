@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { businessDayKey } from "@/lib/business-day";
+import { formatDisplayDate } from "@/lib/format-date";
 
 type RevenueMetrics = {
   today: number;
@@ -108,7 +109,7 @@ export function AdminLiveMetrics({ initial, initialUnavailable = false }: { init
     if (!Number.isFinite(parsed)) {
       return "Live";
     }
-    return `Updated ${new Date(parsed).toLocaleTimeString()}`;
+    return `Updated ${formatDisplayDate(parsed, "time") ?? ""} ET`;
   }, [metrics.updatedAt]);
 
   const trendMax = useMemo(() => {

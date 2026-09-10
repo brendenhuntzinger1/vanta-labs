@@ -6,6 +6,7 @@ import { getMembershipBonusSettings } from "@/lib/membership";
 import { getBulkSavingsControlConfig } from "@/lib/admin-control";
 import { AdminMembershipClient } from "@/components/admin-membership-client";
 import { MemberRemoveButton } from "@/components/member-remove-button";
+import { formatDisplayDate } from "@/lib/format-date";
 
 export const dynamic = "force-dynamic";
 
@@ -104,11 +105,11 @@ export default async function AdminMembershipPage() {
                             {member.status.replace("_", " ")}{member.cancelAtPeriodEnd ? " · ending" : ""}
                           </span>
                         </td>
-                        <td className="py-3 pr-4 text-xs text-zinc-400">{member.joinedAt ? new Date(member.joinedAt).toLocaleDateString() : "—"}</td>
+                        <td className="py-3 pr-4 text-xs text-zinc-400">{formatDisplayDate(member.joinedAt, "medium") ?? "—"}</td>
                         <td className="py-3 pr-4 text-xs text-zinc-400">
                           {member.billingCycle === "free" || !member.nextBillingAt
                             ? "—"
-                            : `${new Date(member.nextBillingAt).toLocaleDateString()} · $${(member.nextBillingAmountCents / 100).toFixed(2)}`}
+                            : `${formatDisplayDate(member.nextBillingAt, "medium") ?? "—"} · $${(member.nextBillingAmountCents / 100).toFixed(2)}`}
                           {/* A paid membership with no processor subscription was
                               charged once and will LAPSE, not renew. Every other
                               column reads identically to a real subscription, so

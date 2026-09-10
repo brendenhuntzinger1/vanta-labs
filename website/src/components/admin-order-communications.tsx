@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { hasUnknowns, type CommunicationRow, type CommunicationState } from "@/lib/order-communications";
+import { formatDisplayDate } from "@/lib/format-date";
 
 /**
  * What the customer has been told about this order.
@@ -51,10 +52,16 @@ const STATE_LABEL: Record<CommunicationState, string> = {
   cannot_determine: "CANNOT DETERMINE",
 };
 
+/**
+ * A send time on the order's email trail, in Eastern.
+ *
+ * This was a bare `toLocaleString()` — no locale, no zone — so it rendered in
+ * whichever zone the code ran in AND in whichever format the reader's machine
+ * preferred. Server-rendered first, that meant a UTC stamp that then changed
+ * under the operator on hydration.
+ */
 function when(value: string | null | undefined): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
+  return formatDisplayDate(value, "datetime") ?? "—";
 }
 
 export function AdminOrderCommunications({ orderId }: { orderId: string }) {

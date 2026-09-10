@@ -5,6 +5,7 @@ import { AFFILIATE_MERGE_FIELDS } from "@/lib/email/affiliate-merge";
 import { AFFILIATE_FILTERS, type AffiliateDirectoryEntry, type AffiliateFilter } from "@/lib/email/affiliate-audience-shared";
 import { MAX_LINK_BUTTONS, type LinkButton } from "@/lib/email/affiliate-campaign-template";
 import type { AffiliateCampaignSummary, AffiliateEmailDashboard } from "@/lib/admin-affiliate-email";
+import { formatDisplayDate } from "@/lib/format-date";
 
 /**
  * Admin → Affiliates → Emails.
@@ -712,9 +713,10 @@ export function AdminAffiliateEmailClient({ dashboard, canManage }: { dashboard:
                     </td>
                     <td className="py-2.5 pr-3 text-[11px] text-zinc-400">{campaign.audience}</td>
                     <td className="py-2.5 pr-3 text-[11px] text-zinc-400">
-                      {campaign.completedAt || campaign.scheduledAt || campaign.createdAt
-                        ? new Date(campaign.completedAt ?? campaign.scheduledAt ?? campaign.createdAt).toLocaleString()
-                        : "—"}
+                      {formatDisplayDate(
+                        campaign.completedAt ?? campaign.scheduledAt ?? campaign.createdAt,
+                        "datetime",
+                      ) ?? "—"}
                     </td>
                     <td className="py-2.5 pr-3">{campaign.recipientCount}</td>
                     <td className="py-2.5 pr-3 text-emerald-300">{campaign.sent}</td>

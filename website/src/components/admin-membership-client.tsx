@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { MembershipTier } from "@/lib/membership";
 import type { MembershipAnalytics, PromotionalPointEvent, CustomerBalanceRow, BulkSavingsStats } from "@/lib/admin-membership";
 import type { BulkSavingsConfig } from "@/lib/bulk-savings";
+import { formatDisplayDate } from "@/lib/format-date";
 
 type BonusSettings = {
   signupBonusEnabled: boolean;
@@ -534,7 +535,7 @@ export function AdminMembershipClient({
           {events.map((event) => (
             <div key={event.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm">
               <span className="text-zinc-200">
-                {event.name} — {event.multiplier}x ({new Date(event.startsAt).toLocaleDateString()} → {new Date(event.endsAt).toLocaleDateString()})
+                {event.name} — {event.multiplier}x ({formatDisplayDate(event.startsAt, "medium") ?? "—"} → {formatDisplayDate(event.endsAt, "medium") ?? "—"})
               </span>
               <button
                 type="button"

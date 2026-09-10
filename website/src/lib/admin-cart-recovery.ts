@@ -505,7 +505,7 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
       success: false,
       deferred: true,
       retryAt: guard.retryAt,
-      error: `Held by the marketing frequency guard: this customer received a marketing email at ${new Date(guard.lastMarketingAt).toLocaleString("en-US", { timeZone: "UTC" })} UTC. The resend can go after ${new Date(guard.retryAt).toLocaleString("en-US", { timeZone: "UTC" })} UTC.`,
+      error: `Held by the marketing frequency guard: this customer received a marketing email at ${formatDisplayDate(guard.lastMarketingAt, "datetime") ?? "an unknown time"} ET. The resend can go after ${formatDisplayDate(guard.retryAt, "datetime") ?? "an unknown time"} ET.`,
     };
   }
   if (guard.outcome === "duplicate" || guard.outcome === "refused") {
@@ -546,7 +546,7 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
   if (override && override.consumedAt) {
     return {
       success: false,
-      error: `This cart's gift email already went out at ${new Date(override.consumedAt).toLocaleString("en-US", { timeZone: "UTC" })} UTC. `
+      error: `This cart's gift email already went out at ${formatDisplayDate(override.consumedAt, "datetime") ?? "an unknown time"} ET. `
         + "Sending it again would issue a new entitlement and break the link in the message they already have.",
     };
   }

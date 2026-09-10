@@ -7,6 +7,7 @@ import {
   referralCodeFingerprint,
   normalizeReferralCode,
 } from "@/lib/referral-code-validation";
+import { formatDisplayDate } from "@/lib/format-date";
 
 // ============================================================================
 // Ambassador referral-code management service. All writes are ATOMIC and
@@ -152,7 +153,7 @@ async function assertWithinChangeLimit(ambassadorId: string, changedAt: string |
     if (changedAt) {
       const nextAllowed = new Date(changedAt).getTime() + policy.changeIntervalDays * DAY_MS;
       if (Date.now() < nextAllowed) {
-        throw new Error(`You can change your code again on ${new Date(nextAllowed).toLocaleDateString("en-US")}.`);
+        throw new Error(`You can change your code again on ${formatDisplayDate(nextAllowed, "long") ?? "a later date"}.`);
       }
     }
     return;

@@ -14,6 +14,7 @@ import { getAmbassadorMarketingResources, getAmbassadorProgramSettings } from "@
 import { getFraudReviewRows, getPayoutHistory } from "@/lib/admin-ambassadors";
 import { failedReads, settleRead, UNKNOWN_FIGURE } from "@/lib/admin-read";
 import { AdminReadFailureNotice } from "@/components/admin-data-notices";
+import { formatDisplayDate } from "@/lib/format-date";
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -79,7 +80,7 @@ export default async function AdminPartnersPage() {
   function formatDate(value: string | null) {
     if (!value) return "—";
     const d = new Date(value);
-    return Number.isFinite(d.getTime()) ? d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }) : "—";
+    return formatDisplayDate(d, "medium") ?? "—";
   }
   function methodLabel(method: string | null, handle: string | null) {
     if (!method) return "Not set";

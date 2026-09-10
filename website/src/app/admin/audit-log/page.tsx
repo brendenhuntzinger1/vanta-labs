@@ -5,6 +5,7 @@ import { canViewAuditLog } from "@/lib/admin-roles";
 import { getAuditLogRows, getAuditLogTargetTables } from "@/lib/admin-audit-log";
 import { failedReads, settleRead, UNKNOWN_FIGURE } from "@/lib/admin-read";
 import { AdminReadFailureNotice } from "@/components/admin-data-notices";
+import { formatDisplayDate } from "@/lib/format-date";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,7 @@ const METADATA_KEYS_TO_HIDE = new Set(["performedAt", "ipAddress", "userAgent", 
 
 function fmtDate(v: string | null) {
   const d = v && v !== "null" ? new Date(v) : null;
-  return d && !isNaN(d.getTime()) ? d.toLocaleString() : "—";
+  return formatDisplayDate(d, "datetime") ?? "—";
 }
 
 function summarizeMetadata(metadata: Record<string, unknown> | null) {

@@ -8,6 +8,7 @@ import { getSiteUrl } from "@/lib/env";
 import { getReferralProgramConfig } from "@/lib/admin-control";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 import AdminAmbassadorRatesCard from "@/components/admin-ambassador-rates-card";
+import { formatDisplayDate } from "@/lib/format-date";
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -16,7 +17,7 @@ function currency(value: number) {
 function formatDate(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  return formatDisplayDate(date, "medium") ?? "—";
 }
 
 const STATUS_STYLES: Record<string, string> = {

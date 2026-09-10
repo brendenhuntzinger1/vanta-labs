@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { AdminCoupon } from "@/lib/admin-coupons";
+import { formatDisplayDate } from "@/lib/format-date";
 
 type CouponFormState = {
   code: string;
@@ -376,9 +377,9 @@ export function AdminCouponsClient({
                             </td>
                             <td className="py-3 pr-4 text-zinc-300">{formatDiscount(coupon)}</td>
                             <td className="py-3 pr-4 text-xs text-zinc-400">
-                              {coupon.startsAt ? new Date(coupon.startsAt).toLocaleDateString() : "—"}
+                              {formatDisplayDate(coupon.startsAt, "medium") ?? "—"}
                               {" → "}
-                              {coupon.endsAt ? new Date(coupon.endsAt).toLocaleDateString() : "—"}
+                              {formatDisplayDate(coupon.endsAt, "medium") ?? "—"}
                             </td>
                             <td className="py-3 pr-4 text-zinc-300">
                               {coupon.redemptionsCount}{coupon.maxRedemptions ? ` / ${coupon.maxRedemptions}` : ""}
@@ -462,7 +463,7 @@ export function AdminCouponsClient({
                         <td className="py-3 pr-4 font-mono text-zinc-100">{coupon.code}</td>
                         <td className="py-3 pr-4 text-zinc-300">{formatDiscount(coupon)}</td>
                         <td className="py-3 pr-4 text-xs text-zinc-400">{coupon.assignedEmail ?? "—"}</td>
-                        <td className="py-3 pr-4 text-xs text-zinc-400">{new Date(coupon.createdAt).toLocaleDateString()}</td>
+                        <td className="py-3 pr-4 text-xs text-zinc-400">{formatDisplayDate(coupon.createdAt, "medium") ?? "—"}</td>
                         <td className="py-3 pr-4">
                           <span className={`rounded-full px-2 py-1 text-xs ${status.className}`}>{status.label}</span>
                         </td>
