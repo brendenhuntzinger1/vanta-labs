@@ -214,6 +214,7 @@ async function deliverResetEmail(email: string, redirectTo: string): Promise<voi
       email,
       success: result.success,
       error: result.error,
+      providerMessageId: result.providerMessageId,
     });
 
     if (result.success) {

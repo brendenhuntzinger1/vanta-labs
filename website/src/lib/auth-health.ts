@@ -53,8 +53,69 @@ export interface StalledSignupSummary {
   stalled: number;
   /** Mailbox domains of the stalled accounts, with counts. Never full addresses. */
   domains: Record<string, number>;
+  /**
+   * The same for EVERY account scanned — the baseline `domains` has to be read
+   * against before it can mean anything. Never full addresses.
+   */
+  scannedDomains: Record<string, number>;
   oldestCreatedAt: string | null;
   alerted: boolean;
+}
+
+/**
+ * The smallest number of stalled accounts on one domain that could be a pattern.
+ *
+ * Below this a ratio is arithmetic on noise: two stalled accounts out of two on
+ * a domain is 100% and means nothing. Crying wolf is what teaches an operator
+ * to skim the alert, which costs the one time it is right.
+ */
+const DOMAIN_SIGNAL_MIN_STALLED = 5;
+
+/** How much more often a domain must stall than it appears, before it is news. */
+const DOMAIN_SIGNAL_RATIO = 1.5;
+
+/**
+ * The one domain whose stalled share is disproportionate to its share of signups.
+ *
+ * WHY A RATIO AND NOT A COUNT. This used to name whichever domain had more than
+ * one stalled account, and then assert a cause: "check whether that provider is
+ * rejecting or spam-filing our sending domain". Our customers are mostly on
+ * Gmail and iCloud, so that condition holds almost always and the alert accused
+ * Gmail nearly every time it fired.
+ *
+ * It did so on 2026-09-10 — "5 of them are @gmail.com" — and all nine of those
+ * confirmations had been delivered in three to seven seconds, Gmail included,
+ * one of them opened, none bounced, none suppressed. The alert cost its reader
+ * an audit of sending-domain reputation for a problem that did not exist.
+ *
+ * A domain is evidence only when it stalls MORE than its presence explains, so
+ * that is what this measures. Null is the common and correct answer.
+ */
+export function overRepresentedDomain(
+  summary: Pick<StalledSignupSummary, "domains" | "scannedDomains" | "stalled">,
+): { domain: string; stalled: number; stalledShare: number; baselineShare: number } | null {
+  const scannedTotal = Object.values(summary.scannedDomains).reduce((a, b) => a + b, 0);
+  if (scannedTotal === 0 || summary.stalled === 0) return null;
+
+  let best: { domain: string; stalled: number; stalledShare: number; baselineShare: number } | null = null;
+
+  for (const [domain, stalled] of Object.entries(summary.domains)) {
+    if (stalled < DOMAIN_SIGNAL_MIN_STALLED) continue;
+
+    const baselineShare = (summary.scannedDomains[domain] ?? 0) / scannedTotal;
+    // A domain we have never otherwise seen has no baseline to be measured
+    // against; the minimum count above is the only guard it gets.
+    if (baselineShare === 0) continue;
+
+    const stalledShare = stalled / summary.stalled;
+    if (stalledShare < baselineShare * DOMAIN_SIGNAL_RATIO) continue;
+
+    if (!best || stalledShare / baselineShare > best.stalledShare / best.baselineShare) {
+      best = { domain, stalled, stalledShare, baselineShare };
+    }
+  }
+
+  return best;
 }
 
 interface AuthUserLike {
@@ -86,10 +147,19 @@ export function summariseStalledSignups(users: AuthUserLike[], now: number): Omi
   const lookbackAfter = now - STALLED_SIGNUP_LOOKBACK_MS;
 
   const domains: Record<string, number> = {};
+  const scannedDomains: Record<string, number> = {};
   let stalled = 0;
   let oldest: string | null = null;
 
   for (const user of users) {
+    // The baseline is every account we looked at, counted BEFORE any of the
+    // skips below — a domain's share of the customer base is not conditional on
+    // whether these particular accounts confirmed.
+    if (user.email) {
+      const seen = domainOf(user.email);
+      scannedDomains[seen] = (scannedDomains[seen] ?? 0) + 1;
+    }
+
     // `confirmed_at` is a generated column in newer GoTrue and can be set by a
     // phone confirmation; either one means this person got in.
     if (user.email_confirmed_at || user.confirmed_at) continue;
@@ -109,7 +179,7 @@ export function summariseStalledSignups(users: AuthUserLike[], now: number): Omi
     }
   }
 
-  return { scanned: users.length, stalled, domains, oldestCreatedAt: oldest };
+  return { scanned: users.length, stalled, domains, scannedDomains, oldestCreatedAt: oldest };
 }
 
 /**
@@ -145,10 +215,16 @@ export async function alertOnStalledSignups(): Promise<StalledSignupSummary> {
     return { ...summary, alerted: false };
   }
 
-  const worstDomain = Object.entries(summary.domains).sort((a, b) => b[1] - a[1])[0];
-  const domainNote = worstDomain && worstDomain[1] > 1
-    ? ` ${worstDomain[1]} of them are @${worstDomain[0]} — check whether that provider is rejecting`
-      + " or spam-filing our sending domain."
+  // Only when the domain stalls out of proportion to how often it appears —
+  // see overRepresentedDomain for the alert this sentence used to misdirect.
+  // The percentages travel with it so the reader can weigh the claim rather
+  // than take it on trust.
+  const skewed = overRepresentedDomain(summary);
+  const pct = (share: number) => `${Math.round(share * 100)}%`;
+  const domainNote = skewed
+    ? ` ${skewed.stalled} of them are @${skewed.domain}, which is ${pct(skewed.stalledShare)} of the`
+      + ` stalled accounts but only ${pct(skewed.baselineShare)} of those scanned — check whether that`
+      + " provider is rejecting or spam-filing our sending domain."
     : "";
 
   await recordSystemAlert({
@@ -180,15 +256,32 @@ export async function alertOnStalledSignups(): Promise<StalledSignupSummary> {
       // failed, so it is worth naming second rather than first.
       + " The confirmation is minted by this app and sent through its own email provider. Look up"
       + " these addresses in email_send_log under campaign_type 'auth:signup_confirmation': a row"
-      + " with status 'sent' means it left us and the problem is delivery or the customer, 'failed'"
-      + " carries the provider's reason in reference_id, and NO row means the send was never"
-      + " attempted. Then check email_suppressions for a prior bounce, and the sending domain's"
-      + " reputation. Note it is not in the retry queue by design — a failed send falls back to"
-      + " Supabase's own sender immediately instead.",
+      + " with status 'sent' means WE handed it to the provider, 'failed' carries the provider's"
+      + " reason in reference_id, and NO row means the send was never attempted."
+      // 'sent' IS NOT 'DELIVERED', AND READING IT THAT WAY IS WHY THIS ALERT
+      // WASTED AN AFTERNOON. It records our own call returning, nothing more.
+      // The provider's verdict lives in email_delivery_events, and joining the
+      // two needs the provider_message_id that auth rows now carry — before
+      // 2026-09-10 they all held NULL, so the only available join was on
+      // address and a time window, which paired one customer's delivery with a
+      // send that happened ninety-two seconds after it.
+      //
+      // Every stalled account in that alert turned out to have been delivered
+      // within seconds. The commonest outcome here is a customer who got the
+      // email and did not click it, and the alert should let its reader
+      // establish that in one query instead of assuming an outage.
+      + " 'sent' means only that we handed it over — for the provider's verdict join"
+      + " email_delivery_events on provider_message_id and read `kind` ('delivered', 'soft_bounce',"
+      + " 'hard_bounce', 'opened'). Delivered-and-never-clicked is the ordinary case and needs no"
+      + " action. Then check email_suppressions for a prior bounce. Note it is not in the retry"
+      + " queue by design — a failed send falls back to Supabase's own sender immediately instead.",
     context: {
       stalled: summary.stalled,
       scanned: summary.scanned,
       domains: summary.domains,
+      // The baseline the stalled mix has to be read against. Without it the
+      // reader of `domains` alone re-derives the wrong conclusion by eye.
+      scannedDomains: summary.scannedDomains,
       oldestCreatedAt: summary.oldestCreatedAt,
     },
     dedupeWindowMs: ALERT_DEDUPE_MS,

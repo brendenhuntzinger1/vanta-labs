@@ -272,10 +272,111 @@ describe("every auth email path records its attempt", () => {
     });
   }
 
+
+  // ---------------------------------------------------------------------------
+  // AND CARRIES THE PROVIDER'S ID WHEN IT HAS ONE.
+  //
+  // Derived for the same reason the list above is derived. Adding the parameter
+  // to recordAuthEmailAttempt changes nothing on its own — the id only reaches
+  // the ledger if every caller passes it, and each of these callers had it in
+  // hand and dropped it. A hand-kept list would go stale at the next auth route.
+  //
+  // The rule keys on the SEND RESULT, not on the kind: a call that reports
+  // `success: <result>.success` is reporting a real provider response and must
+  // report its id too. The two Supabase-fallback calls pass a bare `success:
+  // true` because Supabase's own sender returns no id to record, and they are
+  // correctly left alone by this.
+  // ---------------------------------------------------------------------------
+  const RECORD_CALL = /recordAuthEmailAttempt\(\{[\s\S]*?\}\)/g;
+
+  for (const path of authSenders) {
+    it(`${path} passes the provider message id it was given`, () => {
+      const calls = codeOf(join(process.cwd(), path)).match(RECORD_CALL) ?? [];
+      const fromResult = calls.filter((call) => /success:\s*(\w+)\.success/.test(call));
+
+      for (const call of fromResult) {
+        const receiver = /success:\s*(\w+)\.success/.exec(call)?.[1];
+        expect(call,
+          `${path} records a send result without its provider_message_id — the row `
+          + "cannot then be tied to the message in the provider's dashboard")
+          .toMatch(new RegExp(`providerMessageId:\\s*${receiver}\\.providerMessageId`));
+      }
+    });
+  }
+
   it("the signup route records the failure branch too, not just the happy one", () => {
     const src = readFileSync(join(process.cwd(), "src/app/api/auth/signup/route.ts"), "utf8");
     // Both the app's own send and the Supabase fallback leave a row, so an
     // operator can see WHICH sender the customer's link came from.
     expect(src).toContain("signup_confirmation_supabase_fallback");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE PROVIDER'S MESSAGE ID, WHICH AUTH MAIL ALONE WAS THROWING AWAY.
+//
+// On 2026-09-10 a `signup_confirmation_stalled` alert named nine accounts and
+// sent whoever answered it to check whether Gmail was spam-filing us. Every one
+// of those confirmations had in fact been DELIVERED, within three to seven
+// seconds, Gmail included — but proving that took a join through
+// email_delivery_events on recipient_email and a time window, because the auth
+// rows carry no provider_message_id.
+//
+// That join is not merely inconvenient, it is WRONG. Matching N sends to N
+// deliveries by address alone paired a delivery with a send that happened
+// ninety-two seconds AFTER it, for a customer who had clicked resend three
+// times. types.ts already says why the id is the thing that settles this:
+// without it, "we recorded a successful send" and "the provider accepted a
+// message" are two claims with nothing joining them.
+//
+// The split was total and it was ours: 186 marketing and automation rows over
+// fourteen days, 167 of them carrying an id — and 60 auth rows carrying none,
+// because recordAuthEmailAttempt never had a parameter for it while every one
+// of its callers was holding the id in the send result it had just awaited.
+// ---------------------------------------------------------------------------
+
+describe("the provider's message id", () => {
+  it("is written on the insert, so a send can be traced to the provider", async () => {
+    await recordAuthEmailAttempt({
+      kind: "signup_confirmation",
+      email: "h@example.com",
+      success: true,
+      providerMessageId: "re_abc123",
+    });
+    expect(inserted[0]).toMatchObject({ provider_message_id: "re_abc123" });
+  });
+
+  it("is written when CLOSING a claim, which is the path a real signup takes", async () => {
+    // The claim path is not the edge case — claimAuthEmailSend runs before
+    // every genuine confirmation, so an id recorded only on the insert branch
+    // would still be missing from almost every row in production.
+    existing.push({
+      id: 9, campaign_type: "auth:signup_confirmation",
+      recipient_email: "i@example.com", status: "sending",
+    });
+
+    await recordAuthEmailAttempt({
+      kind: "signup_confirmation",
+      email: "i@example.com",
+      success: true,
+      providerMessageId: "re_def456",
+    });
+
+    expect(inserted, "inserted instead of closing the claim").toHaveLength(0);
+    expect(existing[0]).toMatchObject({ status: "sent", provider_message_id: "re_def456" });
+  });
+
+  it("stays null when the provider returns no id, rather than inventing one", async () => {
+    // SMTP gives no id. A placeholder would be worse than nothing: it would
+    // join to nothing in the provider's dashboard while looking like it should.
+    await recordAuthEmailAttempt({ kind: "password_reset", email: "j@example.com", success: true });
+    expect(inserted[0]).toMatchObject({ provider_message_id: null });
+  });
+
+  it("records no id for a failed send, because the provider accepted nothing", async () => {
+    await recordAuthEmailAttempt({
+      kind: "signup_confirmation", email: "k@example.com", success: false, error: "rejected",
+    });
+    expect(inserted[0]).toMatchObject({ status: "failed", provider_message_id: null });
   });
 });

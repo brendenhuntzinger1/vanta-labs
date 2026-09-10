@@ -386,6 +386,7 @@ async function createAccountAndSend(input: {
     email: input.email,
     success: result.success,
     error: result.error,
+    providerMessageId: result.providerMessageId,
   });
 
   if (result.success) {

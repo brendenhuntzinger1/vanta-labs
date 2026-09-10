@@ -57,6 +57,26 @@ export async function recordAuthEmailAttempt(input: {
    * against a genuine retry and reporting a send perpetually in flight.
    */
   claimedAs?: AuthEmailKind;
+  /**
+   * The id the provider gave the accepted message, when it gives one.
+   *
+   * WITHOUT THIS, A DELIVERED EMAIL AND A LOST ONE LOOK THE SAME. Every caller
+   * already holds it — it comes back on the sendEmail result they awaited — and
+   * every one of them used to drop it here, so all 60 auth rows over a fortnight
+   * carried NULL while 167 of the 186 marketing rows carried an id.
+   *
+   * What that cost is a real alert. `signup_confirmation_stalled` fired on
+   * 2026-09-10 naming nine accounts; answering it meant joining
+   * email_delivery_events on recipient_email and a time window, which is the
+   * best anyone can do without an id and is not good enough — for a customer who
+   * pressed resend three times it paired a delivery with a send that happened
+   * ninety-two seconds after it. The confirmations had all been delivered in
+   * three to seven seconds, Gmail included, and the alert had sent its reader
+   * off to inspect Gmail's treatment of our sending domain.
+   *
+   * Absent for SMTP and for any failure, where nothing was accepted to identify.
+   */
+  providerMessageId?: string;
 }): Promise<void> {
   try {
     // CLOSE THE CLAIM IF THERE IS ONE. claimAuthEmailSend() has usually already
@@ -67,6 +87,9 @@ export async function recordAuthEmailAttempt(input: {
       .update({
         status: input.success ? "sent" : "failed",
         reference_id: input.success ? null : String(input.error ?? "").slice(0, 200) || "unknown",
+        // The claim path is the one a real signup takes, so an id written only
+        // on the insert below would still be missing from nearly every row.
+        provider_message_id: input.success ? input.providerMessageId ?? null : null,
       })
       .eq("campaign_type", `auth:${input.claimedAs ?? input.kind}`)
       .eq("recipient_email", input.email)
@@ -86,6 +109,10 @@ export async function recordAuthEmailAttempt(input: {
       template_key: input.kind,
       sent_at: new Date().toISOString(),
       status: input.success ? "sent" : "failed",
+      // Null rather than a placeholder: SMTP returns no id, and a made-up one
+      // would join to nothing in the provider's dashboard while looking as
+      // though it should.
+      provider_message_id: input.success ? input.providerMessageId ?? null : null,
     });
   } catch {
     // Non-fatal, exactly as in lib/email/marketing.ts: the email is what

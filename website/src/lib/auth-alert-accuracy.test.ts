@@ -57,7 +57,23 @@ describe("the stalled-signup alert points at the system actually in the path", (
     expect(authHealth).toContain("email_send_log");
     expect(authHealth).toContain("auth:signup_confirmation");
     expect(authHealth).toContain("email_suppressions");
-    expect(authHealth).toContain("the sending domain's reputation");
+  });
+
+  it("sends the reader to the provider's verdict, not to domain reputation", () => {
+    // "and the sending domain's reputation" used to sit here, unconditionally,
+    // as one of the four things to go and check. It is the most expensive of
+    // them and the least often relevant: on 2026-09-10 every stalled account
+    // in the alert had been DELIVERED within seconds, Gmail included, and the
+    // reader was auditing reputation for an outage that never happened.
+    //
+    // email_delivery_events answers the same question with evidence, and now
+    // joins cleanly because auth rows carry a provider_message_id. Reputation
+    // is still named, but only in the note that fires when a domain is
+    // genuinely over-represented — see overRepresentedDomain.
+    expect(authHealth).toContain("email_delivery_events");
+    expect(authHealth).toMatch(/provider_message_id/);
+    expect(authHealth, "'sent' must not be presented as proof of delivery")
+      .toMatch(/means only that we handed it over/);
   });
 
   it("distinguishes all three states, including the absent row", () => {

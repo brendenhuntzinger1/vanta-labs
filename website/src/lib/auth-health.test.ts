@@ -5,6 +5,7 @@ import {
   STALLED_SIGNUP_LOOKBACK_MS,
   summarisePartnersLockedOut,
   summariseStalledSignups,
+  overRepresentedDomain,
 } from "@/lib/auth-health";
 
 const NOW = Date.parse("2026-08-29T12:00:00.000Z");
@@ -236,5 +237,88 @@ describe("summarisePartnersLockedOut", () => {
       NOW,
     );
     expect(JSON.stringify(summary)).not.toContain("@");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE DOMAIN NOTE MUST BE EVIDENCE, NOT THE SHAPE OF THE CUSTOMER BASE.
+//
+// The note fired whenever the commonest stalled domain had more than one
+// account, and then asserted a cause: "check whether that provider is rejecting
+// or spam-filing our sending domain". For a consumer store whose customers are
+// mostly on Gmail and iCloud that condition is met essentially always, so the
+// alert accused Gmail every time it fired.
+//
+// On 2026-09-10 it did exactly that — "5 of them are @gmail.com" — and every
+// one of those nine confirmations had been DELIVERED within three to seven
+// seconds, Gmail included, one of them opened. Nothing had bounced and nothing
+// was suppressed. The reader was sent to audit sending-domain reputation for a
+// problem that did not exist, which is the same failure this file's sibling
+// test was written about: an alert that names the wrong system.
+//
+// A domain is only evidence if it is over-represented AMONG THE STALLED
+// relative to its share of everyone scanned. That baseline is free — the same
+// list is already in memory — so this costs no extra query in a sweep that is
+// already close to its deadline.
+// ---------------------------------------------------------------------------
+
+describe("the stalled domain mix is only reported when it is disproportionate", () => {
+  const stalledUser = (email: string) => ({ created_at: iso(48 * HOUR), email });
+  const healthyUser = (email: string) => ({
+    created_at: iso(48 * HOUR), email, email_confirmed_at: iso(47 * HOUR),
+  });
+
+  it("records the domain mix of everyone scanned, not only the stalled", () => {
+    const summary = summariseStalledSignups(
+      [stalledUser("a@gmail.com"), healthyUser("b@gmail.com"), healthyUser("c@icloud.com")],
+      NOW,
+    );
+    expect(summary.domains).toEqual({ "gmail.com": 1 });
+    expect(summary.scannedDomains).toEqual({ "gmail.com": 2, "icloud.com": 1 });
+  });
+
+  it("names no domain when the stalled mix simply mirrors the customer base", () => {
+    // The production case: Gmail is most of the stalled accounts because Gmail
+    // is most of the customers. 6 of 10 stalled, 60 of 100 scanned.
+    const users = [
+      ...Array.from({ length: 6 }, (_, i) => stalledUser(`s${i}@gmail.com`)),
+      ...Array.from({ length: 4 }, (_, i) => stalledUser(`s${i}@icloud.com`)),
+      ...Array.from({ length: 54 }, (_, i) => healthyUser(`h${i}@gmail.com`)),
+      ...Array.from({ length: 36 }, (_, i) => healthyUser(`h${i}@icloud.com`)),
+    ];
+    const summary = summariseStalledSignups(users, NOW);
+    expect(summary.stalled).toBe(10);
+    expect(overRepresentedDomain(summary)).toBeNull();
+  });
+
+  it("names a domain that stalls far more often than its share of signups", () => {
+    // The case actually worth an alert: yahoo is 10% of signups and 80% of the
+    // stalled. That is a provider problem and the note should say so.
+    const users = [
+      ...Array.from({ length: 8 }, (_, i) => stalledUser(`s${i}@yahoo.com`)),
+      ...Array.from({ length: 2 }, (_, i) => stalledUser(`s${i}@gmail.com`)),
+      ...Array.from({ length: 2 }, (_, i) => healthyUser(`h${i}@yahoo.com`)),
+      ...Array.from({ length: 88 }, (_, i) => healthyUser(`h${i}@gmail.com`)),
+    ];
+    const found = overRepresentedDomain(summariseStalledSignups(users, NOW));
+    expect(found?.domain).toBe("yahoo.com");
+    expect(found?.stalled).toBe(8);
+  });
+
+  it("stays silent on a tiny sample, where a ratio means nothing", () => {
+    // Two stalled accounts on one domain is not a pattern, however lopsided the
+    // arithmetic looks. Crying wolf here is what taught people to skim it.
+    const users = [
+      stalledUser("a@yahoo.com"),
+      stalledUser("b@yahoo.com"),
+      ...Array.from({ length: 98 }, (_, i) => healthyUser(`h${i}@gmail.com`)),
+    ];
+    expect(overRepresentedDomain(summariseStalledSignups(users, NOW))).toBeNull();
+  });
+
+  it("survives a scanned population with no usable domains at all", () => {
+    const summary = summariseStalledSignups([{ created_at: iso(48 * HOUR), email: null }], NOW);
+    expect(() => overRepresentedDomain(summary)).not.toThrow();
+    expect(overRepresentedDomain(summary)).toBeNull();
   });
 });
