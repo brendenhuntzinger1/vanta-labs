@@ -61,8 +61,8 @@ The working post-3DS path is intact and is now protected by a permanent
 regression run, `npm run qa:highvalue`, which drives a real high-value order
 through the real checkout, the real order and item rows, the real inventory hold,
 a signed webhook and every side effect behind it. **20 of 20 steps pass on
-desktop and at phone width**, and they were re-run after every single change
-below.
+desktop and at phone width**, and they were re-run after every payment-critical
+change below.
 
 A second run, `npm run qa:amounts`, places ten real carts from $44 to $826 —
 four below $200 and six at or above — and asserts that the cents handed to Veyra
@@ -223,6 +223,10 @@ more risk than the problem.
 - `npm run qa:highvalue` — the post-3DS high-value journey end to end, 20 steps,
   desktop and phone. Run it before and after any payment change.
 - `npm run qa:amounts` — ten real carts either side of $200, 14 steps.
+- `npm run qa:all` — the whole browser suite end to end: access wall, signup,
+  email verification, login, guest checkout and account claim, the purchase path,
+  role boundaries, cross-account access, session fixation and open redirects.
+  **157 checks, none failing**, run after the last change.
 - The automated suite: **10,102 tests passing, none failing**, with about 2,500
   lines of new payment tests written for this audit across 23 files.
 - Every fix in this branch was written as a failing test first, and the failure
@@ -237,7 +241,12 @@ cd website
 npm test                    # the whole suite
 npm run qa:highvalue        # the high-value payment journey
 npm run qa:amounts          # the amount sweep either side of $200
+npm run qa:all              # every browser journey, end to end
 ```
+
+A readable version of this report is published at
+https://claude.ai/code/artifact/e0cbe4c1-df6d-4129-a04c-d7f03bc6839f
+(private unless you share it).
 
 For a single order, open `/admin/orders/<id>` and read the **Processor trace**
 panel. It answers, in one line, whether Veyra ever told us anything about that
