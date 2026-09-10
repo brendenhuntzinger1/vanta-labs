@@ -1251,16 +1251,26 @@ export async function replaceProductDoses(productId: string, doses: DoseInput[])
     // being silently reverted. Everything else in the payload (price, label,
     // COA, position) writes unconditionally as before.
     const query = supabaseAdmin.from("product_doses").update(update.values).eq("id", update.id);
-    const { data, error } =
-      update.expectedInventory == null
-        ? await query.select("id")
-        : await query.eq("inventory_quantity", update.expectedInventory).select("id");
+
+    // NO STOCK IN THIS WRITE: the plain update, exactly as before. Asking for
+    // `.select()` here would buy nothing — there is no rows-affected decision to
+    // make — while forcing every caller and fake to grow a method it never
+    // needed. Only the compare-and-set below has to know whether it applied.
+    if (update.expectedInventory == null) {
+      const { error } = await query;
+      if (error) {
+        throw error;
+      }
+      continue;
+    }
+
+    const { data, error } = await query.eq("inventory_quantity", update.expectedInventory).select("id");
 
     if (error) {
       throw error;
     }
 
-    if (update.expectedInventory != null && (!Array.isArray(data) || data.length === 0)) {
+    if (!Array.isArray(data) || data.length === 0) {
       const { data: current } = await supabaseAdmin
         .from("product_doses")
         .select("inventory_quantity")
