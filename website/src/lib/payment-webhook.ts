@@ -2604,8 +2604,21 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     // — the reconcile sweep relies on that — it is never a mismatch.
     const eventAmount = resolveWebhookPaidAmount(eventPayload);
     const recordedAmount = roundMoney(Number(orderRecord.amount_paid ?? 0));
+    // COMPARED IN CENTS, because `Math.abs(a - b) > 0.01` on dollars is not the
+    // rule it looks like. Binary floating point cannot hold either operand
+    // exactly, so a difference of precisely one cent lands on either side of the
+    // threshold depending on the magnitudes involved. 194.99 − 194.98 evaluates
+    // to 0.010000000000019327 and trips it; 269.36 − 269.35 evaluates to
+    // 0.009999999999990905 and does not. On the flat/internal shape a trip HOLDS
+    // the order out of fulfilment, so that is a real parcel stopped over an
+    // artefact of the representation — and $194.98 is, precisely, the largest
+    // payment this store had ever taken.
+    //
+    // Integers say exactly what was meant — more than one cent apart — and say
+    // it identically at every amount. Same correction, and the same reason, as
+    // isUnderpaidTotal in quote-order.ts.
     const amountDisagrees = eventAmount !== null && eventAmount > 0 && recordedAmount > 0
-      && Math.abs(eventAmount - recordedAmount) > 0.01;
+      && Math.abs(Math.round(eventAmount * 100) - Math.round(recordedAmount * 100)) > 1;
     // WHICH SHAPE THE AMOUNT CAME FROM DECIDES WHETHER A MISMATCH HOLDS THE
     // ORDER. The flat `amount` is ours (internal gateway, harness), so a
     // disagreement there is a real defect and the order is held. The nested
