@@ -251,12 +251,37 @@ export async function sendMarketingEmail(
   // presses "report spam", and a complaint costs the sending domain far more
   // than it costs the campaign.
   //
-  // Keyed off campaignType because that is already how the two audiences are
-  // told apart in email_send_log, so there is no second flag to keep in step.
+  // Keyed off campaignType because that is already how the audiences are told
+  // apart in email_send_log, so there is no second flag to keep in step.
+  //
+  // IT WAS A TWO-WAY BRANCH, AND THERE ARE TEN CAMPAIGN TYPES. The affiliate
+  // case was fixed when it was found; every other type fell through to "you're
+  // a Vanta Labs customer or member", and for most of them that is not true:
+  //
+  //   cart_recovery_*      an abandoned cart. They may never have bought, and
+  //                        the recovery programme exists precisely because they
+  //                        did not. Reproduced: a fresh account that left the
+  //                        optional marketing box UNTICKED, never ordered and
+  //                        holds no membership was told it was a customer.
+  //   back_in_stock        someone who asked to be told about one product.
+  //   campaign / coupon    a list subscriber who may never have ordered.
+  //
+  // Naming the real reason is also the better deliverability answer: a reader
+  // who cannot place why a commercial message is in their inbox presses "report
+  // spam", and one complaint costs the sending domain more than the campaign
+  // was worth.
   const isAffiliateBroadcast = input.campaignType === "affiliate_campaign";
-  const reason = isAffiliateBroadcast
-    ? "You're receiving this because you're a Vanta Labs affiliate."
-    : "You're receiving this because you're a Vanta Labs customer or member.";
+  const reason = `You're receiving this because ${
+    isAffiliateBroadcast ? "you're a Vanta Labs affiliate."
+      : input.campaignType.startsWith("cart_recovery") ? "you left items in your cart at Vanta Labs."
+      : input.campaignType === "back_in_stock" ? "you asked to be told when a Vanta Labs product came back in stock."
+      : input.campaignType.startsWith("membership") ? "you're a Vanta Labs member."
+      // The general marketing list. Deliberately a disjunction, because the
+      // audience genuinely contains both — a subscriber who has never ordered
+      // and a customer who never joined the list — and a line that names only
+      // one of them is false for the other.
+      : "you subscribed to Vanta Labs emails or have shopped with us."
+  }`;
   // Naming what the opt-out actually covers matters more for an affiliate:
   // stopping the broadcasts must not read as leaving the programme, and their
   // commission, payout and account email is transactional and unaffected.
