@@ -5,6 +5,7 @@ import {
   STALLED_SIGNUP_LOOKBACK_MS,
   summarisePartnersLockedOut,
   summariseStalledSignups,
+  canConcludeLockout,
   overRepresentedDomain,
 } from "@/lib/auth-health";
 
@@ -320,5 +321,84 @@ describe("the stalled domain mix is only reported when it is disproportionate", 
     const summary = summariseStalledSignups([{ created_at: iso(48 * HOUR), email: null }], NOW);
     expect(() => overRepresentedDomain(summary)).not.toThrow();
     expect(overRepresentedDomain(summary)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A LISTING THAT FAILED MUST NOT READ AS A LISTING THAT FOUND NOTHING.
+//
+// On 2026-09-09 partner_locked_out reported "20 approved ambassador(s) have
+// never signed in", named all 20 referral codes, and said their codes were
+// earning commission they could not see. Every one of those 20 had signed in.
+// Checked against the database on 2026-09-10: 21 approved ambassadors, all 21
+// with an auth_user_id, all 21 with a last_sign_in_at. AVAMCI had signed in
+// that same afternoon.
+//
+// checked:20, lockedOut:20 — a hundred percent — is the shape of a lookup that
+// returned nothing, not of twenty individual lockouts.
+//
+// listAllAuthUsers breaks out of its paging loop on error and RETURNS WHAT IT
+// HAS. An empty result therefore means either "there are no users" or "the very
+// first page failed", and the caller cannot tell which. With an empty list,
+// every partner's auth_user_id resolves to nothing, every one is labelled
+// auth_user_missing, and the alert renders all of them as "never signed in".
+//
+// Hitting MAX_PAGES is the same silent truncation — 139 users today, so it does
+// not bite, but past 1000 it produces this identical false alert.
+//
+// The same hole makes the OTHER alert lie in the opposite direction: a failed
+// listing gives summariseStalledSignups nothing to count, so it reports zero
+// stalled and stays quiet during exactly the auth incident it exists to catch.
+// ---------------------------------------------------------------------------
+
+describe("an incomplete auth-user listing", () => {
+  const approved = (code: string, authUserId: string | null) => ({
+    id: `p-${code}`, status: "approved", referral_code: code,
+    auth_user_id: authUserId, approved_at: iso(48 * HOUR),
+  });
+
+  it("does not turn a signed-in ambassador into a locked-out one", () => {
+    // The production case, reduced: the partner rows load fine, the user
+    // listing comes back empty because it failed, and every ambassador is
+    // accused. summarisePartnersLockedOut cannot know — so the CALLER must.
+    const summary = summarisePartnersLockedOut(
+      [approved("AVAMCI", "u-1"), approved("KENDRA25", "u-2")],
+      [],
+      NOW,
+    );
+
+    expect(summary.lockedOut).toBe(2);
+    expect(summary.partners.every((p) => p.reason === "auth_user_missing")).toBe(true);
+    expect(canConcludeLockout({ complete: false, summary }),
+      "an incomplete listing must never support a lockout conclusion").toBe(false);
+  });
+
+  it("still concludes normally when the listing is complete", () => {
+    const summary = summarisePartnersLockedOut(
+      [approved("REAL", "u-1")],
+      [{ id: "u-2", last_sign_in_at: iso(HOUR) }],
+      NOW,
+    );
+    expect(summary.lockedOut).toBe(1);
+    expect(canConcludeLockout({ complete: true, summary })).toBe(true);
+  });
+
+  it("allows a complete listing to clear an ambassador who has signed in", () => {
+    const summary = summarisePartnersLockedOut(
+      [approved("AVAMCI", "u-1")],
+      [{ id: "u-1", last_sign_in_at: iso(HOUR) }],
+      NOW,
+    );
+    expect(summary.lockedOut).toBe(0);
+  });
+
+  it("permits the conclusion when every reason stands without the user table", () => {
+    // no_auth_user is decided from the PARTNER row alone — no lookup involved —
+    // so an incomplete user listing cannot have manufactured it. Suppressing
+    // this case too would trade a false alarm for a real ambassador nobody is
+    // told about.
+    const summary = summarisePartnersLockedOut([approved("NOLINK", null)], [], NOW);
+    expect(summary.partners[0].reason).toBe("no_auth_user");
+    expect(canConcludeLockout({ complete: false, summary })).toBe(true);
   });
 });

@@ -118,6 +118,19 @@ export function overRepresentedDomain(
   return best;
 }
 
+/**
+ * Every auth user we could read, AND whether that is all of them.
+ *
+ * The completeness flag is the whole point. listAllAuthUsers used to return a
+ * bare array and break out of its loop on error, so an empty result meant
+ * either "there are no users" or "the first page failed" with no way to tell.
+ * Both alerts in this file then read that silence as a finding.
+ */
+interface AuthUserListing {
+  users: AuthUserLike[];
+  complete: boolean;
+}
+
 interface AuthUserLike {
   id?: string;
   created_at?: string;
@@ -190,27 +203,32 @@ export function summariseStalledSignups(users: AuthUserLike[], now: number): Omi
  * a sweep job that throws takes the whole sweep's error budget with it, and the
  * next tick tries again.
  */
-async function listAllAuthUsers(): Promise<AuthUserLike[]> {
+async function listAllAuthUsers(): Promise<AuthUserListing> {
   const collected: AuthUserLike[] = [];
 
   for (let page = 1; page <= MAX_PAGES; page += 1) {
     const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: PAGE_SIZE });
     if (error) {
       console.error("[auth-health] unable to list users", error);
-      break;
+      return { users: collected, complete: false };
     }
     const users = (data?.users ?? []) as AuthUserLike[];
     collected.push(...users);
-    if (users.length < PAGE_SIZE) break;
+    // A short page is the end of the table — the only way to finish knowing we
+    // saw everything.
+    if (users.length < PAGE_SIZE) return { users: collected, complete: true };
   }
 
-  return collected;
+  // Ran out of pages with a full page still coming. Not an error, but not the
+  // whole table either, and a caller that treats it as complete draws the same
+  // false conclusion a failed page does.
+  return { users: collected, complete: false };
 }
 
 export async function alertOnStalledSignups(): Promise<StalledSignupSummary> {
-  const collected = await listAllAuthUsers();
+  const listing = await listAllAuthUsers();
 
-  const summary = summariseStalledSignups(collected, Date.now());
+  const summary = summariseStalledSignups(listing.users, Date.now());
   if (summary.stalled === 0) {
     return { ...summary, alerted: false };
   }
@@ -219,7 +237,12 @@ export async function alertOnStalledSignups(): Promise<StalledSignupSummary> {
   // see overRepresentedDomain for the alert this sentence used to misdirect.
   // The percentages travel with it so the reader can weigh the claim rather
   // than take it on trust.
-  const skewed = overRepresentedDomain(summary);
+  //
+  // Withheld outright on a short listing: the note is a RATIO against everyone
+  // scanned, and a truncated scan makes that denominator fiction. The stalled
+  // accounts themselves are still real — each one was read from a row — so the
+  // alert still fires, merely undercounted, which is the safe direction.
+  const skewed = listing.complete ? overRepresentedDomain(summary) : null;
   const pct = (share: number) => `${Math.round(share * 100)}%`;
   const domainNote = skewed
     ? ` ${skewed.stalled} of them are @${skewed.domain}, which is ${pct(skewed.stalledShare)} of the`
@@ -418,6 +441,34 @@ export function summarisePartnersLockedOut(
   return { checked, lockedOut: lockedOut.length, partners: lockedOut };
 }
 
+/**
+ * Is this lockout summary safe to act on, given how the user listing went?
+ *
+ * WHAT THIS EXISTS TO PREVENT, in the words of the alert that caused it:
+ * "20 approved ambassador(s) have never signed in", naming all 20 referral
+ * codes and saying their codes were earning commission they could not see. All
+ * 20 had signed in. Checked the next day: 21 approved ambassadors, every one
+ * with an auth_user_id, every one with a last_sign_in_at, one of them from that
+ * same afternoon.
+ *
+ * checked:20 / lockedOut:20 is not twenty lockouts, it is one failed lookup.
+ * With an empty user listing every auth_user_id resolves to nothing, every
+ * partner is labelled auth_user_missing, and the message renders the lot as
+ * "never signed in".
+ *
+ * NOT A BLANKET SUPPRESSION. `no_auth_user` is decided from the partner row on
+ * its own, so an incomplete listing cannot have manufactured it — those still
+ * report. Only the two verdicts that depend on finding a user in the listing
+ * are withheld, and only when the listing is known to be short.
+ */
+export function canConcludeLockout(input: {
+  complete: boolean;
+  summary: Pick<LockedOutPartnerSummary, "partners">;
+}): boolean {
+  if (input.complete) return true;
+  return input.summary.partners.every((partner) => partner.reason === "no_auth_user");
+}
+
 export async function alertOnPartnersLockedOut(): Promise<LockedOutPartnerSummary> {
   const { data, error } = await supabaseAdmin
     .from("partners")
@@ -436,10 +487,20 @@ export async function alertOnPartnersLockedOut(): Promise<LockedOutPartnerSummar
     return { checked: 0, lockedOut: 0, partners: [], alerted: false };
   }
 
-  const users = await listAllAuthUsers();
-  const summary = summarisePartnersLockedOut(partners, users, Date.now());
+  const listing = await listAllAuthUsers();
+  const summary = summarisePartnersLockedOut(partners, listing.users, Date.now());
   if (summary.lockedOut === 0) {
     return { ...summary, alerted: false };
+  }
+
+  // A short listing turns every ambassador into a lockout. Say nothing rather
+  // than name twenty people who are signing in fine — see canConcludeLockout.
+  if (!canConcludeLockout({ complete: listing.complete, summary })) {
+    console.error(
+      "[auth-health] partner lockout check skipped: auth user listing was incomplete",
+      { partners: partners.length, usersSeen: listing.users.length, lockedOut: summary.lockedOut },
+    );
+    return { ...summary, lockedOut: 0, partners: [], alerted: false };
   }
 
   const codes = summary.partners
