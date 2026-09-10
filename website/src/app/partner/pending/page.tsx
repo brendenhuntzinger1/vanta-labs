@@ -1,9 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-type PartnerStatus = "pending" | "info_requested" | "rejected" | "disabled" | "approved" | null;
+// "none" — the fetch succeeded and there is NO partner record. "unknown" — the
+// fetch failed, so we do not know. Both used to be flattened into "pending",
+// which is how a stranger who never applied was told their application was
+// under review.
+type PartnerStatus = "pending" | "info_requested" | "rejected" | "disabled" | "approved" | "none" | "unknown" | null;
 
 const STATUS_COPY: Record<Exclude<PartnerStatus, "approved" | null>, { eyebrow: string; title: string; body: string }> = {
   pending: {
@@ -26,12 +31,37 @@ const STATUS_COPY: Record<Exclude<PartnerStatus, "approved" | null>, { eyebrow: 
     title: "Partner Access Disabled",
     body: "Your partner account has been disabled. If you believe this is a mistake, please contact our support team.",
   },
+  none: {
+    eyebrow: "Partner Programme",
+    title: "No Application on File",
+    body: "We don't have a partner application for you yet. If you'd like to join the ambassador programme, you can apply in a couple of minutes.",
+  },
+  unknown: {
+    eyebrow: "Partner Programme",
+    title: "We Couldn't Load Your Application",
+    body: "Something went wrong reading your partner status. Please refresh, or contact us if it keeps happening — this is a problem on our side, not with your application.",
+  },
 };
 
 export default function PartnerPendingPage() {
+  const router = useRouter();
   const [status, setStatus] = useState<PartnerStatus>(null);
   const [loaded, setLoaded] = useState(false);
 
+  // THIS PAGE USED TO TELL EVERY VISITOR THEIR APPLICATION WAS UNDER REVIEW.
+  //
+  // `json?.partner?.status ?? "pending"` turned a NULL partner — a signed-out
+  // stranger, or a customer who never applied — into "pending", and the .catch
+  // did the same on a failed fetch. So three quite different people were shown
+  // one screen reading "Application Received / Pending Approval":
+  //
+  //   someone who never applied   told an application of theirs is in review
+  //   an approved ambassador      told they cannot reach the dashboard yet
+  //   a failed request            told a falsehood instead of an error
+  //
+  // The three are now distinguished. An absent record says so and offers the
+  // application; a failed read admits it is our fault; and an approved partner
+  // is sent to their dashboard, exactly as /partner/dashboard already does.
   useEffect(() => {
     let active = true;
 
@@ -39,10 +69,11 @@ export default function PartnerPendingPage() {
       .then((response) => response.json())
       .then((json) => {
         if (!active) return;
-        setStatus(json?.partner?.status ?? "pending");
+        const partnerStatus = json?.partner?.status;
+        setStatus(partnerStatus ? (partnerStatus as PartnerStatus) : "none");
       })
       .catch(() => {
-        if (active) setStatus("pending");
+        if (active) setStatus("unknown");
       })
       .finally(() => {
         if (active) setLoaded(true);
@@ -52,6 +83,11 @@ export default function PartnerPendingPage() {
       active = false;
     };
   }, []);
+
+  // An approved ambassador has somewhere better to be.
+  useEffect(() => {
+    if (status === "approved") router.replace("/account/ambassador");
+  }, [status, router]);
 
   const copy = status && status !== "approved" ? STATUS_COPY[status] : STATUS_COPY.pending;
 
@@ -67,6 +103,9 @@ export default function PartnerPendingPage() {
           </p>
         ) : null}
         <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
+          {status === "none" ? (
+            <Link href="/partner" className="vl-btn-primary rounded-full px-6 py-3 text-sm">Apply to the Programme</Link>
+          ) : null}
           <Link href="/products" className="vl-btn-secondary rounded-full px-6 py-3 text-sm">Browse Products</Link>
           {status === "info_requested" ? (
             <Link href="/contact" className="vl-focus-ring rounded-full bg-gradient-to-r from-white to-zinc-300 px-6 py-3 text-sm font-semibold text-zinc-950">Contact Us</Link>

@@ -10,6 +10,9 @@ import { OrderTracking } from "@/components/order-tracking";
 import { ReorderButton } from "@/components/reorder-button";
 import { displayOrderReference } from "@/lib/order-reference";
 import { formatDisplayDate } from "@/lib/format-date";
+import { buildOrderSummaryLines } from "@/lib/order-summary-breakdown";
+import { pointsToDollars } from "@/lib/points-math";
+import { roundMoney } from "@/lib/bundle-pricing";
 
 export const dynamic = "force-dynamic";
 
@@ -131,11 +134,54 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ or
         <section className="vl-panel rounded-2xl p-5 sm:p-6">
           <h2 className="text-lg font-semibold text-white">Payment summary</h2>
           <div className="mt-3 divide-y divide-white/[0.06]">
-            <Row label="Subtotal" value={money(order.subtotal, order.currency)} />
-            {order.discountAmount > 0 ? <Row label="Discount" value={`−${money(order.discountAmount, order.currency)}`} accent="positive" /> : null}
-            <Row label="Shipping" value={order.shippingAmount > 0 ? money(order.shippingAmount, order.currency) : "Free"} />
-            {order.handlingFee > 0 ? <Row label="Handling" value={money(order.handlingFee, order.currency)} /> : null}
-            {order.taxAmount > 0 ? <Row label="Tax" value={money(order.taxAmount, order.currency)} /> : null}
+            {/* THE ROWS THE CUSTOMER SEES MUST ADD UP TO WHAT THEY WERE CHARGED.
+                This panel hand-listed five terms — subtotal, discount, shipping,
+                handling, tax — and the order row carries two more that are
+                genuinely charged: shipping_protection_fee and
+                card_processing_fee. Measured on a real order: rows summing to
+                $28.49 above a "Total paid" of $30.27, with $1.78 unexplained and
+                unlabelled on the one page a customer opens to check a charge.
+                Both fees were already loaded by this page's own data source, and
+                both were itemised correctly on the invoice, the emailed receipt,
+                the confirmation page and the admin order page.
+
+                buildOrderSummaryLines is the function all of those derive from.
+                It models every term and keeps a residual line, so an unmodelled
+                remainder is VISIBLE rather than silently absent — the summary
+                adds up by construction instead of by five lists being kept in
+                step by hand. */}
+            {buildOrderSummaryLines({
+              total: order.amountPaid,
+              subtotal: order.subtotal,
+              shipping: order.shippingAmount,
+              handling: order.handlingFee,
+              tax: order.taxAmount,
+              discount: order.discountAmount,
+              shippingProtection: order.shippingProtectionFee,
+              cardProcessingFee: order.cardProcessingFee,
+              // Store credit is cents; POINTS ARE NOT. They convert through
+              // pointsToDollars at the configured rate, which is what the
+              // emailed receipt and the confirmation page both use
+              // (receiptAdjustmentsFromOrder). Dividing points by 100 here would
+              // have printed a different credit line from the one the customer
+              // was emailed, on the page they open to check a charge.
+              creditsApplied: roundMoney(
+                Math.max(0, order.storeCreditRedeemedCents ?? 0) / 100
+                + pointsToDollars(Math.max(0, order.pointsRedeemed ?? 0)),
+              ),
+              itemsTotal: (order.items ?? []).reduce((running, item) => running + Number(item.lineTotal ?? 0), 0),
+            }).map((line) => (
+              <Row
+                key={line.key}
+                label={line.label}
+                value={line.amount < 0
+                  ? `−${money(Math.abs(line.amount), order.currency)}`
+                  : line.key === "shipping" && line.amount === 0
+                    ? "Free"
+                    : money(line.amount, order.currency)}
+                accent={line.tone === "credit" ? "positive" : undefined}
+              />
+            ))}
             {/* "Total paid" is a claim about money having changed hands. The
                 order-confirmation page already reasoned its way to this and
                 withholds the claim until the backend says it happened; these

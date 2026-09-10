@@ -80,7 +80,13 @@ function ProductMiniCard({ product }: { product: Product }) {
         />
       </div>
       <p className="mt-2.5 line-clamp-2 text-xs text-white/85">{product.name}</p>
-      <p className="mt-1 text-xs text-white/50">${product.price}</p>
+      {/*
+        Product.price is ALREADY a formatted string carrying its own currency
+        symbol ("$69.00"), the way every other price surface in the store
+        consumes it. The literal "$" in front of it printed "$$69.00" on every
+        tile of the account dashboard — the one place in the store that did.
+      */}
+      <p className="mt-1 text-xs text-white/50">{product.price}</p>
     </Link>
   );
 }

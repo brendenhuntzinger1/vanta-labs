@@ -3,6 +3,7 @@ import { getPointsHistory } from "@/lib/membership";
 import { getMembershipBillingHistory } from "@/lib/membership-billing";
 import { isUnpaid } from "@/lib/order-status";
 import { customerSafeFailureReason } from "@/lib/safe-error";
+import { displayOrderReference } from "@/lib/order-reference";
 
 export type NotificationTone = "info" | "success" | "warning";
 export interface AccountNotification {
@@ -25,9 +26,14 @@ const POINTS_LABELS: Record<string, string> = {
   admin_adjustment: "Points adjusted",
 };
 
-function shortId(id: string) {
-  return id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
-}
+// shortId used to name orders in this feed, and produced "order-31…f344" — an
+// internal identifier the customer holds nowhere else. Every other surface (the
+// orders list, the order detail heading, the confirmation page, the invoice and
+// the emailed receipt) calls the same order "VL-CD07E93C", via
+// displayOrderReference, which already falls back to a shortened id when an
+// order genuinely has no number. So this feed now asks the same function, and
+// shortId is gone rather than left as a second, divergent answer to the same
+// question.
 
 /**
  * A unified, honest notifications feed derived from the customer's real
@@ -46,7 +52,7 @@ export async function getCustomerNotifications(userId: string, email?: string | 
 
   for (const order of orders.slice(0, 20)) {
     const ful = String(order.fulfillmentStatus ?? "").toLowerCase();
-    const label = shortId(order.orderId);
+    const label = displayOrderReference(order.orderNumber, order.orderId);
     const orderHref = `/account/orders/${encodeURIComponent(order.orderId)}`;
     if (isUnpaid(order.paymentStatus)) {
       items.push({ id: `o-${order.orderId}`, tone: "warning", icon: "alert", title: `Finish paying for order ${label}`, body: "Your order is reserved but won't ship until payment is completed.", createdAt: order.createdAt, href: `/pay/${encodeURIComponent(order.orderId)}` });
