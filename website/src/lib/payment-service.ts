@@ -723,6 +723,53 @@ export async function createCheckoutSession(
  let paymentId = orderId;
  let hostedCheckoutUrl = "";
 
+ // A ZERO TOTAL CANNOT BE HANDED TO A CARD PROCESSOR.
+ //
+ // Store credit and points are both capped only by the balance still owed, so a
+ // customer with enough of either legitimately reaches $0.00 — and that is a
+ // SUPPORTED state, not an error: quoteOrder clamps to it deliberately and
+ // reconciliation-drift.test.ts pins "an order fully covered by store credit
+ // reconciles at zero, not as a mismatch".
+ //
+ // What is missing is the hand-off. provider.createCheckoutSession is called
+ // with amount 0, the processor refuses it, and the shopper — the store's most
+ // valuable member, the one whose balance can cover an order — is shown a bare
+ // "Invalid checkout amount." with no way forward. Repeatable, and on the
+ // cohort least deserving of it.
+ //
+ // This refuses EARLY and says something the customer can act on. It is not the
+ // full answer: an order that owes nothing should settle without a processor at
+ // all, running the paid side effects once. That is a new payment lane rather
+ // than a bug fix — it has to finalise inventory, send exactly one receipt,
+ // accrue commission and burn the tender, all exactly once, and the webhook is
+ // what does that today. Building it in a hurry, in the most safety-critical
+ // code here, would be the wrong trade. Flagged for the owner as a product
+ // decision; the dead end is gone either way.
+ if (!isManual && Math.round(finalTotal * 100) <= 0) {
+   // Same cleanup the processor-failure branch below performs, and for the same
+   // reason: the order row, its items, a live stock hold and the held credit and
+   // points all exist by now. Leaving them would hold the shopper's own units
+   // and their own balance against a checkout that will never be paid.
+   await releaseInventoryForOrder(orderId).catch((releaseError: unknown) => {
+     console.error("Unable to release inventory for a zero-total checkout", orderId, releaseError);
+   });
+   await releaseOrderTender(orderId).catch((releaseError: unknown) => {
+     console.error("Unable to release held tender for a zero-total checkout", orderId, releaseError);
+   });
+   const { error: zeroCancelError } = await supabaseAdmin
+     .from("orders")
+     .update({ payment_status: "canceled", updated_at: new Date().toISOString() })
+     .eq("order_id", orderId);
+   if (zeroCancelError) {
+     console.error("Unable to cancel a zero-total order", orderId, zeroCancelError);
+   }
+   throw new CustomerFacingError(
+     "Your credit and points cover this order in full, and we can't complete a $0.00 card payment yet. "
+     + "Please reduce the points or credit you're applying by a small amount so there's a balance to charge, "
+     + "and we'll get this straight to you. Nothing has been charged and your balance is untouched.",
+   );
+ }
+
  if (!isManual) {
    // The order row, its items and a live stock hold all exist by now. If the
    // processor call fails, every one of them has to be undone — otherwise the

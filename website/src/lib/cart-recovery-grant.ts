@@ -245,6 +245,21 @@ export const GUEST_GRANT_PREFIXES = [
   "/checkout/pay/",
   "/pay/",
   "/order-confirmation/",
+  // THE POLL THOSE THREE PAGES DEPEND ON.
+  //
+  // /checkout/pay and /pay are on this list, and both poll
+  // /api/checkout/order-status/<orderId> to notice that the payment settled.
+  // The route was NOT, so for a grant-holding guest the poll answered 401 for
+  // ever: the page sat on "confirming your payment" after the money had
+  // actually moved, which produces a second payment attempt and a support
+  // ticket. The completion fallback was dead for precisely the audience the
+  // cart grant exists to convert.
+  //
+  // Safe on the same terms as the three above, and for the same stated reason:
+  // the route defends itself with an unguessable order id and re-checks
+  // nothing else, so the grant gets the guest THROUGH the wall while the route
+  // still decides whether this order is theirs to see.
+  "/api/checkout/order-status/",
 ];
 
 export function guestGrantAllowsPath(pathname: string): boolean {

@@ -5,6 +5,8 @@ import { decodeAutomationCookie } from "@/lib/email/automation-links";
 import { decodeAttributionCookie } from "@/lib/email/campaign-links";
 import { decodeCartRecoveryCookie } from "@/lib/email/cart-recovery-links";
 import { isAutomationKey } from "@/lib/email/automation-catalog";
+import { RECOVERY_GIFT_OFFER_KEY } from "@/lib/cart-recovery-offers";
+import { isCampaignOfferKey } from "@/lib/offers/campaign-gift";
 
 /**
  * ONE PRIMARY MARKETING SOURCE PER ORDER.
@@ -56,7 +58,13 @@ export type MarketingSourceDecision = {
 
 export type MarketingSignals = {
   /** customer_offers row redeemed by this order, if any. */
-  redeemedOffer?: { automationKey: string | null; offerKey: string } | null;
+  /**
+   * `reference_id` names WHAT minted the offer — the cart for a recovery gift,
+   * the campaign for a campaign gift — which is what the decision below credits
+   * the revenue to. Without it a gift could only ever be attributed to the
+   * channel, never to the specific cart or campaign that earned it.
+   */
+  redeemedOffer?: { automationKey: string | null; offerKey: string; referenceId?: string | null } | null;
   automationClick?: { key: string; clickedAtMs: number } | null;
   campaignClick?: { campaignId: string; clickedAtMs: number } | null;
   /**
@@ -76,9 +84,36 @@ export type MarketingSignals = {
 /** Pure. The whole rule, in one place, so it can be tested without a database. */
 export function resolveMarketingSource(signals: MarketingSignals): MarketingSourceDecision {
   if (signals.redeemedOffer) {
+    // A REDEEMED OFFER IS NOT AUTOMATICALLY AN AUTOMATION.
+    //
+    // This returned kind "automation" for every redeemed offer, whatever minted
+    // it — so a cart-recovery gift and a campaign gift, the two flagship
+    // marketing features, both had their revenue credited to the automation
+    // channel. The cart-recovery funnel and its Revenue Recovered tile
+    // understated exactly the conversions the gift ladder produced, and a
+    // campaign that sent a gift showed the sale against nothing.
+    //
+    // The offer key already says which programme minted it, so ask it. Only an
+    // offer that genuinely carries an automation key — or was clicked through
+    // from an automation — is an automation.
+    const offerKey = signals.redeemedOffer.offerKey;
+    if (offerKey === RECOVERY_GIFT_OFFER_KEY) {
+      return {
+        kind: "cart_recovery",
+        ref: signals.redeemedOffer.referenceId ?? signals.cartRecoveryClick?.cartId ?? null,
+        basis: "offer_redeemed",
+      };
+    }
+    if (isCampaignOfferKey(offerKey)) {
+      return {
+        kind: "campaign",
+        ref: signals.redeemedOffer.referenceId ?? signals.campaignClick?.campaignId ?? null,
+        basis: "offer_redeemed",
+      };
+    }
     const key = signals.redeemedOffer.automationKey
       ?? (signals.automationClick && isAutomationKey(signals.automationClick.key) ? signals.automationClick.key : null);
-    return { kind: "automation", ref: key ?? `offer:${signals.redeemedOffer.offerKey}`, basis: "offer_redeemed" };
+    return { kind: "automation", ref: key ?? `offer:${offerKey}`, basis: "offer_redeemed" };
   }
 
   const automationClick = signals.automationClick && isAutomationKey(signals.automationClick.key) ? signals.automationClick : null;
@@ -236,13 +271,22 @@ export async function finalizeMarketingSource(input: { orderId: string; now?: nu
     const [redeemedRead, couponRead, adRead] = await Promise.all([
       supabaseAdmin
         .from("customer_offers")
-        .select("automation_key, offer_key")
+        .select("automation_key, offer_key, reference_id")
         .eq("redeemed_order_id", orderId)
         .limit(1)
-        .then(({ data, error }): Read<{ automationKey: string | null; offerKey: string } | null> => {
+        .then(({ data, error }): Read<{ automationKey: string | null; offerKey: string; referenceId: string | null } | null> => {
           if (error) return failed("customer_offers", error);
-          const hit = (data ?? [])[0] as { automation_key?: string | null; offer_key?: string } | undefined;
-          return { ok: true, value: hit ? { automationKey: hit.automation_key ?? null, offerKey: String(hit.offer_key ?? "") } : null };
+          const hit = (data ?? [])[0] as { automation_key?: string | null; offer_key?: string; reference_id?: string | null } | undefined;
+          return {
+            ok: true,
+            value: hit
+              ? {
+                  automationKey: hit.automation_key ?? null,
+                  offerKey: String(hit.offer_key ?? ""),
+                  referenceId: hit.reference_id ?? null,
+                }
+              : null,
+          };
         }, (error) => failed("customer_offers", error)),
       row.coupon_code
         ? supabaseAdmin

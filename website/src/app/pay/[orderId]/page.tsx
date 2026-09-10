@@ -35,7 +35,16 @@ export default async function ResubmitPaymentPage({ params }: { params: Promise<
   const method = getPaymentMethodById(methods, order.payment_method ? String(order.payment_method) : null);
   const isManual = Boolean(method && isManualPaymentMethod(method));
   const orderNumber = displayOrderReference(order.order_number as string | null, order.order_id as string | null);
-  const alreadyPaid = order.payment_status === "paid";
+  const paymentStatus = String(order.payment_status ?? "").toLowerCase();
+  const alreadyPaid = paymentStatus === "paid";
+  // A REFUNDED ORDER WAS CHARGED, AND MUST NOT BE TOLD OTHERWISE.
+  //
+  // This page had two states: paid, and everything else. "Everything else" ends
+  // at the card branch below, which tells the customer "no charge has been
+  // made" and invites them to go and pay — so someone whose order had been
+  // charged AND REFUNDED was told the opposite of what happened to their money,
+  // and pointed at a checkout that would take it again.
+  const isRefunded = paymentStatus === "refunded" || paymentStatus === "partially_refunded";
 
   return (
     <div className="min-h-screen bg-[#0b0b0b] text-white">
@@ -46,6 +55,13 @@ export default async function ResubmitPaymentPage({ params }: { params: Promise<
           <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Order {orderNumber}</h1>
           {alreadyPaid ? (
             <p className="mt-3 text-sm text-emerald-300">This order is already paid — no further action is needed.</p>
+          ) : isRefunded ? (
+            <p className="mt-3 text-sm leading-7 text-white/60">
+              {paymentStatus === "partially_refunded"
+                ? "This order was paid and has since been partially refunded. There is nothing further to pay."
+                : "This order was paid and has since been refunded. There is nothing further to pay."}
+              {" "}Your refund is returned to the original payment method.
+            </p>
           ) : isManual ? (
             <p className="mt-3 text-sm leading-7 text-white/60">
               {order.rejection_reason
@@ -63,7 +79,7 @@ export default async function ResubmitPaymentPage({ params }: { params: Promise<
           )}
         </section>
 
-        {alreadyPaid ? (
+        {alreadyPaid || isRefunded ? (
           <Link href="/products" className="mt-8 inline-flex text-sm text-white/45 transition hover:text-white">
             Continue shopping
           </Link>

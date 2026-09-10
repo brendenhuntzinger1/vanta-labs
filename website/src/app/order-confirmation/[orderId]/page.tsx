@@ -55,7 +55,7 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
   const [orderResult, paymentMethods, user, cardFeeConfig] = await Promise.all([
     supabaseAdmin
       .from("orders")
-      .select("order_id, order_number, subtotal, shipping_amount, handling_fee, tax_amount, discount_amount, shipping_protection_fee, card_processing_fee, store_credit_redeemed_cents, points_redeemed, amount_paid, payment_status, payment_failure_kind, fulfillment_status, payment_method, customer_email, created_at, order_items(product_name, quantity, line_total)")
+      .select("order_id, order_number, subtotal, shipping_amount, handling_fee, tax_amount, discount_amount, shipping_protection_fee, card_processing_fee, store_credit_redeemed_cents, points_redeemed, amount_paid, payment_status, refund_amount, payment_failure_kind, fulfillment_status, payment_method, customer_email, created_at, order_items(product_name, quantity, line_total)")
       .eq("order_id", orderId)
       .maybeSingle(),
     // Each keeps the failure behaviour it had when it was awaited alone: a
@@ -77,7 +77,19 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
   const orderNumber = displayOrderReference(order.order_number as string | null, order.order_id as string | null);
   const items = (order.order_items ?? []) as Array<{ product_name?: string; quantity?: number; line_total?: number }>;
   const paymentStatus = String(order.payment_status ?? "").toLowerCase();
-  const isPaid = paymentStatus === "paid";
+  // A REFUNDED ORDER WAS PAID. THE MONEY DID CHANGE HANDS.
+  //
+  // This read `paymentStatus === "paid"` only, so a refunded or partially
+  // refunded order was neither paid nor failed and fell into the third branch —
+  // the one that says "CONFIRMING YOUR PAYMENT… no need to pay again. You'll
+  // get an email when it settles." Measured during the audit: that is what a
+  // refunded customer saw, on the page they open to check what happened to
+  // their money, for a charge that had already been taken AND returned.
+  //
+  // The refund is shown separately below; what this flag decides is only
+  // whether the page may say money moved, and for a refunded order it did.
+  const isRefunded = paymentStatus === "refunded" || paymentStatus === "partially_refunded";
+  const isPaid = paymentStatus === "paid" || isRefunded;
   // The processor is finished and did not pay — the same terminal set
   // /api/checkout/order-status reports as `pending: false`. Veyra's return_url
   // is this page, the reconcile sweep can retire an order to payment_failed
@@ -90,6 +102,7 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
   // items are derived from it so the column always adds up (see
   // order-summary-breakdown.ts for why the residual line exists).
   const total = Number(order.amount_paid ?? 0);
+  const refunded = Number(order.refund_amount ?? 0);
   const summaryLines = buildOrderSummaryLines({
     total,
     subtotal: Number(order.subtotal ?? 0),
@@ -202,6 +215,18 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
               beneath a spinner reading "Confirming your payment…". The figure is
               the same either way; what it is called is not. */}
           <OrderTotalRow amount={money(total)} initialPaid={isPaid} />
+          {/* Stated plainly, and only when it happened. A customer arriving here
+              after a refund needs to see the reversal, not just the charge —
+              otherwise the page reads as an ordinary receipt for money they no
+              longer owe. */}
+          {isRefunded ? (
+            <p className="mt-2 text-center text-sm text-emerald-300">
+              {paymentStatus === "partially_refunded"
+                ? `Partially refunded${refunded > 0 ? ` — ${money(refunded)} returned` : ""}. `
+                : `Refunded${refunded > 0 ? ` — ${money(refunded)} returned` : ""}. `}
+              Refunds are returned to the original payment method.
+            </p>
+          ) : null}
         </section>
 
         {/* Full-width, stacked, thumb-sized. The PRIMARY action is tracking the

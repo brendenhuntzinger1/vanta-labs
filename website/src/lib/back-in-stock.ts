@@ -85,7 +85,22 @@ export async function notifyBackInStock(productSlug: string, productName: string
       .eq("product_slug", productSlug)
       .eq("notified", false);
     if (variantId) {
-      query = query.eq("variant_id", variantId);
+      // A PRODUCT-WIDE SIGNUP WANTS TO HEAR ABOUT ANY DOSE COMING BACK.
+      //
+      // `.eq("variant_id", id)` excludes NULL rows in SQL, and a NULL is exactly
+      // what the wishlist form records: account-wishlist-client.tsx renders
+      // BackInStockForm with no variantId, while the product page passes the
+      // selected dose. So every wishlist signup was stored product-wide and then
+      // matched by nothing — the row could never be selected by any restock,
+      // because restocks always name a dose. The customer was promised a message
+      // on screen and silently never got one, for the dose-stocked shape most of
+      // the catalogue is in.
+      //
+      // Widening the MATCH is the right fix, not narrowing the signup. Someone
+      // who asked from their wishlist is waiting on the product, not on one
+      // strength of it, and it also repairs the rows already sitting in the
+      // table — which passing a dose id from the wishlist would not.
+      query = query.or(`variant_id.eq.${variantId},variant_id.is.null`);
     }
 
     const { data, error } = await query;

@@ -190,9 +190,7 @@ export function CartDrawer() {
   // Suppressed only once the gift actually applies, i.e. its own minimum is
   // met; below that the shopper genuinely still has the store threshold to
   // chase and the bar is the honest thing to show.
-  const offerCoversShipping = Boolean(pendingOffer)
-    && pendingOffer!.rewardKind.startsWith("free_shipping")
-    && offerShortfall <= 0;
+
 
   // WHAT THIS CART ACTUALLY COSTS, ACCORDING TO THE THING THAT CHARGES FOR IT.
   //
@@ -246,6 +244,26 @@ export function CartDrawer() {
   });
   const giftLines = offerQuote?.giftLines ?? [];
 
+  // WHETHER THE GIFT IS ACTUALLY APPLIED IS THE SERVER'S ANSWER, NOT A SUM DONE
+  // HERE.
+  //
+  // `offerShortfall` is computed from the CLIENT cart subtotal against the
+  // offer's minimum, and nothing reconciled it against `offerQuote`, which is
+  // the server's actual quote for this basket. So when an offer was withdrawn —
+  // spent already, expired, no longer valid for this cart — the drawer went on
+  // announcing it as applied, the checkout page repeated it, and the order
+  // shipped without the gift and with no explanation. A written promise made on
+  // two screens and then not kept.
+  //
+  // Once the quote has come back it decides. Before it arrives the client sum is
+  // still the best available answer, which is the behaviour that was already
+  // there.
+  const offerApplied = offerShortfall <= 0 && (!offerQuote || Boolean(offerQuote.offer));
+
+  const offerCoversShipping = Boolean(pendingOffer)
+    && pendingOffer!.rewardKind.startsWith("free_shipping")
+    && offerApplied;
+
   // Smart membership upsell: only for non-members, and only when joining
   // would genuinely put money in their pocket TODAY (cart savings + credit
   // exceed the first month's cost). Dollars, computed live from this cart.
@@ -271,8 +289,32 @@ export function CartDrawer() {
     if (referralCode || couponCode) setCodesOpen(true);
   }
 
+  // closeCart is read through a ref so the effect below can depend on
+  // isCartOpen ALONE — see its comment.
+  // Written in an effect, not during render: this repo lints ref writes during
+  // render as an error, and rightly — a render-phase write is invisible to
+  // React's own bookkeeping. useRef's initialiser covers the first render, and
+  // this keeps it current after that.
+  const closeCartRef = useRef(closeCart);
+  useEffect(() => {
+    closeCartRef.current = closeCart;
+  }, [closeCart]);
+
   // Accessible modal behavior: move focus into the drawer on open, trap Tab
   // within it, close on Escape, lock body scroll, and restore focus on close.
+  //
+  // IT USED TO DEPEND ON closeCart, AND THAT MADE IT RUN ON EVERY CART EDIT.
+  // closeCart is redefined on each render of the cart provider, so its identity
+  // changes whenever anything in the cart changes — a quantity bumped, an item
+  // removed, a code applied. The effect therefore tore down and re-ran, and its
+  // first act is `closeButtonRef.current.focus()`. So every edit yanked focus
+  // off the control the shopper was using and back to Close, re-announcing the
+  // dialog to a screen reader each time, and scrolling the page behind it.
+  // Changing a quantity — the most-used control in the cart — was effectively
+  // unusable with a keyboard.
+  //
+  // Depending on isCartOpen alone means it runs when the drawer OPENS and when
+  // it CLOSES, which is exactly when focus should move.
   useEffect(() => {
     if (!isCartOpen) return;
     const previouslyFocused = document.activeElement as HTMLElement | null;
@@ -281,7 +323,7 @@ export function CartDrawer() {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        closeCart();
+        closeCartRef.current();
         return;
       }
       if (event.key === "Tab" && panelRef.current) {
@@ -309,7 +351,7 @@ export function CartDrawer() {
       document.body.style.overflow = previousOverflow;
       previouslyFocused?.focus?.();
     };
-  }, [isCartOpen, closeCart]);
+  }, [isCartOpen]);
 
   const effectiveReferralInput = referralInput || referralCode || "";
   const effectiveCouponInput = couponInput || couponCode || "";
@@ -542,7 +584,11 @@ export function CartDrawer() {
               {/* The one-time win-back gift. Two states, because "you have a
                   free thing" and "you have a free thing you have not unlocked"
                   are different messages and only one of them is an ask. */}
-              {pendingOffer ? (
+              {/* Nothing at all when the shopper has met the minimum but the
+                  server says the offer is no longer theirs: neither "here is
+                  your gift" nor "you are $X away" is true then, and silence
+                  beats a false promise. */}
+              {pendingOffer && (offerShortfall > 0 || offerApplied) ? (
                 <div
                   data-testid="offer-banner"
                   className={`rounded-2xl border p-4 ${

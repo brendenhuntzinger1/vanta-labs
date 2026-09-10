@@ -64,19 +64,36 @@ const MAINTENANCE_CACHE_TTL_MS = 15_000;
 const SESSION_CACHE_TTL_MS = 30_000;
 const CUSTOMER_SESSION_CACHE_TTL_MS = 30_000;
 /**
- * Ceiling on the verified-token cache.
+ * Ceiling on the verified-token caches.
  *
- * The admin cache beside it is unbounded, which is fine for a handful of staff
- * and is not fine here: this one is keyed by CUSTOMER token, so on a busy day
- * it would grow with traffic inside a long-lived runtime. Oldest-out at the
- * cap; an evicted entry costs one re-verification, never a wrong answer.
+ * This comment used to say the admin cache beside it was unbounded and that
+ * this "is fine for a handful of staff". It is not, and the reasoning had the
+ * threat model backwards: the map is keyed by whatever arrives in the
+ * vl_admin_session COOKIE, which any anonymous caller chooses. A loop sending a
+ * fresh random value per request adds an entry every time AND misses the cache
+ * every time, so each one also costs a service-role query from the component
+ * that runs before every request on the site. Unbounded growth plus query
+ * amplification, in the one place that cannot afford either.
+ *
+ * Both caches are now keyed by the token's HASH and capped. Oldest-out; an
+ * evicted entry costs one re-verification, never a wrong answer.
  */
+const SESSION_CACHE_MAX = 2_000;
 const CUSTOMER_SESSION_CACHE_MAX = 5_000;
 
 let maintenanceCacheValue = false;
 let maintenanceCacheExpiresAt = 0;
 
 const sessionCache = new Map<string, { value: boolean; expiresAt: number }>();
+
+/** Oldest-out at the cap, so an anonymous flood cannot grow this without limit. */
+function rememberAdminSession(key: string, value: boolean) {
+  if (sessionCache.size >= SESSION_CACHE_MAX) {
+    const oldest = sessionCache.keys().next();
+    if (!oldest.done) sessionCache.delete(oldest.value);
+  }
+  sessionCache.set(key, { value, expiresAt: Date.now() + SESSION_CACHE_TTL_MS });
+}
 const customerSessionCache = new Map<string, { value: boolean; expiresAt: number }>();
 
 function applySecurityHeaders(response: NextResponse) {
@@ -276,7 +293,12 @@ async function isMaintenanceEnabled() {
 }
 
 async function isValidAdminSessionToken(token: string) {
-  const cached = sessionCache.get(token);
+  // Keyed by HASH, never by the caller-supplied cookie value — see
+  // SESSION_CACHE_MAX. The hash is computed here rather than after the cache
+  // lookup because it IS the cache key now; it was already being computed a few
+  // lines below for the query.
+  const tokenHash = await sha256Hex(token);
+  const cached = sessionCache.get(tokenHash);
   const now = Date.now();
   if (cached && cached.expiresAt > now) {
     return cached.value;
@@ -287,7 +309,6 @@ async function isValidAdminSessionToken(token: string) {
     return false;
   }
 
-  const tokenHash = await sha256Hex(token);
   const query = new URLSearchParams({
     select: "id,username",
     token_hash: `eq.${tokenHash}`,
@@ -307,7 +328,7 @@ async function isValidAdminSessionToken(token: string) {
     });
 
     if (!response.ok) {
-      sessionCache.set(token, { value: false, expiresAt: now + SESSION_CACHE_TTL_MS });
+      rememberAdminSession(tokenHash, false);
       return false;
     }
 
@@ -335,13 +356,13 @@ async function isValidAdminSessionToken(token: string) {
       }
     }
 
-    sessionCache.set(token, { value: valid, expiresAt: now + SESSION_CACHE_TTL_MS });
+    rememberAdminSession(tokenHash, valid);
     return valid;
   } catch {
     // Fail closed for admin-session validation (deny), but never throw — a
     // thrown fetch in middleware 500s the whole request. Cache the negative
     // briefly so a Supabase blip doesn't hammer it on every request.
-    sessionCache.set(token, { value: false, expiresAt: now + SESSION_CACHE_TTL_MS });
+    rememberAdminSession(tokenHash, false);
     return false;
   }
 }

@@ -11,6 +11,7 @@ import { coaErrorResponse, coaForbiddenResponse, coaUnauthorizedResponse } from 
 import { getCoaLibrarySettings } from "@/lib/coa";
 import { normalizeCoaStatus } from "@/lib/coa-format";
 import type { CoaStatus } from "@/lib/coa-types";
+import { writeCoaAudit } from "@/app/api/admin/coa/[coaId]/route";
 
 export const dynamic = "force-dynamic";
 
@@ -85,6 +86,29 @@ export async function POST(request: Request) {
       externalUrl: text("externalUrl"),
       status: normalizeCoaStatus(text("status")),
       upload,
+    });
+
+    // PUBLISHING A COA IS A QUALITY CLAIM UNDER THE COMPANY'S NAME, AND HAD NO
+    // AUDIT TRAIL AT ALL.
+    //
+    // Every OTHER action on a COA record writes one — update, publish, delete —
+    // and admin-roles.ts gates canManageCoa precisely because "publishing one
+    // makes a quality claim under the company's name". Creating one, the moment
+    // the claim first exists, recorded nothing: no actor, no time, no IP. For
+    // the one document class this store asks to be judged on, that is the gap
+    // that matters most.
+    //
+    // Best-effort like its siblings: a failed audit insert must never fail the
+    // upload the operator just completed.
+    await writeCoaAudit(request, session, {
+      action: "coa_create",
+      coaId: String((record as { id?: string })?.id ?? ""),
+      metadata: {
+        productId: text("productId") || null,
+        batchNumber: text("batchNumber") || null,
+        status: normalizeCoaStatus(text("status")),
+        fileName: upload?.fileName ?? null,
+      },
     });
 
     return NextResponse.json({ success: true, record });

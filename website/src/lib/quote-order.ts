@@ -1048,7 +1048,10 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   ]);
   // No service/handling fee is ever charged — customers pay merchandise (minus
   // discounts) + shipping + sales tax only.
-  const bulkSavingsResult = calculateBulkSavingsDiscount(discountBase, bulkSavingsEligible, bulkSavingsConfig);
+  // `let`, because the gift-restore path below re-derives it. Both this and
+  // personalDiscountAmount are sized on discountBase, which changes when
+  // absorbed units are given back.
+  let bulkSavingsResult = calculateBulkSavingsDiscount(discountBase, bulkSavingsEligible, bulkSavingsConfig);
   // THE ORDER'S BUY-X-GET-Y PROMOTION — at most one, the one worth the most.
   //
   // Each promotion is priced against its OWN valuation of a rewarded unit
@@ -1224,7 +1227,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // their OWN purchase. It earns NO commission (self-referral is blocked) and,
   // like every discount here, does not stack unless stacking is enabled.
   const isApprovedAmbassadorSelf = await isApprovedAmbassadorCustomer(input.customerUserId, input.customer.email);
-  const personalDiscountAmount = isApprovedAmbassadorSelf && referralProgram.personalDiscountPercent > 0
+  let personalDiscountAmount = isApprovedAmbassadorSelf && referralProgram.personalDiscountPercent > 0
     ? calculateDiscountAmount(discountBase, referralProgram.personalDiscountPercent)
     : 0;
 
@@ -1331,6 +1334,22 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
         applyPromotionSelection();
         coupon = await resolveCoupon();
         couponAmount = coupon ? coupon.discountAmount : 0;
+        // ...AND THE TWO OTHER DISCOUNTS THAT ARE SIZED ON THE BASKET.
+        //
+        // The comment above says everything derived from the basket's size has
+        // to be derived again, and this block re-derived two of the four. Bulk
+        // savings and the ambassador's own personal discount are both computed
+        // from discountBase, which recomputeSubtotals has just changed — so the
+        // restored, larger basket was priced with the discounts owed on the
+        // SHRUNKEN one and the customer was overcharged by the difference
+        // ($3.00 in the case traced during the audit).
+        //
+        // Nothing else in the four is missing: quantityBundleSavings and the
+        // shipping waiver both fall out of these.
+        bulkSavingsResult = calculateBulkSavingsDiscount(discountBase, bulkSavingsEligible, bulkSavingsConfig);
+        personalDiscountAmount = isApprovedAmbassadorSelf && referralProgram.personalDiscountPercent > 0
+          ? calculateDiscountAmount(discountBase, referralProgram.personalDiscountPercent)
+          : 0;
       }
       offerGrantsFreeShipping = false;
       offerPercentDiscount = 0;

@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
  * Best effort — the write already happened, so a failed audit insert is logged
  * rather than turned into a failed request.
  */
-async function writeCoaAudit(
+export async function writeCoaAudit(
   request: Request,
   session: { username: string },
   input: { action: string; coaId: string; metadata?: Record<string, unknown> },
