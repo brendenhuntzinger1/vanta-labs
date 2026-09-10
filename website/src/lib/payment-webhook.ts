@@ -112,6 +112,13 @@ export interface WebhookEventState {
   status: OrderStatus;
   providerStatus: string;
   duplicate: boolean;
+  /**
+   * True when this delivery was skipped because ANOTHER invocation holds the
+   * claim and has not finished — as opposed to a genuine duplicate of work that
+   * completed. The route turns this into a retryable status instead of a 200, so
+   * an owner that dies mid-flight does not take the event with it.
+   */
+  inFlight?: boolean;
 }
 
 export interface CommissionState {
@@ -474,6 +481,40 @@ function normalizeOrderPayload(payload: string) {
  * Used by the PAID branch only. The refund branch reads the refund amount its
  * own way (resolveRefundOutcome) and is deliberately untouched here.
  */
+/**
+ * WHICH CHECKOUT SESSION A CAPTURE BELONGS TO — or null when it does not say.
+ *
+ * The processor mints one session per payment attempt, so the session id is the
+ * only thing in a delivery that separates ONE capture from ANOTHER. The
+ * envelope's own id does not: it differs per delivery, which is exactly why the
+ * dedupe keyed on it cannot tell a retry of one charge from a second real one.
+ *
+ * SEPARATE FROM resolveWebhookSessionId ON PURPOSE. That one feeds order
+ * MATCHING and reads only the live processor's nested metadata; teaching it the
+ * flat `paymentId` as well would change which order an internal-gateway delivery
+ * resolves to, and that path works. This one is read by the duplicate-capture
+ * check alone, where the flat field is the shape the internal gateway and the
+ * reconcile sweep actually send.
+ *
+ * ADVISORY ONLY. Nothing decides whether money moved from this — it exists so a
+ * second capture on an order that is already paid can be NOTICED. A delivery
+ * carrying no session id is not evidence of anything and yields null.
+ */
+export function resolveWebhookCaptureSessionId(eventPayload: {
+  paymentId?: string;
+  data?: {
+    metadata?: { veyragate_session_id?: string };
+    object?: { metadata?: { veyragate_session_id?: string } };
+  };
+}): string | null {
+  const charge = eventPayload.data?.object ?? eventPayload.data;
+  for (const candidate of [eventPayload.paymentId, charge?.metadata?.veyragate_session_id]) {
+    const value = String(candidate ?? "").trim();
+    if (value) return value;
+  }
+  return null;
+}
+
 export function resolveWebhookPaidAmount(eventPayload: {
   amount?: number;
   data?: {
@@ -594,7 +635,26 @@ const STALE_CLAIM_MS = 5 * 60 * 1000;
 // row with processed_at IS NULL is in-flight. If that claim is stale (its owner
 // crashed before markEventProcessed), it is reclaimed so the processor's retry
 // can finish the order instead of being skipped forever as a "duplicate".
-async function claimEvent(eventId: string, orderId: string, status: OrderStatus): Promise<boolean> {
+/**
+ * WHY THIS IS THREE ANSWERS AND NOT TWO.
+ *
+ * It used to return a boolean, and "already finished" and "someone else is
+ * still working on it" both came back as false — which the caller reported as
+ * `duplicate: true` and the route answered 200. A 200 tells the processor the
+ * event is delivered and it stops retrying. So if the in-flight owner then died
+ * before markEventProcessed (a crashed lambda, a timed-out cold start, a deploy
+ * mid-request), that event was never delivered again: the claim row sat
+ * unprocessed, the card was charged, and the order stayed pending_payment with
+ * nothing left to settle it but the half-hourly reconcile sweep.
+ *
+ * "processed" is genuinely delivered and 200 is correct. "in_flight" is not
+ * delivered yet, and the honest answer is "come back" — which is what the
+ * STALE_CLAIM_MS reclaim below was always written to serve, and could never be
+ * reached by a sender that had been told to stop.
+ */
+type EventClaim = "claimed" | "processed" | "in_flight";
+
+async function claimEvent(eventId: string, orderId: string, status: OrderStatus): Promise<EventClaim> {
   const nowIso = new Date().toISOString();
   const { error } = await supabaseAdmin.from("payment_events").insert({
     event_id: eventId,
@@ -605,7 +665,7 @@ async function claimEvent(eventId: string, orderId: string, status: OrderStatus)
   });
 
   if (!error) {
-    return true;
+    return "claimed";
   }
 
   if ((error as { code?: string }).code !== "23505") {
@@ -638,16 +698,17 @@ async function claimEvent(eventId: string, orderId: string, status: OrderStatus)
       claimed_at: nowIso,
       processed_at: null,
     });
-    return !retry.error;
+    return retry.error ? "in_flight" : "claimed";
   }
 
   if (existing.processed_at) {
-    return false; // genuinely already processed — a true duplicate
+    return "processed"; // genuinely already processed — a true duplicate
   }
 
   const staleBefore = new Date(Date.now() - STALE_CLAIM_MS).toISOString();
   if (String(existing.claimed_at ?? "") >= staleBefore) {
-    return false; // a recent, still-live claim is in flight — skip
+    // A recent, still-live claim. NOT a duplicate: nothing has finished yet.
+    return "in_flight";
   }
 
   // Stale unprocessed claim → retake it atomically. The guards ensure only ONE
@@ -664,7 +725,9 @@ async function claimEvent(eventId: string, orderId: string, status: OrderStatus)
     throw reclaimError;
   }
 
-  return Boolean(reclaimed && reclaimed.length > 0);
+  // Losing the reclaim race means another retry took it a moment ago and is now
+  // the in-flight owner — so this delivery is still undelivered, not a duplicate.
+  return reclaimed && reclaimed.length > 0 ? "claimed" : "in_flight";
 }
 
 // Undo a claim when processing fails partway, so the event isn't permanently
@@ -2122,8 +2185,14 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     // a human-readable scope for the claim row.
     const claimKey = `membership-${(membershipData.membership_id ?? "unknown").slice(0, 64)}`;
     const claimedMembershipEvent = await claimEvent(eventId, claimKey, "pending_payment");
-    if (!claimedMembershipEvent) {
-      return { duplicate: true, eventId, membership: true, handled: false };
+    if (claimedMembershipEvent !== "claimed") {
+      return {
+        duplicate: true,
+        eventId,
+        membership: true,
+        handled: false,
+        inFlight: claimedMembershipEvent === "in_flight",
+      };
     }
     const outcome = await handleMembershipEvent(rawEventType, membershipData);
     await markEventProcessed(eventId, claimKey, "pending_payment");
@@ -2147,13 +2216,17 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   // Claim the event up front (atomic) so concurrent duplicate deliveries can't
   // both run the paid side-effects below.
   const claimed = await claimEvent(eventId, orderId, nextStatus);
-  if (!claimed) {
+  if (claimed !== "claimed") {
     return {
       duplicate: true,
       eventId,
       orderId,
       status: nextStatus,
       providerStatus: eventPayload.status ?? eventPayload.type ?? "unknown",
+      // NOT DELIVERED YET, and the difference decides the HTTP status. An event
+      // whose owner is still working on it (or died mid-flight) must be retried
+      // by the sender; one that genuinely finished must not.
+      inFlight: claimed === "in_flight",
     } satisfies WebhookEventState;
   }
 
@@ -2409,7 +2482,13 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       // claim refuses, a stranded one older than STALE_CLAIM_MS is reclaimed so
       // a crashed run still gets retried.
       const mine = await claimEvent(candidateKey, orderId, nextStatus);
-      if (!mine) {
+      if (mine !== "claimed") {
+        // DELIBERATELY NOT RETRYABLE, unlike the event claim above. This is the
+        // REFUND-IDENTITY claim: another delivery is applying (or has applied)
+        // this same refund, and the correct outcome for this one is to record
+        // itself as handled and change nothing. Asking the sender to retry would
+        // only re-race the same refund. Losing this claim never loses money — the
+        // refund is being applied by whoever holds it.
         await markEventProcessed(eventId, orderId, (priorPaymentStatus ?? nextStatus) as OrderStatus);
         return {
           duplicate: false,
@@ -2563,6 +2642,68 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     // without this they re-fire on every retry. A processor that retries five
     // times over a day sent five critical emails for one fact.
     const flipApplied = (flipped?.length ?? 0) > 0;
+
+    // A SECOND, DIFFERENT CAPTURE ON AN ORDER THAT IS ALREADY PAID.
+    //
+    // Zero rows here means the order was paid before this delivery arrived. For
+    // a redelivery of the same charge that is exactly right, and the guard is
+    // doing its job — no second commission, no second email, no second
+    // decrement. But the same zero rows are returned when the processor has
+    // captured the card a SECOND time, and that case was absorbed in silence:
+    // the store keeps one order, the customer is out two payments, and nothing
+    // anywhere says so. Every downstream surface — the order page, the receipt,
+    // the admin row, the ledger — reports the single recorded amount, so there
+    // is no way to notice from the inside.
+    //
+    // It is reachable on this store. resumeExistingOrder mints a FRESH session
+    // for an order that is not yet paid and moves payment_id onto it, and NOTHING
+    // on our side voids the session it replaced — whether the processor does is
+    // not something we know. So a shopper with the earlier card form still open
+    // in another tab, or restored by their browser, may hold a second submittable
+    // form for one order. That is the same "just try again" behaviour behind
+    // David's and Andrew's repeat attempts on 2026-09-08.
+    //
+    // THE SESSION ID IS THE DISCRIMINATOR, not the event id: event ids differ
+    // per delivery, so they cannot separate a retry from a real second charge.
+    // The row is re-read rather than judged from the snapshot above, because the
+    // snapshot predates the concurrent delivery that won the flip and would
+    // report ITS session as ours.
+    //
+    // ALERT ONLY, DELIBERATELY. The order may already be picked, packed or
+    // shipped, and holding or refunding it from here would be acting on an
+    // inference about someone else's ledger. This says "check the processor",
+    // which is the only correct instruction. It is not deduped by type either:
+    // suppressing this on one order because another order raised it last hour is
+    // exactly the wrong trade for money that has actually moved.
+    if (!flipApplied) {
+      const incomingSession = resolveWebhookCaptureSessionId(eventPayload);
+      if (incomingSession) {
+        const { data: settledRow } = await supabaseAdmin
+          .from("orders")
+          .select("payment_id, amount_paid")
+          .eq("order_id", orderId)
+          .maybeSingle();
+        const settledSession = String(settledRow?.payment_id ?? "").trim();
+        if (settledSession && settledSession !== incomingSession) {
+          await recordSystemAlert({
+            type: "duplicate_capture_suspected",
+            severity: "critical",
+            message: `Order ${orderId} is already paid under payment session ${settledSession}, but a `
+              + `SECOND successful payment arrived under session ${incomingSession}. The customer may have `
+              + "been charged twice for one order. Check both sessions in the processor dashboard and refund "
+              + "the duplicate — the order itself has not been changed, and nothing has been shipped twice.",
+            context: {
+              order_id: orderId,
+              event_id: eventId,
+              settled_session_id: settledSession,
+              duplicate_session_id: incomingSession,
+              recorded_amount: roundMoney(Number(settledRow?.amount_paid ?? orderRecord.amount_paid ?? 0)),
+              duplicate_amount: resolveWebhookPaidAmount(eventPayload),
+            },
+          }).catch(() => {});
+        }
+      }
+    }
 
     if (currencyDisagrees && flipApplied) {
       await recordSystemAlert({

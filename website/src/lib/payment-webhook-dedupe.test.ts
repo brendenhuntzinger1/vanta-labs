@@ -47,6 +47,15 @@ const state: {
    */
   flipToPaidAfterNextRead: boolean;
   paidAt: string | null;
+  /**
+   * The processor session recorded on the order — payment_id.
+   *
+   * The fake omitted it entirely, which is how the duplicate-capture check could
+   * not be written against this file: the only field that separates one capture
+   * from another was not in the row. The paid flip now moves it, exactly as the
+   * real UPDATE does.
+   */
+  paymentId: string | null;
 } = {
   paymentStatus: "pending_payment",
   fulfillmentStatus: "pending",
@@ -58,6 +67,7 @@ const state: {
   orderType: "product",
   flipToPaidAfterNextRead: false,
   paidAt: null,
+  paymentId: "vs_first_attempt",
 };
 
 const sideEffects = {
@@ -138,6 +148,7 @@ vi.mock("@/lib/supabase-server", () => {
     order_number: "VL-CARD001",
     payment_status: state.paymentStatus,
     paid_at: state.paidAt,
+    payment_id: state.paymentId,
     fulfillment_status: state.fulfillmentStatus,
     payment_method: "card",
     order_type: state.orderType,
@@ -266,6 +277,13 @@ vi.mock("@/lib/supabase-server", () => {
               state.paymentStatus = "paid";
               state.paidAt = new Date().toISOString();
               state.flipsApplied += 1;
+              // The real flip writes `payment_id: eventPayload.paymentId ?? <row>`.
+              // Modelling it is what lets a later delivery under a DIFFERENT
+              // session be recognised as a second capture rather than a retry.
+              const flipWritten = payload as Record<string, unknown> | undefined;
+              if (flipWritten && typeof flipWritten.payment_id === "string") {
+                state.paymentId = flipWritten.payment_id;
+              }
               return { data: [{ id: "row-1" }], error: null };
             }
 
@@ -329,9 +347,10 @@ function partialRefundPayload(amount: number) {
   });
 }
 
-function successPayload() {
+function successPayload(sessionId = "vs_first_attempt") {
   return JSON.stringify({
     type: "payment.succeeded",
+    paymentId: sessionId,
     data: { object: { metadata: { order_id: ORDER_ID }, amount: 200 } },
   });
 }
@@ -353,6 +372,7 @@ beforeEach(() => {
   state.orderType = "product";
   state.flipToPaidAfterNextRead = false;
   state.paidAt = null;
+  state.paymentId = "vs_first_attempt";
 });
 
 // ---------------------------------------------------------------------------
@@ -851,5 +871,110 @@ describe("an unsafe effect that REPORTS its failure instead of throwing", () => 
 
     const types = sideEffects.alert.mock.calls.map((call) => call[0].type);
     expect(types).not.toContain("unsafe_effect_failed_inventory_decrement");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TWO CHARGES FOR ONE ORDER, AND NOBODY TOLD.
+//
+// The paid-flip guard above is doing the right thing when it matches zero rows:
+// no second commission, no second email, no second decrement. But the same zero
+// rows come back whether the processor RETRIED one charge or CAPTURED the card a
+// second time, and the second case was absorbed in silence. The store keeps one
+// order at one amount; the customer is out two payments. Every surface
+// downstream reads that single recorded amount, so nothing inside the system can
+// notice.
+//
+// It is reachable here: resumeExistingOrder mints a FRESH session for an order
+// that is not yet paid and moves payment_id onto it, and nothing on our side
+// voids the session it replaced — whether the processor does is not something we
+// know. So a shopper with the earlier card form still open in another tab may
+// hold a second submittable form for one order, which is the same "just try
+// again" behaviour behind David's and Andrew's repeat attempts on 2026-09-08.
+//
+// The session id is what separates the two cases. The envelope id cannot: it
+// differs per delivery.
+// ---------------------------------------------------------------------------
+describe("a second, DIFFERENT capture on an order that is already paid", () => {
+  const alertsOfType = (type: string) =>
+    sideEffects.alert.mock.calls.filter((c) => (c[0] as { type?: string })?.type === type);
+
+  it("is reported, loudly, instead of being absorbed", async () => {
+    await deliver("evt-cap-1", successPayload("vs_first_attempt"));
+    expect(state.paymentStatus).toBe("paid");
+
+    await deliver("evt-cap-2", successPayload("vs_second_attempt"));
+
+    const raised = alertsOfType("duplicate_capture_suspected");
+    expect(raised).toHaveLength(1);
+    const alert = raised[0][0] as { severity?: string; message?: string; context?: Record<string, unknown> };
+    expect(alert.severity).toBe("critical");
+    expect(alert.context?.settled_session_id).toBe("vs_first_attempt");
+    expect(alert.context?.duplicate_session_id).toBe("vs_second_attempt");
+    expect(alert.context?.order_id).toBe(ORDER_ID);
+  });
+
+  it("tells the operator the one thing they can actually do about it", async () => {
+    await deliver("evt-cap-1", successPayload("vs_first_attempt"));
+    await deliver("evt-cap-2", successPayload("vs_second_attempt"));
+    const alert = alertsOfType("duplicate_capture_suspected")[0][0] as { message?: string };
+    expect(alert.message).toMatch(/charged twice/i);
+    expect(alert.message).toMatch(/refund/i);
+  });
+
+  it("still runs no side effects for it — the guard is unchanged", async () => {
+    await deliver("evt-cap-1", successPayload("vs_first_attempt"));
+    sideEffects.coupon.mockClear();
+    sideEffects.points.mockClear();
+    sideEffects.email.mockClear();
+
+    await deliver("evt-cap-2", successPayload("vs_second_attempt"));
+
+    expect(sideEffects.coupon).not.toHaveBeenCalled();
+    expect(sideEffects.points).not.toHaveBeenCalled();
+    expect(sideEffects.email).not.toHaveBeenCalled();
+    expect(state.flipsApplied).toBe(1);
+  });
+
+  it("does not touch the order, because it may already be picked or shipped", async () => {
+    await deliver("evt-cap-1", successPayload("vs_first_attempt"));
+    const fulfillmentAfterFirst = state.fulfillmentStatus;
+
+    await deliver("evt-cap-2", successPayload("vs_second_attempt"));
+
+    expect(state.paymentStatus).toBe("paid");
+    expect(state.fulfillmentStatus).toBe(fulfillmentAfterFirst);
+    // The settled session stays the one that actually paid first.
+    expect(state.paymentId).toBe("vs_first_attempt");
+  });
+});
+
+describe("an ordinary redelivery is NOT reported as a duplicate capture", () => {
+  const duplicateAlerts = () =>
+    sideEffects.alert.mock.calls.filter((c) => (c[0] as { type?: string })?.type === "duplicate_capture_suspected");
+
+  it("stays silent when the same session is delivered again under a new event id", async () => {
+    // Processors retry, and the envelope id changes per delivery — so this is
+    // ordinary traffic, not a second charge. Crying wolf here would make the
+    // alert worthless within a day.
+    await deliver("evt-retry-1", successPayload("vs_first_attempt"));
+    await deliver("evt-retry-2", successPayload("vs_first_attempt"));
+    await deliver("evt-retry-3", successPayload("vs_first_attempt"));
+    expect(duplicateAlerts()).toHaveLength(0);
+  });
+
+  it("stays silent when the delivery names no session at all", async () => {
+    // The reconcile sweep and some senders omit it. Absent is not "different".
+    await deliver("evt-nosess-1", successPayload("vs_first_attempt"));
+    await deliver("evt-nosess-2", JSON.stringify({
+      type: "payment.succeeded",
+      data: { object: { metadata: { order_id: ORDER_ID }, amount: 200 } },
+    }));
+    expect(duplicateAlerts()).toHaveLength(0);
+  });
+
+  it("stays silent on the first delivery, which is not a duplicate of anything", async () => {
+    await deliver("evt-only-1", successPayload("vs_first_attempt"));
+    expect(duplicateAlerts()).toHaveLength(0);
   });
 });

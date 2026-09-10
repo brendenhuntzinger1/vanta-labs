@@ -69,6 +69,31 @@ export async function POST(request: Request) {
 
     const result = await processPaymentWebhook(payload, signature, webhookSecret, eventId);
 
+    // AN EVENT SOMEONE ELSE IS STILL WORKING ON HAS NOT BEEN DELIVERED.
+    //
+    // A 200 tells the processor to stop retrying. That is right for an event
+    // that genuinely finished, and wrong for one whose claim is still open: if
+    // the invocation holding it dies before it marks the event processed (a
+    // crash, a timeout, a deploy mid-request), nothing ever delivers that event
+    // again. The card is charged and the order sits pending_payment with only
+    // the half-hourly reconcile sweep left to rescue it.
+    //
+    // 409 is retryable and idempotent here: the claim still guards the work, so
+    // a retry either finds the event finished (200, done) or reclaims a stale
+    // claim and processes it exactly once. It cannot double-apply anything.
+    if ((result as { inFlight?: boolean }).inFlight) {
+      const res = NextResponse.json(
+        {
+          success: false,
+          error: "This event is already being processed. Please retry shortly.",
+          ...result,
+        },
+        { status: 409 },
+      );
+      res.headers.set("Retry-After", "30");
+      return res;
+    }
+
     return NextResponse.json({ success: true, ...result });
   } catch (error) {
     console.error("Payment webhook error", error);
