@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   STALLED_SIGNUP_AFTER_MS,
   STALLED_SIGNUP_LOOKBACK_MS,
+  describeStalledProviders,
   summarisePartnersLockedOut,
   summariseStalledSignups,
 } from "@/lib/auth-health";
@@ -95,6 +96,103 @@ describe("summariseStalledSignups", () => {
     const summary = summariseStalledSignups([{ created_at: iso(stale), email: null }], NOW);
     expect(summary.stalled).toBe(1);
     expect(summary.domains).toEqual({ "(unknown)": 1 });
+  });
+
+  it("counts every signup each domain contributed in the same window, confirmed or not", () => {
+    // The denominator. Five stalled Gmail accounts means nothing without
+    // knowing whether Gmail sent us five signups that week or eighty.
+    const stale = STALLED_SIGNUP_AFTER_MS + HOUR;
+    const summary = summariseStalledSignups(
+      [
+        { created_at: iso(stale), email: "one@icloud.com" },
+        { created_at: iso(stale), email: "two@icloud.com", email_confirmed_at: iso(stale - HOUR) },
+        { created_at: iso(stale), email: "three@gmail.com", email_confirmed_at: iso(stale - HOUR) },
+        // Inside the grace window: not evidence either way yet, so not counted.
+        { created_at: iso(HOUR), email: "four@gmail.com" },
+        // Older than the lookback: not counted either.
+        { created_at: iso(STALLED_SIGNUP_LOOKBACK_MS + HOUR), email: "five@gmail.com" },
+      ],
+      NOW,
+    );
+
+    expect(summary.signups).toBe(3);
+    expect(summary.signupsByDomain).toEqual({ "icloud.com": 2, "gmail.com": 1 });
+    expect(summary.domains).toEqual({ "icloud.com": 1 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The sentence that tells the operator WHERE to look. On 2026-09-10 it said
+// "5 of them are @gmail.com — check whether that provider is rejecting or
+// spam-filing our sending domain", because Gmail had the most stalled
+// accounts. Gmail also had eighty-odd signups that week and was confirming
+// more than ninety percent of them; iCloud had six and was confirming two.
+// The largest count is not the outlier, the worst share is.
+// ---------------------------------------------------------------------------
+
+describe("describeStalledProviders", () => {
+  it("names the provider whose stalled share is out of line, not the one with the most stalled accounts", () => {
+    const { note, outliers } = describeStalledProviders({
+      stalled: 9,
+      signups: 100,
+      domains: { "gmail.com": 5, "icloud.com": 4 },
+      signupsByDomain: { "gmail.com": 83, "icloud.com": 6, "yahoo.com": 11 },
+    });
+
+    expect(outliers).toEqual(["icloud.com"]);
+    expect(note).toContain("4 of the 6 @icloud.com");
+    expect(note).not.toContain("@gmail.com");
+  });
+
+  it("says so when no provider stands out", () => {
+    // Stalled accounts in proportion to signups: spam folders and changed
+    // minds, not a provider refusing us.
+    const { note, outliers } = describeStalledProviders({
+      stalled: 7,
+      signups: 100,
+      domains: { "gmail.com": 5, "icloud.com": 1, "yahoo.com": 1 },
+      signupsByDomain: { "gmail.com": 80, "icloud.com": 10, "yahoo.com": 10 },
+    });
+
+    expect(outliers).toEqual([]);
+    expect(note).toContain("No single provider stands out");
+    expect(note).not.toContain("check whether that provider");
+  });
+
+  it("points at our own sending when every provider is stalling", () => {
+    const { note, outliers } = describeStalledProviders({
+      stalled: 12,
+      signups: 15,
+      domains: { "gmail.com": 8, "icloud.com": 4 },
+      signupsByDomain: { "gmail.com": 10, "icloud.com": 5 },
+    });
+
+    expect(outliers).toEqual([]);
+    expect(note).toContain("every provider");
+  });
+
+  it("never calls out a provider on one or two signups", () => {
+    // A mistyped domain is one signup and one stall: a 100% rate that means
+    // nothing, and a real customer typo the alert cannot fix.
+    const { outliers } = describeStalledProviders({
+      stalled: 2,
+      signups: 40,
+      domains: { "iclouds.com": 1, "gmail.com": 1 },
+      signupsByDomain: { "iclouds.com": 1, "gmail.com": 39 },
+    });
+
+    expect(outliers).toEqual([]);
+  });
+
+  it("carries the overall figure so the outlier can be read against it", () => {
+    const { note } = describeStalledProviders({
+      stalled: 9,
+      signups: 100,
+      domains: { "gmail.com": 5, "icloud.com": 4 },
+      signupsByDomain: { "gmail.com": 83, "icloud.com": 6, "yahoo.com": 11 },
+    });
+
+    expect(note).toContain("9 of 100");
   });
 });
 

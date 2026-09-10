@@ -31,9 +31,10 @@ import { isTransientAuthRejection } from "@/lib/inventory-reservation";
  * sweep established and are load-bearing: jobs are KEYED rather than
  * positional so inserting one cannot mislabel another's result; each is
  * individually idempotent, so a re-run is always safe and a job that misses a
- * tick is simply picked up by the next; a transient PostgREST auth rejection
- * is retried exactly once; and the watchdog fires INSIDE the function budget
- * so a run that overruns can still report that it did.
+ * tick is simply picked up by the next; a transient PostgREST auth rejection,
+ * or a request the Supabase edge timed out, is retried exactly once; and the
+ * watchdog fires INSIDE the function budget so a run that overruns can still
+ * report that it did.
  */
 
 /** One scheduled job: the response key travels with its operator-facing name. */
@@ -47,6 +48,62 @@ export type CronJobMap = Record<string, CronJob>;
 
 /** One retry after a momentary auth refusal, before the job counts as failed. */
 const JOB_AUTH_RETRY_DELAY_MS = 250;
+
+/**
+ * One retry after the Supabase edge gives up on a request, before the job
+ * counts as failed.
+ *
+ * WHAT WAS SEEN. On 2026-09-10 the edge returned twenty-seven 504s in ten
+ * hours. Every one had an origin time of 5.0–5.4s — the edge's upstream limit
+ * — every one fell inside the first ten seconds of a cron tick, and the tables
+ * behind them hold a few dozen rows (customer_preferences, abandoned_carts,
+ * admin_control_current). Nothing was slow; something was queued. PostgREST on
+ * this project runs a ten-connection pool, and a tick fans out thirty-odd
+ * reads at once across two functions, so whichever request waits past five
+ * seconds comes back as a bare "Gateway Timeout" and the job that issued it
+ * fails outright. That raised `cron_lifecycle_failed` twice in one afternoon,
+ * naming a job that had done nothing wrong.
+ *
+ * WHY A LONGER WAIT THAN THE AUTH RETRY. A clock-skew refusal is over the
+ * moment it happened; a saturated pool is not. The edge logs put the same
+ * tick's p90 origin time back under a second by ten seconds in, so three
+ * seconds lands the retry after the burst rather than inside it, and still
+ * leaves most of the fifty-second budget for the job itself.
+ *
+ * Still one retry, not a loop, for the reason given at the auth retry: a
+ * second failure in a row is a real outage, and it is reported as one. The
+ * retry does not fix the capacity; it stops one queued read from being
+ * reported as a broken job.
+ */
+export const JOB_GATEWAY_RETRY_DELAY_MS = 3_000;
+
+/**
+ * The edge's own phrasing for giving up. postgrest-js hands back the status
+ * text and nothing else when the body is not JSON, and Kong's body when it
+ * does send one names the upstream. A job's genuine bug says neither.
+ */
+const GATEWAY_FAILURE_TEXT = /\b(gateway time-?out|bad gateway|service (temporarily )?unavailable|upstream server is timing out)\b/i;
+
+/**
+ * Did the Supabase edge, rather than the job, produce this failure?
+ *
+ * Three shapes, one cause. postgrest-js reports `{ message: "Gateway Timeout" }`
+ * — the statusText, because the 504 carried no JSON — and readAllRowsBounded
+ * wraps that text under its own label, so the message is the only evidence in
+ * both. auth-js wraps every 5xx (and a dropped connection) in
+ * AuthRetryableFetchError, with the status on the error and the request URL
+ * as its message, so there the name and status are the evidence instead.
+ */
+export function isTransientGatewayFailure(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { name?: unknown; status?: unknown; message?: unknown };
+  if (candidate.name === "AuthRetryableFetchError") return true;
+  if (candidate.status === 502 || candidate.status === 503 || candidate.status === 504) return true;
+  const message = candidate.message == null ? "" : String(candidate.message);
+  return GATEWAY_FAILURE_TEXT.test(message);
+}
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * A standing problem is not forty-eight criticals a day — but six hours is too
@@ -71,7 +128,7 @@ export function isAuthorizedCronRequest(request: Request): boolean {
     && timingSafeEqual(Buffer.from(authHeader), Buffer.from(expected));
 }
 
-async function runJobWithAuthRetry(jobs: CronJobMap, name: string): Promise<unknown> {
+async function runJobWithTransientRetry(jobs: CronJobMap, name: string): Promise<unknown> {
   try {
     return await jobs[name].run();
   } catch (error) {
@@ -81,9 +138,20 @@ async function runJobWithAuthRetry(jobs: CronJobMap, name: string): Promise<unkn
     // infrastructure blip hitting whatever happened to be running, not a bug in
     // any one job. One retry, not a loop — hammering an edge that is already
     // refusing makes an outage worse rather than shorter.
-    if (!isTransientAuthRejection(error)) throw error;
-    await new Promise((resolve) => setTimeout(resolve, JOB_AUTH_RETRY_DELAY_MS));
-    return await jobs[name].run();
+    if (isTransientAuthRejection(error)) {
+      await wait(JOB_AUTH_RETRY_DELAY_MS);
+      return await jobs[name].run();
+    }
+    // The edge timed the request out (see JOB_GATEWAY_RETRY_DELAY_MS). Same
+    // signature — a different job each time, on trivial reads — and the same
+    // single retry. Logged, because a retry that works alerts nothing, and a
+    // tick that needed one is still worth being able to find afterwards.
+    if (isTransientGatewayFailure(error)) {
+      console.warn(`[cron] ${jobs[name].label}: retrying once after the edge gave up on a request —`, describeError(error));
+      await wait(JOB_GATEWAY_RETRY_DELAY_MS);
+      return await jobs[name].run();
+    }
+    throw error;
   }
 }
 
@@ -112,7 +180,7 @@ export async function runCronGroup(options: CronGroupOptions): Promise<Record<st
   const unfinished = new Set<string>(names);
   const running = names.map((name, index) =>
     Promise.resolve()
-      .then(() => runJobWithAuthRetry(jobs, name))
+      .then(() => runJobWithTransientRetry(jobs, name))
       .then(
         (value) => { settled[index] = { status: "fulfilled", value }; },
         (reason: unknown) => { settled[index] = { status: "rejected", reason }; },
