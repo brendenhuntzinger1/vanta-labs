@@ -38,6 +38,15 @@ const state: {
   signatureValid: boolean;
   sideEffectsClaimedAt: string | null;
   orderType: string;
+  /**
+   * Turns the read-then-write window into a deterministic interleave: the next
+   * `orders` read answers with the status it has NOW, and the row then becomes
+   * paid before the caller gets as far as writing. That is exactly what a
+   * concurrent `payment.succeeded` does to a `payment.failed` invocation, with
+   * none of the flakiness of real threads.
+   */
+  flipToPaidAfterNextRead: boolean;
+  paidAt: string | null;
 } = {
   paymentStatus: "pending_payment",
   fulfillmentStatus: "pending",
@@ -47,6 +56,8 @@ const state: {
   signatureValid: true,
   sideEffectsClaimedAt: null,
   orderType: "product",
+  flipToPaidAfterNextRead: false,
+  paidAt: null,
 };
 
 const sideEffects = {
@@ -57,6 +68,8 @@ const sideEffects = {
   storeCredit: vi.fn(async () => {}),
   redeemPoints: vi.fn(async () => {}),
   revokeMembership: vi.fn(async () => {}),
+  releaseTender: vi.fn(async () => {}),
+  releaseInventory: vi.fn(async () => {}),
   alert: vi.fn(async (_alert: { type: string; severity: string; message: string; context?: unknown }) => {}),
 };
 
@@ -91,7 +104,7 @@ vi.mock("@/lib/inventory-fulfillment", () => ({
 }));
 vi.mock("@/lib/inventory-reservation", () => ({
   finalizeInventoryForOrder: vi.fn(async () => ({ ok: false })),
-  releaseInventoryForOrder: vi.fn(async () => {}),
+  releaseInventoryForOrder: sideEffects.releaseInventory,
 }));
 vi.mock("@/lib/ambassador-commission", () => ({
   getEffectiveCommissionPercent: vi.fn(async () => ({ percent: 15, tierName: null })),
@@ -107,6 +120,10 @@ vi.mock("@/lib/membership-billing", () => ({
   revokeMembershipForRefund: sideEffects.revokeMembership,
 }));
 vi.mock("@/lib/cart-recovery", () => ({ markAbandonedCartsRecovered: vi.fn(async () => {}) }));
+// The tender hold is the store credit and loyalty points the shopper spent at
+// checkout. Releasing it hands that balance back, so on a CAPTURED order it is
+// money given away — which is half of what the lost-update race below does.
+vi.mock("@/lib/tender-reservation", () => ({ releaseOrderTender: sideEffects.releaseTender }));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: sideEffects.alert }));
 vi.mock("@/lib/ambassador-settings", () => ({ getAmbassadorProgramSettings: async () => ({ enabled: false }) }));
 vi.mock("@/lib/admin-control", () => ({ getReferralProgramConfig: async () => ({ enabled: false }) }));
@@ -120,6 +137,7 @@ vi.mock("@/lib/supabase-server", () => {
     order_id: ORDER_ID,
     order_number: "VL-CARD001",
     payment_status: state.paymentStatus,
+    paid_at: state.paidAt,
     fulfillment_status: state.fulfillmentStatus,
     payment_method: "card",
     order_type: state.orderType,
@@ -203,12 +221,23 @@ vi.mock("@/lib/supabase-server", () => {
           const b: Record<string, unknown> = {
             eq() { return b; },
             limit() { return b; },
-            async maybeSingle() { return { data: orderRow(), error: null }; },
+            async maybeSingle() {
+              const snapshot = orderRow();
+              // The concurrent winner lands between this read and our write.
+              if (state.flipToPaidAfterNextRead) {
+                state.flipToPaidAfterNextRead = false;
+                state.paymentStatus = "paid";
+                state.paidAt = new Date().toISOString();
+                state.sideEffectsClaimedAt = new Date().toISOString();
+                state.flipsApplied += 1;
+              }
+              return { data: snapshot, error: null };
+            },
             order() { return b; },
           };
           return b;
         },
-        update: () => {
+        update: (payload?: Record<string, unknown>) => {
           const filters: Array<[string, unknown]> = [];
           const b: Record<string, unknown> = {
             eq(c: string, v: unknown) { filters.push([c, v]); return b; },
@@ -235,8 +264,27 @@ vi.mock("@/lib/supabase-server", () => {
             if (notPaid) {
               if (state.paymentStatus === notPaid[1]) return { data: [], error: null };
               state.paymentStatus = "paid";
+              state.paidAt = new Date().toISOString();
               state.flipsApplied += 1;
               return { data: [{ id: "row-1" }], error: null };
+            }
+
+            // EVERY OTHER WRITE, MODELLED AS THE DATABASE WOULD DO IT.
+            //
+            // This used to return a matched row without applying anything, so a
+            // lost update was invisible here: the non-paid write could overwrite
+            // a freshly-paid order and no assertion in this file could see it.
+            // Now the payload lands on the state and an `eq` precondition is
+            // honoured, so a compare-and-set that should match nothing matches
+            // nothing.
+            const expected = filters.find(([c]) => c === "payment_status");
+            if (expected && state.paymentStatus !== expected[1]) {
+              return { data: [], error: null };
+            }
+            const written = payload as Record<string, unknown> | undefined;
+            if (written && typeof written.payment_status === "string") {
+              state.paymentStatus = written.payment_status;
+              if ("paid_at" in written) state.paidAt = (written.paid_at as string | null) ?? null;
             }
             return { data: [{ id: "row-1" }], error: null };
           }
@@ -303,6 +351,60 @@ beforeEach(() => {
   state.signatureValid = true;
   state.sideEffectsClaimedAt = null;
   state.orderType = "product";
+  state.flipToPaidAfterNextRead = false;
+  state.paidAt = null;
+});
+
+// ---------------------------------------------------------------------------
+// A CAPTURED PAYMENT CANNOT BE UN-CAPTURED BY A LOSING EVENT.
+//
+// The demotion guard (CAPTURED_PAYMENT_STATES, payment-webhook.ts) is evaluated
+// against a snapshot read ONCE, and the non-paid write that follows it carried
+// no precondition — so a `payment.failed` that read the order as pending could
+// still overwrite a row that had become `paid` in between. On the harness, 19 of
+// 20 orders driven this way ended `payment_status='payment_failed'` with
+// `paid_at` NULL while `paid_side_effects_at` was set: the money was captured,
+// the receipt had already gone out, and the order said declined.
+//
+// The damage is NOT a restock — that is correctly gated on the prior status.
+// It is worse and quieter:
+//
+//   * the stock HOLD is released on an order whose units were also committed,
+//     so availability is inflated and the line can be oversold;
+//   * the tender hold is released, handing the shopper back the store credit
+//     and points they actually spent;
+//   * the customer keeps a receipt for an order that reads "payment not
+//     completed", and no alert fires anywhere.
+//
+// Both tests below drive the same deterministic interleave.
+// ---------------------------------------------------------------------------
+describe("a losing payment.failed cannot demote an order that has just been paid", () => {
+  it("leaves the order paid, keeps paid_at, and reverses nothing", async () => {
+    // The order is paid by a concurrent delivery in the window between this
+    // invocation's read and its write.
+    state.flipToPaidAfterNextRead = true;
+
+    await deliver("evt-late-decline", JSON.stringify({
+      type: "payment.failed",
+      data: { object: { metadata: { order_id: ORDER_ID }, decline_code: "insufficient_funds" } },
+    }));
+
+    expect(state.paymentStatus).toBe("paid");
+    expect(state.paidAt).not.toBeNull();
+  });
+
+  it("does not hand back the stock hold or the shopper's store credit", async () => {
+    state.flipToPaidAfterNextRead = true;
+
+    await deliver("evt-late-decline-2", JSON.stringify({
+      type: "payment.failed",
+      data: { object: { metadata: { order_id: ORDER_ID }, decline_code: "insufficient_funds" } },
+    }));
+
+    // Releasing either of these on a captured order is giving money away.
+    expect(sideEffects.releaseTender).not.toHaveBeenCalled();
+    expect(sideEffects.releaseInventory).not.toHaveBeenCalled();
+  });
 });
 
 describe("an unsigned delivery is not a payment", () => {

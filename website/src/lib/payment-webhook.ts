@@ -710,6 +710,29 @@ async function upsertOrderRecord(input: {
   paidAt?: string | null;
   providerEventId?: string;
   /**
+   * COMPARE-AND-SET: only write if the row is STILL in this status.
+   *
+   * Every ordering guard in processPaymentWebhook — the refund-terminal check,
+   * CAPTURED_PAYMENT_STATES, FULLY_TERMINAL_ORDER_STATES — is evaluated against
+   * a snapshot read once, near the top. The paid flip has always been a
+   * compare-and-set (`.neq("payment_status","paid")`); this write was not, so
+   * every one of those guards was advisory the moment two deliveries for one
+   * order overlapped. Two events with DISTINCT ids are not serialised by
+   * claimEvent, and on the card lane they are routine: a first-attempt decline
+   * and the shopper's immediate retry.
+   *
+   * Measured on the harness before this existed: of 20 orders each sent a
+   * concurrent payment.succeeded and payment.failed, 19 finished
+   * payment_status='payment_failed' with paid_at NULL and paid_side_effects_at
+   * SET — money captured, receipt sent, order reading declined, the stock hold
+   * released against committed units, and the shopper's store credit handed
+   * back.
+   *
+   * Omit it for a brand-new webhook-created row, where there is no prior status
+   * to assert.
+   */
+  expectedPaymentStatus?: string | null;
+  /**
    * WHY the payment failed, in the processor's words — written only when this
    * upsert is recording a payment_failed status. Absent on every other event so
    * a later refund or cancel never blanks a reason already on the row.
@@ -791,12 +814,20 @@ async function upsertOrderRecord(input: {
   };
 
   if (existingOrder) {
-    const { error } = await supabaseAdmin.from("orders").update(basePayload).eq("order_id", input.orderId);
+    let write = supabaseAdmin.from("orders").update(basePayload).eq("order_id", input.orderId);
+    if (input.expectedPaymentStatus !== undefined) {
+      write = input.expectedPaymentStatus === null
+        ? write.is("payment_status", null)
+        : write.eq("payment_status", input.expectedPaymentStatus);
+    }
+    // `.select()` is what makes the precondition readable: without it the
+    // caller cannot tell a write that matched from one that was refused.
+    const { data: updated, error } = await write.select("id");
     if (error) {
       throw error;
     }
 
-    return { id: existingOrder.id };
+    return { id: existingOrder.id, matched: (updated?.length ?? 0) > 0 };
   }
 
   const { data, error } = await supabaseAdmin.from("orders").insert({
@@ -808,7 +839,8 @@ async function upsertOrderRecord(input: {
     throw error;
   }
 
-  return { id: data.id };
+  // A fresh insert always "matched": there was no prior status to lose a race to.
+  return { id: data.id, matched: true };
 }
 
 async function upsertOrderItems(orderId: string, items?: Array<{
@@ -2437,8 +2469,16 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   // paid delivery. Only a brand-new webhook-created order, or a non-paid status
   // change (refund/cancel/failed), needs the upsert.
   if (!orderRecord || nextStatus !== "paid") {
-    await upsertOrderRecord({
+    const written = await upsertOrderRecord({
       orderId,
+      // ONLY WRITE IF THE ROW IS STILL WHERE THE GUARDS ABOVE SAW IT.
+      //
+      // Every guard between the read at the top of this function and this line
+      // judged a snapshot. Asserting that snapshot here is what turns them from
+      // advisory into enforced — see expectedPaymentStatus on upsertOrderRecord
+      // for the 19-of-20 measurement that prompted it. A brand-new
+      // webhook-created row has no prior status, so it carries no precondition.
+      expectedPaymentStatus: orderRecord ? priorPaymentStatus : undefined,
       // EVERY field below falls back to the stored row, and that is the whole
       // point of this block.
       //
@@ -2493,6 +2533,41 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         : null,
       items: eventPayload.items,
     });
+
+    // THE ROW MOVED UNDER US: STOP, AND REVERSE NOTHING.
+    //
+    // Zero rows matched the precondition, so another delivery changed the
+    // order's money state between our read and our write — in practice a
+    // concurrent payment.succeeded. Everything below this point was reasoned
+    // from the stale snapshot, and the reversal block in particular decides
+    // whether to hand back the stock hold and the shopper's store credit by
+    // comparing against `priorPaymentStatus`. Running it now would release both
+    // against a CAPTURED payment.
+    //
+    // So this returns the way the ordering guards above do: record the event
+    // against the status the row actually holds, and alert, because a silent
+    // no-op here is how a genuine decline would disappear.
+    if (!written.matched) {
+      const fresh = await getOrderByOrderId(orderId);
+      const freshStatus = (fresh?.payment_status ?? priorPaymentStatus ?? "pending_payment") as OrderStatus;
+      await recordSystemAlert({
+        type: "payment_event_lost_race",
+        severity: "warning",
+        message: `Order ${orderId}: a ${eventPayload.type ?? "payment"} event was not applied because the order moved from `
+          + `${priorPaymentStatus ?? "unknown"} to ${freshStatus} while it was being processed. `
+          + `Nothing was reversed. The winning event's state stands.`,
+        context: { order_id: orderId, event_id: eventId, expected_status: priorPaymentStatus, actual_status: freshStatus, event_type: eventPayload.type ?? null },
+      }).catch(() => {});
+      await markEventProcessed(eventId, orderId, freshStatus);
+      return {
+        duplicate: false,
+        eventId,
+        orderId,
+        status: freshStatus,
+        providerStatus: eventPayload.status ?? eventPayload.type ?? "unknown",
+      } satisfies WebhookEventState;
+    }
+
     await upsertOrderItems(orderId, eventPayload.items);
 
     // A WEBHOOK-CREATED ORDER CANNOT KNOW ITS OWN TAX SPLIT — SAY SO RATHER
