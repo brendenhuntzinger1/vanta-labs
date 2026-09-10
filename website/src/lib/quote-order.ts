@@ -34,6 +34,40 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 
 import type { CartItemInput, CustomerInput } from "@/lib/payment-types";
 
+/**
+ * Is the client's claimed total BELOW the server's, beyond the one-cent tolerance?
+ *
+ * The guard exists to refuse underpayment: a crafted request claiming to owe
+ * less than the server computed. Overpayment is harmless — the server charges
+ * its own authoritative figure — so only one direction is blocked, and a
+ * one-cent tolerance is deliberate because the client previews the same maths
+ * in floating point and can legitimately land a cent away.
+ *
+ * WHY THIS IS ITS OWN FUNCTION, COMPARED IN INTEGER CENTS.
+ *
+ * It was written inline as `Number(input.expectedTotal) < expectedTotal - 0.01`,
+ * which is three floating-point operations deciding whether a real customer may
+ * buy something. `0.01` is not representable in binary, so the right-hand side
+ * is not "a cent less than the total" but a value a fraction above or below it
+ * depending on the cents involved — and the left-hand side carries the client's
+ * own accumulated error. At some cent values a legitimate one-cent-under total
+ * is refused; the customer is told their discount is no longer available and the
+ * checkout hard-400s, with no way forward but a reload that changes nothing.
+ *
+ * In cents the rule is exactly what it claims to be and is the same at every
+ * amount: strictly more than one cent short is an underpayment. Out here it is
+ * one expression with a test file, rather than a float comparison buried 1,600
+ * lines into a pricing function.
+ */
+export function isUnderpaidTotal(clientTotal: unknown, serverTotal: number): boolean {
+  const claimed = Number(clientTotal);
+  // Absent or unparseable is not an underpayment CLAIM — the caller only applies
+  // this when the client actually sent a total, and a NaN must never throw away
+  // a legitimate order.
+  if (!Number.isFinite(claimed)) return false;
+  return Math.round(claimed * 100) < Math.round(serverTotal * 100) - 1;
+}
+
 // -------------------------------------------------------------------------
 // quoteOrder — the store's ONE authoritative pricing pass.
 //
@@ -1637,10 +1671,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // real total). Membership perks are applied authoritatively on the server
   // and only ever LOWER the total, so a client total >= the server total is
   // always safe and accepted (the customer is charged the correct perked total).
-  if (
-    input.expectedTotal !== undefined &&
-    Number(input.expectedTotal) < expectedTotal - 0.01
-  ) {
+  if (input.expectedTotal !== undefined && isUnderpaidTotal(input.expectedTotal, expectedTotal)) {
     throw new Error("Altered total detected");
   }
 
