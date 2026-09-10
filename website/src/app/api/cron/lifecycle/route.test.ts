@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { JOB_GATEWAY_RETRY_DELAY_MS } from "@/lib/cron-runner";
 
 // ---------------------------------------------------------------------------
 // LIFECYCLE MAIL RUNS ON ITS OWN SCHEDULE, AND ON EXACTLY ONE.
@@ -136,5 +138,84 @@ describe("the lifecycle schedule", () => {
     await callLifecycle();
 
     expect(cartRecovery).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // THE SUPABASE EDGE GIVES UP ON A REQUEST AFTER FIVE SECONDS.
+  //
+  // 2026-09-10: twenty-seven edge 504s in ten hours, every one with an origin
+  // time of 5.0–5.4s, every one inside the first ten seconds of a cron tick,
+  // on tables of a few dozen rows. PostgREST on this project runs a
+  // ten-connection pool, a tick fans out thirty-odd reads at once, and
+  // whichever one waits past the edge's limit comes back as a bare
+  // "Gateway Timeout" — which the runner treated as a bug in the job and
+  // raised as a critical, twice in one afternoon.
+  // -------------------------------------------------------------------------
+  describe("a request the Supabase edge timed out", () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    async function callLifecycleThroughRetry() {
+      const pending = callLifecycle();
+      await vi.advanceTimersByTimeAsync(JOB_GATEWAY_RETRY_DELAY_MS);
+      return (await (await pending).json()) as Record<string, unknown>;
+    }
+
+    it("is retried once, in the shape PostgREST actually reports it", async () => {
+      // What production raised: a paged read wraps the edge's statusText, and a
+      // bare PostgREST error object carries nothing but that text.
+      emailAutomations.mockRejectedValueOnce(new Error("marketing opt-in read failed: Gateway Timeout"));
+      cartRecovery.mockRejectedValueOnce({ message: "Gateway Timeout" });
+
+      const body = await callLifecycleThroughRetry();
+
+      expect(emailAutomations).toHaveBeenCalledTimes(2);
+      expect(cartRecovery).toHaveBeenCalledTimes(2);
+      expect(body.emailAutomations).toEqual({ job: "emailAutomations" });
+      expect(body.cartRecovery).toEqual({ job: "cartRecovery" });
+      expect(recordSystemAlert).not.toHaveBeenCalled();
+    });
+
+    it("is retried once when GoTrue is the service that timed out", async () => {
+      // auth-js wraps every 5xx in AuthRetryableFetchError; its message is the
+      // request URL, so the status is the only thing that says why.
+      const refusal = Object.assign(new Error('{"url":"https://example.supabase.co/auth/v1/admin/users"}'), {
+        name: "AuthRetryableFetchError",
+        status: 504,
+      });
+      emailAutomations.mockRejectedValueOnce(refusal);
+
+      await callLifecycleThroughRetry();
+
+      expect(emailAutomations).toHaveBeenCalledTimes(2);
+      expect(recordSystemAlert).not.toHaveBeenCalled();
+    });
+
+    it("is reported when it happens twice, because two in a row is an outage", async () => {
+      emailAutomations
+        .mockRejectedValueOnce(new Error("marketing opt-in read failed: Gateway Timeout"))
+        .mockRejectedValueOnce(new Error("marketing opt-in read failed: Gateway Timeout"));
+
+      const body = await callLifecycleThroughRetry();
+
+      expect(emailAutomations).toHaveBeenCalledTimes(2);
+      expect(body.emailAutomations).toEqual({ error: "marketing opt-in read failed: Gateway Timeout" });
+      expect(recordSystemAlert).toHaveBeenCalledTimes(1);
+      expect(recordSystemAlert.mock.calls[0][0].context).toEqual({
+        email_automations: "marketing opt-in read failed: Gateway Timeout",
+      });
+    });
+
+    it("waits before retrying, so the retry lands after the burst rather than inside it", async () => {
+      emailAutomations.mockRejectedValueOnce(new Error("marketing opt-in read failed: Gateway Timeout"));
+
+      const pending = callLifecycle();
+      await vi.advanceTimersByTimeAsync(JOB_GATEWAY_RETRY_DELAY_MS - 1);
+      expect(emailAutomations).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(emailAutomations).toHaveBeenCalledTimes(2);
+    });
   });
 });
