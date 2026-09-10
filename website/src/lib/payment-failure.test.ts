@@ -58,9 +58,23 @@ describe("extractProcessorFailure — the processor's own words, wherever it put
     expect(detail).toEqual({ kind: "processor_declined", code: null, reason: "Test decline" });
   });
 
-  it("records an honest null when the processor said nothing about why", () => {
+  it("refuses to call a detail-less failure a bank decline, exactly as the sweep's classifier does", () => {
+    // This used to expect kind "processor_declined" with a null reason, which
+    // rendered in /admin as "Declined by bank / processor" for an event that
+    // named no bank and gave no code. classifyDeadSession stopped making that
+    // guess on 2026-09-08; this path had been left behind, so one bare failure
+    // got two different labels depending on which classifier saw it.
     const detail = extractProcessorFailure({ type: "payment.failed", data: { metadata: { order_id: "order-1" } } });
-    expect(detail).toEqual({ kind: "processor_declined", code: null, reason: null });
+    expect(detail.kind).toBe("other");
+    expect(detail.code).toBeNull();
+    expect(detail.reason).toMatch(/no decline code or message/i);
+    expect(detail.reason).toMatch(/3-D Secure/);
+  });
+
+  it("still reports a real decline as one whenever the processor explained anything at all", () => {
+    // The boundary the fix must not move: one field is enough.
+    expect(extractProcessorFailure({ data: { decline_code: "do_not_honor" } }).kind).toBe("processor_declined");
+    expect(extractProcessorFailure({ data: { failure_message: "Card was declined." } }).kind).toBe("processor_declined");
   });
 
   it("clamps a runaway message and ignores values that are not strings", () => {
@@ -76,7 +90,8 @@ describe("extractProcessorFailure — the processor's own words, wherever it put
   it("never throws, whatever it is handed", () => {
     for (const garbage of [null, undefined, "string", 12, [], { data: null }, { data: { object: "nope" } }]) {
       expect(() => extractProcessorFailure(garbage)).not.toThrow();
-      expect(extractProcessorFailure(garbage).kind).toBe("processor_declined");
+      // Garbage explains nothing, so it cannot be called a bank decline.
+      expect(extractProcessorFailure(garbage).kind).toBe("other");
     }
   });
 });

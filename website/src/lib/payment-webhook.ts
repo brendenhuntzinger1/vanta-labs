@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { FULLY_TERMINAL_ORDER_STATES } from "@/lib/payment-types";
-import { extractProcessorFailure, type PaymentFailureDetail } from "@/lib/payment-failure";
+import { extractProcessorFailure, PAID_RETRY_WINDOW_MS, type PaymentFailureDetail } from "@/lib/payment-failure";
 
 /**
  * Statuses in which the shopper's money has been captured and the order must
@@ -676,7 +676,7 @@ async function releaseEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, order_number, order_type, membership_tier_id, membership_cycle, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, shipping_protection_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, shipping_address, city, postal_code, points_redeemed, store_credit_redeemed_cents, inventory_committed_at, payment_failure_kind")
+    .select("id, order_id, order_number, order_type, membership_tier_id, membership_cycle, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, shipping_protection_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, shipping_address, city, postal_code, points_redeemed, store_credit_redeemed_cents, inventory_committed_at, payment_failure_kind, payment_failure_code, payment_failure_reason")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -685,6 +685,34 @@ async function getOrderByOrderId(orderId: string) {
   }
 
   return data;
+}
+
+/**
+ * Another order the SAME customer already paid inside the retry window.
+ *
+ * Used only to enrich an alert. A shopper who is told "that payment did not go
+ * through" and sent back to checkout may place a second order before the first
+ * one's money lands, so when a failed order reopens as paid this is the question
+ * an operator needs answered immediately: did this person pay twice?
+ *
+ * findPaidRetry in payment-failure.ts is the pure matcher over a candidate list
+ * (and is what the admin list uses); this is the one narrow read that fetches
+ * such a candidate from the webhook path. Never throws — it informs a warning.
+ */
+async function findPaidSiblingOrder(customerEmail: string | null, excludeOrderId: string): Promise<string | null> {
+  const email = String(customerEmail ?? "").trim().toLowerCase();
+  if (!email) return null;
+  const since = new Date(Date.now() - PAID_RETRY_WINDOW_MS).toISOString();
+  const { data } = await supabaseAdmin
+    .from("orders")
+    .select("order_id, order_number")
+    .eq("customer_email", email)
+    .eq("payment_status", "paid")
+    .gte("paid_at", since)
+    .neq("order_id", excludeOrderId)
+    .limit(1);
+  const row = data?.[0];
+  return row ? String(row.order_number ?? row.order_id) : null;
 }
 
 async function upsertOrderRecord(input: {
@@ -2217,6 +2245,43 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       context: { orderId, eventId },
     }).catch(() => {});
   }
+
+  // THE RETRY THAT PAYS, AND WHY IT MUST NOT BE SILENT.
+  //
+  // payment_failed is deliberately absent from REFUND_TERMINAL_STATES, so a
+  // declined order that later pays is allowed straight through to the paid
+  // flip — which is correct, and is the single most important path this store
+  // has: on 2026-09-09 David's $269.35 came back insufficient_funds, his bank
+  // pushed him an approval, he approved it, and his retry paid 71 seconds
+  // later. That was the first order at or above $200 this store ever settled.
+  //
+  // But the reopen had no voice at all. By the time it happens the shopper has
+  // been TOLD the card was not charged and pushed back to checkout, the stock
+  // hold and the tender hold have both been released, and the admin queue has
+  // filed the order as failed. The money then arrives and nothing says so.
+  // Worse, the shopper who was told to try again may already have placed a
+  // second order — so this is also the one moment where a genuine double
+  // payment by one person is most likely, and nobody was looking.
+  //
+  // findPaidRetry already knows how to spot that sibling order. Warning, not
+  // critical: this is a GOOD outcome that needs eyes, not an incident.
+  if (nextStatus === "paid" && priorPaymentStatus === "payment_failed") {
+    const sibling = await findPaidSiblingOrder(orderRecord?.customer_email ? String(orderRecord.customer_email) : null, orderId)
+      .catch(() => null);
+    await recordSystemAlert({
+      type: "payment_captured_after_failure",
+      severity: "warning",
+      message:
+        `Order ${orderId} was recorded as failed and has now been paid — a retry the processor accepted, which is how a `
+        + "bank-approved purchase completes. The shopper was told the card was not charged, and the stock and "
+        + "store-credit holds were released when it failed, so confirm the order is fulfillable."
+        + (sibling
+          ? ` NOTE: ${sibling} was also paid by the same customer within the last 24 hours — check this is not a double payment.`
+          : ""),
+      context: { orderId, eventId, prior_status: priorPaymentStatus, possible_duplicate_order: sibling },
+    }).catch(() => {});
+  }
+
   if (nextStatus === "paid" && priorPaymentStatus && REFUND_TERMINAL_STATES.has(priorPaymentStatus) && !neverCaptured) {
     await markEventProcessed(eventId, orderId, priorPaymentStatus as OrderStatus);
     return {
@@ -2528,6 +2593,22 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         ? (() => {
             const failure = extractProcessorFailure(eventPayload);
             const recordedKind = orderRecord?.payment_failure_kind ? String(orderRecord.payment_failure_kind) : null;
+            // An UNEXPLAINED failure (no code, no message — kind "other") must
+            // never overwrite a story the row already tells better. The express
+            // lane records Veyra's decline code at authorisation and Veyra then
+            // delivers a bare payment.failed for the same session; replacing
+            // "insufficient_funds" with "the processor did not say why" loses the
+            // only fact anyone had. Leaving paymentFailure null skips the failure
+            // columns entirely — payment_failed_at is already on the row from the
+            // decline that explained itself.
+            //
+            // Only a recorded DECLINE is protected this way. "checkout_expired"
+            // asserts "No charge was attempted", and an arriving payment.failed
+            // contradicts that, so it still gives way to the neutral kind.
+            const explained = failure.kind !== "other";
+            const rowExplains = recordedKind === "processor_declined"
+              && Boolean(orderRecord?.payment_failure_code || orderRecord?.payment_failure_reason);
+            if (!explained && rowExplains) return null;
             return { ...failure, replaceDetail: recordedKind !== null && recordedKind !== failure.kind };
           })()
         : null,

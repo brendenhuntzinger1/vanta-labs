@@ -104,6 +104,17 @@ const REASON_PATHS: readonly (readonly string[])[] = [
 ];
 
 /**
+ * What we say when the processor reported a failure and explained nothing.
+ *
+ * Shared by both classifiers so the webhook path and the reconcile path cannot
+ * drift into labelling the same evidence differently — which is exactly what
+ * happened between 2026-09-08 and this change.
+ */
+const UNEXPLAINED_FAILURE_REASON =
+  "The payment did not complete at the processor, which recorded no decline code or message. "
+  + "Not evidence the card was refused — an abandoned verification (3-D Secure) step ends here too.";
+
+/**
  * The processor's account of a failed charge, wherever it put it.
  *
  * VeyraGate delivers `{ id, type, data: <charge> }` and the charge has been
@@ -114,11 +125,27 @@ const REASON_PATHS: readonly (readonly string[])[] = [
  */
 export function extractProcessorFailure(payload: unknown): PaymentFailureDetail {
   const roots = [dig(payload, ["data", "object"]), dig(payload, ["data"]), payload].filter(isRecord);
-  return {
-    kind: "processor_declined",
-    code: firstText(roots, CODE_PATHS, MAX_CODE_CHARS),
-    reason: firstText(roots, REASON_PATHS, MAX_REASON_CHARS),
-  };
+  const code = firstText(roots, CODE_PATHS, MAX_CODE_CHARS);
+  const reason = firstText(roots, REASON_PATHS, MAX_REASON_CHARS);
+
+  // SAME POLICY AS classifyDeadSession, AND IT USED TO DISAGREE WITH IT.
+  //
+  // This returned kind "processor_declined" unconditionally, so an event that
+  // said only "this payment failed" — no decline code, no message — was filed as
+  // a bank decline and rendered in /admin as "Declined by bank / processor". The
+  // sweep's own classifier was changed on 2026-09-08 to stop making exactly that
+  // guess, for exactly the reason below; the webhook path was left behind, so
+  // the same bare failure got two different labels depending on which code saw
+  // it first.
+  //
+  // An abandoned verification step ends here too, so "the bank refused" is not a
+  // claim this evidence supports. `other` renders as the neutral "Payment
+  // failed"; the order is still retired and no money handling changes.
+  if (!code && !reason) {
+    return { kind: "other", code: null, reason: UNEXPLAINED_FAILURE_REASON };
+  }
+
+  return { kind: "processor_declined", code, reason };
 }
 
 /**
@@ -164,9 +191,7 @@ export function classifyDeadSession(status: string, session?: unknown): PaymentF
     return {
       kind: "other",
       code: "failed",
-      reason:
-        "The payment did not complete at the processor, which recorded no decline code or message. "
-        + "Not evidence the card was refused — an abandoned verification (3-D Secure) step ends here too.",
+      reason: UNEXPLAINED_FAILURE_REASON,
     };
   }
   if (normalized === "expired") {

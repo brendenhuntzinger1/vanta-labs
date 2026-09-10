@@ -378,6 +378,48 @@ beforeEach(() => {
 //
 // Both tests below drive the same deterministic interleave.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// THE RETRY THAT PAYS MUST NOT BE SILENT.
+//
+// payment_failed is deliberately NOT a money-terminal state, so a declined
+// order that later pays goes straight through to the paid flip. That is the
+// single most valuable path this store has — David's $269.35 came back
+// insufficient_funds on 2026-09-09, his bank pushed him an approval, and his
+// retry paid 71 seconds later, the first order at or above $200 ever settled.
+//
+// But by then the shopper has been told the card was NOT charged, the stock and
+// tender holds have been released, and the admin queue has filed the order as
+// failed. The money arriving after all that needs to say so out loud — and it
+// is also the moment a genuine double payment by one person is most likely,
+// because the shopper was told to try again.
+// ---------------------------------------------------------------------------
+describe("a failed order that is later paid", () => {
+  it("still reaches paid, and raises payment_captured_after_failure", async () => {
+    state.paymentStatus = "payment_failed";
+
+    await deliver("evt-reopen-after-failure");
+
+    expect(state.paymentStatus).toBe("paid");
+    const alerts = sideEffects.alert.mock.calls.map(([a]) => a);
+    const reopen = alerts.find((a) => a?.type === "payment_captured_after_failure");
+    expect(reopen).toBeDefined();
+    expect(reopen?.severity).toBe("warning");
+    // It must tell the operator the two things that are now untrue on the order.
+    expect(reopen?.message).toMatch(/not charged/i);
+    expect(reopen?.message).toMatch(/holds were released|store-credit/i);
+  });
+
+  it("does not raise the reopen alert on an ordinary first payment", async () => {
+    state.paymentStatus = "pending_payment";
+
+    await deliver("evt-ordinary-first-payment");
+
+    expect(state.paymentStatus).toBe("paid");
+    const types = sideEffects.alert.mock.calls.map(([a]) => a?.type);
+    expect(types).not.toContain("payment_captured_after_failure");
+  });
+});
+
 describe("a losing payment.failed cannot demote an order that has just been paid", () => {
   it("leaves the order paid, keeps paid_at, and reverses nothing", async () => {
     // The order is paid by a concurrent delivery in the window between this

@@ -26,10 +26,17 @@ describe("payment.succeeded after a never-captured cancel", () => {
     const guard = SOURCE.indexOf('const REFUND_TERMINAL_STATES = new Set(["refunded", "partially_refunded", "canceled"]);');
     expect(guard).toBeGreaterThan(0);
     const window = SOURCE.slice(guard, guard + 2200);
+    // The three clauses that DEFINE a never-captured cancel sit together, right
+    // under the declaration.
     expect(window).toContain('priorPaymentStatus === "canceled"');
     expect(window).toContain("!orderRecord?.paid_at");
     expect(window).toContain("Number(orderRecord?.refund_amount ?? 0) <= 0");
-    expect(window).toContain("REFUND_TERMINAL_STATES.has(priorPaymentStatus) && !neverCaptured");
+    // The short-circuit it feeds is asserted on its own rather than by proximity:
+    // this used to be a fourth toContain inside the window, and adding the
+    // payment_captured_after_failure alert between the two pushed it past the
+    // 2200-character slice — a passing guard reported as a missing one. What
+    // matters is that the exemption exists, not that it is within N characters.
+    expect(SOURCE).toContain("REFUND_TERMINAL_STATES.has(priorPaymentStatus) && !neverCaptured");
   });
 
   it("tells the operator the order was reopened rather than reopening it silently", () => {
