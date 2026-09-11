@@ -150,3 +150,38 @@ trigger. P2 in Primary means the subject and opening are the trigger. Both in
 Promotions is inconclusive in this inbox and the next round goes to a fresh
 seed. Neither probe is a shipping candidate as written; each isolates one
 variable.
+
+## Round two, completed readings (owner screenshot, 9:36 PM ET)
+
+| Id | Subject | Tab |
+|---|---|---|
+| C4-B | One last note, with 10% off your GHRP-2 5mg | **Promotions** |
+| W0 | A gift toward your first Vanta Labs order (welcome offer as configured) | **Promotions** |
+| W1 | Before your first order | not visible in the Promotions list at 9:36; arrival unconfirmed |
+| P1, P2 | | not yet due at screenshot time |
+
+Every cart-recovery variant sent to the consumer inbox after the first two is
+in Promotions, whatever its wording. The welcome offer as configured is in
+Promotions too, which is consistent with its zero clicks over 36 September
+sends.
+
+## Round four: the same set to the support mailbox (Google Workspace)
+
+Owner's instruction: try the other address. This mailbox can be read through
+the API (labels, headers), so each message's folder is recorded from the
+API rather than by eye; the owner reads the tab in the app. Same sender, same
+headers, same bodies, footer addressed to this mailbox. Three minutes apart.
+
+| # | Id | Subject | Resend id |
+|---|---|---|---|
+| 1 | t12h control | Every batch has a published report | 589c589b-bc59-41b6-a1ca-e4ed139ed87e |
+| 2 | t24h control | 2 free gifts with your GHRP-2 5mg | 4f0a1cb2-51d6-45a0-a33c-df0c08286e17 |
+| 3 | C3-B | Your GHRP-2 5mg is still saved | 4e875042-0282-4153-8fb8-0e96759b396e |
+| 4 | P1-plain | Holding your GHRP-2 5mg | b11d827a-fd4d-4851-a1e4-d141c0c9c063 |
+| 5 | P2-doc | Search the COA library before you order | b7feab15-2704-4167-acbf-6e7945b3c888 |
+| 6 | W0 | A gift toward your first Vanta Labs order | 7dffae51-578f-4ae2-87bf-4686f8a04ad6 |
+| 7 | W1 | Before your first order | 88ac2de4-3e65-4c20-854e-405f78920201 |
+
+Caveat: this is a Workspace mailbox on the sender's own organisational domain,
+so it is a weaker stand-in for a consumer inbox. What it adds is a second,
+independent classifier read and API-visible labels.
