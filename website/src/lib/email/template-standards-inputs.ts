@@ -42,6 +42,7 @@ export const INPUTS: Record<string, unknown> = {
   newProductLaunchTemplate: { name: "Zain", productName: "BPC-157", productUrl: URL_ },
   backInStockTemplate: { name: "Zain", productName: "BPC-157", productUrl: URL_ },
   cartRecoveryT30mTemplate: { name: "Zain", items: [{ name: "BPC-157", quantity: 1 }], cartValueCents: 11998, restoreUrl: URL_ },
+  cartRecoveryPaymentFailedTemplate: { name: "Zain", items: [{ name: "BPC-157", quantity: 1 }], cartValueCents: 11998, restoreUrl: URL_, failure: "declined", orderNumber: "VL-1001" },
   cartRecoveryT12hTemplate: { name: "Zain", items: [{ name: "BPC-157", quantity: 1 }], cartValueCents: 11998, restoreUrl: URL_ },
   cartRecoveryT24hTemplate: { name: "Zain", items: [{ name: "BPC-157", quantity: 1 }], cartValueCents: 11998, restoreUrl: URL_ },
   cartRecoveryGiftTemplate: {

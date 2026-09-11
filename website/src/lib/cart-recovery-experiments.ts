@@ -29,6 +29,13 @@
  * at a time, or a difference cannot be attributed to anything.
  */
 
+/**
+ * Which experiment the variant currently means. Recorded on every send row
+ * (abandoned_cart_emails.experiment) so a later test on the same column can
+ * never be pooled with this one. Change it when the axis changes.
+ */
+export const RECOVERY_EXPERIMENT_KEY = "subject-2026-09";
+
 export const RECOVERY_VARIANTS = ["a", "b"] as const;
 export type RecoveryVariant = (typeof RECOVERY_VARIANTS)[number];
 

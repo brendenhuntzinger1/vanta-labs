@@ -7,7 +7,8 @@
     "opened_at",
     "clicked_at",
     "coupon_id",
-    "variant"
+    "variant",
+    "experiment"
   ],
   "abandoned_carts": [
     "id",
@@ -425,6 +426,16 @@
     "notified_at",
     "created_at"
   ],
+  "cart_recovery_stage_overrides": [
+    "abandoned_cart_id",
+    "stage",
+    "offer_key",
+    "note",
+    "created_at",
+    "consumed_at",
+    "consumed_email_id",
+    "perks"
+  ],
   "coa_records": [
     "id",
     "product_id",
@@ -647,6 +658,17 @@
     "recipient_email",
     "suppressed",
     "received_at"
+  ],
+  "email_engagement_events": [
+    "id",
+    "campaign_type",
+    "reference_id",
+    "recipient_email",
+    "kind",
+    "source",
+    "at",
+    "user_agent",
+    "created_at"
   ],
   "email_send_log": [
     "id",
@@ -1450,15 +1472,5 @@
     "user_id",
     "product_slug",
     "created_at"
-  ],
-  "cart_recovery_stage_overrides": [
-    "abandoned_cart_id",
-    "stage",
-    "offer_key",
-    "note",
-    "created_at",
-    "consumed_at",
-    "consumed_email_id",
-    "perks"
   ]
 }

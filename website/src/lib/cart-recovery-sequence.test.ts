@@ -31,12 +31,12 @@ const DAY_MS = 24 * HOUR_MS;
 type Row = Record<string, unknown>;
 
 const db: { carts: Row[]; stages: Row[]; coupons: Row[]; orders: Row[] } = { carts: [], stages: [], coupons: [], orders: [] };
-const sent: Array<{ to: string; campaignType: string; subject: string; text: string; html: string }> = [];
+const sent: Array<{ to: string; campaignType: string; templateKey: string; subject: string; text: string; html: string }> = [];
 
 const { sendMarketingEmail } = vi.hoisted(() => ({
   sendMarketingEmail: vi.fn(async (input: Record<string, unknown>) => {
     sent.push({
-      to: String(input.to), campaignType: String(input.campaignType),
+      to: String(input.to), campaignType: String(input.campaignType), templateKey: String(input.templateKey),
       subject: String(input.subject), text: String(input.text), html: String(input.html),
     });
     return { success: true };
@@ -452,5 +452,69 @@ describe("selectDueStage keeps a minimum gap between stages", () => {
   it("applies no gap to a cart with no stage sent yet", async () => {
     const { selectDueStage } = await import("@/lib/cart-recovery");
     expect(selectDueStage(2 * HOUR_MS, config, new Set(), null)).toBe("t30m");
+  });
+});
+
+describe("stage 1 for a shopper whose payment failed", () => {
+  // Measured 2026-09-11: sixteen orders since August failed at payment ($3,995
+  // of subtotal) and nothing was ever sent about any of them. Three of the
+  // shoppers who came back on their own took two to three days. They are the
+  // highest-intent segment the store has, and until now they received the
+  // same first reminder as someone who added one vial and closed the tab.
+  it("sends the payment message as the first stage when the address has a declined card after the cart was seen", async () => {
+    const cart = seedCart({ firstSeenHoursAgo: 2 });
+    db.orders.push({
+      order_id: "o-declined", order_number: "VL-ABC123", customer_email: cart.email, payment_status: "payment_failed",
+      payment_failure_kind: "processor_declined", payment_failed_at: new Date(Date.now() - 90 * 60_000).toISOString(),
+      created_at: new Date(Date.now() - 90 * 60_000).toISOString(), order_type: "product",
+    });
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    const result = await runAbandonedCartSweep();
+    expect(result.t30mSent).toBe(1);
+    expect(sent[0].campaignType).toBe("cart_recovery_t30m");
+    expect(sent[0].templateKey).toBe("cartRecoveryPaymentFailedTemplate");
+    expect(sent[0].subject).toBe("Your payment did not go through");
+    expect(sent[0].text).toContain("VL-ABC123");
+    expect(sent[0].text).toContain("nothing was charged");
+    // It IS stage 1: the reservation is the t30m slot, so the sequence continues from stage 2.
+    expect(db.stages.map((row) => row.stage)).toEqual(["t30m"]);
+  });
+
+  it("says the order was not completed when the checkout expired at payment", async () => {
+    const cart = seedCart({ firstSeenHoursAgo: 2 });
+    db.orders.push({
+      order_id: "o-expired", order_number: "VL-EXP001", customer_email: cart.email, payment_status: "payment_failed",
+      payment_failure_kind: "checkout_expired", payment_failed_at: new Date(Date.now() - 80 * 60_000).toISOString(),
+      created_at: new Date(Date.now() - 100 * 60_000).toISOString(), order_type: "product",
+    });
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    await runAbandonedCartSweep();
+    expect(sent[0].subject).toBe("Your order was not completed");
+    expect(sent[0].text).toContain("VL-EXP001");
+  });
+
+  it("ignores a failure from before this cart was seen: that was another attempt, not this one", async () => {
+    const cart = seedCart({ firstSeenHoursAgo: 2 });
+    db.orders.push({
+      order_id: "o-old", order_number: "VL-OLD001", customer_email: cart.email, payment_status: "payment_failed",
+      payment_failure_kind: "processor_declined", payment_failed_at: new Date(Date.now() - 3 * DAY_MS).toISOString(),
+      created_at: new Date(Date.now() - 3 * DAY_MS).toISOString(), order_type: "product",
+    });
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    await runAbandonedCartSweep();
+    expect(sent[0].templateKey).toBe("cartRecoveryT30mTemplate");
+  });
+
+  it("sends nothing at all once the shopper has paid, whatever failed before", async () => {
+    const cart = seedCart({ firstSeenHoursAgo: 2 });
+    db.orders.push({
+      order_id: "o-fail", order_number: "VL-F1", customer_email: cart.email, payment_status: "payment_failed",
+      payment_failure_kind: "processor_declined", payment_failed_at: new Date(Date.now() - 90 * 60_000).toISOString(),
+      created_at: new Date(Date.now() - 90 * 60_000).toISOString(), order_type: "product",
+    });
+    db.orders.push({ order_id: "o-paid", customer_email: cart.email, payment_status: "paid", order_type: "product", created_at: new Date(Date.now() - 30 * 60_000).toISOString() });
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    await runAbandonedCartSweep();
+    expect(sent).toHaveLength(0);
   });
 });

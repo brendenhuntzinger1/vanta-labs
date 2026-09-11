@@ -1923,6 +1923,68 @@ export function cartRecoveryT30mTemplate(input: { name: string; items: Array<{ n
 }
 
 /**
+ * STAGE 1, FOR A SHOPPER WHOSE PAYMENT FAILED.
+ *
+ * Measured 2026-09-11: sixteen orders since August failed at payment and
+ * nothing was ever sent about any of them; three of the shoppers who came
+ * back on their own took two to three days. They had reached the till. The
+ * generic reminder ("you left this behind") is wrong for them in fact and in
+ * tone, so the sweep sends this instead as their first stage, through the same
+ * claim, guard and measurement, and the sequence continues from stage 2.
+ *
+ * SAYS ONLY WHAT THE ORDER RECORD PROVES. A recorded decline is a decline and
+ * nothing was charged; an expired checkout was not completed and nothing was
+ * charged; any other failure "did not complete", with no claim about the bank
+ * at all. No offer, no code, no urgency: the shopper's own intent is the
+ * reason to write, and the one thing to do is finish.
+ */
+export type RecoveryPaymentFailure = "declined" | "expired" | "other";
+
+export function cartRecoveryPaymentFailedTemplate(input: { name: string; items: Array<{ name: string; quantity: number; unitPriceCents?: number; image?: string }>; cartValueCents: number; restoreUrl: string; failure: RecoveryPaymentFailure; orderNumber: string }): EmailTemplate {
+  const hi = greeting(input.name);
+  // An unknown kind is treated as "other": the message that claims least.
+  const failure: RecoveryPaymentFailure = input.failure === "declined" || input.failure === "expired" ? input.failure : "other";
+  const order = String(input.orderNumber ?? "").trim();
+  const orderRef = order ? ` for order ${order}` : "";
+  const what = failure === "declined"
+    ? `The card payment${orderRef} was declined by the bank, and nothing was charged.`
+    : failure === "expired"
+      ? `The checkout${orderRef} was not completed, and nothing was charged.`
+      : `The payment${orderRef} did not complete.`;
+  const next = failure === "declined"
+    ? "Your cart is saved at the price you saw. You can finish the order with the same card or another one."
+    : "Your cart is saved at the price you saw, whenever you are ready to finish.";
+  const help = "If something looks wrong, reply to this message and a person will help.";
+  return {
+    subject: failure === "declined" ? "Your payment did not go through" : "Your order was not completed",
+    html: renderLayout({
+      preheader: failure === "other" ? "Your cart is saved at the price you saw." : "Nothing was charged. Your cart is saved.",
+      titleHtml: "About your order",
+      bodyHtml: `${hi.html}<p style="margin:0;">${escapeHtml(what)}</p><p style="margin:12px 0 0;">${escapeHtml(next)}</p>`
+        + `${cartSummaryHtml(input.items, input.cartValueCents)}`
+        + `<p style="margin:16px 0 0;color:#a3a3a3;font-size:13px;">${escapeHtml(help)}</p>`,
+      ctaLabel: "Complete my order",
+      ctaUrl: input.restoreUrl,
+      ctaVariant: "primary",
+    }),
+    text: toText([
+      hi.text,
+      hi.text ? "" : null,
+      what,
+      next,
+      "",
+      ...cartSummaryText(input.items, input.cartValueCents),
+      "",
+      `Complete your order: ${input.restoreUrl}`,
+      "",
+      help,
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
+/**
  * STAGE 2 (12-24h) - THE OBJECTION, ANSWERED.
  *
  * This used to be a second copy of stage 1 ("A quick note that your cart is

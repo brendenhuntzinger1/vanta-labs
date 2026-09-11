@@ -15,6 +15,8 @@ import { isPaidOrderStatus, isProductPurchaseOrder } from "@/lib/ledger";
 import { recordSystemAlert } from "@/lib/monitoring";
 import {
   cartRecoveryGiftTemplate,
+  cartRecoveryPaymentFailedTemplate,
+  type RecoveryPaymentFailure,
   cartRecoveryT30mTemplate,
   cartRecoveryT12hTemplate,
   cartRecoveryT24hTemplate,
@@ -29,7 +31,7 @@ import {
   OFFER_CATALOG,
 } from "@/lib/offers/customer-offers";
 import { loadCartRecoveryOverrides, resolveOverridePerks, markCartRecoveryOverrideConsumed } from "@/lib/cart-recovery-overrides";
-import { recoveryVariantFor } from "@/lib/cart-recovery-experiments";
+import { RECOVERY_EXPERIMENT_KEY, recoveryVariantFor } from "@/lib/cart-recovery-experiments";
 import {
   planStageOffer,
   recoveryGiftConfig,
@@ -628,6 +630,7 @@ async function reserveAndSendStage(input: {
       sent_at: new Date().toISOString(),
       coupon_id: null,
       variant: recoveryVariantFor(input.cartId),
+      experiment: RECOVERY_EXPERIMENT_KEY,
     })
     .select("id")
     .single();
@@ -1026,20 +1029,61 @@ type RecoveryContext = {
    * sequence to the same address, so the cart has to be part of the answer.
    */
   recoveryGifts: Map<string, Array<{ at: number; cartId: string | null }>>;
+  /**
+   * Product orders that failed at payment, per address, newest first. A cart
+   * whose address has one AFTER the cart was seen belongs to a shopper who
+   * reached the till; stage 1 says so instead of "you left this behind".
+   */
+  failedOrders: Map<string, Array<RecoveryFailedOrder>>;
 };
+
+export interface RecoveryFailedOrder {
+  orderId: string;
+  orderNumber: string;
+  at: number;
+  kind: RecoveryPaymentFailure;
+}
+
+/**
+ * The failed payment this cart's first stage should speak to, or null.
+ *
+ * Only a failure at or after the cart was first seen counts: an older one
+ * belongs to another attempt, and a shopper who has since paid never reaches
+ * here at all (the sweep closes the cart first). Pure.
+ */
+export function paymentFailureFor(
+  failed: ReadonlyArray<RecoveryFailedOrder> | undefined,
+  cartFirstSeenAt: number,
+): RecoveryFailedOrder | null {
+  if (!failed || failed.length === 0 || !Number.isFinite(cartFirstSeenAt)) return null;
+  let best: RecoveryFailedOrder | null = null;
+  for (const order of failed) {
+    if (!Number.isFinite(order.at) || order.at < cartFirstSeenAt) continue;
+    if (!best || order.at > best.at) best = order;
+  }
+  return best;
+}
+
+function paymentFailureKind(raw: unknown): RecoveryPaymentFailure {
+  const kind = String(raw ?? "").toLowerCase();
+  if (kind === "processor_declined") return "declined";
+  if (kind === "checkout_expired") return "expired";
+  return "other";
+}
 
 /** PostgREST `in` filters ride in the URL; a page of addresses is read in slices. */
 const CONTEXT_CHUNK = 100;
 
 function mergeRecoveryContext(into: RecoveryContext, from: RecoveryContext): void {
   for (const [email, orders] of from.paidOrders) into.paidOrders.set(email, orders);
+  for (const [email, orders] of from.failedOrders) into.failedOrders.set(email, orders);
   for (const [email, sends] of from.recoverySends) into.recoverySends.set(email, sends);
   for (const [email, at] of from.lastRecoveryCouponAt) into.lastRecoveryCouponAt.set(email, at);
   for (const [email, gifts] of from.recoveryGifts) into.recoveryGifts.set(email, gifts);
 }
 
 async function loadRecoveryContext(emails: string[], now: number): Promise<RecoveryContext> {
-  const context: RecoveryContext = { paidOrders: new Map(), recoverySends: new Map(), lastRecoveryCouponAt: new Map(), recoveryGifts: new Map() };
+  const context: RecoveryContext = { paidOrders: new Map(), recoverySends: new Map(), lastRecoveryCouponAt: new Map(), recoveryGifts: new Map(), failedOrders: new Map() };
   if (emails.length === 0) return context;
   if (emails.length > CONTEXT_CHUNK) {
     for (let i = 0; i < emails.length; i += CONTEXT_CHUNK) {
@@ -1051,9 +1095,21 @@ async function loadRecoveryContext(emails: string[], now: number): Promise<Recov
   try {
     const { data } = await supabaseAdmin
       .from("orders")
-      .select("order_id, customer_email, payment_status, created_at, order_type")
+      .select("order_id, order_number, customer_email, payment_status, created_at, order_type, payment_failed_at, payment_failure_kind")
       .in("customer_email", emails);
     for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+      // A FAILED PAYMENT IS READ HERE TOO. Same product-order rule as the paid
+      // branch below; the kind decides which sentence stage 1 may say.
+      if (String(row.payment_status ?? "") === "payment_failed" && isProductPurchaseOrder(row as { order_type?: string | null })) {
+        const email = String(row.customer_email ?? "").trim().toLowerCase();
+        const at = new Date(String(row.payment_failed_at ?? row.created_at)).getTime();
+        if (email && Number.isFinite(at)) {
+          const list = context.failedOrders.get(email) ?? [];
+          list.push({ orderId: String(row.order_id ?? ""), orderNumber: String(row.order_number ?? ""), at, kind: paymentFailureKind(row.payment_failure_kind) });
+          context.failedOrders.set(email, list);
+        }
+        continue;
+      }
       if (!isPaidOrderStatus(row.payment_status as string | null)) continue;
       // Same rule as the webhook mark above: a membership charge or a reship is
       // not "they already bought", and it does not make them a recent buyer for
@@ -1067,6 +1123,7 @@ async function loadRecoveryContext(emails: string[], now: number): Promise<Recov
       context.paidOrders.set(email, list);
     }
     for (const list of context.paidOrders.values()) list.sort((a, b) => b.at - a.at);
+    for (const list of context.failedOrders.values()) list.sort((a, b) => b.at - a.at);
   } catch (error) {
     console.error("[cart-recovery] could not read orders for the sweep; relying on the webhook mark", error);
   }
@@ -1425,7 +1482,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
   const RECOVERY_MAX_AGE_MS = STAGE_WINDOWS.t72h.closesAfterMs;
   const oldestActivityIso = new Date(now - RECOVERY_MAX_AGE_MS - RECOVERY_SEQUENCE_COOLDOWN_MS).toISOString();
 
-  const context: RecoveryContext = { paidOrders: new Map(), recoverySends: new Map(), lastRecoveryCouponAt: new Map(), recoveryGifts: new Map() };
+  const context: RecoveryContext = { paidOrders: new Map(), recoverySends: new Map(), lastRecoveryCouponAt: new Map(), recoveryGifts: new Map(), failedOrders: new Map() };
   const candidates: Array<{ row: DueCartRow; stage: RecoveryStage; claimed: Set<string> }> = [];
   for (let offset = 0; offset < CART_MAX_SCAN && candidates.length < CART_SWEEP_BUDGET; offset += CART_SCAN_PAGE) {
     const { data, error } = await supabaseAdmin
@@ -1788,11 +1845,18 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     });
 
     if (stage === "t30m") {
+      // A SHOPPER WHO REACHED THE TILL GETS A DIFFERENT FIRST STAGE. Same slot,
+      // same claim, same guard, same measurement; only the message changes,
+      // and only when the record proves a payment failed after this cart was
+      // seen. The sequence then continues from stage 2 exactly as before.
+      const failure = paymentFailureFor(context.failedOrders.get(email), new Date(row.first_seen_at).getTime());
       sent = await reserveAndSendStage({
         cartId, stage, email,
         campaignType: "cart_recovery_t30m",
-        templateKey: "cartRecoveryT30mTemplate",
-        buildTemplate: (url) => cartRecoveryT30mTemplate({ ...base, restoreUrl: url, variant }),
+        templateKey: failure ? "cartRecoveryPaymentFailedTemplate" : "cartRecoveryT30mTemplate",
+        buildTemplate: (url) => failure
+          ? cartRecoveryPaymentFailedTemplate({ ...base, restoreUrl: url, failure: failure.kind, orderNumber: failure.orderNumber })
+          : cartRecoveryT30mTemplate({ ...base, restoreUrl: url, variant }),
       });
     } else if (stage === "t12h") {
       // THE PROOF MESSAGE. The batch number is whatever the catalogue holds for
