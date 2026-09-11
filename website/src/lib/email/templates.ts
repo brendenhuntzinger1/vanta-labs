@@ -2181,6 +2181,36 @@ export function cartRecoveryGiftTemplate(input: {
  * address in the footer of every message.
  */
 /**
+ * WHAT A GIFT LABEL SAYS IN A SENTENCE.
+ *
+ * The sweep builds the label from live product names — "TB-500 5mg + GHK-Cu
+ * 50mg + Recon Water 30ml" — and a leading "free" may arrive on it. The offer
+ * stages state the gift in a sentence rather than in a badge, so the label is
+ * split back into names: "TB-500 5mg, GHK-Cu 50mg and Recon Water 30ml". No
+ * article goes in front of a product name, because "a" or "an" is decided by
+ * how a code is spoken and the catalogue does not say. The count is what a
+ * subject line carries: three names clear the sixty characters an inbox shows.
+ */
+function giftInWords(giftLabel: string): { count: number; list: string; one: string } {
+  const names = giftLabel.replace(/^free\s+/i, "").split(" + ").map((name) => name.trim()).filter(Boolean);
+  const count = names.length;
+  const list = count > 1 ? `${names.slice(0, -1).join(", ")} and ${names[count - 1]}` : (names[0] ?? "");
+  return { count, list, one: names[0] ?? "" };
+}
+
+/** The terms line the till enforces, in the muted size every stage uses for it. */
+const RECOVERY_TERMS_STYLE = "margin:12px 0 0;color:#a3a3a3;font-size:13px;line-height:1.6;";
+
+/**
+ * A subject that names the product, unless naming it would push the line past
+ * the sixty characters an inbox shows — then the generic form, whole, beats
+ * the specific one cut off mid-word.
+ */
+function subjectThatFits(specific: string, generic: string): string {
+  return specific.length <= 60 ? specific : generic;
+}
+
+/**
  * STAGE 3 (24-72h) - THE FIRST INCENTIVE, AND IT IS A GIFT.
  *
  * This used to be a newsletter ("Before you order: testing, shipping,
@@ -2202,40 +2232,27 @@ export function cartRecoveryGiftTemplate(input: {
  * buyers, from addresses already gifted this month, and from carts under the
  * floor. What the email says comes from what was actually minted, never from
  * what the stage nominally offers.
+ *
+ * THE SHAPE IS A NOTE, NOT AN OFFER CARD. This stage used to carry a "FREE
+ * GIFT" badge in gold capitals, a tinted offer box and a "Claim my ..." button.
+ * The placement diagnosis of 2026-09-11 (docs/superpowers/specs/
+ * 2026-09-11-placement-diagnosis-log.md) put that shape, and plain rewrites of
+ * it, in front of a consumer Gmail seed: every offer-shaped message sat in
+ * Promotions, and the one recovery message the inbox kept was the one that led
+ * with information. The tab is not the goal and those readings alone do not
+ * decide it. What they settle is that an offer card is the wrong shape for
+ * this brand's voice in any tab. So the gift is one sentence, the terms are
+ * one muted line, the cart is the cart, and the button says what it does —
+ * stage 1's shape with one more sentence in it. The offer itself, its terms
+ * and its cost are exactly what they were.
  */
 export function cartRecoveryT24hTemplate(input: { name: string; items: Array<{ name: string; quantity: number; unitPriceCents?: number; image?: string }>; cartValueCents: number; restoreUrl: string; giftLabel: string; offerTerms: string; variant?: string; freeShipping?: boolean }): EmailTemplate {
   const hi = greeting(input.name);
   const lead = leadCartItem(input.items);
   const giftLabel = String(input.giftLabel ?? "").trim();
   const offerTerms = String(input.offerTerms ?? "").trim();
-  const hasGift = giftLabel.length > 0;
-  // THE SUBJECT MUST NAME THE GIFT THAT IS ACTUALLY ATTACHED.
-  //
-  // These lines said "a free Recon Water" outright. That was true while the
-  // ladder gifted one vial to every cart; it is false the moment a band gifts a
-  // GHK-Cu, and it was still false in the SUBJECT while the terms paragraph
-  // underneath named all three products correctly. Caught by sending a real
-  // top-band cart through the sweep and reading the delivered message — a
-  // subject that promises the wrong gift is the kind of thing no unit test was
-  // ever going to notice.
-  //
-  // The label is built by the sweep from live product names, so it is already
-  // "TB-500 5mg + GHK-Cu 50mg + Recon Water 30ml". A leading "free" is
-  // stripped so "a free X" never reads "a free free X".
-  const giftName = giftLabel.replace(/^free\s+/i, "");
-  // A SUBJECT LINE HAS ABOUT SIXTY CHARACTERS BEFORE AN INBOX TRUNCATES IT.
-  //
-  // Naming three products in full produced "Last note: a free TB-500 5mg +
-  // GHK-Cu 50mg + Recon Water 30ml with your order" — 85 characters,
-  // so the reader sees neither the last gift nor the point. A count reads
-  // better and survives: "3 free gifts". The body still names every item, and
-  // so does the terms line the checkout enforces.
-  const giftCount = giftName ? giftName.split(" + ").length : 0;
-  const giftSubjectName = giftCount > 1 ? `${giftCount} free gifts` : giftName;
-  // Everywhere OUTSIDE the gift box, which names every item in full. A subject
-  // line, a title and a button each have a length past which the reader loses
-  // the sentence, and three product names clear it on their own.
-  const giftShortName = giftCount > 1 ? `${giftCount} free gifts` : `free ${giftName}`;
+  const gift = giftInWords(giftLabel);
+  const hasGift = gift.count > 0;
 
   // FREE SHIPPING IS A FACT HERE, NOT A GIFT — and it is only stated when the
   // store is actually shipping everything free. Dressing a standing policy up
@@ -2246,70 +2263,65 @@ export function cartRecoveryT24hTemplate(input: { name: string; items: Array<{ n
   // could not be rendered in a test or a preview.
   const freeShipping = input.freeShipping === true;
 
-  // "A FREE GHK-CU 50MG WITH YOUR GHK-CU 50MG" is a real subject this sent.
-  //
-  // The lead is the cart's largest line and the gift is chosen by cart size, so
-  // the two land on the same product often — a shopper stocking up on GHK-Cu is
-  // exactly who the middle bands gift a GHK-Cu to. Naming it twice reads like a
-  // template that failed to fill in, on the one line that decides whether the
-  // message is opened. When they collide the cart half becomes generic; the
-  // gift half never does, because the gift is the offer.
-  const subjectLead = lead && giftName && lead.toLowerCase() === giftName.toLowerCase() ? "" : lead;
+  // "GHK-CU 50MG ADDED TO YOUR GHK-CU 50MG" is the subject this would send
+  // without a guard. The lead is the cart's largest line and the gift is
+  // chosen by cart size, so the two land on the same product often — a
+  // shopper stocking up on GHK-Cu is exactly who the middle bands gift a
+  // GHK-Cu to. When they collide the cart half goes generic; the gift half
+  // never does, because the gift is the point of the line.
+  const subjectLead = lead && gift.count === 1 && lead.toLowerCase() === gift.one.toLowerCase() ? "" : lead;
+  const cartSubject = lead ? subjectThatFits(`Your ${lead} is still saved`, "Your cart is still saved") : "Your cart is still saved";
+  // Arm A names the cart, arm B names the gift; the body and the button are
+  // the same. Which of the two a shopper opens is the whole question this
+  // stage's subject asks, and it is answered on strict conversions, not opens.
+  const giftSubject = subjectThatFits(
+    gift.count > 1
+      ? `${gift.count} gifts added to your ${subjectLead || "order"}`
+      : `${gift.one} added to your ${subjectLead || "order"}`,
+    gift.count > 1 ? `${gift.count} gifts added to your order` : `${gift.one} added to your order`,
+  );
+  const subject = hasGift && input.variant === "b" ? giftSubject : cartSubject;
 
-  const giftHtml = hasGift
-    ? `<div style="margin:18px 0 0;padding:16px 18px;border:1px solid rgba(199,174,94,0.35);border-radius:12px;background:rgba(199,174,94,0.06);">`
-      + `<p style="margin:0;color:#c7ae5e;font-size:12px;letter-spacing:0.18em;text-transform:uppercase;font-weight:700;">Free gift</p>`
-      + `<p style="margin:8px 0 0;color:#ffffff;font-size:18px;font-weight:700;">${escapeHtml(giftLabel)}</p>`
-      + (offerTerms ? `<p style="margin:8px 0 0;color:#a3a3a3;font-size:13px;line-height:1.6;">${escapeHtml(offerTerms)}</p>` : "")
-      + `</div>`
-    : "";
+  // THE ONE SENTENCE ABOUT THE GIFT. It names what was actually minted — this
+  // line once said "a vial of Recon Water" whatever the band had granted, and
+  // a $520 cart read it while the terms and the till both said GHK-Cu.
+  const opening = hasGift
+    ? `Your cart is still here${freeShipping ? ", with free shipping as always" : ""}. `
+      + `We have added ${gift.list} to it at no charge. `
+      + `${gift.count > 1 ? "They ship" : "It ships"} in the same box when you finish the order.`
+    : `Your cart is still here, at the price you saw${freeShipping ? ", and shipping is free as always" : ""}.`;
 
   return {
-    // Arm A leads with the gift, arm B with the product it rides on. Which of
-    // those a shopper clicks is the whole question the stage-3 subject asks.
-    subject: hasGift
-      ? (input.variant === "b"
-        ? (subjectLead ? `Your ${subjectLead}, and ${giftCount > 1 ? giftSubjectName : `a free ${giftName}`}` : `Your cart, and ${giftCount > 1 ? giftSubjectName : `a free ${giftName}`}`)
-        : (subjectLead ? `${giftCount > 1 ? giftSubjectName : `A free ${giftName}`} with your ${subjectLead}` : `${giftCount > 1 ? giftSubjectName : `A free ${giftName}`} with your order`))
-      : (lead ? `Your ${lead} is still saved` : "Your cart is still saved"),
+    subject,
     html: renderLayout({
       preheader: hasGift
-        ? "Added automatically when you finish your order. No code needed."
+        ? (gift.count > 1
+          ? `${gift.count} gifts are added at no charge when you finish the order.`
+          : `${gift.one} is added at no charge when you finish the order.`)
         : "Your selection is held and ready whenever you are.",
-      // ESCAPED, because titleHtml is a raw sink by contract while ctaLabel and
-      // preheader are escaped inside renderLayout. This line was a constant
-      // until the gift became configurable; the moment a product name reaches
-      // it, it is an injection point. templates-sweep.test.ts caught it.
-      titleHtml: hasGift
-        ? (giftCount > 1 ? `${giftCount} free gifts, on us` : `A free ${escapeHtml(giftName)}, on us`)
-        : "Still saved for you",
-      // THE BODY USED TO SAY "a vial of Recon Water" NO MATTER WHAT WAS MINTED.
-      // That was the same defect as the old subject line and worse, because it
-      // is the sentence the shopper reads first: a $520 cart was told it had a
-      // Recon Water coming while the gift box beneath it, the terms line, and the
-      // checkout all said GHK-Cu. It now names what was actually granted.
+      // ESCAPED, because titleHtml is a raw sink by contract. The moment a
+      // product name reaches it, it is an injection point.
+      titleHtml: escapeHtml(hasGift
+        ? (gift.count > 1 ? `Still saved, with ${gift.count} gifts added` : `Still saved, with ${gift.one} added`)
+        : "Still saved for you"),
       bodyHtml: `${hi.html}`
-        + (hasGift
-          ? `<p style="margin:0;">Your cart is still here, and ${giftCount > 1 ? `there are ${giftCount} free gifts on it from us` : `there is a ${escapeHtml(giftName)} on it from us`}${freeShipping ? ", with free shipping as always" : ""}.</p>${giftHtml}`
-          : `<p style="margin:0;">Your cart is still here, at the price you saw${freeShipping ? ", and shipping is free as always" : ""}.</p>`)
+        + `<p style="margin:0;">${escapeHtml(opening)}</p>`
+        + (hasGift && offerTerms ? `<p style="${RECOVERY_TERMS_STYLE}">${escapeHtml(offerTerms)}</p>` : "")
         + `${cartSummaryHtml(input.items, input.cartValueCents)}`,
-      ctaLabel: hasGift ? `Claim my ${giftShortName}` : "Complete my order",
+      ctaLabel: "Complete my order",
       ctaUrl: input.restoreUrl,
       ctaVariant: "primary",
     }),
     text: toText([
       hi.text,
       hi.text ? "" : null,
-      hasGift
-        ? `Your cart is still here, and ${giftCount > 1 ? `there are ${giftCount} free gifts on it from us` : `there is a ${giftName} on it from us`}${freeShipping ? ", with free shipping as always" : ""}.`
-        : `Your cart is still here, at the price you saw${freeShipping ? ", and shipping is free as always" : ""}.`,
-      hasGift ? "" : null,
-      hasGift ? `Free gift: ${giftLabel}` : null,
+      opening,
+      hasGift && offerTerms ? "" : null,
       hasGift && offerTerms ? offerTerms : null,
       "",
       ...cartSummaryText(input.items, input.cartValueCents),
       "",
-      `${hasGift ? `Claim your ${giftShortName}` : "Complete your order"}: ${input.restoreUrl}`,
+      `Complete your order: ${input.restoreUrl}`,
       "",
       "- Vanta Labs",
     ]),
@@ -2327,12 +2339,19 @@ export function cartRecoveryT24hTemplate(input: { name: string; items: Array<{ n
  *
  * THE HONEST SENTENCE ABOUT THE CODE IS LOAD-BEARING. One discount applies per
  * order, greatest saving wins, so while a promotion is running the code may be
- * worth nothing at all on a qualifying basket. Saying "whichever saves you
- * more" is true in every case; promising the percentage outright is false
- * precisely on the largest carts, which are the ones this email exists for.
+ * worth nothing at all on a qualifying basket. "Or applies the current sale if
+ * that saves more" is true in every case; promising the percentage outright is
+ * false precisely on the largest carts, which are the ones this email exists
+ * for.
  *
  * Every half is independently optional, because the segmentation rules and the
  * mint can each withhold one. The email describes what was actually minted.
+ *
+ * THE SUBJECT CARRIES NO PERCENTAGE AND THE BODY HAS NO CODE BOX, for the
+ * reasons given on stage 3: the same diagnosis read "10% off" in the subject
+ * and a dashed code box on the card, and neither belongs to a note from this
+ * brand. The code is still stated in words, so a shopper who types it in has
+ * it, and the button still applies it for them.
  */
 export function cartRecoveryT72hTemplate(input: {
   name: string;
@@ -2346,86 +2365,54 @@ export function cartRecoveryT72hTemplate(input: {
   offerTerms: string;
 }): EmailTemplate {
   const hi = greeting(input.name);
+  const lead = leadCartItem(input.items);
   const code = String(input.couponCode ?? "").trim();
   const percent = Math.max(0, Math.round(Number(input.discountPercent ?? 0)));
   const hasCode = Boolean(code) && percent > 0;
   const giftLabel = String(input.giftLabel ?? "").trim();
   const offerTerms = String(input.offerTerms ?? "").trim();
-  const hasGift = giftLabel.length > 0;
-  // THE SUBJECT MUST NAME THE GIFT THAT IS ACTUALLY ATTACHED.
-  //
-  // These lines said "a free Recon Water" outright. That was true while the
-  // ladder gifted one vial to every cart; it is false the moment a band gifts a
-  // GHK-Cu, and it was still false in the SUBJECT while the terms paragraph
-  // underneath named all three products correctly. Caught by sending a real
-  // top-band cart through the sweep and reading the delivered message — a
-  // subject that promises the wrong gift is the kind of thing no unit test was
-  // ever going to notice.
-  //
-  // The label is built by the sweep from live product names, so it is already
-  // "TB-500 5mg + GHK-Cu 50mg + Recon Water 30ml". A leading "free" is
-  // stripped so "a free X" never reads "a free free X".
-  const giftName = giftLabel.replace(/^free\s+/i, "");
-  // A SUBJECT LINE HAS ABOUT SIXTY CHARACTERS BEFORE AN INBOX TRUNCATES IT.
-  //
-  // Naming three products in full produced "Last note: a free TB-500 5mg +
-  // GHK-Cu 50mg + Recon Water 30ml with your order" — 85 characters,
-  // so the reader sees neither the last gift nor the point. A count reads
-  // better and survives: "3 free gifts". The body still names every item, and
-  // so does the terms line the checkout enforces.
-  const giftCount = giftName ? giftName.split(" + ").length : 0;
-  const giftSubjectName = giftCount > 1 ? `${giftCount} free gifts` : giftName;
+  const gift = giftInWords(giftLabel);
+  const hasGift = gift.count > 0;
+  const expiresAt = String(input.expiresAt ?? "").trim();
   const closing = "This is the last note we will send about this cart.";
 
+  const subject = lead
+    ? subjectThatFits(`One last note about your ${lead}`, "One last note about your cart")
+    : "One last note about your cart";
+
   // PLAIN TEXT, because it is handed to titleHtml through escapeHtml() below.
-  // This branch escaped the product name here as well, which double-encoded it:
-  // a catalogue name containing "&" would have reached the inbox as "&amp;".
+  // An earlier version escaped the product name here as well, which
+  // double-encoded it: a catalogue name containing "&" reached the inbox as
+  // "&amp;".
   const headline = hasCode && hasGift
-    ? `${percent}% off and ${giftCount > 1 ? giftSubjectName : `a free ${giftName}`}`
+    ? (gift.count > 1 ? `${percent}% off, with ${gift.count} gifts still added` : `${percent}% off, with ${gift.one} still added`)
     : hasCode
-      ? `${percent}% off your order`
+      ? `${percent}% off this order`
       : hasGift
-        ? (giftCount > 1 ? `${giftCount} free gifts, on us` : `A free ${giftName}, on us`)
+        ? (gift.count > 1 ? `${gift.count} gifts still added, at no charge` : `${gift.one} still added, at no charge`)
         : "One last note";
 
-  const offerRows: string[] = [];
-  if (hasGift) {
-    offerRows.push(
-      `<p style="margin:0;color:#c7ae5e;font-size:12px;letter-spacing:0.18em;text-transform:uppercase;font-weight:700;">Free gift</p>`
-      + `<p style="margin:8px 0 0;color:#ffffff;font-size:18px;font-weight:700;">${escapeHtml(giftLabel)}</p>`
-      + (offerTerms ? `<p style="margin:8px 0 0;color:#a3a3a3;font-size:13px;line-height:1.6;">${escapeHtml(offerTerms)}</p>` : ""),
-    );
-  }
-  if (hasCode) {
-    offerRows.push(
-      `<p style="margin:${hasGift ? "18px" : "0"} 0 0;color:#c7ae5e;font-size:12px;letter-spacing:0.18em;text-transform:uppercase;font-weight:700;">${percent}% off</p>`
-      + `<div style="margin:8px 0 0;padding:12px;border:1px dashed rgba(255,255,255,0.30);border-radius:10px;text-align:center;">`
-      + `<span style="font-family:Geist Mono,SFMono-Regular,Menlo,monospace;font-size:18px;font-weight:700;letter-spacing:0.10em;color:#ffffff;">${escapeHtml(code)}</span></div>`
-      + `<p style="margin:8px 0 0;color:#a3a3a3;font-size:13px;line-height:1.6;">Applied for you when you use the button below`
-      + `${input.expiresAt ? `, through ${escapeHtml(String(input.expiresAt))}` : ""}. `
-      + `One discount applies per order, so we use whichever saves you more, this code or any sale running.</p>`,
-    );
-  }
-  const offerHtml = offerRows.length > 0
-    ? `<div style="margin:18px 0 0;padding:16px 18px;border:1px solid rgba(199,174,94,0.35);border-radius:12px;background:rgba(199,174,94,0.06);">${offerRows.join("")}</div>`
-    : "";
+  const giftSentence = hasGift
+    ? `The ${gift.list} ${gift.count > 1 ? "are" : "is"} still added at no charge.`
+    : null;
+  const codeSentence = hasCode
+    ? `The button below ${hasGift ? "also " : ""}takes ${percent}% off the order, or applies the current sale if that saves more. `
+      + `Code ${code} is applied for you${expiresAt ? ` and stands through ${expiresAt}` : ""}.`
+    : null;
 
   return {
-    subject: hasCode && hasGift
-      ? `Last note: ${percent}% off and ${giftCount > 1 ? giftSubjectName : `a free ${giftName}`}`
-      : hasCode
-        ? `Last note on your cart, with ${percent}% off`
-        : hasGift
-          ? `Last note: ${giftCount > 1 ? giftSubjectName : `a free ${giftName}`} with your order`
-          : "One last note on your cart",
+    subject,
     html: renderLayout({
       preheader: hasCode || hasGift
         ? "The last thing we will send about this cart."
         : "Your selection is still saved if you want it.",
       titleHtml: escapeHtml(headline),
       bodyHtml: `${hi.html}<p style="margin:0;">${closing} Your selection is still saved if you want it.</p>`
-        + `${offerHtml}${cartSummaryHtml(input.items, input.cartValueCents)}`,
-      ctaLabel: hasCode || hasGift ? "Claim my offer" : "Finish my order",
+        + (giftSentence ? `<p style="margin:12px 0 0;">${escapeHtml(giftSentence)}</p>` : "")
+        + (codeSentence ? `<p style="margin:12px 0 0;">${escapeHtml(codeSentence)}</p>` : "")
+        + (hasGift && offerTerms ? `<p style="${RECOVERY_TERMS_STYLE}">${escapeHtml(offerTerms)}</p>` : "")
+        + `${cartSummaryHtml(input.items, input.cartValueCents)}`,
+      ctaLabel: "Complete my order",
       ctaUrl: input.restoreUrl,
       ctaVariant: "primary",
     }),
@@ -2433,15 +2420,14 @@ export function cartRecoveryT72hTemplate(input: {
       hi.text,
       hi.text ? "" : null,
       `${closing} Your selection is still saved if you want it.`,
-      "",
-      hasGift ? `Free gift: ${giftLabel}` : null,
+      giftSentence || codeSentence ? "" : null,
+      giftSentence,
+      codeSentence,
       hasGift && offerTerms ? offerTerms : null,
-      hasCode ? `${percent}% off with code ${code}${input.expiresAt ? `, through ${input.expiresAt}` : ""}.` : null,
-      hasCode ? "One discount applies per order, so we use whichever saves you more, this code or any sale running." : null,
       "",
       ...cartSummaryText(input.items, input.cartValueCents),
       "",
-      `${hasCode || hasGift ? "Claim your offer" : "Finish your order"}: ${input.restoreUrl}`,
+      `Complete your order: ${input.restoreUrl}`,
       "",
       "- Vanta Labs",
     ]),

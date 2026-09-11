@@ -40,8 +40,9 @@ describe("stage 3 names the gift that was actually minted", () => {
       ...cart,
       giftLabel: "KLOW + GHK-Cu 50mg + Recon Water 30ml",
       offerTerms: "Your gift: KLOW + GHK-Cu 50mg + Recon Water 30ml",
+      variant: "b",
     });
-    expect(mail.subject).toContain("3 free gifts");
+    expect(mail.subject).toContain("3 gifts");
     expect(mail.subject.length).toBeLessThan(60);
     expect(mail.html).toContain("Recon Water 30ml");
   });
@@ -55,7 +56,7 @@ describe("stage 3 names the gift that was actually minted", () => {
       giftLabel: "GHK-Cu 50mg",
       offerTerms: "Your gift: GHK-Cu 50mg",
     });
-    expect(mail.subject).toBe("A free GHK-Cu 50mg with your order");
+    expect(mail.subject).toBe("Your GHK-Cu 50mg is still saved");
     const b = cartRecoveryT24hTemplate({
       ...cart,
       items: [{ name: "GHK-Cu 50mg", quantity: 4, unitPriceCents: 4_799 }],
@@ -63,12 +64,14 @@ describe("stage 3 names the gift that was actually minted", () => {
       offerTerms: "t",
       variant: "b",
     });
-    expect(b.subject).toBe("Your cart, and a free GHK-Cu 50mg");
+    expect(b.subject).toBe("GHK-Cu 50mg added to your order");
   });
 
   it("still names the cart's lead line when it is a different product", () => {
-    const mail = cartRecoveryT24hTemplate({ ...cart, giftLabel: "GHK-Cu 50mg", offerTerms: "t" });
-    expect(mail.subject).toBe("A free GHK-Cu 50mg with your KLOW");
+    const mail = cartRecoveryT24hTemplate({ ...cart, giftLabel: "GHK-Cu 50mg", offerTerms: "t", variant: "b" });
+    expect(mail.subject).toBe("GHK-Cu 50mg added to your KLOW");
+    const a = cartRecoveryT24hTemplate({ ...cart, giftLabel: "GHK-Cu 50mg", offerTerms: "t", variant: "a" });
+    expect(a.subject).toBe("Your KLOW is still saved");
   });
 });
 
@@ -92,11 +95,12 @@ describe("free shipping is a fact about the store, not a gift", () => {
     expect(mail.html).not.toMatch(/free shipping/i);
   });
 
-  // It is never dressed up as part of the gift — the gift box lists products.
-  it("never puts shipping inside the gift block", () => {
+  // It is never dressed up as part of the gift — the gift sentence names products.
+  it("never puts shipping inside the gift sentence", () => {
     const mail = cartRecoveryT24hTemplate({ ...cart, giftLabel: "GHK-Cu 50mg", offerTerms: "Your gift: GHK-Cu 50mg", freeShipping: true });
-    const box = mail.html.slice(mail.html.indexOf("Free gift"), mail.html.indexOf("Free gift") + 400);
-    expect(box).not.toMatch(/shipping/i);
+    const sentence = /We have added [^.]*\./.exec(mail.text)?.[0] ?? "";
+    expect(sentence).toContain("GHK-Cu 50mg");
+    expect(sentence).not.toMatch(/shipping/i);
   });
 });
 
@@ -105,14 +109,14 @@ describe("stage 4 describes only what was minted", () => {
 
   it("carries the gift and the percentage together when both were minted", () => {
     const mail = cartRecoveryT72hTemplate({ ...base, couponCode: "VL10", discountPercent: 10, giftLabel: "GHK-Cu 50mg + Recon Water 30ml", offerTerms: "t" });
-    expect(mail.subject).toBe("Last note: 10% off and 2 free gifts");
+    expect(mail.subject).toBe("One last note about your KLOW");
     expect(mail.html).toContain("VL10");
     expect(mail.html).toContain("Recon Water 30ml");
   });
 
   it("promises no code when none was minted", () => {
     const mail = cartRecoveryT72hTemplate({ ...base, giftLabel: "GHK-Cu 50mg", offerTerms: "t" });
-    expect(mail.subject).toBe("Last note: a free GHK-Cu 50mg with your order");
+    expect(mail.subject).toBe("One last note about your KLOW");
     expect(mail.html).not.toMatch(/% off/);
   });
 
@@ -120,7 +124,7 @@ describe("stage 4 describes only what was minted", () => {
   // text — escaping it twice put a literal "&amp;" in the inbox.
   it("does not double-escape a product name in the headline", () => {
     const mail = cartRecoveryT72hTemplate({ ...base, giftLabel: "Peptide A & B", offerTerms: "t" });
-    expect(mail.html).toContain("A free Peptide A &amp; B, on us");
+    expect(mail.html).toContain("Peptide A &amp; B still added, at no charge");
     expect(mail.html).not.toContain("&amp;amp;");
   });
 });

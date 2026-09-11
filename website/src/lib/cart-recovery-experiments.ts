@@ -24,9 +24,15 @@
  * (abandoned_cart_emails.variant), because an experiment whose assignment lives
  * only in the code that made it cannot be joined to an outcome later.
  *
- * WHAT IS NOT TESTED HERE. Only the subject and preheader vary. The offer, the
- * timing, the body and the call to action are identical across arms — one axis
- * at a time, or a difference cannot be attributed to anything.
+ * WHAT IS NOT TESTED HERE. Only the subject varies. The offer, the timing,
+ * the body and the call to action are identical across arms — one axis at a
+ * time, or a difference cannot be attributed to anything.
+ *
+ * WHAT THE ARMS MEAN UNDER "subject-2026-09-plain": arm A names the cart's
+ * lead product at both stage 1 and stage 3; arm B names the state of the cart
+ * at stage 1 ("Your cart is saved") and what was added at stage 3. Rows from
+ * before the experiment column existed carry a null key and the earlier,
+ * offer-card wording; they are not the same test and must not be pooled.
  */
 
 /**
@@ -34,7 +40,7 @@
  * (abandoned_cart_emails.experiment) so a later test on the same column can
  * never be pooled with this one. Change it when the axis changes.
  */
-export const RECOVERY_EXPERIMENT_KEY = "subject-2026-09";
+export const RECOVERY_EXPERIMENT_KEY = "subject-2026-09-plain";
 
 export const RECOVERY_VARIANTS = ["a", "b"] as const;
 export type RecoveryVariant = (typeof RECOVERY_VARIANTS)[number];
