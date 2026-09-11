@@ -1,4 +1,5 @@
 import { isProductPurchaseOrder, isRevenueOrderStatus } from "@/lib/ledger";
+import { formatDisplayDate } from "@/lib/format-date";
 import { AUTOMATION_KEYS, AUTOMATION_LABELS } from "@/lib/email/automation-catalog";
 import { summarizeSendEngagement, type EngagementKind } from "@/lib/email/engagement-classification";
 
@@ -130,6 +131,42 @@ export interface LifecycleFunnelRow {
   rates: FunnelRates;
   benchmark: typeof CART_RECOVERY_BENCHMARK | null;
   readable: boolean;
+}
+
+/**
+ * WHEN THE RESTRAINED STAGE SHAPE WENT LIVE (main at 773025b, 2026-09-11 03:29
+ * UTC). Sends before this carried the offer-card wording; pooling them with
+ * the new ones in one 28-day window would hide exactly the change the window
+ * exists to read. The default funnel window therefore starts here, and the
+ * operator can widen it from the links above the table.
+ */
+export const RESTRAINED_STAGES_SHIPPED_AT_MS = Date.parse("2026-09-11T03:29:00Z");
+
+export type FunnelWindowKey = "plain" | "28" | "90";
+
+export interface FunnelWindow {
+  key: FunnelWindowKey;
+  /** The start of the window, absolute. */
+  sinceMs: number;
+  /** Whole days from `sinceMs` to `now`, for the report's own bookkeeping. */
+  windowDays: number;
+  /** What the table prints beside the title. */
+  label: string;
+}
+
+const DAY = 24 * 60 * 60 * 1000;
+
+/** Resolve a `?window=` parameter. Anything unrecognised is the new-shape window. */
+export function funnelWindowFor(param: string | string[] | null | undefined, now: number = Date.now()): FunnelWindow {
+  const key = Array.isArray(param) ? param[0] : param;
+  if (key === "28" || key === "90") {
+    const days = Number(key);
+    return { key, sinceMs: now - days * DAY, windowDays: days, label: `last ${days} days` };
+  }
+  const sinceMs = Math.min(RESTRAINED_STAGES_SHIPPED_AT_MS, now);
+  const windowDays = Math.max(1, Math.ceil((now - sinceMs) / DAY));
+  const since = formatDisplayDate(sinceMs, "medium") ?? "the new stages went live";
+  return { key: "plain", sinceMs, windowDays, label: `since ${since} · the note-shaped stages` };
 }
 
 export interface LifecycleFunnelReport {

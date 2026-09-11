@@ -126,7 +126,10 @@ browser run of the customer journey after the click at desktop and 390×844.
 
 ### How to read it from here
 
-Admin → Email → "Lifecycle funnel (28 days)". Each row is a flow and stage.
+Admin → Email → "Lifecycle funnel". The default window starts at 2026-09-11
+03:29 UTC, the moment the note-shaped stages went live, so the old
+offer-card sends never pool with the new ones; the links above the table
+widen it to 28 or 90 days. Each row is a flow and stage.
 Until a row shows 150 delivered it is flagged and its rates are directional.
 The columns to decide on are, in order: delivered, human clicks, restored,
 paid (strict), recovered revenue, gross profit. Opens are shown but are not
@@ -187,9 +190,10 @@ any of it except the two additive migrations noted in §7.
 - Consumer-Gmail tab readings for the P1-plain and P2-doc probes.
 - Google Postmaster enrolment; DMARC to `p=quarantine` when ready; Outlook,
   Yahoo and iCloud seed addresses for the next placement round.
-- `RESEND_WEBHOOK_SIGNING_SECRET` is still unset in production, so delivery
-  events are refused (503) and the funnel's "delivered" column reads
-  "unknown" until it is set. This was already true before this work.
+- (Corrected 2026-09-11 09:40 UTC: an earlier draft of this list said the
+  Resend webhook secret was unset in production. It is set; production has
+  recorded 354 delivery events in the last 14 days and 96 in the last day.
+  The "not set" message came from the local harness, which has no secret.)
 - Enable the browse follow-up in Admin → Email when the cart stages have
   enough sends to read on their own.
 

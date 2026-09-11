@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { isInternalAddressHere } from "@/lib/email/internal-addresses";
 import {
   buildLifecycleFunnel,
+  type FunnelWindow,
   type FunnelCartRow,
   type FunnelDeliveryRow,
   type FunnelEngagementRow,
@@ -35,6 +36,8 @@ export interface LifecycleFunnelResult extends LifecycleFunnelReport {
   ok: boolean;
   error?: string;
   truncated: boolean;
+  /** What the table prints beside the title: "last 28 days" or "since Sep 11, 2026 · ...". */
+  windowLabel: string;
 }
 
 const PAGE = 1_000;
@@ -65,14 +68,24 @@ async function readByIds<T>(table: string, column: string, select: string, ids: 
   return out;
 }
 
-export function emptyLifecycleFunnel(windowDays: number, error?: string): LifecycleFunnelResult {
-  return { ok: !error, error, truncated: false, windowDays, rows: [], notes: [] };
+export function emptyLifecycleFunnel(window: number | FunnelWindow, error?: string): LifecycleFunnelResult {
+  const w = typeof window === "number" ? { windowDays: window, label: `last ${window} days` } : window;
+  return { ok: !error, error, truncated: false, windowDays: w.windowDays, windowLabel: w.label, rows: [], notes: [] };
 }
 
-export async function getLifecycleFunnel(windowDays = 28): Promise<LifecycleFunnelResult> {
+/**
+ * `window` is either a number of days back from now, or a resolved
+ * FunnelWindow (see funnelWindowFor) whose start is absolute — the default
+ * view starts where the note-shaped stages went live rather than N days ago.
+ */
+export async function getLifecycleFunnel(window: number | FunnelWindow = 28): Promise<LifecycleFunnelResult> {
   const now = Date.now();
-  const since = new Date(now - windowDays * 24 * 60 * 60 * 1000).toISOString();
-  const engagementSince = new Date(now - (windowDays + 1) * 24 * 60 * 60 * 1000).toISOString();
+  const resolved: FunnelWindow = typeof window === "number"
+    ? { key: window === 90 ? "90" : "28", sinceMs: now - window * 24 * 60 * 60 * 1000, windowDays: window, label: `last ${window} days` }
+    : window;
+  const windowDays = resolved.windowDays;
+  const since = new Date(resolved.sinceMs).toISOString();
+  const engagementSince = new Date(resolved.sinceMs - 24 * 60 * 60 * 1000).toISOString();
   const notes: string[] = [];
   let truncated = false;
 
@@ -193,8 +206,8 @@ export async function getLifecycleFunnel(windowDays = 28): Promise<LifecycleFunn
       total.eligible = carts.filter((c) => eligibleCartIds.has(c.id) && !isInternalAddressHere(c.email)).length;
     }
     if (truncated) notes.push("One or more reads hit the row ceiling; the figures understate.");
-    return { ...report, notes: [...notes, ...report.notes], ok: true, truncated };
+    return { ...report, windowLabel: resolved.label, notes: [...notes, ...report.notes], ok: true, truncated };
   } catch (error) {
-    return emptyLifecycleFunnel(windowDays, error instanceof Error ? error.message : String(error));
+    return emptyLifecycleFunnel(resolved, error instanceof Error ? error.message : String(error));
   }
 }

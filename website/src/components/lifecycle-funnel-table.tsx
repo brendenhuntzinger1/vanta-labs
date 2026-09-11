@@ -20,13 +20,28 @@ function benchmarkLine(row: LifecycleFunnelRow): string | null {
   return `floor: open ${pct(b.floor.openAny)}, click ${pct(b.floor.clickAny)}, order ${pct(b.floor.placedOrder)} · target: click ${pct(b.target.clickAny)}, order ${pct(b.target.placedOrder)}`;
 }
 
-export function LifecycleFunnelTable({ report, title = "Lifecycle funnel" }: { report: LifecycleFunnelResult; title?: string }) {
+export interface FunnelWindowLink { key: string; label: string; href: string; active: boolean }
+
+export function LifecycleFunnelTable({ report, title = "Lifecycle funnel", windows = [] }: {
+  report: LifecycleFunnelResult;
+  title?: string;
+  /** The window switcher, built by the page so it keeps the page's other query parameters. */
+  windows?: FunnelWindowLink[];
+}) {
   return (
     <section className="vl-panel rounded-2xl p-5 sm:p-6" data-testid="lifecycle-funnel">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-lg font-semibold text-white">{title}</h2>
-        <p className="text-[11px] text-zinc-500">last {report.windowDays} days · real customers only · rates per delivered send where delivery is known</p>
+        <p className="text-[11px] text-zinc-500">{report.windowLabel ?? `last ${report.windowDays} days`} · real customers only · rates per delivered send where delivery is known</p>
       </div>
+      {windows.length > 0 ? (
+        <p className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[12px]" data-testid="lifecycle-funnel-windows">
+          <span className="text-zinc-500">Window:</span>
+          {windows.map((w) => w.active
+            ? <span key={w.key} className="font-medium text-white" aria-current="true">{w.label}</span>
+            : <a key={w.key} href={w.href} className="text-zinc-300 underline decoration-zinc-600 underline-offset-4 hover:text-white">{w.label}</a>)}
+        </p>
+      ) : null}
       {!report.ok ? (
         <p className="mt-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-100">
           Funnel unavailable: {report.error ?? "a reporting query failed."}
