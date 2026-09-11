@@ -489,13 +489,19 @@ describe("the blast radius", () => {
     expect((await runAbandonedCartSweep()).t30mSent).toBe(1);
     expect(state.sends[0].templateKey).toBe("cartRecoveryT30mTemplate");
 
+    // Time passes for the stage rows too: the sweep holds any stage inside
+    // MIN_STAGE_GAP_MS of the previous send, so the earlier stage must be as
+    // old as the cart's own clock says it is.
+    const ageStages = () => { for (const row of state.db.stages) row.sent_at = new Date(Date.now() - 48 * HOUR_MS).toISOString(); };
     (cart as Row).last_updated_at = new Date(Date.now() - IN_T12H * HOUR_MS).toISOString();
     (cart as Row).first_seen_at = new Date(Date.now() - IN_T12H * HOUR_MS).toISOString();
+    ageStages();
     expect((await runAbandonedCartSweep()).t12hSent).toBe(1);
     expect(state.sends[1].templateKey).toBe("cartRecoveryGiftTemplate");
 
     (cart as Row).last_updated_at = new Date(Date.now() - 25 * HOUR_MS).toISOString();
     (cart as Row).first_seen_at = new Date(Date.now() - 25 * HOUR_MS).toISOString();
+    ageStages();
     expect((await runAbandonedCartSweep()).t24hSent).toBe(1);
     expect(state.sends[2].templateKey).toBe("cartRecoveryT24hTemplate");
 
@@ -569,8 +575,10 @@ describe("a replaced stage whose gift also carries a percentage", () => {
 
   it("leads with the percentage, because it is the bigger number", async () => {
     const cart = seedCart({ hoursAgo: 73 });
+    // Earlier stages went a day or more ago, as they do for a 73-hour-old cart:
+    // the sweep holds any stage inside MIN_STAGE_GAP_MS of the previous send.
     for (const stage of ["t30m", "t12h", "t24h"]) {
-      state.db.stages.push({ id: `pre-${stage}`, abandoned_cart_id: cart.id, stage, sent_at: new Date().toISOString() });
+      state.db.stages.push({ id: `pre-${stage}`, abandoned_cart_id: cart.id, stage, sent_at: new Date(Date.now() - 48 * HOUR_MS).toISOString() });
     }
     seedPercentOverride(String(cart.id));
 
@@ -589,7 +597,7 @@ describe("a replaced stage whose gift also carries a percentage", () => {
     // better of the two, and here that is the 40%.
     const cart = seedCart({ hoursAgo: 73 });
     for (const stage of ["t30m", "t12h", "t24h"]) {
-      state.db.stages.push({ id: `pre2-${stage}`, abandoned_cart_id: cart.id, stage, sent_at: new Date().toISOString() });
+      state.db.stages.push({ id: `pre2-${stage}`, abandoned_cart_id: cart.id, stage, sent_at: new Date(Date.now() - 48 * HOUR_MS).toISOString() });
     }
     seedPercentOverride(String(cart.id));
 
@@ -613,7 +621,7 @@ describe("a replaced stage whose gift also carries a percentage", () => {
   it("says a perk once, however many places it came from", async () => {
     const cart = seedCart({ hoursAgo: 73 });
     for (const stage of ["t30m", "t12h", "t24h"]) {
-      state.db.stages.push({ id: `dedupe-${stage}`, abandoned_cart_id: cart.id, stage, sent_at: new Date().toISOString() });
+      state.db.stages.push({ id: `dedupe-${stage}`, abandoned_cart_id: cart.id, stage, sent_at: new Date(Date.now() - 48 * HOUR_MS).toISOString() });
     }
     state.db.overrides.push({
       abandoned_cart_id: String(cart.id), stage: "t72h", offer_key: "labor_day_bac_water_2_40",
@@ -638,7 +646,7 @@ describe("a replaced stage whose gift also carries a percentage", () => {
     const bystander = seedCart({ id: "cart-bystander", email: "other@example.com", hoursAgo: 73 });
     for (const cart of [chosen, bystander]) {
       for (const stage of ["t30m", "t12h", "t24h"]) {
-        state.db.stages.push({ id: `p-${cart.id}-${stage}`, abandoned_cart_id: cart.id, stage, sent_at: new Date().toISOString() });
+        state.db.stages.push({ id: `p-${cart.id}-${stage}`, abandoned_cart_id: cart.id, stage, sent_at: new Date(Date.now() - 48 * HOUR_MS).toISOString() });
       }
     }
     seedPercentOverride(String(chosen.id));

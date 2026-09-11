@@ -877,6 +877,23 @@ export function recoveryDiscountAllowed(input: {
 }
 
 /**
+ * THE LEAST TIME BETWEEN TWO STAGES TO ONE CART.
+ *
+ * The windows say when a stage MAY go; they say nothing about how soon after
+ * the previous one. Measured 2026-09-11: three real customers received three
+ * stages inside thirteen hours (00:20, 01:30, 13:30), because a cart first
+ * processed eleven hours old got stage 1 and stage 2's window opened an hour
+ * later. Stages are exempt from the 24-hour quiet period against each other
+ * on purpose (a sequence is one conversation), so this is the only floor.
+ *
+ * Eight hours is the largest gap that never costs a stage its window: with the
+ * shipped windows, a stage sent at the very end of its own window plus eight
+ * hours still lands inside the next stage's window. The admin resend applies
+ * the same floor.
+ */
+export const MIN_STAGE_GAP_MS = 8 * HOUR_MS;
+
+/**
  * The single stage this cart should receive right now, or null.
  *
  * Pure, so the window rules can be asserted without a database: exactly one
@@ -888,7 +905,14 @@ export function selectDueStage(
   elapsedMs: number,
   config: CartRecoveryConfig,
   claimed: ReadonlySet<string>,
+  sinceLastSendMs: number | null = null,
 ): RecoveryStage | null {
+  // THE GAP COMES BEFORE THE WINDOW. A stage whose window is open is still
+  // held while the previous stage went less than MIN_STAGE_GAP_MS ago; the
+  // next sweep asks again, and the window is wide enough that nothing is
+  // lost (see the test that walks every stage from the end of the previous
+  // one's window).
+  if (sinceLastSendMs !== null && sinceLastSendMs < MIN_STAGE_GAP_MS) return null;
   for (const stage of RECOVERY_STAGES) {
     const window = STAGE_WINDOWS[stage];
     if (elapsedMs < window.opensAfterMs || elapsedMs >= window.closesAfterMs) continue;
@@ -1445,7 +1469,9 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
         continue;
       }
       const claimedStages = new Set(claimed.keys());
-      const stage = selectDueStage(now - clock, config, claimedStages);
+      const lastStageSentAt = claimed.size > 0 ? Math.max(...claimed.values()) : null;
+      const sinceLastSendMs = lastStageSentAt !== null && Number.isFinite(lastStageSentAt) ? now - lastStageSentAt : null;
+      const stage = selectDueStage(now - clock, config, claimedStages, sinceLastSendMs);
       if (!stage) continue;
       candidates.push({ row, stage, claimed: claimedStages });
       if (candidates.length >= CART_SWEEP_BUDGET) break;

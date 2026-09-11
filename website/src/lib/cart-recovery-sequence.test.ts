@@ -415,3 +415,42 @@ describe("clearing a cart", () => {
     expect(sent).toHaveLength(0);
   });
 });
+
+describe("selectDueStage keeps a minimum gap between stages", () => {
+  // Measured 2026-09-11: three real customers received three stages inside
+  // thirteen hours (00:20, 01:30, 13:30). Stages are exempt from the 24-hour
+  // quiet period against each other by design, and the windows only bound WHEN
+  // a stage may go, not how soon after the previous one. A cart first
+  // processed eleven hours old got stage 1, and stage 2's window opened an hour
+  // later.
+  it("holds a stage whose window is open while the previous stage went less than the gap ago", async () => {
+    const { selectDueStage, MIN_STAGE_GAP_MS } = await import("@/lib/cart-recovery");
+    const cfg = { ...config, t12hEnabled: true };
+    const claimed = new Set(["t30m"]);
+    // Stage 2's window (12–24h) is open, but stage 1 went one hour ago.
+    expect(selectDueStage(12.5 * HOUR_MS, cfg, claimed, 1 * HOUR_MS)).toBeNull();
+    // Once the gap has passed it goes, still inside its window.
+    expect(selectDueStage(20 * HOUR_MS, cfg, claimed, MIN_STAGE_GAP_MS)).toBe("t12h");
+  });
+
+  it("never costs a stage its window: the gap fits inside every window when the previous stage went at the end of its own", async () => {
+    const { selectDueStage, MIN_STAGE_GAP_MS, STAGE_WINDOWS } = await import("@/lib/cart-recovery");
+    const cfg = { ...config, t12hEnabled: true };
+    const order = ["t30m", "t12h", "t24h", "t72h"] as const;
+    for (let i = 1; i < order.length; i += 1) {
+      const previous = order[i - 1];
+      const current = order[i];
+      // The previous stage went at the very end of its window; the gap then
+      // ends before this stage's window closes.
+      const previousSentElapsed = STAGE_WINDOWS[previous].closesAfterMs - 1;
+      const earliest = previousSentElapsed + MIN_STAGE_GAP_MS;
+      expect(earliest).toBeLessThan(STAGE_WINDOWS[current].closesAfterMs);
+      expect(selectDueStage(earliest, cfg, new Set([previous]), MIN_STAGE_GAP_MS)).toBe(current);
+    }
+  });
+
+  it("applies no gap to a cart with no stage sent yet", async () => {
+    const { selectDueStage } = await import("@/lib/cart-recovery");
+    expect(selectDueStage(2 * HOUR_MS, config, new Set(), null)).toBe("t30m");
+  });
+});

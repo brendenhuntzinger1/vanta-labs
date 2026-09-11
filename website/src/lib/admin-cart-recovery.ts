@@ -20,6 +20,7 @@ import {
   reconciledCartValueCents,
   type AbandonedCartItemSnapshot,
   type RecoveryCatalogueEntry,
+  MIN_STAGE_GAP_MS,
 } from "@/lib/cart-recovery";
 import { getSiteUrl } from "@/lib/env";
 import { isFreeShippingSitewide } from "@/lib/shipping";
@@ -486,6 +487,31 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
   const leadSlug = leadSlugForItems(storedItems, catalogue);
   const batchNumber = leadSlug ? catalogue.get(leadSlug)?.batchNumber ?? "" : "";
   const name = cart.customer_name ?? "";
+
+  // THE SAME FLOOR THE SWEEP KEEPS. Stages are exempt from the 24-hour quiet
+  // period against each other, so the guard below lets a resend go minutes
+  // after the sweep's own stage; on 2026-09-07 an operator batch put a third
+  // cart email of the day into two real inboxes that way. The sweep now holds
+  // a stage for MIN_STAGE_GAP_MS after the previous one (cart-recovery.ts), and
+  // a resend is not the way round it. Read before the guard so a refusal
+  // claims nothing, mints nothing and arms no cooldown.
+  const { data: lastStage } = await supabaseAdmin
+    .from("abandoned_cart_emails")
+    .select("sent_at")
+    .eq("abandoned_cart_id", cart.id)
+    .order("sent_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const lastStageSentAt = lastStage?.sent_at ? new Date(String(lastStage.sent_at)).getTime() : Number.NaN;
+  if (Number.isFinite(lastStageSentAt) && Date.now() - lastStageSentAt < MIN_STAGE_GAP_MS) {
+    const retryAt = lastStageSentAt + MIN_STAGE_GAP_MS;
+    return {
+      success: false,
+      deferred: true,
+      retryAt,
+      error: `Held: this cart's previous stage went at ${formatDisplayDate(lastStageSentAt, "datetime") ?? "an unknown time"} ET, and stages keep at least ${Math.round(MIN_STAGE_GAP_MS / 3_600_000)} hours between them. The resend can go after ${formatDisplayDate(retryAt, "datetime") ?? "an unknown time"} ET.`,
+    };
+  }
 
   // THE GUARD FIRST, before anything is minted or reset. A manual resend is
   // an explicit admin action and skips the sweep's per-stage and 30-day

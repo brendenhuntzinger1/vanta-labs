@@ -370,7 +370,7 @@ describe("the 72h last-chance email", () => {
     // minted 31 days ago, so the per-address cooldown (30 days) has passed and
     // a new one may be issued.
     const cart = seedCart(73);
-    state.stages.push({ id: "stg-old", abandoned_cart_id: cart.id, stage: "t24h", coupon_id: "cpn-old", sent_at: new Date().toISOString() });
+    state.stages.push({ id: "stg-old", abandoned_cart_id: cart.id, stage: "t24h", coupon_id: "cpn-old", sent_at: new Date(Date.now() - 48 * HOUR_MS).toISOString() });
     state.coupons.push({
       id: "cpn-old", code: "SAVE-DEAD0001", discount_type: "percent", discount_value: 5,
       ends_at: new Date(Date.now() - HOUR_MS).toISOString(),   // died an hour ago
@@ -393,7 +393,7 @@ describe("the 72h last-chance email", () => {
     // month is exactly what taught one July shopper to abandon for discounts,
     // so the last note is sent without an offer instead.
     const cart = seedCart(73);
-    state.stages.push({ id: "stg-old", abandoned_cart_id: cart.id, stage: "t24h", coupon_id: "cpn-old", sent_at: new Date().toISOString() });
+    state.stages.push({ id: "stg-old", abandoned_cart_id: cart.id, stage: "t24h", coupon_id: "cpn-old", sent_at: new Date(Date.now() - 48 * HOUR_MS).toISOString() });
     state.coupons.push({
       id: "cpn-old", code: "SAVE-DEAD0001", discount_type: "percent", discount_value: 5,
       ends_at: new Date(Date.now() - HOUR_MS).toISOString(),
@@ -415,7 +415,7 @@ describe("the 72h last-chance email", () => {
     // row predates coupon_id being recorded). The mail must go without a coupon
     // block rather than with a fabricated one.
     const cart = seedCart(73);
-    state.stages.push({ id: "stg-old", abandoned_cart_id: cart.id, stage: "t24h", coupon_id: null, sent_at: new Date().toISOString() });
+    state.stages.push({ id: "stg-old", abandoned_cart_id: cart.id, stage: "t24h", coupon_id: null, sent_at: new Date(Date.now() - 48 * HOUR_MS).toISOString() });
 
     const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
     await runAbandonedCartSweep();
