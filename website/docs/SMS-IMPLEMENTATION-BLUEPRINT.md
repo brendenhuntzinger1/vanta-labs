@@ -1509,3 +1509,183 @@ rewards (§C7) or remove an earned benefit (§C8).
 **The blockers are now mostly external** — A2P registration, the privacy-policy sentence,
 copy scrub, and counsel. B1–B4 are four small acknowledgements. Once those are in, M0–M6 can
 proceed; M7 needs B1 and B2 settled.
+
+---
+---
+
+# Part D — B1–B4 locked, final test matrix, rollback boundaries
+
+Approved 2026-09-11. **M0–M6 authorised. M7 gated on D4 below.**
+
+| # | Locked as |
+|---|---|
+| **B1** | Refund derives retained commission from the **stored payable** commission. Ships in the **same change** as the floor. Six regression cases in §D3 |
+| **B2** | `minRetainedContribution` **default $0**. Commission may be reduced only to stop commission itself taking contribution below zero. **Never used to rescue an already-negative order** — that stays a pricing/eligibility concern. Configurable for a future positive floor |
+| **B3** | Capped commission **surfaced** in admin and ambassador views: calculated, payable, withheld, reason. **Uncapped orders stay visually simple** — nothing rendered when withheld is zero |
+| **B4** | **Points-earned liability included** in contribution-before-commission |
+
+### ⚠ CONFLICT 6 — M6 is not inert either, and needs its own flag
+
+The rollback analysis turned this up. Everything keyed on `giftDisplacedRevenueCents`
+changes **live behaviour immediately**, because the existing email win-back gift
+(`winback_60_free_ghkcu`) **already absorbs units today**. That applies to the store-credit
+eligibility fix (§C8), not just to commission.
+
+So M6 is not a safe inert migration as written in §B8. **Three flags, not two:**
+
+```
+benefits.gift_displaced_commission.sms          → M7
+benefits.gift_displaced_commission.email        → M9, separate release (D8)
+benefits.gift_displaced_credit_eligibility      → M6, own release   ← NEW
+```
+
+Each defaults **off**; each resolves through the control store; each rolls back without a
+deploy. With all three off, `giftDisplacedRevenueCents` is computed and **recorded** but
+consumed by nothing — which is what makes M4–M6 genuinely observable before they are load-
+bearing.
+
+## D1. The contribution formula: one authoritative implementation
+
+B2 requires a single implementation. Following the **SOT-08** precedent
+(`phase11-bucket0.test.ts:275`), which the repo already uses to stop the floor predicate
+having two homes:
+
+**One export, one home:**
+```
+src/lib/benefits/contribution.ts
+  export function computeContributionBeforeCommission(inputs): ContributionBreakdown
+  export function applyCommissionFloor({ commissionCalculated, contribution, minRetainedContribution })
+```
+
+`ContributionBreakdown` returns every line named in §C1 individually — not just the total —
+so the admin can show *why* a cap fired without recomputing anything.
+
+**Guarded by a source-text test in the SOT-08 style**, asserting:
+1. `quote-order.ts` and `payment-webhook.ts` **call** it and do not restate it.
+2. No module outside `contribution.ts` contains the arithmetic
+   (`- pointsEarnedValue`, `- storeCredit`, `Math.min(commissionCalculated`).
+3. `applyCommissionFloor` is the only place `commission_capped_amount` is derived.
+
+This is the M7 gate: **one formula, one home, never a second inlined copy.**
+
+## D2. Final invariant and test matrix
+
+`P` = must pass before the milestone merges. Existing suites are named where they already
+cover the invariant.
+
+| # | Invariant | Milestone | Suite |
+|---|---|---|---|
+| 1 | Every phone in `orders`/`ambassadors`/`partners`/`customer_preferences` is suppressed after M0; count matches the distinct-phone query | M0 `P` | `sms-suppression-seed.test.ts` (SQL) |
+| 2 | A number leaves suppression only via verification **and** an explicit marketing grant | M2 `P` | `sms-consent.test.ts` |
+| 3 | `verified` alone never sends marketing | M2 `P` | `sms-state-machine.test.ts` |
+| 4 | Every illegal state transition is refused | M2 `P` | `sms-state-machine.test.ts` |
+| 5 | `sms_consent_events` rejects UPDATE and DELETE | M1 `P` | `sms-consent-append-only.test.ts` (SQL) |
+| 6 | A suppression read error **refuses the send** | M2 `P` | `sms-send-fails-closed.test.ts` |
+| 7 | Opt-out honoured within one cron tick; transactional continues | M2 `P` | `sms-keywords.test.ts` |
+| 8 | Double opt-in incomplete → no marketing send | M2 `P` | `sms-double-optin.test.ts` |
+| 9 | `person_key` omitted ⇒ `marketing_send_claim` byte-identical to today | M3 `P` | `marketing-frequency-guard.test.ts` (extend) |
+| 10 | Email lifecycle send behaviour unchanged after M3 | M3 `P` | `marketing-choke-point.test.ts`, `automation-*.test.ts` |
+| 11 | **No gift ⇒ `paidMerchandise === rewardBase === commissionableBase`** | M4 `P` | `benefit-bases.test.ts` |
+| 12 | **M4 changes no total, discount, commission, points or credit anywhere in `REACHABLE`** | M4 `P` | `cart-server-discount-parity.test.ts` **unedited** |
+| 13 | 100,000-case ambassador fuzz passes unchanged | M4 `P` | `ambassador-financial-invariants.test.ts` |
+| 14 | `paidMerchandise` identical to today's `commissionableSubtotal`, all paths | M4 `P` | `benefit-bases.test.ts` |
+| 15 | Gift **added** ⇒ `giftDisplaced === 0` ⇒ commission unchanged | M4 `P` | `gift-displaced-revenue.test.ts` |
+| 16 | Gift **absorbing** ⇒ `giftDisplaced` = the exact subtotal delta incl. bundle repricing | M4 `P` | `gift-displaced-revenue.test.ts` |
+| 17 | `commissionableBase ≤ paidMerchandise + giftRetail × qty`, always | M4 `P` | `gift-displaced-revenue.test.ts` |
+| 18 | No non-SMS incentive (bundle, membership, referral, coupon, BXGY) adds to `commissionableBase` | M4 `P` | `gift-displaced-revenue.test.ts` |
+| 19 | Residual ≥ 0 and ≤ `giftRetail × qty × commissionPct/100`; pinned per-basket table | M4 `P` | `commission-residual-bound.test.ts` |
+| 20 | **One contribution formula; no second inlined copy** (SOT-08 style) | M5 `P` | `sot-contribution.test.ts` |
+| 21 | Floor snapshot carries credit, points, giftCOGS, commission, contribution, bindingConstraint | M5 `P` | `profit-floor-snapshot.test.ts` |
+| 22 | Floor **reports, never refuses** — no code path throws on margin | M5 `P` | `profit-floor-report-only.test.ts` |
+| 23 | Alert fires on every negative-contribution stack in §B6/C2 | M5 `P` | `profit-floor-alert.test.ts` (extend) |
+| 24 | **Points from a $0 gift line = 0** | M5 `P` | `reward-base.test.ts` |
+| 25 | Points on an absorbing gift = points on paid merchandise only | M5 `P` | `reward-base.test.ts` |
+| 26 | Points and credit identical to today when no gift exists | M5 `P` | `reward-base.test.ts` |
+| 27 | **Credit eligibility unchanged by gift absorption** (flag on) | M6 `P` | `store-credit-gift-eligibility.test.ts` |
+| 28 | Credit **redemption** never exceeds balance owed | M6 `P` | `store-credit-gift-eligibility.test.ts` |
+| 29 | Credit behaviour byte-identical with the M6 flag **off** | M6 `P` | `store-credit-gift-eligibility.test.ts` |
+| 30 | Displaced amount used for eligibility thresholds only, **never as an earning base** | M6 `P` | `reward-base.test.ts` |
+| 31 | **Floor unreachable on ordinary referred orders** (headroom 3–5×) | M7 `P` | `commission-floor.test.ts` |
+| 32 | Floor caps commission and **nothing else** — pricing, gifts, membership, points, refunds unchanged by it | M7 `P` | `commission-floor.test.ts` |
+| 33 | Floor **never rescues** an already-negative order; contribution stays negative with commission at 0 | M7 `P` | `commission-floor.test.ts` |
+| 34 | `minRetainedContribution` configurable; $0 reproduces §C2 exactly | M7 `P` | `commission-floor.test.ts` |
+| 35 | **B1 — six refund cases (§D3)** | M7 `P` | `commission-refund-cap.test.ts` |
+| 36 | Refund `merchandiseBase`, `refundedFraction`, `recordedRefundAmount`, `paymentStatus`, `shouldRestock` all unchanged | M7 `P` | `commission-refund-cap.test.ts` |
+| 37 | Audit fields populated on every commission row; `commission_amount` remains payable | M7 `P` | `commission-audit-fields.test.ts` |
+| 38 | Withheld amount + reason rendered when > 0; **nothing rendered when 0** (B3) | M7 `P` | `admin-commission-surface.test.ts` |
+| 39 | Gift minimum withdraws the gift and restores absorbed units below $60 | M7 `P` | `gift-minimum.test.ts` |
+| 40 | `availableForNewGifts` nets off live unredeemed offers; issuance stops below 10 | M7 `P` | `gift-inventory.test.ts` |
+| 41 | An issued promise is **never revoked for stock**; unfulfillable promise surfaces a message and an alert | M7 `P` | `gift-inventory.test.ts` |
+| 42 | Duplicate `twilio_message_sid` writes once; replayed webhook is a no-op | M1 `P` | `sms-webhook.test.ts` |
+| 43 | Unsigned webhook rejected; unconfigured secret ⇒ 503 | M1 `P` | `sms-webhook.test.ts` |
+| 44 | Quiet-hour boundaries at each zone edge + continental fallback | M2 `P` | `sms-quiet-hours.test.ts` |
+| 45 | Cross-channel cap: one marketing message per person per 24h | M8 `P` | `sms-frequency.test.ts` |
+| 46 | A recovered cart cancels the `sms_t4h` stage with no race | M8 `P` | `sms-cart-recovery.test.ts` |
+| 47 | **D8 email: commission before/after matches §C4 with the flag on; identical with it off** | M9 `P` | `email-gift-commission.test.ts` |
+
+**Playwright (M8, harness only — never `npm run dev`):** signup → verify → double opt-in →
+gift issued → cart → checkout → best promotion chosen → purchase → recovery suppressed; and
+STOP → inactive → marketing stops → gift unavailable → **order history unaffected**. Both at
+390×844.
+
+## D3. B1 — the six refund regression cases
+
+Fixture: the §C2 `$100` capped order. `commissionableBase` $88.98, percent 20%,
+`commission_calculated` $17.80, **`commission_amount` (payable) $17.29**,
+`commission_capped_amount` $0.51.
+
+| # | Case | Expected | Proves |
+|---|---|--:|---|
+| 1 | **No refund**, capped order | payable stays **$17.29** | the cap persists at rest |
+| 2 | **Partial refund $50** of $100 | retained = 17.29 × (1 − 50/88.98) = **$7.58** | prorates the **payable**, not `base × percent` |
+| 3 | **Two partials**, $30 then $20 | after: **$11.40**; then **$7.58** | cumulative fraction; second does not overwrite the first |
+| 4 | **Full refund** | **$0.00** | full reversal |
+| 5 | **Uncapped order**, partial refund | identical to today's value, to the cent | no regression for the 99% case |
+| 6 | **Any refund, any sequence** | retained **≤ $17.29**, never ≤ $17.80 | *"refund commission can never exceed the originally payable commission"* |
+
+Case 6 is asserted as a property over a fuzz of refund sequences, not a single example.
+
+## D4. Rollback boundaries per milestone
+
+| M | Changes | Live behaviour? | Rollback | Blast radius if wrong |
+|---|---|:--|---|---|
+| **M0** | Seed `sms_suppressions`; privacy-policy sentence; copy scrub | **Production data write.** No sends exist | Rows identifiable by `reason='pre_consent_migration'`. **Rolling back means un-suppressing — do not.** Forward-only by design | **None.** Additive and safe-by-default: the failure mode is a number staying suppressed, which is the correct default |
+| **M1** | SMS tables; Twilio client; webhook; kill switches | **No.** No app code writes yet | Revert commits; drop empty tables | None — nothing reads them |
+| **M2** | State machine, Verify, keywords, quiet hours, suppression enforcement | **No.** `sms_enabled` off | Revert; tables retain consent evidence (**never delete**) | None while the switch is off |
+| **M3** | `marketing_send_claim` gains `person_key default null` | **No** — omitted ⇒ identical | Replace the function with the prior definition. One idempotent SQL file | **Highest of M1–M3.** A mistake here affects **every email send**. Invariants 9–10 are the gate; deploy alone, verify a real send, then continue |
+| **M4** | Three bases introduced, all equal. `giftDisplacedRevenueCents` computed and recorded, **consumed by nothing** | **No** — proven no-op | Revert one commit | None if invariants 11–14 hold. **If a parity assertion needs editing, the refactor is wrong — stop** |
+| **M5** | Widened floor snapshot; one contribution formula; alerting on cash contribution | **Reporting only.** No pricing, no payout | Revert; snapshot columns are additive | Noisier alerts at worst. Cannot affect a customer or a payout |
+| **M6** | Credit eligibility gated on the gift-independent base | **YES — affects existing email win-back gifts** (CONFLICT 6) | Flag `benefits.gift_displaced_credit_eligibility` **off** — no deploy | A Pro/Elite/Black member redeeming credit on a gift order. Direction is *restorative* (they regain credit they were entitled to), so the risk is over-granting, bounded by the balance owed |
+| **M7** | `commissionableBase` consumed; commission floor; B1 refund fix; audit fields | **YES — ambassador payouts** | Flag `benefits.gift_displaced_commission.sms` off ⇒ today's commission. **The B1 refund fix is not flagged** — it is a correctness fix that is a no-op on uncapped orders | Payouts. Gated on invariants 31–38 **and** D3 cases 1–6. Deploy alone; reconcile the next payout run by hand before the following one |
+| **M8** | SMS marketing sends: caps, quiet hours, `sms_t4h`, back-in-stock, win-back | **YES — customers receive messages.** Needs marketing A2P | `sms_enabled` off ⇒ stops within one cron tick (≤15 min), no deploy | Customer-facing. Irreversible per message sent — a message cannot be unsent. Highest care |
+| **M9** | D8: email win-back gift commission | **YES — payouts on an existing channel** | Flag `benefits.gift_displaced_commission.email` off | Payouts on email gift orders. **Never released with M7 or M8** |
+
+### Rollback rules that hold across all milestones
+
+1. **Consent evidence is never deleted.** Not on rollback, not on cleanup. `sms_subscribers`
+   and `sms_consent_events` survive every revert.
+2. **Flags before deploys.** Every behaviour change resolves through the control store, so
+   the first response to a problem is a flag flip, not a release.
+3. **One behaviour change per release.** M6, M7, M8 and M9 each ship alone. An unexpected
+   payout or message total must have exactly one candidate cause.
+4. **`sms_enabled = false` is the master stop** — halts all sending within one tick, and is
+   the default from M1 until M8.
+5. **M4 is the structural gate.** If it cannot land as a proven no-op, nothing after it is
+   safe, and the design needs revisiting rather than forcing.
+
+## D5. Status
+
+**M0–M6 authorised** and the blueprint now reflects B1–B4. The only addition I made beyond
+your decisions is **CONFLICT 6** — M6 needs its own flag because the existing email win-back
+gift already absorbs units today, so the credit-eligibility fix is not inert. It is included
+above and flagged separately.
+
+**M7 remains gated**, per your instruction, on:
+- invariants 31–38 green,
+- D3 refund cases 1–6 green,
+- and `computeContributionBeforeCommission` being the single authoritative implementation,
+  proven by the SOT-08-style guard (invariant 20).
+
+**Still external and not started:** transactional A2P approval, the Twilio privacy-policy
+sentence, the storefront copy scrub, and counsel on §8.3 items 2/3/6 and D10. M8 cannot
+begin without the first of those.
