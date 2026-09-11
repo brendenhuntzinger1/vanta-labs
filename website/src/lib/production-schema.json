@@ -424,7 +424,9 @@
     "email",
     "notified",
     "notified_at",
-    "created_at"
+    "created_at",
+    "phone_e164",
+    "notify_sms"
   ],
   "cart_recovery_stage_overrides": [
     "abandoned_cart_id",
@@ -1098,7 +1100,9 @@
     "marketing_source_kind",
     "marketing_source_ref",
     "marketing_source_basis",
-    "marketing_source_at"
+    "marketing_source_at",
+    "sms_attributed_send_id",
+    "sms_benefit_cost_cents"
   ],
   "partner_clicks": [
     "id",
@@ -1395,7 +1399,12 @@
     "fraud_flag",
     "fraud_reason",
     "payout_id",
-    "customer_discount_percent"
+    "customer_discount_percent",
+    "commissionable_base",
+    "commission_calculated",
+    "commission_capped_amount",
+    "commission_cap_reason",
+    "contribution_before_commission"
   ],
   "referrals": [
     "id",
@@ -1434,6 +1443,84 @@
     "matched",
     "error",
     "retry_count"
+  ],
+  "sms_consent_events": [
+    "id",
+    "phone_e164",
+    "event",
+    "disclosure_version",
+    "exact_copy_shown",
+    "ip",
+    "user_agent",
+    "source_url",
+    "user_id",
+    "twilio_message_sid",
+    "detail",
+    "created_at"
+  ],
+  "sms_delivery_events": [
+    "id",
+    "twilio_message_sid",
+    "status",
+    "error_code",
+    "raw",
+    "received_at"
+  ],
+  "sms_link_clicks": [
+    "id",
+    "sms_send_log_id",
+    "phone_e164",
+    "path",
+    "clicked_at",
+    "user_agent"
+  ],
+  "sms_send_log": [
+    "id",
+    "campaign_type",
+    "reference_id",
+    "phone_e164",
+    "template_key",
+    "sent_at",
+    "status",
+    "twilio_message_sid",
+    "segments",
+    "price_cents",
+    "delivered_at",
+    "failed_at",
+    "error_code",
+    "clicked_at"
+  ],
+  "sms_subscribers": [
+    "phone_e164",
+    "user_id",
+    "status",
+    "verified_at",
+    "verify_attempts",
+    "last_verify_at",
+    "marketing_consent",
+    "marketing_consent_at",
+    "transactional_consent",
+    "transactional_consent_at",
+    "double_optin_confirmed_at",
+    "consent_source",
+    "disclosure_version",
+    "opted_out_at",
+    "opt_out_keyword",
+    "resubscribed_at",
+    "resubscribe_count",
+    "line_type",
+    "carrier",
+    "timezone",
+    "created_at",
+    "updated_at"
+  ],
+  "sms_suppressions": [
+    "phone_e164",
+    "scope",
+    "reason",
+    "phone_raw",
+    "needs_review",
+    "created_at"
   ],
   "store_credit_ledger": [
     "id",

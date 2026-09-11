@@ -1,0 +1,45 @@
+-- APPLIED. Receipt, not a migration to re-run.
+--
+--   what      Vanta Texts M1 schema. Source: src/lib/sql/sms-programme.sql
+--   project   mlpimwgkwuqpsvsrlpqv (production)
+--   when      2026-09-11 ~23:28 UTC
+--   how       Supabase MCP apply_migration, name `sms_programme_m1_schema`
+--   by        Claude, on the owner's explicit written approval for this
+--             migration only. The M0 suppression seed was NOT run and remains
+--             held pending separate approval.
+--
+-- WHAT IT DID
+--   * created 6 tables: sms_subscribers, sms_consent_events, sms_suppressions,
+--     sms_send_log, sms_delivery_events, sms_link_clicks
+--   * back_in_stock_requests  + phone_e164, notify_sms
+--   * orders                  + sms_attributed_send_id, sms_benefit_cost_cents
+--   * referral_orders         + commissionable_base, commission_calculated,
+--                               commission_capped_amount, commission_cap_reason,
+--                               contribution_before_commission
+--   * RLS enabled on all six, no policies (service-role only), anon and
+--     authenticated revoked
+--   * append-only trigger on sms_consent_events
+--
+-- VERIFIED AFTER APPLYING
+--   6/6 tables present, 0 rows in all six.
+--   orders           46 rows unchanged, 116 -> 118 columns
+--   referral_orders   1 row  unchanged,  26 ->  31 columns
+--   back_in_stock     0 rows unchanged,   7 ->   9 columns
+--   customer_preferences 89 rows unchanged; marketing_subscribers 80 unchanged
+--   RLS on 6/6; 0 policies on sms_* tables; append-only trigger present
+--   Trigger proven live inside a rolled-back DO block: UPDATE and DELETE both
+--   raised "sms_consent_events is append-only", and the probe row was rolled
+--   back so the table is genuinely empty.
+--   src/lib/production-schema.json regenerated: 100 -> 106 tables.
+--   Full suite green: 673 files, 10,490 tests.
+--
+-- NO BEHAVIOUR CHANGED. Nothing in application code reads or writes these
+-- tables except /api/webhooks/twilio, which cannot fire: every SMS switch
+-- (sms.enabled, sms.transactional_enabled, sms.marketing_enabled) is unset and
+-- therefore false, and no Twilio credential is configured.
+--
+-- ROLLBACK. Additive, so leaving it is free. If it must be undone, drop the six
+-- tables and the five referral_orders columns; the orders and
+-- back_in_stock_requests columns are nullable and harmless.
+-- DO NOT drop sms_consent_events once it holds rows: consent evidence is never
+-- deleted, including on rollback.
