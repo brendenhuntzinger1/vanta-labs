@@ -11,7 +11,7 @@ import {
 import { utmForCampaign } from "@/lib/email/utm";
 import { normalizeLinkButtons } from "@/lib/email/affiliate-campaign-template";
 import { hashIpAddress } from "@/lib/ip-hash";
-import { stampCampaignEngagement } from "@/lib/email/engagement";
+import { recordCampaignEngagementEvent, stampCampaignEngagement } from "@/lib/email/engagement";
 import { attachEmailLinkGrant } from "@/lib/email/recipient-attestation";
 import { OFFER_COOKIE, OFFER_COOKIE_MAX_AGE_SECONDS } from "@/lib/offers/customer-offers";
 
@@ -131,6 +131,7 @@ export async function GET(request: NextRequest) {
   // kind of mail. Separately guarded: a failure inserting the click detail
   // above must not cost the send log its record of the click.
   await stampCampaignEngagement("clicked", campaignId, email);
+  await recordCampaignEngagementEvent("clicked", campaignId, email, { source: "click", userAgent: request.headers.get("user-agent") });
 
   // Tagged last, on the destination that was actually chosen. The in-house
   // attribution above is the number this business runs on; this is what lets

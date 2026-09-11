@@ -5,6 +5,8 @@ import { listAbandonedCarts, getCartRecoveryStats, getCartRecoveryTrend } from "
 import { getCartRecoveryControlConfig } from "@/lib/admin-control";
 import { listGiftableProducts, loadRecoveryEconomicsInputs } from "@/lib/admin-cart-recovery";
 import { AdminCartRecoveryClient } from "@/components/admin-cart-recovery-client";
+import { LifecycleFunnelTable } from "@/components/lifecycle-funnel-table";
+import { emptyLifecycleFunnel, getLifecycleFunnel } from "@/lib/email/lifecycle-funnel-report";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +18,7 @@ export default async function AdminCartRecoveryPage() {
 
   const canManage = canManageCartRecovery(session.role);
 
-  const [carts, stats, weeklyTrend, monthlyTrend, config, giftProducts, economics] = canManage
+  const [carts, stats, weeklyTrend, monthlyTrend, config, giftProducts, economics, funnel] = canManage
     ? await Promise.all([
         listAbandonedCarts().catch(() => []),
         getCartRecoveryStats().catch(() => null),
@@ -29,8 +31,11 @@ export default async function AdminCartRecoveryPage() {
         // conservative constants rather than showing nothing.
         listGiftableProducts().catch(() => []),
         loadRecoveryEconomicsInputs().catch(() => ({ postageCents: 793, productCostRatio: 0.2 })),
+        // Never rejects on its own; the catch keeps one failed read from taking
+        // the page down, like every other load here.
+        getLifecycleFunnel(28).catch((error: unknown) => emptyLifecycleFunnel(28, error instanceof Error ? error.message : String(error))),
       ])
-    : [[], null, [], [], null, [], { postageCents: 793, productCostRatio: 0.2 }];
+    : [[], null, [], [], null, [], { postageCents: 793, productCostRatio: 0.2 }, emptyLifecycleFunnel(28)];
 
   return (
     <div className="vl-page-shell min-h-screen bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.1),transparent_52%),linear-gradient(145deg,#04060f_0%,#0b1324_50%,#060911_100%)] px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
@@ -61,6 +66,7 @@ export default async function AdminCartRecoveryPage() {
             Your role ({session.role.replace("_", " ")}) does not have permission to manage cart recovery.
           </section>
         )}
+        {canManage ? <LifecycleFunnelTable report={funnel} title="Lifecycle funnel · every flow" /> : null}
       </div>
     </div>
   );

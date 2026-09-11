@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
     // ...and again in email_send_log, which is the one table that lists every
     // send the system makes. Cart-recovery opens were recorded here alone for
     // six weeks, which is why they appeared nowhere the owner looks.
-    await stampCartRecoveryEngagement("opened", id);
+    await stampCartRecoveryEngagement("opened", id, { userAgent: request.headers.get("user-agent"), source: "pixel" });
   }
 
   return new NextResponse(TRANSPARENT_PIXEL, {

@@ -1,6 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { recordSystemAlert } from "@/lib/monitoring";
-import { mirrorEngagementToChannel, stampSendLogEngagementByMessageId } from "@/lib/email/engagement";
+import { findSendLogIdentityByMessageId, mirrorEngagementToChannel, recordEngagementEvent, stampSendLogEngagementByMessageId } from "@/lib/email/engagement";
 import { findUserByEmail } from "@/lib/auth-confirmation-email";
 
 /**
@@ -66,6 +66,8 @@ export interface DeliveryEvent {
   providerMessageId?: string;
   /** Verbatim provider event name, for the alert context. */
   rawType: string;
+  /** What fetched the pixel or followed the link, when the provider says. */
+  userAgent?: string;
 }
 
 function firstEmail(value: unknown): string {
@@ -105,10 +107,12 @@ function parseResend(body: Record<string, unknown>): DeliveryEvent[] {
     return [{ email, kind: "delayed", providerMessageId, rawType: type }];
   }
   if (type === "email.opened") {
-    return [{ email, kind: "opened", providerMessageId, rawType: type }];
+    const open = (data.open ?? {}) as Record<string, unknown>;
+    return [{ email, kind: "opened", providerMessageId, rawType: type, userAgent: str(open.userAgent) || undefined }];
   }
   if (type === "email.clicked") {
-    return [{ email, kind: "clicked", providerMessageId, rawType: type }];
+    const click = (data.click ?? {}) as Record<string, unknown>;
+    return [{ email, kind: "clicked", providerMessageId, rawType: type, userAgent: str(click.userAgent) || undefined }];
   }
   if (type === "email.bounced") {
     const bounce = (data.bounce ?? {}) as Record<string, unknown>;
@@ -453,6 +457,23 @@ export async function applyDeliveryEvents(events: DeliveryEvent[]): Promise<Deli
       if (identity) {
         outcome.engaged += 1;
         await mirrorEngagementToChannel({ kind: event.kind, identity }).catch(() => {});
+      }
+      // THE EVENT LOG KEEPS EVERY OPEN, not only the first. The stamp above
+      // returns the identity only when it changed a first-touch column, so a
+      // second open resolves its send separately; a message id no send
+      // recorded still cannot be matched, and that gap is unchanged.
+      const eventIdentity = identity ?? (event.providerMessageId
+        ? await findSendLogIdentityByMessageId(event.providerMessageId).catch(() => null)
+        : null);
+      if (eventIdentity) {
+        await recordEngagementEvent({
+          kind: event.kind,
+          source: "provider",
+          campaignType: eventIdentity.campaignType,
+          referenceId: eventIdentity.referenceId,
+          recipientEmail: eventIdentity.recipientEmail,
+          userAgent: event.userAgent ?? null,
+        }).catch(() => false);
       }
       outcome.ignored += 1;
       continue;

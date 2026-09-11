@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { verifyCampaignRecipient } from "@/lib/email/campaign-links";
-import { stampCampaignEngagement } from "@/lib/email/engagement";
+import { recordCampaignEngagementEvent, stampCampaignEngagement } from "@/lib/email/engagement";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +44,7 @@ export async function GET(request: NextRequest) {
     // by every row it fanned out to, and stamping all of them because one
     // person opened would report a 100% open rate.
     await stampCampaignEngagement("opened", campaignId, email);
+    await recordCampaignEngagementEvent("opened", campaignId, email, { source: "pixel", userAgent: request.headers.get("user-agent") });
   }
 
   return new NextResponse(PIXEL, {

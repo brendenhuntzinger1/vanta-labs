@@ -79,7 +79,7 @@ export async function GET(request: NextRequest) {
         // Attribution is best-effort; the redirect is not.
       }
     }
-    await stampCartRecoveryEngagement("clicked", id);
+    await stampCartRecoveryEngagement("clicked", id, { userAgent: request.headers.get("user-agent"), source: "click" });
   }
 
   // THE GUEST GRANT IS MINTED HERE, where the reservation proves which cart

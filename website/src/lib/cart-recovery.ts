@@ -894,6 +894,24 @@ export function recoveryDiscountAllowed(input: {
 export const MIN_STAGE_GAP_MS = 8 * HOUR_MS;
 
 /**
+ * When this cart last received a stage, ms since epoch, or null for never.
+ * Read by the admin resend so it can keep the same floor the sweep keeps.
+ */
+export async function lastStageSentAtFor(cartId: string): Promise<number | null> {
+  const id = String(cartId ?? "").trim();
+  if (!id) return null;
+  const { data } = await supabaseAdmin
+    .from("abandoned_cart_emails")
+    .select("sent_at")
+    .eq("abandoned_cart_id", id)
+    .order("sent_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const at = data?.sent_at ? new Date(String((data as { sent_at?: string }).sent_at)).getTime() : Number.NaN;
+  return Number.isFinite(at) ? at : null;
+}
+
+/**
  * The single stage this cart should receive right now, or null.
  *
  * Pure, so the window rules can be asserted without a database: exactly one

@@ -4,6 +4,8 @@ import { canManageEmailCampaigns } from "@/lib/admin-roles";
 import { getEmailDashboard, loadSubscriberDirectory } from "@/lib/admin-email";
 import { loadAutomations } from "@/lib/email/automations";
 import { loadAutomationStats, parseStatsRange, emptyAutomationStatsReport } from "@/lib/email/automation-stats";
+import { LifecycleFunnelTable } from "@/components/lifecycle-funnel-table";
+import { emptyLifecycleFunnel, getLifecycleFunnel } from "@/lib/email/lifecycle-funnel-report";
 import { OFFER_CATALOG } from "@/lib/offers/customer-offers";
 import { getEmailAdminSettings } from "@/lib/email/settings";
 import { CAMPAIGN_SEGMENTS } from "@/lib/email/audience";
@@ -74,7 +76,7 @@ export default async function AdminEmailPage({
   // Every load is independently fault-tolerant: a campaign system that can't
   // render because one query failed is worse than one showing partial data.
   const emptyDirectory = { rows: [], counts: { subscribed: 0, unsubscribed: 0, bounced: 0, complained: 0 }, truncated: false };
-  const [dashboard, automations, automationStats, emailSettings, categories, giftProducts, subscriberDirectory, sendLedger] = canManage
+  const [dashboard, automations, automationStats, emailSettings, categories, giftProducts, subscriberDirectory, sendLedger, funnel] = canManage
     ? await Promise.all([
         getEmailDashboard().catch(() => ({ subscribers: 0, campaigns: [], totals: { sent: 0, opened: 0, clicked: 0, orders: 0, revenue: 0 } })),
         loadAutomations().catch(() => []),
@@ -93,8 +95,9 @@ export default async function AdminEmailPage({
         // the whole page down, exactly like every other load in this list.
         loadSendLedger().catch((error: unknown) =>
           emptySendLedger(error instanceof Error ? error.message : String(error))),
+        getLifecycleFunnel(28).catch((error: unknown) => emptyLifecycleFunnel(28, error instanceof Error ? error.message : String(error))),
       ])
-    : [{ subscribers: 0, campaigns: [], totals: { sent: 0, opened: 0, clicked: 0, orders: 0, revenue: 0 } }, [], emptyAutomationStatsReport(statsRange), null, [], [], emptyDirectory, emptySendLedger()];
+    : [{ subscribers: 0, campaigns: [], totals: { sent: 0, opened: 0, clicked: 0, orders: 0, revenue: 0 } }, [], emptyAutomationStatsReport(statsRange), null, [], [], emptyDirectory, emptySendLedger(), emptyLifecycleFunnel(28)];
 
   return (
     <div className="vl-page-shell min-h-screen bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.1),transparent_52%),linear-gradient(145deg,#04060f_0%,#0b1324_50%,#060911_100%)] px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
@@ -128,6 +131,7 @@ export default async function AdminEmailPage({
             <p className="text-sm text-zinc-400">Your role does not have permission to manage email campaigns.</p>
           </section>
         )}
+        {canManage ? <LifecycleFunnelTable report={funnel} /> : null}
 
         {/* Below the composer, because it answers a question about mail that has
             already gone out rather than mail about to. */}

@@ -84,6 +84,108 @@ export async function stampSendLogEngagement(input: {
   }
 }
 
+export type EngagementSource = "pixel" | "click" | "provider";
+
+const USER_AGENT_MAX = 300;
+
+/**
+ * KEEP THE EVIDENCE. Every open and click, raw, with what fetched it.
+ *
+ * The first-touch stamps above answer "did anyone ever open it". They cannot
+ * say whether the fetch eight seconds after the send was a person, and on
+ * 2026-09-11 a third of the "opens" on real recovery sends were that fetch.
+ * This writes one append-only row per event into `email_engagement_events`;
+ * engagement-classification.ts decides at read time which rows were people,
+ * so the rule can change without losing history.
+ *
+ * NEVER THROWS, and never blocks a tracker: a pixel, a redirect and a webhook
+ * all call this, and none of them may fail a customer's request over a
+ * bookkeeping write. A missing table (the migration not yet applied) is the
+ * same as a failed insert: false, and the first-touch columns still carry on.
+ */
+export async function recordEngagementEvent(input: {
+  kind: EngagementKind;
+  source: EngagementSource;
+  campaignType: string;
+  referenceId: string | null;
+  recipientEmail: string | null;
+  userAgent: string | null | undefined;
+  at?: string;
+}): Promise<boolean> {
+  const campaignType = String(input.campaignType ?? "").trim();
+  const referenceId = input.referenceId ? String(input.referenceId) : null;
+  const recipientEmail = input.recipientEmail ? String(input.recipientEmail).trim().toLowerCase() : null;
+  // A row that names no send is noise nothing can ever join.
+  if (!campaignType || (!referenceId && !recipientEmail)) return false;
+  const agent = String(input.userAgent ?? "").trim();
+  try {
+    const { error } = await supabaseAdmin.from("email_engagement_events").insert({
+      campaign_type: campaignType,
+      reference_id: referenceId,
+      recipient_email: recipientEmail,
+      kind: input.kind,
+      source: input.source,
+      at: input.at ?? new Date().toISOString(),
+      user_agent: agent ? agent.slice(0, USER_AGENT_MAX) : null,
+    });
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The send behind a provider message id, whether or not its first touch is
+ * already stamped. `stampSendLogEngagementByMessageId` returns the identity
+ * only when it stamped something, which is right for a first-touch column and
+ * wrong for an event log that must keep the second open too.
+ */
+export async function findSendLogIdentityByMessageId(providerMessageId: string): Promise<SendLogIdentity | null> {
+  if (!providerMessageId) return null;
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("email_send_log")
+      .select("campaign_type, reference_id, recipient_email")
+      .eq("provider_message_id", providerMessageId)
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) return null;
+    const row = data as { campaign_type?: string | null; reference_id?: string | null; recipient_email?: string | null };
+    if (!row.campaign_type) return null;
+    return { campaignType: String(row.campaign_type), referenceId: row.reference_id ?? null, recipientEmail: row.recipient_email ?? null };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The campaign tracker's event. A campaign id belongs to one kind of send
+ * (customer campaign or affiliate broadcast) and the send log knows which, so
+ * the event is filed under the same campaign_type the send was.
+ */
+export async function recordCampaignEngagementEvent(
+  kind: EngagementKind,
+  campaignId: string,
+  recipientEmail: string,
+  options: { source: EngagementSource; userAgent: string | null | undefined },
+): Promise<boolean> {
+  if (!campaignId || !recipientEmail) return false;
+  try {
+    const { data } = await supabaseAdmin
+      .from("email_send_log")
+      .select("campaign_type")
+      .in("campaign_type", Array.from(CAMPAIGN_TYPES))
+      .eq("reference_id", campaignId)
+      .eq("recipient_email", recipientEmail.trim().toLowerCase())
+      .limit(1)
+      .maybeSingle();
+    const campaignType = String((data as { campaign_type?: string } | null)?.campaign_type ?? "campaign");
+    return await recordEngagementEvent({ kind, source: options.source, campaignType, referenceId: campaignId, recipientEmail, userAgent: options.userAgent });
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Stamp the send-log row the PROVIDER just reported on.
  *
@@ -174,6 +276,7 @@ export async function stampCampaignEngagement(
 export async function stampCartRecoveryEngagement(
   kind: EngagementKind,
   reservationId: string,
+  options?: { userAgent?: string | null; source?: EngagementSource },
 ): Promise<boolean> {
   if (!reservationId) return false;
   try {
@@ -185,11 +288,18 @@ export async function stampCartRecoveryEngagement(
     if (error || !data) return false;
     const row = data as { abandoned_cart_id?: string | null; stage?: string | null };
     if (!row.abandoned_cart_id || !row.stage) return false;
-    return await stampSendLogEngagement({
+    const campaignType = `cart_recovery_${row.stage}`;
+    // The event is kept whether or not this is the first touch: a second open
+    // is still an open, and the classifier needs to see every fetch.
+    await recordEngagementEvent({
       kind,
-      campaignType: `cart_recovery_${row.stage}`,
+      source: options?.source ?? (kind === "opened" ? "pixel" : "click"),
+      campaignType,
       referenceId: row.abandoned_cart_id,
+      recipientEmail: null,
+      userAgent: options?.userAgent ?? null,
     });
+    return await stampSendLogEngagement({ kind, campaignType, referenceId: row.abandoned_cart_id });
   } catch {
     return false;
   }

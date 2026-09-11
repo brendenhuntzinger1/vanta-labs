@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { verifyAutomationLink } from "@/lib/email/automation-links";
 import { isAutomationKey } from "@/lib/email/automations";
+import { recordEngagementEvent } from "@/lib/email/engagement";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +48,16 @@ export async function GET(request: NextRequest) {
     } catch {
       // Never worth failing the image over.
     }
+    // Every fetch is kept with its agent; the classifier decides later which
+    // were people (engagement-classification.ts). Never throws.
+    await recordEngagementEvent({
+      kind: "opened",
+      source: "pixel",
+      campaignType: `automation:${automationKey}`,
+      referenceId,
+      recipientEmail: email,
+      userAgent: request.headers.get("user-agent"),
+    });
   }
 
   return new NextResponse(PIXEL, {

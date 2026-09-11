@@ -8,6 +8,7 @@ import {
   safeAutomationDestination,
   verifyAutomationLink,
 } from "@/lib/email/automation-links";
+import { recordEngagementEvent } from "@/lib/email/engagement";
 import { utmForAutomation } from "@/lib/email/utm";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { isAutomationKey } from "@/lib/email/automations";
@@ -111,6 +112,14 @@ export async function GET(request: NextRequest) {
         request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
           ?? request.headers.get("x-real-ip"),
       ),
+    });
+    await recordEngagementEvent({
+      kind: "clicked",
+      source: "click",
+      campaignType: `automation:${automationKey}`,
+      referenceId,
+      recipientEmail: email,
+      userAgent: request.headers.get("user-agent"),
     });
 
     // FIRST CLICK ONLY. `clicked_at` on the send-log row answers "did this

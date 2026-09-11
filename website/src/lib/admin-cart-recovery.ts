@@ -21,6 +21,7 @@ import {
   type AbandonedCartItemSnapshot,
   type RecoveryCatalogueEntry,
   MIN_STAGE_GAP_MS,
+  lastStageSentAtFor,
 } from "@/lib/cart-recovery";
 import { getSiteUrl } from "@/lib/env";
 import { isFreeShippingSitewide } from "@/lib/shipping";
@@ -495,15 +496,8 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
   // a stage for MIN_STAGE_GAP_MS after the previous one (cart-recovery.ts), and
   // a resend is not the way round it. Read before the guard so a refusal
   // claims nothing, mints nothing and arms no cooldown.
-  const { data: lastStage } = await supabaseAdmin
-    .from("abandoned_cart_emails")
-    .select("sent_at")
-    .eq("abandoned_cart_id", cart.id)
-    .order("sent_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const lastStageSentAt = lastStage?.sent_at ? new Date(String(lastStage.sent_at)).getTime() : Number.NaN;
-  if (Number.isFinite(lastStageSentAt) && Date.now() - lastStageSentAt < MIN_STAGE_GAP_MS) {
+  const lastStageSentAt = await lastStageSentAtFor(cart.id);
+  if (lastStageSentAt !== null && Date.now() - lastStageSentAt < MIN_STAGE_GAP_MS) {
     const retryAt = lastStageSentAt + MIN_STAGE_GAP_MS;
     return {
       success: false,
