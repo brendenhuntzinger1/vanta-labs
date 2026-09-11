@@ -148,3 +148,48 @@ and the P1/P2 tab readings from the owner's inbox say which probe to promote.
 7. Drop-off: read the funnel's delivered → human click column first; that was the whole loss.
 8. Test next: the stage-3 subject arms (product vs added) under the restrained shape; then layout (P1) if clicks stay low; then the sender name.
 
+## 8. Verification record (2026-09-11, end of session)
+
+What was run, against what, and what it showed. Production was not touched by
+any of it except the two additive migrations noted in §7.
+
+| Check | Result |
+|---|---|
+| `npm run lint` | 0 errors (62 pre-existing warnings, all unused test placeholders) |
+| `tsc --noEmit` | clean |
+| `vitest run` | 668 files, 10,380 tests passed, 245 skipped |
+| `NODE_ENV=test next build` | clean |
+| `scripts/qa-guest-recovery.mjs` on the local harness | 34 passed, 0 failed: click → grant → restore → cart → checkout reachable; every gated surface stays shut; tampering refused |
+| Lifecycle cron (`/api/cron/lifecycle`) on the harness with seeded carts | 2h cart: generic stage 1. 2h cart with a declined card after it: "Your payment did not go through", order number, "nothing was charged". 25h cart with stages 1–2 gone a day ago: "Your BPC-157 10mg is still saved", gift in one sentence, terms once, "Complete my order". 73h cart: "One last note about your Ipamorelin 5mg", gift sentence, 10% code in words, no code box. 13h cart whose stage 1 went 2h ago: held, nothing sent (the 8-hour gap). Every new row carries `experiment = subject-2026-09-plain`. |
+| Browse follow-up on the harness (row enabled for the test, then disabled again) | A consented, attested account holder with a 6h-old view of GHK-Cu and no cart or order received "Still looking at GHK-Cu 50mg?"; the button's click was recorded (`email_automation_clicks`, an engagement event, `clicked_at`) and landed a signed-out browser on `/products/ghk-cu` with the buy panel, at 390×844. |
+| Customer journey at 390×844 (Chromium, Playwright MCP) | Stage-3 email button → tracked click → cart restored with both lines and both gift lines at $0.00 → "Continue to checkout" → checkout with the address prefilled and the summary total. |
+| Admin → Email, desktop | The lifecycle funnel renders per stage with the floor/target line, the "too few" flag, and a human click counted after a phone-user-agent click on a counted send. Harness `.test` addresses are excluded as designed, so only the harness's real-shaped addresses appear. |
+
+### Harness drift found on the way (pre-existing, not fixed here)
+
+- `scripts/qa-lifecycle-email.mjs`, `qa-retention-system.mjs` and
+  `qa-cart-recovery-override.mjs` still call `/api/cron/sweep`, but cart
+  recovery and the automations moved to `/api/cron/lifecycle` when the cron
+  was split (main, 2026-09-08). All three now report "expected one email, got
+  none" for every send-dependent step. Their signup payload also predates the
+  21+/research-use attestation fields the signup API now requires, and their
+  guest browsing steps predate the account-only storefront. The override suite
+  additionally assumes the HTTPS proxy stack (`https://127.0.0.1:3443`).
+  Updating the three suites is a separate piece of work; the checks above
+  cover the same ground by hand for the flows this change set touches.
+- `scripts/setup-local-harness.sh` did not apply
+  `abandoned-cart-checkout-started.sql`, so the harness lacked
+  `abandoned_carts.checkout_started_at` and the funnel reported itself
+  unavailable until it was added to the apply list (fixed in this change set).
+
+### Left for the owner
+
+- Consumer-Gmail tab readings for the P1-plain and P2-doc probes.
+- Google Postmaster enrolment; DMARC to `p=quarantine` when ready; Outlook,
+  Yahoo and iCloud seed addresses for the next placement round.
+- `RESEND_WEBHOOK_SIGNING_SECRET` is still unset in production, so delivery
+  events are refused (503) and the funnel's "delivered" column reads
+  "unknown" until it is set. This was already true before this work.
+- Enable the browse follow-up in Admin → Email when the cart stages have
+  enough sends to read on their own.
+

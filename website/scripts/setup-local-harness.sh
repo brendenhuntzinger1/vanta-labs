@@ -173,7 +173,7 @@ for f in referral-orders-commission-lifecycle referral-orders-manual-review-stat
   tender-hold-claim \
   membership-pending-tier-change \
   order-attribution ads-system ads-spend-roas \
-  cart-recovery-stage-overrides cart-recovery-measurement lifecycle-measurement \
+  abandoned-cart-checkout-started cart-recovery-stage-overrides cart-recovery-measurement lifecycle-measurement \
   browse-abandonment \
   campaign-gifts auth-user-attested-by-email customer-offer-gift-items \
   marketing-attribution; do
