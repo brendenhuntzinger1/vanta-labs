@@ -10,6 +10,31 @@ depending on what the campaign is about". This skill is that pickup point. It
 holds the templates, the assets and the process. Read it top to bottom before
 making anything; the shortcuts are how the brand drifts.
 
+## The owner's standing instruction (2026-09-11, verbatim intent)
+
+> Keep this as is. When I go to a new chat I need it to remember exactly
+> what I want. Eventually I'm going to send out email marketing campaigns
+> with the picture like I showed you and like you developed. Those are just
+> templates. We're going to fully customize them one by one as we send them,
+> whenever we send them. It's going to be a very premium email marketing
+> campaign. So remember this.
+
+What that means in practice:
+
+- The three layouts and four creatives are **starting points, never the
+  deliverable**. Every campaign is built fresh for its subject: its own
+  creative, its own copy, its own product selection, its own structure if the
+  story needs one. Do not reuse a previous campaign's creative or headline.
+- **Premium is the bar.** The references the owner chose were MADE, Hydrant,
+  Nick's, Hennessy and Alexis Bittar. Hennessy is the closest to this brand.
+  If a draft would not sit beside those, it is not finished.
+- Each campaign is made **one at a time, together with the owner**: show the
+  390px renders, take the changes, render again. The owner approves the
+  pictures before anything is loaded or sent.
+- The look was approved on 2026-09-11 and is recorded in
+  `assets/creatives/` and `references/design-system.md`. Change the details
+  per campaign; do not drift the system.
+
 ## What a campaign email is here
 
 A Vanta campaign email is the dark card shell every store email already uses,
