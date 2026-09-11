@@ -116,3 +116,37 @@ Reading rule: C3-B versus C3-A isolates the subject; C4-A versus C4-B isolates
 "% off" in the subject; W1 versus W0 isolates the welcome copy. Anything that
 lands in Primary is a candidate for the real template; the decision is then
 made on stage 3 and 4 clicks, restores and orders, not on the tab.
+
+## Round two readings (owner screenshot, 9:29 PM ET, "All promotions" view)
+
+| Id | Subject | Tab |
+|---|---|---|
+| C3-A | A GHK-Cu has been added to your cart | **Promotions** |
+| C3-B | Your GHRP-2 5mg is still saved | **Promotions** |
+| C4-A | One last note about your GHRP-2 5mg | **Promotions** |
+| seeds 1 + 5 (thread) | Your GHRP-2 5mg is still in your cart | now listed in **Promotions** |
+| seed 2 | Every batch has a published report | not in the list, so Primary |
+| C4-B, W0, W1 | | not yet arrived at screenshot time |
+
+Removing the badge, the code box and the promotional wording did not move the
+offer stages. The one message Gmail keeps out of Promotions is the one whose
+subject and opening are informational (the COA report). Stage 1's earlier
+Primary reading is now doubtful: its thread sits in Promotions after the
+second message joined it.
+
+Caveat: by this point the seed inbox had received nine similar messages from
+the same sender within half an hour, which makes it a noisier instrument than
+at the start. Results from a fresh seed inbox would be cleaner.
+
+## Round three: two probes, one hypothesis each
+
+| Id | Subject | What it changes | Resend id |
+|---|---|---|---|
+| P1-plain | Holding your GHRP-2 5mg | Same stage 3 offer as a short text note on a white background: no product images, no cart table, no gold button, one text link | c1c11954-3eff-4fa3-9954-ea7be934952d |
+| P2-doc | Search the COA library before you order | The current dark card, cart table and button, but the subject and opening lead with the COA library the way stage 2 does; the gift comes second | 2cb1900a-cf74-4fb9-8d39-23d989a776cf |
+
+Reading rule: P1 in Primary means the layout (images, prices, button) is the
+trigger. P2 in Primary means the subject and opening are the trigger. Both in
+Promotions is inconclusive in this inbox and the next round goes to a fresh
+seed. Neither probe is a shipping candidate as written; each isolates one
+variable.
