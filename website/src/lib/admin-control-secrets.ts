@@ -29,6 +29,11 @@ export const SECRET_CONTROL_KEYS: ReadonlySet<string> = new Set([
   "email.sendgrid_api_key",
   "payment_processor.secret_key",
   "payment_processor.webhook_secret",
+  // Twilio. The auth token is BOTH the API credential and the webhook
+  // signing key (Twilio signs callbacks with it rather than a separate
+  // secret), so a leak is simultaneously "send as us" and "forge delivery
+  // receipts to us". Sealed at rest and redacted on every read path.
+  "sms.auth_token",
 ]);
 
 export function isSecretControlKey(section: string, key: string): boolean {
