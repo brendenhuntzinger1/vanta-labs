@@ -70,3 +70,49 @@ Their folder and tab are not readable from this session.
 Authentication passes cleanly on every axis, so if the consumer seeds land in
 Promotions or Spam the cause is reputation or content, not setup. The design's
 decision rules in §5 apply once the tab readings arrive.
+
+## Round one readings (owner, consumer Gmail)
+
+| Seed | Stage | Tab |
+|---|---|---|
+| 1 | t30m reminder | Primary |
+| 2 | t12h COA report | Primary |
+| 3 | t24h free gifts | **Promotions** |
+| 4 | t72h 10% off + gifts | **Promotions** |
+| 5 | t30m, "Brenden at Vanta Labs" | threaded with seed 1; not separately read |
+
+Authentication is clean (above), so the split is content. The two stages that
+carry an incentive are the two classified as promotions, and they are also the
+two that opened worst in September's real sends (7/18 and 5/11 against 10/24
+and 13/21). The display name did not move anything. The shape did: "free
+gifts" and "10% off" in the subject, a "FREE GIFT" badge, a dashed code box and
+a "Claim my offer" button.
+
+## Round two: plain-shape candidates
+
+Same offer, same terms, in the shape of stage 1: a note that the cart is still
+there, one sentence saying the gift is in the box, the terms in muted text, the
+same "Complete my order" button, no badge, no code box, no "free" in the subject.
+Copy written under the brand voice and compliance rules. Sent three minutes
+apart so each can be read on arrival.
+
+| # | Id | Subject | What it tests | Resend id |
+|---|---|---|---|---|
+| 1 | C3-A | A GHK-Cu has been added to your cart | stage 3, plain body, subject names the gift | 24be08e4-e906-48d8-992e-160351c13bb9 |
+| 2 | C3-B | Your GHRP-2 5mg is still saved | stage 3, same body, subject names the cart only | b69afb8a-df87-4436-a3a9-07bb170d4eaa |
+| 3 | C4-A | One last note about your GHRP-2 5mg | stage 4, plain body, no percentage in subject, no code shown | 936441ea-c50d-4ae1-9f05-2a14111bcb20 |
+| 4 | C4-B | One last note, with 10% off your GHRP-2 5mg | stage 4, same body, "10% off" in subject | 20ee8ee5-744b-4a58-9823-fff39ae92f49 |
+| 5 | W0 | A gift toward your first Vanta Labs order | welcome first-order offer exactly as configured today | ab727a10-dbda-4cf4-b2fa-95c362bbf230 |
+| 6 | W1 | Before your first order | welcome offer, plain candidate | 09b3a89f-b351-4a9d-97f5-937f9b9617e1 |
+
+W0 is seeded as a control because the configured copy has the same shape as
+the two Promotions stages: an all-caps "YOUR FIRST ORDER IS 15% OFF" headline
+and an offer box. It also carries "Every batch is third-party tested", which
+the compliance reference calls a blanket claim that is false the moment one
+product lacks a published report; W1 drops it. Neither W0 nor W1 changes the
+configured automation; both are seeds only.
+
+Reading rule: C3-B versus C3-A isolates the subject; C4-A versus C4-B isolates
+"% off" in the subject; W1 versus W0 isolates the welcome copy. Anything that
+lands in Primary is a candidate for the real template; the decision is then
+made on stage 3 and 4 clicks, restores and orders, not on the tab.
