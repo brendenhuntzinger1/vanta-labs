@@ -116,7 +116,8 @@ describe("the login page trusts the fragment, not the query string", () => {
   // RETURNS them, so the caller never consults client storage for identity.
   // The login page now uses the same one.
   it("gates the sign-in on a real session having arrived, in the fragment", () => {
-    expect(LOGIN).toContain("readOAuthCallbackFragment(window.location.hash)");
+    expect(LOGIN).toContain("const readLocationHash = () => window.location.hash;");
+    expect(LOGIN).toContain("readOAuthCallbackFragment(liveHash)");
     expect(LOGIN).toContain('const isVerificationReturn = authReturn.kind === "session";');
     // The weaker predicate must not come back to gate a session here.
     expect(stripComments(LOGIN)).not.toContain("classifyAuthReturn");
@@ -130,11 +131,17 @@ describe("the login page trusts the fragment, not the query string", () => {
   it("classifies once, before supabase-js can consume the fragment", () => {
     // The browser client is lazily constructed on first `supabase.auth` access,
     // which happens inside an effect — after this runs.
-    expect(LOGIN).toContain("const [authReturn] = useState<OAuthCallbackReturn>(");
+    // Latched into state in the render that first sees the fragment, and
+    // never re-read: the hydration render sees the server's empty hash, the
+    // next render sees the real one and keeps it. (A useState initialiser did
+    // this before, and rendered differently on the server — a hydration
+    // mismatch on every emailed-link return.)
+    expect(LOGIN).toContain("const [latchedReturn, setLatchedReturn] = useState<OAuthCallbackReturn | null>(null);");
+    expect(LOGIN).toContain("if (latchedReturn === null && liveHash) {");
   });
 
   it("says something when the link is dead", () => {
-    expect(LOGIN).toContain("deadAuthLinkMessage(authReturn.errorCode)");
+    expect(LOGIN).toContain("setError(deadAuthLinkMessage(classified.errorCode))");
   });
 
   it("reads the ?link= reason /auth/confirm redirects with", () => {

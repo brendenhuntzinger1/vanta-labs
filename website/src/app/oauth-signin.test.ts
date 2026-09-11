@@ -654,10 +654,17 @@ describe("the portal is not a one-way door", () => {
     // A confirmation or recovery return carries a message the sign-in form is
     // built to show. Parking that person behind an age gate buries it, and they
     // already have an account, so the gate has nothing left to ask.
+    //
+    // Two halves, because only one of them is visible to the server. The
+    // query string (?verified=1) decides the opening mode in the initialiser;
+    // the fragment (a token or an error in the hash) moves the form off the
+    // portal in the render that first sees it. Deciding both in the
+    // initialiser made the server and the client disagree — a hydration
+    // mismatch on every emailed-link return.
     const init = code(form).slice(code(form).indexOf("const [mode, setMode]"));
-    expect(init.slice(0, 900)).toContain("fromEmailLink");
-    expect(init.slice(0, 900)).toContain('return "login"');
+    expect(init.slice(0, 900)).toContain('verifiedReturn) return "login"');
     expect(init.slice(0, 900)).toContain('referralCodeFromUrl) return "signup"');
+    expect(code(form)).toContain('setMode((current) => (current === "portal" ? "login" : current))');
   });
 });
 

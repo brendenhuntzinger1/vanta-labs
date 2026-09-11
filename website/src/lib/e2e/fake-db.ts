@@ -140,6 +140,18 @@ export interface FakeDbFailure {
  */
 export const CONTROL_VIEW = "admin_control_current";
 
+import { invalidateControlSnapshotCache } from "@/lib/control-snapshot-cache";
+
+/**
+ * A write to the control table forgets the app's ten-second memory of it,
+ * exactly as upsertControlValue does in production. Tests seed control rows
+ * straight into this table and then read a setting through the app; without
+ * this the read would answer from the memory of the row before the seed.
+ */
+function forgetControlSnapshotIfControlTable(table: string): void {
+  if (table === "admin_audit_logs") invalidateControlSnapshotCache();
+}
+
 export class FakeDb {
   readonly tables = new Map<string, Row[]>();
   /**
@@ -166,6 +178,7 @@ export class FakeDb {
 
   seed(name: string, rows: Row[]): void {
     this.table(name).push(...rows.map((row) => ({ ...row })));
+    forgetControlSnapshotIfControlTable(name);
   }
 
   /** Rows currently in a table (copies, so a test cannot mutate the db by accident). */
@@ -379,6 +392,7 @@ export class FakeDb {
               db.table(table).push(row);
               db.writeLog.push({ table, op: "insert", payload: row });
             }
+            forgetControlSnapshotIfControlTable(table);
             return { data: rows.map((row) => ({ ...row })), error: null };
           };
 
