@@ -202,3 +202,17 @@ Nothing in Spam. This mailbox carries no category labels, so it cannot say
 Primary against Promotions; the consumer inbox remains the only tab reading.
 Gmail's importance marker is a weak, per-user signal and is recorded only
 because it is what this mailbox exposes.
+
+## What shipped from this diagnosis (2026-09-11)
+
+- Stages 3 and 4 now send in the plain shape seeded as C3-B / C4-A: no badge,
+  no offer box, no code box, the gift in one sentence ("We have added GHK-Cu
+  50mg to it at no charge. It ships in the same box when you finish the
+  order."), the terms in one muted line, "Complete my order". The stage-3
+  subject keeps a two-arm test (product vs what was added); the stage-4
+  subject carries no percentage. Commit bba3597.
+- The welcome first-order offer row now carries the W1 copy.
+- Still owner-side: the consumer-Gmail tab readings for P1-plain and P2-doc.
+  They decide whether a text-on-white layout is the next variable; nothing
+  shipped depends on them.
+

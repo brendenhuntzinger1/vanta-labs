@@ -109,3 +109,42 @@ browser run of the customer journey after the click at desktop and 390×844.
 6. Which emails generate orders: none, measurably.
 7. Where customers drop out: between delivered and click.
 8. Test next: the two probes in flight (layout vs opening), then stage 3 in the winning shape against strict conversions.
+
+## 7. What shipped against the ranked leaks (2026-09-11)
+
+| # | Leak | Fix | Commit |
+|---|---|---|---|
+| 1 | Offer stages in Promotions | Stages 3 and 4 rewritten as notes: no badge, no offer box, no code box, the offer in one sentence, the terms in one muted line, "Complete my order". Subject arms: product vs what was added (stage 3); no percentage in the stage-4 subject. | bba3597 |
+| 2 | No payment-failure follow-up | Stage 1 sends a payment-aware message when the record shows a decline or an expired checkout after the cart was seen: what happened, the order number, "nothing was charged" only where true. Same slot, claim, guard and measurement. | fbfdf84 |
+| 3 | Three stages inside 13 hours | 8-hour minimum gap between any two stages, in the sweep and in the admin resend (which says when it will be allowed). | d843ea0 |
+| 4 | No funnel | Engagement events with user agents; human/any split; lifecycle funnel per flow and stage with strict and benchmark-style paid columns; readable-threshold flag. | 0c44b51 |
+| 5 | Welcome offer copy | Production row rewritten to the plain shape ("Before your first order"); old copy kept in the diagnosis log as W0. | data change |
+| 6 | Browse abandonment missing | Shipped, disabled: product views, the automation, its template, the click landing on the viewed product. | 2cf5719 |
+| 7 | Checkout-started segment | Not done. The cart flow already treats a cart that reached checkout as its own; a separate segment needs the funnel's restored → checkout → paid columns to show where those carts actually drop before a message is written for them. |
+| 8 | DMARC p=none, no Postmaster, double open pixel | Owner items (DNS and Google Postmaster enrolment). The double pixel is now harmless to the reading: provider opens and our own pixel are both recorded as events and classified the same way. |
+| 9 | Replenishment timing | Deferred until real reorder gaps exist to read. |
+
+### How to read it from here
+
+Admin → Email → "Lifecycle funnel (28 days)". Each row is a flow and stage.
+Until a row shows 150 delivered it is flagged and its rates are directional.
+The columns to decide on are, in order: delivered, human clicks, restored,
+paid (strict), recovered revenue, gross profit. Opens are shown but are not
+a decision input.
+
+The first decision the funnel should settle: whether the restrained stages 3
+and 4 produce human clicks and paid orders at all. If after 150 delivered per
+stage they do not, the next variable is the layout (P1's text-on-white shape),
+and the P1/P2 tab readings from the owner's inbox say which probe to promote.
+
+### The eight questions, revisited
+
+1. Reach: delivered yes; placement of the offer stages in Gmail was the leak; the shape that placed the messages there is gone.
+2. Engagement: unknown until the new shape has ~150 delivered per stage; the funnel now measures human clicks, not opens.
+3. Links, offers, restore: verified in the harness end to end after this change set (see the verification notes in this session's commits).
+4. Right person, right time: stages are 8 hours apart at minimum; a failed payment gets the message it needs; browse views get one note, later, when enabled.
+5. Competing automations: the quiet period covers every flow; the cart family now has its own gap; browse yields to every other automation and to any open cart.
+6. Which emails make orders: the funnel answers per flow and stage, strict and benchmark-style side by side.
+7. Drop-off: read the funnel's delivered → human click column first; that was the whole loss.
+8. Test next: the stage-3 subject arms (product vs added) under the restrained shape; then layout (P1) if clicks stay low; then the sender name.
+

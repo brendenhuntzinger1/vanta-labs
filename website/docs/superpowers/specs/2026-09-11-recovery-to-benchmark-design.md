@@ -386,3 +386,19 @@ product page signed out.
   experiment has read, so the reputation variables stay controlled.
 - `RESEND_WEBHOOK_SIGNING_SECRET` is still unset (from the 2026-09-07 audit).
   Unrelated to this design and still open.
+
+## 13. Status at the end of 2026-09-11
+
+| Section | State |
+|---|---|
+| §3 Measurement | Shipped. `email_engagement_events` records every open and click with its user agent; opens inside 60 s of the send or from a known scanner, and clicks inside 10 s, are classified non-human at read time. The lifecycle funnel (eligible → attempted → sent → delivered/bounced → human open → click → restored → checkout → paid → revenue → gross profit) renders per flow and stage on Admin → Email and Admin → Cart recovery, with strict (marketing-source) and benchmark-style (5-day open-or-click) paid columns side by side and a "too few sends" flag under 150 delivered. |
+| §4 Sender experiment | Deferred. The placement diagnosis put the offer stages in Promotions whatever the wording, while the sender was constant; the shape of the message, not the name on it, was the variable that mattered. The subject experiment on stages 1 and 3 continues under the key `subject-2026-09-plain`; the sender-name arm can be added to the same framework once the restrained shape has enough sends to read. |
+| §5 Placement diagnosis | Done. Readings and reasoning in the diagnosis log. Consumer-Gmail tab readings for the two probes (P1 text-on-white, P2 COA-led) are still with the owner. |
+| §6 Browse abandonment | Shipped, disabled. `product_views` is recorded for signed-in viewers; the `browse_abandonment` automation exists with its row switched off. Enable it in Admin → Email once the funnel shows the cart stages converting in the restrained shape, so the two can be read separately. |
+| §7 Data model | Applied to production: `email_engagement_events`, `abandoned_cart_emails.experiment`, `product_views`, the `browse_abandonment` row. The schema snapshot is regenerated. |
+| §10 Rollout | Layers 1–4 are on `main` together. Nothing in them changes what is sent to a customer who was already mid-sequence except the wording of stages 3 and 4 and the 8-hour minimum gap, both of which only make a message later or plainer, never extra. |
+
+Beyond this spec, from the lifecycle audit: the 8-hour minimum gap between
+cart stages, the payment-aware first stage for a shopper whose card was
+declined or whose checkout expired, and the plain welcome-offer copy.
+
