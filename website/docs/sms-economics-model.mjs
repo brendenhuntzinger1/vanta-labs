@@ -157,3 +157,95 @@ for (const bk of BASKETS) {
   const o = run(bk, "absorb", { referralPct: 10, memberPct: 12, commissionPct: 20, pointsPerDollar: 5, storeCredit: 75, creditMinOrder: 250, freeShipMember: true });
   console.log(`| ${bk.label} | ${money(o.subtotal)} | ${money(o.discountAmount)} | ${money(o.paidMerchandise)} | ${money(o.commissionableBase)} | ${money(o.commissionNew)} | ${money(o.credit)} | ${money(o.pointsCost)} | ${money(o.giftCost)} | ${money(o.contribNew)} |`);
 }
+
+// ===========================================================================
+// D7 — THE COMMISSION SAFETY FLOOR
+// ===========================================================================
+// contributionBeforeCommission: every Vanta-funded cost attributable to the
+// order, EXCEPT commission itself (that is what the floor bounds).
+//
+//   INCLUDED   paid merchandise revenue, shipping + handling collected,
+//              product COGS of paid lines, gift COGS, processing fee,
+//              actual postage, store credit redeemed, points redeemed,
+//              points EARNED (accrued liability)
+//   EXCLUDED   sales tax (pass-through), commission, membership subscription
+//              revenue (a separate product), refunds (settled later)
+function contributionBeforeCommission(b, e, { pointsPerDollar = 0 } = {}) {
+  const pointsEarnedValue = r(Math.floor(b.rewardBase * pointsPerDollar) / 100);
+  return {
+    revenue: e.revenue,
+    productCost: e.cogs,
+    giftCogs: b.giftCost,
+    processingFee: r(e.revenue * PROC),
+    postage: POSTAGE,
+    storeCredit: e.creditNew,
+    pointsRedeemed: 0,
+    pointsEarnedValue,
+    value: r(e.revenue - e.cogs - b.giftCost - e.revenue * PROC - POSTAGE - e.creditNew - pointsEarnedValue),
+  };
+}
+
+// The floor. Caps commission only; touches nothing the customer sees.
+function applyCommissionFloor(commissionCalculated, contribution, minRetained = 0) {
+  const headroom = r(Math.max(0, contribution - minRetained));
+  const payable = r(Math.min(commissionCalculated, headroom));
+  const capped = r(commissionCalculated - payable);
+  return {
+    commissionCalculated, commissionPayable: payable, commissionCapped: capped,
+    capReason: capped > 0 ? "contribution_floor" : null,
+    contributionBeforeCommission: contribution,
+    contributionAfterCommission: r(contribution - payable),
+  };
+}
+
+console.log("\n## D7-a. Where the floor TRIGGERS — Black member + ambassador referral + SMS gift absorbing a unit\n");
+console.log("| Basket | commissionable | contrib before comm | comm calculated | comm PAYABLE | capped | reason | contrib after |");
+console.log("|---|--:|--:|--:|--:|--:|:--|--:|");
+for (const bk of BASKETS) {
+  const opts = { referralPct: 10, memberPct: 12, commissionPct: 20, pointsPerDollar: 5, storeCredit: 75, creditMinOrder: 250, freeShipMember: true };
+  const o = run(bk, "absorb", opts);
+  const c = contributionBeforeCommission(o, o, opts);
+  const f = applyCommissionFloor(o.commissionNew, c.value, 0);
+  console.log(`| ${bk.label} | ${money(o.commissionableBase)} | ${money(c.value)} | ${money(f.commissionCalculated)} | ${money(f.commissionPayable)} | ${money(f.commissionCapped)} | ${f.capReason ?? "—"} | ${money(f.contributionAfterCommission)} |`);
+}
+
+console.log("\n## D7-b. The floor must NOT trigger on ordinary referred orders (no SMS gift)\n");
+console.log("| Basket | contrib before comm | comm calculated | comm PAYABLE | capped | untouched? |");
+console.log("|---|--:|--:|--:|--:|:--|");
+for (const bk of BASKETS) {
+  const opts = { referralPct: 10, commissionPct: 15, pointsPerDollar: 2 };
+  const o = run(bk, "none", opts);
+  const c = contributionBeforeCommission(o, o, opts);
+  const f = applyCommissionFloor(o.commissionNow, c.value, 0);
+  console.log(`| ${bk.label} | ${money(c.value)} | ${money(f.commissionCalculated)} | ${money(f.commissionPayable)} | ${money(f.commissionCapped)} | ${f.commissionCapped === 0 ? "YES" : "** CAPPED **"} |`);
+}
+
+console.log("\n## D8. Email win-back gift (winback_60_free_ghkcu) — before / after the same principle\n");
+console.log("Identical mechanics to the SMS gift: same OFFER_CATALOG reward kind, same absorb path.\n");
+console.log("| Basket | subtotal | paid merch | gift displaced | comm BEFORE (today) | comm AFTER (D8) | ambassador gains | contrib after |");
+console.log("|---|--:|--:|--:|--:|--:|--:|--:|");
+for (const bk of BASKETS) {
+  const opts = { referralPct: 10, commissionPct: 15, pointsPerDollar: 2 };
+  const o = run(bk, "absorb", opts);
+  const c = contributionBeforeCommission(o, o, opts);
+  const f = applyCommissionFloor(o.commissionNew, c.value, 0);
+  console.log(`| ${bk.label} | ${money(o.subtotal)} | ${money(o.paidMerchandise)} | ${money(o.giftDisplaced)} | ${money(o.commissionNow)} | ${money(f.commissionPayable)} | ${money(r(f.commissionPayable - o.commissionNow))} | ${money(f.contributionAfterCommission)} |`);
+}
+
+console.log("\n## D9. Residual bound — every absorb case, commission NEW vs the no-gift ideal\n");
+console.log("| Basket | comm NEW | comm IDEAL | residual | residual as % of order | within bound? |");
+console.log("|---|--:|--:|--:|--:|:--|");
+let worst = 0;
+for (const bk of BASKETS) {
+  const opts = { referralPct: 10, commissionPct: 15, pointsPerDollar: 2 };
+  const o = run(bk, "absorb", opts);
+  const ideal = run(bk, "none", opts).commissionNow;
+  const res = r(o.commissionNew - ideal);
+  // The bound: a residual can only arise from the gift shrinking the winning
+  // discount, so it can never exceed the gift's retail value x commission pct.
+  const bound = r(GIFT_RETAIL * opts.commissionPct / 100);
+  if (res > worst) worst = res;
+  const pct = o.paidMerchandise > 0 ? ((res / o.paidMerchandise) * 100).toFixed(3) : "n/a";
+  console.log(`| ${bk.label} | ${money(o.commissionNew)} | ${money(ideal)} | ${money(res)} | ${pct}% | ${res >= 0 && res <= bound ? `YES (<= ${money(bound)})` : "** OUT **"} |`);
+}
+console.log(`\nWorst residual across all modelled baskets: **${money(worst)}**. Analytic bound: **${money(r(GIFT_RETAIL * 0.20))}** at the 20% commission tier.`);

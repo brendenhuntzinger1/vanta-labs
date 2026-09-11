@@ -1119,3 +1119,393 @@ Control Center edit, no deploy — and because the offer row records what was **
 token minted under the old gift still redeems as the old gift. Validation on save: product
 exists, is enabled, is not archived, is in stock, and the admin sees the cost and the
 perceived-value multiple before saving (the pattern `tierEconomics` already uses).
+
+---
+---
+
+# Part C — D7–D11 approved: the floor, the audit trail, and the last blockers
+
+All figures below are produced by `docs/sms-economics-model.mjs` (§B header for inputs).
+
+### ⚠ CONFLICT 5 — the refund path would silently un-cap the commission
+
+Found while designing the audit trail, and it would have been invisible until the first
+partial refund on a capped order.
+
+`computeRetainedCommission` (`payment-webhook.ts:1446`) does **not** read the stored
+commission. It recomputes it:
+
+```ts
+const original = roundMoney(input.base * (input.percent / 100));
+return roundMoney(original * (1 - fraction));
+```
+
+And `updateCommissionOnRefund` (`:1460`) selects only
+`payment_status, commission_amount, commission_percent, amount_paid`. Since
+`referral_orders.amount_paid` **is** the commissionable base (written at `:1215`), any
+refund recomputes `base × percent` — **discarding the cap** and paying the ambassador the
+uncapped figure on the retained portion.
+
+**Fix, and it is small:** `computeRetainedCommission` takes the **payable** commission
+explicitly rather than recomputing it.
+
+```
+computeRetainedCommission({ originalPayable, refundedFraction })
+  → roundMoney(originalPayable * (1 - fraction))
+```
+
+One pure function, one new argument, one test. **This must land in the same commit as the
+floor** or the cap leaks on the first refund.
+
+---
+
+## C1. The exact D7 contribution and floor formula
+
+### Contribution before commission
+
+```
+contributionBeforeCommission =
+      paidMerchandise                    (= subtotal − discount_amount)
+    + shippingCollected
+    + handlingCollected
+    − productCost                        COGS of the PAID lines
+    − giftCogs                           COGS of Vanta-funded gift units
+    − processingFee                       per profitSettings.processingFeeIncludesTax
+    − shippingCost                       actual postage
+    − storeCreditRedeemed                non-cash tender: cash Vanta never receives
+    − pointsRedeemedValue                non-cash tender
+    − pointsEarnedValue                  accrued liability created by this order
+```
+
+| Included | Excluded, and why |
+|---|---|
+| Paid merchandise revenue | **Sales tax** — pass-through, never Vanta's money |
+| Shipping + handling collected | **Commission** — it is what the floor bounds |
+| Product COGS (paid lines) | **Membership subscription revenue** — a separate product; an order must stand alone |
+| **Gift COGS** | **Refunds** — settled later; the refund path prorates separately |
+| Processing fee | **Customer-paid card service fee** — passed to the customer, not a Vanta cost |
+| Actual postage | **Fixed overhead** — not order-attributable |
+| Store credit redeemed | |
+| Points redeemed | |
+| **Points earned** (accrual) | |
+
+Points *earned* is included deliberately: it is a real liability this order creates, at
+2–5% of the reward base depending on tier. Excluding it would let commission push true
+contribution negative while the floor reported the order as fine.
+
+### The floor
+
+```
+commissionCalculated = commissionableBase × commissionPercent / 100
+
+headroom             = max(0, contributionBeforeCommission − minRetainedContribution)
+commissionPayable    = min(commissionCalculated, headroom)
+commissionCapped     = commissionCalculated − commissionPayable
+capReason            = commissionCapped > 0 ? 'contribution_floor' : null
+```
+
+`minRetainedContribution` is an admin setting defaulting to **$0** — break-even, matching
+`DEFAULT_PROFIT_SETTINGS.minProfitDollars = 0`.
+
+**The floor touches commission and nothing else.** Customer pricing, gifts, membership
+benefits, points and refunds are all computed before it and are not inputs it may modify.
+Per your instruction, that is a hard constraint, not a convention: the floor's only output
+is `commissionPayable`.
+
+### ⚠ What the floor cannot do
+
+The floor can reduce commission to zero. It **cannot make a negative order positive** when
+non-commission costs already exceed revenue. The **$50** row in C2 shows exactly that:
+commission is capped from $10.00 to $0.00 and contribution is still **−$11.58**, because a
+gift absorbing the only unit leaves no paid merchandise.
+
+**The guard for that case is the $60 gift minimum, not the floor.** Two independent
+protections, and neither substitutes for the other.
+
+## C2. Where the floor triggers
+
+Vanta Black (12%, 5 pts/$, $75 credit, $250 min) + ambassador referral at the **20%**
+commission tier + SMS gift absorbing a unit + free shipping.
+
+| Basket | commissionable | contrib before comm | comm calculated | **comm PAYABLE** | capped | reason | contrib after |
+|---|--:|--:|--:|--:|--:|:--|--:|
+| $50 | $49.99 | -$11.58 | $10.00 | **$0.00** | $10.00 | `contribution_floor` | -$11.58 |
+| $100 | $88.98 | $17.29 | $17.80 | **$17.29** | $0.51 | `contribution_floor` | **$0.00** |
+| $150 | $133.48 | $31.72 | $26.70 | $26.70 | $0.00 | — | $5.02 |
+| $250 | $222.46 | $99.47 | $44.49 | $44.49 | $0.00 | — | $54.98 |
+| $500 | $440.01 | $170.53 | $88.00 | $88.00 | $0.00 | — | $82.53 |
+| $1,000 | $799.96 | $419.80 | $159.99 | $159.99 | $0.00 | — | $259.81 |
+
+The **$100** row is the case D7 exists for: previously **−$0.51**, now exactly **$0.00**, by
+clipping **$0.51** of commission. The ambassador keeps $17.29 of $17.80 — 97%.
+
+### The floor must not touch ordinary orders
+
+Same referral, **no SMS gift**, 15% tier:
+
+| Basket | contrib before comm | comm calculated | comm PAYABLE | capped | untouched? |
+|---|--:|--:|--:|--:|:--|
+| $50 | $36.96 | $6.75 | $6.75 | $0.00 | **YES** |
+| $100 | $68.98 | $13.50 | $13.50 | $0.00 | **YES** |
+| $150 | $100.53 | $20.25 | $20.25 | $0.00 | **YES** |
+| $250 | $151.24 | $33.74 | $33.74 | $0.00 | **YES** |
+| $500 | $305.23 | $66.00 | $66.00 | $0.00 | **YES** |
+| $1,000 | $561.41 | $119.99 | $119.99 | $0.00 | **YES** |
+
+Headroom exceeds commission by 3–5× on every ordinary order. **The floor is unreachable
+without a stacked non-cash tender on a small basket.**
+
+## C3. How a capped commission appears in accounting
+
+`referral_orders` already carries `review_required` and `review_reason`. Five additive
+nullable columns complete the audit trail:
+
+```sql
+alter table public.referral_orders
+  add column if not exists commissionable_base           numeric(12,2),
+  add column if not exists commission_calculated         numeric(12,2),
+  add column if not exists commission_capped_amount      numeric(12,2) not null default 0,
+  add column if not exists commission_cap_reason         text,
+  add column if not exists contribution_before_commission numeric(12,2);
+```
+
+**`commission_amount` keeps its meaning — the payable figure.** Payout code, the partner
+portal and every existing read stay correct without modification. Nothing that computes a
+payout changes shape.
+
+| Field | Value on the $100 row |
+|---|--:|
+| `commissionable_base` | $88.98 |
+| `commission_calculated` | $17.80 |
+| **`commission_amount`** (payable, existing) | **$17.29** |
+| `commission_capped_amount` | $0.51 |
+| `commission_cap_reason` | `contribution_floor` |
+| `contribution_before_commission` | $17.29 |
+
+**Admin — order detail:**
+> Commission $17.29 · calculated $17.80, **$0.51 withheld** — order contribution floor
+> Base $88.98 (incl. $44.99 displaced by a Vanta-funded gift)
+
+**Ambassador portal:** shows the payable amount with a plain-language note, never a silent
+difference:
+> Commission $17.29 — reduced by $0.51 on this order to keep it above our minimum margin.
+
+**Alerting:** `recordSystemAlert` on any capped commission, so a systematic cap shows up as
+an operational signal rather than a payout mystery. If the cap fires more than rarely, the
+commission tiers or the gift minimum are wrong — not the floor.
+
+**Refund interaction:** retained commission is derived from `commission_amount` (payable),
+per CONFLICT 5. `commission_capped_amount` is never re-paid on refund.
+
+## C4. D8 — the email win-back gift, before and after
+
+Identical mechanics: same `OFFER_CATALOG` reward kind, same absorb path, same
+`issueResolvedOffer`. 10% referral, 15% commission tier, floor applied.
+
+| Basket | subtotal | paid merch | gift displaced | comm BEFORE (today) | comm AFTER (D8) | ambassador gains | contrib after |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| $50 | $0.00 | $0.00 | $49.99 | $0.00 | $2.22 | +$2.22 | $0.00 |
+| $100 | $49.99 | $44.99 | $44.99 | $6.75 | $13.50 | **+$6.75** | $19.81 |
+| $150 | $74.99 | $67.49 | $67.49 | $10.12 | $20.25 | **+$10.13** | $28.60 |
+| $250 | $172.47 | $168.72 | $57.49 | $25.31 | $33.93 | +$8.62 | $87.66 |
+| $500 | $377.16 | $377.16 | $62.86 | $56.57 | $66.00 | +$9.43 | $190.85 |
+| $1,000 | $742.82 | $742.82 | $57.14 | $111.42 | $119.99 | +$8.57 | $397.10 |
+
+**This is a live behaviour change and a cost increase**: every win-back gift redeemed on a
+referred order pays the ambassador **$6.75–$10.13 more** than today. Contribution stays
+positive on every reachable basket.
+
+**Flagging, per your instruction.** Two independent flags, defaulting off:
+
+```
+benefits.gift_displaced_commission.sms    → M7
+benefits.gift_displaced_commission.email  → M9, separate release
+```
+
+Both resolve through the existing control store, so either can be rolled back without a
+deploy. **The email flag ships only after its own regression suite is green** and is never
+enabled in the same release as the SMS flag — a payout change and a new channel must not
+land together, or an unexpected commission total has two candidate causes.
+
+## C5. Residual bound (D9) — source, proof, and the guard against growth
+
+**Source.** The gift absorbs units, which shrinks the **list** subtotal a percentage
+discount is taken on. So `discount_amount` falls too, and `paidMerchandise` falls by *less*
+than `subtotal` did. Adding back the full subtotal delta therefore slightly over-restores.
+It appears **only** when a percentage discount wins and the gift absorbs.
+
+| Basket | comm NEW | comm IDEAL | residual | % of order | within bound? |
+|---|--:|--:|--:|--:|:--|
+| $50 | $7.50 | $6.75 | $0.75 | n/a | YES (≤ $6.00) |
+| $100 | $13.50 | $13.50 | $0.00 | 0.000% | YES |
+| $150 | $20.25 | $20.25 | $0.00 | 0.000% | YES |
+| $250 | $33.93 | $33.74 | $0.19 | 0.113% | YES |
+| $500 | $66.00 | $66.00 | $0.00 | 0.000% | YES |
+| $1,000 | $119.99 | $119.99 | $0.00 | 0.000% | YES |
+
+**Analytic bound.** The residual cannot exceed the discount the absorbed units would have
+attracted, times the commission rate:
+
+```
+residual ≤ giftRetail × quantity × maxDiscountPercent × commissionPercent
+```
+
+At GHK-Cu $39.99, one unit, a 20% worst-case discount and the 20% top commission tier:
+**≤ $1.60**. The looser bound asserted in the regression test is
+`giftRetail × commissionPercent` = **$8.00**, which holds for any discount depth.
+
+**Regression guard** — two assertions so the discrepancy cannot grow unnoticed:
+1. `residual >= 0 && residual <= giftRetail × quantity × commissionPercent / 100` for every
+   fuzz case.
+2. A pinned table asserting the exact residual per modelled basket, so a change in the
+   discount engine that moves it **fails loudly** rather than drifting.
+
+No second pricing pass. No added complexity for cents.
+
+## C6. Proof: refund math is unchanged
+
+`paidMerchandise` is byte-identical to today's `commissionableSubtotal`, and it is the only
+value the refund path reads.
+
+| Refund input | Source | Changed? |
+|---|---|---|
+| `merchandiseBase` (fraction denominator) | `paidMerchandise` | **No** |
+| `refundedFraction` = cumulative refunded ÷ merchandiseBase | unchanged | **No** |
+| `amountPaid` (partial-vs-full detection) | `orders.amount_paid` | **No** |
+| `existingRefundAmount` | `orders.refund_amount` | **No** |
+| `recordedRefundAmount`, `paymentStatus`, `shouldRestock` | unchanged | **No** |
+| Retained commission | now derived from `commission_amount` (payable) instead of recomputed | **Yes — CONFLICT 5** |
+
+The only refund change is the one that makes the cap survive a refund. Proof obligations:
+invariants 10 and 29–31 in §B9/C9.
+
+## C7. Proof: a free gift cannot mint points or store credit
+
+Three independent reasons, any one of which is sufficient:
+
+1. **A `$0` gift line adds nothing to `subtotal`**, so it adds nothing to `rewardBase`.
+   Points are `floor(rewardBase × pointsPerDollar)`.
+2. **Absorbed units leave `subtotal`**, so the customer earns points only on what they
+   actually paid. Verified in §B5: `points NOW === points NEW` in every row.
+3. **`rewardBase` never includes `giftDisplacedRevenueCents`.** That term exists solely in
+   `commissionableBase`. This is the whole reason the two bases are separate rather than one
+   variable, and it is why D1 cannot be implemented on `commissionableSubtotal`
+   (§B1) — doing so would make the gift mint points.
+
+**`rewardBase` for earning is paid merchandise only. The gift-displaced amount is used for
+*eligibility thresholds*, never as an earning base** — see C8.
+
+## C8. Proof: a gift cannot remove an earned Vanta Pro benefit
+
+The hazard (CONFLICT 4): store-credit eligibility gates on the post-gift subtotal
+(`quote-order.ts:1629`), so absorption can drop a member under their tier minimum.
+
+| Basket | mode | subtotal | Pro minimum | credit TODAY | credit PROPOSED |
+|---|:--|--:|--:|--:|--:|
+| $150 | none | $142.48 | $100 | $15.00 | $15.00 |
+| **$150** | **absorb** | $74.99 | $100 | **$0.00** ❌ | **$15.00** ✅ |
+| $250 | absorb | $172.47 | $100 | $15.00 | $15.00 |
+| $500 | absorb | $377.16 | $100 | $15.00 | $15.00 |
+
+**Fix:** eligibility is tested against `rewardBase + giftDisplacedRevenueCents` — what the
+basket was worth before a Vanta-funded gift touched it.
+
+Two properties keep this safe:
+
+- **Eligibility moves; the amount does not.** Redemption is still
+  `min(balance, amountStillOwed)`, so nothing extra is given away. Only the *threshold test*
+  stops being disturbed by the gift.
+- **Earning is unaffected.** The displaced amount is used for the threshold only, never as
+  an earning base — so C7 still holds.
+
+The same rule applies to any tier minimum, so Elite ($150) and Black ($250) are covered by
+construction rather than by three separate cases.
+
+## C9. Gift inventory (D11): issued vs unissued
+
+**GHK-Cu 50mg: 40 units in stock, verified live 2026-09-11.**
+
+| Threshold | Value | Behaviour |
+|---|--:|---|
+| Alert | **15 available** | `recordSystemAlert` warning; gift keeps issuing |
+| Stop issuing | **10 available** | No NEW gift offers minted; already-issued promises untouched |
+
+### "Available" must net off outstanding promises
+
+Raw stock is the wrong number. An already-issued, unredeemed gift is a **promise against
+stock**:
+
+```
+availableForNewGifts = live stock
+                     − units reserved by paid-but-unshipped orders
+                     − count of LIVE unredeemed gift offers
+                       (customer_offers where revoked_at is null
+                        and redeemed_at is null and expires_at > now)
+```
+
+Issuing stops when `availableForNewGifts < 10`. This is what makes "do not silently
+invalidate already-issued promises" true by construction rather than by hope: the headroom
+for outstanding promises is subtracted **before** the threshold is tested, so the store
+cannot promise more gifts than it can honour.
+
+### What happens to issued promises
+
+- **Never revoked for stock.** `revokeUnredeemedOffer` is for a failed *send*, not for
+  inventory. Issued promises stay valid to expiry.
+- **Today's fallback is graceful but silent.** `quote-order.ts:900-903` already refuses to
+  grant a gift whose product is out of stock (`if (!offerProduct || !shippable) return
+  null`) — the order prices and completes without the gift. Correct, but the customer is
+  told nothing.
+- **Recommended:** when an issued promise cannot be honoured, surface it at checkout
+  ("your gift is temporarily unavailable — it will apply to an order placed before
+  <expiry>") and alert the operator. Not silence.
+- **Issuance is also gated at send time**, so an SMS never promises a gift the store cannot
+  honour. A message already queued is checked again before dispatch.
+
+### Admin-configurable (D4 + D11)
+
+One control-store section, no deploy, with the same validate-and-show-the-cost pattern
+`tierEconomics` already uses:
+
+```
+sms.gift = {
+  productSlug, variantId, quantity,
+  minSubtotalCents,        default 6000
+  ttlDays,                 default 30
+  alertBelowUnits,         default 15
+  stopIssuingBelowUnits,   default 10
+}
+```
+
+Resolved to a `GiftConfig` at issue time and passed to `issueResolvedOffer()` — the same
+path operator-built campaign gifts already use. Validation on save: product exists, enabled,
+not archived, in stock, `stopIssuingBelowUnits < alertBelowUnits`, and the admin sees cost,
+retail and the perceived-value multiple before saving.
+
+## C10. Remaining blockers before implementation
+
+| # | Blocker | Status |
+|---|---|---|
+| **B1** | **CONFLICT 5 — `computeRetainedCommission` must take the payable commission.** Must land with the floor, or the cap leaks on the first partial refund | **Design agreed, needs your ack** |
+| **B2** | `minRetainedContribution` default. Recommend **$0** (break-even, matches the existing profit-setting default) | **Needs your number** |
+| **B3** | Whether the ambassador portal shows the withheld amount and reason, or only the payable figure. Recommend showing it — a silent difference is what you said you did not want | **Needs your call** |
+| **B4** | **Points-earned inclusion in the floor base.** Included above (2–5% of reward base). Excluding it would let commission push true contribution negative | **Needs your ack** |
+| **B5** | Phase-3 no-op refactor must land with the parity suite green and **no edits to its assertions** | Gate, not a decision |
+| **B6** | A2P: transactional campaign approved; privacy-policy sentence live; storefront copy scrubbed | **External, not started** |
+| **B7** | Counsel on §8.3 items 2, 3 and 6, and on the D10 timezone-inference question | **External, not started** |
+| **B8** | Pre-launch verification of GHK-Cu COGS and inventory (D4) — $3.65 / 40 units read today, re-verify at launch | Open |
+
+**Not blockers, deliberately deferred:** backporting the richer consent record to email
+(§3); renaming `abandoned_cart_emails` (§2); the `Essential` tier's inactive status (§B
+header).
+
+### My assessment
+
+**The economics are ready.** The three bases are proved identical without a gift (§B4), the
+floor is proved unreachable on ordinary orders (§C2), refunds are proved unchanged except
+for the one fix that must accompany the cap (§C6), and gifts are proved unable to mint
+rewards (§C7) or remove an earned benefit (§C8).
+
+**The blockers are now mostly external** — A2P registration, the privacy-policy sentence,
+copy scrub, and counsel. B1–B4 are four small acknowledgements. Once those are in, M0–M6 can
+proceed; M7 needs B1 and B2 settled.
