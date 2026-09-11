@@ -1,6 +1,12 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import {
+  CONTROL_SNAPSHOT_TTL_MS,
+  invalidateControlSnapshotCache,
+  readCachedControlRows,
+  rememberControlRows,
+} from "@/lib/control-snapshot-cache";
 import { isSecretControlKey, SECRET_CONTROL_KEYS } from "@/lib/admin-control-secrets";
 import { isSealedControlValue, sealControlSecret, sealingAvailable, unsealControlSecret } from "@/lib/control-secret-sealing";
 import { DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
@@ -119,6 +125,28 @@ const CONTROL_VIEW = "admin_control_current";
 const CONTROL_HISTORY_WINDOW = 1500;
 
 /**
+ * How long one instance may reuse a control read before asking the database.
+ *
+ * WHY THERE IS A CACHE AT ALL. Every storefront page load asks
+ * /api/catalog/promotions, and that route read the control snapshot FOUR
+ * separate times — homepage, shipping, referral, coupons — with welcome-offer,
+ * bulk-savings and payment-methods reading it again beside it. On 2026-09-10
+ * `admin_control_current` was the second most-read table on the project
+ * (3,697 reads in a day) and the Supabase edge began timing out queued reads at
+ * cron ticks. These values change when an operator saves in Admin → Control, a
+ * few times a week; reading them a few thousand times a day is load, not
+ * caution.
+ *
+ * WHY TEN SECONDS. Short enough that a saved change reaches every instance
+ * before the operator has finished reading the confirmation toast, and shorter
+ * than the fifteen seconds the middleware already tolerates for maintenance
+ * mode. The instance that took the save never waits at all — upsertControlValue
+ * clears the cache — and the admin control centre reads fresh (see the `fresh`
+ * option), so nobody is ever shown a stale picture of their own change.
+ */
+export { CONTROL_SNAPSHOT_TTL_MS, invalidateControlSnapshotCache };
+
+/**
  * True once the deployment is reading current values from the view.
  *
  * Surfaced on /admin/status so a database that has not had
@@ -134,7 +162,25 @@ export async function isControlCurrentViewAvailable(): Promise<boolean> {
   }
 }
 
-async function readControlRows(normalizedSection: string | null): Promise<ControlRow[]> {
+async function readControlRows(
+  normalizedSection: string | null,
+  options?: { fresh?: boolean },
+): Promise<ControlRow[]> {
+  const cacheKey = normalizedSection ?? "*";
+  const now = Date.now();
+  if (!options?.fresh) {
+    const remembered = readCachedControlRows<ControlRow>(cacheKey, now);
+    if (remembered) return remembered;
+  }
+  // A failed read throws out of here and is never cached: a gateway timeout
+  // must not be remembered as "there are no settings" for the next ten seconds
+  // of checkouts.
+  const rows = await readControlRowsFromDatabase(normalizedSection);
+  rememberControlRows(cacheKey, rows, now);
+  return rows;
+}
+
+async function readControlRowsFromDatabase(normalizedSection: string | null): Promise<ControlRow[]> {
   // Preferred path: one row per key, straight from the view.
   try {
     let viewQuery = supabaseAdmin
@@ -177,13 +223,17 @@ async function readControlRows(normalizedSection: string | null): Promise<Contro
   return (data ?? []) as ControlRow[];
 }
 
-export async function getControlSnapshot(section?: string) {
+/**
+ * @param options.fresh Skip the ten-second cache and read the database now.
+ *   For the admin control centre and for any read that precedes a write.
+ */
+export async function getControlSnapshot(section?: string, options?: { fresh?: boolean }) {
   const normalizedSection = section ? sanitizeSection(section) : null;
 
   // Newest-first, so "first occurrence of a key wins" resolves the current
   // value on BOTH paths. The view already returns one row per key; the
   // fallback returns history and relies on the ordering.
-  const rows = await readControlRows(normalizedSection);
+  const rows = await readControlRows(normalizedSection, options);
   const result: Record<string, Record<string, unknown>> = {};
 
   for (const row of rows) {
@@ -239,6 +289,7 @@ export async function upsertControlValue(input: {
   if (error) {
     throw error;
   }
+  invalidateControlSnapshotCache();
 }
 
 
@@ -259,7 +310,7 @@ export async function resealPlaintextControlSecrets(): Promise<{ sealed: number;
   for (const path of SECRET_CONTROL_KEYS) sections.add(path.split(".")[0]);
 
   for (const section of sections) {
-    const rows = await readControlRows(sanitizeSection(section));
+    const rows = await readControlRows(sanitizeSection(section), { fresh: true });
     const seen = new Set<string>();
     for (const row of rows) {
       const key = sanitizeKey(String(row.target_id ?? ""));

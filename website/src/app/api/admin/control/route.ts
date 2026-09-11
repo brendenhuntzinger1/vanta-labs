@@ -60,7 +60,7 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const section = url.searchParams.get("section") ?? undefined;
-    const snapshot = await getControlSnapshot(section);
+    const snapshot = await getControlSnapshot(section, { fresh: true });
     // Never expose credential sections through this endpoint.
     for (const secret of SECRET_SECTIONS) {
       delete (snapshot as Record<string, unknown>)[secret];
@@ -126,7 +126,7 @@ export async function PATCH(request: Request) {
     // leave settings half-wiped. The client applies the same rule when building
     // the request -- this is the copy that also covers a stale tab, a replayed
     // request, or any future caller that forgets to read before writing.
-    const destructive = findDestructiveClears(writable, await getControlSnapshot());
+    const destructive = findDestructiveClears(writable, await getControlSnapshot(undefined, { fresh: true }));
     if (destructive.length > 0) {
       return NextResponse.json(
         {

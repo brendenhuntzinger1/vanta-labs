@@ -98,11 +98,15 @@ describe("when the control read fails", () => {
 
   it("follows the setting back down once the read recovers", async () => {
     // Last-known-good is a fallback, never a latch: an admin switching the
-    // programme off must take effect on the next successful read.
-    const { getShippingConfig } = await import("@/lib/admin-control");
+    // programme off must take effect on the next successful read. The admin's
+    // save clears the ten-second read cache on its way through
+    // upsertControlValue; this test writes around that path, so it clears the
+    // cache the same way the save would.
+    const { getShippingConfig, invalidateControlSnapshotCache } = await import("@/lib/admin-control");
     await getShippingConfig();
 
     state.sitewide = false;
+    invalidateControlSnapshotCache();
     expect((await getShippingConfig()).freeShippingSitewide).toBe(false);
   });
 });
