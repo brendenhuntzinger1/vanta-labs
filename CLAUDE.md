@@ -67,6 +67,14 @@ Use judgement: a typo fix doesn't need a plan.
 If these skills are missing, the session is probably running in the `Default`
 cloud environment rather than `vanta`. Say so rather than working around it.
 
+## Marketing email campaigns
+
+`.claude/skills/vanta-email-campaign/` is the approved kit for campaign
+emails: three layouts, four creative styles, the store's own photography, and
+a render script. When the user wants a campaign about anything, start there;
+it also records which composer blocks exist in code and which are still a
+proposal (`references/status.md`).
+
 ## Plugins (checked in)
 
 `.claude/settings.json` enables these for every session in this repo, so they
