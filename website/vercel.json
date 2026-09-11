@@ -6,7 +6,7 @@
     },
     {
       "path": "/api/cron/lifecycle",
-      "schedule": "*/15 * * * *"
+      "schedule": "5,20,35,50 * * * *"
     }
   ]
 }
