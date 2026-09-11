@@ -185,3 +185,20 @@ headers, same bodies, footer addressed to this mailbox. Three minutes apart.
 Caveat: this is a Workspace mailbox on the sender's own organisational domain,
 so it is a weaker stand-in for a consumer inbox. What it adds is a second,
 independent classifier read and API-visible labels.
+
+## Round four readings (support mailbox, from the API)
+
+| Id | Subject | Labels |
+|---|---|---|
+| t12h control | Every batch has a published report | Inbox, Important |
+| t24h control | 2 free gifts with your GHRP-2 5mg | Inbox, Important |
+| C3-B | Your GHRP-2 5mg is still saved | Inbox, Important |
+| P1-plain | Holding your GHRP-2 5mg | Inbox, Important |
+| P2-doc | Search the COA library before you order | Inbox |
+| W0 | A gift toward your first Vanta Labs order | Inbox |
+| W1 | Before your first order | Inbox, Important |
+
+Nothing in Spam. This mailbox carries no category labels, so it cannot say
+Primary against Promotions; the consumer inbox remains the only tab reading.
+Gmail's importance marker is a weak, per-user signal and is recorded only
+because it is what this mailbox exposes.
