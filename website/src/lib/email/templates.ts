@@ -1,4 +1,5 @@
 import { parseBlocks, renderBlocks } from "@/lib/email/blocks";
+import { mergeProductName } from "@/lib/email/browse-abandonment";
 import type { EmailTemplate } from "@/lib/email/types";
 import { formatDisplayDate } from "@/lib/format-date";
 import { DEFAULT_CARD_PROCESSING_FEE } from "@/lib/payment-methods";
@@ -2430,6 +2431,96 @@ export function cartRecoveryT72hTemplate(input: {
       `Complete your order: ${input.restoreUrl}`,
       "",
       "- Vanta Labs",
+    ]),
+  };
+}
+
+/**
+ * THE BROWSE FOLLOW-UP. One note to a signed-in customer who looked at a
+ * product and left with no cart and no order (browse-abandonment.ts).
+ *
+ * WHAT IS IN IT AND WHY. The product they looked at — name, price, image —
+ * because the whole message is a pointer back to it; the batch report as a
+ * plain link when the catalogue holds one, because that is the question a
+ * hesitant buyer of a research compound actually has; the operator's copy,
+ * with `{{product_name}}` filled in; one button. NO INCENTIVE, by decision:
+ * a discount for looking would teach every customer to look and wait.
+ *
+ * The product facts arrive from the catalogue at send time, never from the
+ * view row, so the note describes the product as it is now.
+ */
+export function browseAbandonmentTemplate(input: {
+  subject: string;
+  headline: string;
+  body: string;
+  ctaLabel: string;
+  ctaUrl: string;
+  productName: string;
+  productPriceLabel: string;
+  productImage?: string;
+  coaUrl?: string | null;
+  postalAddress: string;
+}): EmailTemplate {
+  const productName = String(input.productName ?? "").trim();
+  const subject = mergeProductName(String(input.subject ?? ""), productName);
+  const headline = mergeProductName(String(input.headline ?? ""), productName);
+  const bodyText = mergeProductName(String(input.body ?? ""), productName);
+  const priceLabel = String(input.productPriceLabel ?? "").trim();
+  const image = String(input.productImage ?? "").trim();
+  const coaUrl = String(input.coaUrl ?? "").trim();
+  const postalAddress = String(input.postalAddress ?? "");
+  const ctaLabel = String(input.ctaLabel ?? "").trim();
+  const ctaUrl = String(input.ctaUrl ?? "").trim();
+
+  const paragraphs = bodyText
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block) => `<p>${escapeHtml(block).replace(/\n/g, "<br/>")}</p>`)
+    .join("");
+
+  // The product, in the same row shape the cart stages use, so a customer who
+  // has seen one recovery message recognises the other.
+  const thumb = image
+    ? `<td width="72" style="padding:12px 14px 12px 0;vertical-align:top;">`
+      + `<img src="${escapeHtml(image)}" width="72" height="72" alt="" `
+      + `style="display:block;width:72px;height:72px;border-radius:10px;border:1px solid rgba(255,255,255,0.10);object-fit:cover;background:#1a1a1a;" /></td>`
+    : "";
+  const coaLine = coaUrl
+    ? `<div style="padding-top:6px;font-size:13px;"><a href="${escapeHtml(coaUrl)}" style="color:#a1a1aa;">Certificate of analysis for the current batch</a></div>`
+    : "";
+  const productHtml = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" `
+    + `style="margin:18px 0 0;border-top:1px solid rgba(255,255,255,0.10);border-bottom:1px solid rgba(255,255,255,0.10);">`
+    + `<tr>${thumb}`
+    + `<td style="padding:12px 0;vertical-align:top;color:#ffffff;font-size:15px;line-height:1.5;">${escapeHtml(productName)}`
+    + (priceLabel ? `<div style="color:#a3a3a3;font-size:13px;padding-top:2px;">${escapeHtml(priceLabel)}</div>` : "")
+    + coaLine
+    + `</td></tr></table>`;
+
+  const footerNoteHtml = `<p style="margin:12px 0 0;font-size:11px;color:#71717a;">${escapeHtml(postalAddress).replace(/\n/g, "<br/>")}</p>`;
+
+  return {
+    subject,
+    html: renderLayout({
+      preheader: headline,
+      titleHtml: escapeHtml(headline),
+      bodyHtml: `${paragraphs}${productHtml}`,
+      ctaLabel,
+      ctaUrl,
+      ctaVariant: "primary",
+      footerNoteHtml,
+    }),
+    text: toText([
+      headline,
+      "",
+      bodyText.trim(),
+      "",
+      priceLabel ? `${productName}  ${priceLabel}` : productName,
+      coaUrl ? `Certificate of analysis for the current batch: ${coaUrl}` : null,
+      "",
+      ctaLabel && ctaUrl ? `${ctaLabel}: ${ctaUrl}` : null,
+      ctaLabel && ctaUrl ? "" : null,
+      postalAddress,
     ]),
   };
 }

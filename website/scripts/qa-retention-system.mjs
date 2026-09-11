@@ -273,7 +273,7 @@ async function main() {
   // harness's copy of the automations table: same delays, same gifts, same
   // reorder destination. Nothing here touches production.
   await q(`update email_automations set enabled = true`);
-  await q(`update email_automations set delay_days = case key when 'welcome_intro' then 1 when 'welcome_no_purchase' then 3 when 'post_purchase' then 14 when 'replenishment' then 30 when 'winback_30' then 40 when 'winback_60' then 50 end`);
+  await q(`update email_automations set delay_days = case key when 'welcome_intro' then 1 when 'welcome_no_purchase' then 3 when 'post_purchase' then 14 when 'replenishment' then 30 when 'winback_30' then 40 when 'winback_60' then 50 else delay_days end`);
   await q(`update email_automations set offer_key = case key when 'welcome_no_purchase' then 'winback_60_percent_15' when 'replenishment' then 'winback_60_free_shipping' when 'winback_30' then 'winback_60_bac_water_10' when 'winback_60' then 'winback_60_free_ghkcu' else null end`);
   await q(`update email_automations set cta_path = '/account/orders', cta_label = 'REORDER NOW' where key = 'replenishment'`);
   await q(`update email_automations set cta_path = '/products' where key <> 'replenishment' and (cta_path is null or cta_path = '')`);

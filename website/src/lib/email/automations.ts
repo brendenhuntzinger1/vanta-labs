@@ -11,6 +11,15 @@ import { resolveSitePath } from "@/lib/email/cta-path";
 import { describeOfferTerms, isOfferKey, issueCustomerOffer } from "@/lib/offers/customer-offers";
 import { getSiteUrl } from "@/lib/env";
 import { AUTOMATION_QUIET_MS, claimMarketingSend, isInQuietPeriod, loadLastMarketingSendAt } from "@/lib/email/frequency";
+import {
+  BROWSE_MAX_AGE_MS,
+  BROWSE_MIN_AGE_MS,
+  BROWSE_OPEN_CART_STATUSES,
+  BROWSE_REPEAT_MS,
+  browseReferenceId,
+} from "@/lib/email/browse-abandonment";
+import { browseAbandonmentTemplate } from "@/lib/email/templates";
+import { loadRecentProductViews, pruneProductViews } from "@/lib/product-views";
 
 /**
  * Automated retention sequences.
@@ -274,7 +283,12 @@ async function loadPaidOrders(): Promise<PaidOrder[]> {
   return orders;
 }
 
-export type AutomationTarget = { email: string; referenceId: string };
+export type AutomationTarget = {
+  email: string;
+  referenceId: string;
+  /** The browse follow-up only: the product the customer looked at. */
+  slug?: string;
+};
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -311,6 +325,14 @@ export function selectAutomationTargets(input: {
    * day apart — message 2 carrying the gift before message 1 had a chance.
    */
   ladderPredecessor?: { sentAt: Map<string, number>; delayDays: number } | null;
+  /**
+   * The browse follow-up's own inputs: each address's newest product view,
+   * the addresses with an open cart (the cart flow owns those), and when each
+   * address last received a browse note (the once-a-week rule).
+   */
+  productViews?: Map<string, { slug: string; at: number }>;
+  openCartEmails?: Set<string>;
+  browseSentAt?: Map<string, number>;
   now: number;
   limit?: number;
 }): AutomationTarget[] {
@@ -382,6 +404,31 @@ export function selectAutomationTargets(input: {
       if (quiet({ email: order.email, referenceId: order.orderId })) continue;
       targets.push({ email: order.email, referenceId: order.orderId });
     }
+  } else if (input.key === "browse_abandonment") {
+    // A PRODUCT VIEW WITH NOTHING AFTER IT. Timed in hours from the view, not
+    // in days from an event, so delayDays is not consulted — see
+    // browse-abandonment.ts for the window. Account holders only: a guest on a
+    // marketing-link grant was never recorded, and a guest subscriber has no
+    // product views to speak of.
+    for (const [email, view] of input.productViews ?? []) {
+      if (!input.consented.has(email) || !input.accounts.has(email)) continue;
+      const age = input.now - view.at;
+      if (age < BROWSE_MIN_AGE_MS || age > BROWSE_MAX_AGE_MS) continue;
+      // The cart flow owns an address with an open cart, including one that
+      // reached checkout; two flows mailing about the same product in the
+      // same day is the collision this rule exists to prevent.
+      if (input.openCartEmails?.has(email)) continue;
+      // Bought at or after the view: the view was answered, and the
+      // post-purchase flow owns them now.
+      const paidAt = lastPaidAt.get(email);
+      if (paidAt !== undefined && paidAt >= view.at) continue;
+      const reference = browseReferenceId(email, view.slug, view.at);
+      if (input.alreadySent.has(reference)) continue;
+      const lastBrowse = input.browseSentAt?.get(email);
+      if (lastBrowse !== undefined && input.now - lastBrowse < BROWSE_REPEAT_MS) continue;
+      if (quiet({ email, referenceId: reference })) continue;
+      targets.push({ email, referenceId: reference, slug: view.slug });
+    }
   } else {
     // Win-back. Must have bought at some point — someone who never ordered is
     // the welcome sequence's job, and sending both would be two mails saying
@@ -408,6 +455,87 @@ export function selectAutomationTargets(input: {
 
   const limit = input.limit ?? AUTOMATION_BATCH_LIMIT;
   return targets.slice(0, limit);
+}
+
+/** Addresses holding a cart the cart flow still owns, lowercase. */
+async function loadOpenCartEmails(): Promise<Set<string>> {
+  const emails = new Set<string>();
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabaseAdmin
+      .from("abandoned_carts")
+      .select("email")
+      .in("status", [...BROWSE_OPEN_CART_STATUSES])
+      .not("email", "is", null)
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const rows = (data ?? []) as Array<{ email?: string | null }>;
+    for (const row of rows) {
+      const email = String(row.email ?? "").trim().toLowerCase();
+      if (email) emails.add(email);
+    }
+    if (rows.length < PAGE) break;
+  }
+  return emails;
+}
+
+/** When each address last received the browse note inside the repeat window, lowercase. */
+async function loadBrowseSentAt(now: number): Promise<Map<string, number>> {
+  const sentAt = new Map<string, number>();
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabaseAdmin
+      .from("email_send_log")
+      .select("recipient_email, sent_at")
+      .eq("campaign_type", "automation:browse_abandonment")
+      .neq("status", "failed")
+      .gte("sent_at", new Date(now - BROWSE_REPEAT_MS).toISOString())
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const rows = (data ?? []) as Array<{ recipient_email?: string | null; sent_at?: string | null }>;
+    for (const row of rows) {
+      const email = String(row.recipient_email ?? "").trim().toLowerCase();
+      const at = Date.parse(String(row.sent_at ?? ""));
+      if (!email || !Number.isFinite(at)) continue;
+      sentAt.set(email, Math.max(sentAt.get(email) ?? 0, at));
+    }
+    if (rows.length < PAGE) break;
+  }
+  return sentAt;
+}
+
+/**
+ * THE BROWSE NOTE IS BUILT FROM THE CATALOGUE, NOT FROM THE VIEW ROW. The name,
+ * price, image and batch report are read live, so a product renamed, repriced
+ * or unpublished since the view is described as it is now — and one that is
+ * no longer published is not described at all (null), because a note about a
+ * product nobody can open is worse than no note.
+ *
+ * The catalogue is imported on demand so the sweep's own module graph stays
+ * what it was for the other six automations.
+ */
+async function buildBrowseTemplate(input: {
+  automation: AutomationRow;
+  slug: string;
+  ctaUrl: string;
+  postalAddress: string;
+}): Promise<ReturnType<typeof browseAbandonmentTemplate> | null> {
+  const { getCatalogProductBySlug } = await import("@/lib/catalog");
+  const product = await getCatalogProductBySlug(input.slug);
+  if (!product) return null;
+  const ctaLabel = String(input.automation.cta_label ?? "").trim();
+  return browseAbandonmentTemplate({
+    subject: input.automation.subject,
+    headline: input.automation.headline,
+    body: input.automation.body,
+    ctaLabel,
+    ctaUrl: ctaLabel ? input.ctaUrl : "",
+    productName: product.name,
+    productPriceLabel: product.salePrice || product.price,
+    productImage: product.image || undefined,
+    coaUrl: product.coaUrl || product.coaRecordUrl || null,
+    postalAddress: input.postalAddress,
+  });
 }
 
 /** Guest opt-in times from marketing_subscribers, keyed by lowercase email. */
@@ -533,6 +661,26 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
   const needsWelcome = automations.some((row) => row.key === "welcome_no_purchase" || row.key === "welcome_intro");
   const accountCreatedAt = needsWelcome ? await loadAccountCreatedAt() : new Map<string, number>();
   const subscribedAt = needsWelcome ? await loadSubscribedAt() : new Map<string, number>();
+  // The browse follow-up's inputs, read only when it is switched on. The prune
+  // rides along: views past the retention window are of no use to anyone.
+  const needsBrowse = automations.some((row) => row.key === "browse_abandonment");
+  let productViews = new Map<string, { slug: string; at: number }>();
+  let openCartEmails = new Set<string>();
+  let browseSentAt = new Map<string, number>();
+  if (needsBrowse) {
+    try {
+      productViews = await loadRecentProductViews({ now, windowMs: BROWSE_MAX_AGE_MS });
+      openCartEmails = await loadOpenCartEmails();
+      browseSentAt = await loadBrowseSentAt(now);
+      await pruneProductViews(now);
+    } catch (error) {
+      // Fail closed for this key only: with no picture of carts or recent
+      // sends, the browse note waits for the next sweep rather than risking a
+      // collision. The other automations are unaffected.
+      result.errors.push(`browse_abandonment: inputs unavailable, held this sweep: ${error instanceof Error ? error.message : String(error)}`);
+      productViews = new Map();
+    }
+  }
 
   // THE QUIET PERIOD IS READ ONCE AND KEPT CURRENT. Each successful send below
   // stamps the map, so an automation later in the priority order sees what an
@@ -568,6 +716,9 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
         paidOrders,
         alreadySent,
         lastMarketingSentAt,
+        productViews,
+        openCartEmails,
+        browseSentAt,
         onDeferred: () => { result.deferred++; },
         now,
       });
@@ -657,17 +808,45 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
           offerTerms = describeOfferTerms(automation.offer_key, issued.expiresAt);
         }
 
-        const template = campaignTemplate({
-          subject: automation.subject,
-          previewText: automation.headline,
-          headline: automation.headline,
-          body: automation.body,
-          promoCode: automation.promo_code,
-          ctaLabel: hasCta ? ctaLabel : "",
-          ctaUrl: hasCta ? trackedCtaUrl(automation.key, target.email, target.referenceId, ctaPath, offerToken) : "",
-          offerTerms,
-          postalAddress: config.marketingPostalAddress,
-        });
+        let template: ReturnType<typeof campaignTemplate>;
+        if (automation.key === "browse_abandonment") {
+          // The product page is the destination whatever cta_path says: the
+          // click route reads the slug out of the signed reference. The row's
+          // path is only the fallback for a reference it cannot parse.
+          const built = target.slug
+            ? await buildBrowseTemplate({
+              automation,
+              slug: target.slug,
+              ctaUrl: trackedCtaUrl(automation.key, target.email, target.referenceId, ctaPath),
+              postalAddress: config.marketingPostalAddress,
+            })
+            : null;
+          if (!built) {
+            // The product is no longer in the catalogue. Release the slot so
+            // the row does not sit at 'sending' forever; the view ages out of
+            // the window on its own.
+            await supabaseAdmin.from("email_send_log")
+              .delete()
+              .eq("campaign_type", campaignType)
+              .eq("reference_id", target.referenceId)
+              .eq("status", "sending");
+            result.skipped++;
+            continue;
+          }
+          template = built;
+        } else {
+          template = campaignTemplate({
+            subject: automation.subject,
+            previewText: automation.headline,
+            headline: automation.headline,
+            body: automation.body,
+            promoCode: automation.promo_code,
+            ctaLabel: hasCta ? ctaLabel : "",
+            ctaUrl: hasCta ? trackedCtaUrl(automation.key, target.email, target.referenceId, ctaPath, offerToken) : "",
+            offerTerms,
+            postalAddress: config.marketingPostalAddress,
+          });
+        }
 
         const sendResult = await sendMarketingEmail({
           to: target.email,

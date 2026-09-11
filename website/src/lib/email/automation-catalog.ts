@@ -17,6 +17,11 @@
  *                          because they are stored in email_send_log and
  *                          shown in reports; the DELAY is the operator's,
  *                          edited in the admin.
+ *   browse_abandonment   → LAST, deliberately. A signed-in customer looked at a
+ *                          product and left with no cart and no order. One
+ *                          note, no offer, 4-24 hours after the view (fixed in
+ *                          code — see browse-abandonment.ts). Every other
+ *                          message to an address wins the tick over it.
  */
 export const AUTOMATION_KEYS = [
   "post_purchase",
@@ -25,6 +30,7 @@ export const AUTOMATION_KEYS = [
   "welcome_no_purchase",
   "winback_30",
   "winback_60",
+  "browse_abandonment",
 ] as const;
 export type AutomationKey = (typeof AUTOMATION_KEYS)[number];
 
@@ -53,6 +59,10 @@ export const AUTOMATION_LABELS: Record<AutomationKey, { label: string; descripti
   winback_60: {
     label: "Win-back 2",
     description: "The stronger message for someone who did not respond to the first. This is where the gift belongs.",
+  },
+  browse_abandonment: {
+    label: "Browse follow-up",
+    description: "Four to twenty-four hours after a signed-in customer views a product and leaves with no cart and no order. One note, no offer, at most once a week. {{product_name}} in the copy becomes the product's name. The delay field does not apply; the window is fixed.",
   },
 };
 

@@ -1269,6 +1269,14 @@
     "created_at",
     "updated_at"
   ],
+  "product_views": [
+    "id",
+    "customer_user_id",
+    "email",
+    "slug",
+    "viewed_at",
+    "viewed_hour"
+  ],
   "products": [
     "id",
     "slug",

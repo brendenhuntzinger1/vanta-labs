@@ -35,6 +35,8 @@ export const PRODUCTION_DELAYS: Record<AutomationKey, number> = {
   replenishment: 30,
   winback_30: 40,
   winback_60: 50,
+  // Timed in hours from a product view, not in days; the field is unused.
+  browse_abandonment: 0,
 };
 
 type Sent = { day: number; key: AutomationKey };

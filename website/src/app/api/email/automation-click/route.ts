@@ -15,6 +15,7 @@ import { isAutomationKey } from "@/lib/email/automations";
 import { hashIpAddress } from "@/lib/ip-hash";
 import { OFFER_COOKIE, OFFER_COOKIE_MAX_AGE_SECONDS } from "@/lib/offers/customer-offers";
 import { attachEmailLinkGrant } from "@/lib/email/recipient-attestation";
+import { browseDestinationPath } from "@/lib/email/browse-abandonment";
 
 export const dynamic = "force-dynamic";
 
@@ -74,6 +75,15 @@ export async function GET(request: NextRequest) {
     // cta_path empty. A link minted before that edit can still be clicked, so
     // it resolves to the catalog rather than to nowhere.
     destination = safeAutomationDestination(automation.cta_path as string | null);
+    // THE BROWSE FOLLOW-UP LANDS ON THE PRODUCT THAT WAS VIEWED. The slug is
+    // read out of the reference, which the HMAC above has just verified, so
+    // this is still a destination the server chose — not one the URL did. It
+    // is then resolved through the same same-origin normaliser as every stored
+    // path; a reference the parser refuses falls back to the row's path.
+    if (automationKey === "browse_abandonment") {
+      const productPath = browseDestinationPath(referenceId);
+      if (productPath) destination = safeAutomationDestination(productPath);
+    }
   } catch {
     return NextResponse.redirect(fallback, { status: 302 });
   }

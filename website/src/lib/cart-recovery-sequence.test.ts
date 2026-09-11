@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { BROWSE_OPEN_CART_STATUSES } from "@/lib/email/browse-abandonment";
 import { DEFAULT_RECOVERY_TIERS } from "@/lib/cart-recovery-tiers";
 
 // ---------------------------------------------------------------------------
@@ -516,5 +517,15 @@ describe("stage 1 for a shopper whose payment failed", () => {
     const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
     await runAbandonedCartSweep();
     expect(sent).toHaveLength(0);
+  });
+});
+
+describe("the browse follow-up's idea of an open cart", () => {
+  // browse-abandonment.ts keeps its own literal so the automation sweep does
+  // not import this whole module. If the cart flow's definition of "open"
+  // ever changes, this is what says the two have drifted.
+  it("is the cart flow's", async () => {
+    const { CART_STATUS_OPEN } = await import("@/lib/cart-recovery");
+    expect([...BROWSE_OPEN_CART_STATUSES]).toEqual([...CART_STATUS_OPEN]);
   });
 });

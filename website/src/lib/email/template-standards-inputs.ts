@@ -57,5 +57,14 @@ export const INPUTS: Record<string, unknown> = {
   contactFormAutoReplyTemplate: { firstName: "Zain" },
   wholesaleInquiryNotificationTemplate: { firstName: "Zain", lastName: "M", email: "z@example.test", phone: "+1", organization: "Lab", volume: "100", products: "BPC", message: "Hello" },
   wholesaleInquiryAutoReplyTemplate: { firstName: "Zain" },
+  browseAbandonmentTemplate: {
+    subject: "Still looking at {{product_name}}?", headline: "About {{product_name}}",
+    body: "You were looking at {{product_name}} a little while ago, so here is the page again in case it is useful.\n\nIf a question is holding you up, reply to this email. A person reads and answers every one.",
+    ctaLabel: "See the product page", ctaUrl: URL_, productName: "BPC-157 5mg", productPriceLabel: "$59.99",
+    // No image here, as in the cart fixtures: the link rule reads every URL in
+    // the HTML, and an image source is not a link. browse-abandonment.test.ts
+    // covers the image row.
+    coaUrl: "https://www.vantalabsresearch.com/coa/bpc-157", postalAddress: "1 Nowhere Lane",
+  },
   campaignTemplate: { subject: "News", previewText: "News", headline: "News", body: "<p>Hi</p>", promoCode: "SAVE10", ctaLabel: "Shop", ctaUrl: URL_, offerTerms: "Your gift: a free GHK-Cu on any order of $60 or more, through October 4, 2026. One per customer." },
 };

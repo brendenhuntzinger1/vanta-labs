@@ -186,7 +186,7 @@ async function main() {
 
   // Every automation on, with short delays, so the clock can be walked.
   await q(`update email_automations set enabled = true`);
-  await q(`update email_automations set delay_days = case key when 'welcome_intro' then 1 when 'welcome_no_purchase' then 3 when 'post_purchase' then 5 when 'replenishment' then 30 when 'winback_30' then 45 when 'winback_60' then 75 end`);
+  await q(`update email_automations set delay_days = case key when 'welcome_intro' then 1 when 'welcome_no_purchase' then 3 when 'post_purchase' then 5 when 'replenishment' then 30 when 'winback_30' then 45 when 'winback_60' then 75 else delay_days end`);
   await q(`update email_automations set offer_key = 'winback_60_percent_15' where key = 'welcome_no_purchase'`);
 
   // ---------------------------------------------------------------------------

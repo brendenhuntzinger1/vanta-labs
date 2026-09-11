@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
+import { after } from "next/server";
 import { ProductDetailClient } from "@/components/product-detail-client";
 import { TikTokViewContent } from "@/components/tiktok-view-content";
 import { getCatalogProductBySlug, getCatalogProductsByCategory } from "@/lib/catalog";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { requestHasEmailLinkGrant } from "@/lib/email/link-grant-server";
+import { recordProductView } from "@/lib/product-views";
 import { getHomepageControlConfig } from "@/lib/admin-control";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
 import { advertisableBxgyPromotions, isSlugEligible, storefrontDescription } from "@/lib/bxgy-engine";
@@ -128,6 +130,18 @@ export default async function ProductDetailPage({
 
   if (!product) {
     notFound();
+  }
+
+  // THE VIEW IS RECORDED FOR THE BROWSE FOLLOW-UP — after the response, for
+  // signed-in viewers only, and never for a slug that did not resolve. A
+  // visitor on a marketing-link grant has no account and no consent record
+  // of their own, so nothing is written for them. The write cannot fail the
+  // page: recordProductView swallows every error, and after() runs it once
+  // the response is on its way. See product-views.ts.
+  if (viewer?.email) {
+    const viewerEmail = viewer.email;
+    const viewerId = viewer.id;
+    after(() => recordProductView({ email: viewerEmail, customerUserId: viewerId, slug: product.slug }));
   }
 
   const relatedProducts = await getCatalogProductsByCategory(product.category, product.slug, 4).catch(() => []);
