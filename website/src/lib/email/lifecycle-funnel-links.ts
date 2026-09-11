@@ -12,7 +12,9 @@ export function funnelWindowLinks(
   active: FunnelWindowKey,
 ): FunnelWindowLink[] {
   const options: Array<{ key: FunnelWindowKey; label: string }> = [
-    { key: "plain", label: "since the note-shaped stages (Sep 11)" },
+    // No date here: the table's own label prints it, in Florida time, from
+    // the same constant, and two spellings of one moment read as two moments.
+    { key: "plain", label: "since the note-shaped stages" },
     { key: "28", label: "28 days" },
     { key: "90", label: "90 days" },
   ];
