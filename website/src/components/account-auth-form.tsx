@@ -40,6 +40,16 @@ const PHONE_LOGIN_ENABLED = false;
 // `useApplePayOffered` already uses.
 const REFERRAL_COOKIE_KEY = "vl_referral_code";
 const subscribeNever = () => () => {};
+// The URL fragment, read the same way as the referral cookie below: a browser
+// fact the server cannot see, so the server snapshot is empty and the hydration
+// render matches the server's HTML. Reading it in a useState initialiser guarded
+// by `typeof window` rendered the portal on the server and the sign-in form on
+// the client, and React 19 reported every such load as a hydration mismatch
+// (#418), threw the server HTML away and re-rendered — the exact flash the
+// initialiser was written to avoid, plus an error in Sentry each time.
+const getServerLocationHash = () => "";
+const readLocationHash = () => window.location.hash;
+const NO_AUTH_RETURN: OAuthCallbackReturn = { kind: "none" };
 const getServerReferralCookie = () => "";
 const readReferralCookie = () => {
   try {
@@ -158,6 +168,8 @@ export function AccountAuthForm() {
   // A referral link is an invitation to JOIN, so it opens the signup form
   // directly. A verification return has an account already and must not be
   // parked behind a gate. Everyone else starts at the portal.
+  /** GoTrue's ?verified=1, which both the server and the client render can see. */
+  const verifiedReturn = searchParams.get("verified") === "1";
   const [mode, setMode] = useState<AuthMode>(() => {
     // A referral link is an invitation to JOIN, so it opens the signup form.
     if (referralCodeFromUrl) return "signup";
@@ -169,12 +181,13 @@ export function AccountAuthForm() {
     // confirm their age would bury the one sentence they came back for, and
     // they have an account already, so the gate has nothing left to ask.
     //
-    // Computed here rather than in an effect: both inputs are known at first
-    // render, and deciding later would paint the portal and then replace it.
-    if (typeof window !== "undefined") {
-      const fromEmailLink = searchParams.get("verified") === "1" || Boolean(window.location.hash);
-      if (fromEmailLink) return "login";
-    }
+    // Only the QUERY half is decided here, because only the query half is
+    // known to the server. The fragment half — a token or an error in the hash
+    // — is read below through useSyncExternalStore, and the effect after it
+    // moves the form off the portal the moment it is known. Deciding it here
+    // from `window` made the server and the client disagree, which is a
+    // hydration mismatch and a full client re-render, not a saved paint.
+    if (verifiedReturn) return "login";
     return "portal";
   });
   const [fullName, setFullName] = useState("");
@@ -250,14 +263,16 @@ export function AccountAuthForm() {
   // the shape of the bypass. Classified ONCE, at first render, before
   // supabase-js can consume the fragment (its client is lazily constructed on
   // first `supabase.auth` access, which happens later, inside the effect).
-  const [authReturn] = useState<OAuthCallbackReturn>(() => {
-    if (typeof window === "undefined") return { kind: "none" };
-    return readOAuthCallbackFragment(window.location.hash);
-  });
-  const [arrivedFromEmailLink] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return searchParams.get("verified") === "1" || Boolean(window.location.hash);
-  });
+  const liveHash = useSyncExternalStore(subscribeNever, readLocationHash, getServerLocationHash);
+  // LATCHED, NOT RE-READ. The hydration render sees the server's empty hash;
+  // the render that follows sees the real one and keeps its classification for
+  // the life of the page (the block below), so supabase-js consuming the
+  // fragment later — its client is constructed lazily, inside the effect
+  // below — cannot turn a session return back into "none" halfway through
+  // completing it. That is the "classified once" guarantee the paragraph
+  // above depends on, kept without a render the server cannot reproduce.
+  const [latchedReturn, setLatchedReturn] = useState<OAuthCallbackReturn | null>(null);
+  const authReturn: OAuthCallbackReturn = latchedReturn ?? NO_AUTH_RETURN;
   const isVerificationReturn = authReturn.kind === "session";
 
   // WHAT HAPPENS WHEN THE LINK IS DEAD.
@@ -275,25 +290,35 @@ export function AccountAuthForm() {
   //     redirecting), so this is not an error; they just need to sign in. What
   //     it must never do is promote a leftover localStorage session.
   //
-  // Seeded as INITIAL STATE rather than set from an effect: all three inputs
-  // are known at first render, so an effect would only paint the bare form and
-  // then re-render — a cascading render, and a visible flash of the very
-  // "nothing happened" page this exists to replace.
-  const [message, setMessage] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    if (authReturn.kind !== "none" || !arrivedFromEmailLink) return null;
-    return searchParams.get("verified") === "1"
-      ? "Your email address is confirmed. Sign in below to finish setting up your account."
-      : null;
-  });
+  // Only the QUERY-STRING case is seeded as initial state, because only the
+  // query string is known to both renders. The fragment cases are applied in
+  // the render that first sees the fragment (the latch block below) — a
+  // render-phase update, which React treats as part of the same render, not a
+  // second paint — and the "confirmed" sentence is derived rather than stored,
+  // so a token arriving in the fragment silences it without a state write.
+  const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(() => {
-    if (authReturn.kind === "error") return deadAuthLinkMessage(authReturn.errorCode);
     const linkProblem = searchParams.get("link");
     if (!linkProblem) return null;
     return linkProblem === "unavailable"
       ? "We couldn't check that link just now. Enter your email below and we'll send you a new one."
       : deadAuthLinkMessage();
   });
+  if (latchedReturn === null && liveHash) {
+    const classified = readOAuthCallbackFragment(liveHash);
+    setLatchedReturn(classified);
+    if (classified.kind !== "none") {
+      setMode((current) => (current === "portal" ? "login" : current));
+      if (classified.kind === "error") {
+        setError(deadAuthLinkMessage(classified.errorCode));
+      }
+    }
+  }
+  const verifiedMessage = verifiedReturn && authReturn.kind === "none"
+    ? "Your email address is confirmed. Sign in below to finish setting up your account."
+    : null;
+  /** What the status line shows: something this page said, else the query string's verdict. */
+  const shownMessage = message ?? verifiedMessage;
   // Sign in with a texted one-time code as an alternative to email + password.
   const [loginMethod, setLoginMethod] = useState<"email" | "phone">("email");
   const [phone, setPhone] = useState("");
@@ -1407,8 +1432,8 @@ export function AccountAuthForm() {
         />
       ) : null}
 
-      {message ? (
-        <p role="status" className="mt-5 rounded-[12px] border border-[color:var(--accent-gold)]/25 bg-[var(--accent-gold-soft)] px-4 py-3 text-[0.875rem] leading-6 text-[color:var(--accent-gold-strong)]">{message}</p>
+      {shownMessage ? (
+        <p role="status" className="mt-5 rounded-[12px] border border-[color:var(--accent-gold)]/25 bg-[var(--accent-gold-soft)] px-4 py-3 text-[0.875rem] leading-6 text-[color:var(--accent-gold-strong)]">{shownMessage}</p>
       ) : null}
       {error ? (
         <p role="alert" className="mt-5 rounded-[12px] border border-rose-400/25 bg-rose-500/[0.08] px-4 py-3 text-[0.875rem] leading-6 text-rose-200">{error}</p>

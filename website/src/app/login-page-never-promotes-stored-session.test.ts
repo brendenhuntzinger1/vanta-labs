@@ -61,7 +61,12 @@ describe("the two fragment predicates disagree, which is why the weaker one may 
 
 describe("the login page takes its tokens from the fragment and never from client storage", () => {
   it("classifies the fragment with readOAuthCallbackFragment, like the callback does", () => {
-    expect(form).toContain("readOAuthCallbackFragment(window.location.hash)");
+    // The login form reads the hash through useSyncExternalStore (so the
+    // hydration render matches the server) and classifies what it read; the
+    // callback page reads it directly. Same predicate, same input.
+    expect(form).toContain("const readLocationHash = () => window.location.hash;");
+    expect(form).toContain("useSyncExternalStore(subscribeNever, readLocationHash, getServerLocationHash)");
+    expect(form).toContain("readOAuthCallbackFragment(liveHash)");
     expect(callback).toContain("readOAuthCallbackFragment(window.location.hash)");
   });
 
