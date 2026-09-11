@@ -34,10 +34,12 @@ Commission is `commissionableSubtotal = max(0, subtotal − discount_amount)`
 | Gift **absorbs** a unit already in cart | **−$39.99** | unchanged | **−$39.99** ❌ |
 
 A fix that restores commission by adding back `discount_amount` **will not catch the absorb
-case.** The correct base is a new, explicitly-computed `commissionableBase` that adds back
-both the winning discount *and* the retail value of absorbed gift units.
+case.** The correct base is a new, explicitly-computed `commissionableBase`.
 
-**This needs your decision (D1 in §13).**
+**Decided (D1, §13). The formula, and the proof that it neither double-counts nor changes
+non-SMS orders, is in §B1–B4.** Two further findings surfaced while proving it —
+`commissionableSubtotal` is shared with **points earning and refund proration** (§B1), and
+gift absorption can **silently cost a Vanta Pro member their store credit** (§B5).
 
 ### ⚠ CONFLICT 2 — the strategy doc said "build one benefit engine". Production already has one
 
@@ -606,16 +608,20 @@ subscribers, only for customers with a paid order history. Last in priority, exa
 
 ---
 
-## 13. Decisions I need from you
+## 13. Locked decisions
 
-| # | Decision | Options | My recommendation |
-|---|---|---|---|
-| **D1** | **Commission base** (CONFLICT 1) | (a) keep today's post-discount base — ambassador silently cut by gift absorption; (b) add back discount + absorbed gift retail — costs more, matches your decision 4's intent | **(b)**, with a cap: never pay commission on more than the customer actually paid plus the incentive value. Model the cost before enabling |
-| **D2** | **Double opt-in** | Full DOI for marketing, or single opt-in with DOI only for cart recovery | **Full DOI.** Carrier-forced for cart recovery anyway, and the inbound reply earns Known Sender status |
-| **D3** | **SMS-only subscribers** | The gift is keyed on account email. Can someone subscribe by SMS with no account and hold a gift? | **No.** Require an account to *redeem*. Subscribe freely; gift attaches on account creation |
-| **D4** | **Gift product** | GHK-Cu ($3.65 / $39.99, 11.0×) or Recon Water ($1.43 / $14.99, 10.5×) | **GHK-Cu** for the headline; Recon Water as the low-basket fallback |
-| **D5** | **Store credit + points on a gift order** | Block (rule 2, §10) or allow | **Block.** Same gate as referral, same reason |
-| **D6** | **Quiet-hours fallback** | Continental-safe 12:00–20:00 ET, or ask for timezone at signup | **Continental-safe.** Asking adds a field to a form that already has enough |
+Decided by the owner, 2026-09-11. Part B proves each one against production.
+
+| # | Decision | **Locked as** |
+|---|---|---|
+| **D1** | Commission base | **Preserve commission via an explicit `commissionableBaseCents`.** Restores revenue displaced by a Vanta-funded SMS incentive; never double-counts; never increases commission for unrelated reasons. Formula and proof in **§B1–B3** |
+| **D2** | Double opt-in | **Full SMS double opt-in.** Consent evidence durable and auditable. Existing order/shipping/ambassador/contact numbers remain **non-marketing** |
+| **D3** | SMS-only gift entitlement | **Yes.** A verified SMS subscriber earns the introductory gift **without** email marketing consent and **without** Vanta Pro. Tied to verified person identity, not a browser session. Abuse controls in **§B7** |
+| **D4** | Introductory gift | **GHK-Cu 50mg**, subject to pre-launch COGS/inventory verification. **Admin-configurable, never hard-coded** — see §B-D4 |
+| **D5** | Store credit + points | **Yes on eligible PAID merchandise. No value from the $0 gift.** Explicit `rewardBaseCents`, immune to gift-driven subtotal mutation. Proof in **§B5** |
+| **D6** | Quiet hours | **Real timezone when genuinely known** (order/billing state). **Never inferred from area code.** Unknown → continental-safe **12:00–20:00 ET**, pending compliance sign-off |
+| **ARCH** | One engine | **`quoteOrder()` remains authoritative.** No second engine. Phase 3 is a proven no-op refactor; non-SMS behaviour parity-identical |
+| **ARCH** | `marketing_send_claim` | **`person_key` defaults to the email.** Email lifecycle unchanged until SMS explicitly uses the new path |
 
 ---
 
@@ -774,3 +780,342 @@ filtering) on any message; cash contribution below floor; verification attempt s
 
 **Reported, not alerted:** subscribers by state and source, messages and cost by flow,
 revenue per recipient and per message, holdout lift, gift issuance vs redemption.
+
+---
+---
+
+# Part B — Locked decisions, proved against production
+
+Every figure below is computed by `scratchpad/d1-model.mjs` from constants read out of
+production source or the live database on 2026-09-11. The model is analysis, not shipped
+code, and imports nothing from `src`.
+
+| Input | Value | Source |
+|---|---|---|
+| COGS ratio | 0.1883 | measured, revenue-weighted default doses |
+| GHK-Cu 50mg | $39.99 retail / $3.65 cost / 40 in stock | `product_doses`, live |
+| Recon Water 10mL | $14.99 / $1.43 / 50 in stock | `product_doses`, live |
+| Processing | 8% | `PROCESSING_FEE_DEFAULT_PERCENT` |
+| Postage | $7.93 | `FALLBACK_POSTAGE_CENTS` |
+| Bundle tiers | 5 / 8 / 12 / 20% at 2 / 3–4 / 5–9 / 10+ | `DEFAULT_BUNDLE_CONFIG` |
+| Free shipping | $200, else $15 | `FREE_SHIPPING_THRESHOLD` |
+| Points redemption | 100 points = $1 | `POINTS_PER_DOLLAR_REDEMPTION` |
+
+### ⚠ CONFLICT 3 — the membership tiers in the strategy document are wrong
+
+`membership_tiers`, live: **Vanta Essential (5%) is `is_active = false`.** The active paid
+tiers are **Pro 8% ($24.99)**, **Elite 10% ($39.99)**, **Black 12% ($89.99)**, plus the free
+Research Member tier. Points per dollar differ by tier (2 / 3 / 4 / 5) and store-credit
+minimums are $100 / $150 / $250.
+
+The strategy document's cannibalisation table listed Essential as live. **Correct the
+narrative, not the conclusion** — a free 15% would still have beaten Black, which is why it
+was dropped.
+
+---
+
+## B1. The D1 `commissionableBase` proposal
+
+### Why the obvious fix is wrong
+
+`commissionableSubtotal = max(0, subtotal − discount_amount)` is recomputed at **three**
+sites (`payment-webhook.ts:1038, 1593, 2528`) and feeds **four** consumers:
+
+| Consumer | Line | Effect if we change the variable |
+|---|---|---|
+| Ambassador commission | 1179 | intended ✅ |
+| **Points earning** | 1771, 3126 | **customer earns points on a free gift — violates D5** ❌ |
+| **Refund proration `merchandiseBase`** | 2539 | **changes how every refund is prorated** ❌ |
+| `amount_paid` on the commission record | 1215 | audit drift ❌ |
+
+**So D1 must not touch `commissionableSubtotal`.** D1 and D5 collide head-on if implemented
+on one variable. They need three separate bases.
+
+### The three bases
+
+```
+paidMerchandiseCents   = max(0, subtotal − discount_amount)          ← UNCHANGED, today's value
+                         consumers: refund proration, amount_paid
+
+rewardBaseCents        = paid merchandise, evaluated gift-independently
+                         consumers: points earning, store-credit eligibility   (D5)
+
+commissionableBaseCents = paidMerchandiseCents + giftDisplacedRevenueCents
+                         consumer: ambassador commission ONLY                  (D1)
+```
+
+### `giftDisplacedRevenueCents` — the definition
+
+> The paid subtotal the basket would have had **without** the Vanta-funded gift, minus the
+> paid subtotal it has **with** it.
+
+Concretely, from the `absorbedFromCart` bookkeeping `quoteOrder` **already maintains**
+(`quote-order.ts:814` — *"This records enough to restore them exactly"*, used today to undo
+a gift when its minimum is not met at `1287-1340`):
+
+```
+giftDisplacedRevenueCents =
+      Σ (absorbed units × their unit price at absorption)
+    + bundleRepricingDelta     // survivors dropped to a lower bundle tier (quote-order.ts:934-942)
+```
+
+Two properties make this safe:
+
+1. **Added gift → zero.** A `$0` gift line appended to the basket displaces nothing, so
+   `giftDisplaced = 0` and commission is untouched. This is the no-double-count guarantee.
+2. **No SMS gift → zero.** All three bases collapse to today's single value. This is the
+   parity guarantee.
+
+**Cap:** `commissionableBase ≤ paidMerchandise + (gift retail × quantity)`. A displaced
+amount can never exceed what the gift was worth.
+
+**Scope:** only incentives Vanta funds *for this programme*. Not bundle pricing, not
+membership, not the referral's own discount, not a coupon.
+
+---
+
+## B2. Before / after by basket — ambassador referral, gift ABSORBS a unit
+
+10% customer referral, 15% commission tier. `comm IDEAL` is what the ambassador would have
+earned on the same basket with **no gift at all** — the proposal is correct when `comm NEW`
+lands on it.
+
+| Basket | units after | subtotal | paid merch | gift displaced | commissionable | comm NOW | comm NEW | comm IDEAL | residual | contribution |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| $50 | 0 | $0.00 | $0.00 | $49.99 | $49.99 | $0.00 | $7.50 | $6.75 | $0.75 | -$5.28 |
+| $100 | 1 | $49.99 | $44.99 | $44.99 | $89.98 | $6.75 | $13.50 | $13.50 | **$0.00** | $19.81 |
+| $150 | 1 | $74.99 | $67.49 | $67.49 | $134.98 | $10.12 | $20.25 | $20.25 | **$0.00** | $28.60 |
+| $250 | 3 | $172.47 | $168.72 | $57.49 | $226.21 | $25.31 | $33.93 | $33.74 | $0.19 | $87.66 |
+| $500 | 6 | $377.16 | $377.16 | $62.86 | $440.02 | $56.57 | $66.00 | $66.00 | **$0.00** | $190.85 |
+| $1,000 | 13 | $742.82 | $742.82 | $57.14 | $799.96 | $111.42 | $119.99 | $119.99 | **$0.00** | $397.10 |
+
+**Reading it.** Today the gift silently cuts the ambassador by **$6.75–$10.13** per order —
+roughly **half their commission** on small baskets. The proposal restores it exactly on four
+of six baskets.
+
+**The residual is honest and bounded.** It appears only when the gift also changes the
+winning discount's size (absorbing units shrinks the list subtotal the percentage is taken
+on). Worst observed: **$0.19 on a $250 order — 0.08%.** Options: accept it (recommended,
+it favours the partner), or cap at the no-gift counterfactual, which costs a second pricing
+pass. **Recommend: accept, and assert the bound in a test.**
+
+**The $50 row cannot occur.** Absorbing the only unit leaves a $0 paid subtotal; the gift's
+$60 minimum withdraws the gift and restores the units (`quote-order.ts:1287-1340`). The row
+is printed to show *why the minimum exists* — without it, that order contributes **−$5.28**.
+
+## B3. Gift ADDED (product not already in cart) — the no-double-count proof
+
+| Basket | subtotal | paid merch | gift displaced | comm NOW | comm NEW | delta |
+|---|--:|--:|--:|--:|--:|--:|
+| $50 | $49.99 | $44.99 | $0.00 | $6.75 | $6.75 | **$0.00** |
+| $100 | $94.98 | $89.98 | $0.00 | $13.50 | $13.50 | **$0.00** |
+| $150 | $142.48 | $134.98 | $0.00 | $20.25 | $20.25 | **$0.00** |
+| $250 | $229.96 | $224.96 | $0.00 | $33.74 | $33.74 | **$0.00** |
+| $500 | $440.02 | $440.02 | $0.00 | $66.00 | $66.00 | **$0.00** |
+| $1,000 | $799.96 | $799.96 | $0.00 | $119.99 | $119.99 | **$0.00** |
+
+A $0 line displaces no revenue, so commission does not move. **Commission never rises for
+an unrelated reason.**
+
+## B4. NO SMS entitlement — the parity proof
+
+| Basket | subtotal | discount | winner | paid merch | reward base | commissionable | comm NOW | comm NEW | identical? |
+|---|--:|--:|:--|--:|--:|--:|--:|--:|:--|
+| $50 | $49.99 | $5.00 | referral | $44.99 | $44.99 | $44.99 | $6.75 | $6.75 | **YES** |
+| $100 | $94.98 | $5.00 | referral | $89.98 | $89.98 | $89.98 | $13.50 | $13.50 | **YES** |
+| $150 | $142.48 | $7.50 | referral | $134.98 | $134.98 | $134.98 | $20.25 | $20.25 | **YES** |
+| $250 | $229.96 | $5.00 | referral | $224.96 | $224.96 | $224.96 | $33.74 | $33.74 | **YES** |
+| $500 | $440.02 | $0.00 | none | $440.02 | $440.02 | $440.02 | $66.00 | $66.00 | **YES** |
+| $1,000 | $799.96 | $0.00 | none | $799.96 | $799.96 | $799.96 | $119.99 | $119.99 | **YES** |
+
+All three bases collapse to one value. **Every existing non-SMS order is byte-identical.**
+
+(The $500 and $1,000 rows show the bundle ladder beating the referral outright —
+`compete()` nets 10%-of-list against 12%/20% bundle savings and returns 0. Existing
+behaviour, unchanged.)
+
+## B5. Vanta Pro + SMS gift — and the store-credit hazard
+
+Pro: 8% member discount, free shipping, 3 points/$, $15 monthly credit, **$100 minimum**.
+
+| Basket | mode | winner | subtotal | paid merch | credit NOW → NEW | points | gift COGS | contribution |
+|---|:--|:--|--:|--:|:--|--:|--:|--:|
+| $50 | none | member | $49.99 | $45.99 | $0.00 → $0.00 | 137 | — | $23.60 |
+| $100 | none | member | $94.98 | $91.98 | $0.00 → $0.00 | 275 | — | $56.06 |
+| $100 | absorb | member | $49.99 | $45.99 | $0.00 → $0.00 | 137 | $3.65 | $19.95 |
+| $150 | none | member | $142.48 | $137.98 | $15.00 → $15.00 | 413 | — | $73.05 |
+| **$150** | **absorb** | member | $74.99 | $68.99 | **$0.00 → $15.00** | 206 | $3.65 | $20.71 |
+| $250 | none | bundle | $229.96 | $229.96 | $15.00 → $15.00 | 689 | — | $138.44 |
+| $250 | absorb | bundle | $172.47 | $172.47 | $15.00 → $15.00 | 517 | $3.65 | $94.44 |
+| $500 | absorb | bundle | $377.16 | $377.16 | $15.00 → $15.00 | 1131 | $3.65 | $238.08 |
+| $1,000 | absorb | bundle | $742.82 | $742.82 | $15.00 → $15.00 | 2228 | $3.65 | $494.66 |
+
+### ⚠ CONFLICT 4 — the gift can silently cost a Pro member their store credit
+
+The **$150 absorb** row is the finding. `resolveStoreCreditCents` gates on
+`subtotalCents: Math.round(subtotal * 100)` (`quote-order.ts:1629`) — the **post-gift**
+subtotal. A gift absorbing a $74.99 unit drops the subtotal to $74.99, under Pro's $100
+minimum, and the member **silently loses $15 of credit they were entitled to**.
+
+That is a paying member losing a paid benefit because they accepted a free gift. It is
+exactly the "subtotal mutation caused by gift absorption" D5 names.
+
+**Fix:** gate store-credit eligibility on `rewardBaseCents + giftDisplacedRevenueCents` —
+i.e. what the basket was worth before the Vanta-funded gift touched it. Redemption stays
+capped at what is actually owed, so nothing is given away; only *eligibility* stops moving.
+
+**Vanta Pro is never cannibalised.** In every row the member discount still wins the
+contest or the bundle ladder does. The gift adds **no candidate** to the discount race, so
+it cannot beat a tier. **D3 is satisfied structurally.**
+
+### Points — D5 is already satisfied, and must stay that way
+
+`points NOW` equals `points NEW` in every row. Points are earned on paid merchandise; a $0
+gift line adds nothing and absorbed units leave the subtotal. **No points are generated by
+the gift today, and the `rewardBaseCents` split is what keeps it true after D1 lands** —
+without the split, D1's add-back would start minting points on free product.
+
+## B6. Worst-case legitimate stack
+
+Vanta Black (12%, 5 points/$, $75 credit, $250 min) **+** ambassador referral (20%
+commission tier) **+** SMS gift absorbing a unit **+** store credit **+** points **+** free
+shipping. Commission on the proposed base.
+
+| Basket | subtotal | discount | paid merch | commissionable | commission | credit | points $ | gift | contribution |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| $50 | $0.00 | $0.00 | $0.00 | $49.99 | $10.00 | $0.00 | $0.00 | $3.65 | **-$21.58** |
+| $100 | $49.99 | $6.00 | $43.99 | $88.98 | $17.80 | $0.00 | $2.19 | $3.65 | **-$0.51** |
+| $150 | $74.99 | $9.00 | $65.99 | $133.48 | $26.70 | $0.00 | $3.29 | $3.65 | $5.02 |
+| $250 | $172.47 | $7.50 | $164.97 | $222.46 | $44.49 | $0.00 | $8.24 | $3.65 | $54.98 |
+| $500 | $377.16 | $0.01 | $377.15 | $440.01 | $88.00 | $75.00 | $18.85 | $3.65 | $82.53 |
+| $1,000 | $742.82 | $0.00 | $742.82 | $799.96 | $159.99 | $75.00 | $37.14 | $3.65 | $259.81 |
+
+**Two negatives, and neither is the gift.**
+
+- **$50: −$21.58.** Prevented by the $60 gift minimum. Cannot occur.
+- **$100: −$0.51.** A Black member using an ambassador code on a small basket. The
+  referral **loses** the discount contest (member 12% beats referral 10%) but still accrues
+  **$17.80 of commission** on the restored base. That is the dominant cost — 40% of the
+  basket — and it is a **pre-existing property of the commission model**, not something the
+  SMS gift creates. D1 raises it from $8.80 to $17.80 on this order.
+
+**This is the real cost of D1** and it needs a bound. Recommended: **cap
+`commissionableBase` at `paidMerchandise + giftRetail`, and add a floor rule that
+commission may never exceed contribution before commission.** The second is a new guard and
+is the only thing standing between D1 and a negative order on a small referred basket.
+**Flagged as D7 below.**
+
+## B7. Abuse scenarios (D3 — SMS-only entitlement)
+
+D3 unties the gift from the account email, so the abuse surface widens. Controls, ordered by
+what they cost the honest customer (nothing, at the top):
+
+| Vector | Control | Customer friction |
+|---|---|---|
+| Same person, many phone numbers | Gift ledger keyed on **verified person identity**: `user_id` when known, else the verified `phone_e164`. One `sms_subscribers` row per number (PK) | none |
+| One number, many accounts | `phone_e164` is the PK and carries at most one `user_id`. Re-binding to a second account writes a consent event and **does not re-issue** a gift | none |
+| Opt-out / opt-in farming | Gift is **once ever per identity**, not once per subscription. `resubscribe_count` + cooldown | none |
+| Disposable / VOIP numbers | Block `line_type = 'voip'` at signup via Twilio Lookup | none for real mobiles |
+| Verification flooding (SMS pumping) | Rate-limit per phone, per IP, per account; Twilio Fraud Guard; cap `verify_attempts` | none under normal use |
+| Gift with an empty basket | `min_subtotal_cents = 6000`, re-judged after every other discount | visible, and it is the point |
+| Redeem → refund → redeem | Redemption permanent by design, keyed on order | none |
+| Two concurrent checkouts, one token | `reserveCustomerOffer` advisory lock; a failed reserve **refuses the order** | none |
+| Guest checkout claiming a phone | Benefit never applies to a body-supplied identifier — server-established identity only | starts next order |
+| Account-per-gift farming | New accounts with a fresh number are the residual hole. Mitigation is **detection, not prevention**: alert on gift-redemption rate per day and on repeated same-device/same-address signups | none |
+
+**The residual is accepted deliberately.** At $3.65 a gift with a $60 minimum, farming is
+not profitable for the farmer. Blocking it fully would mean identity checks that cost more
+conversion than the abuse costs margin.
+
+## B8. Migration and rollout sequence
+
+Unchanged from §14, with the D1/D5 work made explicit and placed **after** the no-op
+refactor.
+
+| Step | Action | Reversible? |
+|---|---|---|
+| M0 | Seed `sms_suppressions` from all four phone sources. Verify count = distinct-phone query | additive only |
+| M1 | Create SMS tables. No writes from app code yet | drop (empty) |
+| M2 | Add `back_in_stock_requests.phone_e164 / notify_sms`, `orders.sms_*`. All nullable | drop columns |
+| M3 | `marketing_send_claim` gains `person_key text default null`, resolving to the email when null | drop parameter |
+| M4 | **Phase-3 no-op refactor.** Introduce the three bases, all equal, no behaviour change | revert commit |
+| M5 | Widen `ProfitFloorSnapshot`; wire credit / points / gift COGS / commission | revert commit |
+| M6 | Store-credit eligibility gated on the gift-independent base (**CONFLICT 4**) | revert commit |
+| M7 | `commissionableBaseCents` behind a flag, default OFF — today's value when off | flag |
+| M8 | SMS entitlement returns a real gift. Flag on | flag |
+
+**M4 is the gate.** It must land with the parity suite green and **no edits to its
+assertions**. If a parity assertion needs changing, the refactor is wrong.
+
+## B9. Invariants the suite must prove
+
+**Parity — the no-SMS guarantee** (each asserted with SMS absent):
+1. `paidMerchandise === rewardBase === commissionableBase` for every basket.
+2. Commission, points earned, store credit, `discount_amount` and the order total are
+   identical to the pre-change values across the whole `REACHABLE` scenario table.
+3. `cart-server-discount-parity.test.ts` passes **with no edits to its assertions**.
+4. The 100,000-case fuzz in `ambassador-financial-invariants.test.ts` passes unchanged.
+
+**D1 — commission:**
+5. Gift **added** → `giftDisplaced === 0` → commission unchanged. (B3)
+6. Gift **absorbing** → `commissionNew === commissionNoGift` when the winning discount is
+   unchanged. (B2)
+7. Residual `commissionNew − commissionNoGift` is `≥ 0` and `≤ giftRetail × commissionPct`.
+8. `commissionableBase ≤ paidMerchandise + giftRetail × quantity`, always.
+9. No non-SMS incentive (bundle, membership, referral, coupon, BXGY) ever adds to
+   `commissionableBase`.
+10. `paidMerchandise` — and therefore refund proration and `amount_paid` — is **untouched**
+    by every SMS code path.
+
+**D5 — reward base:**
+11. Points earned from a $0 gift line = 0.
+12. Points earned on an absorbing gift = points on paid merchandise only.
+13. Store-credit **eligibility** is unchanged by gift absorption. (CONFLICT 4 / B5)
+14. Store-credit **redemption** never exceeds the balance owed.
+15. Existing store-credit and points behaviour is identical with no SMS entitlement.
+
+**Consent and suppression:**
+16. `verified` alone never sends marketing.
+17. Every phone seeded at M0 is suppressed and stays suppressed without a fresh grant.
+18. A suppression read error **refuses the send**.
+19. Opt-out is honoured within one cron tick; transactional continues.
+20. `sms_consent_events` rejects UPDATE and DELETE.
+21. Double opt-in incomplete → no marketing send.
+
+**Economics:**
+22. `computeOrderEconomics().acceptable === false` for every negative-contribution stack in
+    B6, and the alert fires.
+23. The gift minimum withdraws the gift and restores absorbed units below $60.
+24. No order can be constructed where the SMS gift alone drives contribution negative.
+
+**Idempotency and delivery:**
+25. Duplicate `twilio_message_sid` writes once.
+26. Replayed webhook is a no-op.
+27. Unsigned webhook rejected; unconfigured secret → 503.
+28. A cart recovered mid-flight cancels the `sms_t4h` stage.
+
+## B10. Remaining decisions
+
+| # | Decision | Why it matters | Recommendation |
+|---|---|---|---|
+| **D7** | **Commission floor rule.** Should commission be capped so it can never exceed contribution before commission? | B6 shows a $100 Black + referral + gift order at **−$0.51**, driven by $17.80 of commission that D1 raises from $8.80. Without a floor, D1 makes small referred baskets loss-making | **Yes — cap it.** Ambassadors keep full commission on healthy orders; only pathological small baskets clip |
+| **D8** | **Does the add-back apply to the existing email win-back gift** (`winback_60_free_ghkcu`), or SMS only? | The same unfairness exists today on email gifts. SMS-only is literal to D1 but creates two rules for one gift | **Apply to all Vanta-funded `free_product` offers.** One rule. **Note: this changes live email win-back behaviour** — needs your explicit sign-off |
+| **D9** | **Residual tolerance.** Accept the ≤$0.19 over-restoration, or spend a second pricing pass to make it exact? | B2. Favours the partner; cost is CPU and complexity | **Accept**, assert the bound |
+| **D10** | **Timezone source.** Use shipping state from the last order? That is PII-adjacent inference | D6 says "genuinely known" — an order's shipping state is known, but is it *their* timezone? | **Use it, with the continental-safe fallback** when there is no order. Flag for compliance sign-off |
+| **D11** | **Gift inventory floor.** GHK-Cu has **40 units** in stock. At what level does the gift auto-disable? | A gift that oversells stock creates unfulfillable orders | **Auto-disable below 10 units**, admin-configurable, alert at 15 |
+
+### D4 — the gift must be configuration, not code
+
+You asked that GHK-Cu not be hard-coded. `OFFER_CATALOG` is a **code constant**, so a
+catalogue key alone does not satisfy this. The mechanism that does already exists:
+`issueResolvedOffer()` takes a **resolved `GiftConfig`**, which is exactly how
+operator-built campaign gifts work today (`campaign-gift.ts:35-43`) — they file under
+`campaign:<id>` and carry no catalogue key at all.
+
+**Proposal:** the SMS gift is an **admin-control setting** (`sms.gift`) holding
+`{ productSlug, variantId, quantity, minSubtotalCents, ttlDays }`, resolved to a
+`GiftConfig` at issue time and passed to `issueResolvedOffer()`. Changing the gift is then a
+Control Center edit, no deploy — and because the offer row records what was **promised**, a
+token minted under the old gift still redeems as the old gift. Validation on save: product
+exists, is enabled, is not archived, is in stock, and the admin sees the cost and the
+perceived-value multiple before saving (the pattern `tierEconomics` already uses).
