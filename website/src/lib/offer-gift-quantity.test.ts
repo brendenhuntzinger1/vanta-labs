@@ -47,8 +47,8 @@ vi.mock("@/lib/offers/customer-offers", async () => {
   };
 });
 
-vi.mock("@/lib/membership", async () => {
-  const actual = await vi.importActual<Record<string, unknown>>("@/lib/membership");
+vi.mock("@/lib/rewards", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("@/lib/rewards");
   return {
     ...actual,
     getMembershipPerks: async () => ({

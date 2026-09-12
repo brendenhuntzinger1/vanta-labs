@@ -55,7 +55,7 @@ const effects = vi.hoisted(() => ({
   recordSystemAlert: vi.fn(),
 }));
 
-vi.mock("@/lib/membership", () => ({
+vi.mock("@/lib/rewards", () => ({
   reverseOrderPoints: effects.reverseOrderPoints,
   restoreRedeemedPoints: effects.restoreRedeemedPoints,
 }));

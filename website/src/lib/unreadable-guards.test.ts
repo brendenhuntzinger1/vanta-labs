@@ -139,7 +139,7 @@ vi.mock("@/lib/supabase-server", () => ({
   },
 }));
 
-const { reverseOrderPoints, restoreRedeemedPoints, redeemPoints, getPointsBalance } = await import("@/lib/membership");
+const { reverseOrderPoints, restoreRedeemedPoints, redeemPoints, getPointsBalance } = await import("@/lib/rewards");
 const { refundStoreCreditForOrder } = await import("@/lib/store-credit");
 const { getEffectiveCommissionPercent } = await import("@/lib/ambassador-commission");
 

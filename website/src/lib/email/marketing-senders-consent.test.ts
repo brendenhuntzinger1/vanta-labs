@@ -26,8 +26,7 @@ const PROMOTIONAL_SENDERS: Array<{ file: string; campaignTypes: string[]; queues
   { file: "cart-recovery.ts", campaignTypes: ["cart_recovery_"], queuesOnDeferral: false },
   { file: "back-in-stock.ts", campaignTypes: ["back_in_stock"], queuesOnDeferral: true },
   { file: "marketing-broadcast.ts", campaignTypes: ["coupon_announcement"], queuesOnDeferral: true },
-  { file: "membership-billing.ts", campaignTypes: ["membership_welcome", "membership_winback"], queuesOnDeferral: true },
-  { file: "membership.ts", campaignTypes: ["membership_birthday"], queuesOnDeferral: true },
+  { file: "rewards.ts", campaignTypes: ["membership_birthday"], queuesOnDeferral: true },
 ];
 
 describe("promotional senders use the marketing wrapper", () => {

@@ -570,8 +570,7 @@ describe("a free-shipping coupon zeroes shipping on both sides", () => {
     { name: "nothing waives it", bulkSavingsTier: false, memberFreeShipping: false, couponFreeShipping: false, expected: false },
     { name: "a free-shipping coupon alone", bulkSavingsTier: false, memberFreeShipping: false, couponFreeShipping: true, expected: true },
     { name: "a bulk tier alone", bulkSavingsTier: true, memberFreeShipping: false, couponFreeShipping: false, expected: true },
-    { name: "a membership perk alone", bulkSavingsTier: false, memberFreeShipping: true, couponFreeShipping: false, expected: true },
-    { name: "a coupon on top of a perk that already ships free", bulkSavingsTier: false, memberFreeShipping: true, couponFreeShipping: true, expected: true },
+    { name: "a coupon on top of a bulk tier that already ships free", bulkSavingsTier: true, memberFreeShipping: false, couponFreeShipping: true, expected: true },
   ];
 
   it.each(grants)("$name", ({ expected, ...waivers }) => {
@@ -620,7 +619,9 @@ describe("a free-shipping coupon zeroes shipping on both sides", () => {
     const callStart = drawer.indexOf("cartShippingLineLabel({");
     const call = drawer.slice(callStart, drawer.indexOf("format: formatCartCurrency", callStart));
     expect(call).toContain("Boolean(couponDetails?.freeShipping)");
-    expect(call).toContain("memberFreeShipping");
+    // "memberFreeShipping" was a third grant here until the paid membership
+    // feature was removed on 2026-09-12; the bulk tier and the coupon remain.
+    expect(call).toContain("bulkSavingsTierReached");
     expect(call).toContain("bulkSavingsTierReached");
   });
 

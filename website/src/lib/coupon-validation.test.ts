@@ -208,20 +208,28 @@ describe("a coupon tied to one customer", () => {
   });
 });
 
+// The member_scope column outlived the paid membership feature (removed
+// 2026-09-12). Nobody is a member now, so:
+//
+//   • a "members" code can no longer be redeemed BY ANYONE. Enforcement is
+//     kept deliberately — dropping it would make every historical members-only
+//     code redeemable by the whole internet, which is a discount giveaway
+//     rather than a removal.
+//   • a "non_members" code works for everyone, which is what it always meant.
 describe("audience scope", () => {
-  it("refuses a members-only coupon for a non-member", async () => {
+  it("refuses a members-only coupon, because nobody is a member any more", async () => {
     state.coupon = coupon({ member_scope: "members" });
-    await expect(validate("SAVE20", 200, undefined, { isActiveMember: false })).rejects.toThrow(/exclusive to active members/i);
+    await expect(validate("SAVE20", 200, undefined, { isActiveMember: false })).rejects.toThrow(/no longer available/i);
   });
 
-  it("allows a members-only coupon for a member", async () => {
+  it("refuses a members-only coupon even if a caller claims membership", async () => {
     state.coupon = coupon({ member_scope: "members" });
-    await expect(validate("SAVE20", 200, undefined, { isActiveMember: true })).resolves.toBeTruthy();
+    await expect(validate("SAVE20", 200, undefined, { isActiveMember: true })).rejects.toThrow(/no longer available/i);
   });
 
-  it("refuses a non-members coupon for a member", async () => {
+  it("allows a non-members coupon, which is now everyone", async () => {
     state.coupon = coupon({ member_scope: "non_members" });
-    await expect(validate("SAVE20", 200, undefined, { isActiveMember: true })).rejects.toThrow(/for non-members/i);
+    await expect(validate("SAVE20", 200, undefined, { isActiveMember: false })).resolves.toBeTruthy();
   });
 });
 

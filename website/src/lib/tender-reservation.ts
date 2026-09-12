@@ -4,7 +4,7 @@ import {
   STORE_CREDIT_REDEMPTION_REASON,
   startOfCurrentMonthIso,
 } from "@/lib/store-credit";
-import { POINTS_REDEMPTION_REASON } from "@/lib/membership";
+import { POINTS_REDEMPTION_REASON } from "@/lib/rewards";
 import { UNPAID_STATUSES } from "@/lib/order-status";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 

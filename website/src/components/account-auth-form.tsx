@@ -1238,7 +1238,7 @@ export function AccountAuthForm() {
         <p className="mt-3 text-[0.9375rem] leading-6 text-white/55">
           {mode === "signup"
             ? "Track orders, save addresses, and check out faster."
-            : "Access your orders, membership, rewards, saved addresses, and account details."}
+            : "Access your orders, rewards, saved addresses, and account details."}
         </p>
       </header>
 

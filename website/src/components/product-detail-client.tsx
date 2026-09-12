@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useCart } from "@/components/cart-context";
-import { bestPaidTier, quoteMemberPrice } from "@/lib/member-pricing";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ProductCard } from "@/components/product-card";
 import { ScrollReveal } from "@/components/scroll-reveal";
@@ -126,8 +125,8 @@ const DEFAULT_PRODUCT_FAQ: ProductFaqItem[] = [
     answer: `${FULFILMENT_SENTENCE} You will receive secure tracking information after dispatch.`,
   },
   {
-    question: "Can I combine discounts, codes, or member pricing?",
-    answer: "No — exactly one discount applies per order. Membership pricing, promo codes, ambassador codes, bundle pricing, and promotions never combine. You don't have to figure out which is best: checkout automatically applies whichever single discount saves you the most.",
+    question: "Can I combine discounts, codes, or promotions?",
+    answer: "No — exactly one discount applies per order. Promo codes, ambassador codes, bundle pricing, and promotions never combine. You don't have to figure out which is best: checkout automatically applies whichever single discount saves you the most.",
   },
 ];
 
@@ -215,7 +214,7 @@ export function ProductDetailClient({
   bacWater?: Product | null;
   coaDocuments?: PublicCoaDocument[];
 }) {
-  const { addToCart, membershipTiers, memberDiscountPercent, shippingConfig } = useCart();
+  const { addToCart, shippingConfig } = useCart();
   const defaultDose = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0] ?? null;
   const [selectedDoseId, setSelectedDoseId] = useState<string | null>(defaultDose?.id ?? null);
   // The shopper's chosen quantity, BEFORE it is clamped to what is on the
@@ -287,18 +286,6 @@ export function ProductDetailClient({
     (isTrackingAvailability && availableQuantity <= 0);
 
   const currentBundleRate = bundleDiscountRate(quantity, bundleConfig);
-
-  // Member pricing on the selected dose — members see their price; everyone
-  // else sees the strongest paid tier's price with exact dollar savings.
-  const isMember = memberDiscountPercent > 0;
-  const pdpUpsellTier = isMember ? null : bestPaidTier(membershipTiers);
-  const memberQuote = unitPrice > 0
-    ? (isMember
-      ? quoteMemberPrice(unitPrice, memberDiscountPercent)
-      : pdpUpsellTier
-        ? quoteMemberPrice(unitPrice, pdpUpsellTier.discountPercent)
-        : null)
-    : null;
 
   // Which dose gets the "★ Most Popular" badge. GLP-3 spotlights its 30mg; the
   // other GLP lines keep their 10mg badge; Recon Water highlights the 30mL; every
@@ -848,51 +835,6 @@ export function ProductDetailClient({
                   <p className="mb-1 text-base text-white/45 line-through">{selectedCompareAtPrice}</p>
                 )}
               </div>
-
-              {/* Member pricing — dollars, not percentages. Members see their
-                  price on this exact vial; everyone else sees precisely what
-                  joining would save them today, linking to the membership
-                  page. Display only — checkout applies the real discount. */}
-              {memberQuote && memberQuote.savings > 0 ? (
-                isMember ? (
-                  <div className="mt-2 flex flex-wrap items-baseline gap-x-2 text-sm">
-                    <span className="font-semibold text-white">Your member price: <span className="tabular-nums">{formatUsd(memberQuote.memberPrice)}</span></span>
-                    <span className="text-[#a3a3a3]">you save {formatUsd(memberQuote.savings)} ({memberQuote.percent}%)</span>
-                  </div>
-                ) : (
-                  <Link
-                    href="/membership"
-                    className="group mt-6 block rounded-2xl border border-[color:var(--accent-gold)]/20 bg-gradient-to-b from-[#161616] to-[#121212] p-6 shadow-[0_10px_30px_-20px_rgba(0,0,0,0.9)] transition duration-200 hover:border-[color:var(--accent-gold)]/40"
-                  >
-                    <span className="flex items-center gap-2">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" className="h-4 w-4 text-[color:var(--accent-gold)]" aria-hidden>
-                        <path d="m12 3.5 2.6 5.6 6.1.8-4.5 4.2 1.2 6-5.4-3-5.4 3 1.2-6L3.3 9.9l6.1-.8z" />
-                      </svg>
-                      <span className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[color:var(--accent-gold)]">Member pricing</span>
-                    </span>
-
-                    <span className="mt-4 block text-[11px] uppercase tracking-[0.2em] text-[#a3a3a3]">Today&apos;s price</span>
-                    <span className="mt-1 block text-[2.25rem] font-semibold leading-none tracking-tight text-white tabular-nums">
-                      {formatUsd(memberQuote.memberPrice)}
-                    </span>
-                    <span className="mt-2 block text-xs text-[#a3a3a3]">
-                      Regular price <span className="line-through">{formatUsd(memberQuote.regularPrice)}</span>
-                      <span className="ml-2 text-[color:var(--accent-gold)]">Save {formatUsd(memberQuote.savings)} today</span>
-                    </span>
-
-                    <span className="mt-4 block text-xs leading-relaxed text-[#a3a3a3]">
-                      Become a member for lower pricing, free shipping, and monthly store credit.
-                    </span>
-
-                    {/* Secondary by design: the page's one bright-gold action is
-                        Add to Cart. This is a refined outline button. */}
-                    <span className="mt-5 inline-flex items-center gap-1.5 rounded-lg border border-[color:var(--accent-gold)]/35 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[color:var(--accent-gold)] transition duration-200 group-hover:border-[color:var(--accent-gold)]/60 group-hover:bg-[color:var(--accent-gold)]/[0.06]">
-                      Join membership
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3 transition-transform duration-200 group-hover:translate-x-0.5" aria-hidden><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-                    </span>
-                  </Link>
-                )
-              ) : null}
 
               {/* OUT OF STOCK is the only stock statement a customer ever sees.
                   Counts, "only N left" and low-stock warnings are deliberately

@@ -1,12 +1,12 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
 // PHASE 11, BUCKET 4 — regressions for the polish findings fixed in this batch.
 //
-// Three of them are behavioural and get real tests against a fake PostgREST
-// (ADM-12, MPC-04, MPC-05). Three are not reachable from a unit test at all —
+// One is behavioural and gets a real test against a fake PostgREST (ADM-12).
+// The rest were not reachable from a unit test at all —
 // a comment naming the wrong settings section, a deleted dead function, an
 // admin control that must no longer save — so they are held by source-level
 // assertions, the same device src/lib/handoff-invariants.test.ts uses.
@@ -149,18 +149,9 @@ vi.mock("@/lib/store-credit", async (importOriginal) => {
 });
 
 vi.mock("@/lib/billing-provider", () => ({ getBillingProvider: () => ({ chargeCard: async () => ({ success: false }) }) }));
-vi.mock("@/lib/veyra-membership", () => ({
-  startVeyraMembership: async () => ({ ok: false }),
-  cancelVeyraMembership: async () => ({ ok: true }),
-  skipVeyraMembershipCycle: async () => ({ ok: true }),
-  updateVeyraMembershipCard: async () => ({ ok: true }),
-  changeVeyraMembershipPlan: async () => ({ ok: true }),
-}));
 vi.mock("@/lib/email/send", () => ({ sendEmail: async () => ({ success: true }) }));
 vi.mock("@/lib/email/marketing", () => ({ sendMarketingEmail: async () => ({ success: true }) }));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: async () => {} }));
-
-const DAY = 24 * 60 * 60 * 1000;
 
 beforeEach(() => {
   db.tables = {};
@@ -206,98 +197,12 @@ describe("ADM-12 — getAuditLogTargetTables reads past the PostgREST row cap", 
 // ---------------------------------------------------------------------------
 // MPC-04 — the store-credit sweep must ask the same question the perks do.
 // ---------------------------------------------------------------------------
-describe("MPC-04 — monthly store credit stops when the paid period has clearly ended", () => {
-  beforeEach(() => {
-    db.tables.membership_tiers = [
-      { id: "tier-pro", slug: "pro", name: "Pro", monthly_store_credit_cents: 5000 },
-    ];
-    db.tables.store_credit_ledger = [];
-  });
+// Four more blocks lived here — MPC-04 (the monthly store-credit grant window),
+// MPC-05 (signup refusing a withdrawn tier), DUP-10 (one hand-rolled membership
+// order insert) and F6 (the intro-offer admin panel). All four tested
+// membership-billing.ts or admin-membership-client.tsx, removed with the paid
+// membership feature on 2026-09-12.
 
-  it("grants to a member whose period is still running", async () => {
-    db.tables.customer_memberships = [
-      { user_id: "user-current", tier_id: "tier-pro", status: "active", next_billing_at: new Date(Date.now() + 20 * DAY).toISOString() },
-    ];
-    const { grantMonthlyStoreCreditSweep } = await import("@/lib/membership-billing");
-    const result = await grantMonthlyStoreCreditSweep();
-
-    expect(granted.calls).toEqual([{ userId: "user-current", cents: 5000 }]);
-    expect(result.granted).toBe(1);
-  });
-
-  it("does NOT grant to a member whose period ended long ago, even though status is still 'active'", async () => {
-    db.tables.customer_memberships = [
-      // The billing sweep never flipped this row: Veyra owns it, or the cron
-      // stalled. isMembershipActive — and therefore every benefit surface —
-      // already treats this member as lapsed.
-      { user_id: "user-lapsed", tier_id: "tier-pro", status: "active", next_billing_at: new Date(Date.now() - 90 * DAY).toISOString() },
-    ];
-    const { grantMonthlyStoreCreditSweep } = await import("@/lib/membership-billing");
-    const result = await grantMonthlyStoreCreditSweep();
-
-    expect(granted.calls).toEqual([]);
-    expect(result.granted).toBe(0);
-  });
-
-  it("still grants inside the expiry grace window", async () => {
-    db.tables.customer_memberships = [
-      { user_id: "user-grace", tier_id: "tier-pro", status: "active", next_billing_at: new Date(Date.now() - 1 * DAY).toISOString() },
-    ];
-    const { grantMonthlyStoreCreditSweep } = await import("@/lib/membership-billing");
-    await grantMonthlyStoreCreditSweep();
-
-    expect(granted.calls.map((call) => call.userId)).toEqual(["user-grace"]);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// MPC-05 — a withdrawn tier must not be purchasable through the API.
-// ---------------------------------------------------------------------------
-describe("MPC-05 — startMembershipSignup refuses a tier the operator withdrew", () => {
-  function seedTier(isActive: boolean | undefined) {
-    db.tables.membership_tiers = [
-      {
-        id: "tier-pro",
-        slug: "pro",
-        name: "Pro",
-        monthly_price_cents: 2900,
-        annual_price_cents: 29000,
-        intro_price_cents: 0,
-        intro_duration_days: 0,
-        intro_offer_enabled: false,
-        monthly_store_credit_cents: 5000,
-        ...(isActive === undefined ? {} : { is_active: isActive }),
-      },
-    ];
-    // Anything reached AFTER the guard fails loudly, so "past the guard" is
-    // observable rather than inferred from the absence of a throw.
-    db.selectError.customer_memberships = { message: "sentinel: reached the membership lookup" };
-  }
-
-  const signup = async (tierId = "tier-pro") => {
-    const { startMembershipSignup } = await import("@/lib/membership-billing");
-    return startMembershipSignup({ userId: "user-1", tierId, billingCycle: "monthly", tokenIntentId: "ti_live" });
-  };
-
-  it("rejects a purchase on an is_active = false tier", async () => {
-    seedTier(false);
-    await expect(signup()).rejects.toThrow("That membership plan is no longer available.");
-  });
-
-  it("allows a purchase on an active tier", async () => {
-    seedTier(true);
-    await expect(signup()).rejects.toThrow("sentinel: reached the membership lookup");
-  });
-
-  it("allows a purchase when the column is absent, so a pre-migration row still sells", async () => {
-    seedTier(undefined);
-    await expect(signup()).rejects.toThrow("sentinel: reached the membership lookup");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Source-level regressions for the three findings a unit test cannot reach.
-// ---------------------------------------------------------------------------
 describe("CFG-15 — the sweep comment names the settings section that actually holds the key", () => {
   it("cites ambassador.commission_hold_days, not referral.", () => {
     const sweep = readSource("app/api/cron/sweep/route.ts");
@@ -308,53 +213,5 @@ describe("CFG-15 — the sweep comment names the settings section that actually 
     expect(settings).toContain('const SECTION = "ambassador";');
     expect(sweep).toContain("ambassador.commission_hold_days");
     expect(sweep).not.toContain("referral.commission_hold_days");
-  });
-});
-
-describe("DUP-10 — one hand-rolled membership order insert, not two", () => {
-  const source = () => readSource("lib/membership-billing.ts");
-
-  it("no longer defines the caller-less manual annual order builder", () => {
-    expect(source()).not.toContain("export async function createAnnualMembershipManualOrder");
-  });
-
-  it("writes the orders table from exactly one place in this module", () => {
-    const inserts = source().match(/from\("orders"\)\s*\.insert\(/g) ?? [];
-    expect(inserts).toHaveLength(1);
-  });
-});
-
-describe("F6 — the admin console cannot switch on an intro offer that does not exist", () => {
-  const source = () => readSource("components/admin-membership-client.tsx");
-
-  it("has no save handler for any intro field", () => {
-    const admin = source();
-    for (const field of ["introOfferEnabled", "introPriceCents", "introDurationDays"]) {
-      expect(admin).not.toMatch(new RegExp(`saveTier\\(tier, \\{ ${field}`));
-    }
-  });
-
-  it("keeps member discount editable — it is live, and shares the same panel", () => {
-    expect(source()).toContain("saveTier(tier, { memberDiscountPercent:");
-  });
-
-  it("nothing in the app writes the (status, intro_status) pair the dead sweep steps select", () => {
-    // The annotation on those two steps claims they are unreachable. This is
-    // the claim: if an intro flow is ever restored, this fails and the comment
-    // has to be revisited rather than quietly becoming a lie.
-    const offenders: string[] = [];
-    const walk = (dir: string) => {
-      for (const entry of readdirSync(dir)) {
-        const full = path.join(dir, entry);
-        if (statSync(full).isDirectory()) { walk(full); continue; }
-        if (!/\.tsx?$/.test(entry) || /\.test\.tsx?$/.test(entry)) continue;
-        const text = readFileSync(full, "utf8");
-        if (/status:\s*"trialing"/.test(text) || /intro_status:\s*"active"/.test(text)) {
-          offenders.push(path.relative(SRC, full));
-        }
-      }
-    };
-    walk(SRC);
-    expect(offenders).toEqual([]);
   });
 });

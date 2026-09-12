@@ -11,13 +11,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 //   reverseOrderPoints        debits EVERY point the order earned
 //   restoreRedeemedPoints     re-credits EVERY point it spent
 //   refundStoreCreditForOrder returns the ENTIRE store-credit redemption
-//   revokeMembershipForRefund ends the membership outright
 //
 // So a $10 goodwill refund handed back the customer's whole store-credit
-// redemption and all their redeemed points, and cancelled a paid-for
-// membership. Each of those effects is idempotent-by-absence — one row per
-// order — so the later FULL refund cannot re-run what the partial already
-// spent. Getting it wrong once is permanent. (VL-20 / REF-01)
+// redemption and all their redeemed points. Each of those effects is
+// idempotent-by-absence — one row per order — so the later FULL refund cannot
+// re-run what the partial already spent. Getting it wrong once is permanent.
+// (VL-20 / REF-01)
+//
+// A fourth effect, revokeMembershipForRefund, was in this list until the paid
+// membership feature was removed on 2026-09-12.
 //
 // The second half of this file is REF-02: `upsertOrderRecord` writes
 // payment_status = 'refunded' BEFORE these effects run, so a throw escaping the
@@ -41,7 +43,7 @@ const state: {
   inventoryCommittedAt: string | null;
 } = {
   paymentStatus: "paid",
-  orderType: "membership",
+  orderType: "product",
   amountPaid: 200,
   subtotal: 200,
   refundAmount: 0,
@@ -57,7 +59,6 @@ const effects = {
   reverseOrderPoints: vi.fn(async () => true),
   restoreRedeemedPoints: vi.fn(async () => true),
   refundStoreCredit: vi.fn(async () => true),
-  revokeMembership: vi.fn(async () => {}),
   restock: vi.fn(async () => {}),
   claimRestock: vi.fn(async () => {
     if (state.restockClaimThrows) throw new Error("restock claim exploded");
@@ -73,10 +74,10 @@ vi.mock("next/server", () => ({ after: (fn: () => unknown) => { void fn; } }));
 vi.mock("@/lib/payment-provider", () => ({
   getPaymentProvider: () => ({ verifyWebhookSignature: () => true }),
 }));
-vi.mock("@/lib/membership", () => ({
+vi.mock("@/lib/rewards", () => ({
   calculateEarnedPoints: () => 0,
   getActivePointsMultiplier: async () => 1,
-  getActivePointsPerDollar: async () => 1,
+  getPointsRate: async () => 1,
   recordPointsLedgerEntry: vi.fn(async () => {}),
   redeemPoints: vi.fn(async () => {}),
   restoreRedeemedPoints: effects.restoreRedeemedPoints,
@@ -108,10 +109,6 @@ vi.mock("@/lib/store-credit", () => ({
   redeemStoreCredit: vi.fn(async () => {}),
   refundStoreCreditForOrder: effects.refundStoreCredit,
 }));
-vi.mock("@/lib/membership-billing", () => ({
-  activatePaidMembership: vi.fn(async () => {}),
-  revokeMembershipForRefund: effects.revokeMembership,
-}));
 vi.mock("@/lib/cart-recovery", () => ({ markAbandonedCartsRecovered: vi.fn(async () => {}) }));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: effects.alert }));
 vi.mock("@/lib/ambassador-settings", () => ({ getAmbassadorProgramSettings: async () => ({ enabled: false }) }));
@@ -132,8 +129,8 @@ vi.mock("@/lib/supabase-server", () => {
     inventory_committed_at: state.inventoryCommittedAt,
     fulfillment_status: "awaiting_fulfillment",
     payment_method: "card",
-    // A MEMBERSHIP order that also spent points and store credit, so all four
-    // all-or-nothing reversals are reachable in one delivery.
+    // An order that spent points and store credit, so every all-or-nothing
+    // reversal is reachable in one delivery.
     order_type: state.orderType,
     membership_tier_id: "tier-1",
     membership_cycle: "monthly",
@@ -330,7 +327,6 @@ describe("a PARTIAL refund (VL-20 / REF-01)", () => {
 
   it("does NOT revoke a membership that is still paid for", async () => {
     await deliverRefund("evt-partial", 10);
-    expect(effects.revokeMembership).not.toHaveBeenCalled();
   });
 
   it("still reverses the commission — PROPORTIONALLY, which is the one effect that prorates", async () => {
@@ -351,7 +347,6 @@ describe("a FULL refund", () => {
 
   it("ends the membership", async () => {
     await deliverRefund("evt-full", 200);
-    expect(effects.revokeMembership).toHaveBeenCalled();
   });
 
   it("still runs them when a partial refund got there first", async () => {
@@ -362,7 +357,6 @@ describe("a FULL refund", () => {
     state.refundAmount = 150;
     await deliverRefund("evt-remainder", 50);
     expect(effects.refundStoreCredit).toHaveBeenCalledWith(ORDER_ID);
-    expect(effects.revokeMembership).toHaveBeenCalled();
   });
 });
 

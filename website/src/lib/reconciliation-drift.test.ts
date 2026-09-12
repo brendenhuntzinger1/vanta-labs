@@ -26,35 +26,54 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // ---------------------------------------------------------------------------
 
 /**
- * Store credit, points and the bulk discount are only reachable for a signed-in
- * member, so the sweep would otherwise leave three of the formula's seven terms
- * at zero — and a term that is always zero cannot disagree. (It did: flipping
- * the sign of `- c.discount` in reconciliation-math left all ten tests green
- * until these were added.)
+ * Store credit and points are only reachable for a signed-in customer, so the
+ * sweep would otherwise leave two of the formula's seven terms at zero — and a
+ * term that is always zero cannot disagree. (It did: flipping the sign of
+ * `- c.discount` in reconciliation-math left all ten tests green until these
+ * were added.)
+ *
+ * The `discount` term is driven by QUANTITY BUNDLE pricing, which applies from
+ * two units. It used to be driven by member pricing and the bulk tier; both
+ * were paid-membership perks and went with that feature on 2026-09-12.
  */
 const member = vi.hoisted(() => ({
   storeCreditBalanceCents: 0,
-  storeCreditMinOrderCents: 0,
   pointsBalance: 0,
-  bulkEligible: false,
-  memberDiscountPercent: 0,
+  couponPercent: 0,
 }));
 
-vi.mock("@/lib/membership", async () => {
-  const actual = await vi.importActual<Record<string, unknown>>("@/lib/membership");
+// A PERCENT COUPON IS NOW THE ONLY THING THAT FILLS discount_amount HERE.
+//
+// It used to be member pricing or the bulk tier, and both went with the paid
+// membership feature on 2026-09-12. Quantity-bundle pricing does NOT stand in
+// for them: it reduces `subtotal` rather than filling `discount_amount`, so
+// swapping to it would have left the discount term at zero for every case —
+// silently reopening the sign-flip gap this file was written to close.
+vi.mock("@/lib/coupons", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("@/lib/coupons");
   return {
     ...actual,
-    getMembershipPerks: async () => ({
-      isActiveMember: true, tierSlug: "pro",
-      memberDiscountPercent: member.memberDiscountPercent,
-      freeShipping: false, pointsPerDollar: 1,
-      storeCreditBalanceCents: member.storeCreditBalanceCents,
-      storeCreditMinOrderCents: member.storeCreditMinOrderCents,
-    }),
-    getPointsBalance: async () => member.pointsBalance,
-    isEligibleForBulkSavings: async () => member.bulkEligible,
-    isPriorityMember: async () => false,
+    validateCoupon: async (code: string | undefined, subtotal: number) =>
+      code && member.couponPercent > 0
+        ? {
+            code: String(code).toUpperCase(),
+            discountType: "percent" as const,
+            discountValue: member.couponPercent,
+            discountAmount: Math.round(subtotal * member.couponPercent) / 100,
+            freeShipping: false,
+          }
+        : null,
   };
+});
+
+vi.mock("@/lib/rewards", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("@/lib/rewards");
+  return { ...actual, getPointsBalance: async () => member.pointsBalance };
+});
+
+vi.mock("@/lib/store-credit", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("@/lib/store-credit");
+  return { ...actual, getStoreCreditBalanceCents: async () => member.storeCreditBalanceCents };
 });
 
 // Nothing here touches the database — quoteOrder and buildOrderRow are pure
@@ -133,17 +152,12 @@ async function quoteAndReconcile(input: {
   paymentMethod?: string;
   storeCreditCents?: number;
   pointsToRedeem?: number;
-  bulkEligible?: boolean;
-  memberDiscountPercent?: number;
+  couponPercent?: number;
 }) {
   member.storeCreditBalanceCents = input.storeCreditCents ?? 0;
-  member.storeCreditMinOrderCents = 0;
   member.pointsBalance = input.pointsToRedeem ?? 0;
-  member.bulkEligible = input.bulkEligible === true;
-  member.memberDiscountPercent = input.memberDiscountPercent ?? 0;
-  const signedIn = Boolean(
-    input.storeCreditCents || input.pointsToRedeem || input.bulkEligible || input.memberDiscountPercent,
-  );
+  member.couponPercent = input.couponPercent ?? 0;
+  const signedIn = Boolean(input.storeCreditCents || input.pointsToRedeem);
   const { quoteOrder, buildOrderRow } = await import("@/lib/quote-order");
   const { expectedOrderTotal, isTotalMismatch } = await import("@/lib/reconciliation-math");
 
@@ -151,6 +165,7 @@ async function quoteAndReconcile(input: {
     items: input.items.map((i) => ({ id: i.slug, quantity: i.quantity })),
     customer: CUSTOMER,
     shippingProtection: input.shippingProtection,
+    couponCode: input.couponPercent ? "RECONCILE" : undefined,
     paymentMethod: input.paymentMethod ?? "card",
     customerUserId: signedIn ? "user-test" : undefined,
     pointsToRedeem: input.pointsToRedeem,
@@ -212,8 +227,7 @@ describe("reconciliation-math agrees with the formula that wrote the row", () =>
   const CASES: Array<{
     name: string; items: Array<{ slug: string; quantity: number }>;
     shippingProtection?: boolean; paymentMethod?: string;
-    storeCreditCents?: number; pointsToRedeem?: number; bulkEligible?: boolean;
-    memberDiscountPercent?: number;
+    storeCreditCents?: number; pointsToRedeem?: number; couponPercent?: number;
   }> = [
     { name: "one item, paid shipping, taxed, card fee", items: [{ slug: "peptide-a", quantity: 1 }] },
     { name: "protection ticked", items: [{ slug: "peptide-a", quantity: 1 }], shippingProtection: true },
@@ -223,13 +237,14 @@ describe("reconciliation-math agrees with the formula that wrote the row", () =>
     { name: "a price that does not divide evenly (rounding)", items: [{ slug: "peptide-c", quantity: 7 }], shippingProtection: true },
     { name: "mixed basket", items: [{ slug: "peptide-a", quantity: 2 }, { slug: "peptide-c", quantity: 3 }], shippingProtection: true },
     { name: "a large basket", items: [{ slug: "peptide-b", quantity: 11 }, { slug: "peptide-c", quantity: 13 }] },
-    { name: "a bulk discount", items: [{ slug: "peptide-b", quantity: 4 }], bulkEligible: true },
-    { name: "a bulk discount at the higher tier, with protection", items: [{ slug: "peptide-b", quantity: 8 }], bulkEligible: true, shippingProtection: true },
+    { name: "a bundle discount", items: [{ slug: "peptide-b", quantity: 4 }] },
+    { name: "a bundle discount at a higher quantity, with protection", items: [{ slug: "peptide-b", quantity: 8 }], shippingProtection: true },
     { name: "store credit redeemed", items: [{ slug: "peptide-b", quantity: 1 }], storeCreditCents: 2500 },
     { name: "points redeemed", items: [{ slug: "peptide-b", quantity: 1 }], pointsToRedeem: 1500 },
-    { name: "store credit AND points AND bulk AND protection", items: [{ slug: "peptide-b", quantity: 6 }], storeCreditCents: 4000, pointsToRedeem: 900, bulkEligible: true, shippingProtection: true },
-    { name: "a member discount, which is the only thing that fills discount_amount", items: [{ slug: "peptide-b", quantity: 2 }], memberDiscountPercent: 15 },
-    { name: "a member discount with protection and points", items: [{ slug: "peptide-b", quantity: 2 }], memberDiscountPercent: 15, shippingProtection: true, pointsToRedeem: 733 },
+    { name: "store credit AND points AND bundle AND protection", items: [{ slug: "peptide-b", quantity: 6 }], storeCreditCents: 4000, pointsToRedeem: 900, shippingProtection: true },
+    { name: "a bundle discount with protection and points", items: [{ slug: "peptide-b", quantity: 2 }], shippingProtection: true, pointsToRedeem: 733 },
+    { name: "a coupon, which is the only thing that fills discount_amount", items: [{ slug: "peptide-b", quantity: 2 }], couponPercent: 15 },
+    { name: "a coupon with protection and points", items: [{ slug: "peptide-b", quantity: 2 }], couponPercent: 15, shippingProtection: true, pointsToRedeem: 733 },
   ];
 
   /** Credit that covers the whole order legitimately lands at $0 paid. */
@@ -307,8 +322,7 @@ describe("reconciliation-math agrees with the formula that wrote the row", () =>
         paymentMethod: next(4) === 0 ? "zelle" : "card",
         storeCreditCents: next(3) === 0 ? next(5000) : 0,
         pointsToRedeem: next(3) === 0 ? next(3000) : 0,
-        bulkEligible: next(2) === 0,
-        memberDiscountPercent: next(3) === 0 ? 5 + next(20) : 0,
+        couponPercent: next(3) === 0 ? 5 + next(20) : 0,
       });
       const detail = {
         items, expected: result.expected, amountPaid: result.amountPaid,

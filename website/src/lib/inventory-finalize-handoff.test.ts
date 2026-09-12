@@ -61,10 +61,10 @@ vi.mock("@/lib/payment-provider", () => ({
     verifyWebhookSignature: () => state.signatureValid,
   }),
 }));
-vi.mock("@/lib/membership", () => ({
+vi.mock("@/lib/rewards", () => ({
   calculateEarnedPoints: () => 100,
   getActivePointsMultiplier: async () => 1,
-  getActivePointsPerDollar: async () => 1,
+  getPointsRate: async () => 1,
   recordPointsLedgerEntry: sideEffects.points,
   redeemPoints: vi.fn(async () => {}),
   restoreRedeemedPoints: vi.fn(async () => {}),

@@ -1,4 +1,3 @@
-import { grantMonthlyStoreCreditSweep, runMembershipBillingSweep } from "@/lib/membership-billing";
 import { autoApproveEligibleCommissions } from "@/lib/partner-portal";
 import { repairMissingCommissionAccruals } from "@/lib/commission-accrual-repair";
 import { repairMissingInventoryCommits } from "@/lib/inventory-commit-repair";
@@ -10,7 +9,7 @@ import { sweepMissingShipments, sweepUnsyncedOrders } from "@/lib/shippo/order-s
 import { repairMissingShippingCosts } from "@/lib/shipping-cost-repair";
 import { repairIncompleteRefunds } from "@/lib/refund-effect-repair";
 import { runOrderPushHealthCheck } from "@/lib/order-push-notification";
-import { runBirthdayBonusSweep } from "@/lib/membership";
+import { runBirthdayBonusSweep } from "@/lib/rewards";
 import { runCouponHygiene } from "@/lib/coupon-hygiene";
 import { resealPlaintextControlSecrets } from "@/lib/admin-control";
 import { repairUnredeemedPaidOffers } from "@/lib/offers/customer-offer-repair";
@@ -47,9 +46,13 @@ export const maxDuration = 60;
 // The watchdog, the once-only retry after a transient PostgREST auth
 // rejection, and the alerting all live in cron-runner.ts, shared with the
 // lifecycle route so the two cannot drift apart.
+//
+// `membershipBilling` and `storeCredit` used to lead this list. Both belonged
+// to the paid membership feature removed on 2026-09-12: one billed renewals,
+// the other granted each member's monthly store credit. Store credit customers
+// already hold is untouched and still spends and refunds — only the recurring
+// GRANT is gone, because nothing grants it any more.
 const JOBS: CronJobMap = {
-  membershipBilling: { label: "membership_billing", run: runMembershipBillingSweep },
-  storeCredit: { label: "store_credit", run: grantMonthlyStoreCreditSweep },
   // Advance ambassador commissions past the CONFIGURED hold automatically
   // (ambassador.commission_hold_days, 30 in production), instead
   // of only when someone happens to load the partner page. Idempotent.

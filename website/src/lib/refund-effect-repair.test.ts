@@ -205,7 +205,7 @@ const effects = vi.hoisted(() => ({
 }));
 
 vi.mock("server-only", () => ({}));
-vi.mock("@/lib/membership", () => ({
+vi.mock("@/lib/rewards", () => ({
   reverseOrderPoints: effects.reverseOrderPoints,
   restoreRedeemedPoints: effects.restoreRedeemedPoints,
 }));

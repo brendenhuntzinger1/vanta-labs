@@ -897,7 +897,7 @@ export function AdminControlCenterClient() {
               <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={couponAllowStacking} onChange={(e) => setCouponAllowStacking(e.target.checked)} /> Allow coupons to stack with referral codes &amp; Buy 3 Get 1</label>
               <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={bundleStacking} onChange={(e) => setBundleStacking(e.target.checked)} /> Allow Bundle &amp; Save (multi-vial) pricing to stack with percentage discounts</label>
               <p className="text-xs text-zinc-500">
-                With both stacking boxes OFF (recommended), every order gets exactly ONE discount — membership, promo code, ambassador code, bulk savings, Buy&nbsp;3&nbsp;Get&nbsp;1, or Bundle&nbsp;&amp;&nbsp;Save pricing — whichever saves the customer the most. Ambassadors still earn commission whenever their code is valid on the order, even when the customer&apos;s membership discount was larger.
+                With both stacking boxes OFF (recommended), every order gets exactly ONE discount — promo code, ambassador code, bulk savings, Buy&nbsp;3&nbsp;Get&nbsp;1, or Bundle&nbsp;&amp;&nbsp;Save pricing — whichever saves the customer the most. Ambassadors still earn commission whenever their code is valid on the order, even when another discount was larger.
               </p>
               <p className="text-xs text-zinc-500">When stacking is off (default), a coupon can&apos;t combine with an ambassador code or Buy 3 Get 1.</p>
             </div>

@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
-import { canManageMembership } from "@/lib/admin-roles";
+import { canManageSettings } from "@/lib/admin-roles";
 import { upsertControlValue } from "@/lib/admin-control";
-import { getMembershipBonusSettings } from "@/lib/membership";
+import { getRewardsBonusSettings } from "@/lib/rewards";
 
 export async function GET(request: Request) {
   const session = await verifyAdminSessionFromRequest(request);
@@ -11,7 +11,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const settings = await getMembershipBonusSettings();
+    const settings = await getRewardsBonusSettings();
     return NextResponse.json({ success: true, settings });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to load settings";
@@ -25,8 +25,8 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  if (!canManageMembership(session.role)) {
-    return NextResponse.json({ success: false, error: "Your role does not have permission to manage membership settings." }, { status: 403 });
+  if (!canManageSettings(session.role)) {
+    return NextResponse.json({ success: false, error: "Your role does not have permission to manage rewards settings." }, { status: 403 });
   }
 
   try {
@@ -59,6 +59,11 @@ export async function PATCH(request: Request) {
         value = n;
       }
       await upsertControlValue({
+        // The section stays "membership" even though this route is now
+        // /api/admin/rewards/settings: it is the admin_control storage key
+        // these six values are ALREADY saved under. Renaming it would orphan
+        // every value the owner has set and silently revert them to defaults.
+        // getRewardsBonusSettings() reads the same key. Do not "tidy" this.
         section: "membership",
         key,
         value,

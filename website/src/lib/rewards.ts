@@ -1,16 +1,23 @@
+// The rewards (loyalty points) programme.
+//
+// This file used to be `membership.ts` and held TWO features: the paid
+// membership tiers, and the points programme below. The paid half was removed
+// on 2026-09-12 (see docs/MEMBERSHIP-REMOVAL-AND-RESTORE.md); the points half
+// is unchanged and lives on here.
+//
+// The `membership_tiers` table SURVIVES that removal, because the free
+// "Research Member" row is where every customer's baseline points rate is
+// configured. Reading one row of it is the only tie left to that table.
+
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { businessCalendarDate } from "@/lib/business-day";
 import { getControlSnapshot } from "@/lib/admin-control";
 import { calculateEarnedPoints, dollarsToPoints, pointsToDollars, POINTS_PER_DOLLAR_REDEMPTION } from "@/lib/points-math";
-import { getStoreCreditBalanceCents } from "@/lib/store-credit";
-import { isMembershipActive } from "@/lib/membership-status";
 import { sendMarketingEmail } from "@/lib/email/marketing";
 import { membershipBirthdayTemplate } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
 
-export { isMembershipActive } from "@/lib/membership-status";
-
-export interface MembershipBonusSettings {
+export interface RewardsBonusSettings {
   signupBonusEnabled: boolean;
   referralBonusEnabled: boolean;
   birthdayBonusEnabled: boolean;
@@ -25,9 +32,13 @@ const DEFAULT_BIRTHDAY_BONUS_POINTS = 150;
 
 // Bonus enable/disable + amount overrides live in the same generic admin
 // config store as homepage/promotions settings (src/lib/admin-control.ts) -
-// no new table needed, and it's editable from /admin/membership the same
-// way the homepage editor already works.
-export async function getMembershipBonusSettings(): Promise<MembershipBonusSettings> {
+// no new table needed, and it's edited from /admin/settings.
+//
+// THE "membership" NAMESPACE IS DELIBERATE AND MUST NOT BE RENAMED. These
+// values are already stored under it in admin_control; renaming the namespace
+// would orphan every setting the owner has saved and silently revert all six
+// to their defaults. The namespace is a storage key, not a feature name.
+export async function getRewardsBonusSettings(): Promise<RewardsBonusSettings> {
   const snapshot = await getControlSnapshot("membership");
   const config = snapshot.membership ?? {};
 
@@ -43,88 +54,24 @@ export async function getMembershipBonusSettings(): Promise<MembershipBonusSetti
 
 export { calculateEarnedPoints, dollarsToPoints, pointsToDollars, POINTS_PER_DOLLAR_REDEMPTION };
 
-export interface MembershipTier {
-  id: string;
-  slug: string;
-  name: string;
-  monthlyPriceCents: number;
-  annualPriceCents: number;
-  pointsPerDollar: number;
-  freeShipping: boolean;
-  priorityShipping: boolean;
-  earlyAccess: boolean;
-  exclusivePricing: boolean;
-  referralBonusPoints: number;
-  benefits: string[];
-  position: number;
-  isActive: boolean;
-  introPriceCents: number;
-  introDurationDays: number;
-  introOfferEnabled: boolean;
-  memberDiscountPercent: number;
-  monthlyStoreCreditCents: number;
-  storeCreditMinOrderCents: number;
-  compareMonthlyPriceCents: number;
-}
-
-function mapTier(row: Record<string, unknown>): MembershipTier {
-  return {
-    id: String(row.id),
-    slug: String(row.slug),
-    name: String(row.name),
-    monthlyPriceCents: Number(row.monthly_price_cents ?? 0),
-    annualPriceCents: Number(row.annual_price_cents ?? 0),
-    pointsPerDollar: Number(row.points_per_dollar ?? 1),
-    freeShipping: Boolean(row.free_shipping),
-    priorityShipping: Boolean(row.priority_shipping),
-    earlyAccess: Boolean(row.early_access),
-    exclusivePricing: Boolean(row.exclusive_pricing),
-    referralBonusPoints: Number(row.referral_bonus_points ?? 0),
-    benefits: Array.isArray(row.benefits) ? (row.benefits as string[]) : [],
-    position: Number(row.position ?? 0),
-    isActive: Boolean(row.is_active),
-    introPriceCents: Number(row.intro_price_cents ?? 100),
-    introDurationDays: Number(row.intro_duration_days ?? 7),
-    introOfferEnabled: Boolean(row.intro_offer_enabled ?? true),
-    memberDiscountPercent: Number(row.member_discount_percent ?? 0),
-    monthlyStoreCreditCents: Number(row.monthly_store_credit_cents ?? 0),
-    storeCreditMinOrderCents: Number(row.store_credit_min_order_cents ?? 0),
-    compareMonthlyPriceCents: Number(row.compare_monthly_price_cents ?? 0),
-  };
-}
-
-export async function getActiveMembershipTiers(): Promise<MembershipTier[]> {
+/**
+ * The baseline points-per-dollar rate every customer earns at.
+ *
+ * This used to be tier-dependent: a paying member earned their tier's rate
+ * while active, and dropped back to the free tier's rate the moment they
+ * stopped paying. With paid tiers removed there is only the free tier, so the
+ * rate is the same for everyone — which is exactly what the old code already
+ * returned for every non-paying customer.
+ *
+ * The rate is still CONFIGURABLE rather than hardcoded, because it always was:
+ * it is the `points_per_dollar` column on the free "Research Member" row. A
+ * missing row falls back to 1x rather than throwing, so a misconfigured
+ * database cannot take down checkout — it just stops earning bonus points.
+ */
+export async function getPointsRate(): Promise<number> {
   const { data, error } = await supabaseAdmin
     .from("membership_tiers")
-    .select("*")
-    .eq("is_active", true)
-    .order("position", { ascending: true });
-
-  if (error) {
-    throw error;
-  }
-
-  return (data ?? []).map(mapTier);
-}
-
-export async function getTierBySlug(slug: string): Promise<MembershipTier | null> {
-  const { data, error } = await supabaseAdmin
-    .from("membership_tiers")
-    .select("*")
-    .eq("slug", slug)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
-
-  return data ? mapTier(data) : null;
-}
-
-export async function getFreeTier(): Promise<MembershipTier | null> {
-  const { data, error } = await supabaseAdmin
-    .from("membership_tiers")
-    .select("*")
+    .select("points_per_dollar")
     .eq("slug", "free")
     .maybeSingle();
 
@@ -132,168 +79,29 @@ export async function getFreeTier(): Promise<MembershipTier | null> {
     throw error;
   }
 
-  return data ? mapTier(data) : null;
+  const rate = Number((data as { points_per_dollar?: unknown } | null)?.points_per_dollar ?? 1);
+  return Number.isFinite(rate) && rate > 0 ? rate : 1;
 }
 
-export interface CustomerMembership {
-  tier: MembershipTier;
-  billingCycle: "monthly" | "annual" | "free";
-  status: "active" | "paused" | "cancelled" | "trialing" | "past_due";
-  startedAt: string;
-  renewsAt: string | null;
-  introStatus: "not_applicable" | "active" | "converted" | "failed";
-  introEndsAt: string | null;
-  nextBillingAt: string | null;
-  nextBillingAmountCents: number | null;
-  cancelAtPeriodEnd: boolean;
-  hasPaymentMethod: boolean;
-  /** An upgrade scheduled for the next renewal (monthly members), or null. */
-  pendingTier: { id: string; name: string; effectiveAt: string | null } | null;
-}
-
-const MEMBERSHIP_SELECT_FIELDS =
-  "tier_id, billing_cycle, status, started_at, renews_at, intro_status, intro_ends_at, next_billing_at, next_billing_amount_cents, cancel_at_period_end, payment_method_ref, veyra_membership_id, pending_tier_id, pending_tier_effective_at, membership_tiers(*)";
-
-function mapCustomerMembership(data: Record<string, unknown>): CustomerMembership {
-  return {
-    tier: mapTier(data.membership_tiers as unknown as Record<string, unknown>),
-    billingCycle: (data.billing_cycle as CustomerMembership["billingCycle"]) ?? "monthly",
-    status: (data.status as CustomerMembership["status"]) ?? "active",
-    startedAt: String(data.started_at),
-    renewsAt: data.renews_at ? String(data.renews_at) : null,
-    introStatus: (data.intro_status as CustomerMembership["introStatus"]) ?? "not_applicable",
-    introEndsAt: data.intro_ends_at ? String(data.intro_ends_at) : null,
-    nextBillingAt: data.next_billing_at ? String(data.next_billing_at) : null,
-    nextBillingAmountCents: data.next_billing_amount_cents !== null && data.next_billing_amount_cents !== undefined ? Number(data.next_billing_amount_cents) : null,
-    cancelAtPeriodEnd: Boolean(data.cancel_at_period_end),
-    // A card can live in EITHER place: payment_method_ref for the legacy lane,
-    // or vaulted at the processor for a recurring subscription, where we hold
-    // only veyra_membership_id. Checking one field told a member who had just
-    // paid — and whose card is on file for renewals — "Not connected yet".
-    hasPaymentMethod: Boolean(data.payment_method_ref) || Boolean(data.veyra_membership_id),
-    pendingTier: data.pending_tier_id
-      ? { id: String(data.pending_tier_id), name: "", effectiveAt: data.pending_tier_effective_at ? String(data.pending_tier_effective_at) : null }
-      : null,
-  };
-}
-
-// Every registered customer is a Research Member (free tier) by default -
-// there is no row in customer_memberships until they upgrade, so this
-// synthesizes one from the free tier rather than requiring a signup-time
-// insert for every account.
-export interface MembershipPerks {
-  isActiveMember: boolean;
-  tierSlug: string;
-  memberDiscountPercent: number;
-  freeShipping: boolean;
-  pointsPerDollar: number;
-  storeCreditBalanceCents: number;
-  storeCreditMinOrderCents: number;
-}
-
-// The single source of truth for what perks a buyer's account currently
-// receives. Discount, free shipping, and store credit apply ONLY while the
-// membership is an active paying (or trialing) PAID tier — so the moment a
-// member stops paying (status leaves active/trialing, or the paid period ends)
-// every perk switches off automatically.
-export async function getMembershipPerks(userId: string): Promise<MembershipPerks> {
-  const membership = await getCustomerMembership(userId);
-  const active = isMembershipActive(membership);
-  const isActiveMember = active && membership.tier.slug !== "free";
-
-  const [storeCreditBalanceCents, freeTier] = await Promise.all([
-    isActiveMember ? getStoreCreditBalanceCents(userId) : Promise.resolve(0),
-    active ? Promise.resolve(null) : getFreeTier(),
-  ]);
-
-  return {
-    isActiveMember,
-    tierSlug: membership.tier.slug,
-    memberDiscountPercent: isActiveMember ? membership.tier.memberDiscountPercent : 0,
-    freeShipping: isActiveMember && membership.tier.freeShipping,
-    // Points rate only comes from the member's tier while their plan is active
-    // or trialing; a cancelled/past-due member drops back to the free-tier rate.
-    pointsPerDollar: active ? membership.tier.pointsPerDollar : (freeTier?.pointsPerDollar ?? 1),
-    storeCreditBalanceCents,
-    storeCreditMinOrderCents: isActiveMember ? membership.tier.storeCreditMinOrderCents : 0,
-  };
-}
-
-// The points-per-dollar rate to actually award on an order, gated on an active
-// (or trialing) membership. A lapsed member earns the free-tier rate, never
-// their old paid rate.
-export async function getActivePointsPerDollar(userId: string): Promise<number> {
-  const membership = await getCustomerMembership(userId);
-  if (isMembershipActive(membership)) {
-    return membership.tier.pointsPerDollar;
-  }
-  const free = await getFreeTier();
-  return free?.pointsPerDollar ?? 1;
-}
-
-export async function getCustomerMembership(userId: string): Promise<CustomerMembership> {
+/**
+ * The referral bonus a REFERRER earns, from the same free-tier row.
+ *
+ * Previously an active paid member earned their own tier's referral bonus and
+ * everyone else earned the free tier's. Only the free tier remains.
+ */
+async function getReferrerBonusPoints(): Promise<number> {
   const { data, error } = await supabaseAdmin
-    .from("customer_memberships")
-    .select(MEMBERSHIP_SELECT_FIELDS)
-    .eq("user_id", userId)
+    .from("membership_tiers")
+    .select("referral_bonus_points")
+    .eq("slug", "free")
     .maybeSingle();
 
   if (error) {
     throw error;
   }
 
-  if (data && data.membership_tiers) {
-    const membership = mapCustomerMembership(data as unknown as Record<string, unknown>);
-    if (membership.pendingTier) {
-      const { data: pending } = await supabaseAdmin
-        .from("membership_tiers")
-        .select("name")
-        .eq("id", membership.pendingTier.id)
-        .maybeSingle();
-      membership.pendingTier.name = String((pending as { name?: string } | null)?.name ?? "");
-    }
-    return membership;
-  }
-
-  const freeTier = await getFreeTier();
-  if (!freeTier) {
-    throw new Error("Free membership tier is not configured");
-  }
-
-  return {
-    tier: freeTier,
-    billingCycle: "free",
-    status: "active",
-    startedAt: new Date().toISOString(),
-    renewsAt: null,
-    introStatus: "not_applicable",
-    introEndsAt: null,
-    nextBillingAt: null,
-    nextBillingAmountCents: null,
-    cancelAtPeriodEnd: false,
-    pendingTier: null,
-    hasPaymentMethod: false,
-  };
-}
-
-// "Exclusive Buy In Bulk Savings" is scoped to the highest tier (by
-// position) and only to members with an actual active-paying subscription
-// - trial members (status "trialing") don't qualify yet.
-export async function isEligibleForBulkSavings(userId: string): Promise<boolean> {
-  const membership = await getCustomerMembership(userId);
-  if (!isMembershipActive(membership)) {
-    return false;
-  }
-  // Bulk savings apply to the Elite and Black tiers (the tiers whose plans
-  // advertise "Exclusive Bulk Discounts"). Tied to the account's active tier.
-  return membership.tier.slug === "elite" || membership.tier.slug === "black";
-}
-
-// Priority order processing - a real operational signal (orders.priority),
-// not just marketing copy, so fulfillment staff can actually filter by it.
-export async function isPriorityMember(userId: string): Promise<boolean> {
-  const membership = await getCustomerMembership(userId);
-  return membership.tier.priorityShipping && isMembershipActive(membership);
+  const points = Number((data as { referral_bonus_points?: unknown } | null)?.referral_bonus_points ?? 0);
+  return Number.isFinite(points) && points > 0 ? points : 0;
 }
 
 export async function getActivePointsMultiplier(): Promise<{ multiplier: number; eventName: string | null }> {
@@ -537,7 +345,7 @@ export async function reverseOrderPoints(orderId: string): Promise<boolean> {
  * SPEND. `orders.points_redeemed` is written by upsertOrderRecord BEFORE any
  * debit is attempted, and the debit that follows can legitimately be smaller
  * (redeemPoints clamps to the live balance) or never happen at all (the order
- * has no account, it is a membership order, or the ledger insert failed — which
+ * has no account, or the ledger insert failed — which
  * this branch classifies as alert-only and survivable). Crediting the order
  * column back therefore created points out of nothing: a customer whose
  * redemption failed kept the discount AND was handed the points on refund, and
@@ -651,7 +459,7 @@ async function hasLedgerEntryWithReason(userId: string, reason: string) {
 // Idempotent - safe to call on every login, since it checks the ledger for
 // a prior award before writing a new one.
 export async function awardSignupBonusIfNeeded(userId: string) {
-  const settings = await getMembershipBonusSettings();
+  const settings = await getRewardsBonusSettings();
   if (!settings.signupBonusEnabled) {
     return;
   }
@@ -669,10 +477,10 @@ export async function awardSignupBonusIfNeeded(userId: string) {
 }
 
 // Awards both sides of a referral once, at the referred customer's signup:
-// the new customer gets a flat bonus, and whoever referred them gets their
-// own membership tier's referral bonus. Idempotent per new customer.
+// the new customer gets a flat bonus, and whoever referred them gets the
+// configured referrer bonus. Idempotent per new customer.
 export async function awardReferralSignupBonus(newUserId: string, referrerUserId: string) {
-  const settings = await getMembershipBonusSettings();
+  const settings = await getRewardsBonusSettings();
   if (!settings.referralBonusEnabled) {
     return;
   }
@@ -689,14 +497,11 @@ export async function awardReferralSignupBonus(newUserId: string, referrerUserId
     metadata: { role: "referred" },
   });
 
-  // The referrer earns their PAID tier's referral bonus only while their
-  // membership is actually active; a lapsed/expired member drops to the free
-  // tier's bonus (so they can't keep earning an elite-tier bonus after they
-  // stopped paying).
-  const referrerMembership = await getCustomerMembership(referrerUserId);
-  const referrerBonusPoints = isMembershipActive(referrerMembership)
-    ? referrerMembership.tier.referralBonusPoints
-    : (await getFreeTier())?.referralBonusPoints ?? 0;
+  // The referrer's bonus. This used to depend on whether they held an active
+  // PAID tier — an active member earned their own tier's bonus, everyone else
+  // the free tier's. With paid tiers gone every referrer earns the free tier's
+  // bonus, which is the branch the overwhelming majority always took.
+  const referrerBonusPoints = await getReferrerBonusPoints();
   if (referrerBonusPoints > 0) {
     await recordPointsLedgerEntry({
       userId: referrerUserId,
@@ -738,7 +543,7 @@ export async function awardReferralSignupBonus(newUserId: string, referrerUserId
  * is owed either way.
  */
 export async function runBirthdayBonusSweep(): Promise<{ granted: number; emailed: number }> {
-  const settings = await getMembershipBonusSettings();
+  const settings = await getRewardsBonusSettings();
   if (!settings.birthdayBonusEnabled) {
     return { granted: 0, emailed: 0 };
   }
@@ -763,7 +568,7 @@ export async function runBirthdayBonusSweep(): Promise<{ granted: number; emaile
     .not("birthday", "is", null);
 
   if (error) {
-    console.error("[membership] birthday sweep could not read preferences", error);
+    console.error("[rewards] birthday sweep could not read preferences", error);
     return { granted: 0, emailed: 0 };
   }
 
@@ -792,7 +597,7 @@ export async function runBirthdayBonusSweep(): Promise<{ granted: number; emaile
       granted += 1;
     } catch (grantError) {
       // One customer's failure must not stop the rest of the day's birthdays.
-      console.error("[membership] birthday bonus could not be granted", userId, grantError);
+      console.error("[rewards] birthday bonus could not be granted", userId, grantError);
       continue;
     }
 
@@ -820,7 +625,7 @@ export async function runBirthdayBonusSweep(): Promise<{ granted: number; emaile
       });
       if (result.success) emailed += 1;
     } catch (mailError) {
-      console.error("[membership] birthday email failed", userId, mailError);
+      console.error("[rewards] birthday email failed", userId, mailError);
     }
   }
 
@@ -832,7 +637,7 @@ export async function checkAndAwardBirthdayBonus(userId: string, birthday: strin
     return false;
   }
 
-  const settings = await getMembershipBonusSettings();
+  const settings = await getRewardsBonusSettings();
   if (!settings.birthdayBonusEnabled) {
     return false;
   }

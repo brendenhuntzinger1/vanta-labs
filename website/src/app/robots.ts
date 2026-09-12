@@ -33,10 +33,10 @@ export default function robots(): MetadataRoute.Robots {
         //
         // KEPT IN STEP WITH THE WALL. This list was written when /products and
         // /coa-library were the only gated prefixes. Closing the default in
-        // access-policy.ts moved the research library and the membership page
-        // behind the same wall and this file was not touched, so we went on
-        // inviting crawlers to fetch URLs that answer 307. That costs crawl
-        // budget and teaches Google the site is full of redirects.
+        // access-policy.ts moved the research library behind the same wall and
+        // this file was not touched, so we went on inviting crawlers to fetch
+        // URLs that answer 307. That costs crawl budget and teaches Google the
+        // site is full of redirects.
         //
         // The home page is deliberately NOT listed: "Disallow: /" would block
         // the whole site including the pages that ARE public. It is gated, so a
@@ -60,7 +60,6 @@ export default function robots(): MetadataRoute.Robots {
           "/products",
           "/coa-library",
           "/research",
-          "/membership",
         ],
       },
     ],

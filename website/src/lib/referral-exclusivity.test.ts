@@ -30,9 +30,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const member = vi.hoisted(() => ({
   storeCreditBalanceCents: 0,
-  storeCreditMinOrderCents: 0,
   pointsBalance: 0,
-  memberDiscountPercent: 0,
+  couponPercent: 0,
 }));
 
 const ambassador = vi.hoisted(() => ({
@@ -46,22 +45,34 @@ const ambassador = vi.hoisted(() => ({
   status: "approved",
 }));
 
-vi.mock("@/lib/membership", async () => {
-  const actual = await vi.importActual<Record<string, unknown>>("@/lib/membership");
+vi.mock("@/lib/rewards", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("@/lib/rewards");
+  return { ...actual, getPointsBalance: async () => member.pointsBalance };
+});
+
+vi.mock("@/lib/store-credit", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("@/lib/store-credit");
+  return { ...actual, getStoreCreditBalanceCents: async () => member.storeCreditBalanceCents };
+});
+
+// A percent coupon stands in for what used to be member pricing: a percentage
+// discount large enough to beat the referral. Member pricing went with the paid
+// membership feature on 2026-09-12; the rule under test — store credit still
+// redeems when the referral LOSES — is unchanged and needs some winner.
+vi.mock("@/lib/coupons", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("@/lib/coupons");
   return {
     ...actual,
-    getMembershipPerks: async () => ({
-      isActiveMember: true,
-      tierSlug: "pro",
-      memberDiscountPercent: member.memberDiscountPercent,
-      freeShipping: false,
-      pointsPerDollar: 1,
-      storeCreditBalanceCents: member.storeCreditBalanceCents,
-      storeCreditMinOrderCents: member.storeCreditMinOrderCents,
-    }),
-    getPointsBalance: async () => member.pointsBalance,
-    isEligibleForBulkSavings: async () => false,
-    isPriorityMember: async () => false,
+    validateCoupon: async (code: string | undefined, subtotal: number) =>
+      code && member.couponPercent > 0
+        ? {
+            code: String(code).toUpperCase(),
+            discountType: "percent" as const,
+            discountValue: member.couponPercent,
+            discountAmount: Math.round(subtotal * member.couponPercent) / 100,
+            freeShipping: false,
+          }
+        : null,
   };
 });
 
@@ -138,18 +149,18 @@ async function quote(input: {
   withCode?: boolean;
   storeCreditCents?: number;
   points?: number;
-  memberDiscountPercent?: number;
+  couponPercent?: number;
 }) {
   member.storeCreditBalanceCents = input.storeCreditCents ?? 0;
-  member.storeCreditMinOrderCents = 0;
   member.pointsBalance = input.points ?? 0;
-  member.memberDiscountPercent = input.memberDiscountPercent ?? 0;
+  member.couponPercent = input.couponPercent ?? 0;
 
   const { quoteOrder } = await import("@/lib/quote-order");
   return quoteOrder({
     items: [{ id: "peptide-a", quantity: input.quantity }],
     customer: CUSTOMER,
     referralCode: input.withCode === false ? undefined : ambassador.referral_code,
+    couponCode: input.couponPercent ? "BIGGERCODE" : undefined,
     customerUserId: "user-member-0001",
     pointsToRedeem: input.points,
     mode: "full",
@@ -246,9 +257,9 @@ describe("a referral that gives nothing costs the shopper nothing", () => {
     expect(quoted.storeCreditRedeemedCents).toBe(5000);
   });
 
-  it("redeems store credit when a bigger membership discount wins instead", async () => {
-    // 30% membership on the $180.00 list beats the ambassador's 15%.
-    const quoted = await quote({ quantity: 3, storeCreditCents: 5000, memberDiscountPercent: 30 });
+  it("redeems store credit when a bigger percentage discount wins instead", async () => {
+    // 30% beats the ambassador's 15%, so the referral is not the winner.
+    const quoted = await quote({ quantity: 3, storeCreditCents: 5000, couponPercent: 30 });
 
     expect(quoted.discountAmount).toBeGreaterThan(0);
     expect(quoted.storeCreditRedeemedCents).toBe(5000);

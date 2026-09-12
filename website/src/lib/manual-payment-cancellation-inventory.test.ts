@@ -117,10 +117,10 @@ vi.mock("@/lib/inventory-reservation", () => ({
   releaseInventoryForOrder: vi.fn(async (orderId: string) => { db.released.push(orderId); }),
 }));
 
-vi.mock("@/lib/membership", () => ({
+vi.mock("@/lib/rewards", () => ({
   calculateEarnedPoints: () => 0,
   getActivePointsMultiplier: async () => ({ multiplier: 1 }),
-  getActivePointsPerDollar: async () => 1,
+  getPointsRate: async () => 1,
   recordPointsLedgerEntry: vi.fn(async () => {}),
   redeemPoints: vi.fn(async () => {}),
   restoreRedeemedPoints: vi.fn(async () => {}),

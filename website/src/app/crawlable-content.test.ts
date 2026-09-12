@@ -14,30 +14,9 @@ const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
 // ones a sweep for more of the same turned up.
 // ---------------------------------------------------------------------------
 
-describe("membership FAQ answers are in the document, not behind a click", () => {
-  const src = read("src/components/membership-landing.tsx");
-
-  it("renders every answer and hides the closed ones", () => {
-    // `{isOpen ? <p>{item.a}</p> : null}` put five of six answers — 204 words,
-    // a fifth of the page's prose — outside the document entirely. Comments
-    // stripped first: the source explains the old shape in prose, and the
-    // prose contains the pattern being banned.
-    const code = src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^\s*\*.*$/gm, " ").replace(/\/\/.*$/gm, " ");
-    expect(code).not.toMatch(/isOpen \? <p[^>]*>\{item\.a\}<\/p> : null/);
-    expect(src).toContain("hidden={!isOpen}");
-    expect(src).toContain("{item.a}");
-  });
-
-  it("hides them with `hidden`, so they leave the tab order too", () => {
-    const faq = src.slice(src.indexOf("function FaqAccordion"));
-    expect(faq.slice(0, 2000)).not.toMatch(/opacity-0|sr-only|-left-\[9999/);
-  });
-
-  it("wires each question to its answer", () => {
-    expect(src).toContain("aria-controls={answerId}");
-    expect(src).toContain("aria-labelledby={questionId}");
-  });
-});
+// A fifth case covered the membership landing page's FAQ. That page went with
+// the paid membership feature on 2026-09-12; the same click-to-reveal rule is
+// still enforced on the product page below.
 
 describe("structured data points at images a crawler may index", () => {
   const identity = read("src/lib/site-identity.ts");

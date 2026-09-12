@@ -72,7 +72,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("next/server", () => ({ after: (fn: () => unknown) => { void fn; } }));
 vi.mock("@/lib/payment-provider", () => ({ getPaymentProvider: () => ({ verifyWebhookSignature: () => true }) }));
 
-vi.mock("@/lib/membership", () => ({
+vi.mock("@/lib/rewards", () => ({
   getMembershipPerks: async () => ({
     isActiveMember: false, tierSlug: "free", memberDiscountPercent: 0,
     freeShipping: false, pointsPerDollar: 1, storeCreditBalanceCents: 0, storeCreditMinOrderCents: 0,
@@ -82,7 +82,7 @@ vi.mock("@/lib/membership", () => ({
   isPriorityMember: async () => false,
   calculateEarnedPoints: () => 0,
   getActivePointsMultiplier: async () => 1,
-  getActivePointsPerDollar: async () => 1,
+  getPointsRate: async () => 1,
   recordPointsLedgerEntry: vi.fn(async () => {}),
   redeemPoints: vi.fn(async () => {}),
   restoreRedeemedPoints: vi.fn(async () => {}),

@@ -33,8 +33,6 @@ describe("everything a customer touches requires an account", () => {
     "/cart",
     "/cart/restore",
     "/checkout",
-    "/membership",
-    "/membership/pro/subscribe",
     // The account area beyond the sign-in surface.
     "/account",
     "/account/orders",
@@ -48,7 +46,6 @@ describe("everything a customer touches requires an account", () => {
     "/api/coa/abc/file",
     "/api/cart/validate",
     "/api/checkout/quote",
-    "/api/membership/subscribe",
     "/api/account/me",
     "/api/coupons/featured",
     "/api/storefront/offers",
@@ -309,7 +306,7 @@ describe("the wall never blocks a page an auth email links to", () => {
   it("still gates everything the wall actually exists for", () => {
     // The exemptions must never widen into the storefront. If this goes red,
     // the wall has been defeated rather than corrected.
-    for (const shopfront of ["/", "/products", "/products/bac-water", "/cart", "/coa-library", "/membership"]) {
+    for (const shopfront of ["/", "/products", "/products/bac-water", "/cart", "/coa-library"]) {
       expect(requiresAccount(shopfront), `${shopfront} must stay behind the wall`).toBe(true);
     }
   });
@@ -586,7 +583,6 @@ describe("the CSRF origin check covers every cookie-authenticated write", () => 
     ["/api/admin", "admin writes"],
     ["/api/account", "account settings"],
     ["/api/auth", "the session endpoint itself"],
-    ["/api/membership", "subscription changes"],
     ["/api/partner", "ambassador writes"],
     ["/api/checkout", "creates an order row"],
     ["/api/cart", "cart mutations"],

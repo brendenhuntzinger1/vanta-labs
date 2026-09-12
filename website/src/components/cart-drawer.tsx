@@ -7,7 +7,6 @@ import Image from "next/image";
 import { formatCartCurrency, useCart, getShippingProgress } from "@/components/cart-context";
 import { isFreeShippingSitewide } from "@/lib/shipping";
 import { bundleDiscountRate, getBundleDiscountedLineTotal, getNextBundleTier } from "@/lib/bundle-pricing";
-import { bestPaidTier, computeCartMembershipValue } from "@/lib/member-pricing";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { cartShippingLineLabel } from "@/lib/cart-shipping-line";
 import { useOfferQuote } from "@/lib/offer-quote";
@@ -99,7 +98,6 @@ export function CartDrawer() {
     couponCode,
     couponDetails,
     bulkSavingsTierReached,
-    memberFreeShipping,
     couponError,
     couponOutcome,
     applyCouponCode,
@@ -113,8 +111,6 @@ export function CartDrawer() {
     bulkSavingsApplied,
     bulkSavingsPercent,
     bulkSavingsProgress,
-    membershipTiers,
-    memberDiscountPercent,
     shippingConfig,
     signedIn,
     emailGrant,
@@ -246,14 +242,6 @@ export function CartDrawer() {
   });
   const giftLines = offerQuote?.giftLines ?? [];
 
-  // Smart membership upsell: only for non-members, and only when joining
-  // would genuinely put money in their pocket TODAY (cart savings + credit
-  // exceed the first month's cost). Dollars, computed live from this cart.
-  const upsellTier = memberDiscountPercent > 0 ? null : bestPaidTier(membershipTiers);
-  const membershipValue = upsellTier
-    ? computeCartMembershipValue({ subtotal, shipping, tier: upsellTier })
-    : null;
-  const showMembershipUpsell = Boolean(upsellTier && membershipValue && membershipValue.todayValue > 0 && subtotal > 0);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
@@ -591,24 +579,6 @@ export function CartDrawer() {
                 </div>
               ) : null}
 
-              {showMembershipUpsell && upsellTier && membershipValue ? (
-                <Link
-                  href="/membership"
-                  onClick={closeCart}
-                  className="vl-focus-ring block rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.04] p-4 transition hover:border-emerald-400/40"
-                >
-                  <p className="text-sm font-semibold text-emerald-300">
-                    Save {formatCartCurrency(membershipValue.totalBenefit)} today with {upsellTier.name}
-                  </p>
-                  <p className="mt-1 text-xs text-emerald-100/50">
-                    {formatCartCurrency(membershipValue.discountSavings)} off this cart
-                    {membershipValue.shippingSavings > 0 ? ` + free shipping` : ""}
-                    {membershipValue.monthlyStoreCredit > 0 ? ` + ${formatCartCurrency(membershipValue.monthlyStoreCredit)} monthly credit` : ""}
-                    {" · "}{formatCartCurrency(membershipValue.monthlyCost)}/mo — join →
-                  </p>
-                </Link>
-              ) : null}
-
               {bulkSavingsApplied ? (
                 <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.04] p-4">
                   <p className="text-sm font-semibold text-emerald-300">Member bulk discount applied</p>
@@ -848,11 +818,10 @@ export function CartDrawer() {
                         shipping: shownShipping,
                         serverQuoted: Boolean(offerQuote),
                         // A zero decided by ANY grant reads "Free": the threshold,
-                        // a bulk tier, a member perk, or a free-shipping coupon
-                        // (PRICE-02) — the same waivers that zeroed `shipping`.
+                        // a bulk tier, or a free-shipping coupon (PRICE-02) —
+                        // the same waivers that zeroed `shipping`.
                         freeShippingUnlocked: shippingProgress.isEligibleForFreeShipping
                           || bulkSavingsTierReached
-                          || memberFreeShipping
                           || Boolean(couponDetails?.freeShipping),
                         format: formatCartCurrency,
                       })}

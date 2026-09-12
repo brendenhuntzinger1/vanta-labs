@@ -71,19 +71,9 @@ vi.mock("@/lib/payment-provider", async () => {
   };
 });
 
-// F-11: the four refund side-effects on this lane were bare `catch {}`. Driving
-// a real failure through needs one of them to actually fail.
-const effectFailure = { membershipRevocation: false, storeCredit: false };
-vi.mock("@/lib/membership-billing", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/membership-billing")>();
-  return {
-    ...actual,
-    revokeMembershipForRefund: vi.fn(async (userId: string) => {
-      if (effectFailure.membershipRevocation) throw new Error("membership revoke failed");
-      return actual.revokeMembershipForRefund(userId);
-    }),
-  };
-});
+// F-11: the refund side-effects on this lane were bare `catch {}`. Driving a
+// real failure through needs one of them to actually fail.
+const effectFailure = { storeCredit: false };
 vi.mock("@/lib/store-credit", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/store-credit")>();
   return {
@@ -107,7 +97,7 @@ vi.unmock("@/lib/coupons");
 vi.unmock("@/lib/admin-control");
 vi.unmock("@/lib/catalog");
 vi.unmock("@/lib/cart-recovery");
-vi.unmock("@/lib/membership");
+vi.unmock("@/lib/rewards");
 
 const BUYER: Shopper = {
   email: "returns.buyer@example.test",
@@ -189,7 +179,6 @@ beforeEach(() => {
   seedStore(harness.db, PRODUCTS);
   vi.clearAllMocks();
   session.mockResolvedValue(ADMIN);
-  effectFailure.membershipRevocation = false;
   effectFailure.storeCredit = false;
 });
 
@@ -732,21 +721,10 @@ describe("a refund side-effect that fails is not silent", () => {
     expect(String(raised[0].severity)).toBe("critical");
   });
 
-  it("says NOTHING RETRIES IT for the membership revocation, which no sweep covers", async () => {
-    const { orderId, amount } = await deliveredOrder();
-    const row = harness.db.table("orders").find((o) => o.order_id === orderId)!;
-    row.order_type = "membership";
-    row.customer_user_id = "user-member-1";
-    effectFailure.membershipRevocation = true;
-
-    await reimburse(orderId, { refundAmount: amount });
-
-    const raised = alerts();
-    expect(raised.map((entry) => (entry.context as { effect: string }).effect)).toContain("membership_revocation");
-    const revocation = raised.find((entry) => (entry.context as { effect: string }).effect === "membership_revocation")!;
-    expect(revocation.context).toMatchObject({ retriedAutomatically: false });
-    expect(String(revocation.message)).toContain("NOTHING retries this one");
-  });
+  // A case here proved the alert said "NOTHING retries this one" for the
+  // membership revocation — the single refund effect no sweep covered. That
+  // effect went with the paid membership feature on 2026-09-12, so every
+  // remaining effect on this lane IS swept and the alert says so.
 
   it("stays quiet when every effect succeeds", async () => {
     const { orderId, amount } = await deliveredOrder();

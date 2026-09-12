@@ -160,13 +160,13 @@ beforeEach(() => {
 
 describe("the points reversal", () => {
   it("writes one reversal and reports it", async () => {
-    const { reverseOrderPoints } = await import("@/lib/membership");
+    const { reverseOrderPoints } = await import("@/lib/rewards");
     expect(await reverseOrderPoints(ORDER)).toBe(true);
     expect(db.pointsLedger.filter((r) => r.reason === "order_refund_reversal")).toHaveLength(1);
   });
 
   it("LOSES THE RACE WITHOUT DOUBLE-DEBITING the customer", async () => {
-    const { reverseOrderPoints } = await import("@/lib/membership");
+    const { reverseOrderPoints } = await import("@/lib/rewards");
     // The sweep inserts its reversal after our guard read and before our insert.
     db.raceAfterReads = 1; // after the existing-row guard, the last read before the insert
     db.raceInsert = () => db.pointsLedger.push({
@@ -181,7 +181,7 @@ describe("the points reversal", () => {
   it("still surfaces a REAL write failure", async () => {
     // 23505 is the only code that means "already applied". Everything else is a
     // failure the sweep must count and alert on.
-    const { reverseOrderPoints, isDuplicateLedgerRow } = await import("@/lib/membership");
+    const { reverseOrderPoints, isDuplicateLedgerRow } = await import("@/lib/rewards");
     expect(isDuplicateLedgerRow({ code: "23505" })).toBe(true);
     expect(isDuplicateLedgerRow({ code: "42501" })).toBe(false);
     expect(isDuplicateLedgerRow(new Error("timeout"))).toBe(false);
@@ -196,7 +196,7 @@ describe("the redeemed-points restore", () => {
   });
 
   it("restores exactly what the ledger says was debited", async () => {
-    const { restoreRedeemedPoints } = await import("@/lib/membership");
+    const { restoreRedeemedPoints } = await import("@/lib/rewards");
     expect(await restoreRedeemedPoints(ORDER)).toBe(true);
     const restored = db.pointsLedger.filter((r) => r.reason === "order_refund_points_restore");
     expect(restored).toHaveLength(1);
@@ -204,7 +204,7 @@ describe("the redeemed-points restore", () => {
   });
 
   it("LOSES THE RACE WITHOUT DOUBLE-CREDITING the customer", async () => {
-    const { restoreRedeemedPoints } = await import("@/lib/membership");
+    const { restoreRedeemedPoints } = await import("@/lib/rewards");
     db.raceAfterReads = 2; // existing-row guard, then the debit sum
     db.raceInsert = () => db.pointsLedger.push({
       user_id: "user-1", amount: 400, reason: "order_refund_points_restore", order_id: ORDER,

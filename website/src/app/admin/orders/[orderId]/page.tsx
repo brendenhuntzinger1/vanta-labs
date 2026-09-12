@@ -104,8 +104,10 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
   // -------------------------------------------------------------------------
   // Fulfillment workstation data.
   //
-  // Only physical orders get the panel — a membership has nothing to put in a
-  // box, and buildOrderParcel refuses one anyway. Every load here is
+  // Only physical orders get the panel, and buildOrderParcel refuses anything
+  // else anyway. The order_type check still names 'membership' because
+  // HISTORICAL orders carry it: the paid membership feature was removed on
+  // 2026-09-12 but the rows it wrote were not. Every load here is
   // best-effort: a parcel that cannot be built, or a package list that fails,
   // must degrade to a panel that explains itself, never a 500 on the order page.
   // -------------------------------------------------------------------------

@@ -9,10 +9,8 @@ import {
 } from "@/lib/admin-control";
 import { DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
 import { DEFAULT_SALES_TAX_CONFIG } from "@/lib/sales-tax";
-import { getActiveMembershipTiers } from "@/lib/membership";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
-import type { MembershipTierSummary } from "@/lib/member-pricing";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
 import { serializeBxgyPromotions } from "@/lib/bxgy-config";
 
@@ -20,35 +18,15 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const [config, salesTaxSettings, shippingConfig, referralProgram, membershipTiers, ambassadorSettings, couponPolicy] = await Promise.all([
+    const [config, salesTaxSettings, shippingConfig, referralProgram, ambassadorSettings, couponPolicy] = await Promise.all([
       getHomepageControlConfig(),
       getSalesTaxSettings(),
       getShippingConfig(),
       getReferralProgramConfig(),
-      getActiveMembershipTiers().catch(() => []),
       getAmbassadorProgramSettings().catch(() => ({ minimumQualifyingOrder: DEFAULT_MINIMUM_QUALIFYING_ORDER })),
       getCouponPolicyConfig().catch(() => ({ couponsEnabled: true, allowStacking: false })),
     ]);
 
-    // Marketing-safe tier summary for member-pricing display (product cards,
-    // cart upsell, membership calculator). Paid tiers only; no internal
-    // fields beyond what the public membership page already shows.
-    const tierSummaries: MembershipTierSummary[] = membershipTiers
-      .filter((tier) => tier.monthlyPriceCents > 0)
-      .map((tier) => ({
-        slug: tier.slug,
-        name: tier.name,
-        discountPercent: tier.memberDiscountPercent,
-        monthlyPriceCents: tier.monthlyPriceCents,
-        annualPriceCents: tier.annualPriceCents,
-        monthlyStoreCreditCents: tier.monthlyStoreCreditCents,
-        storeCreditMinOrderCents: tier.storeCreditMinOrderCents,
-        freeShipping: tier.freeShipping,
-        pointsPerDollar: tier.pointsPerDollar,
-        introPriceCents: tier.introPriceCents,
-        introDurationDays: tier.introDurationDays,
-        introOfferEnabled: tier.introOfferEnabled,
-      }));
     // The Buy X Get Y promotions the cart may price against: switched on,
     // inside their schedule, and not used up. The cart prices from THIS list
     // using the same engine the checkout uses, which is what keeps the preview
@@ -90,7 +68,6 @@ export async function GET() {
       // button would reject — an ambassador's own link turned into a checkout
       // blocker for everyone holding it.
       referralProgramEnabled: referralProgram.enabled,
-      membershipTiers: tierSummaries,
     });
   } catch (error) {
     // A promo-config read must never hard-fail a product page, and it must not
@@ -122,7 +99,6 @@ export async function GET() {
       // charge disagree. Answering `false` on a failed read would also strip a
       // real discount from every referred shopper for the duration.
       referralProgramEnabled: true,
-      membershipTiers: [],
     });
   }
 }

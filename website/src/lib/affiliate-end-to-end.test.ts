@@ -101,9 +101,9 @@ function serverCharges(subtotal: number) {
 vi.mock("server-only", () => ({}));
 vi.mock("next/server", () => ({ after: (fn: () => unknown) => { void fn; } }));
 vi.mock("@/lib/payment-provider", () => ({ getPaymentProvider: () => ({ verifyWebhookSignature: () => true }) }));
-vi.mock("@/lib/membership", () => ({
+vi.mock("@/lib/rewards", () => ({
   calculateEarnedPoints: () => 0, getActivePointsMultiplier: async () => 1,
-  getActivePointsPerDollar: async () => 1, recordPointsLedgerEntry: vi.fn(async () => {}),
+  getPointsRate: async () => 1, recordPointsLedgerEntry: vi.fn(async () => {}),
   redeemPoints: vi.fn(async () => {}), restoreRedeemedPoints: vi.fn(async () => {}),
   reverseOrderPoints: vi.fn(async () => {}),
 }));

@@ -10,6 +10,8 @@ import { getConfiguredReturnAddress, getShippingAddresses } from "@/lib/shipping
 import { getBusinessSettings, getWelcomeOffer } from "@/lib/admin-control";
 import { getSiteUrl } from "@/lib/env";
 import { AdminSettingsClient } from "@/components/admin-settings-client";
+import { AdminRewardsBonusPanel } from "@/components/admin-rewards-bonus-panel";
+import { getRewardsBonusSettings } from "@/lib/rewards";
 
 export const dynamic = "force-dynamic";
 
@@ -52,6 +54,12 @@ export default async function AdminSettingsPage() {
       getInventoryReadiness().catch((): InventoryReadiness | null => null),
     ]);
 
+  // Rewards point bonuses. Read separately rather than added to the Promise.all
+  // above because a failure here must not blank the whole settings screen —
+  // the bonuses fall back to their defaults, which is what the getter returns
+  // for an unset value anyway.
+  const rewardsBonuses = await getRewardsBonusSettings();
+
   return (
     <div className="vl-page-shell min-h-screen bg-zinc-950 px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-4xl">
@@ -72,6 +80,12 @@ export default async function AdminSettingsPage() {
           shippingOriginMissing={addresses.originValidation.missing}
           canManage={canManageSettings(session.role)}
         />
+        <div className="mt-4">
+          <AdminRewardsBonusPanel
+            initialSettings={rewardsBonuses}
+            canManage={canManageSettings(session.role)}
+          />
+        </div>
       </div>
     </div>
   );

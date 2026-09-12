@@ -7,9 +7,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // whole window with no limit and then awaited PER ROW — a card charge, an
 // email, an insert each:
 //
-//   • runMembershipBillingSweep   every due membership, in five steps
 //   • runAbandonedCartSweep       every active cart in a 96-hour window
-//   • grantMonthlyStoreCreditSweep every active member, every tick, for ever
+//
+// Two more were in this list — runMembershipBillingSweep and
+// grantMonthlyStoreCreditSweep — until the paid membership feature was removed
+// on 2026-09-12.
 //
 // So the tick's cost was a function of how well the business was doing, on a
 // budget that is fixed. Past some number of members the sweep stopped
@@ -28,7 +30,6 @@ const db: { customer_memberships: Row[]; store_credit_ledger: Row[]; abandoned_c
 };
 
 const mocks = vi.hoisted(() => ({
-  grantMonthlyStoreCredit: vi.fn(async (_userId: string, _cents: number) => true),
   isMarketingSuppressed: vi.fn(async () => false),
   sendMarketingEmail: vi.fn(async () => ({ success: true })),
 }));
@@ -56,7 +57,7 @@ vi.mock("@/lib/veyra-membership", () => ({
 vi.mock("@/lib/payment-provider", () => ({ getPaymentProvider: () => ({}), isCheckoutOpen: () => true }));
 vi.mock("@/lib/store-credit", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/store-credit")>();
-  return { ...actual, grantMonthlyStoreCredit: mocks.grantMonthlyStoreCredit, reconcileMonthlyStoreCredit: vi.fn() };
+  return { ...actual, reconcileMonthlyStoreCredit: vi.fn() };
 });
 vi.mock("@/lib/admin-control", () => ({
   getCartRecoveryControlConfig: async () => ({
@@ -168,18 +169,8 @@ vi.mock("@/lib/supabase-server", () => {
   return { supabaseAdmin: { from: (t: string) => builder(t) } };
 });
 
-const { grantMonthlyStoreCreditSweep } = await import("@/lib/membership-billing");
 const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
-const { currentPeriodMonth } = await import("@/lib/store-credit");
 
-function seedMembers(count: number) {
-  db.customer_memberships = Array.from({ length: count }, (_unused, i) => ({
-    user_id: `user-${String(i).padStart(5, "0")}`,
-    status: "active",
-    next_billing_at: "2026-09-27T00:00:00.000Z",
-    membership_tiers: { slug: "core", monthly_store_credit_cents: 7500 },
-  }));
-}
 
 function seedCarts(count: number, ageHours: number) {
   db.abandoned_carts = Array.from({ length: count }, (_unused, i) => ({
@@ -208,80 +199,11 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("the monthly store-credit sweep", () => {
-  it("no longer attempts a write for every member on every tick", async () => {
-    seedMembers(2_000);
-
-    await grantMonthlyStoreCreditSweep();
-
-    // Was 2,000 inserts per tick, half-hourly, for the whole month. The
-    // membership base is not a per-tick cost any more.
-    expect(mocks.grantMonthlyStoreCredit.mock.calls.length).toBeLessThan(2_000);
-    expect(mocks.grantMonthlyStoreCredit).toHaveBeenCalled();
-  });
-
-  it("spends the budget on members who have NOT been granted, not on proving that the first ones have", async () => {
-    // The starvation trap a bare .limit() would have walked into: the members
-    // who sort first are exactly the ones already granted, so a limit alone
-    // would have burned every tick on them and never reached user-01999.
-    seedMembers(2_000);
-    const period = currentPeriodMonth();
-    for (let i = 0; i < 1_999; i += 1) {
-      db.store_credit_ledger.push({
-        user_id: `user-${String(i).padStart(5, "0")}`,
-        reason: "membership_monthly_grant",
-        period_month: period,
-      });
-    }
-
-    await grantMonthlyStoreCreditSweep();
-
-    expect(mocks.grantMonthlyStoreCredit).toHaveBeenCalledTimes(1);
-    expect(mocks.grantMonthlyStoreCredit).toHaveBeenCalledWith("user-01999", 7500);
-  });
-
-  it("drains: repeated ticks reach everyone rather than looping on the same members", async () => {
-    seedMembers(500);
-    const period = currentPeriodMonth();
-    // Model the unique index: a granted member gains a ledger row.
-    mocks.grantMonthlyStoreCredit.mockImplementation(async (userId: string) => {
-      db.store_credit_ledger.push({ user_id: userId, reason: "membership_monthly_grant", period_month: period });
-      return true;
-    });
-
-    for (let tick = 0; tick < 5; tick += 1) await grantMonthlyStoreCreditSweep();
-
-    expect(db.store_credit_ledger).toHaveLength(500);
-    // Every member granted exactly once — no member paid for twice, none missed.
-    expect(new Set(db.store_credit_ledger.map((r) => r.user_id)).size).toBe(500);
-  });
-
-  it("does nothing at all once the month is fully granted", async () => {
-    seedMembers(300);
-    const period = currentPeriodMonth();
-    for (const member of db.customer_memberships) {
-      db.store_credit_ledger.push({ user_id: member.user_id, reason: "membership_monthly_grant", period_month: period });
-    }
-
-    await grantMonthlyStoreCreditSweep();
-
-    expect(mocks.grantMonthlyStoreCredit).not.toHaveBeenCalled();
-  });
-
-  it("still refuses comped memberships and free tiers", async () => {
-    // Bounding must not quietly change WHO is eligible.
-    db.customer_memberships = [
-      { user_id: "comped", status: "active", next_billing_at: null, membership_tiers: { slug: "core", monthly_store_credit_cents: 7500 } },
-      { user_id: "free", status: "active", next_billing_at: "2026-09-27T00:00:00.000Z", membership_tiers: { slug: "free", monthly_store_credit_cents: 0 } },
-      { user_id: "paying", status: "active", next_billing_at: "2026-09-27T00:00:00.000Z", membership_tiers: { slug: "core", monthly_store_credit_cents: 7500 } },
-    ];
-
-    await grantMonthlyStoreCreditSweep();
-
-    expect(mocks.grantMonthlyStoreCredit).toHaveBeenCalledTimes(1);
-    expect(mocks.grantMonthlyStoreCredit).toHaveBeenCalledWith("paying", 7500);
-  });
-});
+// A "monthly store-credit sweep" block sat here, bounding grantMonthlyStoreCreditSweep.
+// That job granted each paying member their monthly credit and went with the
+// paid membership feature on 2026-09-12. Credit customers already hold is
+// untouched and still spends; nothing grants more, so there is no longer an
+// unbounded per-tick scan to bound.
 
 describe("the abandoned-cart sweep", () => {
   it("does not touch every active cart in the window", async () => {
