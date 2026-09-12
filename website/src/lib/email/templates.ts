@@ -1818,7 +1818,32 @@ function recoveryCartRowHtml(item: RecoveryCartLine) {
  */
 const CHECKOUT_COST_DISCLOSURE = "Shipping, tax and any options are added at checkout.";
 
-function cartSummaryHtml(items: RecoveryCartLine[], cartValueCents: number) {
+/**
+ * THE SAME SENTENCE, WHEN SHIPPING IS ALREADY FREE.
+ *
+ * P0-7. `free_shipping_sitewide` was switched on in production on 2026-09-06
+ * and nothing propagated it to copy, so every recovery email went on telling
+ * an abandoning shopper that shipping would be added at checkout — on the line
+ * directly above the button, to the one audience that has already decided not
+ * to buy.
+ *
+ * That is not merely a missed boast. Baymard's meta-analysis of fifty studies
+ * puts "extra costs too high — shipping, tax, fees" first among stated reasons
+ * for abandoning, at 48%. The store had removed the cost and the email was
+ * still recreating the objection.
+ *
+ * Derived from the live shipping config rather than swapped for a second
+ * hard-coded string, so the next time the setting moves the copy moves with it.
+ * Tax stays in the sentence because it is still added, and the disclosure has
+ * to remain true rather than merely cheerful.
+ */
+const CHECKOUT_COST_DISCLOSURE_FREE_SHIPPING = "Shipping is free. Tax and any options are added at checkout.";
+
+function checkoutCostDisclosure(freeShipping?: boolean): string {
+  return freeShipping === true ? CHECKOUT_COST_DISCLOSURE_FREE_SHIPPING : CHECKOUT_COST_DISCLOSURE;
+}
+
+function cartSummaryHtml(items: RecoveryCartLine[], cartValueCents: number, freeShipping?: boolean) {
   const rows = items.map(recoveryCartRowHtml).join("");
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" `
     + `style="margin:18px 0 0;border-top:1px solid rgba(255,255,255,0.10);">${rows}</table>`
@@ -1827,10 +1852,10 @@ function cartSummaryHtml(items: RecoveryCartLine[], cartValueCents: number) {
     + `<tr><td style="padding:14px 0 0;color:#a3a3a3;font-size:14px;">Items total</td>`
     + `<td style="padding:14px 0 0;text-align:right;color:#ffffff;font-size:16px;font-weight:700;">`
     + `${money(cartValueCents / 100)}</td></tr></table>`
-    + `<p style="margin:8px 0 0;color:#a3a3a3;font-size:12px;line-height:1.5;">${CHECKOUT_COST_DISCLOSURE}</p>`;
+    + `<p style="margin:8px 0 0;color:#a3a3a3;font-size:12px;line-height:1.5;">${checkoutCostDisclosure(freeShipping)}</p>`;
 }
 
-function cartSummaryText(items: RecoveryCartLine[], cartValueCents: number): string[] {
+function cartSummaryText(items: RecoveryCartLine[], cartValueCents: number, freeShipping?: boolean): string[] {
   return [
     ...items.map((i) => {
       const quantity = Math.max(1, Math.floor(Number(i.quantity) || 1));
@@ -1840,7 +1865,7 @@ function cartSummaryText(items: RecoveryCartLine[], cartValueCents: number): str
     }),
     "",
     `Items total: ${money(cartValueCents / 100)}`,
-    CHECKOUT_COST_DISCLOSURE,
+    checkoutCostDisclosure(freeShipping),
   ];
 }
 
@@ -1882,7 +1907,7 @@ function greeting(name: string): { html: string; text: string | null } {
  * is left, and inventing a deadline here spends the credibility that stage 4's
  * real one depends on.
  */
-export function cartRecoveryT30mTemplate(input: { name: string; items: Array<{ name: string; quantity: number; unitPriceCents?: number; image?: string }>; cartValueCents: number; restoreUrl: string; variant?: string }): EmailTemplate {
+export function cartRecoveryT30mTemplate(input: { name: string; items: Array<{ name: string; quantity: number; unitPriceCents?: number; image?: string }>; cartValueCents: number; restoreUrl: string; variant?: string; freeShipping?: boolean }): EmailTemplate {
   const hi = greeting(input.name);
   const lead = leadCartItem(input.items);
   const treatment = input.variant === "b";
@@ -1904,7 +1929,7 @@ export function cartRecoveryT30mTemplate(input: { name: string; items: Array<{ n
       // item-price promise is the true and useful half, so it is kept and the
       // total is disclosed honestly by cartSummaryHtml below.
       bodyHtml: `${hi.html}<p style="margin:0;">You left this behind. Nothing has been cleared, and your items are held at the price you saw.</p>`
-        + `${cartSummaryHtml(input.items, input.cartValueCents)}`,
+        + `${cartSummaryHtml(input.items, input.cartValueCents, input.freeShipping)}`,
       ctaLabel: "Complete my order",
       ctaUrl: input.restoreUrl,
       ctaVariant: "primary",
@@ -1914,7 +1939,7 @@ export function cartRecoveryT30mTemplate(input: { name: string; items: Array<{ n
       hi.text ? "" : null,
       "You left this behind. Nothing has been cleared, and your items are held at the price you saw.",
       "",
-      ...cartSummaryText(input.items, input.cartValueCents),
+      ...cartSummaryText(input.items, input.cartValueCents, input.freeShipping),
       "",
       `Complete your order: ${input.restoreUrl}`,
       "",
@@ -1941,7 +1966,7 @@ export function cartRecoveryT30mTemplate(input: { name: string; items: Array<{ n
  */
 export type RecoveryPaymentFailure = "declined" | "expired" | "other";
 
-export function cartRecoveryPaymentFailedTemplate(input: { name: string; items: Array<{ name: string; quantity: number; unitPriceCents?: number; image?: string }>; cartValueCents: number; restoreUrl: string; failure: RecoveryPaymentFailure; orderNumber: string }): EmailTemplate {
+export function cartRecoveryPaymentFailedTemplate(input: { name: string; items: Array<{ name: string; quantity: number; unitPriceCents?: number; image?: string }>; cartValueCents: number; restoreUrl: string; failure: RecoveryPaymentFailure; orderNumber: string; freeShipping?: boolean }): EmailTemplate {
   const hi = greeting(input.name);
   // An unknown kind is treated as "other": the message that claims least.
   const failure: RecoveryPaymentFailure = input.failure === "declined" || input.failure === "expired" ? input.failure : "other";
@@ -1962,7 +1987,7 @@ export function cartRecoveryPaymentFailedTemplate(input: { name: string; items: 
       preheader: failure === "other" ? "Your cart is saved at the price you saw." : "Nothing was charged. Your cart is saved.",
       titleHtml: "About your order",
       bodyHtml: `${hi.html}<p style="margin:0;">${escapeHtml(what)}</p><p style="margin:12px 0 0;">${escapeHtml(next)}</p>`
-        + `${cartSummaryHtml(input.items, input.cartValueCents)}`
+        + `${cartSummaryHtml(input.items, input.cartValueCents, input.freeShipping)}`
         + `<p style="margin:16px 0 0;color:#a3a3a3;font-size:13px;">${escapeHtml(help)}</p>`,
       ctaLabel: "Complete my order",
       ctaUrl: input.restoreUrl,
@@ -1974,7 +1999,7 @@ export function cartRecoveryPaymentFailedTemplate(input: { name: string; items: 
       what,
       next,
       "",
-      ...cartSummaryText(input.items, input.cartValueCents),
+      ...cartSummaryText(input.items, input.cartValueCents, input.freeShipping),
       "",
       `Complete your order: ${input.restoreUrl}`,
       "",
@@ -2002,7 +2027,7 @@ export function cartRecoveryPaymentFailedTemplate(input: { name: string; items: 
  * no published report, and an invented batch number is the single worst thing
  * this email could contain.
  */
-export function cartRecoveryT12hTemplate(input: { name: string; items: Array<{ name: string; quantity: number; unitPriceCents?: number; image?: string }>; cartValueCents: number; restoreUrl: string; coaUrl: string; batchNumber: string; supportEmail: string }): EmailTemplate {
+export function cartRecoveryT12hTemplate(input: { name: string; items: Array<{ name: string; quantity: number; unitPriceCents?: number; image?: string }>; cartValueCents: number; restoreUrl: string; coaUrl: string; batchNumber: string; supportEmail: string; freeShipping?: boolean }): EmailTemplate {
   const hi = greeting(input.name);
   const batch = String(input.batchNumber ?? "").trim();
   const support = String(input.supportEmail ?? "").trim();
@@ -2027,7 +2052,7 @@ export function cartRecoveryT12hTemplate(input: { name: string; items: Array<{ n
         + `<p style="margin:0;">Every production batch is filed in our COA library. You can search it by product, batch or lot number and read the report itself, before you order.</p>`
         + `${batchHtml}${coaHtml}${supportHtml}`
         + `<p style="margin:22px 0 0;color:#a3a3a3;font-size:13px;">Your cart is still saved.</p>`
-        + `${cartSummaryHtml(input.items, input.cartValueCents)}`,
+        + `${cartSummaryHtml(input.items, input.cartValueCents, input.freeShipping)}`,
       ctaLabel: "Complete my order",
       ctaUrl: input.restoreUrl,
       ctaVariant: "primary",
@@ -2042,7 +2067,7 @@ export function cartRecoveryT12hTemplate(input: { name: string; items: Array<{ n
       "",
       "Your cart is still saved.",
       "",
-      ...cartSummaryText(input.items, input.cartValueCents),
+      ...cartSummaryText(input.items, input.cartValueCents, input.freeShipping),
       "",
       `Complete your order: ${input.restoreUrl}`,
       "",
@@ -2061,6 +2086,7 @@ export function cartRecoveryGiftTemplate(input: {
   promotionNote?: string | null;
   perks?: string[];
   offerPercent?: number;
+  freeShipping?: boolean;
 }): EmailTemplate {
   const hi = greeting(input.name);
   const percent = Number(input.offerPercent ?? 0);
@@ -2136,7 +2162,7 @@ export function cartRecoveryGiftTemplate(input: {
         + `<p style="margin:0 0 4px;">Your cart is still saved &mdash; and we have added to it.</p>`
         + (promoNote ? `<p style="margin:0 0 4px;">${escapeHtml(promoNote)}</p>` : "")
         + giftHtml
-        + cartSummaryHtml(input.items, input.cartValueCents)
+        + cartSummaryHtml(input.items, input.cartValueCents, input.freeShipping)
         + (deadline
           ? `<p style="margin-top:14px;color:#a1a1aa;">Your ${escapeHtml(input.giftLabel.toLowerCase())} are reserved for you through <strong style="color:#ffffff;">${escapeHtml(deadline)}</strong>.</p>`
           : "")
@@ -2157,7 +2183,7 @@ export function cartRecoveryGiftTemplate(input: {
       percent > 0 ? `On this order: ${percent}% off, plus ${input.giftLabel}` : `On this order: ${input.giftLabel}`,
       ...perks.map((perk) => `  - ${perk}`),
       "",
-      ...cartSummaryText(input.items, input.cartValueCents),
+      ...cartSummaryText(input.items, input.cartValueCents, input.freeShipping),
       "",
       deadline ? `Reserved for you through ${deadline}.` : null,
       "Pick up exactly where you left off.",
@@ -2308,7 +2334,7 @@ export function cartRecoveryT24hTemplate(input: { name: string; items: Array<{ n
       bodyHtml: `${hi.html}`
         + `<p style="margin:0;">${escapeHtml(opening)}</p>`
         + (hasGift && offerTerms ? `<p style="${RECOVERY_TERMS_STYLE}">${escapeHtml(offerTerms)}</p>` : "")
-        + `${cartSummaryHtml(input.items, input.cartValueCents)}`,
+        + `${cartSummaryHtml(input.items, input.cartValueCents, input.freeShipping)}`,
       ctaLabel: "Complete my order",
       ctaUrl: input.restoreUrl,
       ctaVariant: "primary",
@@ -2320,7 +2346,7 @@ export function cartRecoveryT24hTemplate(input: { name: string; items: Array<{ n
       hasGift && offerTerms ? "" : null,
       hasGift && offerTerms ? offerTerms : null,
       "",
-      ...cartSummaryText(input.items, input.cartValueCents),
+      ...cartSummaryText(input.items, input.cartValueCents, input.freeShipping),
       "",
       `Complete your order: ${input.restoreUrl}`,
       "",
@@ -2364,6 +2390,7 @@ export function cartRecoveryT72hTemplate(input: {
   expiresAt: string;
   giftLabel: string;
   offerTerms: string;
+  freeShipping?: boolean;
 }): EmailTemplate {
   const hi = greeting(input.name);
   const lead = leadCartItem(input.items);
@@ -2412,7 +2439,7 @@ export function cartRecoveryT72hTemplate(input: {
         + (giftSentence ? `<p style="margin:12px 0 0;">${escapeHtml(giftSentence)}</p>` : "")
         + (codeSentence ? `<p style="margin:12px 0 0;">${escapeHtml(codeSentence)}</p>` : "")
         + (hasGift && offerTerms ? `<p style="${RECOVERY_TERMS_STYLE}">${escapeHtml(offerTerms)}</p>` : "")
-        + `${cartSummaryHtml(input.items, input.cartValueCents)}`,
+        + `${cartSummaryHtml(input.items, input.cartValueCents, input.freeShipping)}`,
       ctaLabel: "Complete my order",
       ctaUrl: input.restoreUrl,
       ctaVariant: "primary",
@@ -2426,7 +2453,7 @@ export function cartRecoveryT72hTemplate(input: {
       codeSentence,
       hasGift && offerTerms ? offerTerms : null,
       "",
-      ...cartSummaryText(input.items, input.cartValueCents),
+      ...cartSummaryText(input.items, input.cartValueCents, input.freeShipping),
       "",
       `Complete your order: ${input.restoreUrl}`,
       "",

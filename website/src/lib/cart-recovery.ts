@@ -1769,7 +1769,13 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     const cartId = String(row.id);
 
     const reconciledCartCents = reconciledCartValueCents(items, Number(row.cart_value_cents ?? 0));
-    const base = { name, items, cartValueCents: reconciledCartCents };
+    // P0-7. freeShipping rides on `base`, so EVERY stage states the real
+    // shipping position rather than only the 24-hour one. Sitewide free
+    // shipping went live 2026-09-06 and the copy never followed, so all six
+    // recovery templates were telling an abandoning shopper that shipping
+    // would be added at checkout — the single most-cited reason people
+    // abandon, recreated in the message sent to people who already had.
+    const base = { name, items, cartValueCents: reconciledCartCents, freeShipping: freeShippingSitewide };
     let sent = false;
 
     // A NAMED CART'S STAGE CAN BE REPLACED, and that is all this does.
@@ -1959,7 +1965,6 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
           giftLabel: giftConfig?.label ?? "",
           offerTerms: giftTerms,
           variant,
-          freeShipping: freeShippingSitewide,
         }),
       });
     } else {
