@@ -27,19 +27,42 @@ const handle = app.getRequestHandler();
 await app.prepare();
 // next() forces NODE_ENV=production internally; put it back.
 //
-// THIS DOES NOT REACH THE ROUTE HANDLERS, and the comment here used to claim it
-// did ("so the mock gateway is reachable in this harness"). Measured 2026-08-28
-// on a clean restart with no other server bound to :3000:
+// THIS DOES NOT REACH THE ROUTE HANDLERS. It cannot, and the reason is not the
+// one this comment used to give.
 //
-//   GET /api/catalog/payment-methods  ->  500
-//   harness log: "PAYMENT_PROVIDER=mock/test is forbidden in production."
+// The old explanation was: "the value is NOT inlined at build — the compiled
+// chunk still contains the runtime comparison — so the reassignment below is
+// simply not visible where the route runs. Next re-establishes its own
+// environment after prepare()." That is wrong in its load-bearing half, and the
+// wrong half is what matters: it sends the next person to look for a way to set
+// the variable later, and NO such way exists.
 //
-// That throw is resolvePaymentProviderName reading process.env.NODE_ENV at call
-// time (payment-provider.ts:318). The value is NOT inlined at build — the
-// compiled chunk still contains the runtime comparison — so the reassignment
-// below is simply not visible where the route runs. Next re-establishes its own
-// environment after prepare(); reassigning the parent's process.env afterwards
-// does not follow.
+// What is actually true, read out of the build on 2026-09-12
+// (.next/server/chunks/[root-of-the-server]__*.js):
+//
+//   PAYMENT_PROVIDER){let t=(e??"").trim().toLowerCase();
+//   if("mock"===t||"test"===t)throw Error("PAYMENT_PROVIDER=mock/test is forbidden…
+//
+// The source guard is `if (process.env.NODE_ENV === "production") throw`. In the
+// compiled output THE GUARD IS GONE and the throw is unconditional — Turbopack
+// folded process.env.NODE_ENV to the literal "production" at build time and the
+// minifier then deleted the always-true `if`. `next build` sets NODE_ENV=production
+// for itself no matter what the caller exports, so `NODE_ENV=test next build`
+// (what harness:build runs) produces exactly the same folded chunk.
+//
+// CONSEQUENCE: the mock gateway is unreachable from ANY `next build` output, at
+// any runtime, through any environment variable. Setting NODE_ENV here, or per
+// request, or in .env.local, changes nothing — there is no comparison left to
+// change the answer to. `npm run qa:purchase` therefore cannot create an order
+// against this harness: measured 2026-09-12, /api/checkout/create-session
+// answers 400 and the run reports 12 of 18 steps SKIPPED.
+//
+// DO NOT "FIX" THIS BY WEAKENING THE LOCKOUT. It is what stops
+// /api/checkout/mock-pay marking orders paid in production, and it deliberately
+// has no override variable. A real fix has to stop the fold at BUILD time —
+// which means a build whose NODE_ENV is genuinely not "production" — and that is
+// a change to how the harness is built, not to how it is served or to what the
+// lockout permits.
 //
 // CONSEQUENCE, which is the part worth knowing: every checkout page rendered
 // through this harness has been served with payment-methods 500ing, so the card

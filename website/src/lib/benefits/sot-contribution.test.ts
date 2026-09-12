@@ -152,6 +152,81 @@ describe("the processor cost has exactly one home", () => {
   });
 });
 
+describe("the not-a-P&L notice travels with the number", () => {
+  const STORE = "src/lib/benefits/contribution-store.ts";
+
+  it("is defined once, in contribution.ts, as something a surface can render", () => {
+    const owner = source(CONTRIBUTION);
+    expect(owner).toContain("export const CONTRIBUTION_NOT_A_PL_NOTICE");
+    // The three things the sentence must actually say.
+    expect(owner).toContain("not accounting profit");
+    expect(owner).toContain("excludes ambassador commission");
+    expect(owner).toMatch(/Never sum it against/);
+  });
+
+  it("every module that reads the snapshot table must carry it", () => {
+    // THE M8 GATE. Nothing aggregates or displays contribution yet; the day
+    // something does, it inherits this requirement rather than being trusted to
+    // remember it. contribution-store.ts is the WRITER, not a reader, and is
+    // exempt — it has no surface to show a notice on.
+    const offenders = productionSources(CONTRIBUTION, STORE)
+      .filter((entry) => /order_contribution/.test(entry.source))
+      .filter((entry) => !/CONTRIBUTION_NOT_A_PL_NOTICE/.test(entry.source))
+      .map((entry) => entry.path);
+    expect(
+      offenders,
+      "These modules read the contribution snapshot without carrying CONTRIBUTION_NOT_A_PL_NOTICE. "
+        + "Contribution looks like profit, is denominated like profit, and is BIGGER than profit. "
+        + "Any surface that aggregates or displays it must say what it is not.",
+    ).toEqual([]);
+  });
+
+  it("the migration itself says so, for anyone reading the schema rather than the code", () => {
+    const migration = readFileSync(join(process.cwd(), "src/lib/sql/order-contribution.sql"), "utf8");
+    expect(migration).toMatch(/NOT a P&L/);
+    expect(migration).toMatch(/never backfilled/);
+  });
+});
+
+describe("the migration's applied-state header cannot go stale", () => {
+  const MIGRATION_PATH = "src/lib/sql/order-contribution.sql";
+  const migration = () => readFileSync(join(process.cwd(), MIGRATION_PATH), "utf8");
+
+  it("does not claim to be unapplied while a writer is live", () => {
+    // THE DEFECT THIS PINS, found by review before it shipped: the file kept its
+    // "NOT YET APPLIED" banner in the same change that landed the writer and
+    // regenerated production-schema.json.
+    //
+    // It matters because of where it is read from. contribution-store.ts's
+    // failure alert tells an operator "if this is every order,
+    // order-contribution.sql has not been applied to this database" — so a
+    // genuine outage on a deployment that IS migrated sends them to this file,
+    // and a stale banner confirms the wrong diagnosis at the exact moment it is
+    // most expensive.
+    const writerExists = /\.from\("order_contribution"\)/.test(
+      readFileSync(join(process.cwd(), "src/lib/benefits/contribution-store.ts"), "utf8"),
+    );
+    expect(writerExists, "the writer should exist by M5b").toBe(true);
+    expect(
+      migration(),
+      `${MIGRATION_PATH} still says it is unapplied while contribution-store.ts writes to the table.`,
+    ).not.toMatch(/NOT YET APPLIED/);
+  });
+
+  it("points at a receipt that exists, per the repo's migrations-applied convention", () => {
+    const receipt = migration().match(/migrations-applied\/([A-Za-z0-9_]+\.sql)/);
+    expect(receipt, "the header must name its receipt").not.toBeNull();
+    const receiptText = readFileSync(
+      join(process.cwd(), "src/lib/sql/migrations-applied", receipt![1]),
+      "utf8",
+    );
+    expect(receiptText).toMatch(/^-- APPLIED\./m);
+    expect(receiptText).toContain("order_contribution");
+    // The one thing a future reader must not talk themselves out of.
+    expect(receiptText).toMatch(/NO BACKFILL/);
+  });
+});
+
 describe("M5 is reporting-only: the floor is defined but never applied", () => {
   it("nothing in production calls applyCommissionFloor", () => {
     // The M3 precedent (person-key-unused.test.ts): an unconsumed capability is

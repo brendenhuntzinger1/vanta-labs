@@ -2,12 +2,21 @@
 --
 -- VANTA TEXTS — M5. THE CONTRIBUTION SNAPSHOT.
 --
--- NOT YET APPLIED. This file is written, reviewed and tested before it is run,
--- exactly as sms-programme.sql was at M1, and no application code reads or
--- writes this table until the owner has applied it and
--- src/lib/production-schema.json has been regenerated. supabase-schema-parity
--- deliberately allows no early reference to an un-applied TABLE (only to an
--- un-applied column), which is what holds that sequence in place.
+-- APPLIED to production 2026-09-12 on the owner's explicit approval. Receipt:
+-- src/lib/sql/migrations-applied/20260912T2148_order_contribution_snapshot.sql.
+-- src/lib/production-schema.json was regenerated in the same change, which is
+-- what let `contribution-store.ts` reference the table: supabase-schema-parity
+-- allows no early reference to an un-applied TABLE (only to an un-applied
+-- column), so the snapshot carrying `order_contribution` is the repo's own
+-- assertion that production has it.
+--
+-- This header previously declared the file unapplied, because it was written
+-- and reviewed a milestone before it was run. Leaving that banner in place once
+-- the writer shipped would have been worse than saying nothing: the
+-- write-failure alert in contribution-store.ts sends an operator to THIS FILE
+-- to find out whether the migration has landed, so a stale banner would answer
+-- their question with the opposite of the truth on the one day they ask it.
+-- sot-contribution.test.ts now fails if the two ever drift apart again.
 --
 -- ---------------------------------------------------------------------------
 -- WHY A TABLE AND NOT COLUMNS ON `orders`

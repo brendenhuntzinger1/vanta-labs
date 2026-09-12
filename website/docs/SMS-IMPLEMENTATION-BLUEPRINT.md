@@ -1568,6 +1568,52 @@ so the admin can show *why* a cap fired without recomputing anything.
 
 This is the M7 gate: **one formula, one home, never a second inlined copy.**
 
+### D1a. AS SHIPPED (M5, 2026-09-12) — and the constraint every later phase inherits
+
+Shipped as designed, with the commission floor defined but deliberately unconsumed:
+
+| Piece | Where |
+|---|---|
+| The formula | `src/lib/benefits/contribution.ts` — `computeContributionBeforeCommission` |
+| The commission floor | same file — `applyCommissionFloor`, **no production caller until M7** |
+| The processor cost | `src/lib/benefits/processor-cost.ts` — one model, three consumers |
+| The persisted snapshot | `public.order_contribution`, one row per merchandise order, integer cents |
+| The writer | `src/lib/benefits/contribution-store.ts`, called from `insertOrderRow` |
+| The guard | `src/lib/benefits/sot-contribution.test.ts` |
+
+**THE CONSTRAINT. Contribution is a MARKETING metric, not the owner's P&L, and the
+two may never be summed or reconciled.** Signed off by the owner on 2026-09-12:
+
+> The M5 contribution snapshot is a MARKETING / ORDER-ECONOMICS metric, not the
+> owner's accounting P&L. For marketing contribution, keep the points/store-credit
+> liability recognized when it is earned/created by the order… The existing
+> owner/admin profit reporting may retain its current cash-basis treatment. These
+> two metrics must never be summed together or presented as directly reconcilable.
+
+Why they cannot be reconciled, concretely: contribution **excludes ambassador
+commission** (the commission floor is bounded *by* contribution, so including it
+would be circular) and **accrues the loyalty liability an order creates**, while
+`order-profit.ts` counts commission and recognises loyalty value only when it is
+*spent*. Summing contribution across orders therefore counts every loyalty dollar
+twice — once where it was minted, once where it was redeemed.
+
+This is enforced, not merely written down. `CONTRIBUTION_NOT_A_PL_NOTICE` is an
+exported string, and `sot-contribution.test.ts` fails any module that reads
+`order_contribution` without carrying it. **Every aggregation and every display
+built in the Conversion Architecture phase inherits that requirement.**
+
+Two further things fixed in place by M5 and not to be changed without a separate
+decision:
+
+- **The 8% processor cost stays.** It is conservative (a real card rate is ~2.9%
+  + $0.30), it is shared with the existing profit logic, and it is never a settled
+  fee — `PROCESSOR_COST_IS_ALWAYS_MODELLED`, `cost_is_estimated` and
+  `processingFeeIsEstimate` all exist so no report can present it as one.
+- **No backfill.** Historical orders have no snapshot and must not be given one:
+  the processor rate, the postage estimate, the membership points rate and the
+  paid/gift COGS split are all unrecoverable after the fact, so a backfill would
+  invent numbers at today's settings and stamp them with yesterday's date.
+
 ## D2. Final invariant and test matrix
 
 `P` = must pass before the milestone merges. Existing suites are named where they already

@@ -1,0 +1,61 @@
+-- APPLIED. Receipt, not a migration to re-run.
+--
+--   what      The M5 contribution snapshot table.
+--             Source: src/lib/sql/order-contribution.sql
+--   project   mlpimwgkwuqpsvsrlpqv (production)
+--   when      2026-09-12 ~21:48 UTC
+--   how       Supabase MCP apply_migration, name `order_contribution_snapshot`
+--   by        Claude, on the owner's explicit written approval for this
+--             migration only, given with the M5 sign-off:
+--             "Apply src/lib/sql/order-contribution.sql to production,
+--              regenerate production-schema.json, land the persistence writer,
+--              and verify the new-order snapshot path end-to-end.
+--              Do NOT backfill historical orders."
+--
+-- WHAT IT DID
+--   * created 1 table: public.order_contribution
+--       - order_id text PRIMARY KEY, FK -> orders(order_id) on delete cascade
+--       - provenance: formula_version, basis ('quote'|'settled'),
+--         cost_is_estimated, computed_at
+--       - 11 bigint CENTS columns (the formula's ten terms plus the total)
+--       - binding_constraint text
+--       - attribution, all nullable: gift_channel ('sms'|'email'),
+--         offer_id, offer_key, campaign_key, send_reference_id
+--   * 2 indexes: (campaign_key, computed_at desc) partial, (computed_at desc)
+--   * RLS enabled, 0 policies (service-role only)
+--   * a table COMMENT recording that these rows are NOT a P&L
+--
+-- NO BACKFILL, AND ONE MUST NOT BE ADDED. The file contains no INSERT, and
+-- order-contribution-sql.test.ts pins that applying it writes zero rows. The
+-- inputs are unrecoverable after the fact — the processor rate and the postage
+-- estimate are admin settings that change, the points rate follows a membership
+-- that lapses, and the paid/gift COGS split is not derivable from order_items
+-- (a gift line is indistinguishable there). A backfill would not reconstruct
+-- these numbers; it would invent them at today's settings and stamp them with
+-- yesterday's date. The owner ruled on this explicitly: "I agree that
+-- reconstructing historical contribution using today's processor/settings/
+-- membership/gift state would create false data."
+--
+-- MEASURED AFTER APPLYING
+--   order_contribution  0 rows, 23 columns, RLS on, 0 policies, 3 indexes
+--   orders              unchanged (0 orders in the preceding 2 hours)
+--   src/lib/production-schema.json regenerated: 106 -> 107 tables. Every other
+--   table and view verified byte-identical to production by per-table column
+--   fingerprint — 0 mismatches.
+--   Full suite green: 706 files, 11,054 tests (DB-backed suites included).
+--
+-- VERIFIED END TO END, against the local harness rather than production:
+--   a real browser purchase (npm run qa:purchase, 18/18 steps, desktop AND
+--   mobile 390x844) created real orders through the real checkout, and each one
+--   wrote exactly one snapshot. 4 checkout orders -> 4 snapshots, 4 distinct;
+--   0 duplicates; 0 non-integer cents; all attribution NULL; the membership
+--   order and the three raw-SQL fixtures got none.
+--
+-- NO CUSTOMER-FACING BEHAVIOUR CHANGED. The writer runs after the order row is
+-- already committed, cannot throw (contribution-store.ts swallows every failure,
+-- and insertOrderRow catches it again), and nothing reads the table yet.
+--
+-- ROLLBACK. Additive and unread, so leaving it is free. If it must be undone:
+--   drop table if exists public.order_contribution;
+-- Nothing else depends on it. Unlike sms_consent_events these rows carry no
+-- consent evidence, so dropping them loses only marketing analytics.

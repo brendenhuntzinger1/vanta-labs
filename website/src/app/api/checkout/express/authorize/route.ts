@@ -328,6 +328,11 @@ export async function POST(request: Request) {
     // destination and is already trusted here for the coupon code, the tax rate
     // and the tax state on this same row.
     profitFloor: quoteFull.profitFloor,
+    // Attribution for the M5 contribution snapshot. FROM quoteFull, for the
+    // same reason profitFloor is: the snapshot and its attribution must
+    // describe one quote, not two. Only the offer key of a gift that actually
+    // applied; everything else stays NULL until M8 has a real source.
+    contributionAttribution: { offerKey: quoteFull.appliedOffer?.offerKey ?? null },
   });
 
   // Same atomic claim the card lane takes, before the order row exists, so the

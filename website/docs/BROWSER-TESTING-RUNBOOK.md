@@ -575,6 +575,49 @@ class of defects this audit exists to find lives in that gap.
 
 ---
 
+## `PAYMENT_PROVIDER=mock` DOES NOT WORK IN THIS HARNESS. Run the live path against the stub instead.
+
+**Measured 2026-09-12, and it is not a configuration mistake — it is unfixable at
+runtime.** `payment-provider.ts` guards the simulated gateway with
+`if (process.env.NODE_ENV === "production") throw`. In the compiled build that
+guard is *gone*:
+
+    PAYMENT_PROVIDER){let t=(e??"").trim().toLowerCase();
+    if("mock"===t||"test"===t)throw Error("PAYMENT_PROVIDER=mock/test is forbidden in production…
+
+Turbopack folded `process.env.NODE_ENV` to the literal `"production"` at build
+time and the minifier deleted the always-true `if`, so **the throw is
+unconditional**. `next build` sets `NODE_ENV=production` for itself whatever the
+caller exports, so `npm run harness:build` (which is `NODE_ENV=test next build`)
+produces exactly that chunk. No environment variable, set anywhere, at any time,
+can reach a comparison that no longer exists.
+
+With `PAYMENT_PROVIDER=mock`, `/api/checkout/create-session` therefore answers
+**400** and `npm run qa:purchase` reports **12 of 18 steps SKIPPED** — a run that
+proves nothing while exiting 0. `scripts/harness-server.mjs` used to explain this
+with a wrong mechanism ("the compiled chunk still contains the runtime
+comparison"), which sent readers looking for a later place to set the variable.
+There is no such place.
+
+**The way through is not to weaken the lockout — it is not to use mock at all.**
+`scripts/veyra-stub.mjs` already stands in for the processor's session mint, so
+the LIVE provider path runs end to end with no real gateway:
+
+    PAYMENT_PROVIDER=live
+    CHECKOUT_ENABLED=true
+    VEYRA_API_BASE=http://127.0.0.1:59999
+    VEYRA_SECRET_KEY=harness-secret
+    PAYMENT_WEBHOOK_SECRET=harness-webhook-secret
+
+    node scripts/veyra-stub.mjs &          # mints session ids, marks nothing paid
+    npm run harness:start
+
+Verified 2026-09-12: `npm run qa:purchase` goes from 6 passed / 12 skipped to
+**18 passed, 0 skipped** — a real browser signs in, adds a product, checks out,
+creates a real order row, and the signed webhook settles it. The mock lockout is
+untouched, still unconditional, and still has no override variable; nothing here
+turns fake payments back on, because nothing here asks for them.
+
 ## The QA harnesses — run these before hand-driving anything
 
 Hand-driving a browser proves one path once. These scripts prove the same

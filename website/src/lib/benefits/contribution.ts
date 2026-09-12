@@ -147,6 +147,28 @@
 export const CONTRIBUTION_FORMULA_VERSION = 1;
 
 /**
+ * THE SENTENCE THAT MUST TRAVEL WITH THIS NUMBER.
+ *
+ * An exported constant rather than a comment, because a comment cannot be
+ * rendered and cannot be asserted. Every surface that AGGREGATES or DISPLAYS
+ * contribution has to import this and show it, and
+ * sot-contribution.test.ts fails any module that reads `order_contribution`
+ * without it.
+ *
+ * The risk it exists against is specific and easy to walk into: contribution
+ * looks like profit, is denominated like profit, and is bigger than profit
+ * (it excludes commission). A dashboard that puts it beside the owner's P&L
+ * without this line invites someone to reconcile two numbers that have
+ * different bases and cannot be reconciled — see "THE ONE THING THAT CANNOT BE
+ * SUMMED" above.
+ */
+export const CONTRIBUTION_NOT_A_PL_NOTICE =
+  "Marketing contribution, not accounting profit. It excludes ambassador commission and "
+  + "recognises loyalty liability when an order CREATES it, so it is the right basis for "
+  + "judging a lifecycle campaign and the wrong basis for a P&L. Never sum it against, or "
+  + "reconcile it to, the profit figures in Admin → Profit.";
+
+/**
  * Membership subscription orders carry NO contribution snapshot.
  *
  * Stated as an exported constant rather than a comment because it is a rule a

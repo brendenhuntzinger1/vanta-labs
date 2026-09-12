@@ -337,6 +337,11 @@ export async function createCheckoutSession(
    // Internal only — insertOrderRow turns this into the owner's
    // below-floor notice and never writes it to a column.
    profitFloor: quote.profitFloor,
+   // Internal only — attribution for the M5 contribution snapshot. Just the
+   // offer key of a gift that was actually applied; every other field stays
+   // NULL until M8 has a real source, because an order credited to a channel
+   // it did not come from would let that channel claim revenue it did not cause.
+   contributionAttribution: { offerKey: quote.appliedOffer?.offerKey ?? null },
  });
 
  // A unique-index violation on idempotency_key means a truly-simultaneous

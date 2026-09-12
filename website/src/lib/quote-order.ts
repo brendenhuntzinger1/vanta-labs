@@ -29,6 +29,7 @@ import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
 import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getShippingConfig, getReferralProgramConfig, getCouponPolicyConfig, getProfitSettings } from "@/lib/admin-control";
 import { deriveOrderBases, giftDisplacedRevenueFrom } from "@/lib/benefits/bases";
 import { computeContributionBeforeCommission, type ContributionBreakdown } from "@/lib/benefits/contribution";
+import { recordContributionSnapshot, type ContributionAttribution } from "@/lib/benefits/contribution-store";
 import { processorCostFor } from "@/lib/benefits/processor-cost";
 import { computeProfit, resolveCustomerDiscount, type DiscountComponent } from "@/lib/profit-engine";
 import { alertIfBelowProfitFloor, buildProfitFloorSnapshot, withContribution, type ProfitFloorSnapshot } from "@/lib/profit-floor-alert";
@@ -1990,6 +1991,19 @@ export interface OrderRowInput {
   taxState: string | null;
   /** Internal margin snapshot from the quote, for the below-floor notice. */
   profitFloor?: ProfitFloorSnapshot | null;
+  /**
+   * Where this order came from, for the M5 contribution snapshot.
+   *
+   * NOT a column, and deliberately thin. Only facts the quote actually holds go
+   * in — today that is the offer key of a gift that was really applied.
+   * `giftChannel`, `campaignKey` and `sendReferenceId` stay NULL until M8 has a
+   * real source for them: an order credited to a channel it did not come from
+   * would let a campaign claim revenue it did not cause.
+   *
+   * The contribution BREAKDOWN is not threaded here — it already rides on
+   * `profitFloor.contribution`, and both lanes already pass that.
+   */
+  contributionAttribution?: ContributionAttribution;
   /** Buy X Get Y promotion that priced the order, if any. */
   promotionId?: string | null;
   /** Extra columns (e.g. checkout_channel) that live on the newer-column row. */
@@ -2011,6 +2025,11 @@ export interface OrderRowDraft {
    * appears. insertOrderRow strips it; it never reaches the database.
    */
   profitFloor?: ProfitFloorSnapshot | null;
+  /**
+   * Attribution for the contribution snapshot — NOT a column either, and
+   * carried for the same reason. See OrderRowInput.contributionAttribution.
+   */
+  contributionAttribution?: ContributionAttribution;
 }
 
 export function buildOrderRow(input: OrderRowInput): OrderRowDraft {
@@ -2091,7 +2110,12 @@ export function buildOrderRow(input: OrderRowInput): OrderRowDraft {
   const baseWithoutIdempotency = { ...baseOrderRow };
   delete baseWithoutIdempotency.idempotency_key;
 
-  return { full: orderRowWithContact, base: baseWithoutIdempotency, profitFloor: input.profitFloor ?? null };
+  return {
+    full: orderRowWithContact,
+    base: baseWithoutIdempotency,
+    profitFloor: input.profitFloor ?? null,
+    contributionAttribution: input.contributionAttribution ?? {},
+  };
 }
 
 export type OrderInsertOutcome =
@@ -2185,6 +2209,51 @@ export async function insertOrderRow(draft: OrderRowDraft): Promise<OrderInsertO
       // to name. It is awaited but cannot throw (see alertIfBelowProfitFloor),
       // because a missing notice must never undo a sale already made.
       await alertIfBelowProfitFloor(String(draft.full.order_id ?? ""), draft.profitFloor);
+
+      // M5 — the contribution snapshot, written here for the same three reasons
+      // the alert above is: both live lanes reach the database through this
+      // function, an order id exists by now, and a duplicate insert has already
+      // returned above so this runs exactly once per real order.
+      //
+      // MEMBERSHIP AND REPLACEMENT ORDERS CANNOT REACH THIS LINE.
+      // membership-billing.ts and admin-replacements.ts write their own rows and
+      // never call insertOrderRow, so their exclusion is structural rather than
+      // a condition someone has to remember to keep.
+      //
+      // DEFENDED TWICE, ON PURPOSE. recordContributionSnapshot swallows every
+      // failure itself — that is its contract and its tests hold it — and this
+      // `.catch` holds the line anyway, because a guarantee that rests on a
+      // callee's internal discipline is one refactor away from being gone.
+      //
+      // WHAT A THROW HERE WOULD ACTUALLY COST, since the order is already in
+      // (see "THE ORDER IS IN" above) and no charge has been attempted yet in
+      // either lane — the card lane mints its hosted session at
+      // payment-service.ts:696 and the wallet lane charges at
+      // express/authorize/route.ts:425, both strictly after this point:
+      //
+      //   an ORPHANED pending_payment order the shopper was never charged for,
+      //   with its promotion redemption and its one-time gift token still held
+      //   for the full hold window — because both lanes gate their cleanup on
+      //   `insertOutcome.status !== "inserted"`, and a throw never produces an
+      //   outcome at all, so that branch is skipped.
+      //
+      // The wallet lane fares worse still: its insertOrderRow call sits outside
+      // any try, so a throw escapes POST as a 500, `finish(sessionId, …)` never
+      // records a terminal outcome, and the express intent is left mid-flight —
+      // which refuses the shopper's next tap instead of replaying it.
+      //
+      // Not "a charged customer with no order row". That failure is real but it
+      // belongs to the pre-insert path (payment-webhook.ts:2918), and reading it
+      // into this line would put the exposure after the charge instead of before
+      // it — which is exactly the wrong mental model for deciding whether this
+      // call may be moved or the belt removed.
+      await recordContributionSnapshot(
+        String(draft.full.order_id ?? ""),
+        draft.profitFloor?.contribution,
+        draft.contributionAttribution,
+      ).catch((snapshotError) => {
+        console.error("[contribution] snapshot writer threw; the order stands", draft.full.order_id, snapshotError);
+      });
 
       const lostIntegrityColumns = dropped.filter((column) => ORDER_INTEGRITY_COLUMNS.has(column));
       if (lostIntegrityColumns.length > 0) {
