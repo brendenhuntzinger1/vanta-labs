@@ -5,6 +5,7 @@ import { ingestAdSpend } from "./spend-ingest";
 import {
   aggregateCampaigns,
   aggregateCreatives,
+  aggregateNonPaidSource,
   aggregatePlatforms,
   aggregateUnattributedRevenue,
   aggregateUntagged,
@@ -13,6 +14,7 @@ import {
   totalParts,
   type CampaignRow,
   type CreativeRow,
+  type NonPaidSourceRow,
   type Parts,
   type PlatformRow,
   type Rates,
@@ -39,7 +41,7 @@ import {
  * database. This file is the query layer and nothing else.
  */
 
-export type { CampaignRow, CreativeRow, PlatformRow, UnattributedRevenueRow, UntaggedRow };
+export type { CampaignRow, CreativeRow, NonPaidSourceRow, PlatformRow, UnattributedRevenueRow, UntaggedRow };
 
 export type SpendDashboard = {
   /** False when `ads-spend-roas.sql` has not been applied. */
@@ -95,6 +97,19 @@ export type SpendDashboard = {
   /** Revenue we can place on a platform but not on an ad. */
   unattributedRevenue: UnattributedRevenueRow[];
   unattributedRevenueTotal: number;
+
+  /**
+   * Revenue deliberately excluded from everything above: paid orders whose
+   * utm_source names somewhere this store does not buy ads.
+   *
+   * Carried to the UI rather than dropped in the query layer. Before the
+   * exclusion this money was in the headline — $286.54 of ChatGPT referrals
+   * divided by TikTok's spend, reported as ROAS 3.36 on an ad account that had
+   * sold nothing — and a correction that silently removes revenue from a page
+   * is the kind that gets reverted by whoever notices the drop.
+   */
+  nonPaidSourceRevenue: NonPaidSourceRow[];
+  nonPaidSourceRevenueTotal: number;
 };
 
 const DEFAULT_WINDOW_DAYS = 30;
@@ -129,7 +144,7 @@ export async function getSpendDashboard(windowDays = DEFAULT_WINDOW_DAYS): Promi
   // platform reporting a day ahead of UTC must not silently widen it.
   const to = today();
 
-  const [platformRes, campaignRes, creativeRes, untaggedRes, unattributedRes, freshnessRes] = await Promise.all([
+  const [platformRes, campaignRes, creativeRes, untaggedRes, unattributedRes, nonPaidRes, freshnessRes] = await Promise.all([
     // PAGED, every one of them. PostgREST caps a select at 1000 rows and says
     // so only in a header supabase-js does not surface, so an unpaged read of a
     // per-day-per-creative view returns a prefix and the sums below present that
@@ -142,6 +157,7 @@ export async function getSpendDashboard(windowDays = DEFAULT_WINDOW_DAYS): Promi
     safeSelectAll<Record<string, unknown>>("ad_creative_roas_daily", "*", (q) => q.gte("stat_date", from).lte("stat_date", to)),
     safeSelectAll<Record<string, unknown>>("ad_spend_untagged", "*", (q) => q.gte("stat_date", from).lte("stat_date", to)),
     safeSelectAll<Record<string, unknown>>("ad_revenue_unattributed", "*", (q) => q.gte("stat_date", from).lte("stat_date", to)),
+    safeSelectAll<Record<string, unknown>>("ad_revenue_non_paid_source", "*", (q) => q.gte("stat_date", from).lte("stat_date", to)),
     safeSelect<Record<string, unknown>>("ad_spend_daily", "ingested_at", (q) =>
       q.order("ingested_at", { ascending: false }).limit(1),
     ),
@@ -152,6 +168,7 @@ export async function getSpendDashboard(windowDays = DEFAULT_WINDOW_DAYS): Promi
   const creatives = aggregateCreatives(creativeRes.rows);
   const untagged = aggregateUntagged(untaggedRes.rows);
   const unattributedRevenue = aggregateUnattributedRevenue(unattributedRes.rows);
+  const nonPaidSourceRevenue = aggregateNonPaidSource(nonPaidRes.rows);
 
   // Totals come from the PLATFORM rollup, not from creatives, because platform
   // rows include untagged spend and unattributed revenue. Summing creatives
@@ -204,6 +221,8 @@ export async function getSpendDashboard(windowDays = DEFAULT_WINDOW_DAYS): Promi
     untaggedSpend: untagged.reduce((sum, u) => sum + u.spend, 0),
     unattributedRevenue: unattributedRevenue.slice(0, TABLE_LIMIT),
     unattributedRevenueTotal: unattributedRevenue.reduce((sum, u) => sum + u.revenue, 0),
+    nonPaidSourceRevenue: nonPaidSourceRevenue.slice(0, TABLE_LIMIT),
+    nonPaidSourceRevenueTotal: nonPaidSourceRevenue.reduce((sum, u) => sum + u.revenue, 0),
   };
 }
 

@@ -5,6 +5,7 @@ import { decodeAutomationCookie } from "@/lib/email/automation-links";
 import { decodeAttributionCookie } from "@/lib/email/campaign-links";
 import { decodeCartRecoveryCookie } from "@/lib/email/cart-recovery-links";
 import { isAutomationKey } from "@/lib/email/automation-catalog";
+import { isKnownAdPlatform } from "@/lib/ads/utm";
 
 /**
  * ONE PRIMARY MARKETING SOURCE PER ORDER.
@@ -109,8 +110,25 @@ export function resolveMarketingSource(signals: MarketingSignals): MarketingSour
   if (signals.ambassadorId) {
     return { kind: "ambassador", ref: String(signals.ambassadorId), basis: "referral_code" };
   }
-  if (signals.adTouch && (signals.adTouch.campaign || signals.adTouch.source || signals.adTouch.clickId)) {
-    return { kind: "ad", ref: signals.adTouch.campaign ?? signals.adTouch.source ?? signals.adTouch.clickId, basis: "ad_touch" };
+  // AN AD TOUCH NEEDS EVIDENCE OF AN AD, and a utm_source is not evidence.
+  //
+  // This asked only that ONE of campaign, source or clickId be present, on the
+  // assumption that anything carrying UTM tags came from an ad we placed. It
+  // does not: a utm_source is a query parameter anyone may write, and software
+  // writes one unprompted. ChatGPT appends `?utm_source=chatgpt.com` to the
+  // links it hands out, so two organic referrals were stamped `ad` with ref
+  // `chatgpt.com` — the one-primary-source ledger, whose whole purpose is to
+  // stop an order being credited to a channel that did not earn it, crediting
+  // an ad account that had sold nothing.
+  //
+  // Two things count as evidence, and a campaign tag on its own is neither:
+  //
+  //   * a platform click id (ttclid, fbclid, gclid), minted by the ad platform
+  //     itself when it charged us for the click, or
+  //   * a source naming a platform this store actually buys ads on.
+  const adTouch = signals.adTouch;
+  if (adTouch && (adTouch.clickId || isKnownAdPlatform(adTouch.source))) {
+    return { kind: "ad", ref: adTouch.campaign ?? adTouch.source ?? adTouch.clickId, basis: "ad_touch" };
   }
   return { kind: "organic", ref: null, basis: "none" };
 }

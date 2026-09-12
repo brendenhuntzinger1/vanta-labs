@@ -145,6 +145,51 @@ comment on table public.ad_spend_daily is
 -- 3. Revenue — derived from the money record, never stored
 -- -----------------------------------------------------------------------------
 
+-- A UTM SOURCE IS NOT AN AD, and treating it as one is how a store with no
+-- conversions is told it has some.
+--
+-- ad_platform_key() above passes an unrecognised source straight through,
+-- lowercased, because on the SPEND side an unknown value came from an ad
+-- connector and really is a platform we have not mapped yet. On the REVENUE
+-- side the same value came from a URL a browser was handed, which anyone may
+-- write anything into — and plenty of things write into it unprompted. ChatGPT
+-- appends `?utm_source=chatgpt.com` to every link it hands out.
+--
+-- MEASURED IN PRODUCTION, 2026-09-12. $85.23 spent on TikTok, zero orders from
+-- it, and the Ads tab reported Revenue $286.54, Purchases 2, ROAS 3.36. The
+-- two purchases were ChatGPT referrals carrying utm_source and nothing else:
+-- no medium, no campaign, no creative, no click id. They became a platform
+-- named `chatgpt.com` whose revenue was summed into the headline and divided by
+-- TikTok's spend. The owner was reading a 3.36x return on an ad account that
+-- had sold nothing.
+--
+-- So ad revenue requires a source the store can actually be SPENDING money on:
+--
+--   1. one of the four platforms this store buys ads on, or
+--   2. any platform that has spend recorded against it — so connecting a fifth
+--      platform needs no change here. Money out is the test, not a list that
+--      has to be remembered.
+--
+-- `stable`, not `immutable`: clause 2 reads a table. Kept a function so the
+-- rule is stated once and every view below asks the same question.
+create or replace function public.is_paid_ad_source(raw text)
+returns boolean
+language sql
+stable
+as $$
+  select case
+    when public.ad_platform_key(raw) is null then false
+    when public.ad_platform_key(raw) in ('facebook', 'tiktok', 'reddit', 'snapchat') then true
+    else exists (
+      select 1 from public.ad_spend_daily s where s.platform = public.ad_platform_key(raw)
+    )
+  end;
+$$;
+
+alter function public.is_paid_ad_source(text) set search_path = public, pg_temp;
+revoke all on function public.is_paid_ad_source(text) from public;
+
+
 -- LAST TOUCH, matching how every ad platform reports, so the numbers beside
 -- each other answer the same question. First touch stays on `order_attribution`
 -- for the different question of what FINDS customers; mixing the two in one
@@ -222,6 +267,10 @@ from public.orders o
 join public.order_attribution oa on oa.order_id = o.order_id
 where o.payment_status in ('paid', 'refunded', 'partially_refunded')
   and oa.last_utm_source is not null
+  -- The source must be one the store actually buys ads on. See
+  -- is_paid_ad_source() above for the production case this closes;
+  -- ad_revenue_non_paid_source in section 5 names what it excludes.
+  and public.is_paid_ad_source(oa.last_utm_source)
   -- ONE PRIMARY SOURCE PER ORDER, AND THIS VIEW WAS THE ONE THAT IGNORED IT.
   --
   -- marketing-source.ts exists to stop a single order being counted as revenue
@@ -281,6 +330,7 @@ drop view if exists public.ad_campaign_daily cascade;
 drop view if exists public.ad_platform_daily cascade;
 drop view if exists public.ad_spend_untagged cascade;
 drop view if exists public.ad_revenue_unattributed cascade;
+drop view if exists public.ad_revenue_non_paid_source cascade;
 
 -- PER CREATIVE. Inner-joined on the tag, so this contains exactly the ads whose
 -- spend and revenue can be tied together. An ad missing from here is not an ad
@@ -486,6 +536,41 @@ where utm_content is null
 group by 1, 2, 3, 4;
 
 revoke all on public.ad_revenue_unattributed from anon, authenticated;
+
+-- REVENUE THAT IS NOT OURS TO CLAIM: a paid order carrying a utm_source that
+-- the store has never bought a single ad on. Excluded from every view above by
+-- is_paid_ad_source(); named here rather than dropped, for the same reason the
+-- two blind spots above it are.
+--
+-- It is not a blind spot so much as the opposite — it is revenue the ads page
+-- used to claim and no longer does, and the owner is entitled to see which
+-- money moved and where it went. Without this view the fix reads on the page as
+-- $286.54 of revenue vanishing overnight, which is exactly the kind of
+-- unexplained drop that gets a correct fix reverted.
+--
+-- These orders are not lost: they are organic and referral sales and they count
+-- in full on the store's own revenue reporting. They simply did not come from
+-- an ad.
+create view public.ad_revenue_non_paid_source
+with (security_invoker = true) as
+select
+  (o.created_at at time zone 'UTC')::date as stat_date,
+  lower(oa.last_utm_source)               as utm_source,
+  count(*)                                as orders,
+  coalesce(sum(o.amount_paid - o.refund_amount), 0)::numeric(12,2) as net_revenue
+from public.orders o
+join public.order_attribution oa on oa.order_id = o.order_id
+where o.payment_status in ('paid', 'refunded', 'partially_refunded')
+  and oa.last_utm_source is not null
+  and not public.is_paid_ad_source(oa.last_utm_source)
+  and (o.marketing_source_kind is null
+       or o.marketing_source_kind not in ('campaign', 'automation', 'cart_recovery'))
+group by 1, 2;
+
+revoke all on public.ad_revenue_non_paid_source from anon, authenticated;
+
+comment on view public.ad_revenue_non_paid_source is
+  'Paid orders carrying a utm_source the store does not buy ads on (a referrer that stamps one on outbound links, e.g. chatgpt.com). Deliberately excluded from every ROAS view; surfaced so the exclusion is legible instead of looking like missing revenue.';
 
 -- -----------------------------------------------------------------------------
 -- 6. Reddit and Snapchat click ids

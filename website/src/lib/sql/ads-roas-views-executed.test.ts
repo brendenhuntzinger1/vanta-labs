@@ -646,4 +646,93 @@ describeDb("the ROAS views, run against a real Postgres", () => {
       expect(rows[0].roas, "3.0 before the fix — three times the truth").toBe(0);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // A UTM SOURCE IS NOT AN AD
+  // -------------------------------------------------------------------------
+
+  describe("only a source the store actually buys ads on counts as ad revenue", () => {
+    // MEASURED IN PRODUCTION, 2026-09-12. The store had spent $85.23 on TikTok
+    // and taken zero orders from it. The Ads tab reported Revenue $286.54,
+    // Purchases 2 and ROAS 3.36.
+    //
+    // The two "purchases" were ChatGPT referrals. ChatGPT appends
+    // `?utm_source=chatgpt.com` to the links it hands out, so those orders
+    // arrived carrying a utm_source and nothing else — no medium, no campaign,
+    // no creative, no click id. `ad_revenue_daily` asked only that
+    // last_utm_source be non-null, and ad_platform_key() passes an unrecognised
+    // source straight through, so `chatgpt.com` became a platform on the
+    // advertising dashboard and its revenue was divided by TikTok's spend.
+    beforeEach(async () => {
+      await reset();
+      await addSpend([{
+        platform: "tiktok", ad_id: "t1", stat_date: D,
+        utm_content: "hook_a", utm_campaign: "launch", spend: 85.23, clicks: 120, impressions: 9000,
+      }]);
+      await addOrder({ order_id: "gpt1", amount_paid: 179.96, created_at: T, last_utm_source: "chatgpt.com" });
+      await addOrder({ order_id: "gpt2", amount_paid: 106.58, created_at: T, last_utm_source: "chatgpt.com" });
+    });
+
+    it("keeps a referrer's utm_source out of ad revenue entirely", async () => {
+      const { rows } = await client.query("select coalesce(sum(net_revenue),0)::float8 r, coalesce(sum(orders),0)::int n from ad_revenue_daily");
+      expect(rows[0].r, "$286.54 of ChatGPT referrals before the fix").toBe(0);
+      expect(rows[0].n).toBe(0);
+    });
+
+    it("does not invent a platform row for it", async () => {
+      const { rows } = await client.query("select platform from ad_platform_daily order by platform");
+      expect(rows.map((r) => r.platform)).toEqual(["tiktok"]);
+    });
+
+    it("reports the truth the owner asked for: spend, and no conversions", async () => {
+      // THE HEADLINE, as spend-dashboard.ts builds it — summed across every
+      // platform row, which is precisely where the referral revenue landed:
+      // TikTok's own row was always honest, and the total was not.
+      const { rows } = await client.query(
+        `select sum(spend)::float8 spend, sum(orders)::int orders, sum(net_revenue)::float8 revenue
+           from ad_platform_daily`,
+      );
+      expect(rows[0].spend).toBeCloseTo(85.23, 6);
+      expect(rows[0].orders, "2 before the fix").toBe(0);
+      expect(rows[0].revenue, "286.54 before the fix").toBe(0);
+      // ROAS is recomputed from the summed parts, so it follows: 3.36 -> 0.
+      expect(rows[0].revenue / rows[0].spend).toBe(0);
+    });
+
+    it("names the excluded revenue rather than dropping it silently", async () => {
+      // The blind-spot discipline of section 5: money the owner can see on the
+      // page it belongs to, with the reason it is not ad revenue.
+      const { rows } = await client.query(
+        "select utm_source, orders::int orders, net_revenue::float8 revenue from ad_revenue_non_paid_source",
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ utm_source: "chatgpt.com", orders: 2 });
+      expect(rows[0].revenue).toBeCloseTo(286.54, 6);
+    });
+
+    it("still counts a real order from a platform the store buys ads on", async () => {
+      await addOrder({
+        order_id: "real", amount_paid: 200, created_at: T,
+        last_utm_source: "tiktok", last_utm_campaign: "launch", last_utm_content: "hook_a",
+      });
+      const { rows } = await client.query(
+        "select orders::int orders, net_revenue::float8 revenue from ad_platform_daily where platform='tiktok'",
+      );
+      expect(rows[0]).toMatchObject({ orders: 1 });
+      expect(rows[0].revenue).toBe(200);
+    });
+
+    it("counts a platform that is not in the canonical four but has recorded spend", async () => {
+      // So connecting a fifth platform needs no change here: the moment its
+      // spend lands, its revenue is ad revenue. Money out is the test, not a
+      // hard-coded list.
+      await addSpend([{ platform: "pinterest", ad_id: "p1", stat_date: D, utm_content: "pin_a", spend: 20, clicks: 10, impressions: 500 }]);
+      await addOrder({ order_id: "pin", amount_paid: 60, created_at: T, last_utm_source: "pinterest", last_utm_content: "pin_a" });
+      const { rows } = await client.query(
+        "select orders::int orders, net_revenue::float8 revenue from ad_platform_daily where platform='pinterest'",
+      );
+      expect(rows[0]).toMatchObject({ orders: 1 });
+      expect(rows[0].revenue).toBe(60);
+    });
+  });
 });

@@ -77,6 +77,20 @@ export type UnattributedRevenueRow = {
   revenue: number;
 };
 
+/**
+ * Revenue deliberately kept OUT of every number on this page: a paid order
+ * whose utm_source names somewhere the store has never bought an ad.
+ *
+ * Not a blind spot — the opposite. It is what the page used to claim and no
+ * longer does, listed so the correction is legible instead of reading as
+ * revenue that went missing.
+ */
+export type NonPaidSourceRow = {
+  utmSource: string;
+  orders: number;
+  revenue: number;
+};
+
 export const EMPTY_PARTS: Parts = { spend: 0, revenue: 0, orders: 0, impressions: 0, clicks: 0 };
 
 const num = (v: unknown) => {
@@ -249,6 +263,26 @@ export function aggregateUnattributedRevenue(rows: Record<string, unknown>[]): U
     acc.orders += num(row.orders);
     acc.revenue += num(row.net_revenue);
     by.set(key, acc);
+  }
+  return [...by.values()].sort((a, b) => b.revenue - a.revenue);
+}
+
+/**
+ * Sum `ad_revenue_non_paid_source` per source.
+ *
+ * ChatGPT appends `?utm_source=chatgpt.com` to the links it hands out, and it
+ * is not alone. Those orders are real revenue on the store's own reporting;
+ * they are simply not ad revenue, and before the exclusion they were summed
+ * into this page's headline and divided by TikTok's spend.
+ */
+export function aggregateNonPaidSource(rows: Record<string, unknown>[]): NonPaidSourceRow[] {
+  const by = new Map<string, NonPaidSourceRow>();
+  for (const row of rows) {
+    const utmSource = String(row.utm_source ?? "unknown");
+    const acc = by.get(utmSource) ?? { utmSource, orders: 0, revenue: 0 };
+    acc.orders += num(row.orders);
+    acc.revenue += num(row.net_revenue);
+    by.set(utmSource, acc);
   }
   return [...by.values()].sort((a, b) => b.revenue - a.revenue);
 }

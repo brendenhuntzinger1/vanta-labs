@@ -87,6 +87,38 @@ describe("resolveMarketingSource precedence", () => {
       .toEqual({ kind: "organic", ref: null, basis: "none" });
   });
 
+  it("a utm_source from somewhere the store does not buy ads is organic, not an ad", () => {
+    // MEASURED IN PRODUCTION. ChatGPT appends `?utm_source=chatgpt.com` to the
+    // links it hands out, so referrals from it arrived carrying a utm_source
+    // and nothing else. They were stamped `ad` with ref `chatgpt.com`, which
+    // credited organic sales to an ad account that had sold nothing.
+    expect(resolveMarketingSource({ adTouch: { source: "chatgpt.com", campaign: null, clickId: null } }))
+      .toEqual({ kind: "organic", ref: null, basis: "none" });
+    expect(resolveMarketingSource({ adTouch: { source: "linktr.ee", campaign: null, clickId: null } }))
+      .toEqual({ kind: "organic", ref: null, basis: "none" });
+  });
+
+  it("a campaign tag alone is not an ad either — anything can write one", () => {
+    expect(resolveMarketingSource({ adTouch: { source: "newsletter", campaign: "spring", clickId: null } }))
+      .toEqual({ kind: "organic", ref: null, basis: "none" });
+  });
+
+  it("still credits every platform the store does buy ads on, however it is spelled", () => {
+    for (const source of ["tiktok", "TikTok", "meta", "fb", "Instagram", "reddit", "SNAP"]) {
+      expect(resolveMarketingSource({ adTouch: { source, campaign: null, clickId: null } }))
+        .toEqual({ kind: "ad", ref: source, basis: "ad_touch" });
+    }
+  });
+
+  it("a platform click id is proof of a paid click, whatever the source says", () => {
+    // ttclid/fbclid/gclid are minted by the ad platform itself. A source that
+    // looks unfamiliar beside one is a tagging slip, not organic traffic.
+    expect(resolveMarketingSource({ adTouch: { source: "unknown_thing", campaign: null, clickId: "ttclid" } }))
+      .toEqual({ kind: "ad", ref: "unknown_thing", basis: "ad_touch" });
+    expect(resolveMarketingSource({ adTouch: { source: null, campaign: null, clickId: "fbclid" } }))
+      .toEqual({ kind: "ad", ref: "fbclid", basis: "ad_touch" });
+  });
+
   it("nothing at all is organic", () => {
     expect(resolveMarketingSource({})).toEqual({ kind: "organic", ref: null, basis: "none" });
   });
