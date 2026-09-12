@@ -264,9 +264,15 @@ describe("M-04: the profit guard refuses the parent cost on a dose-bearing slug"
     // share of the catalogue, so the substitution understated COGS and loosened
     // the floor rather than tightening it as its comment claimed.
     const quote = source("src/lib/quote-order.ts");
-    const guard = quote.slice(quote.indexOf("const guardProductCost"), quote.indexOf("const guardProfit"));
+    // M5 lifted the reduce body into `guardUnitCost` so contribution could sum
+    // the SAME per-line rule over paid and gift lines separately. The rule is
+    // unchanged — this slice moved to where it now lives, and still ends at the
+    // guard that consumes it.
+    const guard = quote.slice(quote.indexOf("const guardUnitCost"), quote.indexOf("const guardProfit"));
     expect(guard).toContain("slugsWithDoses.has(slug)");
     expect(guard).toContain("profitSettings.worstCaseUnitCost");
+    // And the guard's own total is still that rule summed over every line.
+    expect(guard).toContain("const guardProductCost = roundMoney(lineItems.reduce((sum, line) => sum + guardLineCost(line), 0))");
     expect(quote).not.toContain("This can only tighten the floor for high-cost SKUs");
   });
 });

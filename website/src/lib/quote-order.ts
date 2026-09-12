@@ -10,7 +10,7 @@ import { referralQualifies } from "@/lib/referral-qualification";
 import { resolvePointsRedemptionCents, resolveStoreCreditCents } from "@/lib/store-credit-redemption";
 import { validateCoupon } from "@/lib/coupons";
 import { getMembershipPerks, getPointsBalance, isEligibleForBulkSavings, isPriorityMember } from "@/lib/membership";
-import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
+import { calculateEarnedPoints, dollarsToPoints, pointsToDollars } from "@/lib/points-math";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
@@ -27,9 +27,11 @@ import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { isApprovedAmbassadorCustomer } from "@/lib/ambassador-status";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
 import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getShippingConfig, getReferralProgramConfig, getCouponPolicyConfig, getProfitSettings } from "@/lib/admin-control";
-import { giftDisplacedRevenueFrom } from "@/lib/benefits/bases";
+import { deriveOrderBases, giftDisplacedRevenueFrom } from "@/lib/benefits/bases";
+import { computeContributionBeforeCommission, type ContributionBreakdown } from "@/lib/benefits/contribution";
+import { processorCostFor } from "@/lib/benefits/processor-cost";
 import { computeProfit, resolveCustomerDiscount, type DiscountComponent } from "@/lib/profit-engine";
-import { alertIfBelowProfitFloor, buildProfitFloorSnapshot, type ProfitFloorSnapshot } from "@/lib/profit-floor-alert";
+import { alertIfBelowProfitFloor, buildProfitFloorSnapshot, withContribution, type ProfitFloorSnapshot } from "@/lib/profit-floor-alert";
 import { calculateCardProcessingFee, getPaymentMethodById, isManualPaymentMethod, type PaymentMethodConfig } from "@/lib/payment-methods";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -208,6 +210,18 @@ export interface QuoteResult {
    * consumption flags are off.
    */
   giftDisplacedRevenue: number;
+  /**
+   * What this order contributes in cash before ambassador commission, every
+   * line individually, in integer cents.
+   *
+   * INTERNAL, and ADVISORY AND UNCONSUMED AT M5 exactly as
+   * `giftDisplacedRevenue` is at M4. Nothing prices, pays, rewards or gates
+   * from it. Also reachable through `profitFloor.contribution` — the same
+   * object, carried there so the below-floor alert can report it; surfaced here
+   * so the order lane can persist it without reaching through the floor
+   * snapshot for something that is not about the floor.
+   */
+  contribution: ContributionBreakdown;
   /**
    * The one-time offer this quote priced a free unit for, if any.
    *
@@ -1552,16 +1566,35 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // floor": where the stale parent sits BELOW worstCaseUnitCost it understates
   // COGS, overstates profit, and lets a deep discount through the floor that the
   // worst-case assumption would have stopped.
-  const guardProductCost = roundMoney(lineItems.reduce((sum, line) => {
+  //
+  // A NAMED CLOSURE, NOT AN INLINE REDUCE, because M5 needs the SAME rule split
+  // two ways — paid lines and Vanta-funded gift lines are separate terms of the
+  // contribution formula — and a second copy of these three cases is exactly
+  // what the paragraph above is about. The guard's own figure is unchanged: the
+  // same reduce over the same lines, with the body lifted out.
+  //
+  // Postage the store expects to pay, hoisted so the floor guard and the M5
+  // contribution snapshot charge the SAME figure rather than two reads of the
+  // same setting that could drift apart. The `destinationKnown` condition and
+  // its long justification are unchanged — see the guard's `shippingCost` below.
+  const expectedShippingCost = destinationKnown ? profitSettings.shippingCostPerOrder : 0;
+
+  let guardCostUsedFallback = false;
+  const guardUnitCost = (line: QuoteOrderLine): number => {
     const slug = String(line.product.id).split("::")[0];
     const doseCost = line.product.variantId ? unitCostByDoseId.get(line.product.variantId) : undefined;
-    const unitCost = (doseCost && doseCost > 0)
-      ? doseCost
-      : (slugsWithDoses.has(slug)
-        ? profitSettings.worstCaseUnitCost
-        : (unitCostBySlug.get(slug) ?? profitSettings.worstCaseUnitCost));
-    return sum + unitCost * line.quantity;
-  }, 0));
+    if (doseCost && doseCost > 0) return doseCost;
+    if (slugsWithDoses.has(slug)) {
+      guardCostUsedFallback = true;
+      return profitSettings.worstCaseUnitCost;
+    }
+    const slugCost = unitCostBySlug.get(slug);
+    if (slugCost !== undefined) return slugCost;
+    guardCostUsedFallback = true;
+    return profitSettings.worstCaseUnitCost;
+  };
+  const guardLineCost = (line: QuoteOrderLine) => guardUnitCost(line) * line.quantity;
+  const guardProductCost = roundMoney(lineItems.reduce((sum, line) => sum + guardLineCost(line), 0));
   const guardProfit = computeProfit(
     {
       subtotal,
@@ -1600,7 +1633,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       // notice, which measured every express order as if shipping cost nothing
       // — so a genuinely loss-making one raised no notice at all. It now passes
       // quoteFull.profitFloor, the quote this paragraph calls authoritative.
-      shippingCost: destinationKnown ? profitSettings.shippingCostPerOrder : 0,
+      shippingCost: expectedShippingCost,
       handlingCollected: 0,
       // Effective rate actually applied to this destination (0 when the
       // order ships to a non-nexus state). Tax stays pass-through in the
@@ -1611,7 +1644,10 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   );
   // NOT A GATE. The snapshot travels with the quote so the order lane can tell
   // the owner about it; nothing here can stop the sale.
-  const profitFloor = buildProfitFloorSnapshot(
+  // Completed further down by `withContribution` once store credit and points
+  // are resolved — see the M5 block near the end of this function. The floor's
+  // own verdict is decided here and never revisited.
+  const profitFloorBase = buildProfitFloorSnapshot(
     guardProfit,
     profitSettings,
     customerDiscount.label,
@@ -1720,6 +1756,87 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     : calculateCardProcessingFee(expectedTotal, cardFeeConfig);
   const finalTotal = roundMoney(expectedTotal + cardFee.amount);
 
+  // -------------------------------------------------------------------------
+  // M5 — CASH CONTRIBUTION BEFORE COMMISSION. Computed, carried, consumed by
+  // nothing.
+  //
+  // Every term below is a value this function already holds; nothing here
+  // queries, nothing here can throw, and nothing here can change a total, a
+  // discount, a payout or an eligibility decision. It is the M4 pattern again:
+  // measure first, and only wire the measurement to a decision once it has been
+  // watched in production.
+  //
+  // The arithmetic is NOT here — `computeContributionBeforeCommission` owns it
+  // and sot-contribution.test.ts holds that. This block's only job is to state
+  // each term correctly.
+  // -------------------------------------------------------------------------
+  const contributionBases = deriveOrderBases({ subtotal, discountAmount });
+
+  // COGS, SPLIT THE WAY THE FORMULA NEEDS IT. The same `guardLineCost` the
+  // profit floor sums, partitioned by `line.gift`: a Vanta-funded gift line
+  // (whether it was ADDED as a $0 line or ABSORBED units the shopper had
+  // chosen) is a Vanta cost, not a customer-paid one. The two parts are rounded
+  // independently and so can differ from the guard's single rounded total by at
+  // most a cent — contribution-quote-wiring.test.ts pins that bound.
+  const contributionProductCost = roundMoney(
+    lineItems.filter((line) => !line.gift).reduce((sum, line) => sum + guardLineCost(line), 0),
+  );
+  const contributionGiftCogs = roundMoney(
+    lineItems.filter((line) => line.gift).reduce((sum, line) => sum + guardLineCost(line), 0),
+  );
+
+  // THE PROCESSOR'S TAKE ON THE CASH IT ACTUALLY RUNS.
+  //
+  // `finalTotal` is what the card is charged: net of store credit and points
+  // (the processor never touched those dollars) and inclusive of the card
+  // service fee, which it does. That is deliberately a DIFFERENT base from the
+  // profit floor's `amountCharged` a few hundred lines above — see the note on
+  // ProcessorCostInput.cashCollected for why both are right for their own
+  // consumer. The rate and the tax rule are shared, and come from one module.
+  const contributionProcessingFee = processorCostFor({
+    cashCollected: finalTotal,
+    taxCollected: taxAmount,
+    percent: profitSettings.processingFeePercent,
+    includesTax: profitSettings.processingFeeIncludesTax,
+  });
+
+  // THE POINTS LIABILITY THIS ORDER CREATES, at the rate the buyer will
+  // actually earn at — `memberPerks.pointsPerDollar` applies exactly the rule
+  // getActivePointsPerDollar applies at settlement (a lapsed member drops to
+  // the free-tier rate), and a guest with no account earns nothing at all.
+  //
+  // THE PROMOTIONAL MULTIPLIER IS ASSUMED TO BE 1, AND THAT IS A STATED
+  // ASSUMPTION RATHER THAN A HIDDEN ONE. Reading it would mean a Supabase
+  // round-trip inside checkout for a number nothing consumes, on a function
+  // (`getActivePointsMultiplier`) that THROWS on a query error — so an inert
+  // reporting feature could fail a real sale. `promotional_point_events` has
+  // never held a row in production (measured 2026-09-12), so the assumption is
+  // exact today; the snapshot's `basis: "quote"` is what says it is an
+  // assumption at all, and the settled snapshot reads `orders.points_earned`.
+  const contributionPointsEarnedValue = input.customerUserId
+    ? pointsToDollars(calculateEarnedPoints(contributionBases.rewardBase, memberPerks.pointsPerDollar, 1))
+    : 0;
+
+  const contribution: ContributionBreakdown = computeContributionBeforeCommission({
+    paidMerchandise: contributionBases.paidMerchandise,
+    shippingCollected: shipping,
+    // Never charged on this lane — quote-order writes `handling_fee: 0`. Passed
+    // explicitly so the term is visibly zero rather than silently absent.
+    handlingCollected: 0,
+    productCost: contributionProductCost,
+    giftCogs: contributionGiftCogs,
+    processingFee: contributionProcessingFee,
+    shippingCost: expectedShippingCost,
+    storeCreditRedeemed: roundMoney(storeCreditRedeemedCents / 100),
+    pointsRedeemedValue: pointsDiscountAmount,
+    pointsEarnedValue: contributionPointsEarnedValue,
+    basis: "quote",
+    discountAmount,
+    costIsEstimated: guardCostUsedFallback,
+  });
+
+  const profitFloor = withContribution(profitFloorBase, contribution);
+
   // Snapshot the CURRENT internal cost (COGS) onto each line so profit for this
   // order is always computed with the cost that applied today — a later cost
   // change never rewrites this order's profit. Prefer the dose's cost, else the
@@ -1790,6 +1907,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     shipping,
     discountAmount,
     giftDisplacedRevenue,
+    contribution,
     bulkDiscountTier,
     isPriorityOrder,
     taxQuote,

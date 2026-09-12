@@ -24,6 +24,7 @@ import {
   PROCESSING_FEE_DEFAULT_PERCENT,
   WORST_CASE_UNIT_COST_DEFAULT,
 } from "@/lib/admin-control-shared";
+import { processorCostFor } from "@/lib/benefits/processor-cost";
 
 function round(value: number): number {
   return Math.round(value * 100) / 100;
@@ -352,10 +353,22 @@ export function computeProfit(inputs: OrderInputs, discount: DiscountBreakdown):
   const taxCollected = pct(discountedSubtotal, inputs.taxPercent);
   const revenue = round(discountedSubtotal + inputs.shippingCollected + inputs.handlingCollected);
   const amountCharged = round(revenue + taxCollected);
-  // Most processors charge their fee on the full transaction (incl. tax);
-  // config can exclude tax from the fee base.
-  const feeBase = inputs.processingFeeIncludesTax === false ? revenue : amountCharged;
-  const processingFee = pct(feeBase, inputs.processingFeePercent);
+  // THE processor-cost model, called rather than restated. Most processors
+  // charge on the full transaction (incl. tax); config can exclude tax from the
+  // base, and `processorCostFor` applies that rule once for every consumer —
+  // this guard, the admin profit report, and the M5 contribution snapshot.
+  //
+  // THE BASE IS DELIBERATELY GROSS OF NON-CASH TENDER. `amountCharged` does not
+  // subtract store credit or points, so on a redeeming order this overstates
+  // the fee. That is the conservative direction for a floor that only ever
+  // TELLS the owner, and narrowing it would change when they are told — so it
+  // stays, and contribution.ts states its own (net) base for its own reasons.
+  const processingFee = processorCostFor({
+    cashCollected: amountCharged,
+    taxCollected,
+    percent: inputs.processingFeePercent,
+    includesTax: inputs.processingFeeIncludesTax,
+  });
   const grossProfit = round(
     revenue - inputs.productCost - processingFee - commission - inputs.shippingCost,
   );

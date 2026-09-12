@@ -101,8 +101,15 @@ describe("the symmetry is actually wired into quoteOrder", () => {
 
   it("charges the shipping cost only when the destination is known", () => {
     // A conditional that nothing reads would leave the defect in place while
-    // looking fixed.
-    expect(source).toMatch(/shippingCost:\s*destinationKnown\s*\?\s*profitSettings\.shippingCostPerOrder\s*:\s*0/);
+    // looking fixed — so BOTH halves are pinned: the conditional itself, and
+    // the guard reading it.
+    //
+    // M5 hoisted the expression into `expectedShippingCost` so the contribution
+    // snapshot charges the same postage the floor does, rather than a second
+    // read of the same setting that could drift. The behaviour is unchanged;
+    // only the expression moved, and this assertion moved with it.
+    expect(source).toMatch(/const expectedShippingCost = destinationKnown \? profitSettings\.shippingCostPerOrder : 0/);
+    expect(source).toMatch(/shippingCost:\s*expectedShippingCost/);
   });
 
   it("still resolves the shipping FEE to 0 in the same mode, which is what makes it symmetric", () => {

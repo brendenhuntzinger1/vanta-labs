@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { businessDayKey, startOfBusinessDay, startOfBusinessMonth, startOfBusinessWeek, startOfBusinessYear } from "@/lib/business-day";
 import { getProfitSettings, type ProfitSettingsConfig } from "@/lib/admin-control";
 import { computeOrderProfit, marginPercentOf, type OrderProfitLine, type OrderProfitResult } from "@/lib/order-profit";
+import { processorCostFor } from "@/lib/benefits/processor-cost";
 import { hasCapturedPayment, isEarnedCommission, isSaleOrder } from "@/lib/ledger";
 import { refundedTaxFor } from "@/lib/admin-tax-report";
 import { pointsToDollars } from "@/lib/points-math";
@@ -70,25 +71,26 @@ export interface OrderProfit extends OrderProfitResult {
   shippingCostSource: string | null;
 }
 
-// Peer-to-peer / off-platform methods settle with no card-processor fee. The
-// live catalog only offers card today, but this keeps the math correct if a
-// manual method is ever enabled.
-const MANUAL_HINTS = ["cash", "zelle", "venmo", "paypal", "manual", "wire", "ach", "bank"];
-function isManualMethod(method: string | null): boolean {
-  const m = (method ?? "").toLowerCase();
-  return MANUAL_HINTS.some((hint) => m.includes(hint));
-}
-
+// THE processor-cost model, called rather than restated.
+//
+// The rate, the tax rule and the manual-method exemption used to live here as
+// private code, and a second private copy of the same three rules lived in
+// profit-engine.computeProfit. Neither could see the other, so the two silently
+// disagreed about whether a manual settlement is charged at all. Both now call
+// benefits/processor-cost.ts; processor-cost-parity.test.ts pins this function's
+// output to the expression it replaced across a swept input space.
+//
+// The BASE is still this caller's to choose, and it chooses `amount_paid` — the
+// real charge, net of store credit and points, which is the cash the processor
+// actually ran.
 function processingFeeFor(order: OrderRecord, config: ProfitSettingsConfig): number {
-  if (isManualMethod(order.payment_method)) return 0;
-  const charged = Number(order.amount_paid ?? 0);
-  if (!Number.isFinite(charged) || charged <= 0) return 0;
-  // The processor charges on the full transaction by default; config can
-  // exclude collected sales tax from the fee base.
-  const base = config.processingFeeIncludesTax
-    ? charged
-    : Math.max(0, charged - Number(order.tax_amount ?? 0));
-  return Math.max(0, base * (config.processingFeePercent / 100));
+  return processorCostFor({
+    cashCollected: Number(order.amount_paid ?? 0),
+    taxCollected: Number(order.tax_amount ?? 0),
+    paymentMethod: order.payment_method,
+    percent: config.processingFeePercent,
+    includesTax: config.processingFeeIncludesTax,
+  });
 }
 
 function profitForOrder(

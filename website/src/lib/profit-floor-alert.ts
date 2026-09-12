@@ -1,5 +1,6 @@
 import { recordSystemAlert } from "@/lib/monitoring";
 import { meetsFloor, type ProfitBreakdown } from "@/lib/profit-engine";
+import type { ContributionBreakdown } from "@/lib/benefits/contribution";
 
 // ---------------------------------------------------------------------------
 // THE PROFIT FLOOR TELLS THE OWNER. IT DOES NOT REFUSE THE CUSTOMER.
@@ -63,6 +64,49 @@ export interface ProfitFloorSnapshot {
   thresholdPercent: number;
   /** True when the order clears less than the owner asked to be told about. */
   belowFloor: boolean;
+  /**
+   * M5 — CASH CONTRIBUTION, and every line it is made of.
+   *
+   * The fields above answer "did this order clear the owner's margin
+   * threshold". They cannot answer "did this order pay for itself", because
+   * four real Vanta-funded costs are missing from them entirely: the COGS of a
+   * gift, store credit redeemed, points redeemed, and the points liability the
+   * order creates. On a Vanta Black order with an SMS gift those four are the
+   * majority of the cost, so `estimatedProfit` can read healthy on an order
+   * that lost money.
+   *
+   * Nested rather than flattened so `credit`, `points`, `giftCogs` and
+   * `bindingConstraint` have exactly one home — contribution.ts — and this
+   * snapshot carries them rather than restating them. In integer CENTS, unlike
+   * every dollar field above it; the field names say so.
+   *
+   * Null when the lane could not build one (a membership order, which has no
+   * merchandise economics at all). NOTHING READS IT YET: M5 is reporting-only,
+   * so this travels on the quote and into the alert's context and is consumed
+   * by no pricing, payout or eligibility decision.
+   */
+  contribution?: ContributionBreakdown | null;
+}
+
+/**
+ * Attach the contribution breakdown to a snapshot that has already been built.
+ *
+ * Two-step on purpose. The floor snapshot is built at the point in quoteOrder
+ * where the profit guard runs, which is BEFORE store credit and points are
+ * resolved — and contribution needs both. Moving the guard later would change
+ * what it measures; building contribution earlier would mean guessing. So the
+ * snapshot is completed where the last term becomes known, and this function is
+ * the seam rather than a spread at the call site, so the shape stays owned by
+ * the module that defines it.
+ *
+ * The floor's own verdict (`belowFloor`) is deliberately NOT recomputed here.
+ * M5 changes what the owner is TOLD, never when they are told it.
+ */
+export function withContribution(
+  snapshot: ProfitFloorSnapshot,
+  contribution: ContributionBreakdown | null,
+): ProfitFloorSnapshot {
+  return { ...snapshot, contribution };
 }
 
 interface FloorSettings {
