@@ -418,11 +418,32 @@ export async function sendRenderedMarketingEmail(input: {
     return { success: false, suppressed: true, error: "Address cannot receive mail (provider test domain)" };
   }
   if (!input.unsubscribeUrl) {
-    const { data: suppressed } = await supabaseAdmin
+    const { data: suppressed, error: suppressionError } = await supabaseAdmin
       .from("email_suppressions")
       .select("email")
       .eq("email", email)
       .maybeSingle();
+
+    // FAILS CLOSED, LIKE THE WRAPPER ABOVE.
+    //
+    // This gate destructured `data` only, so a read failure produced
+    // `suppressed === undefined` — indistinguishable from "not suppressed" —
+    // and the message went. The wrapper at the top of this module has failed
+    // closed since the same defect was fixed there; this path, which is the
+    // one the queue drain arrives on, never got the same treatment, and the
+    // test that covers the behaviour only exercised the wrapper.
+    //
+    // This is the path where it matters MOST, not least. A queued message was
+    // parked precisely because the frequency guard held it back, so more time
+    // has passed between consent being checked and the message being sent than
+    // on any other path — which is exactly the window in which somebody
+    // unsubscribes. Mail has a next tick; consent does not have a second
+    // chance.
+    if (suppressionError) {
+      await releaseHeldClaim(input.claimedLogId);
+      console.error("[marketing] suppression check unavailable on the rendered path; refusing to send", redactEmailForLog(email), suppressionError);
+      return { success: false, suppressed: false, error: "Suppression list unavailable; consent could not be verified" };
+    }
     if (suppressed) {
       await releaseHeldClaim(input.claimedLogId);
       return { success: false, suppressed: true, error: "Recipient has unsubscribed from marketing emails" };

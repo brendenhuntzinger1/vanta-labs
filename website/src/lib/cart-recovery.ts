@@ -8,6 +8,7 @@ import { getSiteUrl } from "@/lib/env";
 import { isFreeShippingSitewide } from "@/lib/shipping";
 import { formatDisplayDate } from "@/lib/format-date";
 import { isMarketingSuppressed, sendMarketingEmail } from "@/lib/email/marketing";
+import { getEmailRuntimeConfig, marketingBlockedReason } from "@/lib/email/settings";
 import { claimMarketingSend } from "@/lib/email/frequency";
 import { plainGreetingName } from "@/lib/email/greeting-name";
 import { getCatalogProductsBySlugs, getStockLevelsBySlugs } from "@/lib/catalog";
@@ -1509,6 +1510,32 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
   const result: AbandonedCartSweepResult = {
     t30mSent: 0, t12hSent: 0, t24hSent: 0, t72hSent: 0, scanned: 0, eligible: 0, recoveredLate: 0, heldForCooldown: 0, unknownStatus: 0,
   };
+
+  // P0-10. THE GATE EVERY OTHER MARKETING SENDER HAS, AND THIS ONE DID NOT.
+  //
+  // campaign-sender, automations, marketing-queue and the admin send route all
+  // ask marketingBlockedReason before doing any work. Cart recovery — the
+  // highest-volume marketing stream in the store — never did. Two consequences,
+  // and neither announced itself:
+  //
+  //   * An operator who switches email OFF in Settings stops campaigns,
+  //     automations and the queue, and cart recovery keeps mailing.
+  //   * With the postal address blank, the marketing wrapper renders no
+  //     address (it interpolates an empty string rather than refusing), so
+  //     every recovery message goes out as commercial email without the
+  //     physical address CAN-SPAM requires — a rule with no volume exemption
+  //     and no B2B carve-out.
+  //
+  // BEFORE THE SCAN, SO NOTHING IS CONSUMED. Returning here claims no stage,
+  // mints nothing and burns no window: the next tick after the operator fixes
+  // the setting finds every cart exactly where it was. That ordering is the
+  // whole point — a gate that ran after the claim would trade one silent
+  // failure for another.
+  const emailBlocked = marketingBlockedReason(await getEmailRuntimeConfig());
+  if (emailBlocked) {
+    console.warn("[cart-recovery] sweep held:", emailBlocked);
+    return result;
+  }
 
   // Only sweep carts new enough to still have a pending stage. The stage clock
   // runs from the shopper's LAST activity (elapsedFor), so the age-out must

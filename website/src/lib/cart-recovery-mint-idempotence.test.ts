@@ -58,6 +58,16 @@ const hoisted = vi.hoisted(() => ({
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/env", () => ({ getSiteUrl: () => "https://example.test" }));
+/** P0-10: what marketingBlockedReason answers. null = the sweep may run. */
+let blockedReason: string | null = null;
+vi.mock("@/lib/email/settings", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getEmailRuntimeConfig: async () => ({
+    enabled: true, provider: "resend", from: "Vanta <hello@example.test>",
+    marketingPostalAddress: "1 Test Street, Testville CA 90000",
+  }),
+  marketingBlockedReason: () => blockedReason,
+}));
 vi.mock("@/lib/email/marketing", () => ({
   sendMarketingEmail: hoisted.sendMarketingEmail,
   isMarketingSuppressed: async () => false,
@@ -186,7 +196,7 @@ function seedCart(): CartRow {
 
 beforeEach(() => {
   state.carts = []; state.stages = []; state.coupons = [];
-  mints.length = 0; stageSeq = 0; guardOutcome = "deferred";
+  mints.length = 0; stageSeq = 0; guardOutcome = "deferred"; blockedReason = null;
   hoisted.sendMarketingEmail.mockClear();
   hoisted.claimMarketingSend.mockReset();
   hoisted.claimMarketingSend.mockImplementation(async () =>
@@ -259,5 +269,62 @@ describe("the last-chance stage's gift", () => {
 
     await runAbandonedCartSweep();
     expect(hoisted.sendMarketingEmail).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P0-10. THE GATE EVERY OTHER MARKETING SENDER HAD, AND THIS ONE DID NOT.
+//
+// campaign-sender, automations, marketing-queue and the admin send route all
+// ask marketingBlockedReason before doing any work. Cart recovery — the
+// store's highest-volume marketing stream — never did, so switching email off
+// in Settings stopped everything except the one that sends most, and a blank
+// postal address produced commercial email without the address CAN-SPAM
+// requires (a rule with no volume exemption and no B2B carve-out).
+//
+// The gate runs BEFORE the scan, which is the load-bearing part: holding must
+// not consume anything, or fixing the setting would cost every cart its window.
+// ---------------------------------------------------------------------------
+describe("the sweep's email-blocked gate", () => {
+  it("sends nothing when email is switched off", async () => {
+    seedCart();
+    guardOutcome = "claimed";
+    blockedReason = "Email sending is turned off in Settings.";
+
+    await runAbandonedCartSweep();
+
+    expect(hoisted.sendMarketingEmail).not.toHaveBeenCalled();
+    expect(mints).toHaveLength(0);
+  });
+
+  it("sends nothing when the postal address is missing", async () => {
+    seedCart();
+    guardOutcome = "claimed";
+    blockedReason = "A physical postal address is required in Settings before marketing email can be sent (CAN-SPAM).";
+
+    await runAbandonedCartSweep();
+    expect(hoisted.sendMarketingEmail).not.toHaveBeenCalled();
+  });
+
+  it("consumes NOTHING while held, so the window survives the outage", async () => {
+    const cart = seedCart();
+    guardOutcome = "claimed";
+    blockedReason = "Email sending is turned off in Settings.";
+
+    for (let tick = 0; tick < 10; tick += 1) await runAbandonedCartSweep();
+
+    // No stage claimed, no entitlement minted, no frequency claim taken. The
+    // tick after the operator fixes the setting must find the cart exactly
+    // where it was.
+    expect(state.stages).toHaveLength(0);
+    expect(mints).toHaveLength(0);
+    expect(hoisted.claimMarketingSend).not.toHaveBeenCalled();
+
+    blockedReason = null;
+    await runAbandonedCartSweep();
+
+    expect(hoisted.sendMarketingEmail).toHaveBeenCalledTimes(1);
+    expect(state.stages).toHaveLength(1);
+    expect(state.stages[0].abandoned_cart_id).toBe(cart.id);
   });
 });

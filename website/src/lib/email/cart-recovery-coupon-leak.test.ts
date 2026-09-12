@@ -53,6 +53,18 @@ const db = {
 const attempted: string[] = [];
 
 vi.mock("server-only", () => ({}));
+vi.mock("@/lib/email/settings", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  // P0-10: the sweep now asks marketingBlockedReason before it scans, the way
+  // every other marketing sender already did. These suites are about what the
+  // sweep DOES once it is allowed to run, so the gate is open here and closed
+  // explicitly in cart-recovery-mint-idempotence.test.ts.
+  getEmailRuntimeConfig: async () => ({
+    enabled: true, provider: "resend", from: "Vanta <hello@example.test>",
+    marketingPostalAddress: "1 Test Street, Testville CA 90000",
+  }),
+  marketingBlockedReason: () => null,
+}));
 vi.mock("@/lib/env", () => ({ getSiteUrl: () => "https://www.vantalabsresearch.com" }));
 // Product names come from the catalogue at send time, never from the stored
 // snapshot (AUTH-3): the mock answers every slug the fixtures use.
