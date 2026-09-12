@@ -104,14 +104,10 @@ describe("the trial confirmation is a billing disclosure, not marketing", () => 
     expect(T).toContain("THEY ARE NOT ALL PROMOTIONAL");
   });
 
-  it("its billing siblings are on the transactional path", () => {
-    // If these ever move, a member could unsubscribe from marketing and then be
-    // charged with no notice.
-    const BILLING = R("src/lib/membership-billing.ts");
-    for (const name of ["membershipRemainderReminderTemplate", "membershipRenewalReminderTemplate", "membershipSignupReceiptTemplate"]) {
-      expect(BILLING).toContain(name);
-    }
-  });
+  // A sibling case checked that membership-billing.ts kept its three billing
+  // templates on the transactional path. That module went with the paid
+  // membership feature on 2026-09-12, and with it the only way to be charged
+  // on a recurring basis at all.
 });
 
 describe("the cancellation footer does not print support twice", () => {

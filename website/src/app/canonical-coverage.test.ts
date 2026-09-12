@@ -37,7 +37,6 @@ const SITEMAP_PAGES: Array<[route: string, file: string]> = [
   ["/products", "products/page.tsx"],
   ["/products/[slug]", "products/[slug]/page.tsx"],
   ["/coa-library", "coa-library/page.tsx"],
-  ["/membership", "membership/page.tsx"],
   ["/ambassador", "ambassador/page.tsx"],
   ["/partner", "partner/page.tsx"],
   ["/contact", "contact/page.tsx"],

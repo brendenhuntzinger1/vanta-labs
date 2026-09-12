@@ -256,7 +256,6 @@ export default function CheckoutPage() {
     bulkSavingsTierReached,
     ambassadorDiscountApplied,
     ambassadorDiscountPercent,
-    memberFreeShipping,
     storeCreditBalanceCents,
     storeCreditMinOrderCents,
     salesTaxConfig,
@@ -340,10 +339,10 @@ export default function CheckoutPage() {
   // it zeroes the charge — it used to know only the bulk tier and the perk.
   const couponFreeShipping = Boolean(couponDetails?.freeShipping);
   const shipping = useMemo(
-    () => (isShippingWaived({ bulkSavingsTier: bulkSavingsTierReached, memberFreeShipping, couponFreeShipping })
+    () => (isShippingWaived({ bulkSavingsTier: bulkSavingsTierReached, memberFreeShipping: false, couponFreeShipping })
       ? 0
       : calculateShipping(subtotal, form.country, shippingConfig)),
-    [bulkSavingsTierReached, memberFreeShipping, couponFreeShipping, subtotal, form.country, shippingConfig],
+    [bulkSavingsTierReached, couponFreeShipping, subtotal, form.country, shippingConfig],
   );
   // Live, address-based sales tax: recomputed the instant any address field
   // changes, with the SAME shared resolveSalesTax the server runs when it
@@ -900,11 +899,10 @@ export default function CheckoutPage() {
       <div className="flex justify-between"><span className="text-white/45">Subtotal</span><span className="text-white/80 tabular-nums" data-testid="summary-subtotal">{formatCartCurrency(shownSubtotal)}</span></div>
       <div className="flex justify-between">
         <span className="text-white/45">Shipping</span>
-        {/* "(member)" names the PERK as the reason. With free shipping sitewide
-            on, the reason is the store's own giveaway that every shopper gets,
-            so crediting the plan for it would tell a paying member their
-            subscription bought them something it did not. */}
-        <span className="text-white/80 tabular-nums" data-testid="summary-shipping">{shownShipping === 0 && memberFreeShipping && !isFreeShippingSitewide(shippingConfig) ? "Free (member)" : shownShipping === 0 ? "Free" : formatCartCurrency(shownShipping)}</span>
+        {/* This read "Free (member)" when a paid tier waived shipping. Paid
+            tiers were removed on 2026-09-12, so a zero here is now always the
+            store's own giveaway and is named plainly. */}
+        <span className="text-white/80 tabular-nums" data-testid="summary-shipping">{shownShipping === 0 ? "Free" : formatCartCurrency(shownShipping)}</span>
       </div>
       {shippingProtectionFee > 0 ? (
         <div className="flex justify-between"><span className="text-white/45">Shipping protection</span><span className="text-white/80 tabular-nums">+{formatCartCurrency(shippingProtectionFee)}</span></div>

@@ -53,7 +53,7 @@ vi.mock("@/lib/offers/customer-offers", async () => {
   };
 });
 
-/** Three codes, no database: a big one, a small one, and a shipping waiver. */
+/** A handful of codes, no database: big, small, mid and a shipping waiver. */
 vi.mock("@/lib/coupons", async () => {
   const actual = await vi.importActual<Record<string, unknown>>("@/lib/coupons");
   const calculate = actual.calculateCouponDiscount as (subtotal: number, type: "percent" | "fixed", value: number) => number;
@@ -61,6 +61,8 @@ vi.mock("@/lib/coupons", async () => {
     SAVE50: { percent: 50, freeShipping: false },
     SAVE5: { percent: 5, freeShipping: false },
     SAVE10: { percent: 10, freeShipping: false },
+    // Stands in for the 20% member pricing these cases used to compete against.
+    SAVE20: { percent: 20, freeShipping: false },
     SHIPFREE: { percent: 0, freeShipping: true },
   };
   return {
@@ -74,8 +76,8 @@ vi.mock("@/lib/coupons", async () => {
   };
 });
 
-vi.mock("@/lib/membership", async () => {
-  const actual = await vi.importActual<Record<string, unknown>>("@/lib/membership");
+vi.mock("@/lib/rewards", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("@/lib/rewards");
   return {
     ...actual,
     getMembershipPerks: async () => ({
@@ -233,19 +235,19 @@ describe("a 15% gift against the other discounts", () => {
     expect(q.couponCode).toBe("SHIPFREE");
   });
 
-  it("LOSES to better member pricing", async () => {
+  // These two used to compete the gift against 20% and 10% MEMBER pricing.
+  // Paid tiers were removed on 2026-09-12; a typed code of the same size is
+  // the same shape of competitor and exercises the same rule.
+  it("LOSES to a bigger percentage discount", async () => {
     state.offer = percent15();
-    state.member = { percent: 20, freeShipping: false };
-    const q = await quote([{ id: "peptide-b", quantity: 2 }], { member: true });
+    const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SAVE20" });
     expect(q.discountAmount).toBe(16);
-    expect(q.discountLabel).toBe("Membership pricing");
     expect(q.appliedOffer).toBeNull();
   });
 
-  it("BEATS weaker member pricing", async () => {
+  it("BEATS a smaller percentage discount", async () => {
     state.offer = percent15();
-    state.member = { percent: 10, freeShipping: false };
-    const q = await quote([{ id: "peptide-b", quantity: 2 }], { member: true });
+    const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SAVE10" });
     expect(q.discountAmount).toBe(12);
     expect(q.appliedOffer?.description).toBe("15% off");
   });
@@ -282,15 +284,17 @@ describe("a 15% gift against the other discounts", () => {
     expect(q.appliedOffer).toBeNull();
   });
 
-  it("with coupon stacking switched on, the gift adds on top and is applied", async () => {
-    state.offer = percent15();
-    state.couponStacking = true;
-    state.member = { percent: 10, freeShipping: false };
-    const q = await quote([{ id: "peptide-b", quantity: 2 }], { member: true });
-    // membership $8 + gift $12
-    expect(q.discountAmount).toBe(20);
-    expect(q.appliedOffer?.percentApplied).toBe(true);
-  });
+  // A case here proved that with coupon stacking switched on, the gift added on
+  // top of a customer's MEMBER discount ($8 membership + $12 gift = $20).
+  //
+  // It is not restated with a coupon in membership's place, because that is a
+  // different scenario rather than the same one: membership occupied its own
+  // slot in the single-winner contest, so the gift stacked onto it. A coupon
+  // competes with the gift for one slot, loses at $8 against $12, and is
+  // correctly not applied at all — which proves nothing about stacking.
+  //
+  // Paid tiers were removed on 2026-09-12 and no other discount in this suite's
+  // fixtures sits in a slot the gift can stack onto.
 });
 
 describe("10% off + a free Recon water", () => {
@@ -331,10 +335,12 @@ describe("a free-shipping gift", () => {
     expect(q.appliedOffer).toBeNull();
   });
 
-  it("is NOT applied for a member whose plan already includes free shipping", async () => {
+  // This used to be "a member whose plan already includes free shipping". The
+  // rule is that a shipping waiver which waives nothing is not applied; the
+  // free-shipping THRESHOLD reaches the same state now that plans are gone.
+  it("is NOT applied to a basket that already clears the free-shipping threshold", async () => {
     state.offer = freeShipping();
-    state.member = { percent: 0, freeShipping: true };
-    const q = await quote([{ id: "peptide-b", quantity: 2 }], { member: true });
+    const q = await quote([{ id: "peptide-b", quantity: 6 }]);
     expect(q.shipping).toBe(0);
     expect(q.appliedOffer).toBeNull();
   });
@@ -439,14 +445,6 @@ describe("the retention ladder as production configures it", () => {
 });
 
 describe("a typed code that loses to another discount is not recorded — the same rule as the gift", () => {
-  it("a 5% code beaten by 20% member pricing is not recorded on the order", async () => {
-    state.member = { percent: 20, freeShipping: false };
-    const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SAVE5", member: true });
-    expect(q.discountAmount).toBe(16);
-    expect(q.discountLabel).toBe("Membership pricing");
-    expect(q.couponCode).toBeNull();
-  });
-
   it("a 5% code beaten by a 10% two-unit bundle tier is not recorded on the order", async () => {
     state.bundle = { twoUnitPercent: 0.1, threePlusPercent: 0, fiveUnitPercent: 0, tenUnitPercent: 0 };
     const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SAVE5" });
@@ -455,31 +453,23 @@ describe("a typed code that loses to another discount is not recorded — the sa
     expect(q.couponCode).toBeNull();
   });
 
-  it("a 50% code that BEATS member pricing is recorded, exactly as before", async () => {
-    state.member = { percent: 20, freeShipping: false };
-    const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SAVE50", member: true });
-    expect(q.discountAmount).toBe(40);
+  it("a 50% code that BEATS a bundle tier is recorded, exactly as before", async () => {
+    state.bundle = { twoUnitPercent: 0.1, threePlusPercent: 0, fiveUnitPercent: 0, tenUnitPercent: 0 };
+    const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SAVE50" });
     expect(q.couponCode).toBe("SAVE50");
   });
 
-  it("when stacking is allowed the code is in the price, so it is recorded even though member pricing is larger", async () => {
-    state.couponStacking = true;
-    state.member = { percent: 20, freeShipping: false };
-    const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SAVE5", member: true });
-    expect(q.discountAmount).toBeGreaterThan(16);
-    expect(q.couponCode).toBe("SAVE5");
-  });
-
-  it("a free-shipping code beaten on the percentage still counts when it waived shipping this order would have paid", async () => {
-    state.member = { percent: 20, freeShipping: false };
-    const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SHIPFREE", member: true });
+  it("a free-shipping code counts when it waived shipping this order would have paid", async () => {
+    const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SHIPFREE" });
     expect(q.shipping).toBe(0);
     expect(q.couponCode).toBe("SHIPFREE");
   });
 
-  it("a free-shipping code on a plan that already ships free, beaten on the percentage, gave nothing and is not recorded", async () => {
-    state.member = { percent: 20, freeShipping: true };
-    const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SHIPFREE", member: true });
+  it("a free-shipping code on a basket that already ships free gave nothing and is not recorded", async () => {
+    // Six units clears the free-shipping threshold on its own. This used to be
+    // stated as "a plan that already ships free" — same state, and the only
+    // route to it now that paid tiers are gone.
+    const q = await quote([{ id: "peptide-b", quantity: 6 }], { couponCode: "SHIPFREE" });
     expect(q.shipping).toBe(0);
     expect(q.couponCode).toBeNull();
   });
@@ -574,18 +564,19 @@ describe("the qualifying subtotal: what the customer actually pays for merchandi
     expect(q.appliedOffer?.description).toBe("15% off");
   });
 
-  it("member pricing counts: $80 at 20% member pricing is $64, which is still over $60 for the vial", async () => {
+  // These two used to be stated with 20% MEMBER pricing. What they prove is
+  // that the gift's minimum is judged on what the customer ACTUALLY pays after
+  // the winning discount — true of any discount, so a 20% code states it now.
+  it("a discount counts: $80 at 20% is $64, which is still over $60 for the vial", async () => {
     state.offer = freeGhk();
-    state.member = { percent: 20, freeShipping: false };
-    const q = await quote([{ id: "peptide-b", quantity: 2 }], { member: true });
+    const q = await quote([{ id: "peptide-b", quantity: 2 }], { couponCode: "SAVE20" });
     expect(q.discountAmount).toBe(16);
     expect(q.appliedOffer?.description).toBe("GHK-Cu");
   });
 
-  it("member pricing counts: $70 at 20% is $56, under $60, so no vial", async () => {
+  it("a discount counts: $70 at 20% is $56, under $60, so no vial", async () => {
     state.offer = freeGhk();
-    state.member = { percent: 20, freeShipping: false };
-    const q = await quote([{ id: "vial-70", quantity: 1 }], { member: true });
+    const q = await quote([{ id: "vial-70", quantity: 1 }], { couponCode: "SAVE20" });
     expect(q.discountAmount).toBe(14);
     expect(q.lineItems.some((line) => line.gift)).toBe(false);
     expect(q.appliedOffer).toBeNull();

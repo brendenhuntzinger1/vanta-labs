@@ -224,17 +224,10 @@ describe("every revenue surface agrees with the ledger", () => {
     expect(campaign?.orders).toBe(LEDGER_SALES);
   });
 
-  it("bulk-savings tier stats, on the JS fallback production actually runs", async () => {
-    // The RPC is mocked as unmigrated above, which is production's real state —
-    // so this is the path that serves the dashboard today. It summed GROSS
-    // amount_paid over EVERY status, and the RPC did the same, so the two
-    // "agreed" while both reported roughly three times the truth.
-    const { getBulkSavingsStats } = await import("@/lib/admin-membership");
-    const stats = await getBulkSavingsStats();
-
-    expect(stats.tier5PercentRevenueCents).toBe(Math.round(LEDGER_REVENUE * 100));
-    expect(stats.tier5PercentOrders).toBe(LEDGER_SALES);
-  });
+  // A "bulk-savings tier stats" surface was checked here too. It lived in
+  // admin-membership.ts and was read only by /admin/membership and its
+  // bulk-savings API — all three went with the paid membership feature on
+  // 2026-09-12, so there is no longer a surface to agree with the ledger.
 
   it("best-sellers counts units from sales only", async () => {
     const { getBestSellerSlugs } = await import("@/lib/best-sellers");

@@ -101,9 +101,9 @@ function serverCharges(subtotal: number) {
 vi.mock("server-only", () => ({}));
 vi.mock("next/server", () => ({ after: (fn: () => unknown) => { void fn; } }));
 vi.mock("@/lib/payment-provider", () => ({ getPaymentProvider: () => ({ verifyWebhookSignature: () => true }) }));
-vi.mock("@/lib/membership", () => ({
+vi.mock("@/lib/rewards", () => ({
   calculateEarnedPoints: () => 0, getActivePointsMultiplier: async () => 1,
-  getActivePointsPerDollar: async () => 1, recordPointsLedgerEntry: vi.fn(async () => {}),
+  getPointsRate: async () => 1, recordPointsLedgerEntry: vi.fn(async () => {}),
   redeemPoints: vi.fn(async () => {}), restoreRedeemedPoints: vi.fn(async () => {}),
   reverseOrderPoints: vi.fn(async () => {}),
 }));
@@ -139,7 +139,6 @@ vi.mock("@/lib/ambassador-commission", () => ({
 }));
 vi.mock("@/lib/shippo/order-sync", () => ({ syncOrderToShippo: vi.fn(async () => {}) }));
 vi.mock("@/lib/store-credit", () => ({ redeemStoreCredit: vi.fn(async () => {}), refundStoreCreditForOrder: vi.fn(async () => {}) }));
-vi.mock("@/lib/membership-billing", () => ({ activatePaidMembership: vi.fn(async () => {}), revokeMembershipForRefund: vi.fn(async () => {}) }));
 vi.mock("@/lib/cart-recovery", () => ({ markAbandonedCartsRecovered: vi.fn(async () => {}) }));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: vi.fn(async () => {}) }));
 vi.mock("@/lib/order-attribution", () => ({ getOrderAttribution: async () => null }));

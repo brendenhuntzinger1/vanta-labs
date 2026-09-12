@@ -62,7 +62,7 @@ vi.unmock("@/lib/coupons");
 vi.unmock("@/lib/admin-control");
 vi.unmock("@/lib/catalog");
 vi.unmock("@/lib/cart-recovery");
-vi.unmock("@/lib/membership");
+vi.unmock("@/lib/rewards");
 
 const SHOPPER: Shopper = {
   email: "push.buyer@example.test",

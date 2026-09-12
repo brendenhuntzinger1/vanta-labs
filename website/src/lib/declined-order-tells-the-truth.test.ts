@@ -137,10 +137,15 @@ describe("the account surfaces consult the failed state", () => {
 });
 
 describe("a processor's raw failure text never reaches the customer", () => {
-  it("the notifications list sanitises the reason the way its sibling page does", () => {
+  // The notifications list used to render membership billing events, and this
+  // case pinned it to sanitising the processor's raw failure text rather than
+  // printing decline codes and internal notes to the customer. Membership
+  // billing was removed on 2026-09-12 and that feed no longer carries any
+  // processor text at all — so the guard is that the raw passthrough has not
+  // come back by another route.
+  it("the notifications list carries no raw processor failure text", () => {
     const source = read("src/lib/account-notifications.ts");
-    expect(source).toContain("customerSafeFailureReason(event.failureReason)");
-    // The raw passthrough that used to be here.
     expect(source).not.toContain("event.failureReason ? event.failureReason");
+    expect(source).not.toContain("failureReason");
   });
 });

@@ -30,16 +30,6 @@ function IconOrders({ className = base }: IconProps) {
     </svg>
   );
 }
-function IconSubscriptions({ className = base }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
-      <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8" />
-      <path d="M20 4v4h-4" />
-      <path d="M20 12a8 8 0 0 1-13.7 5.6L4 16" />
-      <path d="M4 20v-4h4" />
-    </svg>
-  );
-}
 function IconHeart({ className = base }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
@@ -129,7 +119,6 @@ type NavItem = {
 const PRIMARY: NavItem[] = [
   { href: "/account", label: "Home", icon: IconHome, exact: true },
   { href: "/account/orders", label: "Orders", icon: IconOrders },
-  { href: "/account/subscriptions", label: "Subscriptions", icon: IconSubscriptions },
   { href: "/account/wishlist", label: "Wishlist", icon: IconHeart },
   { href: "/account/rewards", label: "Rewards", icon: IconRewards },
 ];

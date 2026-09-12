@@ -74,7 +74,6 @@ const TRANSACTIONAL_SENDERS = new Map<string, string>([
 
   // ---- Billing. A charge notice is transactional; the membership MARKETING
   //      in the same module correctly uses sendMarketingEmail. ----
-  ["lib/membership-billing.ts", "renewal receipts and billing failure notices"],
 
   // ---- Inbound forms: these mail the OPERATOR, not the submitter. ----
   ["app/api/contact/route.ts", "delivers a contact form submission to the store"],

@@ -1,8 +1,6 @@
 import { getCustomerOrders } from "@/lib/customer-account";
-import { getPointsHistory } from "@/lib/membership";
-import { getMembershipBillingHistory } from "@/lib/membership-billing";
+import { getPointsHistory } from "@/lib/rewards";
 import { isUnpaid } from "@/lib/order-status";
-import { customerSafeFailureReason } from "@/lib/safe-error";
 
 export type NotificationTone = "info" | "success" | "warning";
 export interface AccountNotification {
@@ -31,15 +29,17 @@ function shortId(id: string) {
 
 /**
  * A unified, honest notifications feed derived from the customer's real
- * activity — order status, points, and membership billing events. No separate
- * notifications table is required; everything here reflects data that already
- * exists. Sorted newest-first.
+ * activity — order status and points. No separate notifications table is
+ * required; everything here reflects data that already exists. Sorted
+ * newest-first.
+ *
+ * Membership billing events were a third source until the paid membership
+ * feature was removed on 2026-09-12.
  */
 export async function getCustomerNotifications(userId: string, email?: string | null, limit = 30): Promise<AccountNotification[]> {
-  const [orders, points, billing] = await Promise.all([
+  const [orders, points] = await Promise.all([
     getCustomerOrders(userId, email).catch(() => []),
     getPointsHistory(userId, 20).catch(() => []),
-    getMembershipBillingHistory(userId, 20).catch(() => []),
   ]);
 
   const items: AccountNotification[] = [];
@@ -72,36 +72,6 @@ export async function getCustomerNotifications(userId: string, email?: string | 
       body: `${positive ? "+" : ""}${entry.amount.toLocaleString()} points`,
       createdAt: entry.createdAt,
       href: "/account/rewards",
-    });
-  }
-
-  for (const event of billing) {
-    const failed = event.status === "failed";
-    let title = "Membership update";
-    let tone: NotificationTone = "info";
-    if (event.eventType === "renewal") { title = "Membership renewed"; tone = failed ? "warning" : "success"; }
-    else if (event.eventType === "payment_failed" || failed) { title = "Membership payment failed"; tone = "warning"; }
-    else if (event.eventType === "cancellation") { title = "Membership cancelled"; tone = "info"; }
-    else if (event.eventType === "pause") { title = "Membership paused"; tone = "info"; }
-    else if (event.eventType === "resume") { title = "Membership resumed"; tone = "success"; }
-    else if (event.eventType === "skip") { title = "Skipped a membership charge"; tone = "info"; }
-    else if (event.eventType === "tier_change") { title = "Membership plan changed"; tone = "info"; }
-    else if (event.eventType === "first_month_remainder") { title = "First-month balance charged"; tone = "success"; }
-
-    items.push({
-      id: `b-${event.id}`,
-      tone,
-      icon: failed ? "alert" : "billing",
-      title,
-      // SANITISED, the way the subscriptions page that shows the same value
-      // already does it. This rendered the processor's raw failure string
-      // verbatim to the customer — which carries decline codes, request ids and,
-      // when the gateway is misconfigured, internal notes naming environment
-      // variables. customerSafeFailureReason is the existing helper for exactly
-      // this and returns null when nothing safe remains.
-      body: failed ? customerSafeFailureReason(event.failureReason) : null,
-      createdAt: event.createdAt,
-      href: "/account/subscriptions",
     });
   }
 

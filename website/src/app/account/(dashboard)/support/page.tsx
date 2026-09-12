@@ -13,11 +13,7 @@ const FAQ: Array<{ q: string; a: string }> = [
   },
   {
     q: "How do points and rewards work?",
-    a: `You earn points on every paid order at your membership's earn rate. ${POINTS_PER_DOLLAR_REDEMPTION} points equals $1 off, applied automatically at checkout. See your balance and history under Rewards.`,
-  },
-  {
-    q: "How do I cancel or change my membership?",
-    a: "Go to Subscription. You can change your plan any time, or cancel to stop future billing while keeping your benefits until the end of the period you already paid for.",
+    a: `You earn points on every paid order. ${POINTS_PER_DOLLAR_REDEMPTION} points equals $1 off, applied automatically at checkout. See your balance and history under Rewards.`,
   },
   {
     q: "Where are the Certificates of Analysis (COAs)?",
@@ -69,7 +65,6 @@ export default async function AccountSupportPage() {
         </div>
         <div className="mt-4 flex flex-wrap gap-2 border-t border-white/10 pt-4 text-xs">
           <Link href="/account/orders" className="rounded-full border border-white/12 bg-white/[0.03] px-3 py-1.5 text-zinc-300 transition hover:border-white/25 hover:text-white">Order help</Link>
-          <Link href="/account/subscriptions" className="rounded-full border border-white/12 bg-white/[0.03] px-3 py-1.5 text-zinc-300 transition hover:border-white/25 hover:text-white">Membership &amp; billing</Link>
           <Link href="/coa-library" className="rounded-full border border-white/12 bg-white/[0.03] px-3 py-1.5 text-zinc-300 transition hover:border-white/25 hover:text-white">COAs</Link>
           <Link href="/legal/refund" className="rounded-full border border-white/12 bg-white/[0.03] px-3 py-1.5 text-zinc-300 transition hover:border-white/25 hover:text-white">Returns</Link>
         </div>

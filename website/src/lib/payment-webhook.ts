@@ -23,7 +23,7 @@ import { finalizeMarketingSource } from "@/lib/marketing-source";
 import { redeemCoupon } from "@/lib/coupons";
 import { normalizeCouponCode } from "@/lib/coupon-code";
 import { readAllRowsBounded } from "@/lib/supabase-page";
-import { calculateEarnedPoints, getActivePointsMultiplier, getActivePointsPerDollar, recordPointsLedgerEntry, redeemPoints, restoreRedeemedPoints, reverseOrderPoints } from "@/lib/membership";
+import { calculateEarnedPoints, getActivePointsMultiplier, getPointsRate, recordPointsLedgerEntry, redeemPoints, restoreRedeemedPoints, reverseOrderPoints } from "@/lib/rewards";
 import { redeemStoreCredit, refundStoreCreditForOrder } from "@/lib/store-credit";
 import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
@@ -42,39 +42,11 @@ import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 // cents and their sums do not drift across the boundary — so this is
 // defensive, not a bug fix. It is here so the two can never drift apart.
 import { referralQualifies } from "@/lib/referral-qualification";
-import { activatePaidMembership, revokeMembershipForRefund } from "@/lib/membership-billing";
-import {
-  isMembershipEvent,
-  handleMembershipEvent,
-  type MembershipEventData,
-} from "@/lib/membership-webhook";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { getOrderAttribution } from "@/lib/order-attribution";
 import { toAnalyticsAttribution } from "@/lib/attribution";
 import { creditFundedOrderNotice } from "@/lib/credit-funded-order-notice";
 import { isSaleOrder } from "@/lib/ledger";
-
-/**
- * The billing cycle to activate for a paid membership order.
- *
- * This used to be `String(cycle ?? "annual") === "monthly" ? "monthly" : "annual"`,
- * so a missing membership_cycle silently granted a ONE-YEAR term. Annual
- * activation also writes cancel_at_period_end = true (an annual pass does not
- * auto-renew), so a guessed cycle produced a member whose account page read
- * "set to cancel at the end of your period" immediately after paying.
- *
- * A missing cycle is a data fault, not an annual purchase. Default to the
- * cheaper, shorter, self-correcting option — monthly renews in 30 days, and a
- * wrong monthly costs the customer 30 days of benefits rather than 365 of ours.
- */
-export function resolveMembershipCycle(raw: unknown, orderId: string): "monthly" | "annual" {
-  const value = String(raw ?? "").trim().toLowerCase();
-  if (value === "monthly" || value === "annual") return value;
-  console.error(
-    `[membership] order ${orderId} has no membership_cycle ("${String(raw)}") — defaulting to monthly rather than granting a year.`,
-  );
-  return "monthly";
-}
 
 /**
  * A durable alert for a financial effect that FAILED and CANNOT be auto-repaired.
@@ -337,6 +309,19 @@ export function getCommissionStateForRefund(currentStatus: string | null | undef
     reviewReason: isKnownStatus ? null : `Refund applied to commission status: ${normalizedStatus}`,
   };
 }
+
+/**
+ * Subscription event types the processor may still emit for memberships that
+ * predate the feature's removal. Kept so the webhook can recognise and ignore
+ * them explicitly — see the guard in the handler below.
+ */
+const MEMBERSHIP_EVENT_TYPES = new Set([
+  "membership.created",
+  "membership.renewed",
+  "membership.payment_failed",
+  "membership.canceled",
+  "membership.card_updated",
+]);
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
@@ -1766,7 +1751,7 @@ export async function finalizeManualPayment(
     }
 
     try {
-      const pointsRate = await getActivePointsPerDollar(customerUserId);
+      const pointsRate = await getPointsRate();
       const { multiplier } = await getActivePointsMultiplier();
       const pointsEarned = calculateEarnedPoints(commissionableSubtotal, pointsRate, multiplier);
 
@@ -1863,17 +1848,11 @@ export async function finalizeManualPayment(
   let stockCommitted = isMembershipOrder;
 
   if (isMembershipOrder) {
-    // Turn on the membership + perks now that payment is verified.
-    try {
-      if (order.customer_user_id && order.membership_tier_id) {
-        const cycle = resolveMembershipCycle(order.membership_cycle, orderId);
-        await activatePaidMembership(String(order.customer_user_id), String(order.membership_tier_id), cycle, orderId);
-      }
-    } catch (membershipError) {
-      console.error("Unable to activate membership for order", orderId, membershipError);
-      await recordSystemAlert(unsafeEffectAlert("membership_activation", orderId, membershipError))
-        .catch(() => {});
-    }
+    // Nothing to activate: the paid membership feature was removed on
+    // 2026-09-12. The branch itself stays because HISTORICAL orders with
+    // order_type = 'membership' still exist, and they hold no inventory —
+    // dropping the check would send them down the product path and try to
+    // commit stock they never reserved.
   } else {
     // Commit stock now that payment is verified. Finalize the reservation held
     // at checkout (permanent deduct); if no active hold exists (untracked item,
@@ -2167,36 +2146,29 @@ export async function processPaymentWebhook(payload: string, signature: string, 
 
   const eventPayload = normalizeOrderPayload(payload);
 
-  // ── Membership lifecycle events ───────────────────────────────────────────
-  // These describe a SUBSCRIPTION, not an order, so they must not fall through
-  // to the order pipeline below: it would resolve no order, synthesise a random
-  // order id, and return early having recorded nothing. That silent drop is why
-  // a Veyra-billed renewal never advanced next_billing_at, leaving the member
-  // to lose access ~3 days later while still being charged.
+  // ── Membership lifecycle events — RECOGNISED, THEN IGNORED ────────────────
+  // The paid membership feature was removed on 2026-09-12 and nothing here
+  // subscribes anyone any more. This guard is NOT dead code: it exists because
+  // of what happens without it.
   //
-  // Claimed through the SAME payment_events path as order events, so a
-  // duplicate delivery cannot double-apply a renewal.
+  // These events describe a SUBSCRIPTION, not an order. If one still arrives —
+  // a subscription left live at the processor, or a redelivery of an old event
+  // — and falls through to the order pipeline below, that pipeline resolves no
+  // order, synthesises a random order id, and returns early having recorded
+  // nothing. That exact silent drop is what once let a billed renewal go
+  // unrecorded while the member lost access three days later.
+  //
+  // So it is answered deliberately and made visible, rather than deleted and
+  // left to fall through. Nothing is applied: there is no membership to renew,
+  // cancel or expire.
   const rawEventType = (eventPayload.type ?? "").trim();
-  if (isMembershipEvent(rawEventType)) {
-    // `data` is typed here for the ORDER envelope (metadata/object); a membership
-    // event carries a different, non-overlapping projection on the same field.
-    const membershipData = (eventPayload.data ?? {}) as unknown as MembershipEventData;
-    // event_id is the unique key; the membership id occupies order_id purely as
-    // a human-readable scope for the claim row.
-    const claimKey = `membership-${(membershipData.membership_id ?? "unknown").slice(0, 64)}`;
-    const claimedMembershipEvent = await claimEvent(eventId, claimKey, "pending_payment");
-    if (claimedMembershipEvent !== "claimed") {
-      return {
-        duplicate: true,
-        eventId,
-        membership: true,
-        handled: false,
-        inFlight: claimedMembershipEvent === "in_flight",
-      };
-    }
-    const outcome = await handleMembershipEvent(rawEventType, membershipData);
-    await markEventProcessed(eventId, claimKey, "pending_payment");
-    return { duplicate: false, eventId, membership: true, ...outcome };
+  if (MEMBERSHIP_EVENT_TYPES.has(rawEventType)) {
+    console.warn(
+      `[payment-webhook] ignoring membership event "${rawEventType}" (event ${eventId}): `
+      + "the membership feature is removed. If these keep arriving, a subscription "
+      + "is still live at the processor and should be cancelled there.",
+    );
+    return { duplicate: false, eventId, membership: true, handled: false };
   }
 
   // Match on the processor's own session id FIRST (server-minted, unspoofable,
@@ -3121,7 +3093,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         }
 
         try {
-          const pointsRate = await getActivePointsPerDollar(customerUserId);
+          const pointsRate = await getPointsRate();
           const { multiplier } = await getActivePointsMultiplier();
           const pointsEarned = calculateEarnedPoints(commissionableSubtotal, pointsRate, multiplier);
 
@@ -3228,18 +3200,6 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           }
         } catch (emailError) {
           console.error("Unable to send order confirmation email for order", orderId, emailError);
-        }
-      }
-
-      // Turn on the membership + perks now that a card payment has cleared.
-      if (isMembershipOrder && customerUserId && orderRecord?.membership_tier_id) {
-        try {
-          const cycle = resolveMembershipCycle(orderRecord.membership_cycle, orderId);
-          await activatePaidMembership(String(customerUserId), String(orderRecord.membership_tier_id), cycle, orderId);
-        } catch (membershipError) {
-          console.error("Unable to activate membership for order", orderId, membershipError);
-          await recordSystemAlert(unsafeEffectAlert("membership_activation", orderId, membershipError))
-            .catch(() => {});
         }
       }
 
@@ -3624,25 +3584,23 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       // `nextStatus` is "refunded" for a $10 goodwill refund on a $200 order
       // just as it is for the full $200 — the partial/full distinction lives in
       // refundOutcome, and everything below used to ignore it. Each of these
-      // four effects returns the WHOLE of something:
+      // effects returns the WHOLE of something:
       //
       //   reverseOrderPoints        debits every point the order earned
       //   restoreRedeemedPoints     re-credits every point it spent
       //   refundStoreCreditForOrder returns the entire redemption
-      //   revokeMembershipForRefund ends the membership outright
       //
       // So a $10 partial refund handed back the customer's full store-credit
       // redemption and all of their redeemed points — real money, on an order
-      // they mostly kept — and cancelled a membership that had been paid for.
-      // Each is also idempotent-by-absence (one row per order), so a later FULL
-      // refund cannot re-run what a partial already spent: getting this wrong
-      // once is permanent.
+      // they mostly kept. Each is also idempotent-by-absence (one row per
+      // order), so a later FULL refund cannot re-run what a partial already
+      // spent: getting this wrong once is permanent.
       //
       // There is no proportional version of any of them to fall back on
-      // (points are reversed per order, store credit is returned per order,
-      // membership is binary), so a partial does NONE of them, exactly
-      // like the admin lane. The customer keeps their points, their credit and
-      // their membership; the cash they were owed is what came back.
+      // (points are reversed per order, store credit is returned per order),
+      // so a partial does NONE of them, exactly like the admin lane. The
+      // customer keeps their points and their credit; the cash they were owed
+      // is what came back.
       // updateCommissionOnRefund above already prorates properly, and the
       // refund sweep only ever plans work for payment_status = 'refunded', so
       // it will not apply these behind our back either.
@@ -3650,7 +3608,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         try {
           await reverseOrderPoints(orderId);
         } catch (pointsError) {
-          console.error("Unable to reverse membership points for order", orderId, pointsError);
+          console.error("Unable to reverse earned points for order", orderId, pointsError);
         }
         try {
           await restoreRedeemedPoints(orderId);
@@ -3661,40 +3619,6 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           await refundStoreCreditForOrder(orderId);
         } catch (creditError) {
           console.error("Unable to return store credit for order", orderId, creditError);
-        }
-      }
-      // A refunded/charged-back MEMBERSHIP order ends the membership immediately
-      // so its benefits stop — otherwise a customer could buy a membership, get
-      // it refunded, and keep member pricing/free shipping/points forever.
-      // Full reversals only: a partial refund on a membership order (a prorated
-      // month, a shipping adjustment) leaves the paid-for membership running.
-      if (refundOutcome.isFullRefund) {
-        try {
-          // An unreadable order is not a non-membership order: swallowing this
-          // read's error skipped the revocation and left the alert below blind to
-          // it, which is the exact failure that alert exists for.
-          const { data: refundedOrder, error: refundedOrderError } = await supabaseAdmin
-            .from("orders")
-            .select("order_type, customer_user_id")
-            .eq("order_id", orderId)
-            .maybeSingle();
-          if (refundedOrderError) throw refundedOrderError;
-          if (
-            refundedOrder
-            && String(refundedOrder.order_type ?? "product") === "membership"
-            && refundedOrder.customer_user_id
-          ) {
-            await revokeMembershipForRefund(String(refundedOrder.customer_user_id));
-          }
-        } catch (membershipError) {
-          console.error("Unable to revoke membership for refunded order", orderId, membershipError);
-          // NEITHER SWEPT NOR ALERTED until now. The refund sweep repairs the
-          // four idempotent refund effects; membership revocation is not one of
-          // them, so this failure had no console reader, no alert and no repair
-          // path — a customer whose membership was refunded kept member pricing,
-          // free shipping and points multipliers indefinitely.
-          await recordSystemAlert(unsafeEffectAlert("membership_revoke", orderId, membershipError))
-            .catch(() => {});
         }
       }
     }

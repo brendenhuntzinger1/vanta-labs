@@ -184,14 +184,20 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
     throw new Error("Invalid coupon code");
   }
 
-  // Audience restriction: a code can be limited to active members only, or to
-  // non-members only (e.g. an acquisition code members shouldn't consume).
+  // Audience restriction, left over from paid membership (removed 2026-09-12).
+  //
+  // `isActiveMember` is now always false, so a "non_members" code simply works
+  // for everyone — which is what it always meant. A "members" code, though,
+  // can no longer be redeemed by anybody.
+  //
+  // ENFORCEMENT IS DELIBERATELY KEPT rather than dropped. Dropping it would
+  // make every historical members-only code instantly redeemable by the whole
+  // internet, which is a discount giveaway, not a removal. The admin form no
+  // longer offers the setting, so no NEW code can land in this state, and the
+  // coupon list still badges the ones that are in it.
   const memberScope = String((data as { member_scope?: string }).member_scope ?? "all");
-  if (memberScope === "members" && !context?.isActiveMember) {
-    throw new Error("This coupon is exclusive to active members. Join a membership to use it.");
-  }
-  if (memberScope === "non_members" && context?.isActiveMember) {
-    throw new Error("This coupon is for non-members — your membership pricing already beats it on most orders.");
+  if (memberScope === "members") {
+    throw new Error("This coupon is no longer available.");
   }
 
   if (data.assigned_email && data.assigned_email.toLowerCase() !== (customerEmail ?? "").trim().toLowerCase()) {

@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 
 export default function AccountForgotPasswordPage() {
   // NO SITE HEADER, for the same reason the portal has none: every link in
-  // it — the wordmark, Products, COA Library, Membership, Account — requires
+  // it — the wordmark, Products, COA Library, Account — requires
   // an account, and the person on this page is here BECAUSE they cannot get
   // into theirs. All five bounce straight back to the sign-in form. The form
   // below carries its own way back.

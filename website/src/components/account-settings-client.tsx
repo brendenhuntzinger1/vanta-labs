@@ -348,7 +348,7 @@ export function AccountSettingsClient({
             </div>
             <p className="mt-3 text-sm font-medium text-white">Secure checkout is arriving soon</p>
             <p className="mx-auto mt-1.5 max-w-md text-sm text-zinc-500">
-              Once our payment processor is connected, you&apos;ll be able to securely save cards here for one-tap checkout and membership billing. Your card details are never stored on our servers.
+              Once our payment processor is connected, you&apos;ll be able to securely save cards here for one-tap checkout. Your card details are never stored on our servers.
             </p>
           </div>
         </section>

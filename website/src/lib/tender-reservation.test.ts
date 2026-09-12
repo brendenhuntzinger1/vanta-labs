@@ -67,7 +67,7 @@ async function creditBalance(): Promise<number> {
 }
 
 async function pointsBalance(): Promise<number> {
-  const { getPointsBalance } = await import("@/lib/membership");
+  const { getPointsBalance } = await import("@/lib/rewards");
   return getPointsBalance(USER);
 }
 
@@ -179,7 +179,7 @@ describe("settlement does not spend the balance twice", () => {
     seed({ cents: 5000 });
     const { reserveOrderTender } = await tender();
     const { redeemStoreCredit } = await import("@/lib/store-credit");
-    const { redeemPoints } = await import("@/lib/membership");
+    const { redeemPoints } = await import("@/lib/rewards");
 
     await reserveOrderTender({ orderId: "order-A", userId: USER, storeCreditCents: 5000, pointsRedeemed: 0 });
     // The webhook path, including the retry that used to double-debit.

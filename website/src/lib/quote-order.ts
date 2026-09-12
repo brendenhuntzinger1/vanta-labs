@@ -9,7 +9,8 @@ import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 import { referralQualifies } from "@/lib/referral-qualification";
 import { resolvePointsRedemptionCents, resolveStoreCreditCents } from "@/lib/store-credit-redemption";
 import { validateCoupon } from "@/lib/coupons";
-import { getMembershipPerks, getPointsBalance, isEligibleForBulkSavings, isPriorityMember } from "@/lib/membership";
+import { getPointsBalance } from "@/lib/rewards";
+import { getStoreCreditBalanceCents } from "@/lib/store-credit";
 import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
@@ -1026,7 +1027,21 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     }
   }
 
-  const [applicablePromotions, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, shippingConfig, memberPerks, referralProgram, couponPolicy] = await Promise.all([
+  // BULK SAVINGS, PRIORITY AND MEMBER PRICING WERE ALL PAID-TIER PERKS.
+  //
+  // The paid membership feature was removed on 2026-09-12, so there is no tier
+  // left to grant any of them and all three resolve to "no" for every order.
+  // They are stated here as explicit constants rather than deleted outright so
+  // the single-winner discount contest below keeps its shape: bulk savings is
+  // still one of the competitors, it simply never wins now.
+  //
+  // Opening bulk savings to ALL customers would be a pricing decision, not a
+  // removal, so it is deliberately not made here — see the note in
+  // docs/MEMBERSHIP-REMOVAL-AND-RESTORE.md.
+  const bulkSavingsEligible = false;
+  const isPriorityOrder = false;
+
+  const [applicablePromotions, bulkSavingsConfig, shippingConfig, storeCreditBalanceCents, referralProgram, couponPolicy] = await Promise.all([
     // Switched on, inside their schedule, and not used up — resolved once,
     // here, so the same list prices the order and the coupon rules read it.
     // The customer's email is what makes a per-customer usage limit
@@ -1037,12 +1052,19 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       { promotions: homepageControlConfig.bxgyPromotions },
     ),
     getBulkSavingsControlConfig(),
-    input.customerUserId ? isEligibleForBulkSavings(input.customerUserId) : Promise.resolve(false),
-    input.customerUserId ? isPriorityMember(input.customerUserId) : Promise.resolve(false),
     getShippingConfig(),
-    input.customerUserId
-      ? getMembershipPerks(input.customerUserId)
-      : Promise.resolve({ isActiveMember: false, tierSlug: "free", memberDiscountPercent: 0, freeShipping: false, pointsPerDollar: 1, storeCreditBalanceCents: 0, storeCreditMinOrderCents: 0 }),
+    // STORE CREDIT IS STILL SPENDABLE, AND THAT IS DELIBERATE.
+    //
+    // This balance used to be read only for an ACTIVE PAID MEMBER — everyone
+    // else was handed a hard 0, so their credit could not be spent. With paid
+    // tiers gone that gate would freeze every balance permanently: customers
+    // would keep credit they earned and be unable to use it, and the refund
+    // path would still be handing more of it back.
+    //
+    // So the balance is now read for any signed-in customer. No NEW credit is
+    // created anywhere (the monthly grant sweep went with the feature), so this
+    // only lets people spend what they already hold.
+    input.customerUserId ? getStoreCreditBalanceCents(input.customerUserId) : Promise.resolve(0),
     getReferralProgramConfig(),
     getCouponPolicyConfig(),
   ]);
@@ -1196,7 +1218,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // code is worth a percentage OF discountBase, and handing absorbed units back
   // moves that base.
   const resolveCoupon = async () => (couponPolicy.couponsEnabled && couponEntered
-    ? await validateCoupon(input.couponCode, discountBase, input.customer.email, { isActiveMember: memberPerks.isActiveMember })
+    ? await validateCoupon(input.couponCode, discountBase, input.customer.email, { isActiveMember: false })
     : null);
   let coupon = await resolveCoupon();
 
@@ -1228,17 +1250,21 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     ? calculateDiscountAmount(discountBase, referralProgram.personalDiscountPercent)
     : 0;
 
-  // Active-member pricing competes as one of the candidate discounts (greatest
-  // savings wins, no stacking) so a member always gets at least their tier
-  // discount whenever it's the best available deal.
-  const memberPricingAmount = memberPerks.memberDiscountPercent > 0
-    ? calculateDiscountAmount(discountBase, memberPerks.memberDiscountPercent)
-    : 0;
+  // Member pricing used to compete as one of the candidate discounts here, at
+  // the buyer's paid-tier percentage. Paid tiers were removed on 2026-09-12,
+  // so `isMember: false` and `membershipPercent: 0` are passed to the rulebook
+  // below and that competitor can never win.
+  //
+  // "membership" STAYS in DISCOUNT_COMPONENTS on purpose. That set is a shared
+  // contract with the profit guard and the client-side preview, and all three
+  // must pass the same shape or they diverge — which is the single failure
+  // this whole path exists to prevent. An entry that always contributes zero
+  // is inert; a set that differs between the three is not.
 
   // Resolve the customer discount through the SHARED profit-engine rulebook, so
   // checkout, the profit guard, and the client preview can never diverge:
-  //  • ONE customer discount (best value) among referral / membership / bulk /
-  //    personal / coupon.
+  //  • ONE customer discount (best value) among referral / bulk / personal /
+  //    coupon. (Membership was a fifth competitor until 2026-09-12.)
   //  • The one intentional stack: a BUNDLE (Buy 3 Get 1) order + a code =
   //    bundle discount PLUS a reduced referral % (admin-set, default 5%).
   //  • Coupons stack only when the admin enables it.
@@ -1262,8 +1288,8 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     bundleDiscount: promotionDiscount,
     referralAccepted: referralQualifiesForDiscount,
     referralPercent: referralQualifiesForDiscount && referral ? referral.discountPercent : 0,
-    isMember: memberPricingAmount > 0,
-    membershipPercent: memberPerks.memberDiscountPercent,
+    isMember: false,
+    membershipPercent: 0,
     bulkSavingsAmount: bulkSavingsResult.amount,
     personalDiscountAmount,
     personalDiscountPercent: referralProgram.personalDiscountPercent,
@@ -1352,7 +1378,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // shipping.ts and cart-server-discount-parity.test.ts).
   const shippingOtherwiseWaived = isShippingWaived({
     bulkSavingsTier: Boolean(bulkSavingsResult.tier),
-    memberFreeShipping: Boolean(memberPerks.freeShipping),
+    memberFreeShipping: false,
     couponFreeShipping: Boolean(coupon?.freeShipping),
   });
   const shippingAtListTerms = destinationKnown
@@ -1429,7 +1455,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // that ships free, or on a bulk tier, the waiver changes nothing either.
   const couponDiscountApplied = Boolean(coupon) && couponAmount > 0 && couponSlotWon && !giftPercentFillsSlot;
   const couponWaivedShipping = Boolean(coupon?.freeShipping)
-    && !(bulkSavingsResult.tier || memberPerks.freeShipping)
+    && !bulkSavingsResult.tier
     && (destinationKnown ? shippingAtListTerms > 0 : true);
   const couponCodeForOrder = coupon && (couponDiscountApplied || couponWaivedShipping) ? coupon.code : null;
 
@@ -1624,8 +1650,11 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // what it always meant.
   const storeCreditRedeemedCents = resolveStoreCreditCents({
     referralDiscountApplied,
-    balanceCents: memberPerks.storeCreditBalanceCents,
-    minOrderCents: memberPerks.storeCreditMinOrderCents,
+    balanceCents: storeCreditBalanceCents,
+    // The redemption minimum was a per-TIER setting (credit could only be spent
+    // on an order big enough for margin to cover it). With no tiers there is no
+    // minimum, which matches what the free tier always carried: 0.
+    minOrderCents: 0,
     subtotalCents: Math.round(subtotal * 100),
     redeemableCents: Math.round(totalBeforePoints * 100),
   });

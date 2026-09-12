@@ -17,7 +17,6 @@ export const dynamic = "force-dynamic";
 // /account/login:
 //
 //     /                             307  -> /account/login?next=%2F
-//     /membership                   307
 //     /research                     307
 //     /research/<four articles>     307  (one per article)
 //
@@ -46,7 +45,7 @@ export const dynamic = "force-dynamic";
 /** Everything this site would offer a crawler if nothing were gated. */
 function candidates(): Array<{ path: string; changeFrequency: "weekly" | "monthly" | "yearly"; priority: number }> {
   return [
-    ...["", "/membership", "/ambassador", "/partner", "/contact", "/wholesale", "/research"].map((path) => ({
+    ...["", "/ambassador", "/partner", "/contact", "/wholesale", "/research"].map((path) => ({
       path,
       changeFrequency: "weekly" as const,
       priority: path === "" ? 1 : 0.7,

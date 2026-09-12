@@ -19,7 +19,6 @@ import { normalizeBxgyPromotion } from "@/lib/bxgy-config";
 import { calculateShippingProtectionFee, SHIPPING_PROTECTION_PERCENT } from "@/lib/shipping-protection";
 import { calculateShipping, DEFAULT_SHIPPING_CONFIG, isShippingWaived, type ShippingConfig } from "@/lib/shipping";
 import { DEFAULT_SALES_TAX_CONFIG, type SalesTaxConfig } from "@/lib/sales-tax";
-import type { MembershipTierSummary } from "@/lib/member-pricing";
 import { canonicalCartSlug } from "@/lib/bac-water";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 import { cartPromoCandidates, describeCouponOutcome, resolveCartDiscount, type CouponOutcome, type PriceControllingDiscount } from "@/lib/discount-resolution";
@@ -134,10 +133,6 @@ type CartContextValue = {
   // always 0 — the checkout page combines this config with the entered address
   // via the shared resolveSalesTax to quote tax live (mirrors the server).
   salesTaxConfig: SalesTaxConfig;
-  // Paid membership tiers (marketing summary) for member-pricing display and
-  // the join-and-save upsells. memberDiscountPercent > 0 means the signed-in
-  // shopper is already an active paying member.
-  membershipTiers: MembershipTierSummary[];
   shippingConfig: ShippingConfig;
   bundleConfig: BundleConfig;
   shippingProtectionEnabled: boolean;
@@ -205,9 +200,6 @@ type CartContextValue = {
   bulkSavingsTierReached: boolean;
   ambassadorDiscountApplied: boolean;
   ambassadorDiscountPercent: number;
-  memberFreeShipping: boolean;
-  /** Active paid-member merchandise discount % (0 = not a paying member). */
-  memberDiscountPercent: number;
   storeCreditApplied: number;
   storeCreditBalanceCents: number;
   storeCreditMinOrderCents: number;
@@ -450,7 +442,6 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
   // must match the server default in admin-control.ts or totals drift.
   const [bundleStacking, setBundleStacking] = useState(false);
   const [salesTaxConfig, setSalesTaxConfig] = useState<SalesTaxConfig>(DEFAULT_SALES_TAX_CONFIG);
-  const [membershipTiers, setMembershipTiers] = useState<MembershipTierSummary[]>([]);
   // Admin-configurable referral customer-discount percent, loaded from the same
   // /api/catalog/promotions config the server uses. Defaults to 10 (matches the
   // server default) until config loads, so the client preview always mirrors the
@@ -507,13 +498,15 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
     setShippingProtectionEnabled(enabled);
   }, []);
 
-  const [isEligibleForBulkSavings, setIsEligibleForBulkSavings] = useState(false);
+  // Bulk savings was gated on the Elite/Black PAID tiers, removed 2026-09-12.
+  // Nobody qualifies now, and this constant mirrors the server, which resolves
+  // the same `false` in quote-order.ts. Kept as a named value rather than
+  // inlined so the two sides stay visibly paired.
+  const isEligibleForBulkSavings = false;
   const [bulkSavingsConfig, setBulkSavingsConfig] = useState<BulkSavingsConfig>(DEFAULT_BULK_SAVINGS_CONFIG);
   const [knownEmail, setKnownEmail] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [cartSessionId, setCartSessionId] = useState<string | null>(null);
-  const [memberDiscountPercent, setMemberDiscountPercent] = useState(0);
-  const [memberFreeShipping, setMemberFreeShipping] = useState(false);
   // Personal discount an approved ambassador gets on their own order (0 for
   // everyone else). Fetched from /api/account/ambassador-discount, which uses
   // the same check as the server so the preview matches the real charge.
@@ -542,9 +535,6 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
           pointsBalance?: number;
           pointsPerDollar?: number;
           pointsMultiplier?: number;
-          isEligibleForBulkSavings?: boolean;
-          memberDiscountPercent?: number;
-          memberFreeShipping?: boolean;
           storeCreditBalanceCents?: number;
           storeCreditMinOrderCents?: number;
         };
@@ -553,9 +543,6 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
         setPointsBalance(result.pointsBalance ?? 0);
         setPointsPerDollar(result.pointsPerDollar ?? 0);
         setPointsMultiplier(result.pointsMultiplier ?? 1);
-        setIsEligibleForBulkSavings(Boolean(result.isEligibleForBulkSavings));
-        setMemberDiscountPercent(Number(result.memberDiscountPercent ?? 0) || 0);
-        setMemberFreeShipping(Boolean(result.memberFreeShipping));
         setStoreCreditBalanceCents(Number(result.storeCreditBalanceCents ?? 0) || 0);
         setStoreCreditMinOrderCents(Number(result.storeCreditMinOrderCents ?? 0) || 0);
         if (result.email) setKnownEmail(result.email);
@@ -676,7 +663,7 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
       try {
         const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
         if (!response.ok) return;
-        const result = await response.json() as { success: boolean; bxgyPromotions?: unknown[]; couponStackingEnabled?: boolean; referralProgramEnabled?: boolean; bundleConfig?: BundleConfig; bundleStacking?: boolean; salesTax?: SalesTaxConfig; shippingConfig?: ShippingConfig; referralDiscountPercent?: number; referralMinimumOrder?: number; membershipTiers?: MembershipTierSummary[] };
+        const result = await response.json() as { success: boolean; bxgyPromotions?: unknown[]; couponStackingEnabled?: boolean; referralProgramEnabled?: boolean; bundleConfig?: BundleConfig; bundleStacking?: boolean; salesTax?: SalesTaxConfig; shippingConfig?: ShippingConfig; referralDiscountPercent?: number; referralMinimumOrder?: number; };
         if (result.success) {
           // Normalised through the same reader the server uses, so a payload
           // from an older or newer deploy can only ever produce a promotion
@@ -707,7 +694,6 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
             });
           }
           if (result.shippingConfig) setShippingConfig(result.shippingConfig);
-          if (Array.isArray(result.membershipTiers)) setMembershipTiers(result.membershipTiers);
           if (Number.isFinite(result.referralDiscountPercent)) {
             setReferralDiscountPercent(Number(result.referralDiscountPercent));
           }
@@ -1320,14 +1306,14 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
   // perk, and a free-shipping code showed the fee still in the total.
   const shippingAtListTerms = calculateShipping(subtotal, undefined, shippingConfig);
   const couponFreeShipping = Boolean(couponDetails?.freeShipping);
-  const shipping = isShippingWaived({ bulkSavingsTier: bulkSavingsTierReached, memberFreeShipping, couponFreeShipping })
+  const shipping = isShippingWaived({ bulkSavingsTier: bulkSavingsTierReached, memberFreeShipping: false, couponFreeShipping })
     ? 0
     : shippingAtListTerms;
   // Whether the CODE is what made shipping free: only when the fee would
   // otherwise be charged and no other grant already waives it — the same rule
   // quote-order.ts uses to decide whether the code is recorded on the order.
   const couponWaivesShipping = couponFreeShipping
-    && !(bulkSavingsTierReached || memberFreeShipping)
+    && !bulkSavingsTierReached
     && shippingAtListTerms > 0;
 
   // ALWAYS ITS REAL VALUE. NEVER ZEROED BY THE COMPANY IT KEEPS.
@@ -1405,10 +1391,11 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
   // Rounding only later, inside compete(), differs by a cent whenever the raw
   // product lands on a half-cent: 76 of 200,000 randomised baskets, every one
   // exactly a cent and every one with the server giving more.
-  const memberPricingAmount = useMemo(
-    () => (memberDiscountPercent > 0 ? Math.round(discountBase * memberDiscountPercent) / 100 : 0),
-    [memberDiscountPercent, discountBase],
-  );
+  // Member pricing was a paid-tier perk, removed on 2026-09-12. It stays in the
+  // discount inputs as a constant 0 so this preview keeps the exact same shape
+  // as the server's rulebook in quote-order.ts — the two diverging is the one
+  // failure this mirroring exists to prevent.
+  const memberPricingAmount = 0;
 
   // Ambassadors get a personal discount on their own order (no commission). It
   // competes for best value with everything else — a bigger coupon wins, and it
@@ -1440,7 +1427,7 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
       promotionStacksCoupon,
       promos: promoDiscounts,
     }),
-    [subtotal, quantityBundleSavings, bulkSavingsResult.amount, memberPricingAmount, ambassadorPersonalAmount, couponDiscountAmount, couponStackingEnabled, promotionStacksCoupon, promoDiscounts],
+    [subtotal, quantityBundleSavings, bulkSavingsResult.amount, ambassadorPersonalAmount, couponDiscountAmount, couponStackingEnabled, promotionStacksCoupon, promoDiscounts],
   );
 
   const bestDiscount = cartDiscount.best;
@@ -1593,8 +1580,9 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
 
   const totalBeforePoints = Math.max(0, subtotal + shipping + taxAmount - discountAmount);
 
-  // Membership store credit auto-applies when the merchandise subtotal meets
-  // the tier's redemption minimum. Mirrors payment-service.ts exactly.
+  // Store credit auto-applies to the order. There is no longer a redemption
+  // minimum (it was a per-tier setting; paid tiers were removed 2026-09-12).
+  // Mirrors payment-service.ts exactly.
   // The arithmetic is in store-credit-redemption.ts, shared verbatim with
   // quote-order.ts. It used to be a hand-written copy here and a second one in
   // checkout/page.tsx; reverting either of them left the whole suite green,
@@ -2217,8 +2205,6 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
     shipping,
     taxAmount,
     salesTaxConfig,
-    membershipTiers,
-    memberDiscountPercent,
     shippingConfig,
     bundleConfig,
     shippingProtectionEnabled,
@@ -2248,7 +2234,6 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
     bulkSavingsTierReached,
     ambassadorDiscountApplied,
     ambassadorDiscountPercent,
-    memberFreeShipping,
     storeCreditApplied,
     storeCreditBalanceCents,
     storeCreditMinOrderCents,

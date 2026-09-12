@@ -7,14 +7,13 @@ import { useCart } from "@/components/cart-context";
 
 const NAV_LINKS = [
   { href: "/products", label: "Products" },
-  { href: "/membership", label: "Membership" },
   { href: "/wholesale", label: "Wholesale" },
   { href: "/partner", label: "Partner Program" },
   { href: "/contact", label: "Contact us" },
   { href: "/coa-library", label: "COA Library" },
 ];
 
-// One treatment for every link. Membership used to sit in a filled white pill
+// One treatment for every link. A Membership link used to sit in a filled white pill
 // and COA Library was dimmed to a "quiet reference"; both were asked to match
 // their neighbours, so the row now has no per-link styling at all.
 const DESKTOP_LINK_CLASS =

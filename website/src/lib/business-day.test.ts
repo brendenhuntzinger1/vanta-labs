@@ -175,7 +175,7 @@ const SURFACES: Array<{ path: string; helpers: string[]; banned?: RegExp[] }> = 
   { path: "src/lib/store-credit.ts", helpers: ["businessMonthKey(", "startOfBusinessMonthIso("] },
   // Whose birthday it is today.
   {
-    path: "src/lib/membership.ts",
+    path: "src/lib/rewards.ts",
     helpers: ["businessCalendarDate("],
     banned: [/today\.getUTC(Month|Date|FullYear)\(\)/],
   },

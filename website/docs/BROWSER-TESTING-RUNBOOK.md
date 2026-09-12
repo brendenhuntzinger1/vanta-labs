@@ -63,6 +63,28 @@ returns 200 and the full storefront is drivable; without it, every host resets.
 
 ---
 
+## The QA suites do not agree on a base URL, and `qa:all` cannot be green
+
+`qa-customer-crawl.mjs` and `qa-checkout-edge-matrix.mjs` default to
+**`https://127.0.0.1:3443`**; `qa-role-boundaries.mjs`, `qa-cross-account.mjs`,
+`qa-customer-journey.mjs`, `qa-purchase-path.mjs`, `qa-post-3ds-high-value.mjs`,
+`qa-amount-matrix.mjs` and `qa-abuse-and-roles.mjs` default to
+**`http://127.0.0.1:3000`**.
+
+Only one of those can match `NEXT_PUBLIC_SITE_URL` at a time, and a mismatch
+does not fail loudly — it fails as something that reads like a defect:
+
+- Set the site URL to 3443 and run the http suites, and the open-redirect check
+  in `qa:abuse` reports "the hop redirected off-site … lands on 127.0.0.1:3443".
+  It did not go off-site. It landed on our own host, on the other port, and the
+  check compares `landing.host` against its own `BASE`.
+- Leave it at 3000 and run `qa:crawl` in WebKit, and sign-in fails with "no
+  session cookie" — the Secure-cookie-over-http trap described below.
+
+So run them in two passes rather than chasing one green `qa:all`, and pass
+`QA_BASE_URL` explicitly to whichever half you are running. Measured
+2026-09-12: every suite passes, but no single invocation covers them all.
+
 ## Chromium is not Safari, and a spoofed user-agent will not make it one
 
 **Only Chromium is pre-installed, and a UA string changes the string, not the
@@ -89,6 +111,18 @@ for `webkit-2336` and finds `webkit-2215`).
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0 PLAYWRIGHT_BROWSERS_PATH=/tmp/pw-engines \
       node /tmp/pw/node_modules/playwright-core/cli.js install webkit firefox
     npx playwright install-deps webkit      # needs root; WebKit needs ~40 shared libs
+
+**Installing into `/opt/pw-browsers` works too, and is simpler** when the
+container lets you (measured 2026-09-12 — WebKit 26.5 launched afterwards):
+
+    PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers npx playwright install webkit
+    PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers npx playwright install-deps webkit
+
+The `install` step FAILS its host-requirements validation on a bare container
+and the download still lands, so do not read that error as "WebKit is
+unavailable" — run `install-deps` and try launching. Without the deps the
+launch error names `libgtk-4`, `libgraphene`, `libevent`, `libflite*` and about
+thirty more; `install-deps` pulls the lot.
 
 Then run with `PLAYWRIGHT_BROWSERS_PATH=/tmp/pw-engines`, and make
 `playwright-core` resolvable from `website/` — a symlink into the scratch
@@ -471,7 +505,32 @@ CHECKOUT_ENABLED=true
 ```
 
 ```bash
-node scripts/veyra-stub.mjs      # mints session ids only; never marks anything paid
+mkdir -p /tmp/vanta-qa
+node scripts/veyra-stub.mjs > /tmp/vanta-qa/veyra.log 2>&1 &
+```
+
+**Redirect its stdout, and redirect it THERE.** The stub logs each request body
+to stdout and writes no file of its own, while `qa-post-3ds-high-value.mjs`
+reads `$QA_VEYRA_LOG`, defaulting to `/tmp/vanta-qa/veyra.log`. Start the stub
+without that redirect and the suite still runs — it just cannot see the request,
+so "the processor was never asked to create a session for this order" fails and
+the amount-integrity check SKIPS. That reads exactly like checkout not reaching
+the processor, and it is really a shell redirect.
+
+**Not starting the stub at all is worse**, because it fails somewhere else
+entirely: `/api/checkout/create-session` cannot mint a session, the order is
+written and immediately CANCELED, and the suite reports "a new order should be
+pending_payment, not canceled" across seven steps. Measured 2026-09-12: seven
+failures with the stub down, two with it up but unredirected, zero with both
+right. If a high-value run fails, check those two things before the code.
+
+**`CRON_SECRET` belongs in `.env.test.local` too.** `/api/cron/sweep` is
+protected by it and answers 401 without it, so the sweep never runs and the
+suite's last step reports held stock that "survived the sweep" — which looks
+like `expireStaleReservations` being broken rather than an unset variable:
+
+```
+CRON_SECRET=harness-cron-secret
 ```
 
 > `scripts/veyra-stub.mjs` originates from the live-inspection session

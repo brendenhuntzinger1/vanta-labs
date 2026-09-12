@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { buildAuthCookieValue, buildExpiredAuthCookie, getSessionAccessToken } from "@/lib/auth-session";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { createServerClient, supabaseAdmin } from "@/lib/supabase-server";
-import { awardReferralSignupBonus, awardSignupBonusIfNeeded } from "@/lib/membership";
+import { awardReferralSignupBonus, awardSignupBonusIfNeeded } from "@/lib/rewards";
 import { getUserIdByReferralCode, setReferredByCode } from "@/lib/customer-account";
 import { customerSafeMessage } from "@/lib/safe-error";
 import { recordMarketingOptIn } from "@/lib/marketing-broadcast";
@@ -254,10 +254,9 @@ export async function POST(request: Request) {
             await awardReferralSignupBonus(data.user.id, referrerUserId);
           }
         }
-      } catch (membershipError) {
-        // A points/membership hiccup must never block establishing the
-        // session itself.
-        console.error("Unable to process membership signup bonuses", membershipError);
+      } catch (rewardsError) {
+        // A points hiccup must never block establishing the session itself.
+        console.error("Unable to process rewards signup bonuses", rewardsError);
       }
     }
 

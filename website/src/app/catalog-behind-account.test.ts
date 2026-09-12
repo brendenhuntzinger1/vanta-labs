@@ -251,7 +251,7 @@ describe("the site stops advertising what it will not serve", () => {
 
   it("the sitemap still offers the whole public brand surface", () => {
     const body = code(sitemap);
-    for (const path of ["/research", "/membership", "/partner", "/wholesale", "/contact"]) {
+    for (const path of ["/research", "/partner", "/wholesale", "/contact"]) {
       expect(body, `${path} must stay indexable`).toContain(`"${path}"`);
     }
     expect(body).toContain("ARTICLE_SLUGS");
@@ -293,7 +293,7 @@ describe("the public brand surface is untouched", () => {
       code(middleware).indexOf("const PUBLIC_EXACT"),
       code(middleware).indexOf("function requiresAccount"),
     );
-    for (const publicPath of ['"/research"', '"/legal"', '"/contact"', '"/membership"']) {
+    for (const publicPath of ['"/research"', '"/legal"', '"/contact"']) {
       expect(gated, `${publicPath} must stay public`).not.toContain(publicPath);
     }
   });

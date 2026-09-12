@@ -101,10 +101,13 @@ describe("getStorefrontCoupon honours member_scope for the viewer", () => {
     expect(await getStorefrontCoupon()).toBeNull();
   });
 
-  it("the route resolves the viewer's membership and passes it in", async () => {
+  it("the route asks as a non-member, which is what every viewer now is", async () => {
+    // This used to resolve the viewer's membership and pass it in. Paid tiers
+    // were removed on 2026-09-12, so the route states the audience directly —
+    // and it must keep matching checkout, where a members-only code can no
+    // longer be redeemed either.
     const { readFileSync } = await import("node:fs");
     const route = readFileSync(`${process.cwd()}/src/app/api/coupons/featured/route.ts`, "utf8");
-    expect(route).toContain("getMembershipPerks(user.id)");
-    expect(route).toContain("getStorefrontCoupon({ isActiveMember })");
+    expect(route).toContain("getStorefrontCoupon({ isActiveMember: false })");
   });
 });
