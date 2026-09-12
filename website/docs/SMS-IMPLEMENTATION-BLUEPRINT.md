@@ -1,5 +1,45 @@
 # Vanta Texts — implementation blueprint
 
+> ## ⏸ PAUSED 2026-09-12, AT THE OWNER'S REQUEST. NOTHING IS HALF-DONE.
+>
+> Paused because the real blocker is not code: **there is no Twilio phone number
+> and no A2P 10DLC registration yet**, and registration is the long pole (2-3
+> weeks realistic, see §A3). Building further before it starts spends effort on
+> the wrong end of the critical path.
+>
+> **Pausing here is safe, and costs nothing recurring.** Nothing can send: every
+> SMS switch (`sms.enabled`, `sms.transactional_enabled`, `sms.marketing_enabled`)
+> is unset and therefore false, no Twilio credential is configured, and the M0
+> suppression seed was deliberately **never run**. Every behavioural flag is off.
+> The work so far is additive and inert — it changed no total, no discount, no
+> payout and no email.
+>
+> **State at the pause.** Branch `claude/practical-archimedes-vne737`, all pushed.
+>
+> | | |
+> |---|---|
+> | M0 evidence pack | done (read-only); **the suppression seed is NOT run and stays held** |
+> | M1 schema + Twilio boundary | done, applied to production |
+> | M2 consent, state machine, keywords, quiet hours | done |
+> | M3 `person_key` on the email frequency guard | done, applied; no caller passes it yet |
+> | M4 the three order bases | done, proven no-op |
+> | M5 contribution formula + persisted snapshot | done, applied to production, verified end to end (§D1a) |
+> | M6 credit eligibility behind its own flag | **not started** |
+> | M7 / M8 / M9 | not started |
+> | Conversion Architecture phase | discovery started and **cancelled at the pause**; no output kept |
+> | Post-Twilio production audit | not started — it is a launch gate, see §A9 |
+>
+> **When this resumes, start here.** Begin the A2P 10DLC brand + campaign
+> registration FIRST and let it run in the background; everything else can be
+> built while it is pending. Read §A3 before filing it — the rejection codes that
+> apply to this store (30951 third-party lead-gen for the ambassador programme,
+> 30941 prescription-drug wording, 30945 incentivized opt-in) are mostly
+> **non-remediable**, so the registration copy has to be right the first time.
+>
+> Next code milestone is **M6**. The reason it exists is CONFLICT 6 in §C4: the
+> existing EMAIL win-back gift already absorbs cart units, so credit eligibility
+> needs its own flag before anything else moves.
+
 **Status:** blueprint for approval. **No production code written.**
 **Date:** 2026-09-11 · **Supersedes nothing; extends** `SMS-LIFECYCLE-STRATEGY.md`
 **Source of truth:** production code at `website/src` and the live database, both read 2026-09-11.
