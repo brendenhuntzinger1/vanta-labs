@@ -186,7 +186,6 @@ vi.mock("@/lib/inventory-reservation", () => ({
 }));
 vi.mock("@/lib/shippo/order-sync", () => ({ syncOrderToShippo: vi.fn(async () => {}) }));
 vi.mock("@/lib/store-credit", () => ({ redeemStoreCredit: vi.fn(async () => {}), refundStoreCreditForOrder: vi.fn(async () => {}) }));
-vi.mock("@/lib/membership-billing", () => ({ activatePaidMembership: vi.fn(async () => {}), revokeMembershipForRefund: vi.fn(async () => {}) }));
 vi.mock("@/lib/cart-recovery", () => ({ markAbandonedCartsRecovered: vi.fn(async () => {}) }));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: vi.fn(async () => {}) }));
 vi.mock("@/lib/order-attribution", () => ({ getOrderAttribution: async () => null }));

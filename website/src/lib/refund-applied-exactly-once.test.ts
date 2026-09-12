@@ -98,10 +98,6 @@ vi.mock("@/lib/store-credit", () => ({
   redeemStoreCredit: vi.fn(async () => {}),
   refundStoreCreditForOrder: sideEffects.refundCredit,
 }));
-vi.mock("@/lib/membership-billing", () => ({
-  activatePaidMembership: vi.fn(async () => {}),
-  revokeMembershipForRefund: sideEffects.revokeMembership,
-}));
 vi.mock("@/lib/cart-recovery", () => ({ markAbandonedCartsRecovered: vi.fn(async () => {}) }));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: sideEffects.alert }));
 vi.mock("@/lib/ambassador-settings", () => ({ getAmbassadorProgramSettings: async () => ({ enabled: false }) }));

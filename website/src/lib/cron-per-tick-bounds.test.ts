@@ -50,10 +50,6 @@ vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: vi.fn(async () => {}) })
 vi.mock("@/lib/billing-provider", () => ({
   getBillingProvider: () => ({ chargeCard: vi.fn(async () => ({ success: true, providerChargeId: "ch_1" })) }),
 }));
-vi.mock("@/lib/veyra-membership", () => ({
-  startVeyraMembership: vi.fn(), cancelVeyraMembership: vi.fn(),
-  skipVeyraMembershipCycle: vi.fn(), updateVeyraMembershipCard: vi.fn(),
-}));
 vi.mock("@/lib/payment-provider", () => ({ getPaymentProvider: () => ({}), isCheckoutOpen: () => true }));
 vi.mock("@/lib/store-credit", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/store-credit")>();

@@ -143,10 +143,6 @@ vi.mock("@/lib/store-credit", () => ({
   redeemStoreCredit: vi.fn(async () => {}),
   refundStoreCreditForOrder: vi.fn(async () => {}),
 }));
-vi.mock("@/lib/membership-billing", () => ({
-  activatePaidMembership: vi.fn(async () => {}),
-  revokeMembershipForRefund: vi.fn(async () => {}),
-}));
 vi.mock("@/lib/cart-recovery", () => ({ markAbandonedCartsRecovered: vi.fn(async () => {}) }));
 vi.mock("@/lib/monitoring", () => ({
   recordSystemAlert: vi.fn(async (alert: Row) => { db.alerts.push(alert); }),
