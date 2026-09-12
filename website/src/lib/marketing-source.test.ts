@@ -101,6 +101,13 @@ describe("resolveMarketingSource precedence", () => {
   it("a campaign tag alone is not an ad either — anything can write one", () => {
     expect(resolveMarketingSource({ adTouch: { source: "newsletter", campaign: "spring", clickId: null } }))
       .toEqual({ kind: "organic", ref: null, basis: "none" });
+    // WITH NO SOURCE AT ALL, which is the case the first assertion does not
+    // reach: the old predicate was `campaign || source || clickId`, so a bare
+    // utm_campaign was enough to call an order an ad. An ad whose utm_source a
+    // redirect stripped now reads organic — the honest answer, since a campaign
+    // tag names no platform and could have been written by anyone.
+    expect(resolveMarketingSource({ adTouch: { source: null, campaign: "spring_sale", clickId: null } }))
+      .toEqual({ kind: "organic", ref: null, basis: "none" });
   });
 
   it("still credits every platform the store does buy ads on, however it is spelled", () => {

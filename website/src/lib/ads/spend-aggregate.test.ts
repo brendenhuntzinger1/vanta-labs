@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   aggregateCampaigns,
   aggregateCreatives,
+  aggregateNonPaidSource,
   aggregatePlatforms,
   aggregateUnattributedRevenue,
   aggregateUntagged,
@@ -257,5 +258,37 @@ describe("the blind spots", () => {
     ]);
     expect(rows[0]).toMatchObject({ platform: "reddit", revenue: 300 });
     expect(rows[1]).toMatchObject({ platform: "snapchat", orders: 3, revenue: 200 });
+  });
+});
+
+describe("revenue the page refuses to claim", () => {
+  it("groups per source across days, not per row", () => {
+    // The view is per (day, source); the panel is per source. Two days of
+    // ChatGPT referrals must read as one line of two orders, not two lines.
+    expect(aggregateNonPaidSource([
+      { stat_date: "2026-09-11", utm_source: "chatgpt.com", orders: 1, net_revenue: 179.96 },
+      { stat_date: "2026-09-06", utm_source: "chatgpt.com", orders: 1, net_revenue: 106.58 },
+    ])).toEqual([{ utmSource: "chatgpt.com", orders: 2, revenue: 286.54 }]);
+  });
+
+  it("sorts by revenue so the biggest unclaimed source leads", () => {
+    const rows = aggregateNonPaidSource([
+      { stat_date: "2026-09-01", utm_source: "linktr.ee", orders: 1, net_revenue: 40 },
+      { stat_date: "2026-09-01", utm_source: "chatgpt.com", orders: 2, net_revenue: 286.54 },
+      { stat_date: "2026-09-01", utm_source: "perplexity.ai", orders: 1, net_revenue: 90 },
+    ]);
+    expect(rows.map((r) => r.utmSource)).toEqual(["chatgpt.com", "perplexity.ai", "linktr.ee"]);
+  });
+
+  it("names a source it cannot read rather than dropping its money", () => {
+    // Dropping the row would understate the excluded total, which reads as the
+    // correction having lost revenue — the exact misreading this panel exists
+    // to prevent.
+    expect(aggregateNonPaidSource([{ stat_date: "2026-09-01", orders: 1, net_revenue: 12.5 }]))
+      .toEqual([{ utmSource: "unknown", orders: 1, revenue: 12.5 }]);
+  });
+
+  it("is empty when every paid order came from a source we buy ads on", () => {
+    expect(aggregateNonPaidSource([])).toEqual([]);
   });
 });

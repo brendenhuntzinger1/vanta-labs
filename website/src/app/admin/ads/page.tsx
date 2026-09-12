@@ -288,6 +288,11 @@ function StaleFeedNotice({ s }: { s: SpendDashboard }) {
  * referrals divided by TikTok's spend, reported as ROAS 3.36 on an ad account
  * that had sold nothing. Removing it silently would read as revenue going
  * missing, so the money is named where it went.
+ *
+ * Its copy states what the EXCLUSION is, never what the traffic was. The view
+ * behind it filters on the tag, not on the channel, so a row in it can still
+ * carry marketing_source_kind 'ad' or 'ambassador' — an earlier draft called
+ * every row "organic and referral sales", which for those rows is simply false.
  */
 function BlindSpots({ s }: { s: SpendDashboard }) {
   const spendShare = s.totals.spend > 0 ? s.untaggedSpend / s.totals.spend : null;
@@ -355,8 +360,9 @@ function BlindSpots({ s }: { s: SpendDashboard }) {
           <p className="text-xs text-white/60">
             <span className="text-white">{money(s.nonPaidSourceRevenueTotal)}</span> of paid orders carry a{" "}
             <code className="font-mono text-white/50">utm_source</code> this store does not buy ads on, so none of it
-            counts as ad revenue here. It is real revenue — organic and referral sales, counted in full on the store&apos;s
-            own reporting. Software stamps that tag unprompted: ChatGPT appends{" "}
+            counts as ad revenue here. The money is real and counts in full on the store&apos;s own revenue reporting —
+            this panel says only that it cannot be set against ad spend, not what the traffic was. Software stamps that
+            tag unprompted: ChatGPT appends{" "}
             <code className="font-mono text-white/50">utm_source=chatgpt.com</code> to every link it hands out.
           </p>
           <ul className="mt-2 space-y-1.5 text-xs">

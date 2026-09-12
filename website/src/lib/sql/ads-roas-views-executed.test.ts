@@ -722,6 +722,18 @@ describeDb("the ROAS views, run against a real Postgres", () => {
       expect(rows[0].revenue).toBe(200);
     });
 
+    it("does not admit a source on a zero-spend reporting row alone", async () => {
+      // The ingest writes a row for a day on which nothing was spent. Because
+      // the EXISTS is uncorrelated with the day, one such row would otherwise
+      // turn every historical order from that source into ad revenue at once.
+      await addSpend([{ platform: "pinterest", ad_id: "p0", stat_date: D, utm_content: "pin_a", spend: 0, clicks: 0, impressions: 30 }]);
+      await addOrder({ order_id: "pin0", amount_paid: 75, created_at: T, last_utm_source: "pinterest", last_utm_content: "pin_a" });
+      const { rows } = await client.query("select coalesce(sum(net_revenue),0)::float8 r from ad_revenue_daily where utm_source='pinterest'");
+      expect(rows[0].r, "a reporting row is not spending").toBe(0);
+      const named = await client.query("select utm_source from ad_revenue_non_paid_source where utm_source='pinterest'");
+      expect(named.rows, "and the money is still named, not dropped").toHaveLength(1);
+    });
+
     it("counts a platform that is not in the canonical four but has recorded spend", async () => {
       // So connecting a fifth platform needs no change here: the moment its
       // spend lands, its revenue is ad revenue. Money out is the test, not a

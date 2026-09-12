@@ -86,7 +86,13 @@ as $$
     when public.ad_platform_key(raw) is null then false
     when public.ad_platform_key(raw) in ('facebook', 'tiktok', 'reddit', 'snapchat') then true
     else exists (
-      select 1 from public.ad_spend_daily s where s.platform = public.ad_platform_key(raw)
+      -- `spend > 0`, not merely a row. The ingest writes a reporting row for a
+      -- day on which nothing was spent, and without this one zero-spend row
+      -- would admit a source retroactively — the EXISTS is uncorrelated with
+      -- the day, so every historical order from it would become ad revenue at
+      -- once. Money out is the test, which is what this clause claims to be.
+      select 1 from public.ad_spend_daily s
+       where s.platform = public.ad_platform_key(raw) and s.spend > 0
     )
   end;
 $$;

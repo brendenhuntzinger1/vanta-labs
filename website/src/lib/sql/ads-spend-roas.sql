@@ -181,7 +181,13 @@ as $$
     when public.ad_platform_key(raw) is null then false
     when public.ad_platform_key(raw) in ('facebook', 'tiktok', 'reddit', 'snapchat') then true
     else exists (
-      select 1 from public.ad_spend_daily s where s.platform = public.ad_platform_key(raw)
+      -- `spend > 0`, not merely a row. The ingest writes a reporting row for a
+      -- day on which nothing was spent, and without this one zero-spend row
+      -- would admit a source retroactively — the EXISTS is uncorrelated with
+      -- the day, so every historical order from it would become ad revenue at
+      -- once. Money out is the test, which is what this clause claims to be.
+      select 1 from public.ad_spend_daily s
+       where s.platform = public.ad_platform_key(raw) and s.spend > 0
     )
   end;
 $$;
@@ -501,7 +507,7 @@ comment on view public.ad_platform_daily is
   'Spend beside attributed revenue per platform per day. The one view that answers "which platform is working" without requiring per-ad UTM tagging.';
 
 -- -----------------------------------------------------------------------------
--- 5. The two blind spots, named rather than dropped
+-- 5. The two blind spots and the one refusal, named rather than dropped
 -- -----------------------------------------------------------------------------
 
 -- SPEND WE CANNOT MEASURE: money went out against an ad carrying no readable
@@ -630,3 +636,10 @@ revoke all on public.ad_spend_daily from anon, authenticated;
 --
 -- select * from public.ad_spend_untagged order by spend desc limit 20;
 -- select * from public.ad_revenue_unattributed order by net_revenue desc limit 20;
+-- select * from public.ad_revenue_non_paid_source order by net_revenue desc limit 20;
+--
+-- -- What the paid-source gate admits, and why. A source reaching 'spend' is
+-- -- admitted by clause 2; one reaching only 'canonical' by clause 1.
+-- select distinct oa.last_utm_source,
+--        public.is_paid_ad_source(oa.last_utm_source) as counts_as_ad
+--   from public.order_attribution oa where oa.last_utm_source is not null;

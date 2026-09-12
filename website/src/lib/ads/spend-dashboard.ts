@@ -199,7 +199,13 @@ export async function getSpendDashboard(windowDays = DEFAULT_WINDOW_DAYS): Promi
 
   return {
     schemaReady: !platformRes.missing,
-    schemaError: [platformRes.error, campaignRes.error, creativeRes.error, untaggedRes.error].find(Boolean) ?? null,
+    // nonPaidRes is in this chain on purpose. safeSelect only calls a failure
+    // `missing` on 42P01 or /does not exist/i, and PostgREST answers a view its
+    // schema cache has not picked up yet with PGRST205 ("Could not find the
+    // table ... in the schema cache"), which matches neither. Left out, a stale
+    // cache would drop the excluded-revenue block silently while the page still
+    // reported schemaReady — a correction that quietly stops explaining itself.
+    schemaError: [platformRes.error, campaignRes.error, creativeRes.error, untaggedRes.error, nonPaidRes.error].find(Boolean) ?? null,
     feedConfigured: Boolean(process.env.WINDSOR_API_KEY?.trim()),
     lastIngestedAt,
     lastIngestedAgeHours: Number.isNaN(lastIngestedMs)
