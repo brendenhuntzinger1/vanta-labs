@@ -567,6 +567,16 @@ async function reserveAndSendStage(input: {
    */
   mintOffer?: () => Promise<string | null>;
   /**
+   * A gift the stage would LIKE to carry but can send without.
+   *
+   * Called after the claim is won and before the template is built, so the
+   * callback may set whatever the template needs to describe the gift. Unlike
+   * `mintOffer` above, returning null — or throwing — is not fatal: the stage
+   * simply goes without one. Use this where the message stands on its own and
+   * `mintOffer` where the message IS the gift.
+   */
+  mintOfferOptional?: () => Promise<string | null>;
+  /**
    * An entitlement token the CALLER already minted, for a stage where the gift
    * is a bonus rather than the subject.
    *
@@ -666,9 +676,38 @@ async function reserveAndSendStage(input: {
     }
   }
 
+  // THE SOFT ENTITLEMENT, ALSO BEHIND THE CLAIM.
+  //
+  // P0-1. The last-chance stage used to mint its gift in the CALLER, before
+  // reserveAndSendStage was entered at all, because its gift is a bonus rather
+  // than the subject and a failed mint must not silence the message. That put
+  // the one irreversible side effect in this whole function — issuing an
+  // entitlement, which retires the address's previous one — OUTSIDE the claim
+  // that makes every other side effect happen at most once.
+  //
+  // The consequence, measured in production 2026-09-12: the frequency guard
+  // deferred the send on every tick of the 24-hour t72h window, the caller
+  // minted anyway on every tick, and each mint revoked the one before it.
+  // Four real carts churned 96-97 tokens each — one per tick, exactly — and
+  // not one of the four ever received the message. Worse, the FIRST token in
+  // that chain was the one already sitting in the shopper's 24-hour email,
+  // promising a ten-day expiry; it died at about 48 hours when the churn began.
+  //
+  // Moving it here keeps both properties: it still cannot silence the send
+  // (failure is tolerated, unlike mintOffer below), and it now cannot run
+  // without the claim, so it happens at most once per cart per stage.
+  let softOfferToken: string | null = null;
+  if (input.mintOfferOptional) {
+    try {
+      softOfferToken = await input.mintOfferOptional();
+    } catch (error) {
+      console.error("[cart-recovery] optional gift could not be minted; sending without it", input.cartId, input.stage, error);
+    }
+  }
+
   // THE ENTITLEMENT IS MINTED BEHIND THE CLAIM, exactly like the coupon above,
   // and a stage that cannot mint one sends nothing at all.
-  let offerToken: string | null = input.offerToken ?? null;
+  let offerToken: string | null = input.offerToken ?? softOfferToken;
   if (input.mintOffer) {
     offerToken = await input.mintOffer();
     if (!offerToken) {
@@ -1935,30 +1974,24 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       // reserveAndSendStage treats a failed `mintOffer` as fatal, because the
       // body of a gift email is about the gift. This message is not: it is the
       // last note about the cart, and it stands on the code and the cart
-      // summary whether or not a vial can be attached. So the gift is minted
-      // BEFORE the send is arranged, and a failure just means the gift block is
-      // absent — never a stage that goes silent on its last chance to convert.
+      // summary whether or not a vial can be attached. So it uses
+      // `mintOfferOptional`, whose failure just means the gift block is absent
+      // — never a stage that goes silent on its last chance to convert.
       //
-      // issueCustomerOffer retires this cart's own stage-3 row and mints a
-      // fresh token, so the link in the NEWEST email is the one that works.
+      // P0-1: THAT SOFTNESS USED TO BE BOUGHT BY MINTING OUT HERE, before the
+      // claim, and that was the bug. Issuing an entitlement retires the
+      // address's previous one, so an unclaimed mint is not a harmless retry —
+      // it is a revocation. With the send deferred on every tick of the window,
+      // four production carts churned 96-97 tokens apiece and none was ever
+      // mailed. The softness is now expressed by the CALLBACK's contract rather
+      // than by its position, so it costs nothing and happens at most once.
       const giftKey = plan.offerKey;
       const giftConfig = recoveryGiftConfig(shippableGifts(plan.gifts), catalogueNameBySlug);
-      let giftToken: string | null = null;
+      // Filled in by mintOfferOptional below, which runs BEHIND the claim and
+      // before buildTemplate — so what the email says about the gift is written
+      // from the row that was actually minted, and only when one was.
       let giftTerms = "";
-      if (giftKey && giftConfig) {
-        try {
-          const issued = await issueResolvedOffer({
-            email, offerKey: giftKey, config: giftConfig, referenceId: cartId,
-          });
-          if (issued) {
-            giftToken = issued.token;
-            giftTerms = describeGiftTerms(giftConfig, issued.expiresAt);
-          }
-        } catch (error) {
-          console.error("[cart-recovery] last-chance gift could not be minted; sending without it", cartId, error);
-        }
-      }
-      const giftLabel = giftToken && giftConfig ? giftConfig.label : "";
+      let giftLabel = "";
 
       // C-06 and K-05 both hold here: the claim comes first, and any code the
       // email advertises is one the database will honour at the till. When the
@@ -1982,7 +2015,19 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
           ? () => resolveLastChanceCoupon(cartId, email, plan.percent, config.couponExpirationHours)
           : () => findLiveCouponForCart(cartId),
         couponRequired: discountAllowed,
-        offerToken: giftToken,
+        mintOfferOptional: giftKey && giftConfig
+          ? async () => {
+            const issued = await issueResolvedOffer({
+              email, offerKey: giftKey, config: giftConfig, referenceId: cartId,
+            });
+            if (!issued) return null;
+            // From the SAME config the mint wrote onto the row, so what the
+            // email states and what the till applies cannot disagree.
+            giftTerms = describeGiftTerms(giftConfig, issued.expiresAt);
+            giftLabel = giftConfig.label;
+            return issued.token;
+          }
+          : undefined,
         buildTemplate: (url, coupon) => cartRecoveryT72hTemplate({
           ...base,
           restoreUrl: url,
