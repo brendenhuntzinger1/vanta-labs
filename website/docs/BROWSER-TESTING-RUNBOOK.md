@@ -63,6 +63,28 @@ returns 200 and the full storefront is drivable; without it, every host resets.
 
 ---
 
+## The QA suites do not agree on a base URL, and `qa:all` cannot be green
+
+`qa-customer-crawl.mjs` and `qa-checkout-edge-matrix.mjs` default to
+**`https://127.0.0.1:3443`**; `qa-role-boundaries.mjs`, `qa-cross-account.mjs`,
+`qa-customer-journey.mjs`, `qa-purchase-path.mjs`, `qa-post-3ds-high-value.mjs`,
+`qa-amount-matrix.mjs` and `qa-abuse-and-roles.mjs` default to
+**`http://127.0.0.1:3000`**.
+
+Only one of those can match `NEXT_PUBLIC_SITE_URL` at a time, and a mismatch
+does not fail loudly — it fails as something that reads like a defect:
+
+- Set the site URL to 3443 and run the http suites, and the open-redirect check
+  in `qa:abuse` reports "the hop redirected off-site … lands on 127.0.0.1:3443".
+  It did not go off-site. It landed on our own host, on the other port, and the
+  check compares `landing.host` against its own `BASE`.
+- Leave it at 3000 and run `qa:crawl` in WebKit, and sign-in fails with "no
+  session cookie" — the Secure-cookie-over-http trap described below.
+
+So run them in two passes rather than chasing one green `qa:all`, and pass
+`QA_BASE_URL` explicitly to whichever half you are running. Measured
+2026-09-12: every suite passes, but no single invocation covers them all.
+
 ## Chromium is not Safari, and a spoofed user-agent will not make it one
 
 **Only Chromium is pre-installed, and a UA string changes the string, not the
@@ -89,6 +111,18 @@ for `webkit-2336` and finds `webkit-2215`).
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0 PLAYWRIGHT_BROWSERS_PATH=/tmp/pw-engines \
       node /tmp/pw/node_modules/playwright-core/cli.js install webkit firefox
     npx playwright install-deps webkit      # needs root; WebKit needs ~40 shared libs
+
+**Installing into `/opt/pw-browsers` works too, and is simpler** when the
+container lets you (measured 2026-09-12 — WebKit 26.5 launched afterwards):
+
+    PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers npx playwright install webkit
+    PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers npx playwright install-deps webkit
+
+The `install` step FAILS its host-requirements validation on a bare container
+and the download still lands, so do not read that error as "WebKit is
+unavailable" — run `install-deps` and try launching. Without the deps the
+launch error names `libgtk-4`, `libgraphene`, `libevent`, `libflite*` and about
+thirty more; `install-deps` pulls the lot.
 
 Then run with `PLAYWRIGHT_BROWSERS_PATH=/tmp/pw-engines`, and make
 `playwright-core` resolvable from `website/` — a symlink into the scratch
