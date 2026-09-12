@@ -106,16 +106,59 @@ async function seedLapsedCustomer(email, days) {
        now() - make_interval(days => $3))`,
     [orderId, email, days],
   );
+  // PAID_AT, NOT JUST CREATED_AT. selectAutomationTargets measures the lapse
+  // from the moment the money landed, so a row that is payment_status='paid'
+  // with a null paid_at has no last-order date at all and matches no win-back.
+  // This fixture set created_at only, so every "lapsed customer" it seeded was
+  // invisible to the rules it exists to exercise.
+  await q(
+    `update orders set paid_at = created_at where order_id = $1 and paid_at is null`,
+    [orderId],
+  );
   return orderId;
 }
 
-/** Run the REAL scheduled sweep — the same entry point Vercel calls. */
+/**
+ * Put an automation on a delay this test controls, rather than trusting
+ * whatever the database happens to carry.
+ *
+ * The harness database had winback_60 at 75 days while this file seeded a
+ * customer who lapsed 70 days ago, so the target was simply not due yet and
+ * the sweep correctly did nothing. A fixture that depends on a default it does
+ * not set is a fixture that breaks the day somebody edits the default — which
+ * is exactly what happened.
+ */
+async function setAutomationDelay(key, days) {
+  await q(`update email_automations set delay_days = $2 where key = $1`, [key, days]);
+}
+
+/**
+ * Run the REAL scheduled sweep — the same entry point Vercel calls.
+ *
+ * THE LIFECYCLE ROUTE, NOT THE SWEEP ROUTE. The six jobs that put a message in
+ * front of a customer — cart recovery, the retention automations, campaigns,
+ * the marketing queue, the email retry and the order-email reaper — moved to
+ * /api/cron/lifecycle on 2026-09-10 so a recovery window could not be lost to
+ * a sweep that overran on twenty-seven unrelated jobs.
+ *
+ * This file was last touched 2026-09-07 and kept calling /api/cron/sweep, so
+ * from the day of that split it asserted on a response that could not contain
+ * `emailAutomations` — the whole gift chain, from the admin dropdown to the $0
+ * line, has been silently proving nothing since. A harness that points at the
+ * wrong door does not fail loudly; it just stops being evidence.
+ */
 async function runSweep() {
-  const res = await fetch(`${BASE}/api/cron/sweep`, {
+  const res = await fetch(`${BASE}/api/cron/lifecycle`, {
     headers: { authorization: `Bearer ${CRON}` },
   });
   const body = await res.json().catch(() => null);
-  assert(res.status === 200, `sweep returned ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
+  assert(res.status === 200, `lifecycle sweep returned ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
+  // The job key this file exists to exercise. If the route is ever split again,
+  // fail HERE with the reason rather than fifteen assertions downstream.
+  assert(
+    body && Object.prototype.hasOwnProperty.call(body, "emailAutomations"),
+    `the lifecycle route returned no emailAutomations key — has the job moved again? got: ${Object.keys(body ?? {}).join(", ")}`,
+  );
   return body;
 }
 
@@ -296,6 +339,7 @@ async function main() {
     await seedLapsedCustomer(GHK_BUYER, 70);
     await seedLapsedCustomer(GHK_SMALL, 70);
     await q("update email_automations set enabled = true where key = 'winback_60'");
+    await setAutomationDelay("winback_60", 60);
     const mark = captureMark();
     const sweep = await runSweep();
     const outcome = sweep?.emailAutomations;
@@ -471,6 +515,7 @@ async function main() {
     await seedLapsedCustomer(COMBO_BUYER, 35);
     await q("update email_automations set enabled = false where key = 'winback_60'");
     await q("update email_automations set enabled = true where key = 'winback_30'");
+    await setAutomationDelay("winback_30", 30);
     const mark = captureMark();
     await runSweep();
     const mail = capturedSince(mark).find((m) => String(m.to ?? "").toLowerCase() === COMBO_BUYER);
