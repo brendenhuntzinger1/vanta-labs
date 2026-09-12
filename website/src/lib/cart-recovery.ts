@@ -1934,7 +1934,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       // $520 cart a GHK-Cu and a Recon Water, because one flat gift under-serves
       // the carts holding most of the money and over-serves the rest.
       const giftKey = plan.offerKey;
-      const giftConfig = recoveryGiftConfig(shippableGifts(plan.gifts), catalogueNameBySlug);
+      const giftConfig = recoveryGiftConfig(shippableGifts(plan.gifts), catalogueNameBySlug, 0, plan.minCartCents);
       let giftTerms = "";
       sent = await reserveAndSendStage({
         cartId, stage, email,
@@ -1986,7 +1986,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       // mailed. The softness is now expressed by the CALLBACK's contract rather
       // than by its position, so it costs nothing and happens at most once.
       const giftKey = plan.offerKey;
-      const giftConfig = recoveryGiftConfig(shippableGifts(plan.gifts), catalogueNameBySlug);
+      const giftConfig = recoveryGiftConfig(shippableGifts(plan.gifts), catalogueNameBySlug, 0, plan.minCartCents);
       // Filled in by mintOfferOptional below, which runs BEHIND the claim and
       // before buildTemplate — so what the email says about the gift is written
       // from the row that was actually minted, and only when one was.

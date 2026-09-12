@@ -122,6 +122,24 @@ export interface RecoveryOfferPlan {
    * that has ever recovered a cart here.
    */
   suppressed: boolean;
+  /**
+   * THE SMALLEST ORDER THIS GIFT MAY BE SPENT AGAINST.
+   *
+   * The band's own floor, not the programme's. Every assembled gift used to
+   * carry the single code floor — $35 — whatever band produced it, so the
+   * $500+ band's gift (a KLOW at $25.07 cost and $119.99 retail, plus a GHK-Cu
+   * and a Recon Water) could be redeemed against a $40 basket. The shopper
+   * simply removed items before checking out and the store shipped roughly
+   * $175 of retail product against a $40 order: a negative-contribution order
+   * the system would have accepted without complaint.
+   *
+   * Matching the minimum to the band that earned the gift closes that without
+   * touching the honest case — a shopper who keeps the cart they abandoned is
+   * unaffected — and it is disclosed rather than silent, because
+   * describeGiftTerms already renders this number as "on any order of $X or
+   * more" in the same sentence that names the gift.
+   */
+  minCartCents: number;
 }
 
 function withinCooldown(last: number | null, window: number, now: number): boolean {
@@ -130,7 +148,7 @@ function withinCooldown(last: number | null, window: number, now: number): boole
 
 export function planStageOffer(context: RecoveryOfferContext): RecoveryOfferPlan {
   const none = (reason: string): RecoveryOfferPlan =>
-    ({ offerKey: null, gifts: [], coupon: false, percent: 0, reason, suppressed: false });
+    ({ offerKey: null, gifts: [], coupon: false, percent: 0, reason, suppressed: false, minCartCents: RECOVERY_GIFT_MIN_CART_CENTS });
 
   // STAGES ONE AND TWO CARRY NOTHING, DELIBERATELY. A discount on the first
   // reminder is a discount for having been interrupted, and it teaches the
@@ -193,6 +211,8 @@ export function planStageOffer(context: RecoveryOfferContext): RecoveryOfferPlan
         ? `stage 3: free gift (${describeGifts(gifts)}), no discount`
         : `no gift: ${giftBlocked ?? "this band gives none at 24h"}`,
       suppressed: false,
+      // The band that earned the gift sets the floor it may be spent against.
+      minCartCents: Math.max(RECOVERY_GIFT_MIN_CART_CENTS, tier?.minCents ?? 0),
     };
   }
 
@@ -226,6 +246,7 @@ export function planStageOffer(context: RecoveryOfferContext): RecoveryOfferPlan
     percent: couponBlocked ? 0 : bandPercent,
     reason: `stage 4: ${parts.join(" + ")}`,
     suppressed: false,
+    minCartCents: Math.max(RECOVERY_GIFT_MIN_CART_CENTS, tier?.minCents ?? 0),
   };
 }
 
@@ -262,6 +283,13 @@ export function recoveryGiftConfig(
   gifts: RecoveryGiftItem[],
   names: ReadonlyMap<string, string>,
   percent = 0,
+  /**
+   * The floor the till will enforce. Defaults to the programme floor so every
+   * existing caller and test keeps its old meaning; the sweep passes the
+   * BAND's floor (plan.minCartCents), which is the whole point of P0-3 — a
+   * $500-band gift must not be spendable against a $40 order.
+   */
+  minSubtotalCents: number = RECOVERY_GIFT_MIN_CART_CENTS,
 ): GiftConfig | null {
   if (gifts.length === 0) return null;
   const label = gifts
@@ -276,7 +304,7 @@ export function recoveryGiftConfig(
     reward: percent > 0
       ? { kind: "free_products_percent", items, percent }
       : { kind: "free_products", items },
-    minSubtotalCents: RECOVERY_GIFT_MIN_CART_CENTS,
+    minSubtotalCents,
     ttlDays: RECOVERY_GIFT_TTL_DAYS,
   };
 }
