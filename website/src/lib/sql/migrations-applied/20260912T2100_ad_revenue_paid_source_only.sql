@@ -39,13 +39,32 @@
 -- isKnownAdPlatform() in src/lib/ads/utm.ts. That half needs no migration.
 --
 -- ----------------------------------------------------------------------------
--- NOT YET APPLIED TO PRODUCTION. Verified on the local harness against the
--- production case (2 chatgpt.com orders beside $85.23 of TikTok spend): the
--- headline went from Revenue $286.54 / Purchases 2 / ROAS 3.36 to $0.00 / 0 /
--- 0.00, with the $286.54 named under "What is not measured". Production is
--- read-only to this session by CLAUDE.md's rule, so applying it there is the
--- owner's call. Until it runs, the Ads tab keeps reporting the inflated
--- figures — the TypeScript half of the fix does not correct the views.
+-- APPLIED TO PRODUCTION 2026-09-12, on the owner's explicit authorisation.
+--
+--   BEFORE  spend $85.23 · purchases 2 · revenue $286.54 · ROAS 3.36 · CPA $42.62
+--   AFTER   spend $85.23 · purchases 0 · revenue   $0.00 · ROAS 0.00 · CPA —
+--
+-- CPA is null, not zero: no purchases means unknown, and a $0.00 CPA on a
+-- store that has sold nothing through an ad would be its own small lie.
+--
+-- Verified afterwards, in production: chatgpt.com appears in none of the five
+-- ads views at any window; all-time ad revenue across every grain is 0 orders
+-- and $0.00; the $286.54 is intact in ad_revenue_non_paid_source; store revenue
+-- is unchanged at 16 paid orders and $1,890.46 net; every view is still
+-- security_invoker with no anon/authenticated SELECT; and pg_get_viewdef hashes
+-- match the harness running this repo's file exactly.
+--
+-- Both positive cases were proven against the live views inside a transaction
+-- that was rolled back: a paid tiktok order attributed normally (ROAS 2.35),
+-- and a `pinterest` order — a platform in no hard-coded list — qualified purely
+-- because spend existed for it (ROAS 3.00). Nothing persisted; the probe rows
+-- were confirmed absent afterwards.
+--
+-- The two `prod_smoke_test` TikTok orders cannot contaminate any of this: they
+-- are `canceled` and `payment_failed`, and the payment_status filter that has
+-- always been on this view excludes them at every window. They carry $68.49 of
+-- amount_paid each, which is exactly the trap section 3 of ads-spend-roas.sql
+-- warns about.
 --
 -- One function added, one view replaced, one view added. The
 -- four views built on ad_revenue_daily (ad_platform_daily, ad_campaign_daily,
