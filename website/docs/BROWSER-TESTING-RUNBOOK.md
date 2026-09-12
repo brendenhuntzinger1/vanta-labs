@@ -471,7 +471,32 @@ CHECKOUT_ENABLED=true
 ```
 
 ```bash
-node scripts/veyra-stub.mjs      # mints session ids only; never marks anything paid
+mkdir -p /tmp/vanta-qa
+node scripts/veyra-stub.mjs > /tmp/vanta-qa/veyra.log 2>&1 &
+```
+
+**Redirect its stdout, and redirect it THERE.** The stub logs each request body
+to stdout and writes no file of its own, while `qa-post-3ds-high-value.mjs`
+reads `$QA_VEYRA_LOG`, defaulting to `/tmp/vanta-qa/veyra.log`. Start the stub
+without that redirect and the suite still runs — it just cannot see the request,
+so "the processor was never asked to create a session for this order" fails and
+the amount-integrity check SKIPS. That reads exactly like checkout not reaching
+the processor, and it is really a shell redirect.
+
+**Not starting the stub at all is worse**, because it fails somewhere else
+entirely: `/api/checkout/create-session` cannot mint a session, the order is
+written and immediately CANCELED, and the suite reports "a new order should be
+pending_payment, not canceled" across seven steps. Measured 2026-09-12: seven
+failures with the stub down, two with it up but unredirected, zero with both
+right. If a high-value run fails, check those two things before the code.
+
+**`CRON_SECRET` belongs in `.env.test.local` too.** `/api/cron/sweep` is
+protected by it and answers 401 without it, so the sweep never runs and the
+suite's last step reports held stock that "survived the sweep" — which looks
+like `expireStaleReservations` being broken rather than an unset variable:
+
+```
+CRON_SECRET=harness-cron-secret
 ```
 
 > `scripts/veyra-stub.mjs` originates from the live-inspection session
