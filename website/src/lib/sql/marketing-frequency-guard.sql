@@ -41,6 +41,32 @@
 -- mail with no natural retry (a restock alert, a coupon announcement, a
 -- membership welcome) is parked in marketing_send_queue, fully rendered, and
 -- drained by the cron sweep once its not_before passes, through the same claim.
+--
+-- 2026-09-12 — p_person_key (SMS groundwork, M3).
+--
+-- The lock is taken on the ADDRESS, which is the right key while email is the
+-- only marketing channel and the wrong key the moment SMS exists: one person
+-- reachable at an inbox and a handset is two lock keys, so an email job and an
+-- SMS job would not contend and the "one marketing message a day" rule would
+-- quietly become "one per channel per day".
+--
+-- So the lock key becomes a PERSON key, supplied by the caller, DEFAULTING TO
+-- THE EMAIL. Omit it and the key is byte-for-byte the string this function has
+-- always locked on, so every existing caller is unchanged in the only sense
+-- that matters — the same lock, the same contention, the same outcomes.
+--
+-- WHAT DELIBERATELY DID NOT CHANGE: the quiet-window READ is still keyed on
+-- `recipient_email`. Making it person-wide needs the SMS ledger to exist and be
+-- populated, which is later work; changing it now would alter which existing
+-- email sends defer, which is precisely what this step must not do. The lock
+-- key is the concurrency primitive and lands first; the read follows when there
+-- is a second channel for it to read.
+--
+-- DROP THEN CREATE, NOT `create or replace`. Adding a defaulted parameter makes
+-- a NEW signature, so `create or replace` would leave BOTH functions in place
+-- and a six-argument call would match the old one exactly and the new one via
+-- its default — "function is not unique". The old signature is therefore
+-- dropped in the same transaction as the new one is created.
 -- ---------------------------------------------------------------------------
 
 -- The quiet-window read is keyed on the address; the existing indexes are all
@@ -48,13 +74,22 @@
 create index if not exists email_send_log_recipient_sent_idx
   on public.email_send_log (recipient_email, sent_at desc);
 
+-- The pre-2026-09-12 six-argument signature. Dropped so exactly one
+-- marketing_send_claim exists and no call can be ambiguous. `if exists` keeps
+-- this file re-runnable.
+drop function if exists public.marketing_send_claim(text, text, text, text, integer, text);
+
 create or replace function public.marketing_send_claim(
   p_email text,
   p_campaign_type text,
   p_reference_id text,
   p_template_key text,
   p_quiet_seconds integer default 86400,
-  p_exempt_family text default null
+  p_exempt_family text default null,
+  -- The person this message is for, when the caller knows it. NULL means "use
+  -- the email", which is what every caller does today and what keeps this
+  -- change invisible until something opts in.
+  p_person_key text default null
 ) returns table (outcome text, log_id uuid, last_marketing_at timestamptz)
 language plpgsql
 security definer
@@ -64,6 +99,9 @@ declare
   v_email text := nullif(lower(trim(coalesce(p_email, ''))), '');
   v_type text := nullif(trim(coalesce(p_campaign_type, '')), '');
   v_quiet interval := make_interval(secs => greatest(coalesce(p_quiet_seconds, 0), 0));
+  -- DEFAULTS TO THE EMAIL, so the lock string is identical to the one this
+  -- function has always used when no person key is supplied.
+  v_person text;
   v_last timestamptz;
   v_id uuid;
 begin
@@ -72,9 +110,12 @@ begin
     return next; return;
   end if;
 
-  -- One lock per inbox. Different addresses never contend; a transaction takes
-  -- exactly one lock here and cannot deadlock.
-  perform pg_advisory_xact_lock(hashtext('marketing_send:' || v_email));
+  v_person := coalesce(nullif(lower(trim(coalesce(p_person_key, ''))), ''), v_email);
+
+  -- One lock per PERSON. Different people never contend; a transaction takes
+  -- exactly one lock here and cannot deadlock. With no person key this is
+  -- 'marketing_send:' || v_email — the exact string locked on before M3.
+  perform pg_advisory_xact_lock(hashtext('marketing_send:' || v_person));
 
   select max(l.sent_at) into v_last
   from public.email_send_log l
@@ -112,11 +153,11 @@ begin
 end;
 $$;
 
-comment on function public.marketing_send_claim(text, text, text, text, integer, text) is
-  'Atomically claim the right to send one marketing email to an address: claimed (row inserted at sending — send, then close it), deferred (a marketing send inside the quiet window stands in the way; last_marketing_at says when), duplicate (the send-once index already holds this reference), or refused (bad input).';
+comment on function public.marketing_send_claim(text, text, text, text, integer, text, text) is
+  'Atomically claim the right to send one marketing email to an address: claimed (row inserted at sending — send, then close it), deferred (a marketing send inside the quiet window stands in the way; last_marketing_at says when), duplicate (the send-once index already holds this reference), or refused (bad input). p_person_key sets the advisory-lock key so one person is serialised across channels; it defaults to the email, which is the pre-M3 behaviour exactly.';
 
-revoke execute on function public.marketing_send_claim(text, text, text, text, integer, text) from public, anon, authenticated;
-grant execute on function public.marketing_send_claim(text, text, text, text, integer, text) to service_role;
+revoke execute on function public.marketing_send_claim(text, text, text, text, integer, text, text) from public, anon, authenticated;
+grant execute on function public.marketing_send_claim(text, text, text, text, integer, text, text) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- THE DEFERRED QUEUE, for event mail with no sweep of its own to retry it.

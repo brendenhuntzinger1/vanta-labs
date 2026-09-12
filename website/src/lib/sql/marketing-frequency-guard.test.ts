@@ -203,12 +203,128 @@ describeDb("marketing_send_claim", () => {
   it("a browser key can neither claim nor read the queue", async () => {
     for (const role of ["anon", "authenticated"]) {
       const { rows } = await client.query(
-        `select has_function_privilege($1, 'public.marketing_send_claim(text,text,text,text,integer,text)', 'execute') as can_claim,
+        // NAMES THE SEVEN-ARGUMENT SIGNATURE. It used to name the six-argument
+        // one; after M3 that no longer resolves, the query throws, the catch
+        // below returns false and this assertion would pass while testing
+        // nothing at all.
+        `select has_function_privilege($1, 'public.marketing_send_claim(text,text,text,text,integer,text,text)', 'execute') as can_claim,
                 has_table_privilege($1, 'public.marketing_send_queue', 'select') as can_read`,
         [role],
       ).catch(() => ({ rows: [{ can_claim: false, can_read: false }] }));
       expect(rows[0].can_claim, `${role} can claim`).toBe(false);
       expect(rows[0].can_read, `${role} can read the queue`).toBe(false);
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // M3 — p_person_key. The whole requirement is that omitting it changes
+  // NOTHING, so most of this block is about the default rather than the feature.
+  // -------------------------------------------------------------------------
+  describe("p_person_key", () => {
+    it("is optional: a six-argument positional call still resolves", async () => {
+      // Every existing caller passes six named arguments. If this breaks, the
+      // email lifecycle stops sending.
+      const { rows } = await client.query(
+        "select * from public.marketing_send_claim($1, $2, $3, $4, $5, $6)",
+        ["six-arg@example.test", "campaign", "ref-1", "campaign", 86_400, null],
+      );
+      expect(rows[0].outcome).toBe("claimed");
+    });
+
+    it("EXACTLY ONE marketing_send_claim exists, so no call can be ambiguous", async () => {
+      // `create or replace` with an added defaulted parameter would leave two
+      // overloads, and a six-argument call would match both. This is the
+      // assertion that catches that mistake.
+      const { rows } = await client.query(
+        `select count(*)::int as n from pg_proc p
+         join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public' and p.proname = 'marketing_send_claim'`,
+      );
+      expect(rows[0].n).toBe(1);
+    });
+
+    it("defaults the lock key to the email — byte-identical to the pre-M3 string", async () => {
+      // Proven by behaviour rather than by reading the source: with no person
+      // key, a second sender to the same address still defers, which can only
+      // happen if both took the same lock.
+      const first = await client.query(
+        "select * from public.marketing_send_claim($1, $2, $3, $4, $5, $6)",
+        ["default-key@example.test", "sender-a", "ref-a", "sender-a", 86_400, null],
+      );
+      await client.query("update public.email_send_log set status = 'sent' where id = $1", [first.rows[0].log_id]);
+      const second = await client.query(
+        "select * from public.marketing_send_claim($1, $2, $3, $4, $5, $6)",
+        ["default-key@example.test", "sender-b", "ref-b", "sender-b", 86_400, null],
+      );
+      expect(first.rows[0].outcome).toBe("claimed");
+      expect(second.rows[0].outcome).toBe("deferred");
+    });
+
+    it("an explicit person key equal to the email behaves exactly as the default", async () => {
+      const first = await client.query(
+        "select * from public.marketing_send_claim($1, $2, $3, $4, $5, $6, $7)",
+        ["same-key@example.test", "sender-a", "ref-a", "sender-a", 86_400, null, "same-key@example.test"],
+      );
+      await client.query("update public.email_send_log set status = 'sent' where id = $1", [first.rows[0].log_id]);
+      const second = await client.query(
+        "select * from public.marketing_send_claim($1, $2, $3, $4, $5, $6)",
+        ["same-key@example.test", "sender-b", "ref-b", "sender-b", 86_400, null],
+      );
+      expect(second.rows[0].outcome).toBe("deferred");
+    });
+
+    it("is normalised like the email — case and whitespace do not make a second key", async () => {
+      const { rows } = await client.query(
+        "select * from public.marketing_send_claim($1, $2, $3, $4, $5, $6, $7)",
+        ["norm@example.test", "sender-a", "ref-a", "sender-a", 86_400, null, "  USER-42  "],
+      );
+      expect(rows[0].outcome).toBe("claimed");
+      // A differently-spelled but equal key must contend with it, not slip past.
+      const parallel = new Client({ connectionString: dbUrl });
+      await parallel.connect();
+      try {
+        await client.query("begin");
+        await client.query(
+          "select * from public.marketing_send_claim($1, $2, $3, $4, $5, $6, $7)",
+          ["held@example.test", "sender-a", "ref-a", "sender-a", 86_400, null, "user-99"],
+        );
+        // A second connection using the same key in different case must block
+        // on the advisory lock until the first transaction ends.
+        const blocked = parallel.query(
+          "select * from public.marketing_send_claim($1, $2, $3, $4, $5, $6, $7)",
+          ["other@example.test", "sender-b", "ref-b", "sender-b", 86_400, null, "USER-99"],
+        );
+        const raced = await Promise.race([
+          blocked.then(() => "completed"),
+          new Promise((resolve) => setTimeout(() => resolve("blocked"), 300)),
+        ]);
+        expect(raced, "the same person key in a different case must contend").toBe("blocked");
+        await client.query("commit");
+        await blocked;
+      } finally {
+        await parallel.end().catch(() => {});
+      }
+    });
+
+    it("serialises TWO DIFFERENT ADDRESSES that are the same person", async () => {
+      // The reason the parameter exists. Without it these two never contend,
+      // and "one marketing message a day" silently becomes one per channel.
+      const first = await client.query(
+        "select * from public.marketing_send_claim($1, $2, $3, $4, $5, $6, $7)",
+        ["person-a@example.test", "sender-a", "ref-a", "sender-a", 86_400, null, "user-7"],
+      );
+      await client.query("update public.email_send_log set status = 'sent' where id = $1", [first.rows[0].log_id]);
+      const second = await client.query(
+        "select * from public.marketing_send_claim($1, $2, $3, $4, $5, $6, $7)",
+        ["person-b@example.test", "sender-b", "ref-b", "sender-b", 86_400, null, "user-7"],
+      );
+      // The LOCK is shared, so they serialise. The quiet-window READ is still
+      // keyed on recipient_email, deliberately unchanged at M3, so the second
+      // address is still claimed — the read becomes person-wide only when there
+      // is a second channel's ledger to read. This assertion documents that
+      // boundary; when M8 widens the read it becomes 'deferred' and this test
+      // is the one that should be updated, on purpose.
+      expect(second.rows[0].outcome).toBe("claimed");
+    });
   });
 });

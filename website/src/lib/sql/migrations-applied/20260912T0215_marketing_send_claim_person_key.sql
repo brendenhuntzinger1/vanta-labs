@@ -1,0 +1,49 @@
+-- APPLIED. Receipt, not a migration to re-run.
+--
+--   what      M3 — p_person_key on marketing_send_claim.
+--             Source: src/lib/sql/marketing-frequency-guard.sql
+--   project   mlpimwgkwuqpsvsrlpqv (production)
+--   when      2026-09-12 ~02:15 UTC
+--   how       Supabase MCP apply_migration, `marketing_send_claim_person_key`
+--   by        Claude, on the owner's approval to deploy M3 alone.
+--
+-- WHAT CHANGED
+--   The advisory-lock key becomes a PERSON key supplied by the caller, and
+--   DEFAULTS TO THE EMAIL. Omit it and the locked string is byte-for-byte the
+--   one this function has always used.
+--
+--   The quiet-window READ is deliberately unchanged, still keyed on
+--   recipient_email. Making it person-wide needs the SMS ledger populated
+--   (M8); changing it now would alter which existing email sends defer, which
+--   is exactly what this step must not do.
+--
+-- WHY DROP-THEN-CREATE. A defaulted parameter makes a NEW signature, so
+-- `create or replace` would have left BOTH functions and a six-argument call
+-- would have matched the old one exactly and the new one via its default —
+-- "function is not unique". Dropped and recreated in one transaction.
+--
+-- VERIFIED AFTER APPLYING (production)
+--   exactly 1 marketing_send_claim; signature carries p_person_text last
+--   service_role execute = true; anon = false; authenticated = false
+--   email_send_log 333 rows before and after; 0 stranded 'sending'
+--
+--   Live claim probe, run against production inside a rolled-back DO block:
+--     six-argument call (the shape frequency.ts sends) -> claimed
+--     different sender, same address, inside quiet window -> deferred,
+--       last_marketing_at populated
+--     second claim with the quiet window disabled -> claimed
+--     rows added by two claims = 2 (no duplication)
+--   Rolled back: 333 rows, 0 probe residue.
+--
+--   Live cron evidence is recorded in the M3 section of
+--   docs/SMS-IMPLEMENTATION-BLUEPRINT.md — production's cron runs PRE-M3
+--   application code against this POST-M3 function, which is the backward
+--   compatibility case that matters.
+--
+-- NO SMS BEHAVIOUR ACTIVATED. No caller passes p_person_key; asserted by
+-- src/lib/email/person-key-unused.test.ts over both the source tree and the
+-- RPC wire shape.
+--
+-- ROLLBACK. Re-create the six-argument function from git history and drop the
+-- seven-argument one. No data migration either way; the parameter is
+-- stateless.

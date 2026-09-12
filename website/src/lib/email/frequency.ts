@@ -101,11 +101,29 @@ export async function claimMarketingSend(input: {
   referenceId?: string | null;
   templateKey?: string | null;
   quietMs?: number;
+  /**
+   * THE PERSON this message is for, when the caller knows it — the key the
+   * advisory lock is taken on.
+   *
+   * Omitted by every caller today, and omitted means the database defaults it
+   * to the email, which is the exact string the guard has always locked on. So
+   * the email lifecycle is unchanged in the only sense that matters: the same
+   * lock, the same contention, the same outcomes.
+   *
+   * It exists now because the key is the wrong one the moment SMS is real: one
+   * person reachable at an inbox and a handset is two lock keys, an email job
+   * and an SMS job would not contend, and "one marketing message a day" would
+   * quietly become one per channel. Plumbing it through while nothing uses it
+   * means the change that turns it on is a single argument rather than a
+   * migration.
+   */
+  personKey?: string | null;
 }): Promise<MarketingClaim> {
   const email = String(input.email ?? "").trim().toLowerCase();
   const campaignType = String(input.campaignType ?? "").trim();
   if (!email || !campaignType) return { outcome: "refused" };
   const quietMs = input.quietMs ?? MARKETING_QUIET_MS;
+  const personKey = String(input.personKey ?? "").trim().toLowerCase() || null;
   try {
     const { data, error } = await supabaseAdmin.rpc("marketing_send_claim", {
       p_email: email,
@@ -114,6 +132,10 @@ export async function claimMarketingSend(input: {
       p_template_key: input.templateKey ?? campaignType,
       p_quiet_seconds: Math.max(0, Math.round(quietMs / 1000)),
       p_exempt_family: quietFamilyFor(campaignType),
+      // OMITTED WHEN ABSENT, not passed as null. Sending the argument at all —
+      // even as null — is a different RPC shape for PostgREST to resolve, and
+      // "no caller passes it yet" should mean exactly that on the wire too.
+      ...(personKey ? { p_person_key: personKey } : {}),
     });
     if (error) return { outcome: "unavailable", error: String(error.message ?? error) };
     const row = (Array.isArray(data) ? data[0] : data) as
