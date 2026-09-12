@@ -57,6 +57,27 @@ export function adPlatformKey(raw: string | null | undefined): string | null {
 }
 
 /**
+ * Whether a utm_source names a platform this store actually buys ads on.
+ *
+ * The counterpart to `adPlatformKey`, and the distinction between them is the
+ * whole point. `adPlatformKey` passes an unrecognised value through, because on
+ * the SPEND side it came from an ad connector and really is a platform. This
+ * asks the opposite question of a value that came from a URL a browser was
+ * handed, which anyone — and plenty of software, unprompted — may write
+ * anything into. ChatGPT appends `?utm_source=chatgpt.com` to every link it
+ * hands out; treating that as an ad credited organic sales to an ad account
+ * that had sold nothing.
+ *
+ * Mirrors clause 1 of `public.is_paid_ad_source` in `ads-spend-roas.sql`. The
+ * SQL side has a second clause this cannot have — "or any platform with spend
+ * recorded against it" — because it can read the spend table and this is pure.
+ */
+export function isKnownAdPlatform(raw: string | null | undefined): boolean {
+  const key = adPlatformKey(raw);
+  return key !== null && (AD_PLATFORMS as readonly string[]).includes(key);
+}
+
+/**
  * Tag characters that survive a round trip through four ad platforms' URL
  * handling, a browser, and a Postgres text column.
  *
