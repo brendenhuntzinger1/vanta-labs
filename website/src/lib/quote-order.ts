@@ -27,6 +27,7 @@ import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { isApprovedAmbassadorCustomer } from "@/lib/ambassador-status";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
 import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getShippingConfig, getReferralProgramConfig, getCouponPolicyConfig, getProfitSettings } from "@/lib/admin-control";
+import { giftDisplacedRevenueFrom } from "@/lib/benefits/bases";
 import { computeProfit, resolveCustomerDiscount, type DiscountComponent } from "@/lib/profit-engine";
 import { alertIfBelowProfitFloor, buildProfitFloorSnapshot, type ProfitFloorSnapshot } from "@/lib/profit-floor-alert";
 import { calculateCardProcessingFee, getPaymentMethodById, isManualPaymentMethod, type PaymentMethodConfig } from "@/lib/payment-methods";
@@ -197,6 +198,16 @@ export interface QuoteResult {
    */
   profitFloor: ProfitFloorSnapshot;
   isBuy3Get1Active: boolean;
+  /**
+   * Dollars a Vanta-funded gift took out of the paid lines by absorbing units
+   * the shopper had already chosen. Zero for an added gift and zero when there
+   * is no gift.
+   *
+   * ADVISORY AND UNCONSUMED AT M4. Nothing prices, pays or rewards from it; the
+   * three bases in src/lib/benefits/bases.ts are all equal while the
+   * consumption flags are off.
+   */
+  giftDisplacedRevenue: number;
   /**
    * The one-time offer this quote priced a free unit for, if any.
    *
@@ -1339,6 +1350,18 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     }
   }
 
+  // REVENUE THE GIFT TOOK OUT OF THE PAID LINES — recorded, consumed by nothing.
+  //
+  // Computed HERE, after the withdrawal check above, because a gift that failed
+  // its minimum gave its units back and emptied `absorbedFromCart`, so it
+  // displaced nothing. An ADDED gift ($0 line, nothing absorbed) is zero for
+  // the same structural reason: the array is empty.
+  //
+  // At M4 this travels on the quote and is written nowhere that changes a
+  // payout, a reward or a total. It exists so M7 is a flag flip rather than a
+  // new calculation invented under time pressure — see src/lib/benefits/bases.ts.
+  const giftDisplacedRevenue = giftDisplacedRevenueFrom(absorbedFromCart);
+
   // WHO GETS FREE SHIPPING — four independent grants, any one of which is
   // enough (a bulk-savings tier, a membership plan that includes it, a gift
   // whose reward is free shipping, a coupon flagged to waive it). None of them
@@ -1766,6 +1789,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     subtotal,
     shipping,
     discountAmount,
+    giftDisplacedRevenue,
     bulkDiscountTier,
     isPriorityOrder,
     taxQuote,

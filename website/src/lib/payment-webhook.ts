@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { deriveOrderBases } from "@/lib/benefits/bases";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { FULLY_TERMINAL_ORDER_STATES } from "@/lib/payment-types";
 import { extractProcessorFailure, PAID_RETRY_WINDOW_MS, type PaymentFailureDetail } from "@/lib/payment-failure";
@@ -1035,7 +1036,7 @@ export async function accrueCommissionForPaidOrder(order: {
     orderId: String(order.order_id),
     ambassadorId: order.ambassador_id ? String(order.ambassador_id) : undefined,
     referralCode: order.referral_code ? String(order.referral_code) : undefined,
-    commissionableSubtotal: roundMoney(Math.max(0, subtotal - discountAmount)),
+    commissionableSubtotal: deriveOrderBases({ subtotal, discountAmount }).paidMerchandise,
     qualifyingSubtotal: subtotal,
     paymentStatus: "paid",
     customerEmail: order.customer_email ? String(order.customer_email) : null,
@@ -1590,7 +1591,11 @@ export async function finalizeManualPayment(
   const subtotal = roundMoney(Number(order.subtotal ?? 0));
   const discountAmount = roundMoney(Number(order.discount_amount ?? 0));
   const amountPaid = roundMoney(Number(order.amount_paid ?? 0));
-  const commissionableSubtotal = roundMoney(Math.max(0, subtotal - discountAmount));
+  // ONE DERIVATION, not a fourth restatement of `subtotal - discountAmount`.
+  // `paidMerchandise` is byte-identical to the expression this replaces; the
+  // other two bases exist for consumers that are NOT this one (see
+  // src/lib/benefits/bases.ts) and are equal to it while the flags are off.
+  const commissionableSubtotal = deriveOrderBases({ subtotal, discountAmount }).paidMerchandise;
 
   // Membership orders are digital — nothing ships, so they go straight to
   // "fulfilled" and never enter the shipping queue.
@@ -2525,7 +2530,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   const shippingAmount = roundMoney(Number(orderRecord?.shipping_amount ?? eventPayload.shippingAmount ?? 0));
   const discountAmount = roundMoney(Number(orderRecord?.discount_amount ?? eventPayload.discountAmount ?? 0));
   const amountPaid = roundMoney(Number(orderRecord?.amount_paid ?? eventPayload.amount ?? 0));
-  const commissionableSubtotal = roundMoney(Math.max(0, subtotal - discountAmount));
+  // ONE DERIVATION, not a fourth restatement of `subtotal - discountAmount`.
+  // `paidMerchandise` is byte-identical to the expression this replaces; the
+  // other two bases exist for consumers that are NOT this one (see
+  // src/lib/benefits/bases.ts) and are equal to it while the flags are off.
+  const commissionableSubtotal = deriveOrderBases({ subtotal, discountAmount }).paidMerchandise;
   const effectiveCouponCode = orderRecord?.coupon_code ? String(orderRecord.coupon_code) : eventPayload.couponCode;
 
   // Resolve how this refund/chargeback/cancel is recorded (partial vs full,
