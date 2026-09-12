@@ -1,7 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { getCartRecoveryControlConfig, getShippingConfig } from "@/lib/admin-control";
+import { getCartRecoveryControlConfig, getShippingConfig, getProfitSettings } from "@/lib/admin-control";
 import {
   cartRecoveryGiftTemplate,
   cartRecoveryT30mTemplate,
@@ -991,7 +991,25 @@ export async function listGiftableProducts(): Promise<GiftableProduct[]> {
  * a new store with no paid orders still gets a sane readout, and the numbers
  * only get truer as orders arrive.
  */
-export type RecoveryEconomicsInputs = { postageCents: number; productCostRatio: number };
+export type RecoveryEconomicsInputs = {
+  postageCents: number;
+  productCostRatio: number;
+  /**
+   * The processor's cut, as a percentage, ESTIMATED rather than settled.
+   *
+   * P0-8. The band editor modelled no processor cost at all, on the strength of
+   * a comment saying the store passes a 3% service fee to the customer. It does
+   * not: admin_control_current holds card_processing_fee {enabled:false,
+   * percentage:0} and the paid orders have collected $0.00 in fees. The cost is
+   * absorbed, so omitting it overstated every margin on the one screen an
+   * operator uses to decide what an incentive costs.
+   *
+   * This comes from the Control Center's profit setting and is a conservative
+   * model, not a reconciliation of per-transaction processor cost. Every
+   * surface that renders it must say "estimated".
+   */
+  estimatedProcessorFeePercent: number;
+};
 
 /** Until there are paid orders to measure. Roughly this store's observed average. */
 const FALLBACK_POSTAGE_CENTS = 793;
@@ -1001,6 +1019,17 @@ const FALLBACK_PRODUCT_COST_RATIO = 0.2;
 export async function loadRecoveryEconomicsInputs(): Promise<RecoveryEconomicsInputs> {
   let postageCents = FALLBACK_POSTAGE_CENTS;
   let productCostRatio = FALLBACK_PRODUCT_COST_RATIO;
+  let estimatedProcessorFeePercent = 0;
+
+  try {
+    // The same setting the checkout profit guard uses, so the band editor and
+    // the till cannot disagree about what a card costs.
+    estimatedProcessorFeePercent = Math.max(0, Number((await getProfitSettings()).processingFeePercent ?? 0));
+  } catch {
+    // A readout that omits the fee is wrong in the dangerous direction, so say
+    // so rather than quietly modelling zero.
+    console.error("[admin-cart-recovery] profit settings unreadable; band economics will omit the processor fee");
+  }
 
   try {
     const { data } = await supabaseAdmin
@@ -1037,5 +1066,5 @@ export async function loadRecoveryEconomicsInputs(): Promise<RecoveryEconomicsIn
     // Keep the fallback.
   }
 
-  return { postageCents, productCostRatio };
+  return { postageCents, productCostRatio, estimatedProcessorFeePercent };
 }

@@ -250,18 +250,39 @@ export function validateRecoveryTiers(
  * than from a spreadsheet that goes stale: real per-dose costs, the real
  * average postage, and the real blended product margin.
  *
- * `productCostRatio` is COGS as a share of revenue — 0.163 for this store's
- * 83.7% blended margin. `postageCents` is what a shipment actually costs, which
- * matters far more than it looks: it is a FIXED cost, so it falls hardest on
- * exactly the small carts where the incentive is also proportionally largest.
+ * `productCostRatio` is COGS as a share of revenue. It is READ FROM LIVE DATA
+ * (loadRecoveryEconomicsInputs, revenue-weighted across the default doses) —
+ * 0.1757 as at 2026-09-12, an 82.4% list-price margin. Do not re-hardcode it:
+ * the number in this comment is a snapshot for the reader, not an input.
+ * `postageCents` is what a shipment actually costs, also read from real orders,
+ * and it matters more than it looks: it is a FIXED cost, so it falls hardest on
+ * exactly the small carts where the incentive is proportionally largest.
  *
- * The card fee is deliberately absent. This store passes a 3% service fee to
- * the customer on card payments, so it is not the store's cost and counting it
- * would understate every margin here.
+ * THE CARD FEE USED TO BE ABSENT HERE, AND THE REASON GIVEN IS NO LONGER TRUE.
+ * This comment used to read "this store passes a 3% service fee to the customer
+ * on card payments, so it is not the store's cost". Production says otherwise:
+ * admin_control_current holds payment_methods/card_processing_fee as
+ * {enabled: false, percentage: 0}, and the fifteen paid orders have collected
+ * $0.00 in card_processing_fee. The fee is absorbed by the store, so leaving it
+ * out overstated every margin on this page — on the one screen an operator uses
+ * to decide what an incentive costs.
+ *
+ * It is now subtracted, and it is ESTIMATED rather than settled. The store does
+ * not reconcile per-transaction processor cost here, so this is a conservative
+ * model (the Control Center's profit setting, 8% by default) and every surface
+ * that shows it must say so. An estimate presented as a settled cost is the
+ * same class of mistake as the one it replaces.
  */
 export type TierEconomicsInputs = {
   productCostRatio: number;
   postageCents: number;
+  /**
+   * The processor's cut, as a percentage of what the customer is actually
+   * charged. ESTIMATED, NEVER SETTLED — see the header. Defaults to zero so an
+   * omitted input cannot silently invent a cost; the admin passes the Control
+   * Center's figure.
+   */
+  processorFeePercent?: number;
   /** Real per-unit cost by slug, in cents. A slug absent here is counted as free. */
   giftCostCents: Readonly<Record<string, number>>;
   /** Retail price by slug, in cents — what the customer sees the gift as worth. */
@@ -270,8 +291,14 @@ export type TierEconomicsInputs = {
 
 export type TierEconomics = {
   cartValueCents: number;
-  /** Revenue less product COGS less postage, before any incentive. */
+  /** Revenue less product COGS, postage and the estimated processor fee, before any incentive. */
   contributionCents: number;
+  /**
+   * The estimated processor cost on what this order would actually charge.
+   * Named "estimated" in the type so no surface can render it as settled cost
+   * without having read that word.
+   */
+  estimatedProcessorFeeCents: number;
   /** The 72-hour offer's cost: the gifts at cost, plus the percentage. */
   incentiveCents: number;
   giftCostCents: number;
@@ -304,18 +331,30 @@ export function tierEconomics(
 ): TierEconomics {
   const revenue = Math.max(0, Math.round(cartValueCents));
   const cogs = Math.round(revenue * inputs.productCostRatio);
-  const contribution = revenue - cogs - inputs.postageCents;
+  const feeRate = Math.max(0, Number(inputs.processorFeePercent ?? 0)) / 100;
 
   const giftCost = sumItems(tier.stage4.gifts, inputs.giftCostCents);
   const percentCost = Math.round(revenue * (tier.stage4.percent / 100));
   const incentive = giftCost + percentCost;
 
-  const net = contribution - incentive;
+  // THE FEE FOLLOWS THE MONEY, NOT THE LIST PRICE. The processor takes its cut
+  // of what is actually charged, so a percentage discount reduces the fee with
+  // it — which is the one respect in which a discount is cheaper than it looks,
+  // and worth modelling correctly rather than conservatively.
+  const estimatedProcessorFee = Math.round((revenue - percentCost) * feeRate);
+
+  // Contribution BEFORE any incentive still carries the fee on undiscounted
+  // revenue, because that is the counterfactual it is compared against: what
+  // this cart would have left had no offer been attached at all.
+  const contribution = revenue - cogs - inputs.postageCents - Math.round(revenue * feeRate);
+
+  const net = revenue - percentCost - cogs - inputs.postageCents - giftCost - estimatedProcessorFee;
   const perceived = sumItems(tier.stage4.gifts, inputs.giftRetailCents) + percentCost;
 
   return {
     cartValueCents: revenue,
     contributionCents: contribution,
+    estimatedProcessorFeeCents: estimatedProcessorFee,
     incentiveCents: incentive,
     giftCostCents: giftCost,
     percentCostCents: percentCost,

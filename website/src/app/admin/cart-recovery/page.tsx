@@ -38,12 +38,12 @@ export default async function AdminCartRecoveryPage({
         // pickers rather than breaking the page, and the economics fall back to
         // conservative constants rather than showing nothing.
         listGiftableProducts().catch(() => []),
-        loadRecoveryEconomicsInputs().catch(() => ({ postageCents: 793, productCostRatio: 0.2 })),
+        loadRecoveryEconomicsInputs().catch(() => ({ postageCents: 793, productCostRatio: 0.2, estimatedProcessorFeePercent: 0 })),
         // Never rejects on its own; the catch keeps one failed read from taking
         // the page down, like every other load here.
         getLifecycleFunnel(funnelWindow).catch((error: unknown) => emptyLifecycleFunnel(funnelWindow, error instanceof Error ? error.message : String(error))),
       ])
-    : [[], null, [], [], null, [], { postageCents: 793, productCostRatio: 0.2 }, emptyLifecycleFunnel(funnelWindow)];
+    : [[], null, [], [], null, [], { postageCents: 793, productCostRatio: 0.2, estimatedProcessorFeePercent: 0 }, emptyLifecycleFunnel(funnelWindow)];
 
   return (
     <div className="vl-page-shell min-h-screen bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.1),transparent_52%),linear-gradient(145deg,#04060f_0%,#0b1324_50%,#060911_100%)] px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
@@ -68,6 +68,7 @@ export default async function AdminCartRecoveryPage({
             giftProducts={giftProducts}
             postageCents={economics.postageCents}
             productCostRatio={economics.productCostRatio}
+            estimatedProcessorFeePercent={economics.estimatedProcessorFeePercent}
           />
         ) : (
           <section className="vl-panel rounded-2xl p-6 text-sm text-zinc-300">
