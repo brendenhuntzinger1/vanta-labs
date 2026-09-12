@@ -57,11 +57,32 @@ const JOBS: CronJobMap = {
 /** Ten seconds short of maxDuration: enough to still report an overrun. */
 const DEADLINE_MS = 50_000;
 
+/**
+ * CART RECOVERY RUNS ALONE, FIRST, AND THE REST FOLLOW.
+ *
+ * The comment above says the recovery ladder is "first because it is the one
+ * with a closing window". Until now that was only true of the order of the keys
+ * in this object: runCronGroup started every job in the same tick, so all six
+ * raced. The one resource they genuinely contend for is the 24-hour quiet
+ * period held per recipient by marketing_send_claim, and the loser of that race
+ * is deferred.
+ *
+ * Deferral costs the automations nothing — a welcome email goes tomorrow. It
+ * costs recovery the send entirely, because a stage is due inside a window that
+ * closes when the next one opens. Measured on 2026-09-12: four real carts
+ * reached t72h, were deferred every tick for the whole 24-hour window, and none
+ * of the four ever received the message.
+ *
+ * So the priority is now enforced rather than described.
+ */
+const RUN_FIRST = ["cartRecovery"] as const;
+
 export async function GET(request: Request) {
   return handleCronRequest(request, {
     jobs: JOBS,
     group: "lifecycle",
     maxDurationSeconds: maxDuration,
     deadlineMs: DEADLINE_MS,
+    runFirst: RUN_FIRST,
   });
 }
