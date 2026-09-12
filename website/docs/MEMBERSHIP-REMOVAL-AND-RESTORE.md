@@ -248,3 +248,55 @@ The removal was held to the pre-existing baseline, not to "it compiles":
 
 The same four were required to match afterwards, minus the membership routes
 and their dedicated tests.
+
+---
+
+## Consequences worth a decision (not bugs — choices)
+
+Three things follow from the removal that the owner may want to act on. None is
+broken; each is the honest result of taking membership out, and each was left
+in the safest state rather than decided unilaterally.
+
+### 1. Bulk savings is now unreachable
+
+"Exclusive Buy In Bulk Savings" was gated on holding an active **Elite or
+Black** tier (`isEligibleForBulkSavings`). With no paid tiers, nobody qualifies,
+so `bulkSavingsEligible` is a hard `false` in `quote-order.ts` and mirrored in
+`cart-context.tsx`.
+
+The feature itself is intact — `bulk-savings.ts`, the tier thresholds and
+percentages in Control Center, `/api/catalog/bulk-savings-config`, and the cart
+progress messaging are all still there. It simply never fires.
+
+**Why it was left off rather than opened up:** switching it on for everyone is a
+*pricing* decision — it would start discounting orders that are not discounted
+today — and that is the owner's call, not a removal's. Leaving it at `false`
+preserves exactly the prices customers pay now.
+
+To open it to all customers later, change the constant in `quote-order.ts` and
+the matching one in `cart-context.tsx`. **Both, together** — they mirror each
+other deliberately, and a preview that disagrees with the charge is the failure
+that whole path exists to prevent.
+
+### 2. Members-only coupons refuse everyone
+
+Coupons carry a `member_scope` of `all` / `members` / `non_members`.
+
+- `non_members` codes now work for everyone, which is what they always meant.
+- `members` codes can no longer be redeemed **by anybody**, and say
+  "This coupon is no longer available."
+
+Enforcement was deliberately kept. Dropping it would have made every historical
+members-only code instantly redeemable by the whole internet — a discount
+giveaway, not a removal. The admin coupon form no longer offers the setting, so
+no new code can land in this state, and the coupon list badges any existing one
+as "Members only — no longer redeemable" so it can be found and replaced.
+
+### 3. Two design gaps where panels used to be
+
+Product cards now show one price where they showed four elements, and the PDP
+goes from price straight to the quantity selector where the gold MEMBER PRICING
+panel used to sit. Both were checked at desktop and 390×844 and read cleanly —
+nothing was invented to fill them, because the brief was "as though membership
+never existed". If either space should carry something else (a trust line, a
+bundle nudge), that is a new design decision rather than part of this removal.
