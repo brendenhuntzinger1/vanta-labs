@@ -340,8 +340,32 @@ async function main() {
   await q("update product_doses set inventory_quantity = 500, stock_status = 'In Stock' where product_id in (select id from products where slug in ('bpc-157-10mg', 'ghk-cu'))").catch(() => {});
   await q("delete from inventory_reservations where slug in ('bpc-157-10mg', 'ghk-cu')").catch(() => {});
 
+  // EVERYTHING THAT POINTS AT THESE ORDERS, NOT JUST THE LINES.
+  //
+  // This deleted order_items and then orders, which is every child row these
+  // orders had until a cart-recovery suite ran first: abandoned_carts carries
+  // recovered_order_id, and a recovered cart from an earlier run pinned one of
+  // these orders in place. The delete then raised
+  //
+  //   update or delete on table "orders" violates foreign key constraint
+  //   "abandoned_carts_recovered_order_id_fkey"
+  //
+  // out of main(), before a single check ran, and the batch recorded "0 passed,
+  // 1 failed" for a file whose subject was never reached. The recovery mark is
+  // released rather than the cart deleted: the cart belongs to whoever made it.
   await q("delete from customer_offers where email in ($1,$2)", [BUYER, STRANGER]);
-  await q("delete from order_items where order_id in (select order_id from orders where customer_email in ($1,$2))", [BUYER, STRANGER]);
+  await q(
+    `update abandoned_carts set recovered_order_id = null
+      where recovered_order_id in (select order_id from orders where customer_email in ($1,$2))`,
+    [BUYER, STRANGER],
+  ).catch(() => {});
+  for (const table of ["order_items", "order_attribution", "order_shipments", "order_shipping_cost_audit",
+    "fulfillment_orders", "fulfillment_batch_orders", "fulfillment_payouts"]) {
+    await q(
+      `delete from ${table} where order_id in (select order_id from orders where customer_email in ($1,$2))`,
+      [BUYER, STRANGER],
+    ).catch(() => {});
+  }
   await q("delete from orders where customer_email in ($1,$2)", [BUYER, STRANGER]);
 
   browser = await chromium.launch({

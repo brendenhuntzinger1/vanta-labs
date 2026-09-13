@@ -41,6 +41,7 @@ import { chromium } from "playwright";
 import pg from "pg";
 import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
 import { captureAutomations, restoreAutomations } from "./qa-automation-fixtures.mjs";
+import { captureControl, pinControl, restoreControl } from "./qa-control-fixtures.mjs";
 
 /** Every automation row as this file found it, put back in the finally. */
 let automationsBefore = null;
@@ -496,6 +497,8 @@ function landedAt(location, path, { tagged = true } = {}) {
   return null;
 }
 
+let controlBefore = null;
+
 async function main() {
   mkdirSync(SHOTS, { recursive: true });
 
@@ -507,6 +510,18 @@ async function main() {
   // turned qa-automation-truth's "no errors" step red. Captured here, restored
   // in the finally block below.
   automationsBefore = await captureAutomations(q);
+
+  // AND THE SHIPPING POLICY, FOR THE SAME REASON POINTED THE OTHER WAY.
+  //
+  // Two checks here read shipping as the evidence: "the unused gift is closed by
+  // that order" proves a free-shipping gift did NOT apply by seeing shipping
+  // charged, and the coupon-minimum case asserts shipping === 15 outright.
+  // qa-cart-recovery-override turns shipping.free_shipping_sitewide on —
+  // correctly, production runs it that way — so run after it this file reported
+  // "shipping 0.00 (the gift must not have applied)" and a quote dump with
+  // shipping 0: the store obeying a setting this file never asked for, twice.
+  controlBefore = await captureControl(q, [["shipping", "free_shipping_sitewide"]]);
+  await pinControl(q, [["shipping", "free_shipping_sitewide", false]]);
 
   // The production configuration (Admin → Email as of 2026-09-04), on the
   // harness's copy of the automations table: same delays, same gifts, same
@@ -1013,6 +1028,7 @@ async function main() {
   });
 
   await restoreAutomations(q, automationsBefore);
+  await restoreControl(q, controlBefore);
   await pool.end();
   const passed = results.filter((r) => r.status === "pass").length;
   const failed = results.filter((r) => r.status === "fail");
@@ -1026,6 +1042,7 @@ main().catch(async (error) => {
   // A run that died half way through still has to leave the table as it found
   // it; otherwise one crash here reds out the next three suites.
   await restoreAutomations(q, automationsBefore).catch(() => {});
+  await restoreControl(q, controlBefore);
   await pool.end().catch(() => {});
   process.exit(1);
 });
