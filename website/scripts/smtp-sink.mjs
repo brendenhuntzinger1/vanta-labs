@@ -68,13 +68,52 @@ function decodeBody(body, encoding) {
 
 /** MIME headers can be folded across lines and RFC 2047-encoded. */
 function unfold(headerBlock) {
-  return headerBlock.replace(/\r?\n[ \t]+/g, " ");
+  return headerBlock
+    .replace(/\r?\n[ \t]+/g, " ")
+    // AND THE SPACE BETWEEN TWO ADJACENT ENCODED-WORDS IS NOT PART OF THE TEXT.
+    //
+    // RFC 2047 §6.2: when one encoded-word is followed by another, separated
+    // only by linear whitespace, that whitespace is a fold and is discarded on
+    // decoding. Nodemailer splits a long subject exactly this way, and the line
+    // above had just turned the fold into a real space:
+    //
+    //   Subject: =?UTF-8?Q?Delivered_=E2=80=94_order_VL-JOURNEY-178?=
+    //    =?UTF-8?Q?9276160790?=
+    //
+    // decoded to "order VL-JOURNEY-178 9276160790" — a space inside the order
+    // number, in a captured subject a test then asserts on. The message on the
+    // wire was correct; only this reader was wrong.
+    .replace(/(\?=)[ \t]+(?==\?)/g, "$1");
 }
 
+/**
+ * BYTES, THEN UTF-8 — THE SAME RULE decodeBody ALREADY FOLLOWS.
+ *
+ * The Q branch built its result with String.fromCharCode per escaped byte, so
+ * each byte of a multi-byte sequence became its own character: an em dash
+ * (=E2=80=94) decoded to "\u00e2\u0080\u0094" rather than "—", and the captured
+ * subject read "Delivered â\u0080\u0094 order". The B branch beside it was
+ * already correct, because it goes through a Buffer.
+ *
+ * That is the bug decodeBody documents at the top of this file, in a second
+ * place. Every non-ASCII subject this harness captured was mojibake, which is a
+ * false brand defect waiting to be reported against templates that are fine.
+ */
 function decodeWord(value) {
-  return value.replace(/=\?[^?]+\?([BbQq])\?([^?]*)\?=/g, (_, kind, text) => {
-    if (kind.toLowerCase() === "b") return Buffer.from(text, "base64").toString("utf8");
-    return text.replace(/_/g, " ").replace(/=([0-9A-Fa-f]{2})/g, (__, hex) => String.fromCharCode(parseInt(hex, 16)));
+  return value.replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, (_, charset, kind, text) => {
+    const enc = /^utf-?8$/i.test(String(charset).trim()) ? "utf8" : "latin1";
+    if (kind.toLowerCase() === "b") return Buffer.from(text, "base64").toString(enc);
+    const q = text.replace(/_/g, " ");
+    const bytes = [];
+    for (let i = 0; i < q.length; i += 1) {
+      if (q[i] === "=" && /^[0-9A-Fa-f]{2}$/.test(q.slice(i + 1, i + 3))) {
+        bytes.push(parseInt(q.slice(i + 1, i + 3), 16));
+        i += 2;
+      } else {
+        bytes.push(q.charCodeAt(i) & 0xff);
+      }
+    }
+    return Buffer.from(bytes).toString(enc);
   });
 }
 
