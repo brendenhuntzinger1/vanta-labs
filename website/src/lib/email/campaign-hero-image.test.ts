@@ -153,3 +153,52 @@ describe("every render path carries the hero", () => {
     expect(SRC("lib/admin-email.ts")).toContain("heroImageUrl");
   });
 });
+
+// ---------------------------------------------------------------------------
+// The hero may also be a link. Optional, and the same tracked destination the
+// button uses — a hero that went somewhere else would be a second CTA, and a
+// hero that went to an untracked URL would lose the click and the grant.
+// ---------------------------------------------------------------------------
+
+describe("an optional clickable hero", () => {
+  const CLICK = BASE.ctaUrl;
+
+  it("is not a link when no href is given", () => {
+    const { html } = withHero();
+    const img = html.match(/<img[\s\S]*?\/>/)![0];
+    expect(html).not.toContain(`<a href="${CLICK}"><img`);
+    expect(img).toContain("<img");
+  });
+
+  it("wraps the hero in an anchor when an href is given", () => {
+    const { html } = withHero({ heroImageHref: CLICK });
+    expect(html).toMatch(/<a href="[^"]*"[^>]*>\s*<img/);
+    expect(html).toContain(CLICK);
+  });
+
+  it("still renders exactly one image", () => {
+    expect(withHero({ heroImageHref: CLICK }).html.match(/<img/g)).toHaveLength(1);
+  });
+
+  it("keeps the hero link reachable from the plain-text part", () => {
+    // template-standards: "Gmail strips anchors from anything it files as
+    // spam", so every URL in the HTML has to appear in the text part too.
+    const { text } = withHero({ heroImageHref: CLICK });
+    expect(text).toContain(CLICK);
+  });
+
+  it("refuses an unsafe href and renders the plain image instead", () => {
+    for (const bad of ["javascript:alert(1)", "data:text/html,x", "/products", "//evil.example"]) {
+      const { html } = withHero({ heroImageHref: bad });
+      expect(html).not.toContain("<a href=\"" + bad);
+      expect(html.match(/<img/g)).toHaveLength(1);
+    }
+  });
+
+  it("changes nothing else about the email", () => {
+    const withoutLink = withHero().html;
+    const withLink = withHero({ heroImageHref: CLICK }).html;
+    // strip the anchor wrapper and the two documents must agree
+    expect(withLink.replace(/<a href="[^"]*"[^>]*>(\s*<img[\s\S]*?\/>)\s*<\/a>/, "$1")).toBe(withoutLink);
+  });
+});

@@ -66,5 +66,5 @@ export const INPUTS: Record<string, unknown> = {
     // covers the image row.
     coaUrl: "https://www.vantalabsresearch.com/coa/bpc-157", postalAddress: "1 Nowhere Lane",
   },
-  campaignTemplate: { subject: "News", previewText: "News", headline: "News", body: "<p>Hi</p>", promoCode: "SAVE10", ctaLabel: "Shop", ctaUrl: URL_, offerTerms: "Your gift: a free GHK-Cu on any order of $60 or more, through October 4, 2026. One per customer." },
+  campaignTemplate: { subject: "News", previewText: "News", headline: "News", body: "<p>Hi</p>", promoCode: "SAVE10", ctaLabel: "Shop", ctaUrl: URL_, offerTerms: "Your gift: a free GHK-Cu on any order of $60 or more, through October 4, 2026. One per customer.", heroImageUrl: "https://www.vantalabsresearch.com/images/b2g1-hero.png", heroImageAlt: "Buy 2 Get 1 Free", heroImageHref: URL_ },
 };

@@ -38,7 +38,7 @@ export type EmailBlock =
    * CTA, supplied at render time — see renderBlocks.
    */
   | { type: "button"; label: string; variant?: EmailCtaVariant }
-  | { type: "image"; url: string; alt?: string }
+  | { type: "image"; url: string; alt?: string; href?: string }
   | { type: "divider" }
   | { type: "spacer" };
 
@@ -132,11 +132,22 @@ function renderBlock(block: EmailBlock, options: RenderBlocksOptions): Rendered 
       // expects. Dropping the block would silently lose artwork the operator
       // placed.
       const alt = clean((block as { alt?: unknown }).alt);
+      const img = `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" style="display:block;width:100%;max-width:520px;height:auto;margin:0 0 16px;border:0;" />`;
+      // AN OPTIONAL LINK ROUND THE IMAGE, held to the same test as a button's
+      // destination. An href that is not usable renders the plain image rather
+      // than dropping the artwork: a hero that does not click is a small loss,
+      // a hero that does not appear is the whole message.
+      const href = clean((block as { href?: unknown }).href);
+      const linked = href && isSafeUrl(href);
       return {
-        html: `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" style="display:block;width:100%;max-width:520px;height:auto;margin:0 0 16px;border:0;" />`,
+        html: linked
+          ? `<a href="${escapeHtml(href)}" style="display:block;text-decoration:none;border:0;">${img}</a>`
+          : img,
         // Most clients block images by default, so for a large share of
-        // recipients the alt text IS the message.
-        text: alt ? `${alt}\n\n` : "",
+        // recipients the alt text IS the message. The href joins it because
+        // template-standards requires every link in the html to be reachable
+        // from the text part — Gmail strips anchors out of suspected spam.
+        text: linked ? `${alt ? `${alt}: ` : ""}${href}\n\n` : (alt ? `${alt}\n\n` : ""),
       };
     }
 

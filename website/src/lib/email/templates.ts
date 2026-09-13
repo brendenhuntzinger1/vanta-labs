@@ -2735,6 +2735,7 @@ export function campaignTemplate(input: {
   postalAddress: string;
   heroImageUrl?: string | null;
   heroImageAlt?: string | null;
+  heroImageHref?: string | null;
 }): EmailTemplate {
   // offerTerms: the terms of a one-time gift riding on this message — minimum,
   // deadline, one per customer — written by the sweep from the offer catalogue,
@@ -2781,7 +2782,19 @@ export function campaignTemplate(input: {
   // the no-hero document rather than shipping a broken image to the list.
   const heroUrl = String(input.heroImageUrl ?? "").trim();
   const hero = heroUrl
-    ? renderBlocks([{ type: "image", url: heroUrl, alt: String(input.heroImageAlt ?? "").trim() }], { ctaUrl: input.ctaUrl })
+    ? renderBlocks(
+        [{
+          type: "image",
+          url: heroUrl,
+          alt: String(input.heroImageAlt ?? "").trim(),
+          // Deliberately the campaign's own tracked CTA and nothing else: a
+          // hero pointing somewhere the button does not is a second call to
+          // action, and one pointing at an untracked URL loses both the click
+          // and the grant that gets the recipient past the wall.
+          href: String(input.heroImageHref ?? "").trim() || undefined,
+        }],
+        { ctaUrl: input.ctaUrl },
+      )
     : null;
   const heroHtml = hero?.html || "";
   // Alt only, and only when there is one: an image with no alt says nothing to
