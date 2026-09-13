@@ -89,15 +89,68 @@ async function step(name, fn) {
 
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
-const logOffset = () => (HARNESS_LOG && existsSync(HARNESS_LOG) ? statSync(HARNESS_LOG).size : 0);
+/**
+ * THE CAPTURE FILE, WHICH BOTH EMAIL CONFIGURATIONS WRITE.
+ *
+ * This file read the app's stdout for NoopEmailProvider's `Not sent: "..." to
+ * ...` line, and nothing else. That works on exactly one of the two harness
+ * configurations the runbook documents, and silently fails on the other.
+ *
+ * With email DISABLED the app falls back to the noop provider and logs that
+ * line. With email ENABLED — which is what the campaign, automation, lifecycle
+ * and retention suites all require, because marketingBlockedReason refuses to
+ * send while it is off — the SMTP provider hands the message to
+ * scripts/smtp-sink.mjs instead, nothing reaches stdout, and the two email
+ * assertions here reported "0 confirmation emails were composed" for a
+ * confirmation that had been delivered correctly, carrying the right order
+ * number, and captured on disk a few bytes away.
+ *
+ * A false failure is cheaper than a false pass and still costs a diagnosis
+ * round every time. Both providers append to captured-emails.jsonl, so reading
+ * THAT is the configuration-independent answer; the stdout parse stays as a
+ * fallback for a harness started without a capture directory.
+ */
+const CAPTURE_FILE = `${process.env.EMAIL_CAPTURE_DIR ?? process.env.QA_LOG_DIR ?? "/tmp/vanta-qa"}/captured-emails.jsonl`;
+
+const sizeOf = (path) => (path && existsSync(path) ? statSync(path).size : 0);
+const logOffset = () => ({ log: sizeOf(HARNESS_LOG), capture: sizeOf(CAPTURE_FILE) });
 
 /** Byte-accurate, because the log carries em dashes — see qa-customer-journey. */
 function mailSince(offset) {
-  if (!HARNESS_LOG || !existsSync(HARNESS_LOG)) return null;
-  const buf = readFileSync(HARNESS_LOG);
-  const text = buf.subarray(Math.min(offset, buf.length)).toString("utf8");
-  return [...text.matchAll(/Not sent: "([^"]+)" to (\S+?)\.?\s*$/gm)]
-    .map((m) => ({ subject: m[1], to: m[2] }));
+  // Older call sites passed a bare number; accept both shapes.
+  const marks = typeof offset === "number" ? { log: offset, capture: 0 } : (offset ?? { log: 0, capture: 0 });
+  const messages = [];
+  let sawSource = false;
+
+  if (existsSync(CAPTURE_FILE)) {
+    sawSource = true;
+    const buf = readFileSync(CAPTURE_FILE);
+    const text = buf.subarray(Math.min(marks.capture ?? 0, buf.length)).toString("utf8");
+    for (const line of text.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = JSON.parse(trimmed);
+        const to = Array.isArray(parsed.to) ? parsed.to.join(",") : String(parsed.to ?? "");
+        if (parsed.subject) messages.push({ subject: String(parsed.subject), to });
+      } catch {
+        // A half-written final line while the sink is mid-append.
+      }
+    }
+  }
+
+  if (HARNESS_LOG && existsSync(HARNESS_LOG)) {
+    sawSource = true;
+    const buf = readFileSync(HARNESS_LOG);
+    const text = buf.subarray(Math.min(marks.log ?? 0, buf.length)).toString("utf8");
+    for (const m of text.matchAll(/Not sent: "([^"]+)" to (\S+?)\.?\s*$/gm)) {
+      messages.push({ subject: m[1], to: m[2] });
+    }
+  }
+
+  // null still means "no way to observe mail", which is what makes the email
+  // steps SKIP loudly rather than pass having checked nothing.
+  return sawSource ? messages : null;
 }
 
 /**
@@ -621,14 +674,18 @@ async function main() {
     // having inspected nothing at all. And even with a log it only ever checked
     // that the RAW key was absent — never that the friendly number was there —
     // so a subject carrying no order reference, or somebody else's, passed too.
-    if (!HARNESS_LOG || !existsSync(HARNESS_LOG)) {
-      return SKIP("no harness log, so the subject cannot be read — this proves nothing either way");
+    // Read through mailSince so this works under BOTH email configurations —
+    // the raw stdout parse it used before was blind whenever a real provider
+    // was configured, which is exactly when the lifecycle suites run.
+    const all = mailSince({ log: 0, capture: 0 });
+    if (all === null) {
+      return SKIP("no harness log and no capture file, so the subject cannot be read — this proves nothing either way");
     }
-    const log = readFileSync(HARNESS_LOG, "utf8");
-    assert(!log.includes(`Not sent: "Order Confirmed - ${orderId}"`),
+    const subjects = all.map((m) => m.subject);
+    assert(!subjects.includes(`Order Confirmed - ${orderId}`),
       "the confirmation subject quoted the raw order-<uuid> key");
-    assert(log.includes(`Not sent: "Order Confirmed - ${row.order_number}"`),
-      `no confirmation subject quoted this order's own number (${row.order_number})`);
+    assert(subjects.includes(`Order Confirmed - ${row.order_number}`),
+      `no confirmation subject quoted this order's own number (${row.order_number}); saw ${subjects.slice(-5).join(" | ") || "nothing"}`);
     return `quotes ${row.order_number}`;
   });
 
