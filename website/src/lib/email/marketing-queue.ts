@@ -26,7 +26,20 @@ export const MARKETING_QUEUE_MAX_ATTEMPTS = 8;
 export const MARKETING_QUEUE_RETRY_MS = 30 * 60 * 1000;
 
 export type MarketingQueueDrainResult = {
+  /** Messages THIS drain handed to the provider. Nothing else. */
   sent: number;
+  /**
+   * Rows closed because the address already had the message — a previous drain
+   * delivered it and could not record that, or the send that deferred this row
+   * in the first place WAS this message.
+   *
+   * Counted apart from `sent` because it is not a send. It used to be added to
+   * it, which made the only number the lifecycle cron reports for this job
+   * ("marketing_queue sent N") include messages that never touched the wire.
+   * Reporting a delivery that did not happen is the same class of mistake as
+   * reporting one that did not arrive, and it is the one that inflates.
+   */
+  alreadyDelivered: number;
   deferredAgain: number;
   cancelled: number;
   failed: number;
@@ -45,7 +58,7 @@ export type MarketingQueueDrainResult = {
 export async function drainMarketingSendQueue(input?: { now?: number; limit?: number }): Promise<MarketingQueueDrainResult> {
   const now = input?.now ?? Date.now();
   const limit = input?.limit ?? 50;
-  const result: MarketingQueueDrainResult = { sent: 0, deferredAgain: 0, cancelled: 0, failed: 0, errors: [] };
+  const result: MarketingQueueDrainResult = { sent: 0, alreadyDelivered: 0, deferredAgain: 0, cancelled: 0, failed: 0, errors: [] };
 
   // Email switched off in Settings holds the queue exactly as it holds the
   // campaign and automation sweeps: nothing is attempted, nothing is failed,
@@ -114,7 +127,10 @@ export async function drainMarketingSendQueue(input?: { now?: number; limit?: nu
         referenceId: row.reference_id ? String(row.reference_id) : null,
         now,
       })) {
-        result.sent++;
+        // The ROW is satisfied — the address has the message — so it closes
+        // 'sent' exactly as before. The COUNTER is what changed: this drain
+        // sent nothing.
+        result.alreadyDelivered++;
         await mark(id, { status: "sent", sent_at: new Date().toISOString(), attempts, last_error: "already delivered to this address" });
         continue;
       }

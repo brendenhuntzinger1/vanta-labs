@@ -75,6 +75,29 @@ beforeEach(() => {
   state.logInserts = [];
 });
 
+/**
+ * The path the marketing QUEUE drains on. It arrives at
+ * sendRenderedMarketingEmail directly, skipping the wrapper above, and re-runs
+ * the two gates itself because a person may have unsubscribed while the
+ * message sat parked.
+ */
+async function sendRendered() {
+  const { sendRenderedMarketingEmail } = await import("@/lib/email/marketing");
+  return sendRenderedMarketingEmail({
+    rendered: { to: "customer@example.test", subject: "A queued campaign", html: "<p>Hello</p>", text: "Hello" },
+    campaignType: "campaign",
+    referenceId: "camp-1",
+    templateKey: "campaign",
+    onDeferred: "report",
+  } as never);
+}
+
+beforeEach(() => {
+  state.suppressionError = null;
+  state.sends = [];
+  state.logInserts = [];
+});
+
 describe("sendMarketingEmail when the suppression table cannot be read", () => {
   it("refuses to send rather than assuming consent", async () => {
     state.suppressionError = { message: "connection reset" };
@@ -86,6 +109,42 @@ describe("sendMarketingEmail when the suppression table cannot be read", () => {
 
   it("still sends when the read succeeds and the address is clean", async () => {
     const result = await send();
+    expect(state.sends).toHaveLength(1);
+    expect(result.success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P0-10. THE SAME RULE ON THE QUEUE'S DRAIN PATH, WHICH NEVER HAD IT.
+//
+// sendRenderedMarketingEmail destructured `data` only, so a read failure there
+// still meant "not suppressed" long after the wrapper above was fixed — and
+// the tests above only ever exercised the wrapper.
+//
+// This is the path where it matters most. A queued message was parked BECAUSE
+// the frequency guard held it back, so more time has passed between consent
+// being checked and the message going out than on any other path — which is
+// precisely the window in which somebody unsubscribes.
+// ---------------------------------------------------------------------------
+describe("sendRenderedMarketingEmail — the queue drain path", () => {
+  it("also refuses to send when consent cannot be verified", async () => {
+    state.suppressionError = { message: "connection reset" };
+    const result = await sendRendered();
+    expect(result.success).toBe(false);
+    expect(state.sends).toHaveLength(0);
+    expect(String(result.error ?? "")).toMatch(/suppression|consent|verify/i);
+  });
+
+  it("reports the refusal as unverified rather than as suppressed", async () => {
+    // The distinction the queue acts on: `suppressed` cancels the row for good,
+    // while an unverified read must leave it to be retried on a later tick.
+    state.suppressionError = { message: "connection reset" };
+    const result = await sendRendered();
+    expect(result.suppressed).toBe(false);
+  });
+
+  it("still sends when the read succeeds and the address is clean", async () => {
+    const result = await sendRendered();
     expect(state.sends).toHaveLength(1);
     expect(result.success).toBe(true);
   });

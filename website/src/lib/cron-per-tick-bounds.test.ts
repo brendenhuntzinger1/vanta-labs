@@ -35,6 +35,16 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("server-only", () => ({}));
+vi.mock("@/lib/email/settings", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  // P0-10: the sweep asks marketingBlockedReason before it scans. This suite is
+  // about how much work the sweep does once allowed to run, so the gate is open.
+  getEmailRuntimeConfig: async () => ({
+    enabled: true, provider: "resend", from: "Vanta <hello@example.test>",
+    marketingPostalAddress: "1 Test Street, Testville CA 90000",
+  }),
+  marketingBlockedReason: () => null,
+}));
 vi.mock("@/lib/env", () => ({ getSiteUrl: () => "https://example.test" }));
 // Product names come from the catalogue at send time, never from the stored
 // snapshot (AUTH-3): the mock answers every slug the fixtures use.

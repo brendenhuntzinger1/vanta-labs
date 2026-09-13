@@ -8,9 +8,11 @@ import { getSiteUrl } from "@/lib/env";
 import { isFreeShippingSitewide } from "@/lib/shipping";
 import { formatDisplayDate } from "@/lib/format-date";
 import { isMarketingSuppressed, sendMarketingEmail } from "@/lib/email/marketing";
+import { getEmailRuntimeConfig, marketingBlockedReason } from "@/lib/email/settings";
 import { claimMarketingSend } from "@/lib/email/frequency";
 import { plainGreetingName } from "@/lib/email/greeting-name";
 import { getCatalogProductsBySlugs, getStockLevelsBySlugs } from "@/lib/catalog";
+import type { Product } from "@/lib/catalog-types";
 import { isPaidOrderStatus, isProductPurchaseOrder } from "@/lib/ledger";
 import { recordSystemAlert } from "@/lib/monitoring";
 import {
@@ -567,6 +569,16 @@ async function reserveAndSendStage(input: {
    */
   mintOffer?: () => Promise<string | null>;
   /**
+   * A gift the stage would LIKE to carry but can send without.
+   *
+   * Called after the claim is won and before the template is built, so the
+   * callback may set whatever the template needs to describe the gift. Unlike
+   * `mintOffer` above, returning null — or throwing — is not fatal: the stage
+   * simply goes without one. Use this where the message stands on its own and
+   * `mintOffer` where the message IS the gift.
+   */
+  mintOfferOptional?: () => Promise<string | null>;
+  /**
    * An entitlement token the CALLER already minted, for a stage where the gift
    * is a bonus rather than the subject.
    *
@@ -666,9 +678,38 @@ async function reserveAndSendStage(input: {
     }
   }
 
+  // THE SOFT ENTITLEMENT, ALSO BEHIND THE CLAIM.
+  //
+  // P0-1. The last-chance stage used to mint its gift in the CALLER, before
+  // reserveAndSendStage was entered at all, because its gift is a bonus rather
+  // than the subject and a failed mint must not silence the message. That put
+  // the one irreversible side effect in this whole function — issuing an
+  // entitlement, which retires the address's previous one — OUTSIDE the claim
+  // that makes every other side effect happen at most once.
+  //
+  // The consequence, measured in production 2026-09-12: the frequency guard
+  // deferred the send on every tick of the 24-hour t72h window, the caller
+  // minted anyway on every tick, and each mint revoked the one before it.
+  // Four real carts churned 96-97 tokens each — one per tick, exactly — and
+  // not one of the four ever received the message. Worse, the FIRST token in
+  // that chain was the one already sitting in the shopper's 24-hour email,
+  // promising a ten-day expiry; it died at about 48 hours when the churn began.
+  //
+  // Moving it here keeps both properties: it still cannot silence the send
+  // (failure is tolerated, unlike mintOffer below), and it now cannot run
+  // without the claim, so it happens at most once per cart per stage.
+  let softOfferToken: string | null = null;
+  if (input.mintOfferOptional) {
+    try {
+      softOfferToken = await input.mintOfferOptional();
+    } catch (error) {
+      console.error("[cart-recovery] optional gift could not be minted; sending without it", input.cartId, input.stage, error);
+    }
+  }
+
   // THE ENTITLEMENT IS MINTED BEHIND THE CLAIM, exactly like the coupon above,
   // and a stage that cannot mint one sends nothing at all.
-  let offerToken: string | null = input.offerToken ?? null;
+  let offerToken: string | null = input.offerToken ?? softOfferToken;
   if (input.mintOffer) {
     offerToken = await input.mintOffer();
     if (!offerToken) {
@@ -934,11 +975,36 @@ export function selectDueStage(
   // lost (see the test that walks every stage from the end of the previous
   // one's window).
   if (sinceLastSendMs !== null && sinceLastSendMs < MIN_STAGE_GAP_MS) return null;
-  for (const stage of RECOVERY_STAGES) {
+
+  // THE LADDER ONLY EVER GOES UP.
+  //
+  // The clock is the shopper's LAST ACTIVITY, and that is deliberate — someone
+  // still adding to a cart is not an abandoner. But it means elapsed RESETS
+  // when they come back and touch the cart without buying, which re-opens the
+  // early windows on a sequence that has already moved past them.
+  //
+  // Usually harmless, because the early stage is claimed and this returns null.
+  // Not always: a stage the operator had switched OFF when its window passed
+  // was never claimed, so switching it back on is enough. Then a shopper who
+  // was mailed the 12-hour and 24-hour messages, and who edited their cart on
+  // day two, is sent "Your cart is saved" on day three — the opening line of a
+  // sequence they are three messages into. There is no reading of that which is
+  // not a mistake to the person receiving it.
+  //
+  // So a stage below the highest one already sent is never due, whatever the
+  // windows say. Sending nothing is the right answer here: the later stages are
+  // still reachable as the clock runs on, and the sequence stays in order.
+  let highestClaimed = -1;
+  for (let index = 0; index < RECOVERY_STAGES.length; index += 1) {
+    if (claimed.has(RECOVERY_STAGES[index])) highestClaimed = index;
+  }
+
+  for (const [index, stage] of RECOVERY_STAGES.entries()) {
     const window = STAGE_WINDOWS[stage];
     if (elapsedMs < window.opensAfterMs || elapsedMs >= window.closesAfterMs) continue;
     if (!STAGE_ENABLED[stage](config)) return null;
     if (claimed.has(stage)) return null;
+    if (index < highestClaimed) return null;
     return stage;
   }
   return null;
@@ -1274,6 +1340,35 @@ export interface RecoveryCatalogueEntry {
    */
   variantPriceCents?: Map<string, number>;
   variantLabel?: Map<string, string>;
+  /**
+   * THIS PRODUCT CANNOT BE BOUGHT TODAY, judged on the dose a line that names
+   * no variant would get.
+   *
+   * The gift ladder has checked stock since a top-band cart mailed a
+   * three-product promise the till then honoured two thirds of. The CART lines
+   * never did — so a recovery email could print, price and total a product that
+   * is out of stock, walk the shopper back to it, and let them find out at the
+   * checkout. Worse, `reconciledCartValueCents` sizes the offer band on exactly
+   * the lines the email prints, so an unbuyable line also bought a bigger gift
+   * than the buyable basket justified.
+   *
+   * Set by loadRecoveryCatalogue using the same dual test quoteOrder uses —
+   * status AND tracked count — because resolveStockStatus() reports "In Stock"
+   * for every product while the global inventory flag is off, which is its
+   * default. Unknown stays shippable: an untracked supply has no count, and
+   * withholding a line because a read was silent would empty the email.
+   */
+  unshippable?: boolean;
+  /**
+   * THE DOSES THAT CANNOT BE BOUGHT, keyed exactly as `variantPriceCents` is.
+   *
+   * Availability is per dose, not per product: GLP-3 routinely has its 5mg on
+   * the shelf and its 10mg gone. Judging a line that names a dose by the
+   * PRODUCT's default would both drop buyable lines and keep unbuyable ones,
+   * which is why recoveryEmailItems asks this set first and only falls back to
+   * `unshippable` for a line that names no variant at all.
+   */
+  unshippableVariants?: Set<string>;
 }
 
 /** What a recovery email renders per line — and nothing the client typed. */
@@ -1332,6 +1427,25 @@ export function recoveryEmailItems(
     // can never quietly shrink a cart into a smaller offer band. A missing
     // price loses a number on one line; a wrong one loses the sale.
     const variantId = String(item?.variantId ?? "").trim();
+
+    // A LINE THAT CANNOT BE BOUGHT IS NOT PRINTED, PRICED OR TOTALLED.
+    //
+    // Dropping it rather than showing it struck through is deliberate: this
+    // email's whole job is to walk somebody back to a basket they can pay for,
+    // and reconciledCartValueCents sizes the offer band on what is printed
+    // here. Leaving the line in would advertise an unbuyable product AND buy a
+    // bigger gift than the remaining basket justifies. A cart with nothing left
+    // produces no lines at all, and the caller declines to send.
+    //
+    // Judged on THE DOSE THIS LINE NAMES when it names one, because
+    // availability is per dose — asking the product's default instead would
+    // drop a buyable 5mg because the 10mg ran out. A dose the catalogue does
+    // not know stays shippable, for the same reason an unreadable count does.
+    const lineUnshippable = variantId
+      ? entry.unshippableVariants?.has(variantId) === true
+      : entry.unshippable === true;
+    if (lineUnshippable) continue;
+
     const variantPrice = variantId ? entry.variantPriceCents?.get(variantId) : undefined;
     const unitPriceCents = variantId ? Number(variantPrice) : Number(entry.unitPriceCents);
     // The dose label qualifies the name for the same reason: "GLP-3" and
@@ -1434,6 +1548,18 @@ export async function loadRecoveryCatalogue(slugs: string[]): Promise<Map<string
   const entries = new Map<string, RecoveryCatalogueEntry>();
   if (unique.length === 0) return entries;
   const site = getSiteUrl();
+
+  // The same read the gift ladder makes, for the same reason, against the cart's
+  // own slugs. A failed read leaves the map empty and every line stays
+  // shippable — the till still guards the real order, and an email missing its
+  // cart is a worse outcome than one line that turns out to be unavailable.
+  let stock = new Map<string, number>();
+  try {
+    stock = await getStockLevelsBySlugs(unique);
+  } catch (error) {
+    console.error("[cart-recovery] cart stock unreadable; pricing every line as available", error);
+  }
+
   for (const product of await getCatalogProductsBySlugs(unique)) {
     if (!product?.slug || !product.name) continue;
     const price = Number(String(product.salePrice ?? product.price ?? "").replace(/[^0-9.]/g, ""));
@@ -1452,9 +1578,40 @@ export async function loadRecoveryCatalogue(slugs: string[]): Promise<Map<string
       if (Number.isFinite(dosePrice) && dosePrice > 0) variantPriceCents.set(String(dose.id), Math.round(dosePrice * 100));
       if (dose.label) variantLabel.set(String(dose.id), String(dose.label));
     }
+    // WHAT CAN ACTUALLY BE BOUGHT, by exactly the test the gift ladder and
+    // quoteOrder use: the status OR a tracked count at or below zero. Both,
+    // because resolveStockStatus() reports "In Stock" for every product while
+    // the global inventory flag is off — its default here — so the status alone
+    // would call an empty shelf available, and the count alone would call an
+    // untracked product empty.
+    const cannotShip = (
+      status: Product["stockStatus"] | undefined,
+      count: number | undefined,
+    ) => status === "Out of Stock"
+      || status === "Reserved"
+      || (typeof count === "number" && Number.isFinite(count) && count <= 0);
+
+    // Per dose first, keyed as the cart lines key it.
+    const unshippableVariants = new Set<string>();
+    for (const dose of product.doses ?? []) {
+      if (!dose?.id) continue;
+      if (cannotShip(dose.stockStatus ?? product.stockStatus, stock.get(String(dose.id)))) {
+        unshippableVariants.add(String(dose.id));
+      }
+    }
+    // Then the product, on the dose a line naming no variant would receive —
+    // the same dose and the same key order the gift check picks.
+    const defaultDose = product.doses?.find((entry) => entry.isDefault) ?? product.doses?.[0];
+    const unshippable = cannotShip(
+      defaultDose?.stockStatus ?? product.stockStatus,
+      defaultDose ? stock.get(String(defaultDose.id)) : stock.get(String(product.slug)),
+    );
+
     entries.set(String(product.slug), {
       name: String(product.name),
       unitPriceCents: Number.isFinite(price) ? Math.round(price * 100) : 0,
+      ...(unshippable ? { unshippable: true } : {}),
+      ...(unshippableVariants.size > 0 ? { unshippableVariants } : {}),
       ...(image ? { image } : {}),
       ...(product.batchNumber ? { batchNumber: String(product.batchNumber) } : {}),
       ...(variantPriceCents.size > 0 ? { variantPriceCents } : {}),
@@ -1470,6 +1627,32 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
   const result: AbandonedCartSweepResult = {
     t30mSent: 0, t12hSent: 0, t24hSent: 0, t72hSent: 0, scanned: 0, eligible: 0, recoveredLate: 0, heldForCooldown: 0, unknownStatus: 0,
   };
+
+  // P0-10. THE GATE EVERY OTHER MARKETING SENDER HAS, AND THIS ONE DID NOT.
+  //
+  // campaign-sender, automations, marketing-queue and the admin send route all
+  // ask marketingBlockedReason before doing any work. Cart recovery — the
+  // highest-volume marketing stream in the store — never did. Two consequences,
+  // and neither announced itself:
+  //
+  //   * An operator who switches email OFF in Settings stops campaigns,
+  //     automations and the queue, and cart recovery keeps mailing.
+  //   * With the postal address blank, the marketing wrapper renders no
+  //     address (it interpolates an empty string rather than refusing), so
+  //     every recovery message goes out as commercial email without the
+  //     physical address CAN-SPAM requires — a rule with no volume exemption
+  //     and no B2B carve-out.
+  //
+  // BEFORE THE SCAN, SO NOTHING IS CONSUMED. Returning here claims no stage,
+  // mints nothing and burns no window: the next tick after the operator fixes
+  // the setting finds every cart exactly where it was. That ordering is the
+  // whole point — a gate that ran after the claim would trade one silent
+  // failure for another.
+  const emailBlocked = marketingBlockedReason(await getEmailRuntimeConfig());
+  if (emailBlocked) {
+    console.warn("[cart-recovery] sweep held:", emailBlocked);
+    return result;
+  }
 
   // Only sweep carts new enough to still have a pending stage. The stage clock
   // runs from the shopper's LAST activity (elapsedFor), so the age-out must
@@ -1730,7 +1913,13 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     const cartId = String(row.id);
 
     const reconciledCartCents = reconciledCartValueCents(items, Number(row.cart_value_cents ?? 0));
-    const base = { name, items, cartValueCents: reconciledCartCents };
+    // P0-7. freeShipping rides on `base`, so EVERY stage states the real
+    // shipping position rather than only the 24-hour one. Sitewide free
+    // shipping went live 2026-09-06 and the copy never followed, so all six
+    // recovery templates were telling an abandoning shopper that shipping
+    // would be added at checkout — the single most-cited reason people
+    // abandon, recreated in the message sent to people who already had.
+    const base = { name, items, cartValueCents: reconciledCartCents, freeShipping: freeShippingSitewide };
     let sent = false;
 
     // A NAMED CART'S STAGE CAN BE REPLACED, and that is all this does.
@@ -1895,7 +2084,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       // $520 cart a GHK-Cu and a Recon Water, because one flat gift under-serves
       // the carts holding most of the money and over-serves the rest.
       const giftKey = plan.offerKey;
-      const giftConfig = recoveryGiftConfig(shippableGifts(plan.gifts), catalogueNameBySlug);
+      const giftConfig = recoveryGiftConfig(shippableGifts(plan.gifts), catalogueNameBySlug, 0, plan.minCartCents);
       let giftTerms = "";
       sent = await reserveAndSendStage({
         cartId, stage, email,
@@ -1920,7 +2109,6 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
           giftLabel: giftConfig?.label ?? "",
           offerTerms: giftTerms,
           variant,
-          freeShipping: freeShippingSitewide,
         }),
       });
     } else {
@@ -1935,30 +2123,24 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       // reserveAndSendStage treats a failed `mintOffer` as fatal, because the
       // body of a gift email is about the gift. This message is not: it is the
       // last note about the cart, and it stands on the code and the cart
-      // summary whether or not a vial can be attached. So the gift is minted
-      // BEFORE the send is arranged, and a failure just means the gift block is
-      // absent — never a stage that goes silent on its last chance to convert.
+      // summary whether or not a vial can be attached. So it uses
+      // `mintOfferOptional`, whose failure just means the gift block is absent
+      // — never a stage that goes silent on its last chance to convert.
       //
-      // issueCustomerOffer retires this cart's own stage-3 row and mints a
-      // fresh token, so the link in the NEWEST email is the one that works.
+      // P0-1: THAT SOFTNESS USED TO BE BOUGHT BY MINTING OUT HERE, before the
+      // claim, and that was the bug. Issuing an entitlement retires the
+      // address's previous one, so an unclaimed mint is not a harmless retry —
+      // it is a revocation. With the send deferred on every tick of the window,
+      // four production carts churned 96-97 tokens apiece and none was ever
+      // mailed. The softness is now expressed by the CALLBACK's contract rather
+      // than by its position, so it costs nothing and happens at most once.
       const giftKey = plan.offerKey;
-      const giftConfig = recoveryGiftConfig(shippableGifts(plan.gifts), catalogueNameBySlug);
-      let giftToken: string | null = null;
+      const giftConfig = recoveryGiftConfig(shippableGifts(plan.gifts), catalogueNameBySlug, 0, plan.minCartCents);
+      // Filled in by mintOfferOptional below, which runs BEHIND the claim and
+      // before buildTemplate — so what the email says about the gift is written
+      // from the row that was actually minted, and only when one was.
       let giftTerms = "";
-      if (giftKey && giftConfig) {
-        try {
-          const issued = await issueResolvedOffer({
-            email, offerKey: giftKey, config: giftConfig, referenceId: cartId,
-          });
-          if (issued) {
-            giftToken = issued.token;
-            giftTerms = describeGiftTerms(giftConfig, issued.expiresAt);
-          }
-        } catch (error) {
-          console.error("[cart-recovery] last-chance gift could not be minted; sending without it", cartId, error);
-        }
-      }
-      const giftLabel = giftToken && giftConfig ? giftConfig.label : "";
+      let giftLabel = "";
 
       // C-06 and K-05 both hold here: the claim comes first, and any code the
       // email advertises is one the database will honour at the till. When the
@@ -1982,7 +2164,19 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
           ? () => resolveLastChanceCoupon(cartId, email, plan.percent, config.couponExpirationHours)
           : () => findLiveCouponForCart(cartId),
         couponRequired: discountAllowed,
-        offerToken: giftToken,
+        mintOfferOptional: giftKey && giftConfig
+          ? async () => {
+            const issued = await issueResolvedOffer({
+              email, offerKey: giftKey, config: giftConfig, referenceId: cartId,
+            });
+            if (!issued) return null;
+            // From the SAME config the mint wrote onto the row, so what the
+            // email states and what the till applies cannot disagree.
+            giftTerms = describeGiftTerms(giftConfig, issued.expiresAt);
+            giftLabel = giftConfig.label;
+            return issued.token;
+          }
+          : undefined,
         buildTemplate: (url, coupon) => cartRecoveryT72hTemplate({
           ...base,
           restoreUrl: url,

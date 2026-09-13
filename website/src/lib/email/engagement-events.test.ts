@@ -25,7 +25,23 @@ vi.mock("@/lib/supabase-server", () => {
     const filters: Array<(row: Row) => boolean> = [];
     let mode: "select" | "update" = "select";
     let patch: Row = {};
-    const matching = () => (db.tables[table] ?? []).filter((row) => filters.every((f) => f(row)));
+    // ORDER AND LIMIT ARE REAL HERE, not no-ops. stampSendLogEngagement picks
+    // the NEWEST matching send, and a fake that ignores the ordering would
+    // report a pass for code that stamped the oldest.
+    let sortBy: { column: string; ascending: boolean } | null = null;
+    let cap: number | null = null;
+    const matching = () => {
+      let rows = (db.tables[table] ?? []).filter((row) => filters.every((f) => f(row)));
+      if (sortBy) {
+        const { column, ascending } = sortBy;
+        rows = [...rows].sort((a, b) => {
+          const left = String(a[column] ?? "");
+          const right = String(b[column] ?? "");
+          return ascending ? left.localeCompare(right) : right.localeCompare(left);
+        });
+      }
+      return cap === null ? rows : rows.slice(0, cap);
+    };
     const settle = () => {
       const rows = matching();
       if (mode === "update") for (const row of rows) Object.assign(row, patch);
@@ -42,8 +58,11 @@ vi.mock("@/lib/supabase-server", () => {
       eq: (col: string, value: unknown) => { filters.push((r) => r[col] === value); return builder; },
       in: (col: string, values: unknown[]) => { filters.push((r) => values.includes(r[col])); return builder; },
       is: (col: string, value: unknown) => { filters.push((r) => (r[col] ?? null) === value); return builder; },
-      order: () => builder,
-      limit: () => builder,
+      order: (column: string, options?: { ascending?: boolean }) => {
+        sortBy = { column, ascending: options?.ascending !== false };
+        return builder;
+      },
+      limit: (n: number) => { cap = n; return builder; },
       maybeSingle: () => Promise.resolve({ data: matching()[0] ?? null, error: null }),
       then: (resolve: (v: unknown) => unknown) => Promise.resolve(settle()).then(resolve),
     };
@@ -117,7 +136,7 @@ describe("recordEngagementEvent", () => {
 describe("the cart-recovery tracker records an event beside the first-touch stamp", () => {
   it("resolves the reservation to the cart and stage, stamps first touch, and writes the event every time", async () => {
     db.tables.abandoned_cart_emails = [{ id: "res-1", abandoned_cart_id: "cart-9", stage: "t24h" }];
-    db.tables.email_send_log = [{ campaign_type: "cart_recovery_t24h", reference_id: "cart-9", opened_at: null, recipient_email: "b@example.com" }];
+    db.tables.email_send_log = [{ id: "send-1", campaign_type: "cart_recovery_t24h", reference_id: "cart-9", sent_at: "2026-09-10T10:00:00.000Z", opened_at: null, recipient_email: "b@example.com" }];
     await stampCartRecoveryEngagement("opened", "res-1", { userAgent: "Mozilla/5.0 (iPhone)" });
     await stampCartRecoveryEngagement("opened", "res-1", { userAgent: "Mozilla/5.0 (iPhone)" });
     // First touch stamped once…
@@ -131,6 +150,40 @@ describe("the cart-recovery tracker records an event beside the first-touch stam
   it("writes nothing for an unknown reservation", async () => {
     await stampCartRecoveryEngagement("clicked", "nope", { userAgent: "x" });
     expect(db.inserts).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // ONE OPEN IS ONE OPEN, EVEN AFTER AN ADMIN RESEND.
+  //
+  // A cart-recovery stage is NOT one-row-per-reference, though this module used
+  // to say it was: resendCartRecoveryEmail claims through marketing_send_claim
+  // with the same campaign_type and the same cart id, so each press of the
+  // resend button adds another email_send_log row under that one key. The stamp
+  // was a filtered UPDATE, so a single fetch of a single pixel stamped BOTH —
+  // and the ledger reported two opens for one.
+  // -------------------------------------------------------------------------
+  it("stamps only the newest send when a stage has been resent", async () => {
+    db.tables.abandoned_cart_emails = [{ id: "res-1", abandoned_cart_id: "cart-9", stage: "t72h" }];
+    db.tables.email_send_log = [
+      { id: "original", campaign_type: "cart_recovery_t72h", reference_id: "cart-9", sent_at: "2026-09-10T10:00:00.000Z", opened_at: null },
+      { id: "resend", campaign_type: "cart_recovery_t72h", reference_id: "cart-9", sent_at: "2026-09-12T10:00:00.000Z", opened_at: null },
+    ];
+    await stampCartRecoveryEngagement("opened", "res-1", { userAgent: "Mozilla/5.0 (iPhone)" });
+    const stamped = db.tables.email_send_log.filter((row) => row.opened_at);
+    expect(stamped).toHaveLength(1);
+    expect(stamped[0].id).toBe("resend");
+  });
+
+  it("falls back to the earlier send once the newest is already stamped", async () => {
+    // Not a second credit for the same fetch: this is a genuinely separate
+    // open, and the row it lands on is the one still unaccounted for.
+    db.tables.abandoned_cart_emails = [{ id: "res-1", abandoned_cart_id: "cart-9", stage: "t72h" }];
+    db.tables.email_send_log = [
+      { id: "original", campaign_type: "cart_recovery_t72h", reference_id: "cart-9", sent_at: "2026-09-10T10:00:00.000Z", opened_at: null },
+      { id: "resend", campaign_type: "cart_recovery_t72h", reference_id: "cart-9", sent_at: "2026-09-12T10:00:00.000Z", opened_at: "2026-09-12T10:05:00.000Z" },
+    ];
+    await stampCartRecoveryEngagement("opened", "res-1", { userAgent: "Mozilla/5.0 (iPhone)" });
+    expect(db.tables.email_send_log.find((row) => row.id === "original")?.opened_at).toBeTruthy();
   });
 });
 

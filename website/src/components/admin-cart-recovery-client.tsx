@@ -143,6 +143,7 @@ export function AdminCartRecoveryClient({
   giftProducts,
   postageCents,
   productCostRatio,
+  estimatedProcessorFeePercent,
 }: {
   initialCarts: AbandonedCartRow[];
   initialStats: CartRecoveryStats;
@@ -153,6 +154,13 @@ export function AdminCartRecoveryClient({
   postageCents: number;
   /** Product COGS as a share of revenue, from the live blended margin. */
   productCostRatio: number;
+  /**
+   * The processor's cut, ESTIMATED rather than settled — see the header of
+   * cart-recovery-tiers.ts. This page modelled no processor cost at all until
+   * P0-8, on the strength of a pass-through that production has switched off,
+   * so every margin here read higher than it was.
+   */
+  estimatedProcessorFeePercent: number;
   initialMonthlyTrend: RecoveryTrendPoint[];
   initialConfig: CartRecoveryConfig;
 }) {
@@ -199,9 +207,10 @@ export function AdminCartRecoveryClient({
   const economicsInputs = useMemo(() => ({
     productCostRatio,
     postageCents,
+    processorFeePercent: estimatedProcessorFeePercent,
     giftCostCents: Object.fromEntries(costBySlug),
     giftRetailCents: Object.fromEntries(giftProducts.map((p) => [p.slug, p.priceCents])),
-  }), [costBySlug, giftProducts, postageCents, productCostRatio]);
+  }), [costBySlug, giftProducts, postageCents, productCostRatio, estimatedProcessorFeePercent]);
 
   const saveConfig = async () => {
     // Refused here as well as at the API, so the operator sees the reason
@@ -383,6 +392,9 @@ export function AdminCartRecoveryClient({
           <h2 className="text-lg font-semibold text-white">Offer by cart size</h2>
           <p className="text-xs text-zinc-500">
             Postage {money(postageCents)} · product cost {(productCostRatio * 100).toFixed(1)}% of revenue
+            {estimatedProcessorFeePercent > 0
+              ? ` · processor ${estimatedProcessorFeePercent.toFixed(1)}% (estimated, not settled)`
+              : " · processor cost not modelled"}
           </p>
         </div>
         <p className="mt-2 max-w-3xl text-sm text-zinc-400">

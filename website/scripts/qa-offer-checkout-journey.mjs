@@ -24,6 +24,7 @@ import { createHash, createHmac, randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { chromium, webkit } from "playwright";
 import pg from "pg";
+import { harnessSigningSecret } from "./lib/harness-env.mjs";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
 const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/storefront";
@@ -122,8 +123,10 @@ async function clearRateLimit() { await q("delete from rate_limit_hits").catch((
  *  step here answered "Sign in to continue", which looks like nineteen product
  *  failures and is one stale fixture. */
 async function emailLinkGrant() {
-  const secret = process.env.UNSUBSCRIBE_SECRET ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!secret) return null;
+  // Loudly, not as null: a missing secret used to leave every step answering
+  // "Sign in to continue", which looks like nineteen product failures and is
+  // one absent environment variable.
+  const secret = harnessSigningSecret();
   // EMAIL_GRANT_TTL_MS is 7 days and verifyEmailLinkGrant refuses a stamp
   // FURTHER OUT than the TTL allows — so an over-generous expiry is rejected
   // exactly like a forged one. Half the window keeps this clear of both edges.

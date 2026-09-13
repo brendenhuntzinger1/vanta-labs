@@ -163,6 +163,28 @@ export interface CronGroupOptions {
   maxDurationSeconds: number;
   /** When the watchdog gives up, INSIDE the budget so it can still report. */
   deadlineMs: number;
+  /**
+   * JOBS THAT MUST FINISH BEFORE THE REST BEGIN.
+   *
+   * WHY THIS EXISTS. Every job in a group used to start in the same tick of the
+   * event loop, so the documented priority order was not a priority order at
+   * all — it was a list. That is harmless for jobs that touch different rows,
+   * and it is not harmless here, because two of these jobs compete for the SAME
+   * scarce resource: the 24-hour quiet period held per recipient by
+   * marketing_send_claim. Whichever job reaches an address first takes it and
+   * the other is deferred.
+   *
+   * Deferral is not symmetrical. A welcome email deferred today goes tomorrow
+   * and nothing is lost. A cart-recovery stage is due inside a WINDOW that
+   * closes when the next stage opens (STAGE_WINDOWS), so a stage deferred past
+   * its window is not sent late — it is never sent, and the shopper is simply
+   * never reminded. Running the windowed job first costs the unwindowed ones a
+   * few seconds and costs the windowed one nothing.
+   *
+   * Names not present in `jobs` are ignored rather than throwing: a route that
+   * renames a job should not take its whole schedule down.
+   */
+  runFirst?: readonly string[];
 }
 
 /**
@@ -178,15 +200,32 @@ export async function runCronGroup(options: CronGroupOptions): Promise<Record<st
 
   const settled: Array<PromiseSettledResult<unknown> | null> = names.map(() => null);
   const unfinished = new Set<string>(names);
-  const running = names.map((name, index) =>
-    Promise.resolve()
+  // Started, not merely pending. A job held behind an earlier phase has not
+  // stalled — it has not begun — and the timeout alert below says which.
+  const started = new Set<string>();
+
+  const launch = (name: string) => {
+    const index = names.indexOf(name);
+    started.add(name);
+    return Promise.resolve()
       .then(() => runJobWithTransientRetry(jobs, name))
       .then(
         (value) => { settled[index] = { status: "fulfilled", value }; },
         (reason: unknown) => { settled[index] = { status: "rejected", reason }; },
       )
-      .finally(() => { unfinished.delete(name); }),
-  );
+      .finally(() => { unfinished.delete(name); });
+  };
+
+  const first = (options.runFirst ?? []).filter((name) => name in jobs);
+  const rest = names.filter((name) => !first.includes(name));
+
+  // Each launched job settles into its own slot and never rejects, so awaiting
+  // a phase cannot be short-circuited by one job failing — the second phase
+  // runs whether or not the first succeeded, exactly as before.
+  const running = (async () => {
+    if (first.length > 0) await Promise.all(first.map(launch));
+    await Promise.all(rest.map(launch));
+  })();
 
   // THE WATCHDOG. Every alert here is written AFTER the jobs finish, so the one
   // failure mode that could never report itself was running out of time: the
@@ -196,7 +235,7 @@ export async function runCronGroup(options: CronGroupOptions): Promise<Record<st
   // cancelled — there is no cancellation to hand them, and each is idempotent,
   // so the next tick simply picks them up again.
   const raced = await Promise.race([
-    Promise.all(running).then(() => "finished" as const),
+    running.then(() => "finished" as const),
     new Promise<"timed_out">((resolve) => {
       const timer = setTimeout(() => resolve("timed_out"), deadlineMs);
       timer.unref?.();
@@ -204,7 +243,11 @@ export async function runCronGroup(options: CronGroupOptions): Promise<Record<st
   ]);
 
   if (raced === "timed_out") {
-    const stalled = [...unfinished];
+    // A job that never started is a different fault from one that hung, and
+    // conflating them sends an operator to read the wrong code. `neverStarted`
+    // means an earlier phase used the whole budget.
+    const stalled = [...unfinished].filter((name) => started.has(name));
+    const neverStarted = [...unfinished].filter((name) => !started.has(name));
     await recordSystemAlert({
       type: `cron_${group}_timeout`,
       severity: "critical",
@@ -212,12 +255,17 @@ export async function runCronGroup(options: CronGroupOptions): Promise<Record<st
         `The ${group} schedule was still running ${stalled.length} job(s) after ${Math.round(deadlineMs / 1000)}s `
         + `and will be cut off at the ${maxDurationSeconds}s function limit: `
         + `${stalled.map((name) => jobs[name].label).join(", ")}. `
+        + (neverStarted.length > 0
+          ? `${neverStarted.length} job(s) never started because an earlier phase used the budget: `
+            + `${neverStarted.map((name) => jobs[name].label).join(", ")}. `
+          : "")
         + "Whatever those jobs do has not finished this tick, and if this repeats they are not running at all.",
       context: {
         group,
         deadlineSeconds: Math.round(deadlineMs / 1000),
         maxDurationSeconds,
         stalled: stalled.map((name) => jobs[name].label),
+        neverStarted: neverStarted.map((name) => jobs[name].label),
         finished: names.filter((name) => !unfinished.has(name)).map((name) => jobs[name].label),
       },
       dedupeWindowMs: CRON_ALERT_DEDUPE_MS,

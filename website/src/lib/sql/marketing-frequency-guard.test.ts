@@ -140,6 +140,44 @@ describeDb("marketing_send_claim", () => {
     expect((await claim("buyer@example.test", "automation:winback_30", "ref")).outcome).toBe("claimed");
   });
 
+  // -------------------------------------------------------------------------
+  // THE PRESSURE WINDOW HEALS. THE SEND-ONCE INDEX DOES NOT.
+  //
+  // The test above proves a stranded claim stops counting as pressure after
+  // fifteen minutes, and that is the whole of the self-healing. The automation
+  // send-once index carries NO time bound — it is (campaign_type, reference_id)
+  // WHERE status <> 'failed' — so the same stranded row goes on holding that
+  // recipient's slot for as long as it exists, and the claim answers
+  // `duplicate` rather than `deferred`. The customer never gets that win-back,
+  // and loadSendLedger hides 'sending', so nothing says so.
+  //
+  // This is why marketing-send-reaper.ts exists, and these two cases are the
+  // property it depends on: the block is permanent, and 'failed' is what lifts
+  // it.
+  // -------------------------------------------------------------------------
+  it("blocks an automation slot for ever while a stranded claim holds it", async () => {
+    await logRow("automation:winback_60", "lapsed@example.test", "sending", "30 days", "lapsed@example.test:1");
+    const again = await claim("lapsed@example.test", "automation:winback_60", "lapsed@example.test:1");
+    // Not 'deferred' — deferral is a wait. This is a refusal that never expires.
+    expect(again.outcome).toBe("duplicate");
+    expect(again.log_id).toBeNull();
+  });
+
+  it("releases that slot the moment the row is closed 'failed' — the reaper's whole job", async () => {
+    await logRow("automation:winback_60", "lapsed@example.test", "sending", "30 days", "lapsed@example.test:1");
+    expect((await claim("lapsed@example.test", "automation:winback_60", "lapsed@example.test:1")).outcome).toBe("duplicate");
+    await client.query("update public.email_send_log set status = 'failed' where status = 'sending'");
+    expect((await claim("lapsed@example.test", "automation:winback_60", "lapsed@example.test:1")).outcome).toBe("claimed");
+  });
+
+  it("a slot closed 'sent' stays held, so a delivered message is never re-sent", async () => {
+    // The other half of the reaper's decision. Where the provider reported the
+    // message DID go out, closing the row 'sent' must keep the refusal.
+    await logRow("automation:winback_60", "lapsed@example.test", "sending", "30 days", "lapsed@example.test:1");
+    await client.query("update public.email_send_log set status = 'sent' where status = 'sending'");
+    expect((await claim("lapsed@example.test", "automation:winback_60", "lapsed@example.test:1")).outcome).toBe("duplicate");
+  });
+
   it("but a fresh 'sending' claim counts, so two senders in the same minute cannot both go", async () => {
     await logRow("campaign", "buyer@example.test", "sending", "1 minute");
     expect((await claim("buyer@example.test", "automation:winback_30", "ref")).outcome).toBe("deferred");

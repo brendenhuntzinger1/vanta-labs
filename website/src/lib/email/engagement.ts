@@ -51,11 +51,28 @@ export interface SendLogIdentity {
 /**
  * Stamp the send-log row a first-party tracker just heard from.
  *
- * `recipientEmail` narrows the match and must be supplied whenever one
+ * ONE OPEN STAMPS ONE ROW. This used to issue a filtered UPDATE and stamp
+ * EVERY row matching (campaign_type, reference_id) whose column was still null,
+ * on the stated belief that "automations and cart-recovery stages are
+ * one-row-per-reference". That is true of automations. It is NOT true of cart
+ * recovery: resendCartRecoveryEmail claims through marketing_send_claim with
+ * the same campaignType and the same cart id, so every press of the admin
+ * resend button adds another email_send_log row under that one key.
+ *
+ * So a single open of a resent stage was credited to the original send as well
+ * — one fetch, two opened rows in the ledger, and the same again for a click.
+ * The rate survived it (both rows count as sent too) but the counts did not,
+ * and the counts are what an operator reads as "how much engagement did
+ * recovery get".
+ *
+ * The newest matching send is the one stamped, because the link that was
+ * followed is the one most recently put in front of the customer. Resolving the
+ * row first also bounds the write to a single row by primary key, which is what
+ * a stamp should always have been.
+ *
+ * `recipientEmail` still narrows the match and must be supplied whenever one
  * reference_id covers many recipients — a campaign fans out to thousands of
- * rows sharing its id, and stamping all of them because one person opened would
- * turn a 2% open rate into 100%. Automations and cart-recovery stages are
- * one-row-per-reference, so they may omit it.
+ * rows sharing its id, and the wrong person's row would be stamped without it.
  */
 export async function stampSendLogEngagement(input: {
   kind: EngagementKind;
@@ -67,16 +84,30 @@ export async function stampSendLogEngagement(input: {
   if (!input.campaignType || !input.referenceId) return false;
   const column = COLUMN[input.kind];
   try {
-    let query = supabaseAdmin
+    let lookup = supabaseAdmin
       .from("email_send_log")
-      .update({ [column]: input.at ?? new Date().toISOString() })
+      .select("id")
       .eq("campaign_type", input.campaignType)
       .eq("reference_id", input.referenceId)
       .is(column, null);
     if (input.recipientEmail) {
-      query = query.eq("recipient_email", input.recipientEmail.trim().toLowerCase());
+      lookup = lookup.eq("recipient_email", input.recipientEmail.trim().toLowerCase());
     }
-    const { data, error } = await query.select("id");
+    const { data: candidates, error: lookupError } = await lookup
+      .order("sent_at", { ascending: false })
+      .limit(1);
+    if (lookupError) return false;
+    const target = (candidates ?? [])[0] as { id?: string } | undefined;
+    if (!target?.id) return false;
+
+    const { data, error } = await supabaseAdmin
+      .from("email_send_log")
+      .update({ [column]: input.at ?? new Date().toISOString() })
+      .eq("id", target.id)
+      // Still conditioned on null, so two trackers reporting the same open in
+      // the same instant cannot both claim it — FIRST TOUCH ONLY holds.
+      .is(column, null)
+      .select("id");
     if (error) return false;
     return (data ?? []).length > 0;
   } catch {

@@ -14,7 +14,7 @@ import { getAuthenticatedUser } from "@/lib/auth-session";
 import { isAutomationKey } from "@/lib/email/automations";
 import { hashIpAddress } from "@/lib/ip-hash";
 import { OFFER_COOKIE, OFFER_COOKIE_MAX_AGE_SECONDS } from "@/lib/offers/customer-offers";
-import { attachEmailLinkGrant } from "@/lib/email/recipient-attestation";
+import { emailLinkLanding, setEmailLinkGrantCookie } from "@/lib/email/recipient-attestation";
 import { browseDestinationPath } from "@/lib/email/browse-abandonment";
 
 export const dynamic = "force-dynamic";
@@ -151,7 +151,26 @@ export async function GET(request: NextRequest) {
     // Metrics are not worth failing a customer's click over.
   }
 
-  const response = NextResponse.redirect(destination, { status: 302 });
+  // WHERE THIS CLICK CAN ACTUALLY GO, decided before the redirect is built.
+  //
+  // destinationForVisitor above already forwards a signed-out visitor off a
+  // gated account page and onto the catalogue — but the catalogue is gated too,
+  // so that only exchanged one sign-in wall for another. Every automation's
+  // cta_path in production is /products or /account/orders, and both 307 to
+  // /account/login for a request without a session.
+  //
+  // An attested recipient gets the destination and the grant, exactly as
+  // before. One who has never made the 21+ and research-use representations is
+  // sent to the interstitial that collects them, carrying this destination and
+  // this gift — rather than to a sign-in page for an account they may not have,
+  // holding a token they cannot spend. See recipient-attestation.ts.
+  const landing = await emailLinkLanding({
+    email,
+    destination: destination.toString(),
+    offerToken: offerToken && offerToken.length <= 128 ? offerToken : null,
+  });
+
+  const response = NextResponse.redirect(landing.destination, { status: 302 });
 
   // THE OFFER TOKEN GOES IN AN httpOnly COOKIE, NOT IN THE REDIRECT URL.
   //
@@ -189,21 +208,11 @@ export async function GET(request: NextRequest) {
     maxAge: AUTOMATION_COOKIE_MAX_AGE_SECONDS,
   });
 
-  // THE CAPABILITY TO REACH THE DESTINATION AT ALL.
-  //
-  // destinationForVisitor above already forwards a signed-out visitor off a
-  // gated account page and onto the catalogue — but the catalogue is gated too,
-  // so that only exchanged one sign-in wall for another. Every automation's
-  // cta_path in production is /products or /account/orders, and both 307 to
-  // /account/login for a request without a session.
-  //
-  // Minted only when the recipient's account already carries the 21+ and
-  // research-use representations, because those are collected on the sign-in
-  // form this grant lets them skip. See recipient-attestation.ts.
-  //
   // Set AFTER the offer cookie deliberately: if a gift rode on this click, the
-  // customer must be able to reach a page that can spend it.
-  await attachEmailLinkGrant(response, email);
+  // customer must be able to reach a page that can spend it. Null when the
+  // recipient is being sent to the interstitial instead — the grant is minted
+  // there, after the statements are made, and never before them.
+  if (landing.grant) setEmailLinkGrantCookie(response, landing.grant);
 
   return response;
 }

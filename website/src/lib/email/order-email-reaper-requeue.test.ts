@@ -79,11 +79,26 @@ function query(table: keyof typeof db, mode: "select" | "update", patch?: Row, c
   return builder;
 }
 
+/** Set to make the pending_emails duplicate-check read fail. */
+const readFailure = { pendingEmails: false };
+
 vi.mock("@/lib/supabase-server", () => ({
   supabaseAdmin: {
     from(table: keyof typeof db) {
       return {
-        select: (columns?: string) => query(table, "select", undefined, columns),
+        select: (columns?: string) => {
+          if (table === "pending_emails" && readFailure.pendingEmails) {
+            return {
+              eq() { return this; }, lt() { return this; }, lte() { return this; }, in() { return this; },
+              order() { return this; }, limit() { return this; }, select() { return this; },
+              async maybeSingle() { return { data: null, error: { message: "connection reset" } }; },
+              then(resolve: (value: { data: null; error: { message: string } }) => unknown) {
+                return Promise.resolve(resolve({ data: null, error: { message: "connection reset" } }));
+              },
+            };
+          }
+          return query(table, "select", undefined, columns);
+        },
         update: (patch: Row) => query(table, "update", patch),
         insert: async (row: Row) => {
           db[table].push({ id: nextId++, ...row });
@@ -121,6 +136,7 @@ beforeEach(() => {
   alerts.length = 0;
   sends.length = 0;
   nextId = 1;
+  readFailure.pendingEmails = false;
 });
 
 describe("a stranded order confirmation is re-queued, not just released", () => {
@@ -240,5 +256,45 @@ describe("a stranded email the reaper cannot rebuild", () => {
     expect(outcome.unrecoverable).toBe(1);
     expect(db.pending_emails).toHaveLength(0);
     expect(alerts[0].severity).toBe("critical");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// IF THE DUPLICATE CHECK ITSELF FAILS, NOTHING IS QUEUED.
+//
+// The check exists because "a second [queue row] would be a second delivery on
+// a provider that does not honour the idempotency key" — the module's own
+// words. It tested `!waitingError`, so an unreadable pending_emails fell
+// straight through to the enqueue and did exactly that.
+//
+// Failing closed makes the outcome LATE AND VISIBLE instead of possibly
+// DOUBLED AND SILENT: the slot is reported unrecoverable, which is what raises
+// the critical alert naming the order for a human to resend.
+// ---------------------------------------------------------------------------
+describe("when the reaper cannot tell whether the email is already queued", () => {
+  it("queues nothing and reports the slot for a human", async () => {
+    const { reapStrandedOrderEmails } = await import("@/lib/email/order-email-reaper");
+    seedPaidOrder();
+    db.order_email_log.push({ id: nextId++, order_id: "order-1", kind: "order_confirmation", status: "sending", attempted_at: minutesAgo(60) });
+    readFailure.pendingEmails = true;
+
+    const outcome = await reapStrandedOrderEmails();
+
+    expect(outcome).toEqual({ released: 1, requeued: 0, unrecoverable: 1 });
+    expect(db.pending_emails).toHaveLength(0);
+    const alert = alerts.find((a) => a.type === "order_email_stranded");
+    expect(alert!.severity).toBe("critical");
+    expect(alert!.message).toContain("resend those by hand");
+  });
+
+  it("still releases the slot, so the block is lifted either way", async () => {
+    const { reapStrandedOrderEmails } = await import("@/lib/email/order-email-reaper");
+    seedPaidOrder();
+    db.order_email_log.push({ id: nextId++, order_id: "order-1", kind: "order_confirmation", status: "sending", attempted_at: minutesAgo(60) });
+    readFailure.pendingEmails = true;
+
+    await reapStrandedOrderEmails();
+
+    expect(db.order_email_log[0].status).toBe("failed");
   });
 });

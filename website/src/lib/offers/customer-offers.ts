@@ -484,6 +484,23 @@ export async function issueResolvedOffer(input: {
   // while making the email honest: the link in the NEWEST message always works,
   // and only that one. A previous message's link stops working, which is what
   // "one live offer" means.
+  //
+  // WHICH IS EXACTLY WHY IT MUST BE BOUNDED. Every reissue silently kills a
+  // link that is already sitting in somebody's inbox. That is correct once —
+  // the newest message wins — and indefensible on a loop: in production a
+  // caller that re-entered on every 15-minute tick turned this into 96
+  // revocations for one cart, and the token the shopper had been emailed died
+  // within two days of a promise that said ten.
+  //
+  // The caller that did it is fixed (cart-recovery.ts mints behind its stage
+  // claim now), so this is a backstop, not the fix. It is deliberately loose:
+  // the honest paths make one or two rows per reference, so a cap of three
+  // cannot reach a legitimate reissue, and any future caller that loops is
+  // stopped at the fourth row instead of the ninety-seventh — loudly, because
+  // the whole failure mode here is that it is silent.
+  if (input.referenceId && !(await reissueBudgetRemains(input.offerKey, email, input.referenceId))) {
+    return null;
+  }
   if (!(await retireStaleOffer(input.offerKey, email, now))) return null;
 
   const second = await mint();
@@ -548,6 +565,47 @@ const OFFER_HOLD_SECONDS = 1800;
  * Retire the unredeemed row blocking a reissue, unless a checkout is holding it.
  * Returns true when the way is clear for a fresh insert.
  */
+/**
+ * THE MOST TOKENS ONE LOGICAL ISSUANCE MAY EVER MINT.
+ *
+ * An honest reissue chain is short: the first mint, plus at most a retry after
+ * a send that failed with the token still unstored. Three leaves room for both
+ * and for one oddity, and still catches a loop three rows in rather than
+ * ninety-seven.
+ */
+const MAX_OFFERS_PER_REFERENCE = 3;
+
+/**
+ * May this reference mint another token, or is something looping?
+ *
+ * Counts every row ever written for this (offer_key, email, reference_id),
+ * revoked ones included — the revoked rows ARE the churn, so excluding them
+ * would make the guard blind to the exact thing it exists to catch.
+ *
+ * Fails OPEN on a read error, and that is deliberate in the other direction
+ * from suppression: refusing here withholds a gift the customer was promised,
+ * while allowing here risks one extra row that the next tick's count will then
+ * stop. The cheaper mistake is the extra row.
+ */
+async function reissueBudgetRemains(offerKey: string, email: string, referenceId: string): Promise<boolean> {
+  const { count, error } = await supabaseAdmin
+    .from("customer_offers")
+    .select("id", { count: "exact", head: true })
+    .eq("offer_key", offerKey)
+    .eq("email", email)
+    .eq("reference_id", referenceId);
+  if (error) {
+    console.error("[offers] unable to count prior issuances; allowing the mint", offerKey, redactEmailForLog(email), error.message);
+    return true;
+  }
+  if ((count ?? 0) < MAX_OFFERS_PER_REFERENCE) return true;
+  console.error(
+    `[offers] REFUSING to reissue: ${count} tokens already minted for ${offerKey} / ${redactEmailForLog(email)} / ref ${referenceId}. `
+    + "Something is re-entering the mint. Each reissue revokes a link that may already be in the customer's inbox.",
+  );
+  return false;
+}
+
 async function retireStaleOffer(offerKey: string, email: string, now: number): Promise<boolean> {
   const { data, error } = await supabaseAdmin
     .from("customer_offers")

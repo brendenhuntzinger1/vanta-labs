@@ -118,6 +118,8 @@ describe("the exemptions, each of which has to earn its place", () => {
     ["/robots.txt", "convention"],
     ["/sitemap.xml", "convention"],
     ["/_next/static/chunk.js", "the page cannot render without its own assets"],
+    ["/attest", "gating the screen that collects the attestation behind the wall that requires it is a loop"],
+    ["/api/attest", "the endpoint behind that screen; it refuses without an hour-old signed handoff"],
   ];
 
   it.each(MUST_BE_PUBLIC)("%s is public — %s", (path) => {
@@ -127,7 +129,26 @@ describe("the exemptions, each of which has to earn its place", () => {
   it("keeps the exemption list short enough to read in one sitting", () => {
     // Not a style rule. Every entry is a hole, and a list nobody reads is a
     // list nobody audits. If this needs raising, raise it deliberately.
-    expect(PUBLIC_EXACT.size + PUBLIC_PREFIXES.length).toBeLessThanOrEqual(40);
+    //
+    // RAISED FROM 40 TO 42 on 2026-09-13 for /attest and /api/attest, and this
+    // is the deliberate part. Both are public for the reason /account/login is:
+    // gating the screen that COLLECTS the 21+ and research-use representations
+    // behind the wall that REQUIRES them is a loop. Neither hands anything out
+    // on its own — the page discloses nothing about the address it names, and
+    // the endpoint refuses without a handoff this server signed inside the last
+    // hour, refuses unless both statements arrive explicitly affirmed, and then
+    // mints only the ordinary marketing-link grant.
+    expect(PUBLIC_EXACT.size + PUBLIC_PREFIXES.length).toBeLessThanOrEqual(42);
+  });
+
+  it("does not let the attestation step become a second front door", () => {
+    // It is public, so the things it must NOT be are worth pinning: it opens no
+    // account surface, and it is not a prefix that could swallow one.
+    expect(isPublicPath("/attest")).toBe(true);
+    expect(isPublicPath("/api/attest")).toBe(true);
+    expect(isPublicPath("/account/orders")).toBe(false);
+    expect(isPublicPath("/checkout")).toBe(false);
+    expect(isPublicPath("/attestation-of-something-else")).toBe(false);
   });
 
   it("exempts no storefront surface", () => {

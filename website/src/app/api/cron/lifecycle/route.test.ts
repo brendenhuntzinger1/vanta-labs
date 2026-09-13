@@ -155,10 +155,31 @@ describe("the lifecycle schedule", () => {
     beforeEach(() => { vi.useFakeTimers(); });
     afterEach(() => { vi.useRealTimers(); });
 
+    /**
+     * ADVANCES THE CLOCK ONCE PER PHASE, NOT ONCE PER TICK.
+     *
+     * This used to advance a single retry delay, which was enough while every
+     * job started together: two jobs waiting three seconds waited the SAME
+     * three seconds. The lifecycle schedule now runs cart recovery to
+     * completion before the other five start (see RUN_FIRST in route.ts, and
+     * the reason in cron-lifecycle-priority.test.ts), so a retry in the first
+     * phase and a retry in the second are consecutive rather than concurrent.
+     *
+     * That is a real cost and it is bounded: at most one delay per phase, so
+     * 6s of a 50s budget in the worst case, however many jobs retry — the five
+     * in the second phase still wait together.
+     *
+     * The loop settles the promise rather than counting phases, so adding a
+     * phase later cannot silently turn this into a five-second timeout again.
+     */
     async function callLifecycleThroughRetry() {
       const pending = callLifecycle();
-      await vi.advanceTimersByTimeAsync(JOB_GATEWAY_RETRY_DELAY_MS);
-      return (await (await pending).json()) as Record<string, unknown>;
+      let settled = false;
+      const done = pending.then((response) => { settled = true; return response; });
+      for (let phase = 0; phase < 4 && !settled; phase += 1) {
+        await vi.advanceTimersByTimeAsync(JOB_GATEWAY_RETRY_DELAY_MS);
+      }
+      return (await (await done).json()) as Record<string, unknown>;
     }
 
     it("is retried once, in the shape PostgREST actually reports it", async () => {

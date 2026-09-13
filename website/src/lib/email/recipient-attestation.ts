@@ -5,8 +5,11 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import {
   EMAIL_GRANT_COOKIE,
   EMAIL_GRANT_MAX_AGE_SECONDS,
+  emailGrantAllowsPath,
   signEmailLinkGrant,
 } from "@/lib/email/link-grant";
+import { signAttestationHandoff } from "@/lib/email/attestation-handoff";
+import { getSiteUrl } from "@/lib/env";
 
 /**
  * MAY THIS RECIPIENT BE WAVED PAST THE SIGN-IN WALL?
@@ -86,4 +89,185 @@ export async function attachEmailLinkGrant(
   } catch {
     return false;
   }
+}
+
+/**
+ * IS THERE AN AUTH ACCOUNT FOR THIS ADDRESS AT ALL?
+ *
+ * A different question from `recipientHasAttested`, and since the attestation
+ * step shipped it is the one that decides whether a gift-bearing message can be
+ * sent. An unattested address WITH an account now completes the journey: the
+ * click lands on the interstitial, the two statements are made, and the
+ * representations are written to that account. An address with NO account has
+ * nowhere authoritative for them to be written, so it is routed into sign-up —
+ * a longer journey this harness has not yet proven end to end, which is why it
+ * remains withheld.
+ *
+ * FAILS CLOSED: unreadable answers false, which withholds the message. Nothing
+ * is consumed by a withheld target, so the next sweep reconsiders it.
+ *
+ * ONE ROUND TRIP, same reason as the attestation lookup. findUserByEmail()
+ * answers a richer question with an RPC plus an admin fetch and can walk the
+ * directory; nothing here needs the user, only whether one exists.
+ */
+export async function recipientHasAccount(email: string): Promise<boolean> {
+  const target = String(email ?? "").trim().toLowerCase();
+  if (!target) return false;
+  try {
+    const { data, error } = await supabaseAdmin.rpc("auth_user_id_by_email", { p_email: target });
+    if (error) {
+      console.error("[email-grant] account lookup unavailable; gift-bearing mail will be withheld", error.message);
+      return false;
+    }
+    return typeof data === "string" && data.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * WHICH OF THESE ADDRESSES COULD ACTUALLY SPEND A GIFT TODAY.
+ *
+ * The storefront is default-deny: /cart and /checkout require an account or a
+ * grant, because the 21+ and research-use representations are collected on the
+ * sign-in form and this is an age-gated catalogue. A marketing-link grant is
+ * minted only for an address that has already made both representations
+ * (recipientHasAttested above), so an address that has not cannot reach the
+ * cart from an email at all.
+ *
+ * That produced a specific, silent waste: a lapsed GUEST customer — targeted by
+ * email, because selectAutomationTargets keys on customer_email rather than on
+ * an account id — received "here is your free GHK-Cu", clicked it, and landed
+ * on "Sign in to continue" for an account they do not have, holding a real
+ * minted token they could not spend. Production, 2026-09-12: three of twelve
+ * paid customers have no auth account at all, and forty of a hundred and
+ * fifty-two accounts carry no attestation.
+ *
+ * The rule is about the PROMISE rather than about the gate: Vanta does not email
+ * somebody a benefit and then send them somewhere it cannot be used. It
+ * withholds the message; it does not weaken, bypass or pre-fill the
+ * attestation, and it grants nothing.
+ *
+ * NARROWED ON 2026-09-13, NOW THAT THE ATTESTATION STEP EXISTS. It used to
+ * withhold from every unattested address. An unattested recipient WITH an
+ * account is no longer stranded: the click lands on /attest, they make the two
+ * statements, the representations are written to their own auth record and the
+ * grant is minted — so they can spend the gift, and withholding from them was
+ * costing real win-backs (forty of a hundred and fifty-two accounts).
+ *
+ * WHAT IT STILL WITHHOLDS: an address with NO auth account. The interstitial
+ * routes them into sign-up, and that is almost certainly a journey they can
+ * finish — but "almost certainly" is not the standard for spending a real token
+ * on a real promise, and the journey harness does not yet drive a fresh signup
+ * through to a completed purchase. It stays withheld until it does. That is
+ * three of twelve paid customers today.
+ *
+ * FAILS CLOSED, and that is the cheaper mistake in both directions here. An
+ * unreadable lookup withholds a marketing message that the next sweep will
+ * reconsider, because nothing is consumed when a target is filtered out before
+ * its claim. Sending anyway would spend a real token on a journey that
+ * dead-ends.
+ */
+export async function partitionByAttestation(
+  emails: readonly string[],
+): Promise<{ reachable: Set<string>; unreachable: Set<string> }> {
+  const reachable = new Set<string>();
+  const unreachable = new Set<string>();
+  // One lookup per distinct address, not per target: a sweep is capped at a few
+  // dozen recipients and the same address can appear under two automations.
+  const distinct = [...new Set(emails.map((e) => String(e ?? "").trim().toLowerCase()).filter(Boolean))];
+  for (const email of distinct) {
+    // Attested is the cheap answer and covers almost everyone. Only an address
+    // that is NOT attested costs the second lookup.
+    if (await recipientHasAttested(email)) { reachable.add(email); continue; }
+    if (await recipientHasAccount(email)) { reachable.add(email); continue; }
+    unreachable.add(email);
+  }
+  return { reachable, unreachable };
+}
+
+/**
+ * WHERE THIS CLICK SHOULD LAND, AND WHETHER IT CARRIES A GRANT.
+ *
+ * Both click trackers used to do one thing with the answer to
+ * `recipientHasAttested`: mint a grant, or not. "Or not" meant the customer was
+ * handed the sign-in page — which is right for somebody who has never made the
+ * 21+ and research-use representations, and is a dead end for the one holding a
+ * gift we just minted and promised them.
+ *
+ * So there are now three landings, not two:
+ *
+ *   ATTESTED            → the destination, with the grant. Unchanged, and it is
+ *                         the overwhelming majority: no new screen, no new tap,
+ *                         nothing at all is different for them.
+ *   NOT ATTESTED        → the interstitial, carrying a signed handoff naming
+ *                         this address, this destination and this offer. NO
+ *                         GRANT travels with it. The capability is minted on the
+ *                         far side, by POST /api/attest, only after the person
+ *                         has explicitly made both statements.
+ *   NOT ATTESTED, and
+ *   the handoff cannot
+ *   be built            → the destination, no grant: exactly the old behaviour,
+ *                         which is the sign-in page. A missing signing secret
+ *                         must degrade to what happened before this existed,
+ *                         never to an ungated catalogue.
+ *
+ * ONE ATTESTATION LOOKUP PER CLICK. This runs on a redirect a customer is
+ * waiting on, and the previous shape asked twice — once to decide, once inside
+ * attachEmailLinkGrant. The grant token comes back from here so the caller sets
+ * the cookie without a second round trip.
+ *
+ * THE DETOUR IS ONLY EVER OFFERED FOR A DESTINATION THE GRANT COULD HAVE
+ * OPENED. A path outside EMAIL_GRANT_BROWSE_* is not somewhere attesting gets
+ * anybody, so sending them through a screen that ends in a grant would be
+ * promising a second dead end. Those go to the destination as before.
+ */
+export async function emailLinkLanding(input: {
+  email: string;
+  /** Absolute URL the click resolved to, already tagged. */
+  destination: string;
+  offerToken?: string | null;
+}): Promise<{ destination: string; grant: string | null }> {
+  const unchanged = { destination: input.destination, grant: null as string | null };
+  try {
+    if (await recipientHasAttested(input.email)) {
+      return { destination: input.destination, grant: await signEmailLinkGrant() };
+    }
+
+    const target = new URL(input.destination);
+    const path = `${target.pathname}${target.search}`;
+    if (!emailGrantAllowsPath(target.pathname)) return unchanged;
+
+    const handoff = await signAttestationHandoff({
+      email: input.email,
+      destination: path,
+      offerToken: input.offerToken ?? null,
+    });
+    if (!handoff) return unchanged;
+
+    const detour = new URL("/attest", getSiteUrl());
+    detour.searchParams.set("h", handoff);
+    return { destination: detour.toString(), grant: null };
+  } catch {
+    // A customer who clicked a link in an email must reach a page. The worst
+    // outcome available here is the one they reached before any of this.
+    return unchanged;
+  }
+}
+
+/**
+ * Set the marketing-link grant cookie from a token `emailLinkLanding` returned.
+ * One place knows the cookie's attributes; both click trackers set an identical
+ * one, and so does POST /api/attest.
+ */
+export function setEmailLinkGrantCookie(response: NextResponse, token: string): void {
+  response.cookies.set({
+    name: EMAIL_GRANT_COOKIE,
+    value: token,
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: EMAIL_GRANT_MAX_AGE_SECONDS,
+  });
 }

@@ -1,7 +1,8 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { getCartRecoveryControlConfig, getShippingConfig } from "@/lib/admin-control";
+import { evaluateRecoveryOffer, RECOVERY_FLOOR_ENFORCED } from "@/lib/cart-recovery-offer-floor";
+import { getCartRecoveryControlConfig, getShippingConfig, getProfitSettings } from "@/lib/admin-control";
 import {
   cartRecoveryGiftTemplate,
   cartRecoveryT30mTemplate,
@@ -24,6 +25,7 @@ import {
   lastStageSentAtFor,
 } from "@/lib/cart-recovery";
 import { getSiteUrl } from "@/lib/env";
+import { recordSystemAlert } from "@/lib/monitoring";
 import { isFreeShippingSitewide } from "@/lib/shipping";
 import { formatDisplayDate } from "@/lib/format-date";
 import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
@@ -583,10 +585,28 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
     }
   }
 
-  // "Resend" reuses the same (cart, stage) tracking row rather than
-  // inserting a duplicate - the unique index on abandoned_cart_emails
-  // enforces one row per stage per cart, and resetting opened_at/clicked_at
-  // means tracking reflects this new send, not a stale earlier one.
+  // "Resend" reuses the same (cart, stage) tracking row rather than inserting a
+  // duplicate: the unique index on abandoned_cart_emails enforces one row per
+  // stage per cart.
+  //
+  // IT NO LONGER CLEARS opened_at AND clicked_at, and that reversal is the
+  // point. It used to, on the reasoning that "tracking reflects this new send,
+  // not a stale earlier one" — but the effect was to DELETE a recorded fact. A
+  // shopper who opened their 72-hour message, clicked it and did not buy, whose
+  // cart an operator then resent, came out of that write looking as though they
+  // had never engaged at all.
+  //
+  // Two places read those columns, and both were wrong afterwards: the recovery
+  // panel's open and click rates, and — worse — the subject-line experiment's
+  // per-arm tallies, where losing engagement from whichever arm an operator
+  // happened to resend biases the comparison itself.
+  //
+  // Nothing is lost by keeping them. Each send has its OWN email_send_log row
+  // (marketing_send_claim writes one per claim, resends included) carrying its
+  // own sent/opened/clicked timeline, and stampSendLogEngagement now stamps
+  // exactly the newest of them — so the per-send view is exact there, and this
+  // row answers the per-cart question it is actually read for: did this cart's
+  // stage ever reach somebody who opened it.
   const { data: existingRow } = await supabaseAdmin
     .from("abandoned_cart_emails")
     .select("id")
@@ -599,7 +619,7 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
     rowId = existingRow.id;
     await supabaseAdmin
       .from("abandoned_cart_emails")
-      .update({ sent_at: new Date().toISOString(), opened_at: null, clicked_at: null, coupon_id: couponId })
+      .update({ sent_at: new Date().toISOString(), coupon_id: couponId })
       .eq("id", rowId);
   } else {
     const { data: inserted, error: insertError } = await supabaseAdmin
@@ -609,6 +629,79 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
       .single();
     if (insertError || !inserted) throw insertError ?? new Error("Unable to create tracking row");
     rowId = inserted.id;
+  }
+
+  // ---- THE ECONOMIC FLOOR, IN REPORT-ONLY MODE ----------------------------
+  //
+  // P0-4. The banded ladder sizes a gift against cart value and is defensible
+  // by construction. An OVERRIDE has no arithmetic anywhere: a row names an
+  // offer_key for one cart, written by hand, and this button attaches whatever
+  // it says. So the most expensive gift in the catalogue can reach the cheapest
+  // cart in the store with nothing in between having an opinion.
+  //
+  // At today's live figures a $40 cart contributes about $22 before any
+  // incentive and the top band's gifts cost about $31 at COGS: that order ships
+  // at a loss of roughly $9 and every screen reports it as a recovered cart.
+  //
+  // NOTHING IS REFUSED YET, deliberately. An override exists because a human
+  // has a reason the rules do not know — a complaint being made right, a
+  // customer owed something — and turning a brand-new floor straight into a
+  // refusal would break that on its first day in the hands of the one person
+  // who cannot ask anybody else to unblock it. It computes, names the figure,
+  // alerts, and returns the warning to the operator. Enforcing is a one-line
+  // change in cart-recovery-offer-floor.ts.
+  let floorWarning: string | null = null;
+  if (override?.offerKey) {
+    try {
+      const [economics, giftables] = await Promise.all([
+        loadRecoveryEconomicsInputs(),
+        listGiftableProducts(),
+      ]);
+      const giftCostCents: Record<string, number> = {};
+      for (const product of giftables) {
+        if (product.costCents != null) giftCostCents[product.slug] = product.costCents;
+      }
+      const verdict = evaluateRecoveryOffer({
+        offerKey: override.offerKey,
+        // The reconciled value of the lines this message will actually print,
+        // not the browser's stored snapshot — literally the figure the email
+        // shows, so the guardrail and the customer are reading one number.
+        cartValueCents,
+        inputs: {
+          productCostRatio: economics.productCostRatio,
+          postageCents: economics.postageCents,
+          processorFeePercent: economics.estimatedProcessorFeePercent,
+          giftCostCents,
+        },
+      });
+      if (verdict.belowFloor) {
+        floorWarning = verdict.summary;
+        await recordSystemAlert({
+          type: "recovery_offer_below_floor",
+          severity: "warning",
+          message: `Manual recovery resend: ${verdict.summary}`,
+          context: {
+            cartId: cart.id,
+            stage,
+            offerKey: verdict.offerKey,
+            cartValueCents: verdict.cartValueCents,
+            contributionBeforeCents: verdict.contributionBeforeCents,
+            contributionAfterCents: verdict.contributionAfterCents,
+            incentiveCents: verdict.incentiveCents,
+            enforced: verdict.enforced,
+          },
+          dedupeWindowMs: 60 * 60 * 1000,
+        }).catch(() => {});
+        if (RECOVERY_FLOOR_ENFORCED) {
+          return { success: false, error: verdict.summary };
+        }
+      }
+    } catch (error) {
+      // A guardrail that cannot be computed must not stop a send an operator
+      // deliberately asked for. It is reported and the send proceeds — which is
+      // what report-only means in the failure case too.
+      console.error("[admin-cart-recovery] offer floor could not be evaluated", error);
+    }
   }
 
   // The gift is minted only once the tracking row exists, mirroring the sweep's
@@ -691,7 +784,10 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
     if (result.success) {
       await markCartRecoveryOverrideConsumed({ cartId: cart.id, stage, reservationId: rowId });
     }
-    return result;
+    // The floor's verdict travels back with the send, so the operator who
+    // pressed the button reads it — a warning only they will ever see in an
+    // alert feed is a warning aimed at the wrong person.
+    return floorWarning ? { ...result, floorWarning } : result;
   }
 
   if (stage === "t30m") {
@@ -991,7 +1087,25 @@ export async function listGiftableProducts(): Promise<GiftableProduct[]> {
  * a new store with no paid orders still gets a sane readout, and the numbers
  * only get truer as orders arrive.
  */
-export type RecoveryEconomicsInputs = { postageCents: number; productCostRatio: number };
+export type RecoveryEconomicsInputs = {
+  postageCents: number;
+  productCostRatio: number;
+  /**
+   * The processor's cut, as a percentage, ESTIMATED rather than settled.
+   *
+   * P0-8. The band editor modelled no processor cost at all, on the strength of
+   * a comment saying the store passes a 3% service fee to the customer. It does
+   * not: admin_control_current holds card_processing_fee {enabled:false,
+   * percentage:0} and the paid orders have collected $0.00 in fees. The cost is
+   * absorbed, so omitting it overstated every margin on the one screen an
+   * operator uses to decide what an incentive costs.
+   *
+   * This comes from the Control Center's profit setting and is a conservative
+   * model, not a reconciliation of per-transaction processor cost. Every
+   * surface that renders it must say "estimated".
+   */
+  estimatedProcessorFeePercent: number;
+};
 
 /** Until there are paid orders to measure. Roughly this store's observed average. */
 const FALLBACK_POSTAGE_CENTS = 793;
@@ -1001,6 +1115,17 @@ const FALLBACK_PRODUCT_COST_RATIO = 0.2;
 export async function loadRecoveryEconomicsInputs(): Promise<RecoveryEconomicsInputs> {
   let postageCents = FALLBACK_POSTAGE_CENTS;
   let productCostRatio = FALLBACK_PRODUCT_COST_RATIO;
+  let estimatedProcessorFeePercent = 0;
+
+  try {
+    // The same setting the checkout profit guard uses, so the band editor and
+    // the till cannot disagree about what a card costs.
+    estimatedProcessorFeePercent = Math.max(0, Number((await getProfitSettings()).processingFeePercent ?? 0));
+  } catch {
+    // A readout that omits the fee is wrong in the dangerous direction, so say
+    // so rather than quietly modelling zero.
+    console.error("[admin-cart-recovery] profit settings unreadable; band economics will omit the processor fee");
+  }
 
   try {
     const { data } = await supabaseAdmin
@@ -1037,5 +1162,5 @@ export async function loadRecoveryEconomicsInputs(): Promise<RecoveryEconomicsIn
     // Keep the fallback.
   }
 
-  return { postageCents, productCostRatio };
+  return { postageCents, productCostRatio, estimatedProcessorFeePercent };
 }

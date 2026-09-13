@@ -125,6 +125,19 @@ export const PUBLIC_PREFIXES = [
   "/api/email",
   "/api/unsubscribe",
 
+  // ---- The 21+ / research-use step, and the endpoint behind it.
+  //
+  // It is public for the same reason /account/login is: gating the screen that
+  // COLLECTS the representation behind the wall that REQUIRES it is a loop. It
+  // is not a hole — it hands out nothing on its own. The page renders the two
+  // statements and discloses nothing about the address; the endpoint refuses
+  // without a handoff this server signed inside the last hour, refuses unless
+  // both statements arrive explicitly affirmed, and then mints only the
+  // ordinary marketing-link grant, whose allowlist is closed to browse and buy.
+  // Rate-limited per requester like every other public form here.
+  "/attest",
+  "/api/attest",
+
   // ---- WHAT THE PUBLIC PAGES ABOVE ACTUALLY CALL.
   //
   // This list named the PAGES and forgot the endpoints behind them, and the
