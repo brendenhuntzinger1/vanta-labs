@@ -53,7 +53,13 @@ const CAPTURE = `${CAPTURE_DIR}/captured-emails.jsonl`;
 const SHOTS = `${CAPTURE_DIR}/lifecycle-shots`;
 const CRON_SECRET = process.env.CRON_SECRET ?? "harness-cron-secret";
 const WEBHOOK_SECRET = process.env.EMAIL_WEBHOOK_SECRET ?? "harness-email-webhook-secret";
-const ADMIN = { username: process.env.QA_ADMIN_USER ?? "qaadmin", password: process.env.QA_ADMIN_PASS ?? "HarnessAdminPass123", passcode: process.env.QA_ADMIN_PASSCODE ?? "123456" };
+// qa-seed-roles.mjs is the seeder and therefore the authority on this
+// value; qa-role-boundaries already agrees with it, and its admin positive
+// control (74 admin routes reached) is what proves the pair works. Three
+// different defaults were in circulation across six suites, so every
+// admin-authenticated step in this file answered 401 unless somebody
+// happened to export QA_ADMIN_PASS.
+const ADMIN = { username: process.env.QA_ADMIN_USER ?? "qaadmin", password: process.env.QA_ADMIN_PASS ?? "QaAdmin123!Pass", passcode: process.env.QA_ADMIN_PASSCODE ?? "123456" };
 
 if (!/127\.0\.0\.1|localhost/.test(BASE)) {
   console.error(`Refusing to run against ${BASE}. Local harness only.`);
@@ -167,6 +173,37 @@ async function passAgeGate(page) {
   return true;
 }
 
+/**
+ * SIGN IN, BECAUSE THE STOREFRONT NO LONGER HAS ANONYMOUS BROWSING.
+ *
+ * access-policy.ts closed the default: /products, /cart and /checkout all
+ * redirect an unauthenticated visitor to /account/login. Every step below that
+ * cleared cookies and then went shopping was therefore looking at a sign-in
+ * form, and `a[href^="/products/"]` failed to match — reported as "could not
+ * add a product" rather than as a wall.
+ */
+async function signInAs(page, email, password = "HarnessPass123!") {
+  await page.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    if (await page.$("form input[type=email]")) break;
+    await page.evaluate(() => {
+      const b = [...document.querySelectorAll("button")]
+        .find((x) => x.textContent.trim() === "Sign in with email");
+      if (b) b.click();
+    });
+    await page.waitForTimeout(500);
+  }
+  if (!(await page.$("form input[type=email]"))) return false;
+  await page.fill("form input[type=email]", email);
+  await page.fill("form input[type=password]", password);
+  await Promise.all([
+    page.waitForNavigation({ timeout: 60000 }).catch(() => {}),
+    page.click("form button[type=submit]"),
+  ]);
+  await page.waitForTimeout(1500);
+  return !/\/account\/login/.test(page.url());
+}
+
 async function addFirstProductToCart(page) {
   await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(1500);
@@ -236,20 +273,56 @@ async function main() {
   const subscriber = `sub.${stamp}@example.test`;
   let subscriberUserId = null;
 
-  await step("the signup form offers a marketing opt-in, ticked by default", async () => {
+  await step("the signup form offers a marketing opt-in, OFF by default", async () => {
+    // THIS STEP USED TO ASSERT THE OPPOSITE, AND THE PRODUCT IS RIGHT.
+    //
+    // It required the box to be "ticked by default". account-auth-form.tsx
+    // initialises marketingOptIn to false on purpose and says so beside the
+    // control: the row is "genuinely optional, genuinely off until someone
+    // turns it on". Pre-ticked marketing consent is the defect — it is not
+    // consent under GDPR, it is the thing CAN-SPAM complaints and spam-folder
+    // placement are made of, and this store's own campaign sends depend on a
+    // clean list. Making this assertion pass by pre-ticking the box would have
+    // traded deliverability for a green line.
+    //
+    // The step also never reached the form. It clicked "Create an account"
+    // while that button was DISABLED — canEnter gates it on the 21+ and
+    // research-use rows — so mode never became "signup", the control never
+    // rendered, and the failure read as a missing opt-in rather than an
+    // unticked gate. Both acknowledgements are made here first, exactly as a
+    // customer makes them.
     await passAgeGate(page);
     await page.goto(`${BASE}/account/login?mode=signup`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(1500);
-    const toggled = await page.evaluate(() => {
-      const b = [...document.querySelectorAll("button, a")].find((x) => /create (an )?account|sign up|join/i.test(x.textContent || ""));
-      if (b && !document.querySelector('[data-testid="signup-marketing-opt-in"]')) { b.click(); return "clicked"; }
-      return "already";
+    await page.evaluate(() => {
+      const rows = [...document.querySelectorAll("label")];
+      for (const row of rows) {
+        const text = row.textContent ?? "";
+        if (!/21 years|research use/i.test(text)) continue;
+        const box = row.querySelector('input[type="checkbox"]');
+        if (box && !box.checked) box.click();
+      }
+    });
+    await page.waitForTimeout(400);
+    await page.evaluate(() => {
+      const b = [...document.querySelectorAll("button, a")]
+        .find((x) => /create (an )?account/i.test(x.textContent || "") && !x.disabled);
+      if (b && !document.querySelector('[data-testid="signup-marketing-opt-in"]')) b.click();
     });
     await page.waitForSelector('[data-testid="signup-marketing-opt-in"]', { timeout: 8000 });
-    const checked = await page.$eval('[data-testid="signup-marketing-opt-in"]', (el) => el.checked);
-    assert(checked, "the opt-in box is not ticked by default");
+    const state = await page.$eval('[data-testid="signup-marketing-opt-in"]', (el) => ({
+      checked: el.checked,
+      optional: !el.required,
+    }));
+    assert(!state.checked, "the marketing opt-in is pre-ticked — that is not consent");
+    assert(state.optional, "the marketing opt-in is marked required; it must never gate an account");
+    // And it must actually be usable, or "off by default" would be satisfied by
+    // a control nobody can turn on.
+    await page.click('[data-testid="signup-marketing-opt-in"]');
+    const afterClick = await page.$eval('[data-testid="signup-marketing-opt-in"]', (el) => el.checked);
+    assert(afterClick, "the marketing opt-in cannot be turned on");
     await page.screenshot({ path: `${SHOTS}/signup-opt-in.png`, fullPage: true });
-    return `box present and ticked (${toggled})`;
+    return "present, optional, off by default, and can be turned on";
   });
 
   await step("signing up with the box ticked records consent in both stores and sends the confirmation", async () => {
@@ -337,22 +410,50 @@ async function main() {
   // ---------------------------------------------------------------------------
   section("2. Guest checkout abandonment → recovery sequence");
   const guest = `guest.${stamp}@example.test`;
+  const createAccount = (email) => q(
+    `insert into auth.users (email, encrypted_password, email_confirmed_at, created_at)
+     values ($1,'HarnessPass123!',now(),now())
+     on conflict (email) do update set encrypted_password = excluded.encrypted_password,
+       email_confirmed_at = now()`,
+    [email],
+  );
   let cartId = null;
 
-  await step("a guest who types an email at checkout has the cart tracked", async () => {
-    await context.clearCookies();
-    await passAgeGate(page);
+  await step("a signed-in shopper who reaches checkout has the cart tracked", async () => {
+    // THIS USED TO CLEAR COOKIES AND SHOP AS AN ANONYMOUS VISITOR, AND THAT
+    // VISITOR NO LONGER EXISTS.
+    //
+    // The storefront is default-deny (access-policy.ts): /products, /cart and
+    // /checkout all redirect an unauthenticated visitor to /account/login. So
+    // the step shopped on a sign-in page, `a[href^="/products/"]` matched
+    // nothing, and six further steps in this section — the whole recovery
+    // ladder — failed behind it on a cart that had never been created.
+    //
+    // The reachable shape of the same scenario is a signed-in shopper reaching
+    // checkout: the tracker takes the address from the session, and the field
+    // is read-only for them anyway. The recovery ladder keys on the EMAIL, so
+    // everything below is unchanged.
+    //
+    // The account-less guest cart is still real — the track route serves one,
+    // and grant-holders from a recovery email reach /cart without an account —
+    // and it is covered by qa-guest-recovery, which seeds those rows directly
+    // for exactly this reason.
+    await createAccount(guest);
+    assert(await signInAs(page, guest), "could not sign in to shop");
     const product = await addFirstProductToCart(page);
     assert(product, "could not add a product");
     await page.goto(`${BASE}/checkout`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(2500);
-    await page.fill("input[type=email]", guest);
-    await page.waitForTimeout(3500);
+    // NOTHING IS TYPED, BECAUSE NOTHING CAN BE. checkout/page.tsx renders the
+    // email field `readOnly={emailLockedToAccount}` for a signed-in customer:
+    // the receipt address IS the account address, which is what keeps an order,
+    // its recovery mail and its attribution on one identity. The tracker takes
+    // the address from the session, so reaching checkout is the whole action.
+    await page.waitForTimeout(2000);
     const row = await q(`select id, status, cart_value_cents, customer_user_id from abandoned_carts where email = $1 order by first_seen_at desc limit 1`, [guest]);
-    assert(row.rows.length === 1, "no abandoned_carts row for the guest");
+    assert(row.rows.length === 1, "no abandoned_carts row for the shopper");
     cartId = row.rows[0].id;
-    assert(row.rows[0].customer_user_id === null, "a guest cart was linked to a user");
-    return `cart ${cartId} tracked, ${row.rows[0].cart_value_cents}c`;
+    return `cart ${cartId} tracked against ${guest}, ${row.rows[0].cart_value_cents}c`;
   });
 
   await step("nothing is sent while the shopper is still active", async () => {
@@ -479,16 +580,43 @@ async function main() {
     assert(mail.length === 0, "a cleared cart was mailed");
   });
 
-  await step("the track endpoint refuses a provider sink address and rate-limits guests", async () => {
-    const sink = await fetch(`${BASE}/api/cart/track`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: `sess-${stamp}-sink`, email: "bounced@resend.dev", items: [{ slug: "ghk-cu", name: "x", quantity: 1, unitPrice: 1 }], cartValueCents: 100 }) });
-    assert((await sink.json()).tracked === false, "a sink address was tracked");
-    let refused = 0;
-    for (let i = 0; i < 14; i += 1) {
-      const r = await fetch(`${BASE}/api/cart/track`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: `sess-${stamp}-rl-${i}`, email: `flood.${stamp}@example.test`, items: [{ slug: "ghk-cu", name: "x", quantity: 1, unitPrice: 1 }], cartValueCents: 100 }) });
-      if ((await r.json()).tracked === false) refused += 1;
-    }
-    assert(refused >= 1, "fourteen guest snapshots for one address were all accepted");
-    return `${refused} of 14 refused past the per-address limit`;
+  await step("the track endpoint refuses an unauthenticated caller outright", async () => {
+    // THIS STEP REPORTED THE OPPOSITE OF WHAT HAPPENED, WHICH IS WORSE THAN
+    // FAILING.
+    //
+    // It posted a provider sink address with no credentials and asserted
+    // `body.tracked === false`. /api/cart/track is not on access-policy's
+    // public list, so the wall answers 401 with {"success":false,"error":"Sign
+    // in to continue"} — there is no `tracked` key at all, `undefined === false`
+    // is false, and the step failed with "a sink address was tracked".
+    //
+    // Nothing had been tracked. The message claimed a deliverability hole in
+    // the exact place the wall had just closed one, and anybody reading the
+    // output would have gone looking for a bug that did not exist.
+    //
+    // What is true now is stronger than what the step was checking: an
+    // unauthenticated caller cannot enter ANY address into the recovery list,
+    // sink or otherwise, so the address-shape guard and the per-address flood
+    // limit behind it are a second line rather than the first. Both still run
+    // for a grant-holder, which is the only account-less shopper that reaches
+    // this route; qa-guest-recovery covers that path.
+    const sink = await fetch(`${BASE}/api/cart/track`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: `sess-${stamp}-sink`,
+        email: "bounced@resend.dev",
+        items: [{ slug: "ghk-cu", name: "x", quantity: 1, unitPrice: 1 }],
+        cartValueCents: 100,
+      }),
+    });
+    const body = await sink.json().catch(() => ({}));
+    assert(sink.status === 401 || body.tracked === false,
+      `an unauthenticated snapshot was accepted: ${sink.status} ${JSON.stringify(body).slice(0, 120)}`);
+    // And it must not have landed anyway.
+    const landed = await q("select 1 from abandoned_carts where email = $1", ["bounced@resend.dev"]);
+    assert(landed.rows.length === 0, "a sink address reached abandoned_carts despite the refusal");
+    return `refused with ${sink.status}, nothing written`;
   });
 
   // ---------------------------------------------------------------------------

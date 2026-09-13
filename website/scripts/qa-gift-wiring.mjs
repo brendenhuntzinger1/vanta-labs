@@ -38,7 +38,13 @@ const SHOTS = process.env.QA_SHOT_DIR ?? "/tmp/vanta-qa/gift";
 const CAPTURE = process.env.QA_EMAIL_CAPTURE ?? "/tmp/vanta-qa/captured-emails.jsonl";
 const CRON = process.env.QA_CRON_SECRET ?? "harness-cron-secret";
 const USER = process.env.QA_ADMIN_USER ?? "vantaqa";
-const PASS = process.env.QA_ADMIN_PASS ?? "HarnessAdmin123!";
+// qa-seed-roles.mjs is the seeder and therefore the authority on this
+// value; qa-role-boundaries already agrees with it, and its admin positive
+// control (74 admin routes reached) is what proves the pair works. Three
+// different defaults were in circulation across six suites, so every
+// admin-authenticated step in this file answered 401 unless somebody
+// happened to export QA_ADMIN_PASS.
+const PASS = process.env.QA_ADMIN_PASS ?? "QaAdmin123!Pass";
 const CODE = process.env.QA_ADMIN_CODE ?? "123456";
 
 loadHarnessEnv();

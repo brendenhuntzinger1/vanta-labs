@@ -106,12 +106,18 @@ sleep 2
 #                             isn't fully configured". The harness wants smtp
 #                             pointed at scripts/smtp-sink.mjs.
 #   MARKETING_POSTAL_ADDRESS  CAN-SPAM gate: marketing is refused without it.
+#   EMAIL_WEBHOOK_SECRET      /api/webhooks/email fails CLOSED without it and
+#                             answers 503, so bounce and complaint suppression
+#                             cannot be exercised at all — and a 503 reads as a
+#                             broken delivery pipeline rather than as an unset
+#                             variable. Same fail-closed shape as the payment
+#                             and Shippo secrets above it.
 #
 # Reported together and by name, because finding them one at a time means one
 # rebuild-and-rerun cycle each.
 echo "==> required harness env"
 missing=""
-for var in CRON_SECRET EMAIL_ENABLED EMAIL_PROVIDER SMTP_HOST SMTP_PORT MARKETING_POSTAL_ADDRESS; do
+for var in CRON_SECRET EMAIL_ENABLED EMAIL_PROVIDER SMTP_HOST SMTP_PORT MARKETING_POSTAL_ADDRESS EMAIL_WEBHOOK_SECRET; do
   grep -qE "^${var}=" "$HERE/.env.test.local" 2>/dev/null || missing="$missing $var"
 done
 if [ -n "$missing" ]; then

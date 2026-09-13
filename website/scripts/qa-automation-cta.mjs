@@ -29,7 +29,13 @@ const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
 const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/storefront";
 const SHOTS = process.env.QA_SHOT_DIR ?? "/tmp/vanta-qa/cta";
 const USER = process.env.QA_ADMIN_USER ?? "vantaqa";
-const PASS = process.env.QA_ADMIN_PASS ?? "HarnessAdmin123!";
+// qa-seed-roles.mjs is the seeder and therefore the authority on this
+// value; qa-role-boundaries already agrees with it, and its admin positive
+// control (74 admin routes reached) is what proves the pair works. Three
+// different defaults were in circulation across six suites, so every
+// admin-authenticated step in this file answered 401 unless somebody
+// happened to export QA_ADMIN_PASS.
+const PASS = process.env.QA_ADMIN_PASS ?? "QaAdmin123!Pass";
 const CODE = process.env.QA_ADMIN_CODE ?? "123456";
 
 if (!/127\.0\.0\.1|localhost/.test(BASE)) {

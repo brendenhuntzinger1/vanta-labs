@@ -67,7 +67,13 @@ const CAPTURE = `${CAPTURE_DIR}/captured-emails.jsonl`;
 const SHOTS = `${CAPTURE_DIR}/retention-shots`;
 const CRON_SECRET = process.env.CRON_SECRET ?? "harness-cron-secret";
 const WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET ?? "harness-webhook-secret";
-const ADMIN = { username: process.env.QA_ADMIN_USER ?? "qaadmin", password: process.env.QA_ADMIN_PASS ?? "HarnessAdminPass123", passcode: process.env.QA_ADMIN_PASSCODE ?? "123456" };
+// qa-seed-roles.mjs is the seeder and therefore the authority on this
+// value; qa-role-boundaries already agrees with it, and its admin positive
+// control (74 admin routes reached) is what proves the pair works. Three
+// different defaults were in circulation across six suites, so every
+// admin-authenticated step in this file answered 401 unless somebody
+// happened to export QA_ADMIN_PASS.
+const ADMIN = { username: process.env.QA_ADMIN_USER ?? "qaadmin", password: process.env.QA_ADMIN_PASS ?? "QaAdmin123!Pass", passcode: process.env.QA_ADMIN_PASSCODE ?? "123456" };
 
 if (!/127\.0\.0\.1|localhost/.test(BASE)) {
   console.error(`Refusing to run against ${BASE}. Local harness only.`);
