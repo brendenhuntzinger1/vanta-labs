@@ -750,16 +750,16 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
       let eligibleTargets = targets;
       const carriesOffer = Boolean(String(automation.offer_key ?? "").trim());
       if (carriesOffer && targets.length > 0) {
-        const { unattested } = await partitionByAttestation(targets.map((t) => t.email));
-        if (unattested.size > 0) {
-          eligibleTargets = targets.filter((t) => !unattested.has(String(t.email ?? "").trim().toLowerCase()));
+        const { unreachable } = await partitionByAttestation(targets.map((t) => t.email));
+        if (unreachable.size > 0) {
+          eligibleTargets = targets.filter((t) => !unreachable.has(String(t.email ?? "").trim().toLowerCase()));
           const withheld = targets.length - eligibleTargets.length;
           result.withheldUnattested += withheld;
           // Visible in the cron report rather than silent: this is marketing
           // deliberately not sent, and an operator should be able to see that
           // it is a policy decision and not a failure.
           result.errors.push(
-            `${automation.key}: withheld ${withheld} gift-bearing message(s) — recipient has not made the 21+/research-use representations, so the offer could not be redeemed.`,
+            `${automation.key}: withheld ${withheld} gift-bearing message(s) — no account exists for the recipient, so the offer has nowhere to be redeemed yet.`,
           );
         }
       }

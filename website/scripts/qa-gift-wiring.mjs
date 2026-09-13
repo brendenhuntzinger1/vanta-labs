@@ -76,7 +76,20 @@ async function step(name, fn) {
 const GHK_BUYER = "gift-ghk-buyer@example.test";
 const GHK_SMALL = "gift-ghk-small@example.test";
 const COMBO_BUYER = "gift-combo-buyer@example.test";
+/** The attestation-step fixtures (section 8), named here so the re-runnable
+ *  cleanup below covers them. A fixture left behind is not inert: the earlier
+ *  sweeps pick it up as a legitimate win-back target, and an address with no
+ *  account is WITHHELD — which lands in the sweep's error list and fails a
+ *  section that has nothing to do with it. That is how a harness starts
+ *  reporting a fault in the wrong place. */
+const REGISTERED_UNATTESTED = "gift-registered-unattested@example.test";
+const NO_ACCOUNT = "gift-no-account@example.test";
+const UNATTESTED_GUEST = "gift-unattested@example.test";
+
 const EVERYONE = [GHK_BUYER, GHK_SMALL, COMBO_BUYER];
+/** Everything this file seeds, for cleanup. EVERYONE is the happy-path subset
+ *  the sweep assertions count, and must stay that. */
+const ALL_FIXTURES = [...EVERYONE, REGISTERED_UNATTESTED, NO_ACCOUNT, UNATTESTED_GUEST];
 
 const BIG = { id: "bpc-157-10mg", quantity: 1 };     // $69 — clears the $60 minimum
 const SMALL = { id: "ipamorelin-5mg", quantity: 1 }; // $59 — one dollar short of it
@@ -295,11 +308,12 @@ async function main() {
   await q("update products set inventory_quantity = 500, stock_status = 'In Stock' where slug in ('bpc-157-10mg','ipamorelin-5mg','ghk-cu')");
   await q("update product_doses set inventory_quantity = 500, stock_status = 'In Stock'").catch(() => {});
   await q("delete from inventory_reservations").catch(() => {});
-  await q("delete from customer_offers where email = any($1)", [EVERYONE]);
-  await q("delete from order_items where order_id in (select order_id from orders where customer_email = any($1))", [EVERYONE]);
-  await q("delete from orders where customer_email = any($1)", [EVERYONE]);
-  await q("delete from marketing_subscribers where email = any($1)", [EVERYONE]);
-  await q("delete from email_send_log where recipient_email = any($1)", [EVERYONE]).catch(() => {});
+  await q("delete from customer_offers where email = any($1)", [ALL_FIXTURES]);
+  await q("delete from order_items where order_id in (select order_id from orders where customer_email = any($1))", [ALL_FIXTURES]);
+  await q("delete from orders where customer_email = any($1)", [ALL_FIXTURES]);
+  await q("delete from marketing_subscribers where email = any($1)", [ALL_FIXTURES]);
+  await q("delete from email_send_log where recipient_email = any($1)", [ALL_FIXTURES]).catch(() => {});
+  await q("delete from auth.users where email = any($1)", [ALL_FIXTURES]).catch(() => {});
   // Start with every automation off, so each round's sweep can only mail the
   // one automation that round is about.
   await q("update email_automations set enabled = false, offer_key = null");
@@ -664,7 +678,7 @@ async function main() {
   // -------------------------------------------------------------------------
   section("7. A gift is never promised to somebody who could not spend it");
 
-  const UNATTESTED = "gift-unattested@example.test";
+  const UNATTESTED = UNATTESTED_GUEST;
 
   await step("a lapsed customer with NO attested account is withheld, not mailed", async () => {
     // The real-world case: production has three paid customers with no auth
@@ -718,6 +732,222 @@ async function main() {
     const mail = capturedSince(mark).filter((m) => (m.to ?? "").includes(UNATTESTED));
     assert(mail.length === 1, `expected one no-offer message, saw ${mail.length}`);
     return `"${mail[0].subject}" delivered with no offer attached`;
+  });
+
+  // -------------------------------------------------------------------------
+  section("8. The attestation step: a promised gift now has somewhere to go");
+
+  // The case B used to withhold from and A now serves: a lapsed customer with a
+  // real account who has never made the 21+/research-use representations.
+  // Production has forty of these. Before A they clicked a genuine win-back
+  // holding a real token and met "Sign in to continue".
+  const REGISTERED = REGISTERED_UNATTESTED;
+  let attestLink = null;
+
+  await step("an unattested customer WITH an account is now mailed the gift", async () => {
+    await q("delete from customer_offers where email = $1", [REGISTERED]);
+    await q("delete from email_send_log where recipient_email = $1", [REGISTERED]);
+    await q("delete from auth.users where email = $1", [REGISTERED]);
+    await seedLapsedCustomer(REGISTERED, 70, { attested: false });
+    // An account, carrying NEITHER representation. This is the exact shape the
+    // narrowed rule turns on: reachable because /attest can write to this row.
+    await q(
+      `insert into auth.users (email, email_confirmed_at, raw_user_meta_data, created_at)
+       values ($1, now(), '{"role": "customer"}'::jsonb, now())
+       on conflict (email) do update set raw_user_meta_data = '{"role": "customer"}'::jsonb`,
+      [REGISTERED],
+    );
+    await q("update email_automations set enabled = false");
+    await q("update email_automations set enabled = true, offer_key = 'winback_60_free_ghkcu' where key = 'winback_60'");
+    await setAutomationDelay("winback_60", 60);
+
+    const mark = captureMark();
+    await runSweep();
+    const mail = capturedSince(mark).filter((m) => String(m.to).toLowerCase() === REGISTERED);
+    assert(mail.length === 1, `expected one gift email, saw ${mail.length}`);
+    const { rows } = await q("select count(*)::int n from customer_offers where email = $1", [REGISTERED]);
+    assert(rows[0].n === 1, `expected one minted token, found ${rows[0].n}`);
+    attestLink = ctaLinkFrom(mail[0].html);
+    return `"${mail[0].subject}" with a real token`;
+  });
+
+  await step("clicking it lands on the attestation step, holding the gift and NO grant", async () => {
+    // The whole point: the capability is not handed out on the way in. It is
+    // minted on the far side, after the statements are actually made.
+    const context = await freshContext();
+    const page = await context.newPage();
+    await page.goto(attestLink, { waitUntil: "domcontentloaded" });
+    assert(page.url().includes("/attest"), `landed on ${page.url()} instead of the attestation step`);
+    const cookies = await context.cookies();
+    assert(!cookies.some((c) => c.name === "vl_email_grant"), "a grant was issued BEFORE the statements were made");
+    const offer = cookies.find((c) => c.name === "vl_offer");
+    assert(offer && offer.httpOnly, "the gift did not survive the redirect as an httpOnly cookie");
+    const body = await page.textContent("body");
+    assert(/21 years of age/i.test(body), "the age statement is not on the page");
+    assert(/research use/i.test(body), "the research-use statement is not on the page");
+    assert(/gift is saved/i.test(body), "the page does not tell the customer their gift survived");
+    await page.screenshot({ path: `${SHOTS}/attest-desktop.png` });
+    await context.close();
+    return "on /attest, gift held, no grant yet";
+  });
+
+  await step("it renders at 390x844 without the button falling off the screen", async () => {
+    const context = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      extraHTTPHeaders: { "x-real-ip": "198.51.100.200" },
+    });
+    const page = await context.newPage();
+    await page.goto(attestLink, { waitUntil: "domcontentloaded" });
+    const button = page.getByRole("button", { name: /confirm and continue/i });
+    const box = await button.boundingBox();
+    assert(box, "the confirm button has no box at 390x844");
+    assert(box.x >= 0 && box.x + box.width <= 390, `the button runs off screen: x=${box.x} w=${box.width}`);
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+      "the page scrolls sideways on a phone");
+    await page.screenshot({ path: `${SHOTS}/attest-mobile.png`, fullPage: true });
+    await context.close();
+    return `button at x=${Math.round(box.x)} w=${Math.round(box.width)}, no sideways scroll`;
+  });
+
+  await step("the button refuses until BOTH statements are ticked", async () => {
+    const context = await freshContext();
+    const page = await context.newPage();
+    await page.goto(attestLink, { waitUntil: "domcontentloaded" });
+    const button = page.getByRole("button", { name: /confirm and continue/i });
+    assert(await button.isDisabled(), "the button was live before either statement was made");
+    await page.getByRole("checkbox").first().check();
+    assert(await button.isDisabled(), "one tick was enough to arm the button");
+    const { rows } = await q(
+      "select raw_user_meta_data->>'age_confirmed_21' a from auth.users where email = $1", [REGISTERED],
+    );
+    assert(rows[0].a === null, "an attestation was recorded before the customer finished");
+    await context.close();
+    return "disabled at zero ticks and at one; nothing recorded";
+  });
+
+  let attestedContext = null;
+  await step("ticking both carries them to the catalogue with the gift armed", async () => {
+    attestedContext = await freshContext();
+    const page = await attestedContext.newPage();
+    await page.goto(attestLink, { waitUntil: "domcontentloaded" });
+    for (const box of await page.getByRole("checkbox").all()) await box.check();
+    await Promise.all([
+      page.waitForURL((url) => !url.pathname.startsWith("/attest"), { timeout: 15000 }),
+      page.getByRole("button", { name: /confirm and continue/i }).click(),
+    ]);
+    assert(page.url().includes("/products"), `landed on ${page.url()} instead of the intended destination`);
+    const status = await page.evaluate(async () => (await fetch("/api/offer/status", { cache: "no-store" })).json());
+    assert(status?.offer?.rewardKind === "free_product", `the gift did not survive: ${JSON.stringify(status).slice(0, 160)}`);
+    await page.screenshot({ path: `${SHOTS}/attest-landed.png` });
+    return `${new URL(page.url()).pathname} — ${status.offer.rewardName}`;
+  });
+
+  await step("the representations are on the AUTH record, stamped with where they were made", async () => {
+    // One compliance register, not two: the same two fields signup writes, read
+    // by the same function every gate in the email system reads.
+    const { rows } = await q(
+      // Aliased carefully: `at` is reserved in Postgres (AT TIME ZONE) and a
+      // bare one here is a syntax error, which reads as a missing attestation.
+      `select raw_user_meta_data->>'age_confirmed_21' as age_ok,
+              raw_user_meta_data->>'research_use_only_agreed' as research_ok,
+              raw_user_meta_data->>'attested_at' as attested_at,
+              raw_user_meta_data->>'attested_via' as attested_via
+         from auth.users where email = $1`,
+      [REGISTERED],
+    );
+    assert(rows[0]?.age_ok === "true", `age_confirmed_21 is ${rows[0]?.age_ok}`);
+    assert(rows[0]?.research_ok === "true", `research_use_only_agreed is ${rows[0]?.research_ok}`);
+    assert(rows[0]?.attested_at, "no attested_at stamp");
+    assert(rows[0]?.attested_via === "email_link_interstitial", `attested_via is ${rows[0]?.attested_via}`);
+    return `both true, via ${rows[0].attested_via}`;
+  });
+
+  await step("the grant it mints opens the store and NOTHING personal", async () => {
+    // Scoped narrowly, deliberately: attesting gets somebody to the catalogue
+    // and the checkout, which is where the message was sending them. It is not
+    // a way past the login wall in general.
+    const page = await attestedContext.newPage();
+    const codes = {};
+    for (const path of ["/products", "/cart", "/account/orders"]) {
+      const response = await page.goto(`${BASE}${path}`, { waitUntil: "domcontentloaded" });
+      codes[path] = page.url().includes("/account/login") ? "login" : String(response.status());
+    }
+    assert(codes["/products"] === "200", `/products answered ${codes["/products"]}`);
+    assert(codes["/cart"] === "200", `/cart answered ${codes["/cart"]}`);
+    assert(codes["/account/orders"] === "login", `/account/orders was opened by the grant (${codes["/account/orders"]})`);
+    return "products 200, cart 200, account/orders still gated";
+  });
+
+  await step("and the gift is actually spent at the till, at $0", async () => {
+    // The assertion the whole change exists for. Everything above is a journey;
+    // this is the sale it was blocking.
+    const page = await attestedContext.newPage();
+    await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
+    const orderId = await checkout(page, REGISTERED, [BIG]);
+    const order = await readOrder(orderId);
+    const gift = order.lines.find((l) => l.slug === "ghk-cu");
+    assert(gift, `no GHK-Cu line; lines were ${JSON.stringify(order.lines.map((l) => l.slug))}`);
+    assert(Number(gift.unit_price) === 0, `gift priced at ${gift.unit_price}`);
+    assert(Number(order.subtotal) === 69, `subtotal ${order.subtotal} — the customer was charged for the gift`);
+    await attestedContext.close();
+    attestedContext = null;
+    return `subtotal $${order.subtotal}, free GHK-Cu at $0`;
+  });
+
+  await step("a second visit finds them attested, with no interstitial at all", async () => {
+    // "Already-attested customers experience no new friction" — including the
+    // one who just attested.
+    const context = await freshContext();
+    const page = await context.newPage();
+    await page.goto(attestLink, { waitUntil: "domcontentloaded" });
+    assert(!page.url().includes("/attest"), `an attested customer was sent back through the step: ${page.url()}`);
+    const cookies = await context.cookies();
+    assert(cookies.some((c) => c.name === "vl_email_grant"), "an attested customer was not granted on the click");
+    await context.close();
+    return `straight to ${new URL(page.url()).pathname}`;
+  });
+
+  await step("a tampered handoff fails safely and offers a way forward", async () => {
+    const context = await freshContext();
+    const page = await context.newPage();
+    const parts = new URL(attestLink);
+    // Build a handoff-shaped token with a valid structure and a dead signature.
+    const forged = `v1.${Date.now() + 600000}.eyJlIjoidmljdGltQGV4YW1wbGUudGVzdCIsImQiOiIvcHJvZHVjdHMiLCJvIjpudWxsLCJuIjoieCJ9.${"0".repeat(32)}`;
+    await page.goto(`${BASE}/attest?h=${encodeURIComponent(forged)}`, { waitUntil: "domcontentloaded" });
+    const body = await page.textContent("body");
+    assert(/expired/i.test(body), `a forged handoff did not fail safely: ${String(body).slice(0, 160)}`);
+    const cookies = await context.cookies();
+    assert(!cookies.some((c) => c.name === "vl_email_grant"), "a forged handoff minted a grant");
+    // And the API refuses it too, not just the page.
+    const refused = await page.evaluate(async ([token]) => {
+      const res = await fetch("/api/attest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ h: token, ageConfirmed: true, researchUseOnly: true }),
+      });
+      return res.status;
+    }, [forged]);
+    assert(refused === 400, `the endpoint answered ${refused} to a forged handoff`);
+    await context.close();
+    void parts;
+    return "page says expired, endpoint answers 400, no grant";
+  });
+
+  await step("a customer with no account at all is still withheld, not promised", async () => {
+    // The one case the narrowed rule keeps withholding: sign-up is where their
+    // representations would be recorded, and that longer journey is not yet
+    // driven end to end here. Until it is, no promise is made.
+    const NOBODY = NO_ACCOUNT;
+    await q("delete from customer_offers where email = $1", [NOBODY]);
+    await q("delete from email_send_log where recipient_email = $1", [NOBODY]);
+    await q("delete from auth.users where email = $1", [NOBODY]);
+    await seedLapsedCustomer(NOBODY, 70, { attested: false });
+    const mark = captureMark();
+    const sweep = await runSweep();
+    const mail = capturedSince(mark).filter((m) => String(m.to).toLowerCase() === NOBODY);
+    assert(mail.length === 0, `an account-less guest was promised a gift: ${mail.map((m) => m.subject).join(", ")}`);
+    assert((sweep?.emailAutomations?.withheldUnattested ?? 0) >= 1, "the sweep did not report withholding");
+    return "withheld, and reported";
   });
 
   await step("no console or network errors on the admin panel", async () => {

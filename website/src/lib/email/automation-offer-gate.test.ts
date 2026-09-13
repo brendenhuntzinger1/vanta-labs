@@ -56,8 +56,8 @@ vi.mock("@/lib/email/settings", () => ({
 vi.mock("@/lib/email/recipient-attestation", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   partitionByAttestation: async (emails: readonly string[]) => ({
-    attested: new Set(emails.map((e) => String(e).trim().toLowerCase())),
-    unattested: new Set<string>(),
+    reachable: new Set(emails.map((e) => String(e).trim().toLowerCase())),
+    unreachable: new Set<string>(),
   }),
 }));
 vi.mock("@/lib/email/audience", () => ({
