@@ -26,6 +26,23 @@ import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 import { referralAppliedMessage, referralCartStatus, referralQualifies, referralShortfall } from "@/lib/referral-qualification";
 import { REFERRAL_PROGRAM_PAUSED_MESSAGE, referralProgramAllowsCodes, referralProgramIsOff } from "@/lib/referral-program-gate";
 import { resolvePointsRedemptionCents, resolveStoreCreditCents } from "@/lib/store-credit-redemption";
+import {
+  normalizeCartEmail,
+  readCachedEligibility,
+  selectApplicablePromotions,
+  writeCachedEligibility,
+  type EligibilityAnswer,
+} from "@/lib/promotion-eligibility-client";
+
+/**
+ * How long the cart waits after the email field settles before asking whether
+ * this shopper has used a promotion up.
+ *
+ * Checkout calls setKnownEmail on every keystroke that leaves the field looking
+ * like an address, so "a@b.com" arrives as three different addresses. Without
+ * this, finishing a domain name costs three lookups.
+ */
+const ELIGIBILITY_DEBOUNCE_MS = 400;
 
 /**
  * THE SUPABASE BROWSER CLIENT IS LOADED ONLY WHEN A CODE ACTUALLY NEEDS CHECKING.
@@ -427,11 +444,17 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
   // /api/catalog/promotions answers, which is the same posture the store has
   // with no promotion running — the cart never invents one.
   const [bxgyPromotions, setBxgyPromotions] = useState<BxgyPromotion[]>([]);
-  // Promotions THIS shopper has personally used up. Only knowable once an email
-  // is known, so it arrives separately (see the effect below); until then the
-  // cart prices the store-wide list, exactly as the server does for a quote
-  // with no email.
-  const [exhaustedPromotionIds, setExhaustedPromotionIds] = useState<string[]>([]);
+  // THE SERVER'S ANSWER ABOUT THIS SHOPPER, AND THE ADDRESS IT IS ABOUT.
+  //
+  // It carries the email deliberately. `exhaustedPromotionIds` used to be a
+  // bare list that began empty and meant "nothing is used up", so a lookup that
+  // never came back — a 429, a timeout, an offline moment — was indistinguishable
+  // from a confirmed "you may have everything". That is the one disagreement
+  // quote-order refuses: the cart previews a promotion the server drops, the
+  // total arrives below the server's, and the sale dies as "Altered total
+  // detected". Null now means UNCONFIRMED, and an answer for another address is
+  // not an answer for this one. See lib/promotion-eligibility-client.ts.
+  const [promotionEligibility, setPromotionEligibility] = useState<EligibilityAnswer | null>(null);
   // The admin's coupon-stacking policy (`coupons.allow_stacking`). Until this
   // was delivered the cart assumed "never stacks" and the server assumed the
   // admin's actual setting, which is the last place the two disagreed.
@@ -579,54 +602,93 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
     })();
   }, [signedIn]);
 
-  // PER-CUSTOMER USAGE LIMITS, LEARNED THE MOMENT AN EMAIL IS KNOWN.
+  // PER-CUSTOMER USAGE LIMITS, LEARNED ONCE PER ADDRESS RATHER THAN ONCE PER PAGE.
   //
   // A "one per customer" promotion is the only rule the cart cannot evaluate on
   // its own, and getting it wrong does not merely mis-state a discount: the
-  // server would drop the promotion, the cart's total would sit below the
-  // server's, and payment-service would refuse the order outright. Asking here
-  // keeps the two answers the same before the shopper reaches the pay button.
+  // server drops the promotion, the cart's total sits below the server's, and
+  // payment-service refuses the order outright.
+  //
+  // THIS USED TO ASK ON EVERY PAGE VIEW, AND THE ENDPOINT'S BUDGET WAS TEN PER
+  // TEN MINUTES. The tenth page of an ordinary browse was refused — measured on
+  // the harness, the refusal landed on /checkout — and a refused lookup left the
+  // cart previewing promotions it had never had confirmed. Three things fix
+  // that together, and only the last of them is load-bearing for correctness:
+  //
+  //   * ASK ONLY WHEN THE ANSWER COULD CHANGE A DECISION. No address, or no
+  //     promotion carrying a per-customer limit, means no request at all — so
+  //     an anonymous browse never touches the endpoint.
+  //   * REUSE THE ANSWER. One lookup per address, cached in localStorage, so a
+  //     second tab, a reload and a navigation all read what the first one
+  //     learned instead of spending a fresh request.
+  //   * WITHHOLD WHAT IS NOT CONFIRMED. availablePromotions now requires a
+  //     confirmed answer FOR THIS ADDRESS before it will apply a per-customer
+  //     promotion, so a request that never comes back cannot produce a preview
+  //     the till disagrees with.
+  //
+  // The debounce matters more than it looks: checkout calls setKnownEmail on
+  // every keystroke that leaves the field looking like an address, so typing
+  // "a@b.com" walks through "a@b.c", "a@b.co" and "a@b.com" — three different
+  // addresses, three lookups, and on the old budget a third of a shopper's
+  // allowance spent on typing.
   useEffect(() => {
-    const email = knownEmail.trim().toLowerCase();
-    let cancelled = false;
-    (async () => {
-      // NOTHING TO ASK FOR WHILE SIGNED OUT. Every one of these five endpoints
-      // is behind the account wall, so a signed-out page — the sign-in portal
-      // itself, which is now the first screen of almost every visit — fired
-      // five requests it knew would be refused, and put five 401s in the
-      // console of the page a new customer sees first. `signedIn` is already a
-      // dependency (the config has to be re-read the moment a session appears),
-      // so this costs nothing and skips work that could never succeed.
-      if (!signedIn) return;
+    const email = normalizeCartEmail(knownEmail);
+    // NO ADDRESS MEANS NOTHING TO ASK AND NOTHING TO CLEAR. An answer held for a
+    // previous address is not discarded here because it does not need to be:
+    // mayApplyPromotion refuses any answer whose `email` is not the one the
+    // order will be placed under, so a stale confirmation is already inert.
+    // Leaving it also means going back to an address answers instantly.
+    if (!email) return;
+    if (promotionEligibility?.email === email) return;
 
-      // No email yet (or one cleared): back to the store-wide list. Same
-      // reference when it is already empty, so this cannot loop.
-      if (!email || !email.includes("@")) {
-        if (!cancelled) setExhaustedPromotionIds((previous) => (previous.length === 0 ? previous : []));
+    let cancelled = false;
+    let networkTimer = 0;
+
+    // The cache read is deferred rather than run inline so no setState happens
+    // synchronously inside this effect, which would cascade a render.
+    const cacheTimer = window.setTimeout(() => {
+      if (cancelled) return;
+      const cached = readCachedEligibility(window.localStorage, email);
+      if (cached) {
+        setPromotionEligibility(cached);
         return;
       }
-      try {
-        const response = await fetch("/api/catalog/promotions/eligibility", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email }),
-        });
-        if (!response.ok) return;
-        const result = await response.json() as { success?: boolean; exhaustedPromotionIds?: unknown };
-        if (cancelled || !result.success) return;
-        setExhaustedPromotionIds(
-          Array.isArray(result.exhaustedPromotionIds)
-            ? result.exhaustedPromotionIds.filter((id): id is string => typeof id === "string")
-            : [],
-        );
-      } catch {
-        // Fail open, exactly as the endpoint and the server-side counter do: a
-        // lookup that could not run must never strip a promotion the checkout
-        // will still honour.
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [knownEmail, signedIn]);
+      networkTimer = window.setTimeout(() => {
+        void (async () => {
+          try {
+            const response = await fetch("/api/catalog/promotions/eligibility", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ email }),
+            });
+            if (!response.ok) return;
+            const result = await response.json() as { success?: boolean; exhaustedPromotionIds?: unknown };
+            if (cancelled || !result.success) return;
+            const answer: EligibilityAnswer = {
+              email,
+              exhaustedPromotionIds: Array.isArray(result.exhaustedPromotionIds)
+                ? result.exhaustedPromotionIds.filter((id): id is string => typeof id === "string")
+                : [],
+            };
+            writeCachedEligibility(window.localStorage, answer);
+            setPromotionEligibility(answer);
+          } catch {
+            // WITHHOLD, DO NOT ASSUME. Leaving the answer unconfirmed keeps the
+            // per-customer promotions out of the preview, which is the direction
+            // the server itself degrades in: getPromotionUsage withholds limited
+            // promotions when it cannot count them, and says of it "this withholds
+            // a discount — it never blocks a checkout".
+          }
+        })();
+      }, ELIGIBILITY_DEBOUNCE_MS);
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(cacheTimer);
+      window.clearTimeout(networkTimer);
+    };
+  }, [knownEmail, signedIn, promotionEligibility]);
 
   useEffect(() => {
     (async () => {
@@ -1206,9 +1268,13 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
   const totalQuantity = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
   // The promotions this cart may actually earn: the store-wide live list, minus
   // anything this shopper has personally used up.
+  // Mirrors quote-order's own condition — it consults a per-customer count only
+  // when `promotion.perCustomerLimit !== null && email` — so the cart applies a
+  // limited promotion only in the states where the till will apply it too. See
+  // lib/promotion-eligibility-client.ts for the truth table and its test.
   const availablePromotions = useMemo(
-    () => bxgyPromotions.filter((promotion) => !exhaustedPromotionIds.includes(promotion.id)),
-    [bxgyPromotions, exhaustedPromotionIds],
+    () => selectApplicablePromotions(bxgyPromotions, normalizeCartEmail(knownEmail), promotionEligibility),
+    [bxgyPromotions, knownEmail, promotionEligibility],
   );
 
   // At most one, the one worth the most — chosen by the same engine, from the

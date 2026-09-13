@@ -110,6 +110,32 @@ describe("the cart refetches its configuration when the viewer signs in", () => 
     // happen.
     const at = cart.indexOf(endpoint);
     expect(at, `${endpoint} must still be fetched here`).toBeGreaterThan(-1);
+
+    // THE ELIGIBILITY CHECK IS GUARDED ON THE ADDRESS, NOT ON THE SESSION, and
+    // that is strictly stronger for the property this test protects.
+    //
+    // It used to return early on `!signedIn`. That kept the 401s off the
+    // sign-in portal, and it also skipped the one shopper who most needs the
+    // answer: a guest holding a recovery grant reaches /cart with no account,
+    // and the wall admits them. Guarding on the address covers both — the
+    // portal has no knownEmail so it still asks nothing, while a grant-holder
+    // who has typed an address gets the lookup the wall will actually serve.
+    //
+    // It is also the guard that matters for correctness now. The cart withholds
+    // a per-customer promotion until it has a confirmed answer FOR THE ADDRESS
+    // the order will be placed under, so asking with no address would be asking
+    // a question whose answer could not be used.
+    if (endpoint === '"/api/catalog/promotions/eligibility"') {
+      const effectStart = cart.lastIndexOf("useEffect(() => {", at);
+      expect(effectStart, `no effect body found around ${endpoint}`).toBeGreaterThan(-1);
+      const guard = cart.slice(effectStart, at);
+      expect(
+        guard.includes("if (!email) return;"),
+        `${endpoint} must not be requested before an address is known`,
+      ).toBe(true);
+      return;
+    }
+
     const effectStart = cart.lastIndexOf("(async () => {", at);
     expect(effectStart, `no effect body found around ${endpoint}`).toBeGreaterThan(-1);
     const guard = cart.slice(effectStart, at);
