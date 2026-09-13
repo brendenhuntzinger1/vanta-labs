@@ -79,12 +79,37 @@ let maintenanceCacheExpiresAt = 0;
 const sessionCache = new Map<string, { value: boolean; expiresAt: number }>();
 const customerSessionCache = new Map<string, { value: boolean; expiresAt: number }>();
 
-function applySecurityHeaders(response: NextResponse) {
+/**
+ * Static asset trees that EXIST to be embedded somewhere else.
+ *
+ * Cross-Origin-Resource-Policy: same-origin is right for everything this app
+ * serves except these. An email is the case that proves it: a campaign hero
+ * lives at /images and is loaded by a document on a completely different
+ * origin, so same-origin tells the renderer to drop it — the artwork is the
+ * message, and the recipient sees alt text where the offer should be.
+ *
+ * Found by rendering a real campaign against the deployed URL and watching it
+ * fail with ERR_BLOCKED_BY_RESPONSE.NotSameOrigin. curl could not have caught
+ * it: CORP is enforced by the embedding client, so a 200 with the right bytes
+ * and the right content-type is exactly what a blocked asset looks like from
+ * the command line.
+ *
+ * Narrow on purpose. These four trees are already on the access-policy public
+ * list — brand marks, artwork, video and fonts, served to anyone who asks with
+ * or without an account — so relaxing CORP on them grants nothing that was not
+ * already public. Every dynamic route, every API and every per-requester body
+ * keeps same-origin.
+ */
+const EMBEDDABLE_ASSET_PREFIXES = ["/images/", "/icons/", "/videos/", "/fonts/"];
+
+function applySecurityHeaders(response: NextResponse, pathname?: string) {
   response.headers.set("X-Frame-Options", "DENY");
   response.headers.set("X-Content-Type-Options", "nosniff");
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  response.headers.set("Cross-Origin-Resource-Policy", "same-origin");
+  const embeddable = typeof pathname === "string"
+    && EMBEDDABLE_ASSET_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+  response.headers.set("Cross-Origin-Resource-Policy", embeddable ? "cross-origin" : "same-origin");
   // HSTS: force HTTPS for two years incl. subdomains. Safe for an HTTPS-only
   // storefront and expected for anything handling payment/auth.
   response.headers.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
@@ -797,7 +822,7 @@ export async function middleware(request: NextRequest) {
       response.headers.set("Cache-Control", "private, no-store");
     }
 
-    return applySecurityHeaders(response);
+    return applySecurityHeaders(response, pathname);
   };
 
   // A REDIRECT THIS FILE INVENTS FROM THE USER-AGENT MUST NOT BE REPLAYED TO A
