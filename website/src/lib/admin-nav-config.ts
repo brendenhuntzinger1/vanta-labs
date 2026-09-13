@@ -36,6 +36,11 @@ export const ADMIN_NAV_GROUPS: AdminTabGroup[] = [
     title: "Today",
     tabs: [
       { label: "Live Sales & Visitors", href: "/admin", match: (p) => p === "/admin" },
+      // The dashboard tile above ("Online Now (5m)") is a rough, 5-minute-
+      // window COUNT computed once per page load. This is the actual live
+      // list — who, updated every 5s — so it gets its own destination
+      // rather than being squeezed into that tile.
+      { label: "Live Visitors", href: "/admin/live", match: startsWith("/admin/live") },
       { label: "System Status", href: "/admin/status", match: startsWith("/admin/status"), badge: "critical" },
     ],
   },
