@@ -12,6 +12,7 @@ import { getEmailRuntimeConfig, marketingBlockedReason } from "@/lib/email/setti
 import { claimMarketingSend } from "@/lib/email/frequency";
 import { plainGreetingName } from "@/lib/email/greeting-name";
 import { getCatalogProductsBySlugs, getStockLevelsBySlugs } from "@/lib/catalog";
+import type { Product } from "@/lib/catalog-types";
 import { isPaidOrderStatus, isProductPurchaseOrder } from "@/lib/ledger";
 import { recordSystemAlert } from "@/lib/monitoring";
 import {
@@ -1314,6 +1315,35 @@ export interface RecoveryCatalogueEntry {
    */
   variantPriceCents?: Map<string, number>;
   variantLabel?: Map<string, string>;
+  /**
+   * THIS PRODUCT CANNOT BE BOUGHT TODAY, judged on the dose a line that names
+   * no variant would get.
+   *
+   * The gift ladder has checked stock since a top-band cart mailed a
+   * three-product promise the till then honoured two thirds of. The CART lines
+   * never did — so a recovery email could print, price and total a product that
+   * is out of stock, walk the shopper back to it, and let them find out at the
+   * checkout. Worse, `reconciledCartValueCents` sizes the offer band on exactly
+   * the lines the email prints, so an unbuyable line also bought a bigger gift
+   * than the buyable basket justified.
+   *
+   * Set by loadRecoveryCatalogue using the same dual test quoteOrder uses —
+   * status AND tracked count — because resolveStockStatus() reports "In Stock"
+   * for every product while the global inventory flag is off, which is its
+   * default. Unknown stays shippable: an untracked supply has no count, and
+   * withholding a line because a read was silent would empty the email.
+   */
+  unshippable?: boolean;
+  /**
+   * THE DOSES THAT CANNOT BE BOUGHT, keyed exactly as `variantPriceCents` is.
+   *
+   * Availability is per dose, not per product: GLP-3 routinely has its 5mg on
+   * the shelf and its 10mg gone. Judging a line that names a dose by the
+   * PRODUCT's default would both drop buyable lines and keep unbuyable ones,
+   * which is why recoveryEmailItems asks this set first and only falls back to
+   * `unshippable` for a line that names no variant at all.
+   */
+  unshippableVariants?: Set<string>;
 }
 
 /** What a recovery email renders per line — and nothing the client typed. */
@@ -1372,6 +1402,25 @@ export function recoveryEmailItems(
     // can never quietly shrink a cart into a smaller offer band. A missing
     // price loses a number on one line; a wrong one loses the sale.
     const variantId = String(item?.variantId ?? "").trim();
+
+    // A LINE THAT CANNOT BE BOUGHT IS NOT PRINTED, PRICED OR TOTALLED.
+    //
+    // Dropping it rather than showing it struck through is deliberate: this
+    // email's whole job is to walk somebody back to a basket they can pay for,
+    // and reconciledCartValueCents sizes the offer band on what is printed
+    // here. Leaving the line in would advertise an unbuyable product AND buy a
+    // bigger gift than the remaining basket justifies. A cart with nothing left
+    // produces no lines at all, and the caller declines to send.
+    //
+    // Judged on THE DOSE THIS LINE NAMES when it names one, because
+    // availability is per dose — asking the product's default instead would
+    // drop a buyable 5mg because the 10mg ran out. A dose the catalogue does
+    // not know stays shippable, for the same reason an unreadable count does.
+    const lineUnshippable = variantId
+      ? entry.unshippableVariants?.has(variantId) === true
+      : entry.unshippable === true;
+    if (lineUnshippable) continue;
+
     const variantPrice = variantId ? entry.variantPriceCents?.get(variantId) : undefined;
     const unitPriceCents = variantId ? Number(variantPrice) : Number(entry.unitPriceCents);
     // The dose label qualifies the name for the same reason: "GLP-3" and
@@ -1474,6 +1523,18 @@ export async function loadRecoveryCatalogue(slugs: string[]): Promise<Map<string
   const entries = new Map<string, RecoveryCatalogueEntry>();
   if (unique.length === 0) return entries;
   const site = getSiteUrl();
+
+  // The same read the gift ladder makes, for the same reason, against the cart's
+  // own slugs. A failed read leaves the map empty and every line stays
+  // shippable — the till still guards the real order, and an email missing its
+  // cart is a worse outcome than one line that turns out to be unavailable.
+  let stock = new Map<string, number>();
+  try {
+    stock = await getStockLevelsBySlugs(unique);
+  } catch (error) {
+    console.error("[cart-recovery] cart stock unreadable; pricing every line as available", error);
+  }
+
   for (const product of await getCatalogProductsBySlugs(unique)) {
     if (!product?.slug || !product.name) continue;
     const price = Number(String(product.salePrice ?? product.price ?? "").replace(/[^0-9.]/g, ""));
@@ -1492,9 +1553,40 @@ export async function loadRecoveryCatalogue(slugs: string[]): Promise<Map<string
       if (Number.isFinite(dosePrice) && dosePrice > 0) variantPriceCents.set(String(dose.id), Math.round(dosePrice * 100));
       if (dose.label) variantLabel.set(String(dose.id), String(dose.label));
     }
+    // WHAT CAN ACTUALLY BE BOUGHT, by exactly the test the gift ladder and
+    // quoteOrder use: the status OR a tracked count at or below zero. Both,
+    // because resolveStockStatus() reports "In Stock" for every product while
+    // the global inventory flag is off — its default here — so the status alone
+    // would call an empty shelf available, and the count alone would call an
+    // untracked product empty.
+    const cannotShip = (
+      status: Product["stockStatus"] | undefined,
+      count: number | undefined,
+    ) => status === "Out of Stock"
+      || status === "Reserved"
+      || (typeof count === "number" && Number.isFinite(count) && count <= 0);
+
+    // Per dose first, keyed as the cart lines key it.
+    const unshippableVariants = new Set<string>();
+    for (const dose of product.doses ?? []) {
+      if (!dose?.id) continue;
+      if (cannotShip(dose.stockStatus ?? product.stockStatus, stock.get(String(dose.id)))) {
+        unshippableVariants.add(String(dose.id));
+      }
+    }
+    // Then the product, on the dose a line naming no variant would receive —
+    // the same dose and the same key order the gift check picks.
+    const defaultDose = product.doses?.find((entry) => entry.isDefault) ?? product.doses?.[0];
+    const unshippable = cannotShip(
+      defaultDose?.stockStatus ?? product.stockStatus,
+      defaultDose ? stock.get(String(defaultDose.id)) : stock.get(String(product.slug)),
+    );
+
     entries.set(String(product.slug), {
       name: String(product.name),
       unitPriceCents: Number.isFinite(price) ? Math.round(price * 100) : 0,
+      ...(unshippable ? { unshippable: true } : {}),
+      ...(unshippableVariants.size > 0 ? { unshippableVariants } : {}),
       ...(image ? { image } : {}),
       ...(product.batchNumber ? { batchNumber: String(product.batchNumber) } : {}),
       ...(variantPriceCents.size > 0 ? { variantPriceCents } : {}),
