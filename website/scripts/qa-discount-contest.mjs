@@ -129,6 +129,9 @@ const PASSWORD = "HarnessPass123!";
 
 const browser = await chromium.launch(CHROME ? { executablePath: CHROME } : {});
 
+/** The seed's out-of-stock control, captured before this file stocks it. */
+let stockBefore = null;
+
 try {
   await q(
     `insert into auth.users (email, encrypted_password, raw_user_meta_data, raw_app_meta_data, email_confirmed_at, created_at)
@@ -188,9 +191,71 @@ try {
      on conflict (code) do update set discount_type = 'percent', discount_value = 40, active = true`,
   );
 
+  // STOCK THE PRODUCT THIS FILE PRICES AGAINST, BECAUSE PRODUCTION COUNTS STOCK.
+  //
+  // Every expected figure below is two vials of TB-500 5mg at $89.00, and the
+  // seed deliberately ships that product at zero as the catalogue's
+  // out-of-stock control. While the harness had inventory.tracking_enabled OFF
+  // — which is its default, and NOT what production runs — resolveStockStatus
+  // answered "In Stock" for everything, the localStorage fixture below was
+  // accepted, and this suite passed.
+  //
+  // Turn tracking on so the harness matches production and the same fixture is
+  // correctly dropped: the drawer opens reading "Open cart with 0 items", six
+  // checks then compare an empty cart against the codes panel and the totals,
+  // and they fail. The suite was green on a configuration the store does not
+  // have.
+  //
+  // reserved_quantity is reset alongside the quantity because reserve_inventory
+  // gates on `inventory_quantity - reserved_quantity`, and leaving a stale
+  // reservation behind is the documented way to make the last unit unsellable.
+  // The original values are restored at the end so the out-of-stock control
+  // stays a control for every other suite sharing this database.
+  stockBefore = (await q(
+    `select inventory_quantity, reserved_quantity, stock_status from products where slug = 'tb-500-5mg'`,
+  )).rows[0] ?? null;
+  await q(
+    `update products set inventory_quantity = 50, reserved_quantity = 0, stock_status = 'In Stock'
+      where slug = 'tb-500-5mg'`,
+  );
+  await q(
+    `update product_doses set inventory_quantity = 50, reserved_quantity = 0, stock_status = 'In Stock'
+      where product_id = (select id from products where slug = 'tb-500-5mg')`,
+  );
+
   const ctx = await browser.newContext({ ignoreHTTPSErrors: true,  ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
   const page = await ctx.newPage();
 
+  /**
+   * ANSWER THE COOKIE BANNER, BECAUSE A SHOPPER DOES.
+   *
+   * The consent banner is a real, correct part of the storefront and it sits
+   * over the page until it is answered — including over the cart drawer. This
+   * file read the drawer's text without answering it, so on a fresh harness six
+   * checks compared the drawer's codes panel against
+   *
+   *     "Essential cookies run the store. Analytics and our advertising
+   *      pixels ... Decline"
+   *
+   * and reported "the CART DRAWER offers the codes panel" and "the discount
+   * line names the winning offer" as failures, plus "read null from the totals"
+   * where the summary was simply behind it. On a database that already carried
+   * an answered banner the same run passed, which is worse than failing: the
+   * suite's result depended on leftover state rather than on the code.
+   *
+   * Accepting also keeps attribution capture on, which is what the referral
+   * assertions below are about.
+   */
+  const answerConsent = async (p) => {
+    const accept = p.getByRole("button", { name: /^Accept$/ });
+    if (await accept.count()) {
+      await accept.first().click().catch(() => {});
+      await p.waitForTimeout(400);
+    }
+  };
+
+  await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+  await answerConsent(page);
   await passAgeGate(page);
   await login(page, EMAIL, PASSWORD);
   check(!/\/account\/login/.test(page.url()), "signed in", `still at ${page.url()}`);
@@ -373,6 +438,19 @@ try {
 
   await ctx.close();
 } finally {
+  // Put the out-of-stock control back exactly as the seed left it.
+  if (stockBefore) {
+    await q(
+      `update products set inventory_quantity = $1, reserved_quantity = $2, stock_status = $3
+        where slug = 'tb-500-5mg'`,
+      [stockBefore.inventory_quantity, stockBefore.reserved_quantity, stockBefore.stock_status],
+    ).catch(() => {});
+    await q(
+      `update product_doses set inventory_quantity = $1, reserved_quantity = $2, stock_status = $3
+        where product_id = (select id from products where slug = 'tb-500-5mg')`,
+      [stockBefore.inventory_quantity, stockBefore.reserved_quantity, stockBefore.stock_status],
+    ).catch(() => {});
+  }
   await browser.close();
   await pool.end();
 }
