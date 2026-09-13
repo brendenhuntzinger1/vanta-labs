@@ -87,10 +87,32 @@ function linksIn(mail) {
 }
 
 // --- the clock ----------------------------------------------------------------
+/**
+ * THE LIFECYCLE ROUTE, NOT THE SWEEP ROUTE.
+ *
+ * The jobs that put a message in front of a customer — cart recovery, the
+ * retention automations, campaigns, the marketing queue, the email retry and
+ * the order-email reaper — moved to /api/cron/lifecycle on 2026-09-10, so a
+ * closing recovery window could not be lost to a sweep that overran on
+ * twenty-seven unrelated jobs. This file kept calling /api/cron/sweep.
+ *
+ * That route still answers 200 and still returns a body, so nothing failed
+ * loudly — it just stopped being evidence. every `cartRecovery` count this file reads came back
+ * undefined, and each recovery stage looked like it had never been sent.
+ *
+ * THE KEY IS ASSERTED, not just the status. A 200 from a route that no longer
+ * runs this job is exactly what made the old call look healthy, so if the jobs
+ * move again this fails HERE, naming the reason, rather than as a screenful of
+ * unrelated-looking assertion failures downstream.
+ */
 async function sweep() {
-  const r = await fetch(`${BASE}/api/cron/sweep`, { headers: { Authorization: `Bearer ${CRON_SECRET}` } });
+  const r = await fetch(`${BASE}/api/cron/lifecycle`, { headers: { Authorization: `Bearer ${CRON_SECRET}` } });
   const body = await r.json();
-  assert(r.status === 200 && body.success, `sweep answered ${r.status}`);
+  assert(r.status === 200 && body.success, `lifecycle sweep answered ${r.status}`);
+  assert(
+    Object.prototype.hasOwnProperty.call(body, "cartRecovery"),
+    `the lifecycle route ran no cartRecovery job — has it moved again? got: ${Object.keys(body).join(", ")}`,
+  );
   return body;
 }
 async function sweepAndMail(fn) {

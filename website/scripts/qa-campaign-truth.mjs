@@ -8,7 +8,7 @@
 //   subscriber → consent → audience → campaign → personalisation →
 //   suppression → sendMarketingEmail → provider → unsubscribe → suppression
 //
-// — against real Postgres and the real /api/cron/sweep, and then tries to break
+// — against real Postgres and the real /api/cron/lifecycle, and then tries to break
 // each guarantee rather than only confirming it.
 //
 // THE ADVERSARIAL HALF, which is the point of the file:
@@ -91,10 +91,36 @@ const who = (tag) => `camp-${stamp}-${tag}@example.test`;
 // CSRF guard and not something to route around — a real browser sends these.
 const SAME_ORIGIN = { Origin: BASE, "x-forwarded-proto": new URL(BASE).protocol.replace(":", "") };
 
+/**
+ * THE LIFECYCLE ROUTE, NOT THE SWEEP ROUTE.
+ *
+ * The jobs that put a message in front of a customer — cart recovery, the
+ * retention automations, campaigns, the marketing queue, the email retry and
+ * the order-email reaper — moved to /api/cron/lifecycle on 2026-09-10, so a
+ * closing recovery window could not be lost to a sweep that overran on
+ * twenty-seven unrelated jobs. This file kept calling /api/cron/sweep.
+ *
+ * That route still answers 200 and still returns a body, so nothing failed
+ * loudly: `emailCampaigns` was simply absent, `?? {}` turned the miss into an
+ * empty object, and every count below read `undefined`. Six of this file's nine
+ * checks failed for one wrong URL, and the three that "passed" proved nothing —
+ * the same rot that left qa-gift-wiring and qa-cart-recovery-override pointing
+ * at the wrong door.
+ *
+ * THE KEY IS ASSERTED, not just the status, and the `?? {}` is gone. A 200 from
+ * a route that no longer runs this job is exactly what made the old call look
+ * healthy, so if campaigns move again this fails HERE, naming the reason,
+ * rather than as six unrelated-looking assertion failures downstream.
+ */
 async function sweep() {
-  const r = await fetch(`${BASE}/api/cron/sweep`, { headers: { Authorization: `Bearer ${CRON_SECRET}` } });
-  assert(r.status === 200, `sweep answered ${r.status}`);
-  return (await r.json()).emailCampaigns ?? {};
+  const r = await fetch(`${BASE}/api/cron/lifecycle`, { headers: { Authorization: `Bearer ${CRON_SECRET}` } });
+  assert(r.status === 200, `lifecycle sweep answered ${r.status}`);
+  const body = await r.json();
+  assert(
+    body && Object.prototype.hasOwnProperty.call(body, "emailCampaigns"),
+    `the lifecycle route ran no emailCampaigns job — has it moved again? got: ${Object.keys(body ?? {}).join(", ")}`,
+  );
+  return body.emailCampaigns;
 }
 
 /** A campaign with an explicit recipient list, exactly as the composer writes one. */

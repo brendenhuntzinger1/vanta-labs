@@ -4,7 +4,7 @@
 //
 // Drives the customer journeys the retention engine exists for, against the
 // local harness, through the same surfaces production uses: the scheduled
-// sweep (/api/cron/sweep), the emails actually rendered and captured, the
+// sweep (/api/cron/lifecycle), the emails actually rendered and captured, the
 // tracked click that arms the gift, the checkout API, the signed payment
 // webhook, and the rows each of those writes.
 //
@@ -98,10 +98,32 @@ const ctaOf = (mail) => linksIn(mail).find((l) => /\/api\/email\/automation-clic
 const to = (mail) => String(mail.to ?? "").toLowerCase();
 
 // --- the clock ----------------------------------------------------------------
+/**
+ * THE LIFECYCLE ROUTE, NOT THE SWEEP ROUTE.
+ *
+ * The jobs that put a message in front of a customer — cart recovery, the
+ * retention automations, campaigns, the marketing queue, the email retry and
+ * the order-email reaper — moved to /api/cron/lifecycle on 2026-09-10, so a
+ * closing recovery window could not be lost to a sweep that overran on
+ * twenty-seven unrelated jobs. This file kept calling /api/cron/sweep.
+ *
+ * That route still answers 200 and still returns a body, so nothing failed
+ * loudly — it just stopped being evidence. every `emailAutomations` count this file reads came
+ * back undefined, so the retention automations looked like they never fired.
+ *
+ * THE KEY IS ASSERTED, not just the status. A 200 from a route that no longer
+ * runs this job is exactly what made the old call look healthy, so if the jobs
+ * move again this fails HERE, naming the reason, rather than as a screenful of
+ * unrelated-looking assertion failures downstream.
+ */
 async function sweep() {
-  const r = await fetch(`${BASE}/api/cron/sweep`, { headers: { Authorization: `Bearer ${CRON_SECRET}` } });
+  const r = await fetch(`${BASE}/api/cron/lifecycle`, { headers: { Authorization: `Bearer ${CRON_SECRET}` } });
   const body = await r.json();
-  assert(r.status === 200 && body.success, `sweep answered ${r.status}`);
+  assert(r.status === 200 && body.success, `lifecycle sweep answered ${r.status}`);
+  assert(
+    Object.prototype.hasOwnProperty.call(body, "emailAutomations"),
+    `the lifecycle route ran no emailAutomations job — has it moved again? got: ${Object.keys(body).join(", ")}`,
+  );
   return body;
 }
 async function sweepAndMail(filter) {

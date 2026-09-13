@@ -12,7 +12,7 @@
 // reach: the Postgres partial unique index that makes "exactly once" true
 // across two processes, the frequency guard's advisory lock, the suppression
 // read, the offer mint, the renderer, and the SMTP conversation. This drives
-// all of it — the real /api/cron/sweep, against real Postgres, reading the
+// all of it — the real /api/cron/lifecycle, against real Postgres, reading the
 // messages that actually came out the other end.
 //
 // WHAT IT PROVES, and each is asserted by NAME, not by count:
@@ -118,11 +118,37 @@ async function waitForCapture(offset, predicate, timeoutMs = 15_000) {
 
 const who = (tag) => `auto-${stamp}-${tag}@example.test`;
 
+/**
+ * THE LIFECYCLE ROUTE, NOT THE SWEEP ROUTE.
+ *
+ * The jobs that put a message in front of a customer — cart recovery, the
+ * retention automations, campaigns, the marketing queue, the email retry and
+ * the order-email reaper — moved to /api/cron/lifecycle on 2026-09-10, so a
+ * closing recovery window could not be lost to a sweep that overran on
+ * twenty-seven unrelated jobs. This file kept calling /api/cron/sweep.
+ *
+ * That route still answers 200 and still returns a body, so nothing failed
+ * loudly — it just stopped being evidence. `body.emailAutomations` was simply absent, `?? {}`
+ * turned the miss into an empty object, and every count this file prints read
+ * `undefined` — "sent undefined, deferred undefined, skipped undefined". The
+ * cohort assertions then compared real seeded state against an empty sweep and
+ * reported each customer as one lifecycle stage behind, which reads exactly
+ * like an off-by-one in the scheduler and is one wrong URL.
+ *
+ * THE KEY IS ASSERTED, not just the status. A 200 from a route that no longer
+ * runs this job is exactly what made the old call look healthy, so if the jobs
+ * move again this fails HERE, naming the reason, rather than as a screenful of
+ * unrelated-looking assertion failures downstream.
+ */
 async function sweep() {
-  const r = await fetch(`${BASE}/api/cron/sweep`, { headers: { Authorization: `Bearer ${CRON_SECRET}` } });
-  assert(r.status === 200, `sweep answered ${r.status}`);
+  const r = await fetch(`${BASE}/api/cron/lifecycle`, { headers: { Authorization: `Bearer ${CRON_SECRET}` } });
+  assert(r.status === 200, `lifecycle sweep answered ${r.status}`);
   const body = await r.json();
-  return body.emailAutomations ?? {};
+  assert(
+    body && Object.prototype.hasOwnProperty.call(body, "emailAutomations"),
+    `the lifecycle route ran no emailAutomations job — has it moved again? got: ${Object.keys(body ?? {}).join(", ")}`,
+  );
+  return body.emailAutomations;
 }
 
 /**
