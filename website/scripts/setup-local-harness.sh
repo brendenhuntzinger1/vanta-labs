@@ -163,6 +163,19 @@ echo "==> post-parity migrations"
 # orders.amount_paid, orders.refund_amount and orders.payment_status. Run before
 # harness-prod-parity-columns.sql adds those, the view fails to create, `|| true`
 # swallows it, and the harness comes up missing exactly the view under test.
+#
+# IT HAPPENED AGAIN, INSIDE THIS VERY LOOP, AND THE `|| true` HID IT AGAIN.
+# ad_revenue_daily also selects orders.marketing_source_kind, which
+# marketing-attribution.sql adds — and marketing-attribution sat four entries
+# AFTER ads-spend-roas here. So every harness built by this script came up with
+# ad_spend_daily present and SEVEN VIEWS MISSING: ad_revenue_daily,
+# ad_creative_roas_daily, ad_campaign_daily, ad_platform_daily,
+# ad_revenue_unattributed, ad_revenue_non_paid_source and ad_performance_derived.
+#
+# Nothing announced it. /admin/ads reads as a broken page rather than an
+# unmigrated one, and — worse for an audit — any assertion about ROAS reporting
+# measured an empty set and passed. ads-spend-roas.sql now runs LAST, after
+# every column any of its views reads.
 for f in referral-orders-commission-lifecycle referral-orders-manual-review-status \
          refund-exactly-once-indexes pending-emails-order-link automation-send-once auth-email-debounce \
          affiliate-email-system email-automation-tracking customer-offers coupon-free-shipping \
@@ -172,11 +185,12 @@ for f in referral-orders-commission-lifecycle referral-orders-manual-review-stat
   bxgy-promotions bxgy-redemption-claims coupon-redeem-rpc \
   tender-hold-claim \
   membership-pending-tier-change \
-  order-attribution ads-system ads-spend-roas \
+  order-attribution ads-system \
   abandoned-cart-checkout-started cart-recovery-stage-overrides cart-recovery-measurement lifecycle-measurement \
   browse-abandonment \
   campaign-gifts auth-user-attested-by-email customer-offer-gift-items \
-  marketing-attribution; do
+  marketing-attribution \
+  ads-spend-roas; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
 done
 
