@@ -20,10 +20,11 @@
 
 import { execFileSync } from "node:child_process";
 import { createHmac } from "node:crypto";
+import { harnessSigningSecret } from "./lib/harness-env.mjs";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
 const PSQL = ["-h", "/tmp", "-p", "55432", "-U", "postgres", "-d", "storefront", "-tAc"];
-const SECRET = process.env.UNSUBSCRIBE_SECRET ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SECRET = harnessSigningSecret();
 const GRANT_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 
 let pass = 0;
@@ -86,10 +87,6 @@ function cleanup() {
 }
 
 async function main() {
-  if (!SECRET) {
-    console.error("No UNSUBSCRIBE_SECRET / SUPABASE_SERVICE_ROLE_KEY — cannot mint grants.");
-    process.exit(2);
-  }
   cleanup();
 
   const LIVE = { slug: "bpc-157-10mg", name: "SPOOFED BY THE BROWSER", quantity: 2, unitPrice: 0.01 };

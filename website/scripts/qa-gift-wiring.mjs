@@ -30,6 +30,7 @@ import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { createHmac } from "node:crypto";
 import { chromium } from "playwright";
 import pg from "pg";
+import { harnessSigningSecret, loadHarnessEnv } from "./lib/harness-env.mjs";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
 const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/storefront";
@@ -39,6 +40,8 @@ const CRON = process.env.QA_CRON_SECRET ?? "harness-cron-secret";
 const USER = process.env.QA_ADMIN_USER ?? "vantaqa";
 const PASS = process.env.QA_ADMIN_PASS ?? "HarnessAdmin123!";
 const CODE = process.env.QA_ADMIN_CODE ?? "123456";
+
+loadHarnessEnv();
 
 if (!/127\.0\.0\.1|localhost/.test(BASE)) {
   console.error(`Refusing to run against ${BASE}. Local harness only.`);
@@ -111,8 +114,7 @@ async function freshContext() {
  * made this harness prove something the product does not do.
  */
 async function grantOrdinaryAccess(context) {
-  const secret = process.env.UNSUBSCRIBE_SECRET ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
-  assert(secret, "no UNSUBSCRIBE_SECRET / SUPABASE_SERVICE_ROLE_KEY — cannot mint a grant");
+  const secret = harnessSigningSecret();
   const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000;
   const mac = createHmac("sha256", secret)
     .update(`email_link_grant:v1:${expiresAt}`)
