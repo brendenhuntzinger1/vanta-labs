@@ -305,6 +305,10 @@ export function validateCampaignInput(input: Record<string, unknown>): { ok: tru
   offerKey: string | null;
   /** An operator-built gift, already validated, or null. */
   offerCustom: CampaignGiftSpec | null;
+  /** Absolute https URL for one hero image above the headline, or null. */
+  heroImageUrl: string | null;
+  /** Alt text for that hero. Null when there is no hero. */
+  heroImageAlt: string | null;
 } } | { ok: false; error: string } {
   const text = (value: unknown, max: number) => String(value ?? "").trim().slice(0, max);
 
@@ -327,8 +331,27 @@ export function validateCampaignInput(input: Record<string, unknown>): { ok: tru
     { label: "Preview text", value: text(input.previewText, 200) },
     { label: "Message", value: body },
     { label: "Button text", value: text(input.ctaLabel, 40) },
+    // Alt text is read aloud and is what image-blocking clients show, so it is
+    // copy like any other and is held to the same no-emoji rule.
+    { label: "Hero image alt text", value: text(input.heroImageAlt, 300) },
   ]);
   if (copyIssue) return { ok: false, error: copyIssue };
+
+  // THE HERO, VALIDATED WHERE THE OPERATOR CAN STILL SEE THE ERROR.
+  //
+  // The renderer already refuses anything that is not https and simply drops
+  // the image — correct at send time, when there is nobody to tell — but a
+  // silent drop in the composer looks like the feature is broken. So the same
+  // rule is stated here as a message, and the renderer stays the backstop.
+  //
+  // The alt is dropped along with the URL rather than kept: alt text for an
+  // image that is not being sent is a line of prose with nothing to describe.
+  const heroImageUrlRaw = text(input.heroImageUrl, 600);
+  if (heroImageUrlRaw && !/^https:\/\//i.test(heroImageUrlRaw)) {
+    return { ok: false, error: "The hero image must be a full https:// URL, like https://www.vantalabsresearch.com/images/hero.png." };
+  }
+  const heroImageUrl = heroImageUrlRaw || null;
+  const heroImageAlt = heroImageUrl ? (text(input.heroImageAlt, 300) || null) : null;
 
   const ctaPathRaw = text(input.ctaPath, 300) || "/products";
   // Same-origin only, decided by RESOLVING the path rather than by matching its
@@ -406,6 +429,8 @@ export function validateCampaignInput(input: Record<string, unknown>): { ok: tru
       segmentParam: text(input.segmentParam, 80) || null,
       offerKey,
       offerCustom,
+      heroImageUrl,
+      heroImageAlt,
     },
   };
 }

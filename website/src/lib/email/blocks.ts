@@ -38,7 +38,7 @@ export type EmailBlock =
    * CTA, supplied at render time — see renderBlocks.
    */
   | { type: "button"; label: string; variant?: EmailCtaVariant }
-  | { type: "image"; url: string; alt?: string }
+  | { type: "image"; url: string; alt?: string; link?: boolean }
   | { type: "divider" }
   | { type: "spacer" };
 
@@ -59,6 +59,21 @@ function clean(value: unknown): string {
 /** Same test renderCtaButton applies, so a button and an image agree about what a URL is. */
 function isSafeUrl(url: string): boolean {
   return /^https?:\/\//i.test(url);
+}
+
+/**
+ * Stricter test for an image SOURCE, which every other statement about this
+ * field already assumed: admin-email.ts refuses a non-https hero on the way in,
+ * templates.ts says "https only", and add-campaign-hero-image.sql skips a CHECK
+ * constraint on the strength of it. isSafeUrl allows http, so the backstop did
+ * not hold the line the rest of the system was leaning on.
+ *
+ * Kept separate rather than tightening isSafeUrl, because that one also guards
+ * the CTA — which is same-origin and IS http on the local harness, where making
+ * it https-only would silently stop rendering every button.
+ */
+function isHttpsUrl(url: string): boolean {
+  return /^https:\/\//i.test(url);
 }
 
 type Rendered = { html: string; text: string };
@@ -126,17 +141,40 @@ function renderBlock(block: EmailBlock, options: RenderBlocksOptions): Rendered 
 
     case "image": {
       const url = clean((block as { url?: unknown }).url);
-      if (!url || !isSafeUrl(url)) return null;
+      if (!url || !isHttpsUrl(url)) return null;
       // An absent alt is rendered as empty rather than dropped: that is the
       // correct treatment for a decorative image and what a screen reader
       // expects. Dropping the block would silently lose artwork the operator
       // placed.
       const alt = clean((block as { alt?: unknown }).alt);
+      const img = `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" style="display:block;width:100%;max-width:520px;height:auto;margin:0 0 16px;border:0;" />`;
+      // AN OPTIONAL LINK ROUND THE IMAGE, AND THE DESTINATION IS THE
+      // CAMPAIGN'S, NEVER THE BLOCK'S — the same rule the button above states,
+      // for the same reason and one more.
+      //
+      // This block first took its own `href`, and parseBlocks passes unknown
+      // properties straight through, so a body JSON an operator can edit could
+      // wrap the hero in an anchor to any origin and send it to the whole list.
+      // Unlike cta_path nothing forced same-origin, so it was a link to
+      // anywhere, over our sending domain, in a message recipients trust
+      // because we sent it. It also lost the click and the gift cookie, which
+      // is the loss the button's comment already describes.
+      //
+      // `link` is therefore a request to BE linked, not a place to link to. A
+      // stale `href` on a body saved before this change is ignored, exactly as
+      // the button ignores a stale `url`.
+      const wantsLink = (block as { link?: unknown }).link === true;
+      const href = clean(options.ctaUrl);
+      const linked = wantsLink && Boolean(href) && isSafeUrl(href);
       return {
-        html: `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" style="display:block;width:100%;max-width:520px;height:auto;margin:0 0 16px;border:0;" />`,
+        html: linked
+          ? `<a href="${escapeHtml(href)}" style="display:block;text-decoration:none;border:0;">${img}</a>`
+          : img,
         // Most clients block images by default, so for a large share of
-        // recipients the alt text IS the message.
-        text: alt ? `${alt}\n\n` : "",
+        // recipients the alt text IS the message. The href joins it because
+        // template-standards requires every link in the html to be reachable
+        // from the text part — Gmail strips anchors out of suspected spam.
+        text: linked ? `${alt ? `${alt}: ` : ""}${href}\n\n` : (alt ? `${alt}\n\n` : ""),
       };
     }
 

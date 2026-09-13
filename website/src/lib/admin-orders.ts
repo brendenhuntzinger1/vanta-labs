@@ -22,6 +22,18 @@ export interface AdminOrderRow {
   coupon_code: string | null;
   payment_status: string;
   /**
+   * 'product' on an ordinary sale, and the reason a row is not one otherwise —
+   * 'replacement' for a warranty reship, 'test' for an order placed to exercise
+   * checkout. Already selected below; it was simply never carried out to the
+   * list, so an operator had no way to tell a test order from a real one
+   * without opening it. Surfaced as a badge by admin-orders-client.
+   *
+   * THIS IS A LABEL, NOT A LEDGER RULE. Only NON_SALE_ORDER_TYPES decides what
+   * counts as revenue, and 'test' is deliberately not in it — the charge was
+   * real money and still reports as such. See ledger.ts.
+   */
+  order_type: string | null;
+  /**
    * WHY a payment_failed row failed — processor_declined | checkout_expired |
    * other — with the processor's own words when it sent any. Null on rows that
    * are not failed and on failures recorded before 2026-09-04. See
@@ -165,6 +177,7 @@ export async function getAdminOrderRows(filters: AdminOrderFilters = {}): Promis
       referral_code: order.referral_code,
       coupon_code: order.coupon_code,
       payment_status: order.payment_status,
+      order_type: order.order_type ?? null,
       payment_failure_kind: order.payment_failure_kind ?? null,
       payment_failure_code: order.payment_failure_code ?? null,
       payment_failure_reason: order.payment_failure_reason ?? null,

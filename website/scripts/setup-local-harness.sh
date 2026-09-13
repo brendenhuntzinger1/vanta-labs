@@ -74,7 +74,7 @@ echo "==> feature schema files"
 for f in inventory-reservations inventory-ledger order-email-log v1.1-features \
          fulfillment-batches self-fulfillment-shippo membership-tiers-seed express-checkout \
          referral-code-management marketing-subscribers order-profit-shipping-reconciliation \
-         email-campaigns coa-library ads-purchase-idempotency product-cost-tracking \
+         email-campaigns add-campaign-hero-image coa-library ads-purchase-idempotency product-cost-tracking \
          checkout-hardening canonical-availability referral-code-rpc partner-portal-schema \
          affiliate-program-schema orders-schema growth-features replacement-orders \
          shipping-protection-persistence dynamic-sales-tax product-shipping-weights \

@@ -180,7 +180,7 @@ export function renderCtaButton(input: {
     + `</td></tr></table>`;
 }
 
-export function renderLayout(input: { preheader: string; titleHtml: string; bodyHtml: string; ctaLabel?: string; ctaUrl?: string; ctaVariant?: EmailCtaVariant; footerNoteHtml?: string }) {
+export function renderLayout(input: { preheader: string; titleHtml: string; bodyHtml: string; heroHtml?: string; ctaLabel?: string; ctaUrl?: string; ctaVariant?: EmailCtaVariant; footerNoteHtml?: string }) {
   // Blank is a legitimate answer, not a bug. An operator who clears the button
   // text or the destination on an automation means "no button on this one", and
   // the message must then render as a clean piece of copy — not as an empty
@@ -196,6 +196,14 @@ export function renderLayout(input: { preheader: string; titleHtml: string; body
   // narrow phone, and layout-alignment.test.ts holds every card row to it.
   const cta = button ? `<tr><td align="center" style="padding:28px 32px 4px;">${button}</td></tr>` : "";
 
+  // An optional hero row between the wordmark and the headline. Empty when no
+  // hero is supplied, and interpolated with no surrounding whitespace, so a
+  // caller that passes nothing gets the document it got before this slot
+  // existed — asserted byte for byte by campaign-hero-image.test.ts.
+  const hero = input.heroHtml
+    ? `\n        <tr><td style="padding:20px 32px 0;">${input.heroHtml}</td></tr>`
+    : "";
+
   return `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Vanta Labs</title></head>
@@ -206,7 +214,7 @@ export function renderLayout(input: { preheader: string; titleHtml: string; body
       <table role="presentation" width="100%" style="max-width:520px;background:#111111;border:1px solid rgba(255,255,255,0.12);border-radius:16px;overflow:hidden;">
         <tr><td style="padding:28px 32px 0;">
           <p style="margin:0;font-size:13px;letter-spacing:0.32em;text-transform:uppercase;color:#f2c94c;font-weight:700;">Vanta Labs</p>
-        </td></tr>
+        </td></tr>${hero}
         <tr><td style="padding:16px 32px 8px;">
           <h1 style="margin:0;font-size:22px;line-height:1.3;color:#ffffff;">${input.titleHtml}</h1>
         </td></tr>
@@ -2725,6 +2733,8 @@ export function campaignTemplate(input: {
   ctaUrl: string;
   offerTerms?: string | null;
   postalAddress: string;
+  heroImageUrl?: string | null;
+  heroImageAlt?: string | null;
 }): EmailTemplate {
   // offerTerms: the terms of a one-time gift riding on this message — minimum,
   // deadline, one per customer — written by the sweep from the offer catalogue,
@@ -2755,6 +2765,45 @@ export function campaignTemplate(input: {
   // JSON array of known blocks — which makes the discriminator total. "Hello"
   // is not JSON; "[1,2,3]" is JSON but yields no blocks. Both fall through to
   // the plain-text path below, unchanged.
+  // THE HERO IS A FIELD, NOT MARKUP IN THE BODY.
+  //
+  // `body` is escaped on the way out and stays that way — blocks.test.ts and
+  // campaign-template.test.ts both hold it to "text, never markup", because it
+  // is operator input that reaches the whole list. So artwork arrives in its
+  // own column and is rendered by the block system's image block, which already
+  // decides what a usable URL is (https only), already escapes the alt, and
+  // already produces the plain-text twin. Reused rather than reimplemented: a
+  // second opinion about what a safe image URL is, is a second thing to get
+  // wrong.
+  //
+  // An unusable URL renders NOTHING. renderBlocks drops a block it cannot
+  // render, so the html comes back empty and the email falls through to exactly
+  // the no-hero document rather than shipping a broken image to the list.
+  const heroUrl = String(input.heroImageUrl ?? "").trim();
+  const hero = heroUrl
+    ? renderBlocks(
+        [{
+          type: "image",
+          url: heroUrl,
+          alt: String(input.heroImageAlt ?? "").trim(),
+          // Linked, and the block decides nothing about where to. The
+          // destination is options.ctaUrl below — the campaign's own tracked
+          // click URL — so the hero and the button always agree, the click is
+          // recorded, and the grant that gets the recipient past the account
+          // wall rides either tap. A caller cannot supply a destination here at
+          // all, which is why there is no heroImageHref: an off-origin one
+          // would be a link to anywhere, sent to the whole list, over a domain
+          // recipients trust because we sent it.
+          link: true,
+        }],
+        { ctaUrl: input.ctaUrl },
+      )
+    : null;
+  const heroHtml = hero?.html || "";
+  // Alt only, and only when there is one: an image with no alt says nothing to
+  // a text reader, and a blank line in its place is worse than no line at all.
+  const heroText = hero?.text.trim() || null;
+
   const parsedBlocks = parseBlocks(bodyText);
   // The campaign's OWN tracked CTA is handed down, so a button block links
   // through /api/email/click like the footer button does — recording the click
@@ -2790,6 +2839,7 @@ export function campaignTemplate(input: {
   const html = renderLayout({
     preheader,
     titleHtml: escapeHtml(input.headline),
+    heroHtml,
     bodyHtml: `${paragraphs}${codeBlock}${offerTermsHtml}`,
     ctaLabel: input.ctaLabel,
     ctaUrl: input.ctaUrl,
@@ -2798,6 +2848,8 @@ export function campaignTemplate(input: {
   });
 
   const text = toText([
+    heroText,
+    heroText ? "" : null,
     input.headline,
     "",
     // The blocks' own plain-text twin, produced in the same pass as their HTML

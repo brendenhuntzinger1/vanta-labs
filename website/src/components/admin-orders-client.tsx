@@ -24,6 +24,24 @@ function money(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
 }
 
+/**
+ * The order's type, shown only when it is not an ordinary sale.
+ *
+ * 'product' is the overwhelming majority and carries no information, so
+ * rendering it would be noise on every row. A 'test' or 'replacement' row is
+ * the one an operator needs to spot at a glance — previously indistinguishable
+ * from a real sale in this list.
+ */
+function OrderTypeBadge({ orderType }: { orderType: string | null }) {
+  const value = (orderType ?? "product").toLowerCase();
+  if (value === "product") return null;
+  return (
+    <span className="ml-2 inline-block whitespace-nowrap rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 align-middle text-[10px] font-medium uppercase tracking-[0.14em] text-amber-300">
+      {value}
+    </span>
+  );
+}
+
 export function AdminOrdersClient({ orders }: { orders: AdminOrderRow[] }) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -168,7 +186,7 @@ export function AdminOrdersClient({ orders }: { orders: AdminOrderRow[] }) {
                 <span className="text-xs uppercase tracking-[0.2em] text-zinc-500">Order</span>
               </label>
             </div>
-            <p className="mt-1 text-sm font-semibold text-white break-all">{order.order_number ?? order.order_id}</p>
+            <p className="mt-1 text-sm font-semibold text-white break-all">{order.order_number ?? order.order_id}<OrderTypeBadge orderType={order.order_type} /></p>
             <div className="mt-3 space-y-1.5 text-sm text-zinc-300">
               <p><span className="text-zinc-500">Customer:</span> {order.customer_email ?? "Unknown"}</p>
               <p><span className="text-zinc-500">Items:</span> {order.item_count}</p>
@@ -227,7 +245,7 @@ export function AdminOrdersClient({ orders }: { orders: AdminOrderRow[] }) {
                     className="h-4 w-4 rounded border-zinc-700 bg-zinc-900"
                   />
                 </td>
-                <td className="px-4 py-3"><Link href={`/admin/orders/${order.order_id}`} className="hover:underline">{order.order_number ?? order.order_id}</Link></td>
+                <td className="px-4 py-3"><Link href={`/admin/orders/${order.order_id}`} className="hover:underline">{order.order_number ?? order.order_id}</Link><OrderTypeBadge orderType={order.order_type} /></td>
                 <td className="px-4 py-3">{order.customer_email ?? "Unknown"}</td>
                 <td className="px-4 py-3">{order.item_count}</td>
                 <td className="px-4 py-3">{money(order.amount_paid)}</td>

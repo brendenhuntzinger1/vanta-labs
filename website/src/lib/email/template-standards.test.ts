@@ -91,7 +91,23 @@ describe("every email template", () => {
         // Gmail strips anchors from anything it files as spam. The text part is
         // the copy that survives that, and it is the only reason a filtered
         // message is still actionable.
-        const htmlUrls = urlsIn(out.html).filter((u) => !u.startsWith("mailto:"));
+        //
+        // ANCHORS, NOT EVERY URL IN THE DOCUMENT. This read the whole html and
+        // so also demanded the <img src> of a hero image — an address a plain
+        // text reader cannot act on, printed in the one part of the message
+        // that has to stay readable. The rule above is about a LINK surviving
+        // anchor stripping, and an image source is not a link: nothing is
+        // stripped from it, and repeating it actionably helps nobody. Every
+        // href is still required, including the one wrapped round a hero.
+        //
+        // Matched anywhere in the tag and un-escaped the way urlsIn does. The
+        // first cut of this required href to be the FIRST attribute and kept
+        // the raw `&amp;`, which passed only because the fixture URL has no
+        // query string — a real click URL (?c=…&e=…&t=…) would have been
+        // reported missing from a text part that in fact contains it.
+        const anchorHrefs = [...out.html.matchAll(/<a\b[^>]*?\shref="([^"]+)"/g)]
+          .map((m) => m[1].replace(/&amp;/g, "&"));
+        const htmlUrls = [...new Set(anchorHrefs)].filter((u) => !u.startsWith("mailto:"));
         const textBody = String(out.text ?? "");
         for (const url of htmlUrls) {
           expect(textBody, `${name}: ${url} is in the HTML but not the text part`).toContain(url);
