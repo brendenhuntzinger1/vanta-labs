@@ -50,6 +50,8 @@ if (!/127\.0\.0\.1|localhost/.test(BASE)) {
 }
 
 const pool = new pg.Pool({ connectionString: DB });
+/** The automation configuration as this file found it. */
+let ladderBefore = null;
 const q = (text, params) => pool.query(text, params);
 const DAY = 24 * 60 * 60 * 1000;
 const stamp = randomBytes(3).toString("hex");
@@ -249,8 +251,64 @@ async function sentByAddress() {
   return map;
 }
 
+/**
+ * THE LADDER THIS FILE MEASURES, CONFIGURED BY THIS FILE.
+ *
+ * Every boundary below — day 29/30/31, 39/40/41, 49/50/51 — is written against
+ * replenishment at 30 days, win-back 1 at 40 and win-back 2 at 50, and against
+ * all three being switched ON. None of that was ever established here. A FRESH
+ * harness ships the automations DISABLED, with winback_30 at 30 and winback_60
+ * at 60, so the sweep correctly mails nobody and nine assertions fail on
+ * timings the store was not configured for.
+ *
+ * It passed only on a database where some earlier run had happened to enable
+ * and re-time them, which is not a property of the code under test. A suite
+ * whose result depends on what ran before it is not evidence.
+ *
+ * The previous configuration is restored afterwards so this file leaves the
+ * store as it found it for everything else sharing the database.
+ */
+const LADDER = [
+  { key: "replenishment", delay: 30 },
+  { key: "winback_30", delay: 40 },
+  { key: "winback_60", delay: 50 },
+];
+
+async function configureLadder() {
+  const { rows } = await q(
+    `select key, enabled, delay_days from email_automations where key = any($1)`,
+    [LADDER.map((l) => l.key)],
+  );
+  for (const { key, delay } of LADDER) {
+    await q(
+      `update email_automations set enabled = true, delay_days = $2 where key = $1`,
+      [key, delay],
+    );
+  }
+  return rows;
+}
+
+async function restoreLadder(previous) {
+  for (const row of previous ?? []) {
+    await q(
+      `update email_automations set enabled = $2, delay_days = $3 where key = $1`,
+      [row.key, row.enabled, row.delay_days],
+    ).catch(() => {});
+  }
+}
+
 async function main() {
   console.log(`Automation truth harness — run ${stamp}`);
+  ladderBefore = await configureLadder();
+  await step("the ladder under test is switched on at 30/40/50 days", async () => {
+    const { rows } = await q(
+      `select key, enabled, delay_days from email_automations where key = any($1) order by delay_days`,
+      [LADDER.map((l) => l.key)],
+    );
+    const shape = rows.map((r) => `${r.key}=${r.delay_days}${r.enabled ? "" : " (OFF)"}`).join(", ");
+    assert(rows.length === 3 && rows.every((r) => r.enabled), `the ladder is not fully enabled: ${shape}`);
+    return shape;
+  });
 
   // -------------------------------------------------------------------------
   section("Seeding a cohort standing on each boundary");
@@ -408,6 +466,8 @@ async function main() {
     return `no change (sweep reported sent ${s.sent}, skipped ${s.skipped})`;
   });
 
+  // Leave the store's automation configuration as this file found it.
+  await restoreLadder(ladderBefore);
   await pool.end();
   const passed = results.filter((r) => r.status === "pass").length;
   const failed = results.filter((r) => r.status === "fail");
@@ -415,4 +475,8 @@ async function main() {
   process.exit(failed.length ? 1 : 0);
 }
 
-main().catch((error) => { console.error(error); process.exit(1); });
+main().catch(async (error) => {
+  console.error(error);
+  await restoreLadder(ladderBefore).catch(() => {});
+  process.exit(1);
+});
