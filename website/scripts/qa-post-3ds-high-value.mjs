@@ -132,15 +132,61 @@ async function step(name, fn) {
   }
 }
 
-const logOffset = () => (HARNESS_LOG && existsSync(HARNESS_LOG) ? statSync(HARNESS_LOG).size : 0);
+/**
+ * WHERE THE MAIL IS READ FROM, AND WHY IT IS NOT STDOUT ALONE.
+ *
+ * This file used to parse the noop provider's `Not sent: "..." to ...` lines out
+ * of the app's stdout. That is only true of a harness with NO provider
+ * configured. The moment one is — and EMAIL_PROVIDER=smtp is what the lifecycle
+ * and retention suites need — the message goes to scripts/smtp-sink.mjs, nothing
+ * reaches stdout, and "the retry settles to PAID" failed with
+ * "0 confirmation emails for one paid order" for a receipt that had been
+ * delivered correctly and written to disk a few bytes away.
+ *
+ * Both providers append to captured-emails.jsonl, so reading THAT is the
+ * configuration-independent answer; the stdout parse stays as the fallback for a
+ * harness started without a capture directory. Same helper as qa-purchase-path.
+ */
+const CAPTURE_FILE = `${process.env.EMAIL_CAPTURE_DIR ?? process.env.QA_LOG_DIR ?? "/tmp/vanta-qa"}/captured-emails.jsonl`;
 
-/** Emails the app composed since `offset`. Mirrors qa-purchase-path.mjs. */
+const sizeOf = (path) => (path && existsSync(path) ? statSync(path).size : 0);
+const logOffset = () => ({ log: sizeOf(HARNESS_LOG), capture: sizeOf(CAPTURE_FILE) });
+
+/** Emails the app sent since `offset`, from whichever source this harness has. */
 function mailSince(offset) {
-  if (!HARNESS_LOG || !existsSync(HARNESS_LOG)) return null;
-  const buf = readFileSync(HARNESS_LOG);
-  const text = buf.subarray(Math.min(offset, buf.length)).toString("utf8");
-  return [...text.matchAll(/Not sent: "([^"]+)" to (\S+?)\.?\s*$/gm)]
-    .map((m) => ({ subject: m[1], to: m[2] }));
+  const marks = typeof offset === "number" ? { log: offset, capture: 0 } : (offset ?? { log: 0, capture: 0 });
+  const messages = [];
+  let sawSource = false;
+
+  if (existsSync(CAPTURE_FILE)) {
+    sawSource = true;
+    const buf = readFileSync(CAPTURE_FILE);
+    const text = buf.subarray(Math.min(marks.capture ?? 0, buf.length)).toString("utf8");
+    for (const line of text.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = JSON.parse(trimmed);
+        const to = Array.isArray(parsed.to) ? parsed.to.join(",") : String(parsed.to ?? "");
+        if (parsed.subject) messages.push({ subject: String(parsed.subject), to });
+      } catch {
+        // A half-written final line while the sink is mid-append.
+      }
+    }
+  }
+
+  if (HARNESS_LOG && existsSync(HARNESS_LOG)) {
+    sawSource = true;
+    const buf = readFileSync(HARNESS_LOG);
+    const text = buf.subarray(Math.min(marks.log ?? 0, buf.length)).toString("utf8");
+    for (const m of text.matchAll(/Not sent: "([^"]+)" to (\S+?)\.?\s*$/gm)) {
+      messages.push({ subject: m[1], to: m[2] });
+    }
+  }
+
+  // null still means "no way to observe mail", which is what makes the email
+  // steps SKIP loudly rather than pass having checked nothing.
+  return sawSource ? messages : null;
 }
 
 const veyraOffset = () => (existsSync(VEYRA_LOG) ? statSync(VEYRA_LOG).size : 0);

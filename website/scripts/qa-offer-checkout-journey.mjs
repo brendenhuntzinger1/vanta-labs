@@ -803,12 +803,25 @@ async function main() {
     try {
       await runEngine(name, launcher);
     } catch (error) {
-      results.push({ engine: name, section: "engine", name: `${name} run`, status: "fail", detail: String(error?.message ?? error).slice(0, 200) });
-      console.log(`\n  FAIL  ${name} aborted: ${String(error?.message ?? error).split("\n")[0]}`);
+      const message = String(error?.message ?? error);
+      // AN ENGINE THIS MACHINE DOES NOT HAVE IS NOT A PRODUCT FAILURE, AND IT
+      // IS NOT A PASS EITHER. A container without WebKit installed reported
+      // "browserType.launch: Executable doesn't exist" as a failed checkout
+      // journey, which points the diagnosis at the store instead of at
+      // `npx playwright install webkit`. It is recorded as NOT VERIFIED and
+      // printed again at the end, so nobody reads the summary as Safari
+      // coverage that did not happen.
+      const missing = /Executable doesn't exist|missing dependencies to run browsers|Please run the following command to download/i.test(message);
+      results.push({
+        engine: name, section: "engine", name: `${name} run`,
+        status: missing ? "skip" : "fail", detail: message.slice(0, 200),
+      });
+      console.log(`\n  ${missing ? "SKIP" : "FAIL"}  ${name} ${missing ? "is not installed here" : "aborted"}: ${message.split("\n")[0]}`);
     }
   }
 
   const failed = results.filter((r) => r.status === "fail");
+  const skipped = results.filter((r) => r.status === "skip");
   console.log(`\n${"=".repeat(70)}`);
   for (const name of ENGINES) {
     const mine = results.filter((r) => r.engine === name);
@@ -817,6 +830,10 @@ async function main() {
   if (failed.length) {
     console.log("\nFAILED:");
     for (const f of failed) console.log(`  [${f.engine}] ${f.section} → ${f.name}\n    ${f.detail}`);
+  }
+  if (skipped.length) {
+    console.log("\nThese did NOT run, so they are NOT verified:");
+    for (const s2 of skipped) console.log(`  [${s2.engine}] ${s2.name} — install it with: npx playwright install ${s2.engine}`);
   }
   console.log(`screenshots: ${SHOTS}`);
   await pool.end();

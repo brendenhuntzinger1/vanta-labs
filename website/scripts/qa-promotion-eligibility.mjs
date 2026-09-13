@@ -216,8 +216,23 @@ async function fillCart(page, quantity) {
   const add = page.getByRole("button", { name: /add to cart/i }).first();
   assert(await add.count(), "no ADD TO CART on the promoted product page");
   for (let i = 0; i < quantity; i += 1) {
-    await dismissOverlays(page);
-    await add.click({ timeout: 20000 });
+    // THE RECONSTITUTION-WATER REMINDER OPENS OVER THIS BUTTON, ONCE PER
+    // SESSION, AND IT ANIMATES IN. Dismissing before the click is not enough:
+    // the sheet can mount between the dismissal and the click, and Playwright
+    // then reports a backdrop intercepting pointer events — which reads as a
+    // broken Add to Cart and is nothing of the kind. A customer just closes it
+    // and clicks again, so that is what this does.
+    let clicked = false;
+    for (let attempt = 0; attempt < 5 && !clicked; attempt += 1) {
+      await dismissOverlays(page);
+      try {
+        await add.click({ timeout: 8000 });
+        clicked = true;
+      } catch (error) {
+        if (attempt === 4) throw error;
+        await page.waitForTimeout(400);
+      }
+    }
     await page.waitForTimeout(600);
   }
   await dismissOverlays(page);
