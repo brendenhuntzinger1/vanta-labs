@@ -158,6 +158,19 @@ for (const [label, ua, viewport] of CASES) {
     viewport,
     // Firefox does not support Playwright's mobile emulation.
     ...(viewport.width < 500 && ENGINE !== "firefox" ? { isMobile: true, hasTouch: true } : {}),
+    // THE LOCAL HARNESS IS HTTPS, AND ITS CERTIFICATE IS SELF-SIGNED.
+    //
+    // The runbook requires the harness to be driven over TLS (section 5c): the
+    // session cookie is Secure in a production build, and the browser's Supabase
+    // client would otherwise be mixed content. tls-proxy.mjs generates its own
+    // pair, so without this every navigation to 127.0.0.1:3443 dies at
+    // ERR_CERT_AUTHORITY_INVALID — and this script reports that as six
+    // "navigation failed" findings labelled "likely transport", which is exactly
+    // the shape of a site-wide outage and is really a missing context option.
+    //
+    // Scoped to loopback so it cannot weaken a run against production, which is
+    // the only other thing this script is ever pointed at.
+    ...(/^https:\/\/(127\.0\.0\.1|localhost)(:|$)/.test(BASE) ? { ignoreHTTPSErrors: true } : {}),
   });
   const page = await ctx.newPage();
   console.log(`\n### ${ENGINE} — ${label} ${viewport.width}x${viewport.height}`);
