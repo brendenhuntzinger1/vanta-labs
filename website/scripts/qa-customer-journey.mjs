@@ -314,22 +314,71 @@ const DEFAULT_HARNESS_LOG = `${process.env.QA_LOG_DIR ?? "/tmp/vanta-qa"}/harnes
 const HARNESS_LOG = process.env.QA_HARNESS_LOG
   ?? (existsSync(DEFAULT_HARNESS_LOG) ? DEFAULT_HARNESS_LOG : null);
 
+/**
+ * THE CAPTURE FILE, WHICH BOTH EMAIL CONFIGURATIONS WRITE.
+ *
+ * This read the app's stdout for NoopEmailProvider's `Not sent: "..." to ...`
+ * line and nothing else, so it could only see mail on one of the two harness
+ * configurations the runbook documents. With email ENABLED — which is what the
+ * campaign, automation, lifecycle and retention suites require — the SMTP
+ * provider hands the message to scripts/smtp-sink.mjs, nothing reaches stdout,
+ * and three steps here failed:
+ *
+ *     no shipping email composed; saw: nothing
+ *     no delivery email composed; saw: nothing
+ *     no change-of-address email composed; saw: nothing
+ *
+ * All three had been delivered and captured on disk. Both providers append to
+ * captured-emails.jsonl, so that is the configuration-independent place to read;
+ * the stdout parse stays as a fallback, and `null` still means "no way to
+ * observe mail at all", which is what keeps these steps failing loudly rather
+ * than passing having checked nothing.
+ */
+const CAPTURE_FILE = `${process.env.EMAIL_CAPTURE_DIR ?? process.env.QA_LOG_DIR ?? "/tmp/vanta-qa"}/captured-emails.jsonl`;
+const sizeOf = (path) => (path && existsSync(path) ? statSync(path).size : 0);
+
 function mailSince(offset) {
-  if (!HARNESS_LOG || !existsSync(HARNESS_LOG)) return null;
-  // Sliced as BYTES, not characters. statSync().size is a byte count and
-  // String.prototype.slice counts UTF-16 code units, so a log containing an
-  // em dash (every "Delivered — order" line has one) drifts the two apart and
-  // the window silently starts past the lines being looked for. That reported
-  // "no email composed" for emails that had been composed perfectly well.
-  const buf = readFileSync(HARNESS_LOG);
-  const text = buf.subarray(Math.min(offset, buf.length)).toString("utf8");
-  // The address runs to end-of-line; the trailing full stop is the log's, not
-  // part of the address.
-  return [...text.matchAll(/Not sent: "([^"]+)" to (\S+?)\.?\s*$/gm)]
-    .map((m) => ({ subject: m[1], to: m[2] }));
+  const marks = typeof offset === "number" ? { log: offset, capture: 0 } : (offset ?? { log: 0, capture: 0 });
+  const messages = [];
+  let sawSource = false;
+
+  if (existsSync(CAPTURE_FILE)) {
+    sawSource = true;
+    const buf = readFileSync(CAPTURE_FILE);
+    const text = buf.subarray(Math.min(marks.capture ?? 0, buf.length)).toString("utf8");
+    for (const line of text.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = JSON.parse(trimmed);
+        const to = Array.isArray(parsed.to) ? parsed.to.join(",") : String(parsed.to ?? "");
+        if (parsed.subject) messages.push({ subject: String(parsed.subject), to });
+      } catch {
+        // A half-written final line while the sink is mid-append.
+      }
+    }
+  }
+
+  if (HARNESS_LOG && existsSync(HARNESS_LOG)) {
+    sawSource = true;
+    // Sliced as BYTES, not characters. statSync().size is a byte count and
+    // String.prototype.slice counts UTF-16 code units, so a log containing an
+    // em dash (every "Delivered — order" line has one) drifts the two apart and
+    // the window silently starts past the lines being looked for. That reported
+    // "no email composed" for emails that had been composed perfectly well.
+    const buf = readFileSync(HARNESS_LOG);
+    const text = buf.subarray(Math.min(marks.log ?? 0, buf.length)).toString("utf8");
+    // The address runs to end-of-line; the trailing full stop is the log's, not
+    // part of the address.
+    for (const m of text.matchAll(/Not sent: "([^"]+)" to (\S+?)\.?\s*$/gm)) {
+      messages.push({ subject: m[1], to: m[2] });
+    }
+  }
+
+  return sawSource ? messages : null;
 }
 
-const mailOffset = () => (HARNESS_LOG && existsSync(HARNESS_LOG) ? statSync(HARNESS_LOG).size : 0);
+const mailOffset = () => ({ log: sizeOf(HARNESS_LOG), capture: sizeOf(CAPTURE_FILE) });
 
 
 /**
