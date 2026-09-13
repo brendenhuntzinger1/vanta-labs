@@ -123,24 +123,41 @@ export async function GET(request: NextRequest) {
           ?? request.headers.get("x-real-ip"),
       ),
     });
-    await recordEngagementEvent({
-      kind: "clicked",
-      source: "click",
-      campaignType: `automation:${automationKey}`,
-      referenceId,
-      recipientEmail: email,
-      userAgent: request.headers.get("user-agent"),
-    });
+  } catch {
+    // Metrics are not worth failing a customer's click over.
+  }
 
-    // FIRST CLICK ONLY. `clicked_at` on the send-log row answers "did this
-    // person ever click this send", which is what a unique-click count is;
-    // overwriting it on every click would turn it into "when did they last
-    // click" and quietly make unique clicks equal total clicks.
-    //
-    // The log row is where this lives because automations have no recipient
-    // table — there is no queue by design — and email_send_log already holds
-    // exactly one row per (campaign_type, reference_id), enforced by the
-    // partial unique index in automation-send-once.sql.
+  // SEPARATELY GUARDED, exactly as the campaign click route guards its own.
+  //
+  // These three writes shared one try/catch, so a throw from the detail insert
+  // above — a transport error, a schema drift, anything — silently discarded
+  // the two below it as well. The detail row is a diagnostic log; the send-log
+  // stamp is the number. Every report an operator reads counts `clicked_at` on
+  // email_send_log, so bundling them meant one failed insert turned a real
+  // click into a click that never happened as far as the business could see,
+  // with no error, no log line, and a redirect that still worked perfectly.
+  //
+  // recordEngagementEvent never throws by contract (see engagement.ts), so it
+  // needs no guard of its own; the stamp does.
+  await recordEngagementEvent({
+    kind: "clicked",
+    source: "click",
+    campaignType: `automation:${automationKey}`,
+    referenceId,
+    recipientEmail: email,
+    userAgent: request.headers.get("user-agent"),
+  });
+
+  // FIRST CLICK ONLY. `clicked_at` on the send-log row answers "did this
+  // person ever click this send", which is what a unique-click count is;
+  // overwriting it on every click would turn it into "when did they last
+  // click" and quietly make unique clicks equal total clicks.
+  //
+  // The log row is where this lives because automations have no recipient
+  // table — there is no queue by design — and email_send_log already holds
+  // exactly one row per (campaign_type, reference_id), enforced by the
+  // partial unique index in automation-send-once.sql.
+  try {
     await supabaseAdmin
       .from("email_send_log")
       .update({ clicked_at: clickedAt.toISOString() })
