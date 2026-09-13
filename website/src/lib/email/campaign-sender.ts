@@ -625,13 +625,6 @@ export async function sendCampaignBatch(input: {
               postalAddress: config.marketingPostalAddress,
               heroImageUrl: campaign.hero_image_url,
               heroImageAlt: campaign.hero_image_alt,
-              // THE ARTWORK IS A TAP TARGET. On a phone the hero is the
-              // largest thing in the message and the button is a fraction of
-              // its area, so a hero that is not a link loses the taps it
-              // attracts. The same per-recipient tracked URL the button
-              // carries, so the click is recorded and the grant that gets the
-              // recipient past the account wall rides it either way.
-              heroImageHref: buildCampaignClickUrl(campaign.id, recipient.email, mintedToken),
             });
 
         // THE SAME MARKETING WRAPPER EITHER WAY. Suppression, the one-click

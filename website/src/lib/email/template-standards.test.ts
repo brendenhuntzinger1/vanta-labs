@@ -99,7 +99,14 @@ describe("every email template", () => {
         // anchor stripping, and an image source is not a link: nothing is
         // stripped from it, and repeating it actionably helps nobody. Every
         // href is still required, including the one wrapped round a hero.
-        const anchorHrefs = [...out.html.matchAll(/<a\s+href="([^"]+)"/g)].map((m) => m[1]);
+        //
+        // Matched anywhere in the tag and un-escaped the way urlsIn does. The
+        // first cut of this required href to be the FIRST attribute and kept
+        // the raw `&amp;`, which passed only because the fixture URL has no
+        // query string — a real click URL (?c=…&e=…&t=…) would have been
+        // reported missing from a text part that in fact contains it.
+        const anchorHrefs = [...out.html.matchAll(/<a\b[^>]*?\shref="([^"]+)"/g)]
+          .map((m) => m[1].replace(/&amp;/g, "&"));
         const htmlUrls = [...new Set(anchorHrefs)].filter((u) => !u.startsWith("mailto:"));
         const textBody = String(out.text ?? "");
         for (const url of htmlUrls) {

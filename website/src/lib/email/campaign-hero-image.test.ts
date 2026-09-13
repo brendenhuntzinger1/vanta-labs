@@ -87,10 +87,11 @@ describe("a campaign with a hero image", () => {
 
   it("changes nothing but the hero row", () => {
     // The whole point of an additive field: strip the row it adds and the
-    // document must collapse back onto the no-hero render.
+    // document must collapse back onto the no-hero render. The row now carries
+    // the anchor the hero is always wrapped in, so the pattern spans it.
     const plain = campaignTemplate(BASE).html;
     const hero = withHero().html;
-    expect(hero.replace(/\n\s*<tr><td[^>]*>\s*<img[\s\S]*?<\/td><\/tr>/, "")).toBe(plain);
+    expect(hero.replace(/\n\s*<tr><td[^>]*>\s*<a[\s\S]*?<\/td><\/tr>/, "")).toBe(plain);
   });
 });
 
@@ -103,10 +104,14 @@ describe("the plain-text twin stays clean", () => {
     expect(text).not.toContain(HERO);
   });
 
-  it("is unchanged from the no-hero twin when the alt is empty", () => {
-    // An image with no alt says nothing to a text reader, so it must not leave
-    // a blank gap behind in the text part.
-    expect(withHero({ heroImageAlt: "" }).text).toBe(campaignTemplate(BASE).text);
+  it("still prints the destination when the alt is empty", () => {
+    // An unlabelled hero says nothing to a text reader, but it is still a LINK,
+    // and template-standards requires every anchor href in the html to be
+    // reachable from the text part — Gmail strips anchors out of suspected
+    // spam. So the URL survives even with nothing to call it.
+    const { text } = withHero({ heroImageAlt: "" });
+    expect(text).toContain(BASE.ctaUrl);
+    expect(text).not.toContain(HERO);
   });
 });
 
@@ -153,71 +158,84 @@ describe("every render path carries the hero", () => {
     expect(SRC("lib/admin-email.ts")).toContain("heroImageUrl");
   });
 
-  // The hero shipped unlinked for its first three commits: campaignTemplate
-  // grew the href and not one caller passed it, so the biggest tap target in
-  // the message was inert in every real send while the tests above still
-  // passed. Asserting the URL is carried, not merely that the column is read.
+  // NO PATH SUPPLIES A HERO DESTINATION, and none can: the template linked the
+  // hero from a caller-supplied href for three commits, and renderBlocks passes
+  // unknown block properties through, so an operator-editable body could have
+  // pointed the artwork at any origin. The parameter is gone; the destination
+  // is the campaign's own tracked CTA, decided inside the template.
   it.each([
     ["the scheduled sender", "lib/email/campaign-sender.ts"],
     ["the manual send route", "app/api/admin/email/campaigns/[campaignId]/send/route.ts"],
     ["the preview route", "app/api/admin/email/campaigns/preview/route.ts"],
-  ])("%s makes the hero clickable", (_label, rel) => {
-    expect(SRC(rel)).toContain("heroImageHref");
+  ])("%s supplies no hero destination of its own", (_label, rel) => {
+    expect(SRC(rel)).not.toContain("heroImageHref");
   });
 
-  it("points the sender's hero at the same tracked URL as its button", () => {
-    const src = SRC("lib/email/campaign-sender.ts");
-    const call = (key: string) =>
-      src.slice(src.indexOf(`${key}:`)).split("\n")[0].replace(`${key}:`, "").trim().replace(/,$/, "");
-    expect(call("heroImageHref")).toBe(call("ctaUrl"));
+  // And the harness has to be able to read the columns the sender selects, or
+  // a fresh harness answers 42703 on every campaign query this touched.
+  it("applies the hero migration when the local harness is built", () => {
+    expect(SRC("../scripts/setup-local-harness.sh")).toContain("add-campaign-hero-image");
   });
 });
 
 // ---------------------------------------------------------------------------
-// The hero may also be a link. Optional, and the same tracked destination the
-// button uses — a hero that went somewhere else would be a second CTA, and a
-// hero that went to an untracked URL would lose the click and the grant.
+// The hero is a link, and the destination is the campaign's — never a caller's
+// and never a block's. A hero going somewhere the button does not is a second
+// call to action; one going to an untracked URL loses the click and the grant;
+// one going off-origin is a link to anywhere, sent to the whole list, over a
+// domain recipients trust because we sent it.
 // ---------------------------------------------------------------------------
 
-describe("an optional clickable hero", () => {
+describe("the hero links to the campaign's own CTA, and to nothing else", () => {
   const CLICK = BASE.ctaUrl;
 
-  it("is not a link when no href is given", () => {
+  it("wraps the hero in an anchor to the tracked click URL", () => {
     const { html } = withHero();
-    const img = html.match(/<img[\s\S]*?\/>/)![0];
-    expect(html).not.toContain(`<a href="${CLICK}"><img`);
-    expect(img).toContain("<img");
-  });
-
-  it("wraps the hero in an anchor when an href is given", () => {
-    const { html } = withHero({ heroImageHref: CLICK });
     expect(html).toMatch(/<a href="[^"]*"[^>]*>\s*<img/);
-    expect(html).toContain(CLICK);
+    expect(html).toContain(`<a href="${CLICK}"`);
   });
 
   it("still renders exactly one image", () => {
-    expect(withHero({ heroImageHref: CLICK }).html.match(/<img/g)).toHaveLength(1);
+    expect(withHero().html.match(/<img/g)).toHaveLength(1);
   });
 
   it("keeps the hero link reachable from the plain-text part", () => {
     // template-standards: "Gmail strips anchors from anything it files as
     // spam", so every URL in the HTML has to appear in the text part too.
-    const { text } = withHero({ heroImageHref: CLICK });
-    expect(text).toContain(CLICK);
+    expect(withHero().text).toContain(CLICK);
   });
 
-  it("refuses an unsafe href and renders the plain image instead", () => {
-    for (const bad of ["javascript:alert(1)", "data:text/html,x", "/products", "//evil.example"]) {
-      const { html } = withHero({ heroImageHref: bad });
-      expect(html).not.toContain("<a href=\"" + bad);
-      expect(html.match(/<img/g)).toHaveLength(1);
-    }
+  it("takes no destination from its caller — there is no such parameter", () => {
+    // The hero once accepted an href, and renderBlocks passes unknown block
+    // properties through, so an operator-editable body could have wrapped the
+    // artwork in a link to any origin and sent it to the whole list.
+    const { html } = campaignTemplate({
+      ...BASE,
+      heroImageUrl: HERO,
+      heroImageAlt: ALT,
+      // deliberately shaped like the field that used to exist
+      heroImageHref: "https://evil.example/phish",
+    } as Parameters<typeof campaignTemplate>[0] & { heroImageHref: string });
+    expect(html).not.toContain("evil.example");
+    expect(html).toContain(`<a href="${CLICK}"`);
   });
 
-  it("changes nothing else about the email", () => {
-    const withoutLink = withHero().html;
-    const withLink = withHero({ heroImageHref: CLICK }).html;
-    // strip the anchor wrapper and the two documents must agree
-    expect(withLink.replace(/<a href="[^"]*"[^>]*>(\s*<img[\s\S]*?\/>)\s*<\/a>/, "$1")).toBe(withoutLink);
+  it("renders the plain image when the campaign has no usable CTA", () => {
+    const { html } = campaignTemplate({ ...BASE, ctaUrl: "", heroImageUrl: HERO, heroImageAlt: ALT });
+    expect(html.match(/<img/g)).toHaveLength(1);
+    expect(html).not.toMatch(/<a href="[^"]*"[^>]*>\s*<img/);
+  });
+
+  it("refuses an http hero source, which every other check already assumed", () => {
+    // admin-email.ts refuses it on the way in and the SQL skips a CHECK
+    // constraint because this backstop was documented as https-only. It was
+    // not: isSafeUrl allows http, so the claim and the code disagreed.
+    const { html } = campaignTemplate({
+      ...BASE,
+      heroImageUrl: "http://www.vantalabsresearch.com/images/b2g1-hero.png",
+      heroImageAlt: ALT,
+    });
+    expect(html).not.toContain("<img");
+    expect(html).toBe(campaignTemplate(BASE).html);
   });
 });

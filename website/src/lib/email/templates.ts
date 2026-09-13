@@ -2735,7 +2735,6 @@ export function campaignTemplate(input: {
   postalAddress: string;
   heroImageUrl?: string | null;
   heroImageAlt?: string | null;
-  heroImageHref?: string | null;
 }): EmailTemplate {
   // offerTerms: the terms of a one-time gift riding on this message — minimum,
   // deadline, one per customer — written by the sweep from the offer catalogue,
@@ -2787,11 +2786,15 @@ export function campaignTemplate(input: {
           type: "image",
           url: heroUrl,
           alt: String(input.heroImageAlt ?? "").trim(),
-          // Deliberately the campaign's own tracked CTA and nothing else: a
-          // hero pointing somewhere the button does not is a second call to
-          // action, and one pointing at an untracked URL loses both the click
-          // and the grant that gets the recipient past the wall.
-          href: String(input.heroImageHref ?? "").trim() || undefined,
+          // Linked, and the block decides nothing about where to. The
+          // destination is options.ctaUrl below — the campaign's own tracked
+          // click URL — so the hero and the button always agree, the click is
+          // recorded, and the grant that gets the recipient past the account
+          // wall rides either tap. A caller cannot supply a destination here at
+          // all, which is why there is no heroImageHref: an off-origin one
+          // would be a link to anywhere, sent to the whole list, over a domain
+          // recipients trust because we sent it.
+          link: true,
         }],
         { ctaUrl: input.ctaUrl },
       )
