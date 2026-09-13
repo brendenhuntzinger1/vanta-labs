@@ -24,8 +24,29 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { chromium } from "playwright";
 import pg from "pg";
+import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
 
-const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
+/**
+ * THE DEFAULT BASE IS THE TLS HARNESS, AND THAT IS NOT A PREFERENCE.
+ *
+ * Every link inside a captured email is built from NEXT_PUBLIC_SITE_URL, which
+ * the runbook requires to be https://127.0.0.1:3443 (section 5c). Driven at
+ * http://127.0.0.1:3000 this file follows those links to the OTHER origin, and
+ * then measures a cross-origin arrangement the store does not have: a click that
+ * "redirected off-site", a session cookie set on one port and looked for on
+ * another, "could not sign in to shop". Same code, same store, nine more red
+ * steps — and none of them about the product.
+ *
+ * qa-cart-recovery-override already defaults this way for the same reason. The
+ * override still works for a deliberate cross-origin test; it is simply no
+ * longer the accident you get by running the file with no environment at all.
+ */
+const BASE = process.env.QA_BASE_URL ?? "https://127.0.0.1:3443";
+
+// Links inside a captured email point at the harness TLS proxy, whose
+// certificate is self-signed; without this a fetch that follows one fails
+// with a bare "fetch failed". No-op unless BASE is loopback.
+allowLoopbackSelfSignedTls(BASE);
 const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/storefront";
 const SHOTS = process.env.QA_SHOT_DIR ?? "/tmp/vanta-qa/cta";
 // qa-seed-roles.mjs seeds the username too, and it seeds "qaadmin". This said

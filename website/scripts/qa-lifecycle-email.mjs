@@ -25,8 +25,33 @@ import { createHmac, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { chromium } from "playwright";
 import pg from "pg";
+import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
+import { captureAutomations, restoreAutomations } from "./qa-automation-fixtures.mjs";
 
-const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
+/** Every automation row as this file found it, put back before it exits. */
+let automationsBefore = null;
+
+/**
+ * THE DEFAULT BASE IS THE TLS HARNESS, AND THAT IS NOT A PREFERENCE.
+ *
+ * Every link inside a captured email is built from NEXT_PUBLIC_SITE_URL, which
+ * the runbook requires to be https://127.0.0.1:3443 (section 5c). Driven at
+ * http://127.0.0.1:3000 this file follows those links to the OTHER origin, and
+ * then measures a cross-origin arrangement the store does not have: a click that
+ * "redirected off-site", a session cookie set on one port and looked for on
+ * another, "could not sign in to shop". Same code, same store, nine more red
+ * steps — and none of them about the product.
+ *
+ * qa-cart-recovery-override already defaults this way for the same reason. The
+ * override still works for a deliberate cross-origin test; it is simply no
+ * longer the accident you get by running the file with no environment at all.
+ */
+const BASE = process.env.QA_BASE_URL ?? "https://127.0.0.1:3443";
+
+// Links inside a captured email point at the harness TLS proxy, whose
+// certificate is self-signed; without this a fetch that follows one fails
+// with a bare "fetch failed". No-op unless BASE is loopback.
+allowLoopbackSelfSignedTls(BASE);
 
 /**
  * THE HARNESS IS HTTPS, AND ITS CERTIFICATE IS SELF-SIGNED.
@@ -305,9 +330,21 @@ async function main() {
   const page = await context.newPage();
 
   // Every automation on, with short delays, so the clock can be walked.
+  automationsBefore = await captureAutomations(q);
   await q(`update email_automations set enabled = true`);
   await q(`update email_automations set delay_days = case key when 'welcome_intro' then 1 when 'welcome_no_purchase' then 3 when 'post_purchase' then 5 when 'replenishment' then 30 when 'winback_30' then 45 when 'winback_60' then 75 else delay_days end`);
-  await q(`update email_automations set offer_key = 'winback_60_percent_15' where key = 'welcome_no_purchase'`);
+  // THE GIFTS ARE STATED IN FULL, INCLUDING THE ONES THAT MUST BE ABSENT.
+  //
+  // This line used to set the welcome gift and say nothing about the rest, which
+  // was fine until another suite left one on `replenishment` and did not put it
+  // back. The reorder reminder then stopped arriving — correctly: this file's
+  // subscribers are guests, a gift-bearing message to somebody with no account
+  // has nowhere to be redeemed, and the sweep withholds it. Reported here it
+  // read as "expected the reminder, got 0", a dead flow that was not dead.
+  //
+  // A suite's verdict must come from its own setup, so the absence is now
+  // stated rather than assumed.
+  await q(`update email_automations set offer_key = case key when 'welcome_no_purchase' then 'winback_60_percent_15' else null end`);
 
   // ---------------------------------------------------------------------------
   section("1. Subscriber → welcome sequence");
@@ -1087,6 +1124,7 @@ async function main() {
   });
 
   await browser.close();
+  await restoreAutomations(q, automationsBefore);
   await pool.end();
 
   const passed = results.filter((r) => r.status === "pass").length;
@@ -1101,4 +1139,9 @@ async function main() {
   process.exit(failed.length ? 1 : 0);
 }
 
-main().catch((error) => { console.error(error); process.exit(1); });
+main().catch(async (error) => {
+  console.error(error);
+  // A crash half way through still leaves the table as this file found it.
+  await restoreAutomations(q, automationsBefore).catch(() => {});
+  process.exit(1);
+});

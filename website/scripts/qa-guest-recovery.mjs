@@ -21,8 +21,14 @@
 import { execFileSync } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { harnessSigningSecret } from "./lib/harness-env.mjs";
+import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
+
+// Links inside a captured email point at the harness TLS proxy, whose
+// certificate is self-signed; without this a fetch that follows one fails
+// with a bare "fetch failed". No-op unless BASE is loopback.
+allowLoopbackSelfSignedTls(BASE);
 const PSQL = ["-h", "/tmp", "-p", "55432", "-U", "postgres", "-d", "storefront", "-tAc"];
 const SECRET = harnessSigningSecret();
 const GRANT_TTL_MS = 14 * 24 * 60 * 60 * 1000;

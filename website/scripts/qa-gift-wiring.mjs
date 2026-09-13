@@ -31,8 +31,18 @@ import { createHmac } from "node:crypto";
 import { chromium } from "playwright";
 import pg from "pg";
 import { harnessSigningSecret, loadHarnessEnv } from "./lib/harness-env.mjs";
+import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
+import { captureAutomations, restoreAutomations } from "./qa-automation-fixtures.mjs";
+
+/** Every automation row as this file found it, put back before it exits. */
+let automationsBefore = null;
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
+
+// Links inside a captured email point at the harness TLS proxy, whose
+// certificate is self-signed; without this a fetch that follows one fails
+// with a bare "fetch failed". No-op unless BASE is loopback.
+allowLoopbackSelfSignedTls(BASE);
 
 /**
  * LINKS INSIDE CAPTURED EMAILS POINT AT THE TLS PROXY, WHATEVER THIS IS DRIVEN AT.
@@ -337,7 +347,11 @@ async function main() {
   await q("delete from email_send_log where recipient_email = any($1)", [ALL_FIXTURES]).catch(() => {});
   await q("delete from auth.users where email = any($1)", [ALL_FIXTURES]).catch(() => {});
   // Start with every automation off, so each round's sweep can only mail the
-  // one automation that round is about.
+  // one automation that round is about. That is a big change to a shared table
+  // — every flow disabled and every gift stripped — so it is captured first and
+  // handed back before this file exits; a suite that ran afterwards used to
+  // inherit a store with its entire lifecycle switched off.
+  automationsBefore = await captureAutomations(q);
   await q("update email_automations set enabled = false, offer_key = null");
   // AND SET THE SHIPPING POLICY THIS FILE ASSUMES, rather than inheriting it.
   //
@@ -1030,12 +1044,14 @@ async function main() {
     for (const f of failed) console.log(`  ${f.section} → ${f.name}\n    ${f.detail}`);
   }
   console.log(`screenshots: ${SHOTS}`);
+  await restoreAutomations(q, automationsBefore);
   await pool.end();
   process.exit(failed.length ? 1 : 0);
 }
 
 main().catch(async (error) => {
   console.error(error);
+  await restoreAutomations(q, automationsBefore).catch(() => {});
   await pool.end().catch(() => {});
   process.exit(1);
 });

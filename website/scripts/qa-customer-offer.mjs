@@ -29,8 +29,13 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chromium } from "playwright";
 import pg from "pg";
+import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
+
+// The browser side of this is handled below; Node's own fetch needs the same
+// allowance, and has no per-request option for it. No-op unless BASE is loopback.
+allowLoopbackSelfSignedTls(BASE);
 
 /**
  * LINKS INSIDE CAPTURED EMAILS POINT AT THE TLS PROXY, WHATEVER THIS IS DRIVEN AT.

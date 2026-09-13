@@ -15,6 +15,7 @@
 import { existsSync } from "node:fs";
 import { chromium } from "playwright";
 import pg from "pg";
+import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
 
 // ONE ORIGIN THROUGHOUT. /r/<code> redirects to the request's own origin, and
 // 127.0.0.1 and localhost are DIFFERENT origins for cookies and localStorage —
@@ -22,6 +23,11 @@ import pg from "pg";
 // empty cart and a "the checkout lost the code" failure that is entirely the
 // harness's own doing.
 const BASE = process.env.QA_BASE_URL ?? "http://localhost:3000";
+
+// Links inside a captured email point at the harness TLS proxy, whose
+// certificate is self-signed; without this a fetch that follows one fails
+// with a bare "fetch failed". No-op unless BASE is loopback.
+allowLoopbackSelfSignedTls(BASE);
 const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/storefront";
 const MOBILE = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true };
 const VIEWPORT_OPTS = process.env.QA_VIEWPORT === "mobile" ? MOBILE : {};

@@ -25,8 +25,14 @@ import { mkdirSync } from "node:fs";
 import { chromium, webkit } from "playwright";
 import pg from "pg";
 import { harnessSigningSecret } from "./lib/harness-env.mjs";
+import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
+
+// Links inside a captured email point at the harness TLS proxy, whose
+// certificate is self-signed; without this a fetch that follows one fails
+// with a bare "fetch failed". No-op unless BASE is loopback.
+allowLoopbackSelfSignedTls(BASE);
 const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/storefront";
 const SHOTS = process.env.QA_SHOT_DIR ?? "/tmp/vanta-qa/journey";
 const ENGINES = (process.env.QA_ENGINES ?? "chromium,webkit").split(",").map((e) => e.trim()).filter(Boolean);

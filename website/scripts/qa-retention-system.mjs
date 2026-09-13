@@ -39,8 +39,33 @@ import { createHmac, randomBytes, randomUUID, createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { chromium } from "playwright";
 import pg from "pg";
+import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
+import { captureAutomations, restoreAutomations } from "./qa-automation-fixtures.mjs";
 
-const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
+/** Every automation row as this file found it, put back in the finally. */
+let automationsBefore = null;
+
+/**
+ * THE DEFAULT BASE IS THE TLS HARNESS, AND THAT IS NOT A PREFERENCE.
+ *
+ * Every link inside a captured email is built from NEXT_PUBLIC_SITE_URL, which
+ * the runbook requires to be https://127.0.0.1:3443 (section 5c). Driven at
+ * http://127.0.0.1:3000 this file follows those links to the OTHER origin, and
+ * then measures a cross-origin arrangement the store does not have: a click that
+ * "redirected off-site", a session cookie set on one port and looked for on
+ * another, "could not sign in to shop". Same code, same store, nine more red
+ * steps — and none of them about the product.
+ *
+ * qa-cart-recovery-override already defaults this way for the same reason. The
+ * override still works for a deliberate cross-origin test; it is simply no
+ * longer the accident you get by running the file with no environment at all.
+ */
+const BASE = process.env.QA_BASE_URL ?? "https://127.0.0.1:3443";
+
+// Links inside a captured email point at the harness TLS proxy, whose
+// certificate is self-signed; without this a fetch that follows one fails
+// with a bare "fetch failed". No-op unless BASE is loopback.
+allowLoopbackSelfSignedTls(BASE);
 
 /**
  * THE HARNESS IS HTTPS, AND ITS CERTIFICATE IS SELF-SIGNED.
@@ -316,6 +341,15 @@ const GHK = { id: "ghk-cu", quantity: 1 };         // $47.99
 // ============================================================================
 async function main() {
   mkdirSync(SHOTS, { recursive: true });
+
+  // WHAT THIS FILE CHANGES, IT PUTS BACK. It rewrites every automation's delay
+  // and gift to the production configuration, which is right for its own
+  // journeys and wrong for everyone else's: the free-shipping gift it hangs on
+  // `replenishment` made qa-lifecycle-email's reorder reminder vanish (correctly
+  // withheld — its subscriber has no account, so the gift has nowhere to go) and
+  // turned qa-automation-truth's "no errors" step red. Captured here, restored
+  // in the finally block below.
+  automationsBefore = await captureAutomations(q);
 
   // The production configuration (Admin → Email as of 2026-09-04), on the
   // harness's copy of the automations table: same delays, same gifts, same
@@ -792,6 +826,7 @@ async function main() {
     return `winback_30: ${issued} issued, ${redeemed} redeemed, ${orders} orders (7-day window)`;
   });
 
+  await restoreAutomations(q, automationsBefore);
   await pool.end();
   const passed = results.filter((r) => r.status === "pass").length;
   const failed = results.filter((r) => r.status === "fail");
@@ -800,4 +835,11 @@ async function main() {
   process.exit(failed.length ? 1 : 0);
 }
 
-main().catch((error) => { console.error(error); process.exit(1); });
+main().catch(async (error) => {
+  console.error(error);
+  // A run that died half way through still has to leave the table as it found
+  // it; otherwise one crash here reds out the next three suites.
+  await restoreAutomations(q, automationsBefore).catch(() => {});
+  await pool.end().catch(() => {});
+  process.exit(1);
+});

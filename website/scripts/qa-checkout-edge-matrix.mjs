@@ -36,6 +36,7 @@ import { createHmac, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chromium, webkit } from "playwright";
 import pg from "pg";
+import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
 
 // HTTPS BY DEFAULT, AND THAT IS NOT COSMETIC.
 //
@@ -50,6 +51,11 @@ import pg from "pg";
 // this, and docs/BROWSER-TESTING-RUNBOOK.md section 5c is the instruction.
 // 127.0.0.1 and not localhost: middleware compares Origin against proto://host.
 const BASE = process.env.QA_BASE_URL ?? "https://127.0.0.1:3443";
+
+// Links inside a captured email point at the harness TLS proxy, whose
+// certificate is self-signed; without this a fetch that follows one fails
+// with a bare "fetch failed". No-op unless BASE is loopback.
+allowLoopbackSelfSignedTls(BASE);
 const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/storefront";
 const WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET ?? "harness-webhook-secret";
 // THE WEBHOOK IS SERVER-TO-SERVER, so it goes straight to the app on plain http

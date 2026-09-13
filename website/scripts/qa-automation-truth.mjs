@@ -38,8 +38,15 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import pg from "pg";
+import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
+import { captureAutomations, pinAutomations, restoreAutomations } from "./qa-automation-fixtures.mjs";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
+
+// Links inside a captured email point at the harness TLS proxy, whose
+// certificate is self-signed; without this a fetch that follows one fails
+// with a bare "fetch failed". No-op unless BASE is loopback.
+allowLoopbackSelfSignedTls(BASE);
 const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/storefront";
 const CAPTURE = `${process.env.EMAIL_CAPTURE_DIR ?? "/tmp/vanta-qa"}/captured-emails.jsonl`;
 const CRON_SECRET = process.env.CRON_SECRET ?? "harness-cron-secret";
@@ -274,28 +281,30 @@ const LADDER = [
   { key: "winback_60", delay: 50 },
 ];
 
+/**
+ * THE WHOLE TABLE, NOT JUST THE THREE COLUMNS THIS FILE MEANT TO CHANGE.
+ *
+ * This used to capture and restore `enabled` and `delay_days` only, and to leave
+ * `offer_key` alone on the theory that it never touched it. It does not touch
+ * it — but qa-retention-system does, and does not put it back, so this file ran
+ * against a ladder carrying gifts it never configured. A gift-bearing message to
+ * a subscriber with no account is correctly WITHHELD, and the sweep says so, so
+ * "the sweep runs and reports no errors" failed with
+ * "replenishment: withheld 1 gift-bearing message(s)" — the product behaving
+ * exactly right, reported as a defect in the wrong file.
+ *
+ * So the gift is pinned OFF for the rungs under test (this file proves the
+ * DELAYS, with plain messages) and the whole table is captured and restored.
+ */
 async function configureLadder() {
-  const { rows } = await q(
-    `select key, enabled, delay_days from email_automations where key = any($1)`,
-    [LADDER.map((l) => l.key)],
-  );
-  for (const { key, delay } of LADDER) {
-    await q(
-      `update email_automations set enabled = true, delay_days = $2 where key = $1`,
-      [key, delay],
-    );
-  }
-  return rows;
+  const previous = await captureAutomations(q);
+  await pinAutomations(q, Object.fromEntries(
+    LADDER.map(({ key, delay }) => [key, { enabled: true, delayDays: delay, offerKey: null }]),
+  ));
+  return previous;
 }
 
-async function restoreLadder(previous) {
-  for (const row of previous ?? []) {
-    await q(
-      `update email_automations set enabled = $2, delay_days = $3 where key = $1`,
-      [row.key, row.enabled, row.delay_days],
-    ).catch(() => {});
-  }
-}
+const restoreLadder = (previous) => restoreAutomations(q, previous);
 
 async function main() {
   console.log(`Automation truth harness — run ${stamp}`);

@@ -38,8 +38,14 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { chromium, webkit } from "playwright";
 import pg from "pg";
+import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
 
 const BASE = process.env.QA_BASE_URL ?? "https://127.0.0.1:3443";
+
+// Links inside a captured email point at the harness TLS proxy, whose
+// certificate is self-signed; without this a fetch that follows one fails
+// with a bare "fetch failed". No-op unless BASE is loopback.
+allowLoopbackSelfSignedTls(BASE);
 // The webhook is server-to-server, so it goes to the app directly rather than
 // through the self-signed proxy the browsers use.
 const WEBHOOK_ORIGIN = process.env.QA_WEBHOOK_ORIGIN ?? "http://127.0.0.1:3000";
