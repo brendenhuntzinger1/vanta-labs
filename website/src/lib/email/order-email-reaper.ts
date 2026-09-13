@@ -88,6 +88,14 @@ async function requeueStrandedEmail(orderId: string, kind: string): Promise<bool
     // (order, kind) — the original path enqueued after a refusal, say — will
     // deliver it; a second would be a second delivery on a provider that does
     // not honour the idempotency key.
+    //
+    // AND IF THE CHECK ITSELF FAILS, NOTHING IS QUEUED. This used to test
+    // `!waitingError`, so an unreadable pending_emails fell straight through to
+    // the enqueue below and did the exact thing the paragraph above says must
+    // not happen. Returning false instead reports the slot as unrecoverable,
+    // which raises the critical alert and names the order for a human to resend
+    // by hand — the message is late and a person is told, rather than possibly
+    // sent twice and nobody is.
     const { data: waiting, error: waitingError } = await supabaseAdmin
       .from("pending_emails")
       .select("id")
@@ -95,7 +103,11 @@ async function requeueStrandedEmail(orderId: string, kind: string): Promise<bool
       .eq("email_kind", kind)
       .eq("status", "pending")
       .limit(1);
-    if (!waitingError && (waiting ?? []).length > 0) return true;
+    if (waitingError) {
+      console.error("[order-email-reaper] could not check the queue; not enqueuing", orderId, kind, waitingError.message);
+      return false;
+    }
+    if ((waiting ?? []).length > 0) return true;
 
     await enqueueFailedEmail(
       { to, subject: template.subject, html: template.html, text: template.text },

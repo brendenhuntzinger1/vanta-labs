@@ -975,11 +975,36 @@ export function selectDueStage(
   // lost (see the test that walks every stage from the end of the previous
   // one's window).
   if (sinceLastSendMs !== null && sinceLastSendMs < MIN_STAGE_GAP_MS) return null;
-  for (const stage of RECOVERY_STAGES) {
+
+  // THE LADDER ONLY EVER GOES UP.
+  //
+  // The clock is the shopper's LAST ACTIVITY, and that is deliberate — someone
+  // still adding to a cart is not an abandoner. But it means elapsed RESETS
+  // when they come back and touch the cart without buying, which re-opens the
+  // early windows on a sequence that has already moved past them.
+  //
+  // Usually harmless, because the early stage is claimed and this returns null.
+  // Not always: a stage the operator had switched OFF when its window passed
+  // was never claimed, so switching it back on is enough. Then a shopper who
+  // was mailed the 12-hour and 24-hour messages, and who edited their cart on
+  // day two, is sent "Your cart is saved" on day three — the opening line of a
+  // sequence they are three messages into. There is no reading of that which is
+  // not a mistake to the person receiving it.
+  //
+  // So a stage below the highest one already sent is never due, whatever the
+  // windows say. Sending nothing is the right answer here: the later stages are
+  // still reachable as the clock runs on, and the sequence stays in order.
+  let highestClaimed = -1;
+  for (let index = 0; index < RECOVERY_STAGES.length; index += 1) {
+    if (claimed.has(RECOVERY_STAGES[index])) highestClaimed = index;
+  }
+
+  for (const [index, stage] of RECOVERY_STAGES.entries()) {
     const window = STAGE_WINDOWS[stage];
     if (elapsedMs < window.opensAfterMs || elapsedMs >= window.closesAfterMs) continue;
     if (!STAGE_ENABLED[stage](config)) return null;
     if (claimed.has(stage)) return null;
+    if (index < highestClaimed) return null;
     return stage;
   }
   return null;
