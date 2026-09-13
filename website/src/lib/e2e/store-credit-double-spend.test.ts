@@ -56,8 +56,8 @@ vi.mock("@/lib/auth-session", () => ({
 // a member is on. Everything about the balance itself stays real — the perks
 // below read the live ledger through the shipping code, so a hold taken by the
 // first checkout is visible to the second exactly as in production.
-vi.mock("@/lib/membership", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/membership")>();
+vi.mock("@/lib/rewards", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/rewards")>();
   return {
     ...actual,
     getMembershipPerks: async (userId: string) => {
@@ -72,7 +72,7 @@ vi.mock("@/lib/membership", async (importOriginal) => {
         storeCreditMinOrderCents: 0,
       };
     },
-    getActivePointsPerDollar: async () => 1,
+    getPointsRate: async () => 1,
     getActivePointsMultiplier: async () => ({ multiplier: 1, eventName: null }),
   };
 });

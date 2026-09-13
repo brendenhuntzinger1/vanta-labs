@@ -139,7 +139,7 @@ export async function GET(_request: Request, context: { params: Promise<{ orderI
 
     <div class="note">
       All products are sold strictly for laboratory and research use only — not for human or animal consumption.
-      Memberships and orders are subject to the Vanta Labs terms of service. Thank you for your order.
+      Orders are subject to the Vanta Labs terms of service. Thank you for your order.
     </div>
   </div>
 </body></html>`;

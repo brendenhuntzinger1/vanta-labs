@@ -77,7 +77,6 @@ const sideEffects = {
   coupon: vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true })),
   storeCredit: vi.fn(async () => {}),
   redeemPoints: vi.fn(async () => {}),
-  revokeMembership: vi.fn(async () => {}),
   releaseTender: vi.fn(async () => {}),
   releaseInventory: vi.fn(async () => {}),
   alert: vi.fn(async (_alert: { type: string; severity: string; message: string; context?: unknown }) => {}),
@@ -90,10 +89,10 @@ vi.mock("@/lib/payment-provider", () => ({
     verifyWebhookSignature: () => state.signatureValid,
   }),
 }));
-vi.mock("@/lib/membership", () => ({
+vi.mock("@/lib/rewards", () => ({
   calculateEarnedPoints: () => 100,
   getActivePointsMultiplier: async () => 1,
-  getActivePointsPerDollar: async () => 1,
+  getPointsRate: async () => 1,
   recordPointsLedgerEntry: sideEffects.points,
   redeemPoints: sideEffects.redeemPoints,
   restoreRedeemedPoints: vi.fn(async () => {}),
@@ -124,10 +123,6 @@ vi.mock("@/lib/shippo/order-sync", () => ({ syncOrderToShippo: vi.fn(async () =>
 vi.mock("@/lib/store-credit", () => ({
   redeemStoreCredit: sideEffects.storeCredit,
   refundStoreCreditForOrder: vi.fn(async () => {}),
-}));
-vi.mock("@/lib/membership-billing", () => ({
-  activatePaidMembership: vi.fn(async () => {}),
-  revokeMembershipForRefund: sideEffects.revokeMembership,
 }));
 vi.mock("@/lib/cart-recovery", () => ({ markAbandonedCartsRecovered: vi.fn(async () => {}) }));
 // The tender hold is the store credit and loyalty points the shopper spent at
@@ -703,9 +698,11 @@ describe("an unsafe effect that throws", () => {
 //
 // The rule this file already proves for store credit — ONE EFFECT, ONE ALERT
 // TYPE — was only half-applied. A points REDEMPTION shared a try/catch with the
-// points EARN and surfaced as `points_earn`; the membership revoke on a refund
-// had a brand-new alert call that nothing drove, so deleting it left every test
-// green. Both are wired here through the real webhook.
+// points EARN and surfaced as `points_earn`. It is wired here through the real
+// webhook.
+//
+// A second case lived here — the membership revoke on a refund — until the paid
+// membership feature was removed on 2026-09-12.
 // ---------------------------------------------------------------------------
 describe("a points redemption that throws", () => {
   it("is not reported as a points-earn failure", async () => {
@@ -784,34 +781,6 @@ describe("the refund confirmation email", () => {
   });
 });
 
-describe("a membership revoke that throws on a refund", () => {
-  it("raises unsafe_effect_failed_membership_revoke", async () => {
-    // A refunded membership whose revoke fails leaves the customer with member
-    // pricing, free shipping and points multipliers indefinitely. This is not
-    // auto-repairable — ending a subscription is not replayable — so the alert
-    // IS the recovery path.
-    state.orderType = "membership";
-    sideEffects.revokeMembership.mockRejectedValueOnce(new Error("billing provider down"));
-
-    await deliver("evt-refund-1", refundPayload());
-
-    expect(sideEffects.revokeMembership).toHaveBeenCalledWith("user-1");
-    const alerts = sideEffects.alert.mock.calls.map((call) => call[0]);
-    const revoke = alerts.find((alert) => alert.type === "unsafe_effect_failed_membership_revoke");
-    expect(revoke).toBeDefined();
-    expect(revoke!.severity).toBe("critical");
-    expect(revoke!.message).toContain(ORDER_ID);
-  });
-
-  it("raises nothing when the revoke succeeds", async () => {
-    state.orderType = "membership";
-
-    await deliver("evt-refund-2", refundPayload());
-
-    const types = sideEffects.alert.mock.calls.map((call) => call[0].type);
-    expect(types).not.toContain("unsafe_effect_failed_membership_revoke");
-  });
-});
 
 // ---------------------------------------------------------------------------
 // THE FAILURE ARRIVES AS A RETURN VALUE, NOT AN EXCEPTION — FIX WAVE 3.

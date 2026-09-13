@@ -13,8 +13,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sentinel = (name: string) => vi.fn(async () => ({ job: name }));
 
-const membership = sentinel("membership");
-const storeCredit = sentinel("storeCredit");
 const cartRecovery = sentinel("cartRecovery");
 const commissions = sentinel("commissions");
 const commissionAccrualRepair = sentinel("commissionAccrualRepair");
@@ -42,11 +40,7 @@ interface SystemAlert {
 }
 const recordSystemAlert = vi.fn(async (_alert: SystemAlert) => {});
 
-vi.mock("@/lib/membership-billing", () => ({
-  runMembershipBillingSweep: () => membership(),
-  grantMonthlyStoreCreditSweep: () => storeCredit(),
-}));
-vi.mock("@/lib/membership", () => ({ runBirthdayBonusSweep: () => birthdayBonus() }));
+vi.mock("@/lib/rewards", () => ({ runBirthdayBonusSweep: () => birthdayBonus() }));
 vi.mock("@/lib/cart-recovery", () => ({ runAbandonedCartSweep: () => cartRecovery() }));
 vi.mock("@/lib/partner-portal", () => ({ autoApproveEligibleCommissions: () => commissions() }));
 vi.mock("@/lib/commission-accrual-repair", () => ({ repairMissingCommissionAccruals: () => commissionAccrualRepair() }));
@@ -113,8 +107,8 @@ describe("the scheduled sweep", () => {
   it("reports every job under its own name", async () => {
     const body = (await (await callSweep()).json()) as Record<string, { job?: string }>;
 
-    expect(body.membershipBilling).toEqual({ job: "membership" });
-    expect(body.storeCredit).toEqual({ job: "storeCredit" });
+    expect(body.tenderHoldsReleased).toEqual({ job: "tenderHolds" });
+    expect(body.commissionApproval).toEqual({ job: "commissions" });
     expect(body.commissionApproval).toEqual({ job: "commissions" });
     expect(body.reservationsExpired).toEqual({ job: "reservations" });
     expect(body.tenderHoldsReleased).toEqual({ job: "tenderHolds" });
@@ -138,7 +132,7 @@ describe("the scheduled sweep", () => {
   it("runs every job exactly once", async () => {
     await callSweep();
 
-    for (const job of [membership, storeCredit, commissions, reservations, tenderHolds, paymentReconcile, expressIntents, shippoSync, shipmentRepair, inventoryCommitRepair, shippingCostRepair, refundEffectRepair, signupConfirmations, partnerAccess, orderPushHealth]) {
+    for (const job of [commissions, reservations, tenderHolds, paymentReconcile, expressIntents, shippoSync, shipmentRepair, inventoryCommitRepair, shippingCostRepair, refundEffectRepair, signupConfirmations, partnerAccess, orderPushHealth]) {
       expect(job).toHaveBeenCalledTimes(1);
     }
   });
@@ -230,40 +224,40 @@ describe("the scheduled sweep", () => {
   // its own three RPCs; every other job was unprotected.
   describe("a momentary auth refusal", () => {
     it("is retried once and the job then succeeds, with no alert", async () => {
-      storeCredit.mockRejectedValueOnce({ code: "PGRST303", message: "JWT issued at future" });
+      tenderHolds.mockRejectedValueOnce({ code: "PGRST303", message: "JWT issued at future" });
 
       const response = await callSweep();
       const body = await response.json();
 
       // Ran twice: the refusal, then the retry that worked.
-      expect(storeCredit).toHaveBeenCalledTimes(2);
-      expect(body.storeCredit).toEqual({ job: "storeCredit" });
+      expect(tenderHolds).toHaveBeenCalledTimes(2);
+      expect(body.tenderHoldsReleased).toEqual({ job: "tenderHolds" });
       // Nothing to tell the operator — it recovered on its own.
       expect(recordSystemAlert).not.toHaveBeenCalled();
     });
 
     it("still alerts when the refusal persists, rather than hiding an outage", async () => {
       const refusal = { code: "PGRST303", message: "JWT issued at future" };
-      storeCredit.mockRejectedValueOnce(refusal).mockRejectedValueOnce(refusal);
+      tenderHolds.mockRejectedValueOnce(refusal).mockRejectedValueOnce(refusal);
 
       await callSweep();
 
-      expect(storeCredit).toHaveBeenCalledTimes(2);
+      expect(tenderHolds).toHaveBeenCalledTimes(2);
       expect(recordSystemAlert).toHaveBeenCalledTimes(1);
       const alert = recordSystemAlert.mock.calls[0][0];
-      expect(alert.message).toContain("store_credit");
+      expect(alert.message).toContain("tender_hold_release");
       // And it says WHY, which is how this was diagnosed in the first place.
-      expect(String((alert.context as Record<string, unknown>).store_credit)).toContain("PGRST303");
+      expect(String((alert.context as Record<string, unknown>).tender_hold_release)).toContain("PGRST303");
     });
 
     it("does NOT retry an ordinary failure — one retry is for auth, not for bugs", async () => {
       // A logic error must fail fast and loudly. Retrying it would double every
       // side effect the job had already performed before throwing.
-      storeCredit.mockRejectedValueOnce(new Error("cannot read property of undefined"));
+      tenderHolds.mockRejectedValueOnce(new Error("cannot read property of undefined"));
 
       await callSweep();
 
-      expect(storeCredit).toHaveBeenCalledTimes(1);
+      expect(tenderHolds).toHaveBeenCalledTimes(1);
       expect(recordSystemAlert).toHaveBeenCalledTimes(1);
     });
   });
@@ -287,7 +281,7 @@ describe("the scheduled sweep", () => {
 
     expect(body.success).toBe(true);
     expect(shippoSync).toHaveBeenCalledTimes(1);
-    expect(body.membershipBilling).toEqual({ job: "membership" });
+    expect(body.tenderHoldsReleased).toEqual({ job: "tenderHolds" });
   });
 
   it("stays quiet when everything succeeds", async () => {
@@ -333,7 +327,7 @@ describe("a sweep that runs out of time", () => {
     vi.useFakeTimers();
     // Never settles: exactly what a job blocked on a slow provider looks like.
     // Once, so the hang does not leak into the next test.
-    membership.mockImplementationOnce(() => new Promise(() => {}));
+    commissions.mockImplementationOnce(() => new Promise(() => {}));
 
     const { GET } = await import("./route");
     const response = GET(new Request("https://vantalabsresearch.com/api/cron/sweep", {
@@ -349,15 +343,15 @@ describe("a sweep that runs out of time", () => {
     const [alert] = recordSystemAlert.mock.calls[0] as unknown as [
       { message: string; context: { stalled: string[] }; dedupeWindowMs?: number },
     ];
-    expect(alert.context.stalled).toEqual(["membership_billing"]);
-    expect(alert.message).toContain("membership_billing");
+    expect(alert.context.stalled).toEqual(["commission_approval"]);
+    expect(alert.message).toContain("commission_approval");
     expect(body.timedOut).toBe(true);
   });
 
   it("still reports every job that DID finish", async () => {
     vi.useFakeTimers();
     // Once, so the hang does not leak into the next test.
-    membership.mockImplementationOnce(() => new Promise(() => {}));
+    commissions.mockImplementationOnce(() => new Promise(() => {}));
 
     const { GET } = await import("./route");
     const response = GET(new Request("https://vantalabsresearch.com/api/cron/sweep", {
@@ -370,13 +364,13 @@ describe("a sweep that runs out of time", () => {
     // A partial sweep is still information. The one that hung is named as such
     // rather than silently reported as an empty result.
     expect(body.shippoSync).toEqual({ job: "shippoSync" });
-    expect(body.membershipBilling).toEqual({ error: "did not finish before the deadline" });
+    expect(body.commissionApproval).toEqual({ error: "did not finish before the deadline" });
   });
 
   it("collapses the repeat, because a sweep that overruns overruns every tick", async () => {
     vi.useFakeTimers();
     // Once, so the hang does not leak into the next test.
-    membership.mockImplementationOnce(() => new Promise(() => {}));
+    commissions.mockImplementationOnce(() => new Promise(() => {}));
 
     const { GET } = await import("./route");
     const response = GET(new Request("https://vantalabsresearch.com/api/cron/sweep", {

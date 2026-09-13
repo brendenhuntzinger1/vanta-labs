@@ -8,14 +8,13 @@ import { getCustomerOrders, getCustomerPreferences, getDefaultCustomerAddress, g
 import {
   checkAndAwardBirthdayBonus,
   getActivePointsMultiplier,
-  getCustomerMembership,
-  getMembershipPerks,
   getPointsBalance,
+  getPointsRate,
   getPointsHistory,
   getProgressToNextReward,
   pointsToDollars,
   POINTS_PER_DOLLAR_REDEMPTION,
-} from "@/lib/membership";
+} from "@/lib/rewards";
 import { getActiveCouponsForDisplay } from "@/lib/coupons";
 import { getLifetimeSavings } from "@/lib/member-savings";
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
@@ -94,11 +93,12 @@ export default async function AccountDashboardPage() {
   const preferences = await getCustomerPreferences(user.id);
   await checkAndAwardBirthdayBonus(user.id, preferences.birthday).catch(() => {});
 
-  const [orders, membership, perks, pointsBalance, pointsHistory, activeCoupons, pointsMultiplier, lifetimeSavings, defaultAddress, wishlistSlugs, bestSellerSlugs, shippingConfig] =
+  const [orders, pointsPerDollar, pointsBalance, pointsHistory, activeCoupons, pointsMultiplier, lifetimeSavings, defaultAddress, wishlistSlugs, bestSellerSlugs, shippingConfig] =
     await Promise.all([
       getCustomerOrders(user.id, ownershipEmail(user)).catch(() => []),
-      getCustomerMembership(user.id),
-      getMembershipPerks(user.id),
+      // The baseline earn rate, from the free tier's configured row. A failed
+      // read shows the 1x floor rather than breaking the dashboard.
+      getPointsRate().catch(() => 1),
       // A points read that FAILED is not a balance of zero. Rendering a
       // confident "0" for a statement timeout told the customer their points
       // were gone and gave support nothing to go on; null is rendered as an
@@ -130,22 +130,8 @@ export default async function AccountDashboardPage() {
   ]);
   const recommended = bestSellerProducts.filter((p) => !wishlistSlugs.includes(p.slug)).slice(0, 4);
 
-  const isActiveMember = perks.isActiveMember;
-  // "Paid" means an ACTIVE paid plan. A row that exists but was never paid for
-  // (or has lapsed) must not surface billing dates or a tier badge.
-  const isPaid = membership.billingCycle !== "free" && isActiveMember;
-  const pastDue = membership.status === "past_due";
   const recentOrders = orders.slice(0, 3);
   const lastOrder = orders[0];
-
-  // Friendly account-status pill
-  const status = pastDue
-    ? { text: "Payment needed", cls: "border-amber-300/40 bg-amber-300/10 text-amber-200" }
-    : isActiveMember
-      ? { text: "Active member", cls: "border-emerald-400/40 bg-emerald-400/10 text-emerald-200" }
-      : membership.status === "cancelled"
-        ? { text: "Membership ending", cls: "border-zinc-500/40 bg-zinc-500/10 text-zinc-300" }
-        : { text: "No active membership", cls: "border-white/15 bg-white/[0.04] text-zinc-300" };
 
   return (
     <div className="space-y-5">
@@ -155,50 +141,8 @@ export default async function AccountDashboardPage() {
           <div className="min-w-0">
             <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Dashboard</p>
             <h1 className="vl2-serif mt-2 text-3xl text-white sm:text-4xl">Welcome back, {firstName}.</h1>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <span className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium ${status.cls}`}>
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-current opacity-80" />
-                {status.text}
-              </span>
-              {isActiveMember && membership.tier.slug !== "free" ? (
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.06] px-3 py-1 text-xs text-[color:var(--accent-gold)]">
-                  {membership.tier.name}
-                </span>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="shrink-0 sm:text-right">
-            {isPaid ? (
-              <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
-                <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">
-                  {membership.cancelAtPeriodEnd ? "Access until" : "Next billing"}
-                </p>
-                <p className="mt-1 text-sm font-semibold text-white">
-                  {formatDisplayDate(membership.nextBillingAt, "medium") ?? "—"}
-                </p>
-                <Link href="/account/subscriptions" className="mt-2 inline-block text-xs text-cyan-300 underline-offset-2 hover:underline">
-                  Manage subscription →
-                </Link>
-              </div>
-            ) : (
-              <Link href="/membership" className="vl2-btn-primary vl-focus-ring inline-flex px-5 py-3 text-xs">
-                Choose a membership
-              </Link>
-            )}
           </div>
         </div>
-
-        {pastDue ? (
-          <div className="mt-5 flex flex-col gap-3 rounded-xl border border-amber-300/30 bg-amber-300/[0.06] p-4 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-amber-100/90">
-              Your membership payment didn&apos;t go through, so member benefits are paused until it&apos;s resolved.
-            </p>
-            <Link href="/account/subscriptions" className="vl-focus-ring shrink-0 rounded-full border border-amber-300/50 bg-amber-300/10 px-4 py-2 text-xs font-semibold text-amber-100 transition hover:bg-amber-300/20">
-              Resolve payment →
-            </Link>
-          </div>
-        ) : null}
 
         {lifetimeSavings.available && lifetimeSavings.total > 0 ? (
           <div className="mt-5 rounded-xl border border-amber-200/25 bg-gradient-to-r from-amber-200/[0.10] via-amber-200/[0.04] to-transparent p-4 sm:p-5">
@@ -221,7 +165,7 @@ export default async function AccountDashboardPage() {
         />
         <StatTile
           label="Earn rate"
-          value={`${perks.pointsPerDollar}×`}
+          value={`${pointsPerDollar}×`}
           sub={pointsMultiplier.multiplier > 1 ? `${pointsMultiplier.eventName} (${pointsMultiplier.multiplier}× active)` : "points per $1"}
         />
         {/*

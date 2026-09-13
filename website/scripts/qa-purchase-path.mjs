@@ -972,63 +972,10 @@ async function main() {
       : "the original tab was already signed in by the verification in the other tab";
   });
 
-  // ---- 6. Membership billing emails --------------------------------------
-  section("6. Membership billing emails");
-
-  await step("a renewal receipt goes to the member who was charged", async () => {
-    const memberId = (await q("select id from auth.users where email = $1", [MEMBER_EMAIL])).rows[0]?.id;
-    if (!memberId) return SKIP("no member account to renew");
-
-    const veyraId = `vm_${stamp}`;
-    const tier = (await q("select id from membership_tiers order by 1 limit 1")).rows[0];
-    if (!tier) return SKIP("no membership tier seeded in the harness");
-
-    const existing = await q(
-      `insert into customer_memberships (user_id, tier_id, status, billing_cycle, veyra_membership_id, next_billing_at, created_at, updated_at)
-       values ($1, $2, 'active', 'monthly', $3, now() + interval '30 days', now(), now())
-       on conflict do nothing returning user_id`,
-      [memberId, tier.id, veyraId],
-    ).catch(() => ({ rows: [] }));
-    if (!existing.rows.length) {
-      const already = await q("select 1 from customer_memberships where veyra_membership_id = $1", [veyraId]);
-      if (!already.rows.length) return SKIP("could not seed a membership row in the harness");
-    }
-
-    const before = logOffset();
-    const body = JSON.stringify({
-      id: `evt_${randomUUID()}`,
-      type: "membership.renewed",
-      data: {
-        membership_id: veyraId,
-        amount_charged_cents: 2900,
-        next_renewal_at: new Date(Date.now() + 30 * 864e5).toISOString(),
-      },
-    });
-    const signature = createHmac("sha256", WEBHOOK_SECRET).update(body, "utf8").digest("hex");
-    const res = await page.request.post(`${BASE}/api/webhooks/payment`, {
-      headers: {
-        "content-type": "application/json",
-        "x-payment-signature": signature,
-        "x-event-id": `evt_${randomUUID()}`,
-      },
-      data: body,
-    });
-    await page.waitForTimeout(2500);
-    if (!res.ok()) return SKIP(`the membership webhook was refused: ${res.status()}`);
-
-    const mail = mailSince(before);
-    if (!mail) return SKIP("no harness log configured");
-    // Match on the money and the word, not on a guess at the wording: the
-    // subject was `Receipt: $29.00 charged` when this first ran, which named
-    // neither. It says "membership renewal" now — and that is asserted properly
-    // in email/membership-receipt-subjects.test.ts, where a wording change is a
-    // test failure rather than a silently-skipped harness step.
-    const receipt = mail.find((m) => /receipt/i.test(m.subject) && /29\.00/.test(m.subject));
-    assert(receipt, `no renewal email composed; saw: ${mail.map((m) => m.subject).join(", ") || "nothing"}`);
-    assert(receipt.to === MEMBER_EMAIL,
-      `the renewal receipt went to ${receipt.to}, not the member who was charged`);
-    return `"${receipt.subject}" to ${receipt.to}`;
-  });
+  // A sixth section drove a Veyra `membership.renewed` webhook and asserted the
+  // renewal receipt reached the member who was charged. The paid membership
+  // feature was removed on 2026-09-12, and the webhook now recognises those
+  // event types only to ignore them, so there is no receipt to assert.
 
   await browser.close();
 

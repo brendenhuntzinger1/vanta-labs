@@ -56,14 +56,14 @@ export default async function AccountNotificationsPage() {
       <header className="vl-fade-up">
         <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Account</p>
         <h1 className="vl2-serif mt-1.5 text-3xl text-white sm:text-4xl">Notifications</h1>
-        <p className="mt-2 text-sm text-zinc-400">Order updates, rewards, and membership activity — all in one place.</p>
+        <p className="mt-2 text-sm text-zinc-400">Order updates and rewards — all in one place.</p>
       </header>
 
       {notifications.length === 0 ? (
         <section className="vl-panel rounded-2xl p-10 text-center">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-white/12 bg-white/[0.03] text-2xl">🔔</div>
           <h2 className="mt-5 text-lg font-semibold text-white">You&apos;re all caught up</h2>
-          <p className="mx-auto mt-2 max-w-sm text-sm text-zinc-500">Updates about your orders, points, and membership will show up here.</p>
+          <p className="mx-auto mt-2 max-w-sm text-sm text-zinc-500">Updates about your orders and points will show up here.</p>
         </section>
       ) : (
         <section className="vl-panel rounded-2xl p-3 sm:p-4">

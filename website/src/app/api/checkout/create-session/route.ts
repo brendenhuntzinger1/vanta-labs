@@ -214,7 +214,7 @@ export async function POST(request: Request) {
       {
         success: false,
         // Translate the internal underpayment-guard string into an actionable,
-        // non-alarming message (it can trip on a stale membership/credit
+        // non-alarming message (it can trip on a stale discount/credit
         // preview). It is our own words already, so it needs no sanitising.
         error: raw === "Altered total detected"
           ? "A discount on your order is no longer available, so your total has been updated. Please refresh this page to see the current total, then place your order."

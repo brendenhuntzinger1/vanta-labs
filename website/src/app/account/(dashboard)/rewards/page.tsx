@@ -5,13 +5,13 @@ import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import {
   getActivePointsMultiplier,
-  getCustomerMembership,
   getPointsBalance,
   getPointsHistory,
+  getPointsRate,
   getProgressToNextReward,
   pointsToDollars,
   POINTS_PER_DOLLAR_REDEMPTION,
-} from "@/lib/membership";
+} from "@/lib/rewards";
 import { getActiveCouponsForDisplay } from "@/lib/coupons";
 
 export const dynamic = "force-dynamic";
@@ -36,8 +36,8 @@ export default async function AccountRewardsPage() {
     redirect("/account/login");
   }
 
-  const [membership, pointsBalance, pointsHistory, pointsMultiplier, activeCoupons] = await Promise.all([
-    getCustomerMembership(user.id),
+  const [pointsPerDollar, pointsBalance, pointsHistory, pointsMultiplier, activeCoupons] = await Promise.all([
+    getPointsRate().catch(() => 1),
     // A points read that FAILED is not a balance of zero. Showing a confident
     // "0" on the rewards page told the customer their points were gone; null is
     // rendered as an unknown below instead.
@@ -71,7 +71,7 @@ export default async function AccountRewardsPage() {
           </div>
           <div className="vl-panel-soft rounded-xl p-5">
             <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Earn rate</p>
-            <p className="mt-2 text-3xl font-semibold text-white">{membership.tier.pointsPerDollar}×</p>
+            <p className="mt-2 text-3xl font-semibold text-white">{pointsPerDollar}×</p>
             <p className="mt-1 text-sm text-zinc-500">
               points per $1{pointsMultiplier.multiplier > 1 ? ` · ${pointsMultiplier.eventName} (${pointsMultiplier.multiplier}× active)` : ""}
             </p>

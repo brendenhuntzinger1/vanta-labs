@@ -16,8 +16,7 @@ import { deliveryConfirmationTemplate, orderCancelledTemplate, reimbursementReco
 import { createReplacementOrder } from "@/lib/admin-replacements";
 import { syncOrderToShippo } from "@/lib/shippo/order-sync";
 import { refundedMerchandiseFraction, updateCommissionOnRefund } from "@/lib/payment-webhook";
-import { restoreRedeemedPoints, reverseOrderPoints } from "@/lib/membership";
-import { revokeMembershipForRefund } from "@/lib/membership-billing";
+import { restoreRedeemedPoints, reverseOrderPoints } from "@/lib/rewards";
 import { refundStoreCreditForOrder } from "@/lib/store-credit";
 import { pointsToDollars } from "@/lib/points-math";
 import { recordSystemAlert } from "@/lib/monitoring";
@@ -32,11 +31,17 @@ function roundMoney(value: number) {
  * Run one refund side-effect on the ADMIN MANUAL-REIMBURSEMENT lane, and make a
  * failure reach a person.
  *
- * `NOT_SWEPT` names the effects nothing else will ever retry, so the alert can
- * say whether a human has to act now or whether the sweep will pick it up.
+ * Every effect on this lane is retried by the refund repair sweep, which
+ * selects on ledger absence. That is only true because the reimbursement claim
+ * above sets payment_status and refunded_at first, so the sweep can see the
+ * order at all.
+ *
+ * There used to be a second class here — `NOT_SWEPT`, whose only member was
+ * membership revocation, the one effect nothing retried. The paid membership
+ * feature was removed on 2026-09-12, so that class is now empty and the alert
+ * no longer has to distinguish. If an effect is ever added that the sweep does
+ * NOT cover, the distinction has to come back with it.
  */
-const NOT_SWEPT = new Set(["membership_revocation"]);
-
 async function runRefundEffect(
   effect: string,
   orderId: string,
@@ -47,17 +52,13 @@ async function runRefundEffect(
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     console.error("Admin refund side-effect failed", effect, orderId, detail);
-    const swept = !NOT_SWEPT.has(effect);
     await recordSystemAlert({
       type: "admin_refund_effect_failed",
       severity: "critical",
       message:
         `A reimbursement was recorded for order ${orderId} but its ${effect} did not complete. `
-        + (swept
-          ? "The refund repair sweep will retry it; check that it clears."
-          : "NOTHING retries this one — the customer keeps member pricing, free shipping and their "
-            + "points multiplier until it is revoked by hand."),
-      context: { orderId, effect, detail, retriedAutomatically: swept },
+        + "The refund repair sweep will retry it; check that it clears.",
+      context: { orderId, effect, detail, retriedAutomatically: true },
     }).catch((alertError) => {
       console.error("Unable to record an admin refund effect alert", alertError);
     });
@@ -642,13 +643,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       });
       await updateCommissionOnRefund(orderId, { refundedFraction });
 
-      // Only reverse membership points and re-credit spent store credit on a
+      // Only reverse earned points and re-credit spent store credit on a
       // full refund - a partial refund leaves earned points untouched rather
       // than pro-rating them.
       if (isFullRefund) {
         // BEST-EFFORT IS NOT THE SAME AS UNRECORDED.
         //
-        // These four were bare `catch {}` — no log, no alert, nobody told. The
+        // These were bare `catch {}` — no log, no alert, nobody told. The
         // reimbursement claim above is single-use, so a swallowed failure here
         // is PERMANENT on this lane: the money went back and the effect never
         // ran. It is the identical defect class this branch exists to close,
@@ -656,10 +657,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         // (reverseOrderPoints and restoreRedeemedPoints by the refund sweep,
         // which selects on ledger absence) — but only because the claim above
         // sets payment_status and refunded_at, so the sweep can see the order.
-        // refundStoreCreditForOrder is swept too. revokeMembershipForRefund is
-        // NOT swept by anything, so a refunded member silently keeps member
-        // pricing, free shipping and their points multiplier until a human
-        // notices.
+        // refundStoreCreditForOrder is swept too.
         //
         // Still non-blocking: the reimbursement is already recorded and
         // throwing here would report a completed refund as a failure. The
@@ -669,15 +667,6 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         // discount those points bought is being fully undone.
         await runRefundEffect("points_restore", orderId, () => restoreRedeemedPoints(orderId));
         await runRefundEffect("store_credit_refund", orderId, () => refundStoreCreditForOrder(orderId));
-        // A fully-refunded MEMBERSHIP order ends the membership immediately so
-        // its benefits stop (member pricing, free shipping, points, etc.).
-        if (String(order.order_type ?? "product") === "membership" && order.customer_user_id) {
-          await runRefundEffect(
-            "membership_revocation",
-            orderId,
-            () => revokeMembershipForRefund(String(order.customer_user_id)),
-          );
-        }
         // INVENTORY IS NOT RESTOCKED HERE, DELIBERATELY.
         //
         // This action records a reimbursement the owner has ALREADY sent by

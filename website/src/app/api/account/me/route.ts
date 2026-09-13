@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getDefaultCustomerAddress } from "@/lib/customer-account";
-import { getActivePointsMultiplier, getCustomerMembership, getMembershipPerks, getPointsBalance, isEligibleForBulkSavings } from "@/lib/membership";
+import { getActivePointsMultiplier, getPointsBalance, getPointsRate } from "@/lib/rewards";
+import { getStoreCreditBalanceCents } from "@/lib/store-credit";
 import { customerSafeMessage } from "@/lib/safe-error";
 
 export async function GET() {
@@ -13,15 +14,16 @@ export async function GET() {
 
   const fullName = typeof user.user_metadata?.full_name === "string" ? user.user_metadata.full_name : "";
 
-  let defaultAddress, pointsBalance, membership, pointsMultiplier, isEligibleForBulk, perks;
+  let defaultAddress, pointsBalance, pointsPerDollar, pointsMultiplier, storeCreditBalanceCents;
   try {
-    [defaultAddress, pointsBalance, membership, pointsMultiplier, isEligibleForBulk, perks] = await Promise.all([
+    [defaultAddress, pointsBalance, pointsPerDollar, pointsMultiplier, storeCreditBalanceCents] = await Promise.all([
       getDefaultCustomerAddress(user.id),
       getPointsBalance(user.id),
-      getCustomerMembership(user.id),
+      getPointsRate(),
       getActivePointsMultiplier(),
-      isEligibleForBulkSavings(user.id),
-      getMembershipPerks(user.id),
+      // Still read, and still spendable: the paid membership feature was
+      // removed on 2026-09-12 but credit customers already hold was not.
+      getStoreCreditBalanceCents(user.id),
     ]);
   } catch (error) {
     // The account dashboard's primary endpoint must degrade to a clean JSON
@@ -43,15 +45,11 @@ export async function GET() {
         }
       : null,
     pointsBalance,
-    pointsPerDollar: membership.tier.pointsPerDollar,
+    pointsPerDollar,
     pointsMultiplier: pointsMultiplier.multiplier,
-    tierName: membership.tier.name,
-    isEligibleForBulkSavings: isEligibleForBulk,
-    // Active-membership perks the checkout applies. All zero/false for
-    // non-members and for members whose plan is no longer active.
-    memberDiscountPercent: perks.memberDiscountPercent,
-    memberFreeShipping: perks.freeShipping,
-    storeCreditBalanceCents: perks.storeCreditBalanceCents,
-    storeCreditMinOrderCents: perks.storeCreditMinOrderCents,
+    storeCreditBalanceCents,
+    // The redemption minimum was a per-tier setting; with no tiers there is no
+    // minimum. Mirrors quote-order.ts, which resolves the same 0 server-side.
+    storeCreditMinOrderCents: 0,
   });
 }

@@ -179,9 +179,6 @@ export default async function HomePage() {
               <Link href="/products" className="vl2-btn-primary vl-focus-ring w-full px-8 py-4 text-sm sm:w-auto">
                 Shop the catalog
               </Link>
-              <Link href="/membership" className="vl2-btn-secondary vl-focus-ring w-full px-8 py-4 text-sm sm:w-auto">
-                Explore membership
-              </Link>
             </div>
 
             {/* Inline trust strip — factual claims only, right under the CTA so

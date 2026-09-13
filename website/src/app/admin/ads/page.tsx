@@ -276,17 +276,29 @@ function StaleFeedNotice({ s }: { s: SpendDashboard }) {
 }
 
 /**
- * The two blind spots, stated as amounts.
+ * What this page cannot measure, and what it deliberately refuses to claim.
  *
  * A ROAS table that quietly covers 40% of spend is worse than one that says
  * which 60% is missing, so both gaps are quantified against the totals they are
  * missing from.
+ *
+ * The third block is not a gap but a correction, and it is here for the same
+ * reason: revenue that arrived carrying a `utm_source` from somewhere the store
+ * does not buy ads. It used to be in the headline — $286.54 of ChatGPT
+ * referrals divided by TikTok's spend, reported as ROAS 3.36 on an ad account
+ * that had sold nothing. Removing it silently would read as revenue going
+ * missing, so the money is named where it went.
+ *
+ * Its copy states what the EXCLUSION is, never what the traffic was. The view
+ * behind it filters on the tag, not on the channel, so a row in it can still
+ * carry marketing_source_kind 'ad' or 'ambassador' — an earlier draft called
+ * every row "organic and referral sales", which for those rows is simply false.
  */
 function BlindSpots({ s }: { s: SpendDashboard }) {
   const spendShare = s.totals.spend > 0 ? s.untaggedSpend / s.totals.spend : null;
   const revenueShare = s.totals.revenue > 0 ? s.unattributedRevenueTotal / s.totals.revenue : null;
 
-  if (s.untaggedSpend === 0 && s.unattributedRevenueTotal === 0) {
+  if (s.untaggedSpend === 0 && s.unattributedRevenueTotal === 0 && s.nonPaidSourceRevenueTotal === 0) {
     return (
       <Empty>
         Nothing is unmeasured: every ad that spent carries a readable{" "}
@@ -334,6 +346,29 @@ function BlindSpots({ s }: { s: SpendDashboard }) {
                   <span className="capitalize text-white/50">{u.platform}</span>
                   {u.utmCampaign ? ` · ${u.utmCampaign}` : " · no campaign tag"}
                 </span>
+                <span className="shrink-0 text-white/80">
+                  {money(u.revenue)} <span className="text-white/35">({u.orders})</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {s.nonPaidSourceRevenueTotal > 0 ? (
+        <div>
+          <p className="text-xs text-white/60">
+            <span className="text-white">{money(s.nonPaidSourceRevenueTotal)}</span> of paid orders carry a{" "}
+            <code className="font-mono text-white/50">utm_source</code> this store does not buy ads on, so none of it
+            counts as ad revenue here. The money is real and counts in full on the store&apos;s own revenue reporting —
+            this panel says only that it cannot be set against ad spend, not what the traffic was. Software stamps that
+            tag unprompted: ChatGPT appends{" "}
+            <code className="font-mono text-white/50">utm_source=chatgpt.com</code> to every link it hands out.
+          </p>
+          <ul className="mt-2 space-y-1.5 text-xs">
+            {s.nonPaidSourceRevenue.slice(0, 4).map((u) => (
+              <li key={u.utmSource} className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2">
+                <span className="min-w-0 truncate text-white/70">{u.utmSource}</span>
                 <span className="shrink-0 text-white/80">
                   {money(u.revenue)} <span className="text-white/35">({u.orders})</span>
                 </span>
@@ -624,7 +659,7 @@ export default async function AdsDashboardPage() {
           />
         </Panel>
 
-        <Panel title="What is not measured" subtitle="the size of this page's blind spot, stated rather than hidden">
+        <Panel title="What is not measured" subtitle="the size of this page's blind spot, and the revenue it refuses to claim">
           <BlindSpots s={spend} />
         </Panel>
       </div>

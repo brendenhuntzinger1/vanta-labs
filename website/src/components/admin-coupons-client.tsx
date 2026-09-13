@@ -266,22 +266,11 @@ export function AdminCouponsClient({
               className="vl-input mt-1 w-full px-3 py-2"
             />
           </label>
-          <label className="block text-sm text-zinc-400">
-            Who can use it
-            <select
-              value={form.memberScope}
-              onChange={(e) => setForm((prev) => ({ ...prev, memberScope: e.target.value as CouponFormState["memberScope"] }))}
-              className="vl-input mt-1 w-full px-3 py-2"
-            >
-              <option value="all">Everyone</option>
-              <option value="members">Active members only</option>
-              <option value="non_members">Non-members only</option>
-            </select>
-            <span className="mt-1 block text-xs text-zinc-500">
-              Codes never stack — every customer automatically gets their single best discount, so a code only
-              applies when it beats their membership/ambassador pricing.
-            </span>
-          </label>
+          {/* The "Who can use it" selector (Everyone / Active members only /
+              Non-members only) lived here until the paid membership feature was
+              removed on 2026-09-12. New codes are always created for everyone.
+              Existing member-scoped codes keep their badge in the list below so
+              an owner can see why an old members-only code no longer redeems. */}
           <label className="flex items-start gap-2.5 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm text-zinc-300 sm:col-span-2">
             <input
               type="checkbox"
@@ -295,7 +284,7 @@ export function AdminCouponsClient({
               <span className="mt-0.5 block text-xs text-zinc-500">
                 On top of the discount above, so one code can give a percentage AND free shipping.
                 Shipping is not part of the &ldquo;single best discount&rdquo; rule, so this applies even
-                when the percentage loses to a customer&apos;s membership or ambassador pricing.
+                when the percentage loses to a customer&apos;s ambassador pricing.
                 Worth nothing on an order that already ships free &mdash; which, while Free Shipping
                 Sitewide is on in Control Center &rarr; Shipping, is every order. With it off, orders
                 over the free-shipping thresholds set there.
@@ -371,7 +360,7 @@ export function AdminCouponsClient({
                               ) : null}
                               {coupon.memberScope !== "all" ? (
                                 <span className="ml-2 rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2 py-0.5 font-sans text-[10px] font-semibold uppercase tracking-wide text-cyan-300">
-                                  {coupon.memberScope === "members" ? "Members only" : "Non-members"}
+                                  {coupon.memberScope === "members" ? "Members only — no longer redeemable" : "Non-members"}
                                 </span>
                               ) : null}
                             </td>

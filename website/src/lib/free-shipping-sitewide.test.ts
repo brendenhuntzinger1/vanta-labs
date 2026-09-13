@@ -151,9 +151,13 @@ const sourceOf = (path: string) =>
     .join("\n");
 
 describe("the words on the page follow the switch, not just the arithmetic", () => {
-  it("checkout stops crediting the membership perk for a storewide giveaway", () => {
+  // Checkout used to print "Free (member)" when a paid tier waived shipping,
+  // and this case guarded it against crediting the plan for a storewide
+  // giveaway every shopper gets. Paid tiers were removed on 2026-09-12, so a
+  // zero is now unambiguously the store's own giveaway and simply reads "Free".
+  it("checkout never credits a plan for shipping the store gave away", () => {
     const checkout = sourceOf("src/app/checkout/page.tsx");
-    expect(checkout).toContain('memberFreeShipping && !isFreeShippingSitewide(shippingConfig) ? "Free (member)"');
+    expect(checkout).not.toContain('"Free (member)"');
   });
 
   it("checkout stops quoting a threshold it is no longer applying", () => {

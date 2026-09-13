@@ -52,9 +52,9 @@ export function ScrollReveal({
         }
       },
       // threshold 0 fires as soon as ANY part of the element enters the
-      // viewport. A tall above-the-fold section (e.g. the top of the
-      // Membership page) never reaches the old 15% threshold until you
-      // scroll, which made that content appear only after scrolling.
+      // viewport. A tall above-the-fold section never reaches the old 15%
+      // threshold until you scroll, which made that content appear only after
+      // scrolling.
       { threshold: 0, rootMargin: "0px 0px -5% 0px" },
     );
 

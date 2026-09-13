@@ -84,7 +84,7 @@ describe("safeSelectAll pages until the rows run out", () => {
 });
 
 describe("the ROAS dashboard uses the paged reader for every view it sums", () => {
-  it("reads all five through safeSelectAll", async () => {
+  it("reads all six through safeSelectAll", async () => {
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
     const source = readFileSync(join(process.cwd(), "src/lib/ads/spend-dashboard.ts"), "utf8");
@@ -94,6 +94,10 @@ describe("the ROAS dashboard uses the paged reader for every view it sums", () =
       "ad_creative_roas_daily",
       "ad_spend_untagged",
       "ad_revenue_unattributed",
+      // The sixth. An unpaged read here would sum a 1000-row prefix and
+      // UNDERSTATE the excluded total, which reads as the correction having
+      // quietly lost money — the one failure this panel exists to prevent.
+      "ad_revenue_non_paid_source",
     ]) {
       expect(source, `${view} must be read through safeSelectAll`).toMatch(
         new RegExp(`safeSelectAll<[\\s\\S]{0,60}?>\\("${view}"`),

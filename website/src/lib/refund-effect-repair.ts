@@ -1,7 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { reverseOrderPoints, restoreRedeemedPoints } from "@/lib/membership";
+import { reverseOrderPoints, restoreRedeemedPoints } from "@/lib/rewards";
 import { refundStoreCreditForOrder, isRefundableRedemption, startOfCurrentMonthIso } from "@/lib/store-credit";
 import { recordSystemAlert } from "@/lib/monitoring";
 

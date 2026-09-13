@@ -158,7 +158,7 @@ export function AdminPromotionsClient({ initialBuy3Get1Enabled }: { initialBuy3G
           Every promotion here runs on one shared engine: buy X eligible items, get Y of them at a reduced price. The
           discounted items are always the cheapest ones in the cart, counted across the whole order rather than per
           product. At most one of these applies to an order — the one worth the most — and it competes with coupons,
-          referral codes, membership pricing and bulk savings under the store&apos;s existing &ldquo;best single
+          referral codes and bulk savings under the store&apos;s existing &ldquo;best single
           discount wins&rdquo; rule.
         </p>
         {initialBuy3Get1Enabled ? (

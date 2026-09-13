@@ -6,9 +6,10 @@ import path from "node:path";
 // K-19 — EVERY OUTBOUND CALL GETS A DEADLINE.
 //
 // Eleven outbound `fetch` sites were tabulated across the codebase. The ad
-// pixels and the label printer had timeouts. The payment processor, the
-// membership processor and both email providers did not — the three that take
-// or move money, and the one that tells the customer it happened.
+// pixels and the label printer had timeouts. The payment processor and both
+// email providers did not — the ones that take or move money, and the one that
+// tells the customer it happened. (A membership processor was a fourth, until
+// that feature was removed on 2026-09-12.)
 //
 // A `fetch` with no signal waits as long as the other end wants. On a request
 // path that means the shopper sits on "Processing…" until the platform kills the
@@ -28,7 +29,6 @@ import path from "node:path";
 
 const CALLERS = [
   { file: "src/lib/payment-provider.ts", what: "the payment processor" },
-  { file: "src/lib/veyra-membership.ts", what: "the membership processor" },
   { file: "src/lib/email/providers/resend.ts", what: "Resend" },
   { file: "src/lib/email/providers/sendgrid.ts", what: "SendGrid" },
   { file: "src/lib/shippo/client.ts", what: "Shippo" },

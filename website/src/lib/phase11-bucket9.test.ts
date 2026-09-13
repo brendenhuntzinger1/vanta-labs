@@ -502,12 +502,14 @@ describe("SQL-09 / SQL-10 — the schema's column defaults agree with the code t
   });
 
   it("customer_memberships.intro_status defaults to a value the type union contains", () => {
-    // membership.ts types introStatus as
-    // "not_applicable" | "active" | "converted" | "failed" and coalesces only
-    // NULL, so a stored 'none' passed through un-normalised.
+    // The paid membership feature was removed on 2026-09-12, but the table and
+    // its rows were deliberately left in place, and the schema files that build
+    // it are still applied to every fresh database. The default has to stay
+    // correct so a restored membership feature does not read back a value its
+    // type union never contained. The source half of this check went with
+    // membership.ts.
     expect(deploy).not.toMatch(/intro_status text not null default 'none'/);
     expect(deploy.match(/intro_status text not null default 'not_applicable'/g)).toHaveLength(2);
-    expect(source("lib/membership.ts")).not.toMatch(/introStatus:[^;]*"none"/);
   });
 
   it("carries the ALTER that makes an already-built database converge", () => {

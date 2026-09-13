@@ -158,7 +158,10 @@ function pathBypassesMaintenance(pathname: string) {
     //                    that has ALREADY been delivered. That link has to work
     //                    whatever the storefront is doing.
     //   /api/veyra       is a processor callback, exactly like /api/webhooks
-    //                    beside it. Dropping it loses membership events.
+    //                    beside it. It carries the express-checkout shipping
+    //                    callback; dropping it breaks wallet checkout. (It also
+    //                    carried membership events until that feature was
+    //                    removed on 2026-09-12.)
     //   /api/coa         serves published certificates — a compliance document,
     //                    not a shopping page.
     //   /api/health      is how anyone finds out the site is up at all.
@@ -1035,7 +1038,7 @@ export async function middleware(request: NextRequest) {
   // comment above claimed coverage the list did not have, and a future cookie
   // that needs SameSite=None would silently lose the only protection.
   const CSRF_PROTECTED_PREFIXES = [
-    "/api/admin", "/api/account", "/api/auth", "/api/membership", "/api/partner",
+    "/api/admin", "/api/account", "/api/auth", "/api/partner",
     "/api/checkout", "/api/cart", "/api/coupons", "/api/catalog",
     // /api/ads authenticates the SAME admin cookie /api/admin does
     // (verifyAdminSessionFromCookie), which is exactly what makes a

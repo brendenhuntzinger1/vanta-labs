@@ -55,7 +55,7 @@ vi.mock("@/lib/auth-session", () => ({
   getAuthenticatedUser: async () => null,
 }));
 
-vi.mock("@/lib/membership", () => ({
+vi.mock("@/lib/rewards", () => ({
   getMembershipPerks: async () => ({ freeShipping: false, exclusivePricing: false }),
 }));
 

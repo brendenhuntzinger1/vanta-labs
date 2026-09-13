@@ -11,7 +11,6 @@ const SHOP_LINKS = [
 ];
 
 const PRIMARY_LINKS = [
-  { href: "/membership", label: "Membership" },
   { href: "/partner", label: "Partner Program" },
   { href: "/ambassador", label: "Ambassador" },
   { href: "/contact", label: "Contact" },
@@ -113,11 +112,7 @@ export function SiteHeader() {
               key={link.href}
               href={link.href}
               aria-current={isActive(link.href) ? "page" : undefined}
-              className={`vl-focus-ring py-2 ${
-                link.href === "/membership"
-                  ? "rounded-full bg-white px-3.5 font-semibold text-black shadow-sm transition hover:bg-white/90"
-                  : "vl-nav-link"
-              }`}
+              className="vl-focus-ring vl-nav-link py-2"
             >
               {link.label}
             </Link>
@@ -235,11 +230,7 @@ export function SiteHeader() {
                   key={link.href}
                   href={link.href}
                   onClick={() => setMobileNavOpen(false)}
-                  className={`vl-focus-ring px-4 py-3 text-sm transition ${
-                    link.href === "/membership"
-                      ? "rounded-lg bg-white font-semibold text-black hover:bg-white/90"
-                      : "vl-panel-soft text-zinc-200 hover:border-white/25 hover:text-white"
-                  }`}
+                  className="vl-focus-ring vl-panel-soft px-4 py-3 text-sm text-zinc-200 transition hover:border-white/25 hover:text-white"
                 >
                   {link.label}
                 </Link>

@@ -86,7 +86,6 @@ export const ADMIN_NAV_GROUPS: AdminTabGroup[] = [
       { label: "Affiliate Emails", href: "/admin/affiliates/emails", match: startsWith("/admin/affiliates") },
       { label: "Coupons", href: "/admin/coupons", match: startsWith("/admin/coupons") },
       { label: "Promotions", href: "/admin/promotions", match: startsWith("/admin/promotions") },
-      { label: "Membership", href: "/admin/membership", match: startsWith("/admin/membership") },
       { label: "Cart Recovery", href: "/admin/cart-recovery", match: startsWith("/admin/cart-recovery") },
       { label: "Email", href: "/admin/email", match: startsWith("/admin/email") },
       { label: "Advertising", href: "/admin/ads", match: startsWith("/admin/ads") },

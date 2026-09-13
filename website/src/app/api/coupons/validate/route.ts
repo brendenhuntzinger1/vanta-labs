@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { validateCoupon } from "@/lib/coupons";
 import { getAuthenticatedUser } from "@/lib/auth-session";
-import { getMembershipPerks } from "@/lib/membership";
 import { getRequestIpAddress } from "@/lib/admin-auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { customerSafeMessage } from "@/lib/safe-error";
@@ -38,23 +37,14 @@ export async function POST(request: Request) {
     }
 
     // Pass the signed-in shopper's email so a once-per-customer welcome offer is
-    // rejected here in the cart, not just silently later at payment time, and
-    // their membership status so member-only / non-member-only codes are
-    // rejected with a clear message up front (server re-checks at payment).
+    // rejected here in the cart, not just silently later at payment time.
     const user = await getAuthenticatedUser();
-    let isActiveMember = false;
-    if (user?.id) {
-      try {
-        isActiveMember = (await getMembershipPerks(user.id)).isActiveMember;
-      } catch {
-        // Treated as non-member for the preview; payment re-checks authoritatively.
-      }
-    }
     const coupon = await validateCoupon(
       code,
       Number.isFinite(subtotal) ? subtotal : 0,
       user?.email ?? (typedEmail.includes("@") ? typedEmail : undefined),
-      { isActiveMember },
+      // Nobody holds a paid membership any more (feature removed 2026-09-12).
+      { isActiveMember: false },
     );
 
     if (!coupon) {

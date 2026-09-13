@@ -467,8 +467,11 @@ async function main() {
 
   await step("every cookie-authenticated API prefix is CSRF-guarded", async () => {
     const probes = [
+      // One per cookie-authenticated prefix the middleware guards. A fifth,
+      // /api/membership/cancel, went with the paid membership feature on
+      // 2026-09-12 — and so did its prefix in middleware.ts.
       "/api/account/preferences", "/api/auth/session", "/api/admin/auth/login",
-      "/api/membership/cancel", "/api/partner/referral-code",
+      "/api/partner/referral-code",
     ];
     if (!csrfCookieHeader) return SKIP("could not sign in, so this proves nothing about CSRF");
     const bad = [];

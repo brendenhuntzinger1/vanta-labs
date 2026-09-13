@@ -4,8 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import type { Product } from "@/lib/catalog-types";
 import { WishlistButton } from "@/components/wishlist-button";
-import { formatCartCurrency, useCart } from "@/components/cart-context";
-import { bestPaidTier, parsePriceValue, quoteMemberPrice } from "@/lib/member-pricing";
+
 import { hasCoa } from "@/lib/coa-url";
 import { isSoldOut } from "@/lib/catalog-order";
 
@@ -42,24 +41,6 @@ export function ProductCard({
   // the grid. One rule, so the badge and the position can never disagree about
   // which products are dead ends.
   const soldOut = isSoldOut(product);
-
-  // Member pricing — dollars first. Members see THEIR real price; everyone else
-  // sees the STRONGEST paid tier's price, which is the biggest discount the
-  // catalog can honestly advertise. A member is never shown a lower tier's
-  // price they can't actually get, and never a higher one they'd have to
-  // upgrade for — `memberDiscountPercent` is their own.
-  const { membershipTiers, memberDiscountPercent } = useCart();
-  const numericPrice = parsePriceValue(product.salePrice ?? product.price);
-  const isMember = memberDiscountPercent > 0;
-  const upsellTier = isMember ? null : bestPaidTier(membershipTiers);
-  const memberQuote = numericPrice > 0
-    ? (isMember
-      ? quoteMemberPrice(numericPrice, memberDiscountPercent)
-      : upsellTier
-        ? quoteMemberPrice(numericPrice, upsellTier.discountPercent)
-        : null)
-    : null;
-  const showMemberPricing = Boolean(memberQuote && memberQuote.savings > 0);
 
   return (
     <article className="vl2-product-card group relative flex h-full flex-col">
@@ -118,28 +99,6 @@ export function ProductCard({
               <p className="text-xs text-white/55 line-through sm:text-sm">{product.compareAtPrice}</p>
             ) : null}
           </div>
-          {/* The member price used to be one line of small grey-gold text that
-              read past. The saving is the strongest thing on the card after the
-              price itself, so it gets the price's weight and a percent chip —
-              and the tier is NAMED, because "member price" alone doesn't tell a
-              shopper which membership actually buys it. */}
-          {showMemberPricing && memberQuote ? (
-            <div className="mt-1.5">
-              <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
-                <span className="text-base font-semibold tracking-tight text-[color:var(--accent-gold)] sm:text-lg">
-                  {formatCartCurrency(memberQuote.memberPrice)}
-                </span>
-                <span className="rounded-full border border-[color:var(--accent-gold)]/35 bg-[color:var(--accent-gold)]/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[color:var(--accent-gold)]">
-                  −{memberQuote.percent}%
-                </span>
-              </div>
-              <p className="mt-0.5 text-[11px] leading-tight text-[#a3a3a3] sm:text-xs">
-                {isMember ? "Your member price" : `With ${upsellTier?.name ?? "membership"}`}
-                {" · save "}
-                <span className="text-white/75">{formatCartCurrency(memberQuote.savings)}</span>
-              </p>
-            </div>
-          ) : null}
           {/* Trust badges — data-driven, so they only appear when the real
               purity / COA / batch data is entered in Admin (no fabricated claims). */}
           <div className="mt-2.5 flex flex-wrap items-center gap-1.5 text-[10px] leading-none">
@@ -247,14 +206,6 @@ export function ProductCard({
             </svg>
             View COA
           </a>
-        ) : null}
-        {!soldOut && showMemberPricing && memberQuote && !isMember ? (
-          <Link
-            href="/membership"
-            className="vl-focus-ring col-span-2 -mb-1 inline-flex items-center justify-center gap-1 py-1 text-[11px] text-[color:var(--accent-gold)]/70 transition hover:text-[color:var(--accent-gold)]"
-          >
-            Become a member &amp; save {formatCartCurrency(memberQuote.savings)} today →
-          </Link>
         ) : null}
       </div>
     </article>

@@ -217,52 +217,11 @@ describe("an ambassador applicant is told where they stand", () => {
 //   never had a caller. A member whose card expired, actively trying to pay,
 //   followed a button that did not do what it said.
 // ---------------------------------------------------------------------------
-describe("payment controls say what actually happens", () => {
-  it("no longer tells shoppers the store cannot take a card", () => {
-    // COMMENTS STRIPPED FIRST. The fix left a comment quoting the removed
-    // sentence so the next reader knows why it went; matching raw source would
-    // fail on that explanation rather than on anything a customer can see.
-    // What must not come back is the RENDERED claim.
-    const subscribe = stripComments(source("src/components/membership-subscribe-client.tsx"));
-    // Matched on the claim, not the component name, so re-adding the sentence
-    // anywhere on this page fails even under a different wrapper.
-    expect(subscribe).not.toMatch(/isn&apos;t connected yet|hasn't finished setting up a payment/);
-    expect(subscribe).not.toMatch(/activated manually/);
-  });
+// A "payment controls say what actually happens" block sat here. Every case in
+// it was about the membership signup notice, the membership card-config lane
+// and the /account/subscriptions restart CTA — all removed with the paid
+// membership feature on 2026-09-12.
 
-  it("keeps the real card lane wired, so the notice was not hiding a gap", () => {
-    const subscribe = source("src/components/membership-subscribe-client.tsx");
-    expect(subscribe).toContain("/api/membership/card-config");
-    expect(subscribe).toContain("setCardConfig");
-  });
-
-  it("does not offer to update a payment method when nothing can", () => {
-    const subs = source("src/app/account/(dashboard)/subscriptions/page.tsx");
-    expect(subs).not.toContain('cta: "Update payment method"');
-  });
-
-  it("still gives a lapsed member a route back to paying", () => {
-    // The fix was to stop the button lying, NOT to remove the member's way
-    // back. /membership genuinely restores a past-due membership, because
-    // startMembershipSignup short-circuits only for active/trialing.
-    const subs = source("src/app/account/(dashboard)/subscriptions/page.tsx");
-    expect(subs).toContain('cta: "Restart membership"');
-    expect(subs).toContain('href="/membership"');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// THE OWNER GUIDE DESCRIBES THE SOFTWARE THAT EXISTS.
-//
-// A hand-maintained guide documents the version it was written against, and
-// that is the version that stops being true first. So the queue list, the
-// exception list and both staleness numbers are RENDERED FROM THE SAME
-// CONSTANTS the Workstation itself uses — passed down as props, because
-// fulfillment-buckets.ts is server-only and correctly so.
-//
-// These assertions hold that wiring. What they cannot check is the prose, which
-// is the part code cannot know.
-// ---------------------------------------------------------------------------
 describe("the Owner Guide is generated from the real definitions", () => {
   const guide = source("src/components/fulfillment-owner-guide.tsx");
   const page = source("src/app/admin/fulfillment/workstation/page.tsx");

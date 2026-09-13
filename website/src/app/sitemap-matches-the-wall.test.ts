@@ -10,7 +10,7 @@ vi.mock("@/lib/site-identity", () => ({ siteUrl: () => "https://www.vantalabsres
 // A SITEMAP MAY ONLY ADVERTISE WHAT AN ANONYMOUS CRAWLER CAN ACTUALLY BE SERVED.
 //
 // The list and the rule used to live in two files. Closing the default in
-// access-policy.ts gated the home page, /membership and the whole research
+// access-policy.ts gated the home page and the whole research
 // library; sitemap.ts still offered all seven URLs, and every one of them
 // answered 307 to /account/login. Measured on the harness build: 10 of 17
 // entries servable.
@@ -55,7 +55,7 @@ describe("sitemap.xml advertises only what the wall serves", () => {
     const paths = (await sitemap()).map((e) => new URL(e.url).pathname);
     // Guarded by isPublicPath so that OPENING one of these again puts it back
     // automatically rather than failing this test.
-    for (const gated of ["/", "/membership", "/research", ...ARTICLE_SLUGS.map((s) => `/research/${s}`)]) {
+    for (const gated of ["/", "/research", ...ARTICLE_SLUGS.map((s) => `/research/${s}`)]) {
       if (!isPublicPath(gated)) {
         expect(paths, `${gated} requires an account and must not be advertised`).not.toContain(gated);
       }
@@ -73,7 +73,7 @@ describe("robots.txt does not invite crawlers through the wall", () => {
 
     // Every one of these requires an account, so a crawler fetching it gets a
     // redirect. Asking it not to is the whole point of the list.
-    for (const gated of ["/products", "/coa-library", "/research", "/membership", "/account", "/cart", "/checkout"]) {
+    for (const gated of ["/products", "/coa-library", "/research", "/account", "/cart", "/checkout"]) {
       expect(isPublicPath(gated), `${gated} is expected to be gated`).toBe(false);
       expect(disallow, `${gated} is gated and should be disallowed`).toContain(gated);
     }
