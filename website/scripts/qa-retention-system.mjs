@@ -185,7 +185,22 @@ async function sweepAndMail(filter) {
 }
 const ago = (ms) => new Date(Date.now() - ms).toISOString();
 /** Nothing marketing reached this address in the last two days, as far as the guard can see. */
-const quietReset = (email) => q(`update email_send_log set sent_at = $2 where recipient_email = $1 and sent_at > $2`, [email, ago(2 * DAY)]);
+/**
+ * Move this address's sends back, so the next one is not held.
+ *
+ * TWO DIFFERENT CLOCKS READ THE SAME COLUMN, and two days only satisfies one of
+ * them. The frequency guard wants 24 hours since the last marketing message.
+ * The win-back LADDER wants the gap between the two rungs' delays — ten days
+ * here, 40 to 50 — since win-back 1 went for this lapse episode, and will not
+ * send win-back 2 before that. Backdating two days satisfied the guard, left the
+ * ladder unsatisfied, and reported "day 50: none" as though the last win-back
+ * had stopped working. Nothing about the rules is relaxed; the customer is
+ * simply walked far enough forward.
+ */
+const quietReset = (email, days = 2) => q(
+  `update email_send_log set sent_at = $2 where recipient_email = $1 and sent_at > $2`,
+  [email, ago(days * DAY)],
+);
 
 /**
  * Move an order back in time WITHOUT re-triggering the win-backs that already
@@ -207,8 +222,104 @@ async function setOrderAge(orderId, email, days) {
 let ipCounter = 10;
 const nextIp = () => `203.0.113.${(ipCounter += 1) % 250}`;
 
+/**
+ * A SUBSCRIBER WITH AN ACCOUNT, BECAUSE THAT IS WHO A GIFT CAN BE SENT TO.
+ *
+ * This used to seed a row in marketing_subscribers and nothing else — a guest
+ * who had opted in. Every journey in this file then failed at its first gift:
+ * "expected the offer, got none". The sweep was right and the test was wrong.
+ * A gift-bearing automation is WITHHELD for an address with no auth account,
+ * because the offer would have nowhere to be redeemed, and the sweep reports it
+ * ("withheld N gift-bearing message(s)"). The customer these journeys describe —
+ * someone who receives a private token, clicks it, and buys with it — has an
+ * account by definition.
+ *
+ * The attestation is written the same way /api/attest writes it, onto
+ * auth.users.raw_user_meta_data, which is the one place this store keeps the 21+
+ * and research-use representations. It is set here rather than collected because
+ * the interstitial itself is qa-offer-journey's subject; what this file needs is
+ * a customer who is already through that door.
+ */
+const ACCOUNT_PASSWORD = "HarnessPass123!";
+
+/**
+ * The confirmed, attested account behind an address. Idempotent.
+ *
+ * `daysAgo` is WHEN THEY SIGNED UP, and it matters: for an account holder the
+ * welcome sequence is timed from auth.users.created_at, not from the subscriber
+ * row's opt-in. Leaving it at a default of 100 days aged every customer out of
+ * the welcome window, so "day 3: the first-order offer" stopped arriving. Pass
+ * it when the caller knows the age; omit it (mintToken) and an existing
+ * account's date is left exactly as it was rather than being overwritten with
+ * one this call invented.
+ */
+async function ensureAccount(email, daysAgo) {
+  await q(
+    `insert into auth.users (email, encrypted_password, email_confirmed_at, created_at, raw_user_meta_data)
+     values ($1, $2, now(), $3, jsonb_build_object(
+       'age_confirmed_21', true, 'research_use_only_agreed', true,
+       'attested_at', to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SSZ'),
+       'attested_via', 'email_link_interstitial'))
+     on conflict (email) do update set
+       encrypted_password = excluded.encrypted_password,
+       email_confirmed_at = now(),
+       created_at = case when $4 then excluded.created_at else auth.users.created_at end,
+       raw_user_meta_data = coalesce(auth.users.raw_user_meta_data, '{}'::jsonb) || excluded.raw_user_meta_data`,
+    [email, ACCOUNT_PASSWORD, ago((daysAgo ?? 100) * DAY), daysAgo !== undefined],
+  ).catch(() => {});
+  // CONSENT HAS TWO STORES AND AN ACCOUNT HOLDER'S IS customer_preferences.
+  //
+  // marketing_subscribers is the guest half; for somebody with an account the
+  // authoritative flag is customer_preferences.marketing_emails, which defaults
+  // to FALSE. Creating the account without it turned consented guests into
+  // unconsented account holders, and the marketing this file is about stopped —
+  // fail-closed, exactly as designed. A customer who ticked the box while signed
+  // in has both, so both are written.
+  await q(
+    `insert into customer_preferences (user_id, marketing_emails)
+     select id, true from auth.users where lower(email) = lower($1)
+     on conflict (user_id) do update set marketing_emails = true`,
+    [email],
+  ).catch(() => {});
+  sessionCookies.delete(email.toLowerCase());
+}
+
 async function seedSubscriber(email, daysAgo) {
   await q(`insert into marketing_subscribers (email, source, opted_in_at) values ($1, 'harness', $2) on conflict (email) do update set opted_in_at = excluded.opted_in_at, unsubscribed_at = null`, [email, ago(daysAgo * DAY)]);
+  await ensureAccount(email, daysAgo);
+}
+
+/**
+ * The session cookie this address's browser would be carrying, obtained the way
+ * the sign-in form obtains it: credentials to GoTrue, the tokens it returns to
+ * /api/auth/session, and the cookie that route sets. Cached per address.
+ *
+ * Without it every call below arrives at the account wall as a stranger and is
+ * answered {"error":"Sign in to continue"} — which is the wall working, not a
+ * broken checkout.
+ */
+const sessionCookies = new Map();
+
+async function sessionCookieFor(email) {
+  const key = email.toLowerCase();
+  if (sessionCookies.has(key)) return sessionCookies.get(key);
+  const authBase = process.env.QA_AUTH_URL ?? "http://127.0.0.1:54321";
+  const tokenRes = await fetch(`${authBase}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password: ACCOUNT_PASSWORD }),
+  });
+  const tokens = await tokenRes.json().catch(() => null);
+  if (!tokens?.access_token) { sessionCookies.set(key, null); return null; }
+  const sessionRes = await fetch(`${BASE}/api/auth/session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", origin: BASE },
+    body: JSON.stringify({ accessToken: tokens.access_token, refreshToken: tokens.refresh_token, rememberMe: true }),
+  });
+  const raw = sessionRes.headers.getSetCookie?.() ?? [];
+  const cookie = raw.map((c) => c.split(";")[0]).filter((c) => c.startsWith("vl_session_token=")).join("; ") || null;
+  sessionCookies.set(key, cookie);
+  return cookie;
 }
 async function seedPaidOrder(email, daysAgo, suffix = "1") {
   const orderId = `order-qa-${stamp}-${email.split("@")[0]}-${suffix}`;
@@ -222,6 +333,13 @@ async function seedPaidOrder(email, daysAgo, suffix = "1") {
 
 /** A gift token minted exactly as the sweep mints one, when a journey needs one without a send. */
 async function mintToken(email, offerKey, automationKey) {
+  // A PRIVATE GIFT IMPLIES AN ACCOUNT TO SPEND IT FROM. The coupon-contest and
+  // gift-floor journeys mint a token for an address and then price a cart with
+  // it; without an account behind the address the wall answers "Sign in to
+  // continue", the quote comes back undefined, and four steps failed with an
+  // EMPTY message because the assertion stringified an undefined quote. The
+  // sweep will not even issue such a gift — see seedSubscriber.
+  await ensureAccount(email);
   const shapes = {
     winback_60_percent_15: { kind: "percent", slug: null, percent: 15, min: 3500 },
     winback_60_free_shipping: { kind: "free_shipping", slug: null, percent: null, min: 3500 },
@@ -244,13 +362,28 @@ async function clickCta(link, extraCookie = "") {
   const setCookies = typeof r.headers.getSetCookie === "function" ? r.headers.getSetCookie() : [r.headers.get("set-cookie") ?? ""];
   const offerToken = setCookies.map((c) => c.match(/^vl_offer=([^;]+)/)?.[1]).find(Boolean) ?? null;
   const automationCookie = setCookies.map((c) => c.match(/^vl_automation=([^;]+)/)?.[1]).find(Boolean) ?? null;
-  return { status: r.status, location: r.headers.get("location") ?? "", offerToken, automationCookie };
+  // KEEP EVERY COOKIE THE CLICK SET, NOT JUST THE GIFT.
+  //
+  // The same redirect also mints the marketing-link GRANT that lets an attested
+  // recipient through the account wall without signing in. Picking out vl_offer
+  // and dropping the rest modelled a browser that throws away half its cookies:
+  // the gift was armed and /api/offer/status still answered "Sign in to
+  // continue", which is the wall doing its job to a visitor the store had just
+  // let in. `cookies` is what the browser would send back.
+  const cookies = setCookies.map((c) => c.split(";")[0]).filter(Boolean).join("; ");
+  return { status: r.status, location: r.headers.get("location") ?? "", offerToken, automationCookie, cookies };
 }
 
 async function quote({ email, items, couponCode, offerToken }) {
+  const session = await sessionCookieFor(email);
+  const cookies = [offerToken ? `vl_offer=${offerToken}` : null, session].filter(Boolean).join("; ");
   const r = await fetch(`${BASE}/api/checkout/quote`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...(offerToken ? { Cookie: `vl_offer=${offerToken}` } : {}), "x-real-ip": nextIp() },
+    // ORIGIN, BECAUSE THE REQUEST NOW CARRIES A SESSION. The CSRF guard refuses
+    // a state-changing call from a signed-in cookie with no same-origin Origin
+    // header — correctly; a browser always sends one. Without it the wall is
+    // passed and the guard refuses instead: {"error":"Invalid request origin"}.
+    headers: { "Content-Type": "application/json", origin: BASE, ...(cookies ? { Cookie: cookies } : {}), "x-real-ip": nextIp() },
     body: JSON.stringify({ items, email, country: "United States", state: "CA", couponCode }),
   });
   return r.json();
@@ -258,10 +391,11 @@ async function quote({ email, items, couponCode, offerToken }) {
 
 async function checkoutApi({ email, items, couponCode, offerToken, automationCookie }) {
   await q("delete from rate_limit_hits").catch(() => {});
-  const cookies = [offerToken ? `vl_offer=${offerToken}` : null, automationCookie ? `vl_automation=${automationCookie}` : null].filter(Boolean).join("; ");
+  const session = await sessionCookieFor(email);
+  const cookies = [offerToken ? `vl_offer=${offerToken}` : null, automationCookie ? `vl_automation=${automationCookie}` : null, session].filter(Boolean).join("; ");
   const r = await fetch(`${BASE}/api/checkout/create-session`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...(cookies ? { Cookie: cookies } : {}), "x-real-ip": nextIp() },
+    headers: { "Content-Type": "application/json", origin: BASE, ...(cookies ? { Cookie: cookies } : {}), "x-real-ip": nextIp() },
     body: JSON.stringify({
       items,
       customer: { email, fullName: "QA Customer", address: "1 Harness Way", city: "Testville", state: "CA", postalCode: "90000", country: "US", phone: "5555555555" },
@@ -339,6 +473,29 @@ const BPC = { id: "bpc-157-10mg", quantity: 1 };   // $69
 const GHK = { id: "ghk-cu", quantity: 1 };         // $47.99
 
 // ============================================================================
+/**
+ * WHERE A TRACKED LINK LANDED, COMPARED THE WAY IT SHOULD BE.
+ *
+ * These steps used to require the redirect to equal `${BASE}/products` exactly.
+ * The destination now carries the campaign's own UTM tags —
+ * ?utm_source=email&utm_medium=automation&utm_campaign=replenishment — which is
+ * the store tagging its own traffic correctly, and made three steps fail with
+ * their own expected page printed in the message. The PATH is what those steps
+ * are about, so the path is what is compared, and the tagging is asserted too
+ * rather than merely tolerated: an untagged automation click would be reported
+ * as organic and quietly understate the channel.
+ */
+function landedAt(location, path, { tagged = true } = {}) {
+  const url = new URL(location);
+  if (url.pathname !== path) return `landed on ${location}`;
+  if (tagged) {
+    if (url.searchParams.get("utm_source") !== "email") return `landed untagged: ${location}`;
+    if (url.searchParams.get("utm_medium") !== "automation") return `landed with utm_medium=${url.searchParams.get("utm_medium")}`;
+    if (!url.searchParams.get("utm_campaign")) return `landed with no utm_campaign: ${location}`;
+  }
+  return null;
+}
+
 async function main() {
   mkdirSync(SHOTS, { recursive: true });
 
@@ -461,9 +618,9 @@ async function main() {
   await step("a GUEST clicking the reorder button lands on the catalogue, not the login page, with the gift armed", async () => {
     const click = await clickCta(bCta);
     assert(click.status === 302, `click → ${click.status}`);
-    assert(click.location === `${BASE}/products`, `landed on ${click.location}`);
+    assert(!landedAt(click.location, "/products"), landedAt(click.location, "/products") ?? "");
     assert(click.offerToken, "the gift cookie was not set");
-    const status = await fetch(`${BASE}/api/offer/status`, { headers: { Cookie: `vl_offer=${click.offerToken}` } }).then((r) => r.json());
+    const status = await fetch(`${BASE}/api/offer/status`, { headers: { Cookie: click.cookies } }).then((r) => r.json());
     assert(status?.offer?.rewardKind === "free_shipping", `offer status ${JSON.stringify(status)}`);
     return `→ /products; offer status: ${status.offer.rewardKind}`;
   });
@@ -579,7 +736,9 @@ async function main() {
     await setOrderAge(d1, D, 41); await quietReset(D);
     const d40 = await sweepAndMail((m) => to(m) === D);
     assert(d40.mail.length === 1, `day 40: ${d40.mail.map((m) => m.subject).join(", ") || "none"}`);
-    await setOrderAge(d1, D, 51); await quietReset(D);
+    // Eleven days, not two: win-back 2 is the rung above win-back 1 and the
+    // ladder holds it until the ten days between their delays have passed.
+    await setOrderAge(d1, D, 51); await quietReset(D, 11);
     const d50 = await sweepAndMail((m) => to(m) === D);
     assert(d50.mail.length === 1, `day 50: ${d50.mail.map((m) => m.subject).join(", ") || "none"}`);
     const click = await clickCta(ctaOf(d50.mail[0]));
@@ -669,17 +828,42 @@ async function main() {
   let fToken = null; let fCart = null;
 
   await step("the abandoned cart gets its first reminder; the gift is untouched", async () => {
+    // CART RECOVERY IS MARKETING MAIL, SO IT NEEDS A CONSENTED ADDRESS.
+    // mintToken creates the account the gift needs; the opt-in is separate and
+    // deliberately fail-closed, so without it the sweep is right to send nothing
+    // and "expected one reminder, got none" is the consent rule working.
+    await seedSubscriber(F, 100);
     fToken = await mintToken(F, "winback_60_percent_15", "welcome_no_purchase");
     const sessionId = `qa-cart-${stamp}`;
+    // THE CART SNAPSHOT IS NOT AN ANONYMOUS ENDPOINT, AND MUST NOT BE.
+    //
+    // /api/cart/track refuses a caller with no session — which qa-lifecycle-email
+    // asserts on purpose ("the track endpoint refuses an unauthenticated caller
+    // outright"), because an open one would let anyone write a cart against
+    // somebody else's address and pull recovery mail down on them. So the
+    // snapshot is made the way the shop makes it: as the signed-in shopper.
+    const session = await sessionCookieFor(F);
     const r = await fetch(`${BASE}/api/cart/track`, {
-      method: "POST", headers: { "Content-Type": "application/json", "x-real-ip": nextIp() },
-      body: JSON.stringify({ sessionId, email: F, items: [{ id: "bpc-157-10mg", name: "BPC-157 10mg", quantity: 1, unitPriceCents: 6900 }], cartValueCents: 6900 }),
+      method: "POST",
+      headers: { "Content-Type": "application/json", origin: BASE, ...(session ? { Cookie: session } : {}), "x-real-ip": nextIp() },
+      // THE ITEM SHAPE THE CART REALLY POSTS: slug and unitPrice. This said
+      // `id` and `unitPriceCents`, so the row stored lines with no slug — and a
+      // sweep that cannot name a cart's products from the catalogue sends
+      // nothing for it. The cart counted as ELIGIBLE and no message went, which
+      // reads as a dead recovery ladder rather than as a malformed fixture.
+      body: JSON.stringify({ sessionId, email: F, items: [{ slug: "bpc-157-10mg", name: "BPC-157 10mg", quantity: 1, unitPrice: 69 }], cartValueCents: 6900 }),
     });
     assert(r.status === 200, `track answered ${r.status}: ${(await r.text()).slice(0, 160)}`);
     const cart = (await q(`select id from abandoned_carts where email = $1 order by first_seen_at desc limit 1`, [F])).rows[0];
     assert(cart, "no abandoned cart tracked");
     fCart = cart.id;
     await q(`update abandoned_carts set first_seen_at = $2, last_updated_at = $2 where id = $1`, [fCart, ago(2 * HOUR)]);
+    // An earlier section mails this address as part of a CAMPAIGN, and the
+    // frequency guard then holds every other marketing message to it for a day —
+    // correctly, and proved on purpose two sections below. This step is about the
+    // recovery ladder, not about frequency, so the unrelated pressure is aged out
+    // rather than left to make a working reminder look missing.
+    await quietReset(F);
     const { mail } = await sweepAndMail((m) => to(m) === F);
     assert(mail.length === 1, `expected one reminder, got ${mail.map((m) => m.subject).join(", ") || "none"}`);
     assert(!/SAVE-/.test(decode(mail[0].html)), "the first reminder carried a discount code");
@@ -777,13 +961,15 @@ async function main() {
     assert(mail.length === 1, `expected the reorder reminder, got ${mail.map((m) => m.subject).join(", ") || "none"}`);
     hCta = ctaOf(mail[0]);
     const click = await clickCta(hCta, hSession);
-    assert(click.status === 302 && click.location === `${BASE}/account/orders`, `signed in → ${click.status} ${click.location}`);
+    assert(click.status === 302, `signed in → ${click.status} ${click.location}`);
+    assert(!landedAt(click.location, "/account/orders"), `signed in → ${landedAt(click.location, "/account/orders")}`);
     return `→ /account/orders`;
   });
 
   await step("with an expired session the same link lands on the catalogue, gift still armed", async () => {
     const click = await clickCta(hCta, "sb-access-token=expired; sb-refresh-token=expired");
-    assert(click.status === 302 && click.location === `${BASE}/products`, `expired → ${click.status} ${click.location}`);
+    assert(click.status === 302, `expired → ${click.status} ${click.location}`);
+    assert(!landedAt(click.location, "/products"), `expired → ${landedAt(click.location, "/products")}`);
     assert(click.offerToken, "gift cookie not set");
     return "→ /products";
   });
