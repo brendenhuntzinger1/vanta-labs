@@ -27,6 +27,26 @@ import { chromium } from "playwright";
 import pg from "pg";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
+
+/**
+ * THE HARNESS IS HTTPS, AND ITS CERTIFICATE IS SELF-SIGNED.
+ *
+ * The runbook requires the harness to be driven over TLS (section 5c): the
+ * session cookie is Secure in a production build, so over plain http a correct
+ * sign-in establishes nothing and this file reports "no session cookie after a
+ * correct sign-in" — a defect that does not exist in production. The links
+ * inside the captured emails are built from NEXT_PUBLIC_SITE_URL and therefore
+ * point at the TLS proxy regardless of what this file is driven at, so without
+ * this every "follow the link from the email" step dies at
+ * ERR_CERT_AUTHORITY_INVALID.
+ *
+ * Scoped to loopback so a run against anything else keeps full certificate
+ * checking.
+ */
+const LOOPBACK_TLS = /^https:\/\/(127\.0\.0\.1|localhost)(:|$)/.test(BASE)
+  ? { ignoreHTTPSErrors: true }
+  : {};
+
 const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/storefront";
 const CAPTURE_DIR = process.env.EMAIL_CAPTURE_DIR ?? "/tmp/vanta-qa";
 const CAPTURE = `${CAPTURE_DIR}/captured-emails.jsonl`;
@@ -203,7 +223,7 @@ async function renderMail(context, mail, label) {
 async function main() {
   mkdirSync(SHOTS, { recursive: true });
   const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium", args: ["--no-sandbox", "--ssl-version-max=tls1.2"] });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ ...LOOPBACK_TLS, viewport: { width: 1280, height: 900 } });
   const page = await context.newPage();
 
   // Every automation on, with short delays, so the clock can be walked.
@@ -237,7 +257,10 @@ async function main() {
     const r = await page.evaluate(async ([email]) => {
       const res = await fetch("/api/auth/signup", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password: "HarnessPass123!", fullName: "Sam Subscriber", businessType: "Other", referredByCode: "", captchaToken: "", nextPath: "/account", marketingOptIn: true }),
+        // The store's own gate: signup requires the 21+ and research-use
+        // acknowledgements. Sending them is what a real customer does, not a
+        // bypass — the portal collects both before it will submit.
+        body: JSON.stringify({ email, password: "HarnessPass123!", fullName: "Sam Subscriber", businessType: "Other", referredByCode: "", captchaToken: "", nextPath: "/account", marketingOptIn: true, ageConfirmed: true, researchUseOnly: true }),
       });
       return { status: res.status, body: await res.json().catch(() => null) };
     }, [subscriber]);

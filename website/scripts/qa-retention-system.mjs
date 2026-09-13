@@ -41,6 +41,26 @@ import { chromium } from "playwright";
 import pg from "pg";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
+
+/**
+ * THE HARNESS IS HTTPS, AND ITS CERTIFICATE IS SELF-SIGNED.
+ *
+ * The runbook requires the harness to be driven over TLS (section 5c): the
+ * session cookie is Secure in a production build, so over plain http a correct
+ * sign-in establishes nothing and this file reports "no session cookie after a
+ * correct sign-in" — a defect that does not exist in production. The links
+ * inside the captured emails are built from NEXT_PUBLIC_SITE_URL and therefore
+ * point at the TLS proxy regardless of what this file is driven at, so without
+ * this every "follow the link from the email" step dies at
+ * ERR_CERT_AUTHORITY_INVALID.
+ *
+ * Scoped to loopback so a run against anything else keeps full certificate
+ * checking.
+ */
+const LOOPBACK_TLS = /^https:\/\/(127\.0\.0\.1|localhost)(:|$)/.test(BASE)
+  ? { ignoreHTTPSErrors: true }
+  : {};
+
 const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/storefront";
 const CAPTURE_DIR = process.env.EMAIL_CAPTURE_DIR ?? "/tmp/vanta-qa";
 const CAPTURE = `${CAPTURE_DIR}/captured-emails.jsonl`;
@@ -683,7 +703,9 @@ async function main() {
   await step("a signed-in customer's reorder link lands on their orders", async () => {
     const signup = await fetch(`${BASE}/api/auth/signup`, {
       method: "POST", headers: { "Content-Type": "application/json", ...SAME_ORIGIN, "x-real-ip": nextIp() },
-      body: JSON.stringify({ email: H, password: "HarnessPass123!", fullName: "Holly Harness", businessType: "Other", referredByCode: "", captchaToken: "", nextPath: "/account", marketingOptIn: true }),
+      // The store's own gate: signup requires the 21+ and research-use
+      // acknowledgements. Sending them is what a real customer does.
+      body: JSON.stringify({ email: H, password: "HarnessPass123!", fullName: "Holly Harness", businessType: "Other", referredByCode: "", captchaToken: "", nextPath: "/account", marketingOptIn: true, ageConfirmed: true, researchUseOnly: true }),
     });
     assert(signup.status === 200, `signup answered ${signup.status}`);
     const user = (await q(`select id from auth.users where email = $1`, [H])).rows[0];
@@ -729,7 +751,7 @@ async function main() {
   await step("on a phone, a guest lands on the catalogue and the cart announces the gift", async () => {
     const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium", args: ["--no-sandbox", "--ssl-version-max=tls1.2"] });
     try {
-      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, extraHTTPHeaders: { "x-real-ip": nextIp() } });
+      const context = await browser.newContext({ ...LOOPBACK_TLS, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, extraHTTPHeaders: { "x-real-ip": nextIp() } });
       const page = await context.newPage();
       await page.goto(hCta, { waitUntil: "domcontentloaded" });
       await page.waitForTimeout(1500);

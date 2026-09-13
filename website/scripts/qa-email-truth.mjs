@@ -34,6 +34,26 @@ import { chromium } from "playwright";
 import pg from "pg";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
+
+/**
+ * THE HARNESS IS HTTPS, AND ITS CERTIFICATE IS SELF-SIGNED.
+ *
+ * The runbook requires the harness to be driven over TLS (section 5c): the
+ * session cookie is Secure in a production build, so over plain http a correct
+ * sign-in establishes nothing and this file reports "no session cookie after a
+ * correct sign-in" — a defect that does not exist in production. The links
+ * inside the captured emails are built from NEXT_PUBLIC_SITE_URL and therefore
+ * point at the TLS proxy regardless of what this file is driven at, so without
+ * this every "follow the link from the email" step dies at
+ * ERR_CERT_AUTHORITY_INVALID.
+ *
+ * Scoped to loopback so a run against anything else keeps full certificate
+ * checking.
+ */
+const LOOPBACK_TLS = /^https:\/\/(127\.0\.0\.1|localhost)(:|$)/.test(BASE)
+  ? { ignoreHTTPSErrors: true }
+  : {};
+
 const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/storefront";
 const CAPTURE = `${process.env.EMAIL_CAPTURE_DIR ?? "/tmp/vanta-qa"}/captured-emails.jsonl`;
 const PASSWORD = "HarnessPass123!";
@@ -52,9 +72,24 @@ let section_ = "";
 const section = (t) => { section_ = t; console.log(`\n${t}`); };
 const assert = (c, m) => { if (!c) throw new Error(m); };
 
+/**
+ * A step that could not run, reported as neither a pass nor a failure.
+ *
+ * The repository's rule is that a skip is not a pass, so these are counted
+ * separately and printed again at the end under a heading that says so. A step
+ * blocked by the HARNESS must not be able to hide as green, and must not be
+ * able to masquerade as a product defect either.
+ */
+const SKIP = (reason) => ({ __skip: reason });
+
 async function step(name, fn) {
   try {
     const detail = await fn();
+    if (detail && typeof detail === "object" && detail.__skip) {
+      results.push({ section: section_, name, status: "skip", detail: detail.__skip });
+      console.log(`  SKIP  ${name}\n        ${detail.__skip}`);
+      return;
+    }
     results.push({ section: section_, name, status: "pass", detail });
     console.log(`  PASS  ${name}${detail ? `  — ${detail}` : ""}`);
   } catch (error) {
@@ -151,7 +186,7 @@ async function main() {
     "/opt/pw-browsers/chromium/chrome-linux/chrome",
   ].find((p) => existsSync(p));
   browser = await chromium.launch(CHROME ? { executablePath: CHROME } : {});
-  const context = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+  const context = await browser.newContext({ ...LOOPBACK_TLS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
   const page = await context.newPage();
   await passAgeGate(page);
 
@@ -168,8 +203,11 @@ async function main() {
 
   await step("signing up sends EXACTLY ONE email, to the address that signed up", async () => {
     const before = mailOffset();
+    // The store's own gate: signup requires the 21+ and research-use
+    // acknowledgements. Sending them is what a real customer does, not a bypass.
     const res = await post(page, "/api/auth/signup", {
       email: EMAIL, password: PASSWORD, fullName: "Truth Customer",
+      ageConfirmed: true, researchUseOnly: true,
     });
     assert(res.status < 500, `signup answered ${res.status}`);
     await page.waitForTimeout(1500);
@@ -219,8 +257,8 @@ async function main() {
     const dbl = `dbl.${stamp}@example.test`;
     const before = mailOffset();
     await Promise.all([
-      post(page, "/api/auth/signup", { email: dbl, password: PASSWORD, fullName: "Double" }),
-      post(page, "/api/auth/signup", { email: dbl, password: PASSWORD, fullName: "Double" }),
+      post(page, "/api/auth/signup", { email: dbl, password: PASSWORD, fullName: "Double", ageConfirmed: true, researchUseOnly: true }),
+      post(page, "/api/auth/signup", { email: dbl, password: PASSWORD, fullName: "Double", ageConfirmed: true, researchUseOnly: true }),
     ]);
     await page.waitForTimeout(2000);
     const mail = to(mailSince(before), dbl);
@@ -232,7 +270,7 @@ async function main() {
 
   await step("resend gives ANOTHER usable link, and only one", async () => {
     const target = `resend.${stamp}@example.test`;
-    await post(page, "/api/auth/signup", { email: target, password: PASSWORD, fullName: "Resend" });
+    await post(page, "/api/auth/signup", { email: target, password: PASSWORD, fullName: "Resend", ageConfirmed: true, researchUseOnly: true });
     await page.waitForTimeout(1500);
 
     const before = mailOffset();
@@ -248,7 +286,7 @@ async function main() {
 
   await step("THREE CONCURRENT resends cannot produce three emails", async () => {
     const target = `conc.${stamp}@example.test`;
-    await post(page, "/api/auth/signup", { email: target, password: PASSWORD, fullName: "Concurrent" });
+    await post(page, "/api/auth/signup", { email: target, password: PASSWORD, fullName: "Concurrent", ageConfirmed: true, researchUseOnly: true });
     await page.waitForTimeout(1500);
 
     const before = mailOffset();
@@ -282,7 +320,25 @@ async function main() {
     await passAgeGate(p);
     await p.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
     await p.waitForTimeout(1200);
+    // THE PORTAL SHOWS NO EMAIL FIELD UNTIL "Sign in with email" IS PRESSED,
+    // and this helper read its absence as "already signed in". That is the same
+    // observation for two opposite states, and it resolved to the wrong one:
+    // every sign-in here silently did nothing, and the three steps that check a
+    // session afterwards failed with "no session cookie after a correct
+    // sign-in" — a defect that does not exist. The journey harness this comment
+    // says it mirrors does press the button; this did not.
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      if (await p.$("form input[type=email]")) break;
+      await p.evaluate(() => {
+        const b = [...document.querySelectorAll("button")]
+          .find((x) => x.textContent.trim() === "Sign in with email");
+        if (b) b.click();
+      });
+      await p.waitForTimeout(500);
+    }
     const field = await p.$("form input[type=email]");
+    // Now an absent field means what it claims: the portal forwarded an
+    // already-signed-in visitor away before it could render one.
     if (!field) return { alreadySignedIn: true };
     await p.fill("form input[type=email]", email);
     await p.fill("form input[type=password]", password);
@@ -366,7 +422,7 @@ async function main() {
 
   await step("the applicant signs up and gets their verification link", async () => {
     const before = mailOffset();
-    await post(page, "/api/auth/signup", { email: AMB, password: PASSWORD, fullName: "Zane Applicant" });
+    await post(page, "/api/auth/signup", { email: AMB, password: PASSWORD, fullName: "Zane Applicant", ageConfirmed: true, researchUseOnly: true });
     await page.waitForTimeout(2000);
 
     const mail = to(mailSince(before), AMB);
@@ -409,8 +465,29 @@ async function main() {
   });
 
   await step("the referral link actually attributes to that ambassador", async () => {
+    // /r/<code> BUILDS ITS REDIRECT FROM request.url's ORIGIN, AND A CUSTOM
+    // SERVER BEHIND A TLS PROXY COMPOSES THAT WRONGLY.
+    //
+    // harness-server.mjs listens on 127.0.0.1:3000 and tls-proxy.mjs forwards
+    // `Host: 127.0.0.1:3443` with `x-forwarded-proto: https`. Next takes the
+    // SCHEME from the forwarded header and the HOST from the server's own
+    // address, so the route composes `https://localhost:3000` — an https URL
+    // pointing at a plain-http port, and the browser dies on the handshake with
+    // ERR_SSL_PROTOCOL_ERROR before the route's own logic is reached.
+    //
+    // It is a harness artifact, not a product defect: on Vercel request.url
+    // carries the real request host, and a spoofed Host header does NOT move
+    // this origin (checked), so nothing here is injectable. The same hop over
+    // the plain-http base works, and qa-discount-contest — which runs at
+    // http://localhost:3000 precisely so that /r/ stays on one origin — proves
+    // the referral cookie and its attribution there, including a step named
+    // "the link stayed on one origin".
+    if (/^https:\/\/(127\.0\.0\.1|localhost)(:|$)/.test(BASE)) {
+      return SKIP("/r/ cannot be followed over the loopback TLS proxy — see the comment above; "
+        + "covered at the http base and by qa-discount-contest");
+    }
     const code = `ZANE${String(stamp).slice(-5)}`;
-    const visitor = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const visitor = await browser.newContext({ ...LOOPBACK_TLS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const v = await visitor.newPage();
     await v.goto(`${BASE}/r/${code}`, { waitUntil: "domcontentloaded" });
     await v.waitForTimeout(2000);
@@ -442,7 +519,15 @@ async function main() {
   await browser.close();
 
   const failed = results.filter((r) => r.status === "fail");
-  console.log(`\n${results.length} checks: ${results.length - failed.length} passed, ${failed.length} failed.`);
+  const skipped = results.filter((r) => r.status === "skip");
+  const passed = results.length - failed.length - skipped.length;
+  console.log(`\n${results.length} checks: ${passed} passed, ${failed.length} failed, ${skipped.length} skipped.`);
+  if (skipped.length) {
+    // Printed again, under a heading that says what a skip means, because a
+    // step that did not run is not a step that passed.
+    console.log("\nThese did NOT run, so they are NOT verified:");
+    for (const r of skipped) console.log(`  ${r.section} :: ${r.name}\n      ${r.detail}`);
+  }
   if (failed.length) {
     console.log("\nFailures:");
     for (const f of failed) console.log(`  ${f.section} :: ${f.name}\n      ${f.detail}`);
