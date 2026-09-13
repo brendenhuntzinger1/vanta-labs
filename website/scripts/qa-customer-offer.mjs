@@ -30,6 +30,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { chromium } from "playwright";
 import pg from "pg";
 import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
+import { captureControl, pinControl, restoreControl } from "./qa-control-fixtures.mjs";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
 
@@ -314,7 +315,22 @@ async function checkout(page, { email, items, expectFailure = false }) {
 
 const LINE = { id: "bpc-157-10mg", quantity: 1 };          // $69, clears the $60 minimum
 
+let controlBefore = null;
+
 async function main() {
+  // SAY WHAT THE SHIPPING POLICY IS, RATHER THAN INHERITING IT.
+  //
+  // Section 5 proves a free-SHIPPING gift, and it can only do that if an
+  // ordinary order pays shipping first. qa-cart-recovery-override turns
+  // shipping.free_shipping_sitewide ON — correctly; production runs it that way
+  // and its totals depend on it — so whichever suite ran last decided whether
+  // this one passed. Run after it, this file reported seven failures, every one
+  // of them the store obeying a setting this file never asked for:
+  // "baseline order already shipped free (0.00)", "a different address got free
+  // shipping", "an unflagged coupon waived shipping". None of them was a defect.
+  controlBefore = await captureControl(q, [["shipping", "free_shipping_sitewide"]]);
+  await pinControl(q, [["shipping", "free_shipping_sitewide", false]]);
+
   // RE-RUNNABLE. This script places a dozen real orders, and the free unit
   // consumes real stock — which is the point of it being a real order line,
   // and which means an un-topped-up harness runs the catalogue dry and the
@@ -796,6 +812,7 @@ main()
     results.push({ name: "harness", status: "fail", detail: String(error?.message ?? error) });
   })
   .finally(async () => {
+    await restoreControl(q, controlBefore);
     await pool.end().catch(() => {});
     const pass = results.filter((r) => r.status === "pass").length;
     const fail = results.filter((r) => r.status === "fail").length;

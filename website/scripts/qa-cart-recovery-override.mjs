@@ -34,6 +34,7 @@ import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { chromium } from "playwright";
 import pg from "pg";
 import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
+import { captureControl, pinControl, restoreControl } from "./qa-control-fixtures.mjs";
 
 const BASE = process.env.QA_BASE_URL ?? "https://127.0.0.1:3443";
 
@@ -230,11 +231,15 @@ async function seedPromotion() {
   );
   // Production runs free shipping sitewide, so the harness must too — the whole
   // point of these totals is that they are the totals the shopper will see.
-  await q(
-    `insert into admin_audit_logs (action, target_table, target_id, metadata, created_at)
-     values ('admin_control_upsert', 'shipping', 'free_shipping_sitewide', $1, now())`,
-    [JSON.stringify({ value: true })],
-  );
+  //
+  // AND IT IS PUT BACK AT THE END. Left on, it silently became the store every
+  // later suite read: qa-customer-offer proves a free-SHIPPING gift and needs an
+  // ordinary order to pay shipping, so it reported seven failures — "baseline
+  // order already shipped free (0.00)" — that were this file's setting, not a
+  // defect. Captured here rather than at the top of main() so the capture is
+  // next to the write it undoes.
+  controlBefore = await captureControl(q, [["shipping", "free_shipping_sitewide"]]);
+  await pinControl(q, [["shipping", "free_shipping_sitewide", true]]);
   for (const [key, value] of [["t30m_enabled", true], ["t12h_enabled", true], ["t24h_enabled", true], ["t72h_enabled", true]]) {
     await q(
       `insert into admin_audit_logs (action, target_table, target_id, metadata, created_at)
@@ -411,6 +416,8 @@ async function placeOrder(page, { email, items }) {
     complianceAcknowledgements: { researchCompliance: true, returnsPolicy: true },
   }]);
 }
+
+let controlBefore = null;
 
 async function main() {
   console.log("\nTHE REPLACED STAGES, END TO END\n");
@@ -759,6 +766,7 @@ async function main() {
     assert(rows[0].n === 0, `${rows[0].n} stage rows belong to carts outside the three`);
   });
 
+  await restoreControl(q, controlBefore);
   await pool.end();
   await browser?.close();
   console.log(failures === 0 ? "\nALL CHECKS PASSED\n" : `\n${failures} CHECK(S) FAILED\n`);
@@ -767,6 +775,7 @@ async function main() {
 
 main().catch(async (error) => {
   console.error("\nFATAL", error);
+  await restoreControl(q, controlBefore);
   await pool.end().catch(() => {});
   await browser?.close().catch(() => {});
   process.exit(1);

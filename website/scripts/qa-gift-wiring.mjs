@@ -33,6 +33,7 @@ import pg from "pg";
 import { harnessSigningSecret, loadHarnessEnv } from "./lib/harness-env.mjs";
 import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
 import { captureAutomations, restoreAutomations } from "./qa-automation-fixtures.mjs";
+import { captureControl, pinControl, restoreControl } from "./qa-control-fixtures.mjs";
 
 /** Every automation row as this file found it, put back before it exits. */
 let automationsBefore = null;
@@ -333,6 +334,8 @@ async function readOrder(orderId) {
   return { ...rows[0], lines };
 }
 
+let controlBefore = null;
+
 async function main() {
   mkdirSync(SHOTS, { recursive: true });
 
@@ -361,11 +364,11 @@ async function main() {
   // totals depend on it), so whichever harness ran last decided whether this one
   // passed. A harness that inherits a precondition is a harness that reports a
   // product failure when a sibling ran before it.
-  await q(
-    `insert into admin_audit_logs (action, target_table, target_id, metadata, created_at)
-     values ('admin_control_upsert', 'shipping', 'free_shipping_sitewide', $1, now())`,
-    [JSON.stringify({ value: false })],
-  ).catch(() => {});
+  // ...and puts it back afterwards, for exactly the reason above, pointed the
+  // other way: a suite that leaves the store changed hands the next one a
+  // precondition it never set.
+  controlBefore = await captureControl(q, [["shipping", "free_shipping_sitewide"]]);
+  await pinControl(q, [["shipping", "free_shipping_sitewide", false]]);
 
   browser = await chromium.launch({
     executablePath: "/opt/pw-browsers/chromium",
@@ -1045,6 +1048,7 @@ async function main() {
   }
   console.log(`screenshots: ${SHOTS}`);
   await restoreAutomations(q, automationsBefore);
+  await restoreControl(q, controlBefore);
   await pool.end();
   process.exit(failed.length ? 1 : 0);
 }
@@ -1052,6 +1056,7 @@ async function main() {
 main().catch(async (error) => {
   console.error(error);
   await restoreAutomations(q, automationsBefore).catch(() => {});
+  await restoreControl(q, controlBefore);
   await pool.end().catch(() => {});
   process.exit(1);
 });

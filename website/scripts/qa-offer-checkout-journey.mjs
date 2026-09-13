@@ -26,6 +26,7 @@ import { chromium, webkit } from "playwright";
 import pg from "pg";
 import { harnessSigningSecret } from "./lib/harness-env.mjs";
 import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
+import { captureControl, pinControl, restoreControl } from "./qa-control-fixtures.mjs";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
 
@@ -83,12 +84,12 @@ async function step(name, fn) {
 // switched it on for everyone, and the 15% loses to Buy 2 Get 1 because
 // "largest discount wins" picked the larger one — correctly.
 //
-// That cost an hour to re-derive once. Flip both in the local database before
-// running, and put them back afterwards:
-//
-//   insert into admin_audit_logs (action, target_table, target_id, metadata)
-//   values ('admin_control_upsert','shipping','free_shipping_sitewide','{"value": false}'),
-//          ('admin_control_upsert','promotions','bxgy_promotions','{"value": []}');
+// That cost an hour to re-derive once, and then cost a release batch again when
+// qa-cart-recovery-override — which turns sitewide free shipping ON, correctly,
+// because production runs it that way — happened to run first: eight failures
+// reading "shipping charged" and "nothing double-counts", none of them a defect.
+// So the suite now SAYS what it needs instead of asking you to, and puts the
+// store back when it is done. See qa-control-fixtures.mjs.
 //
 // The suite is deliberately NOT rewritten to accept either config: an exact
 // figure is what catches a pricing regression, and "whatever the config says"
@@ -184,12 +185,43 @@ async function passAgeGate(page) {
 }
 
 /** Walk the storefront and put things in the basket, as a shopper does. */
+/**
+ * CONFIRM THE LINE LANDED, RATHER THAN ASSUMING THE CLICK DID.
+ *
+ * This clicked once and waited 700ms. A click that arrives before the page has
+ * hydrated does nothing at all, and nothing here noticed — the basket stayed
+ * empty and the failure surfaced eight sections later as "locator.waitFor:
+ * Timeout" on the mobile checkout total, because the mobile summary and the
+ * sticky bar are only RENDERED when the basket has something in it. Read at
+ * face value that is "the phone checkout does not show a total in WebKit". It
+ * was a dropped click, it reproduced roughly one run in three, and WebKit-only
+ * runs passed 19/19 every time.
+ *
+ * So the click is retried until the store says the line is in the cart. A
+ * button that genuinely does not work still fails, and now says so in the words
+ * of the thing that went wrong.
+ */
 async function addToCart(page, products) {
   for (const [index, product] of products.entries()) {
     await page.goto(`${BASE}/products/${product.slug}`, { waitUntil: "domcontentloaded" });
     if (index === 0) await passAgeGate(page);
-    await page.getByRole("button", { name: /add to cart/i }).first().click();
-    await page.waitForTimeout(700);
+    const button = page.getByRole("button", { name: /add to cart/i }).first();
+    const inCart = async () => page.evaluate((slug) => {
+      try {
+        const raw = localStorage.getItem("vanta-labs-cart");
+        return Boolean(raw) && (JSON.parse(raw).items ?? []).some((item) => item.slug === slug);
+      } catch { return false; }
+    }, product.slug).catch(() => false);
+
+    let landed = false;
+    for (let attempt = 0; attempt < 3 && !landed; attempt += 1) {
+      await button.click({ timeout: 15_000 });
+      for (let waited = 0; waited < 8000 && !landed; waited += 400) {
+        await page.waitForTimeout(400);
+        landed = await inCart();
+      }
+    }
+    if (!landed) throw new Error(`Add to Cart never put ${product.slug} in the basket after 3 attempts`);
   }
 }
 
@@ -240,7 +272,34 @@ const ANY_TOTAL = '[data-testid="summary-total"]:visible, [data-testid="summary-
 
 async function gotoCheckout(page, { email, state = "CA" } = {}) {
   await page.goto(`${BASE}/checkout`, { waitUntil: "domcontentloaded" });
-  await page.locator(ANY_TOTAL).first().waitFor({ timeout: 20_000 });
+  // SAY WHAT THE PAGE ACTUALLY SHOWED, AND GIVE IT LONGER.
+  //
+  // This threw a bare "locator.waitFor: Timeout 20000ms exceeded" once, in the
+  // WebKit half of a two-engine run on a loaded machine — and the same section
+  // passed 19/19 on two WebKit-only runs straight afterwards. A bare timeout
+  // says nothing about whether the total was missing, the cart was empty, or
+  // the wall had bounced the request, so it cost a full investigation to
+  // establish that nothing was wrong with the store. The wait is unchanged in
+  // what it demands; it is only more patient, and it reports where it was.
+  await page.locator(ANY_TOTAL).first().waitFor({ timeout: 45_000 }).catch(async (error) => {
+    const url = page.url().replace(BASE, "") || "/";
+    const body = await page.locator("body").innerText().catch(() => "");
+    const ids = await page.evaluate(
+      () => [...document.querySelectorAll("[data-testid]")].map((el) => el.getAttribute("data-testid")).join(","),
+    ).catch(() => "");
+    // The cart too: the mobile summary and the sticky bar are only RENDERED
+    // when the basket has something in it, so "no mobile total" and "no cart"
+    // are the same finding and the log should not make you guess which.
+    const cart = await page.evaluate(() => {
+      try { return localStorage.getItem("vanta-labs-cart") ?? "(none)"; } catch { return "(unreadable)"; }
+    }).catch(() => "(unreadable)");
+    const lines = (() => {
+      try { return (JSON.parse(cart).items ?? []).map((i) => `${i.slug}x${i.quantity}`).join(" ") || "EMPTY"; }
+      catch { return cart.slice(0, 60); }
+    })();
+    throw new Error(`${String(error.message).split("\n")[0]} — at ${url}, cart [${lines}], `
+      + `testids [${ids.slice(0, 120)}], page reads "${body.replace(/\s+/g, " ").trim().slice(0, 120)}"`);
+  });
   if (email !== undefined) await fillCheckoutForm(page, { email, state });
   await page.waitForTimeout(1800);
 }
@@ -798,8 +857,20 @@ async function runEngine(name, launcher) {
   await browser.close();
 }
 
+let controlBefore = null;
+
 async function main() {
   mkdirSync(SHOTS, { recursive: true });
+  // The two settings every dollar-exact figure in this file depends on, stated
+  // rather than inherited, and restored on the way out.
+  controlBefore = await captureControl(q, [
+    ["shipping", "free_shipping_sitewide"],
+    ["promotions", "bxgy_promotions"],
+  ]);
+  await pinControl(q, [
+    ["shipping", "free_shipping_sitewide", false],
+    ["promotions", "bxgy_promotions", []],
+  ]);
   await q("update products set inventory_quantity = 900, stock_status = 'In Stock'");
   await q("update product_doses set inventory_quantity = 900, stock_status = 'In Stock'").catch(() => {});
   await q("delete from inventory_reservations").catch(() => {});
@@ -842,12 +913,14 @@ async function main() {
     for (const s2 of skipped) console.log(`  [${s2.engine}] ${s2.name} — install it with: npx playwright install ${s2.engine}`);
   }
   console.log(`screenshots: ${SHOTS}`);
+  await restoreControl(q, controlBefore);
   await pool.end();
   process.exit(failed.length ? 1 : 0);
 }
 
 main().catch(async (error) => {
   console.error(error);
+  await restoreControl(q, controlBefore);
   await pool.end().catch(() => {});
   process.exit(1);
 });
