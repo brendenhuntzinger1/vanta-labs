@@ -70,6 +70,11 @@ export async function POST(request: Request) {
     ctaUrl: ctaLabel ? resolveSitePath(ctaPath, getSiteUrl()) : "",
     offerTerms,
     postalAddress: config.marketingPostalAddress || "(postal address not set — add it in Settings before sending)",
+    // The preview is the only place an operator sees the hero before it ships,
+    // so it reads the same fields the send does. An unusable URL renders
+    // nothing here too, which is how the preview shows the truth.
+    heroImageUrl: text(body.heroImageUrl, 600) || null,
+    heroImageAlt: text(body.heroImageAlt, 300) || null,
   });
 
   return NextResponse.json({ success: true, subject: template.subject, html: template.html, text: template.text });

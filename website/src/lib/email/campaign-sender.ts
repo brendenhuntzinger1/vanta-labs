@@ -77,6 +77,8 @@ export type CampaignRow = {
   segment_param: string | null;
   status: string;
   scheduled_at: string | null;
+  hero_image_url: string | null;
+  hero_image_alt: string | null;
   audience_kind?: string | null;
   affiliate_filter?: string | null;
   affiliate_ids?: string[] | null;
@@ -394,7 +396,7 @@ export async function sendCampaignBatch(input: {
 
   const { data: campaignData, error: campaignError } = await supabaseAdmin
     .from("email_campaigns")
-    .select("id, name, subject, preview_text, headline, body, promo_code, cta_label, cta_path, segment, segment_param, status, scheduled_at, audience_kind, affiliate_filter, affiliate_ids, link_buttons, offer_key, offer_custom")
+    .select("id, name, subject, preview_text, headline, body, promo_code, cta_label, cta_path, segment, segment_param, status, scheduled_at, audience_kind, affiliate_filter, affiliate_ids, link_buttons, offer_key, offer_custom, hero_image_url, hero_image_alt")
     .eq("id", input.campaignId)
     .maybeSingle();
   if (campaignError) throw campaignError;
@@ -621,6 +623,8 @@ export async function sendCampaignBatch(input: {
               // applies is the failure this line exists to prevent.
               offerTerms,
               postalAddress: config.marketingPostalAddress,
+              heroImageUrl: campaign.hero_image_url,
+              heroImageAlt: campaign.hero_image_alt,
             });
 
         // THE SAME MARKETING WRAPPER EITHER WAY. Suppression, the one-click

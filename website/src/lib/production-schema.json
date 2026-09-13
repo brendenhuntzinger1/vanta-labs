@@ -648,7 +648,9 @@
     "affiliate_ids",
     "link_buttons",
     "offer_key",
-    "offer_custom"
+    "offer_custom",
+    "hero_image_url",
+    "hero_image_alt"
   ],
   "email_delivery_events": [
     "id",

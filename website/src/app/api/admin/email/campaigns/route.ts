@@ -71,6 +71,8 @@ export async function POST(request: Request) {
       promo_code: value.promoCode,
       cta_label: value.ctaLabel,
       cta_path: value.ctaPath,
+      hero_image_url: value.heroImageUrl,
+      hero_image_alt: value.heroImageAlt,
       segment: value.segment,
       segment_param: value.segmentParam,
       offer_key: value.offerKey,

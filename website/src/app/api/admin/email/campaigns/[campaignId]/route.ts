@@ -24,7 +24,7 @@ export async function GET(request: Request, context: { params: Promise<{ campaig
   const { campaignId } = await context.params;
   const { data, error } = await supabaseAdmin
     .from("email_campaigns")
-    .select("id, name, subject, preview_text, headline, body, promo_code, cta_label, cta_path, segment, segment_param, status, scheduled_at, audience_kind, offer_key, offer_custom")
+    .select("id, name, subject, preview_text, headline, body, promo_code, cta_label, cta_path, segment, segment_param, status, scheduled_at, audience_kind, offer_key, offer_custom, hero_image_url, hero_image_alt")
     .eq("id", campaignId)
     .maybeSingle();
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 });
@@ -80,6 +80,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ campa
       promo_code: value.promoCode,
       cta_label: value.ctaLabel,
       cta_path: value.ctaPath,
+      hero_image_url: value.heroImageUrl,
+      hero_image_alt: value.heroImageAlt,
       segment: value.segment,
       segment_param: value.segmentParam,
       offer_key: value.offerKey,

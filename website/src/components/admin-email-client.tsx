@@ -39,6 +39,10 @@ const EMPTY_FORM = {
   promoCode: "",
   ctaLabel: "SHOP NOW",
   ctaPath: "/products",
+  // Empty is the default and means no hero. A campaign that carries artwork
+  // should be a decision somebody made.
+  heroImageUrl: "",
+  heroImageAlt: "",
   segment: "all",
   segmentParam: "",
   // THE GIFT. "none" is the default and stays the default: a broadcast that
@@ -472,6 +476,8 @@ export function AdminEmailClient({
         promoCode: str(detail?.promo_code),
         ctaLabel: str(detail?.cta_label, EMPTY_FORM.ctaLabel),
         ctaPath: str(detail?.cta_path, EMPTY_FORM.ctaPath),
+        heroImageUrl: str(detail?.hero_image_url),
+        heroImageAlt: str(detail?.hero_image_alt),
         segment: campaign.segment,
         segmentParam: campaign.segmentParam ?? "",
         // THE GIFT COMES BACK TOO. Duplicating a campaign that gave something
@@ -502,6 +508,8 @@ export function AdminEmailClient({
           promoCode: form.promoCode,
           ctaLabel: form.ctaLabel,
           ctaPath: form.ctaPath,
+          heroImageUrl: form.heroImageUrl,
+          heroImageAlt: form.heroImageAlt,
           // So the preview shows the gift paragraph the recipient will read.
           offerKey: form.giftMode === "catalog" ? form.offerKey : null,
           offerCustom: form.giftMode === "custom" ? giftSpec : null,
@@ -778,6 +786,34 @@ export function AdminEmailClient({
                   onChange={(event) => setForm({ ...form, ctaPath: event.target.value })}
                   placeholder="/products"
                 />
+              </label>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Hero image URL</span>
+                <input
+                  data-testid="field-hero-image-url"
+                  className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                  value={form.heroImageUrl}
+                  onChange={(event) => setForm({ ...form, heroImageUrl: event.target.value })}
+                  placeholder="https://www.vantalabsresearch.com/images/hero.png"
+                />
+                <span className="mt-1 block text-[11px] text-zinc-500">
+                  Optional. Shown once, above the headline. Must be a full https:// URL on a public path.
+                </span>
+              </label>
+              <label className="block">
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Hero image alt text</span>
+                <input
+                  data-testid="field-hero-image-alt"
+                  className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                  value={form.heroImageAlt}
+                  onChange={(event) => setForm({ ...form, heroImageAlt: event.target.value })}
+                />
+                <span className="mt-1 block text-[11px] text-zinc-500">
+                  Most clients block images, so for many recipients this is the message. Describe the offer.
+                </span>
               </label>
             </div>
 

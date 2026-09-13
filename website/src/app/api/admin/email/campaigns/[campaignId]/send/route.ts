@@ -45,7 +45,7 @@ export async function POST(request: Request, context: { params: Promise<{ campai
 
   const { data: campaign } = await supabaseAdmin
     .from("email_campaigns")
-    .select("id, name, subject, preview_text, headline, body, promo_code, cta_label, cta_path, status, audience_kind, link_buttons")
+    .select("id, name, subject, preview_text, headline, body, promo_code, cta_label, cta_path, status, audience_kind, link_buttons, hero_image_url, hero_image_alt")
     .eq("id", campaignId)
     .maybeSingle();
   if (!campaign) {
@@ -127,6 +127,10 @@ export async function POST(request: Request, context: { params: Promise<{ campai
           // customer, minus the click being recorded.
           ctaUrl: safeCampaignDestination(campaign.cta_path as string),
           postalAddress: config.marketingPostalAddress,
+          // A test send that does not carry the artwork is not a test of the
+          // campaign that will go out. Same two columns, same renderer.
+          heroImageUrl: campaign.hero_image_url as string | null,
+          heroImageAlt: campaign.hero_image_alt as string | null,
         });
 
     // The same headers sendMarketingEmail sets, built from the same HMAC token,
