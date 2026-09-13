@@ -1473,7 +1473,9 @@
     "created_at",
     "utm_content",
     "utm_term",
-    "ttclid"
+    "ttclid",
+    "user_id",
+    "is_bot"
   ],
   "wishlist_items": [
     "id",

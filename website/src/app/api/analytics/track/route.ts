@@ -5,6 +5,11 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { createOptionalColumnInserter } from "@/lib/analytics-column-fallback";
 import { customerSafeMessage } from "@/lib/safe-error";
 import { normalizeCampaignTag } from "@/lib/attribution";
+import { getAuthenticatedUser } from "@/lib/auth-session";
+import { detectRoleFromUser } from "@/lib/auth-role";
+import { resolveAnalyticsUserId } from "@/lib/analytics-identity";
+import { resolveCoarseGeoFromHeaders } from "@/lib/request-geo";
+import { isLikelyBotUserAgent } from "@/lib/bot-detection";
 
 const insertAnalyticsEvent = createOptionalColumnInserter(async (row) =>
   supabaseAdmin.from("website_analytics_events").insert(row),
@@ -41,6 +46,13 @@ const ALLOWED_EVENTS = new Set([
   "remove_from_cart",
   "update_cart_quantity",
   "begin_checkout",
+  // Liveness ping for /admin/live (the live-visitor dashboard) — sent every
+  // 15s while a tab is visible. Safe on the same anonymous-write footing as
+  // page_view/session_start: it carries no revenue or order data, nothing
+  // reads it back into a funnel/attribution report, and it is excluded from
+  // getCurrentOnlineVisitorCount's event_type list on purpose (that reader
+  // still means "a real navigation happened", not "a tab is still open").
+  "heartbeat",
 ]);
 
 function normalizePath(path: unknown) {
@@ -92,8 +104,9 @@ export async function POST(request: Request) {
       referrer?: string;
       sessionId?: string;
       visitorId?: string;
-      country?: string;
-      city?: string;
+      // No country/city field here on purpose — geo is resolved server-side
+      // from Vercel's edge headers (see `geo` below), never from anything
+      // the client claims.
       deviceType?: string;
       utmSource?: string;
       utmMedium?: string;
@@ -131,10 +144,38 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "Too many requests" }, { status: 429 });
     }
 
-    // The three creative-attribution columns ship with a migration. Until that
-    // migration is applied they do not exist, and including them would make
-    // PostgREST reject the entire insert — switching off first-party analytics
-    // that has worked for months. See analytics-column-fallback.ts.
+    // IDENTITY, SERVER-VERIFIED ONLY. Nothing above this line reads an
+    // identity from the request body — resolveAnalyticsUserId only ever sees
+    // the GoTrue user this route itself looked up from the session cookie, so
+    // there is no field a client can set to claim to be someone else, or to
+    // claim the admin/staff role that would otherwise exclude them from the
+    // live-visitor dashboard. Fails soft to anonymous (userId stays null) on
+    // any session-verification hiccup — a GoTrue blip must never break
+    // tracking for the anonymous majority of traffic, which never touches
+    // this cookie at all.
+    let userId: string | null = null;
+    try {
+      const user = await getAuthenticatedUser();
+      userId = resolveAnalyticsUserId(user, user ? detectRoleFromUser(user) : "unknown");
+    } catch (identityError) {
+      console.error("[analytics/track] identity resolution failed, treating as anonymous", identityError);
+    }
+
+    // GEO, SERVER-RESOLVED ONLY. Vercel's edge network has already resolved
+    // country/city before this request reaches the app; a client-supplied
+    // country/city is never read (the browser tracker never sent one anyway).
+    // No IP address is read for this — see request-geo.ts.
+    const geo = resolveCoarseGeoFromHeaders(request.headers);
+    const userAgent = request.headers.get("user-agent");
+    // Display filter for /admin/live only (bot-detection.ts) — never an
+    // access control, never changes what this route does with the request.
+    const isBot = isLikelyBotUserAgent(userAgent);
+
+    // The three creative-attribution columns, plus user_id/is_bot below, ship
+    // with migrations. Until a migration is applied its columns do not exist,
+    // and including them would make PostgREST reject the entire insert —
+    // switching off first-party analytics that has worked for months. See
+    // analytics-column-fallback.ts.
     const error = await insertAnalyticsEvent(
       {
         event_type: eventType,
@@ -143,10 +184,16 @@ export async function POST(request: Request) {
         referrer: normalizeText(body.referrer, 1200),
         session_id: sessionId,
         visitor_id: normalizeText(body.visitorId, 120),
-        user_agent: normalizeText(request.headers.get("user-agent"), 700),
-        ip_address: normalizeIpAddress(request.headers.get("x-forwarded-for")),
-        country: normalizeText(body.country, 80),
-        city: normalizeText(body.city, 120),
+        user_agent: normalizeText(userAgent, 700),
+        // NEVER FOR A HEARTBEAT. Every other event type keeps the existing
+        // stored IP (unchanged behavior, unrelated to this feature); a
+        // heartbeat is pure liveness-ping traffic for /admin/live and the
+        // requirement for that feature is explicit: no raw IP retained. Geo
+        // for a heartbeat comes entirely from the header-resolved `geo`
+        // above, which never touches the address at all.
+        ip_address: eventType === "heartbeat" ? null : normalizeIpAddress(request.headers.get("x-forwarded-for")),
+        country: geo.country,
+        city: geo.city,
         device_type: normalizeText(body.deviceType, 80),
         // CAMPAIGN TAGS ARE THE JOIN KEY, SO THEY ARE STORED THE WAY THE JOIN
         // EXPECTS THEM — normalizeCampaignTag, not normalizeText.
@@ -177,6 +224,8 @@ export async function POST(request: Request) {
         // A click id is an opaque token the ad platform matches on, never a key
         // we group by — lowercasing one would break the conversion API.
         ttclid: normalizeText(body.ttclid, 260),
+        user_id: userId,
+        is_bot: isBot,
       },
     );
 

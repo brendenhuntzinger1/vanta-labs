@@ -14,6 +14,7 @@ import { runCouponHygiene } from "@/lib/coupon-hygiene";
 import { resealPlaintextControlSecrets } from "@/lib/admin-control";
 import { repairUnredeemedPaidOffers } from "@/lib/offers/customer-offer-repair";
 import { ingestAdSpend } from "@/lib/ads/spend-ingest";
+import { pruneStaleHeartbeats } from "@/lib/admin-live-visitors";
 import { handleCronRequest, type CronJobMap } from "@/lib/cron-runner";
 
 export const dynamic = "force-dynamic";
@@ -143,6 +144,13 @@ const JOBS: CronJobMap = {
   // hours, because the platforms restate a few times a day and 192 requests
   // daily would buy nothing.
   adSpendIngest: { label: "ad_spend_ingest", run: ingestAdSpend },
+  // Retention for /admin/live's heartbeat rows only — page_view/session_start
+  // and every other event type are untouched (real funnel/attribution
+  // reporting depends on those). A heartbeat is worthless past the 60s live
+  // window it exists to serve, and without this the table would gain one row
+  // every 15s per open tab, forever. Idempotent: it only ever deletes rows
+  // already past the retention cutoff.
+  liveVisitorHeartbeatPrune: { label: "live_visitor_heartbeat_prune", run: pruneStaleHeartbeats },
 };
 
 /**

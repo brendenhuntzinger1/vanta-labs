@@ -32,6 +32,7 @@ const signupConfirmations = sentinel("signupConfirmations");
 const partnerAccess = sentinel("partnerAccess");
 const birthdayBonus = sentinel("birthdayBonus");
 const orderPushHealth = sentinel("orderPushHealth");
+const liveVisitorHeartbeatPrune = sentinel("liveVisitorHeartbeatPrune");
 interface SystemAlert {
   type: string;
   severity: string;
@@ -88,6 +89,7 @@ vi.mock("@/lib/offers/customer-offer-repair", () => ({ repairUnredeemedPaidOffer
 vi.mock("@/lib/ads/spend-ingest", () => ({
   ingestAdSpend: async () => ({ ran: false, reason: "WINDSOR_API_KEY is not set", connectors: [], totalWritten: 0, totalSpend: 0 }),
 }));
+vi.mock("@/lib/admin-live-visitors", () => ({ pruneStaleHeartbeats: () => liveVisitorHeartbeatPrune() }));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: (alert: SystemAlert) => recordSystemAlert(alert) }));
 
 const SECRET = "test-cron-secret";
@@ -127,6 +129,9 @@ describe("the scheduled sweep", () => {
     expect(body.signupConfirmations).toEqual({ job: "signupConfirmations" });
     expect(body.partnerAccess).toEqual({ job: "partnerAccess" });
     expect(body.orderPushHealth).toEqual({ job: "orderPushHealth" });
+    // Asserted for the same reason as inventoryCommitRepair above: a job that
+    // is mocked but never wired into JOBS would still import cleanly.
+    expect(body.liveVisitorHeartbeatPrune).toEqual({ job: "liveVisitorHeartbeatPrune" });
   });
 
   it("runs every job exactly once", async () => {
