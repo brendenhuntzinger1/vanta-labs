@@ -29,34 +29,66 @@
 // ---------------------------------------------------------------------------
 
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import * as pw from "playwright-core";
 import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
 
-const BASE = process.env.QA_BASE_URL || "http://127.0.0.1:3000";
+// WEBKIT IS DRIVEN OVER TLS, AND THAT IS NOT A CONVENIENCE.
+//
+// The session cookie is Secure in a production build, and WebKit correctly
+// refuses to store a Secure cookie delivered over plain http. Chromium stores it
+// anyway because it treats 127.0.0.1 as a trustworthy origin. Pointed at the
+// http port, WebKit therefore fails every authenticated assertion in this file
+// — "the credentials establish a session", three times — for a reason that does
+// not exist in production, where the origin is https. Read at face value that
+// says "sign-in is broken in Safari", which is the exact false P0 this harness
+// exists to avoid manufacturing. docs/BROWSER-TESTING-RUNBOOK.md §5c.
+//
+// So WebKit gets the TLS proxy and the other two keep the http port they are
+// already certified on. An explicit QA_BASE_URL overrides all of it.
+const EXPLICIT_BASE = process.env.QA_BASE_URL;
+const HTTP_BASE = EXPLICIT_BASE || "http://127.0.0.1:3000";
+const TLS_BASE = EXPLICIT_BASE || process.env.QA_TLS_BASE_URL || "https://127.0.0.1:3443";
+const baseFor = (engine) => (engine === "webkit" ? TLS_BASE : HTTP_BASE);
 
 // Links inside a captured email point at the harness TLS proxy, whose
 // certificate is self-signed; without this a fetch that follows one fails
-// with a bare "fetch failed". No-op unless BASE is loopback.
-allowLoopbackSelfSignedTls(BASE);
-const ENGINE = process.env.ENGINE || "chromium";
+// with a bare "fetch failed". No-op unless the base is loopback.
+allowLoopbackSelfSignedTls(TLS_BASE);
+// ALL THREE BY DEFAULT, NOT CHROMIUM BY DEFAULT.
+//
+// The header of this file says "in Chromium, WebKit and Firefox", and one ENGINE
+// at a time is how it was driven by hand — but the release runner invokes it
+// with no environment at all, so the gating batch was proving Chromium three
+// times and calling it cross-engine. WebKit is the engine every iOS in-app
+// browser actually runs (TikTok, Instagram, Facebook, Snapchat are all
+// WKWebView), which is precisely where paid traffic lands, and Firefox is the
+// one that reads geometry differently. Both were unverified.
+//
+// ENGINE=<name> still runs exactly one, for a quick loop on a single engine.
+const ALL_ENGINES = ["chromium", "firefox", "webkit"];
+const ENGINES = process.env.ENGINE ? [process.env.ENGINE] : ALL_ENGINES;
 const EMAIL = process.env.QA_SIGNIN_EMAIL || "qa.verified@example.test";
 const PASSWORD = process.env.QA_SIGNIN_PASSWORD || "HarnessPass123!";
 
-if (!/127\.0\.0\.1|localhost/.test(BASE)) {
-  console.error(`Refusing to run against ${BASE}. This script signs in and drives the local harness only.`);
-  process.exit(1);
+for (const base of [HTTP_BASE, TLS_BASE]) {
+  if (!/127\.0\.0\.1|localhost/.test(base)) {
+    console.error(`Refusing to run against ${base}. This script signs in and drives the local harness only.`);
+    process.exit(1);
+  }
 }
 
-const launcher = pw[ENGINE];
-if (!launcher) {
-  console.error(`unknown ENGINE "${ENGINE}" — use chromium, webkit or firefox`);
-  process.exit(2);
+for (const engine of ENGINES) {
+  if (!pw[engine]) {
+    console.error(`unknown ENGINE "${engine}" — use chromium, webkit or firefox`);
+    process.exit(2);
+  }
 }
 
 // The egress proxy resets TLS 1.3 and each engine needs a different cap. Inert
 // on loopback; kept so the same script works against a preview URL. Without
 // them every page looks dead, which reads as an outage and is not one.
-const LAUNCH = {
+const LAUNCH_OPTS = {
   chromium: {
     headless: true,
     executablePath: "/opt/pw-browsers/chromium",
@@ -64,7 +96,26 @@ const LAUNCH = {
   },
   firefox: { headless: true, firefoxUserPrefs: { "security.tls.version.max": 3 } },
   webkit: { headless: true },
-}[ENGINE];
+};
+
+/**
+ * Where this engine's binary is, or null if it is not installed.
+ *
+ * An engine that is not on disk must be REPORTED as unrun, never quietly
+ * dropped: "36 checks, 0 failing" with WebKit silently absent is a green that
+ * says the opposite of the truth. Chromium is pinned to a fixed path because
+ * playwright-core resolves a build number this image does not carry.
+ */
+function binaryFor(engine) {
+  const pinned = LAUNCH_OPTS[engine].executablePath;
+  if (pinned) return existsSync(pinned) ? pinned : null;
+  try {
+    const path = pw[engine].executablePath();
+    return path && existsSync(path) ? path : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Desktop plus the two phone widths the audit names. */
 const VIEWPORTS = {
@@ -122,9 +173,10 @@ const OVERFLOW = () => {
   return { over: de.scrollWidth > vw + 1, by: de.scrollWidth - vw, offenders, len: (document.body.innerText || "").trim().length };
 };
 
-async function run(name, viewport) {
-  console.log(`\n### ${ENGINE} — ${name} ${viewport.width}x${viewport.height}`);
-  const browser = await launcher.launch(LAUNCH);
+async function run(engine, name, viewport) {
+  const BASE = baseFor(engine);
+  console.log(`\n### ${engine} — ${name} ${viewport.width}x${viewport.height}  ${BASE}`);
+  const browser = await pw[engine].launch(LAUNCH_OPTS[engine]);
   const ctx = await browser.newContext({
     viewport,
     extraHTTPHeaders: { "x-real-ip": clientIp() },
@@ -134,13 +186,13 @@ async function run(name, viewport) {
     // docs/BROWSER-TESTING-RUNBOOK.md §5c. Inert on http.
     ignoreHTTPSErrors: true,
     // Firefox does not implement Playwright's mobile emulation.
-    ...(viewport.width < 500 && ENGINE !== "firefox" ? { isMobile: true, hasTouch: true } : {}),
+    ...(viewport.width < 500 && engine !== "firefox" ? { isMobile: true, hasTouch: true } : {}),
   });
   const page = await ctx.newPage();
   const consoleErrors = [];
   page.on("console", (m) => { if (m.type() === "error") consoleErrors.push(m.text().slice(0, 120)); });
 
-  const tag = `${ENGINE}/${name}`;
+  const tag = `${engine}/${name}`;
   try {
     // 1. The wall holds, and the portal is what a signed-out visitor gets.
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded", timeout: 60000 });
@@ -313,8 +365,25 @@ async function run(name, viewport) {
     // That is a deliberate, disclosed design, not drift — but an UNDISCLOSED
     // difference is exactly the "Final total $344.96 became $355.31" defect
     // that disclosure exists to prevent, so the test demands the disclosure.
+    // COMPARE THE MONEY, NOT THE WORDING. The cart writes "$0.00" for shipping
+    // and the checkout writes "Free" — the same zero in two vocabularies, which
+    // this reported as a disagreement about shipping, the one kind of finding
+    // that must mean a customer is about to be charged something they were not
+    // shown. A real mismatch still fails: the amounts are parsed and compared.
+    const money = (text) => {
+      const value = String(text ?? "").trim();
+      if (/^free$/i.test(value)) return 0;
+      const digits = value.replace(/[^0-9.]/g, "");
+      return digits ? Number(digits) : null;
+    };
     const exact = ["subtotal", "shipping"]
-      .filter((k) => cart.rows[k] && checkout.rows[k] && cart.rows[k] !== checkout.rows[k])
+      .filter((k) => {
+        if (!cart.rows[k] || !checkout.rows[k]) return false;
+        const a = money(cart.rows[k]);
+        const b = money(checkout.rows[k]);
+        if (a === null || b === null) return cart.rows[k] !== checkout.rows[k];
+        return a !== b;
+      })
       .map((k) => `${k}: cart ${cart.rows[k]} vs checkout ${checkout.rows[k]}`);
     const comparedExact = ["subtotal", "shipping"].filter((k) => cart.rows[k] && checkout.rows[k]);
     record(`${tag}: the cart and checkout agree on subtotal and shipping`,
@@ -341,14 +410,30 @@ async function run(name, viewport) {
   }
 }
 
-for (const [name, viewport] of Object.entries(VIEWPORTS)) {
-  if (ONLY && ONLY !== name) continue;
-  await run(name, viewport);
+const missing = [];
+for (const engine of ENGINES) {
+  if (!binaryFor(engine)) {
+    missing.push(engine);
+    console.log(`\n### ${engine} — NOT RUN: no browser binary installed`);
+    continue;
+  }
+  for (const [name, viewport] of Object.entries(VIEWPORTS)) {
+    if (ONLY && ONLY !== name) continue;
+    await run(engine, name, viewport);
+  }
 }
 
-console.log(`\n${results.length} checks, ${failures} failing (${ENGINE})`);
+const ran = ENGINES.filter((e) => !missing.includes(e));
+console.log(`\n${results.length} checks, ${failures} failing (${ran.join(", ") || "no engine"})`);
 if (failures) {
   console.log("\nFailures:");
   for (const r of results.filter((x) => !x.ok)) console.log(`  ${r.label}${r.detail ? ` — ${r.detail}` : ""}`);
 }
-process.exit(failures ? 1 : 0);
+if (missing.length) {
+  console.log("\nThese engines did NOT run, so they are NOT verified:");
+  for (const engine of missing) console.log(`  ${engine} — install it with: npx playwright install ${engine}`);
+}
+// A missing engine is a gap in the evidence, not a pass. WebKit is every iOS
+// in-app browser; reporting green without it would be the false green this
+// batch exists to catch.
+process.exit(failures || missing.length ? 1 : 0);

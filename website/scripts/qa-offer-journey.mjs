@@ -44,6 +44,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { chromium } from "playwright";
 import pg from "pg";
 import { allowLoopbackSelfSignedTls } from "./qa-loopback-tls.mjs";
+import { captureAutomations, pinAutomations, restoreAutomations } from "./qa-automation-fixtures.mjs";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
 
@@ -101,17 +102,22 @@ let automationBefore = null;
 let stockBefore = null;
 
 async function seedFixtures() {
-  automationBefore = (await q(
-    `select key, enabled, delay_days, offer_key from email_automations where key = $1`, [AUTOMATION],
-  )).rows[0] ?? null;
+  automationBefore = await captureAutomations(q);
   // Only the GIFT is imposed. The schedule is left exactly as the store runs it
   // (win-back 1 at 45 days, win-back 2 at 75, thirty days apart), because the
   // ladder spacing is part of what the journey has to survive — a suite that
   // flattened the delays would prove a sequence this store never sends.
-  await q(
-    `update email_automations set enabled = true, offer_key = $2 where key = $1`,
-    [AUTOMATION, OFFER_KEY],
-  );
+  //
+  // AND THE OTHER FLOWS' GIFTS ARE STATED TOO, AS ABSENT. This file counts the
+  // offers minted for one customer and expects exactly one. Win-back 1 climbs
+  // the same ladder on the way up, so a gift left on IT by another suite mints a
+  // second row and "no second gift is minted for them" fails with "2 offer
+  // row(s)" — an accurate count of a store this file never configured.
+  await pinAutomations(q, Object.fromEntries([
+    [AUTOMATION, { enabled: true, offerKey: OFFER_KEY }],
+    ...["winback_30", "replenishment", "post_purchase", "welcome_intro", "welcome_no_purchase", "browse_abandonment"]
+      .map((key) => [key, { offerKey: null }]),
+  ]));
 
   stockBefore = (await q(
     `select slug, inventory_quantity, reserved_quantity, stock_status from products where slug in ($1,$2)`,
@@ -131,12 +137,7 @@ async function seedFixtures() {
 }
 
 async function restoreFixtures() {
-  if (automationBefore) {
-    await q(
-      `update email_automations set enabled = $2, delay_days = $3, offer_key = $4 where key = $1`,
-      [automationBefore.key, automationBefore.enabled, automationBefore.delay_days, automationBefore.offer_key],
-    ).catch(() => {});
-  }
+  await restoreAutomations(q, automationBefore);
   for (const row of stockBefore ?? []) {
     await q(
       `update products set inventory_quantity = $2, reserved_quantity = $3, stock_status = $4 where slug = $1`,

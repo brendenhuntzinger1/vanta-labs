@@ -692,7 +692,18 @@ async function main() {
         escaped.push(`${next} -> unparseable ${location}`);
         continue;
       }
-      if (landing.host !== new URL(BASE).host) {
+      // THE QUESTION IS WHOSE HOST IT IS, NOT WHICH PORT THIS RUN USED.
+      //
+      // The store's canonical origin is NEXT_PUBLIC_SITE_URL — the harness TLS
+      // proxy on 127.0.0.1:3443 — and the hop sends the customer there whatever
+      // base this file is driven at. Comparing the landing host to BASE's host
+      // therefore called the store's OWN front door "off-site", and reported an
+      // open redirect with the evidence that every attempt landed on
+      // 127.0.0.1:3443: the attack was neutralised in each case, which is the
+      // property under test. The hostname is what an attacker would have to move,
+      // so the hostname is what is compared.
+      const storeHost = new URL(BASE).hostname;
+      if (landing.hostname !== storeHost) {
         escaped.push(`${next} -> lands on ${landing.host}`);
         continue;
       }

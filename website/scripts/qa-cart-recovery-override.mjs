@@ -175,7 +175,7 @@ async function seedCatalogue() {
     const { rows } = await q(
       `insert into products (slug, name, category, description, price_cents, stock_status,
          is_active, is_enabled, is_published, is_archived, image_url)
-       values ($1, $2, 'Research Peptides', 'harness fixture', $3, 'In Stock', true, true, true, false, '/placeholder.png')
+       values ($1, $2, 'Research Peptides', 'harness fixture', $3, 'In Stock', true, true, true, false, '/images/product-placeholder.png')
        on conflict (slug) do update set name = excluded.name, price_cents = excluded.price_cents,
          stock_status = 'In Stock', is_active = true, is_enabled = true,
          is_published = true, is_archived = false
@@ -702,14 +702,28 @@ async function main() {
   console.log("\n  --- idempotency, against the running system ---");
 
   await step("a second sweep sends nothing and mints nothing more", async () => {
+    // COUNTED FOR THIS FILE'S SHOPPERS, NOT FOR THE WHOLE STORE.
+    //
+    // The mail half of this check was already scoped to CARTS; the entitlement
+    // half counted every row in customer_offers. The sweep is the REAL one, so
+    // it also serves whoever else the database happens to hold — a neighbouring
+    // suite's lapsed customer becoming due is the programme working, and it
+    // arrived here as "a second sweep minted 27 more entitlement(s)", an
+    // idempotency failure in a file whose carts had not moved at all.
+    const emails = CARTS.map((c) => c.email.toLowerCase());
+    const mine = async () => (await q(
+      "select count(*)::int as n from customer_offers where lower(email) = any($1)", [emails],
+    )).rows[0].n;
+
     const before = captureMark();
-    const beforeOffers = (await q("select count(*)::int as n from customer_offers")).rows[0].n;
+    const beforeOffers = await mine();
     await runSweep();
     const after = capturedSince(before).filter((m) => CARTS.some((c) => String(m.to ?? "").includes(c.email)));
-    const afterOffers = (await q("select count(*)::int as n from customer_offers")).rows[0].n;
+    const afterOffers = await mine();
     assert(after.length === 0, `a second sweep sent ${after.length} more message(s)`);
-    assert(afterOffers === beforeOffers, `a second sweep minted ${afterOffers - beforeOffers} more entitlement(s)`);
-    return `still ${afterOffers} entitlements, no new mail`;
+    assert(afterOffers === beforeOffers,
+      `a second sweep minted ${afterOffers - beforeOffers} more entitlement(s) for this file's shoppers`);
+    return `still ${afterOffers} entitlements for these ${CARTS.length} carts, no new mail`;
   });
 
   await step("each cart holds exactly one t12h claim", async () => {

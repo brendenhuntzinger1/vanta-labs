@@ -343,6 +343,53 @@ function cartClearing(lines, targetCents) {
   return null;
 }
 
+/**
+ * An order that really does clear the threshold, sized by the STORE'S OWN price.
+ *
+ * cartClearing() sizes a basket by its pre-discount SUBTOTAL, and for a
+ * threshold question that is the wrong number to size against. The store's
+ * bulk-savings rule legitimately took a $245.64 subtotal down to a $183.34
+ * order, and this file reported that correct behaviour as "the cart totalled
+ * $183.34, which is under the threshold" — a failure of a basket the harness
+ * had itself built too small, dressed up as a payment defect.
+ *
+ * Nothing here re-implements the discount rules. A second pricing engine in the
+ * test is a second engine to be wrong, and it would happily agree with itself
+ * while the shop charged something else. Instead the order is placed, the store
+ * reports what it actually charges, and the basket is grown by the shortfall the
+ * store itself just named. Two passes is normally enough; the growth factor
+ * comes from the effective rate the first order revealed.
+ *
+ * The undersized attempts are ordinary pending_payment orders holding ordinary
+ * units, and the run's closing step already hands every such hold back through
+ * the real sweep.
+ *
+ * The assertion downstream is untouched and still strict: the order handed to
+ * the processor really is over $200.
+ */
+async function placeOrderClearing(page, lines, thresholdDollars, attempts = 3) {
+  let target = Math.round(thresholdDollars * 100);
+  let last = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const cart = cartClearing(lines, target);
+    if (!cart) return last;
+    const placed = await placeOrder(page, cart);
+    last = { ...placed, cart };
+    const total = Number(placed.row.amount_paid);
+    if (total >= thresholdDollars) return last;
+    // Grown from the SUBTOTAL the store just priced, not from the target that
+    // produced it. cartClearing() rounds up to whole units, so the basket it
+    // returns usually overshoots the target it was given — growing the target
+    // by the shortfall therefore lands inside the same unit count and re-places
+    // the identical order. Scaling the subtotal cannot: it is the number the
+    // store actually applied its rate to. 2% over, so the next basket lands
+    // above the line rather than exactly on it.
+    const grown = Math.ceil(cart.subtotal_cents * (thresholdDollars / total) * 1.02);
+    target = Math.max(grown, cart.subtotal_cents + 1);
+  }
+  return last;
+}
+
 async function createConfirmedCustomer(email, password, fullName) {
   await q(
     `insert into auth.users (email, encrypted_password, raw_user_meta_data, raw_app_meta_data,
@@ -509,18 +556,33 @@ async function waitForStockDrop(cart, before, expected, timeoutMs = 15_000) {
   return before.qty - latest.qty;
 }
 
+/**
+ * THE SHELF THIS LINE COMES OFF, WHICHEVER ROW THAT TURNS OUT TO BE.
+ *
+ * A cart line names a slug; the store may resolve it to a DOSE. The reservation
+ * records which — inventory_reservations.variant_id — and finalize_inventory
+ * decrements product_doses when it is set and products when it is not. Guard and
+ * decrement therefore always agree, and there is no oversell either way.
+ *
+ * This used to pick the row from the cart item's own id string: `slug::dose` read
+ * the dose, a bare slug read the product. For a line the store resolved to a dose
+ * anyway, it then watched the product row — which correctly never moves — and
+ * reported "stock moved by 0, expected 3" against a sale that had moved exactly
+ * three units off the right shelf.
+ *
+ * So both rows are summed. Precisely one of them moves, so the total is the
+ * movement, and the check cannot be satisfied by the wrong shelf moving.
+ */
 async function stockOf(cart) {
-  const [slug, doseId] = String(cart.items[0].id).split("::");
-  if (doseId) {
-    const r = (await q(
-      `select coalesce(d.inventory_quantity,0) as qty, coalesce(d.reserved_quantity,0) as reserved
-         from product_doses d where d.id = $1`, [doseId],
-    )).rows[0];
-    return { qty: Number(r.qty), reserved: Number(r.reserved) };
-  }
+  const [slug] = String(cart.items[0].id).split("::");
   const r = (await q(
-    `select coalesce(inventory_quantity,0) as qty, coalesce(reserved_quantity,0) as reserved
-       from products where slug = $1`, [slug],
+    `select coalesce(p.inventory_quantity,0) + coalesce((
+              select sum(d.inventory_quantity) from product_doses d where d.product_id = p.id
+            ),0) as qty,
+            coalesce(p.reserved_quantity,0) + coalesce((
+              select sum(d.reserved_quantity) from product_doses d where d.product_id = p.id
+            ),0) as reserved
+       from products p where p.slug = $1`, [slug],
   )).rows[0];
   return { qty: Number(r.qty), reserved: Number(r.reserved) };
 }
@@ -547,7 +609,7 @@ async function main() {
   if (toppedUp) console.log(`topped up ${toppedUp} product line(s) so this run can be served`);
 
   const lines = await sellableLines();
-  const highCart = cartClearing(lines, THRESHOLD * 100);
+  let highCart = cartClearing(lines, THRESHOLD * 100);
   const lowCart = cartClearing(lines.slice().reverse(), 2000);
 
   await createConfirmedCustomer(SHOPPER, PASSWORD, "High Value Buyer");
@@ -563,7 +625,10 @@ async function main() {
   await step(`a cart over $${THRESHOLD} is quoted and an order row is written`, async () => {
     if (!highCart) return SKIP("no in-stock product can reach the threshold in this catalogue");
     const vOffset = veyraOffset();
-    const { row } = await placeOrder(page, highCart);
+    const placed = await placeOrderClearing(page, lines, THRESHOLD);
+    if (!placed) return SKIP("no in-stock product can reach the threshold in this catalogue");
+    highCart = placed.cart;
+    const { row } = placed;
     highOrder = row;
     const total = Number(row.amount_paid);
     assert(total >= THRESHOLD, `the cart totalled $${total.toFixed(2)}, which is under the threshold`);
