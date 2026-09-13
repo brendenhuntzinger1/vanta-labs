@@ -101,6 +101,10 @@ vi.mock("@/lib/rewards", () => ({
   redeemPoints: vi.fn(async () => {}),
   restoreRedeemedPoints: vi.fn(async () => {}),
   reverseOrderPoints: vi.fn(async () => {}),
+  // tender-reservation.ts imports this constant to release a points hold, the
+  // same way it imports STORE_CREDIT_REDEMPTION_REASON above. Omitted, the
+  // release threw and was logged, and nothing failed. The real value.
+  POINTS_REDEMPTION_REASON: "redeem",
 }));
 vi.mock("@/lib/coupons", () => ({ redeemCoupon: vi.fn(async () => ({ ok: true })) }));
 vi.mock("@/lib/email/send", () => ({

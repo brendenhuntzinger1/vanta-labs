@@ -119,7 +119,46 @@ vi.mock("@/lib/supabase-server", () => {
     };
     return builder;
   };
-  return { supabaseAdmin: { from: (name: string) => table(name) } };
+  // THE CLAIM THE PRODUCTION SENDER ACTUALLY MAKES.
+  //
+  // claimMarketingSend calls supabaseAdmin.rpc("marketing_send_claim"). Without
+  // it the call threw, the sender logged "frequency guard unavailable; sending
+  // without it" and fell back to logging after the fact — so this file proved
+  // send-once on the FALLBACK path while the production path went unexercised.
+  // The RPC is the insert, so the partial unique index modelled above is what
+  // decides, exactly as marketing-frequency-guard.sql decides in Postgres:
+  // 23505 on that index is "duplicate", and the caller must not send.
+  const marketingSendClaim = (args: Record<string, unknown>) => {
+    const email = String(args.p_email ?? "").trim().toLowerCase();
+    const campaignType = String(args.p_campaign_type ?? "").trim();
+    if (!email || !campaignType) return { outcome: "refused", log_id: null, last_marketing_at: null };
+    const row: LogRow = {
+      campaign_type: campaignType,
+      reference_id: (args.p_reference_id ?? null) as string | null,
+      recipient_email: email,
+      template_key: String(args.p_template_key ?? campaignType),
+      status: "sending",
+      sent_at: new Date().toISOString(),
+    };
+    // The quiet window is not modelled here on purpose: this file is about the
+    // send-once index, and the window has its own suites
+    // (marketing-frequency-guard.test.ts against real Postgres, and
+    // cart-recovery-frequency-deferral.test.ts).
+    if (violatesUnique(row)) return { outcome: "duplicate", log_id: null, last_marketing_at: null };
+    db.log.push(row);
+    return { outcome: "claimed", log_id: `${row.campaign_type}:${row.reference_id}`, last_marketing_at: null };
+  };
+
+  return {
+    supabaseAdmin: {
+      from: (name: string) => table(name),
+      rpc: async (name: string, args: Record<string, unknown>) => (
+        name === "marketing_send_claim"
+          ? { data: [marketingSendClaim(args)], error: null }
+          : { data: null, error: { message: `unmocked rpc ${name}` } }
+      ),
+    },
+  };
 });
 
 vi.mock("@/lib/email/marketing", () => ({

@@ -186,9 +186,30 @@ vi.mock("@/lib/supabase-server", () => {
     return noop;
   };
 
+  // THE CLAIM THE PRODUCTION SENDER ACTUALLY MAKES — see the note on the insert
+  // above, which models the partial unique index this goes through. Without an
+  // rpc here, claimMarketingSend threw, the sender logged "frequency guard
+  // unavailable; sending without it", and every test in this file measured the
+  // fallback path instead of the one production takes.
+  const marketingSendClaim = (args: Record<string, unknown>) => {
+    const email = String(args.p_email ?? "").trim().toLowerCase();
+    const campaignType = String(args.p_campaign_type ?? "").trim();
+    if (!email || !campaignType) return { outcome: "refused", log_id: null, last_marketing_at: null };
+    const reference = (args.p_reference_id ?? null) as string | null;
+    const clash = sendLog.some((r) => r.reference_id === reference && r.status !== "failed");
+    if (clash) return { outcome: "duplicate", log_id: null, last_marketing_at: null };
+    sendLog.push({ reference_id: reference, status: "sending" } as never);
+    return { outcome: "claimed", log_id: String(reference), last_marketing_at: null };
+  };
+
   return {
     supabaseAdmin: {
       from,
+      rpc: async (name: string, args: Record<string, unknown>) => (
+        name === "marketing_send_claim"
+          ? { data: [marketingSendClaim(args)], error: null }
+          : { data: null, error: { message: `unmocked rpc ${name}` } }
+      ),
       auth: {
         admin: {
           listUsers: async ({ page }: { page: number }) => ({
