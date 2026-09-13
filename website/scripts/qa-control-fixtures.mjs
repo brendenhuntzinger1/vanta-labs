@@ -51,8 +51,27 @@ export async function captureControl(q, pairs) {
   return captured;
 }
 
-/** Say what the store is, for the length of this suite. */
-export async function pinControl(q, triples) {
+/**
+ * The running app's control-snapshot cache, from control-snapshot-cache.ts.
+ *
+ * Writing the row is not the same as the store reading it: getControlSnapshot
+ * caches for ten seconds, so a suite that pins a setting and opens a page a
+ * second later is served the OLD value. qa-offer-checkout-journey did exactly
+ * that in one shuffled batch and failed its very first check with
+ * "cart total 59, expected 74.00 ($59 + $15 shipping)" — the pin was correct
+ * and the shop had simply not noticed it yet. The suites that happened to do a
+ * lot of seeding before their first page load never saw it, which is what makes
+ * this the kind of race that only shows up in one order out of four.
+ */
+const CONTROL_SNAPSHOT_TTL_MS = 10_000;
+
+/**
+ * Say what the store is, for the length of this suite, and WAIT FOR IT TO TAKE.
+ *
+ * The settle is the cache window plus a second. Pass `settleMs: 0` only where
+ * nothing reads the setting through the app.
+ */
+export async function pinControl(q, triples, { settleMs = CONTROL_SNAPSHOT_TTL_MS + 1000 } = {}) {
   for (const [section, key, value] of triples) {
     await q(
       `insert into admin_audit_logs (action, target_table, target_id, metadata, created_at)
@@ -60,6 +79,7 @@ export async function pinControl(q, triples) {
       [section, key, JSON.stringify({ value })],
     );
   }
+  if (settleMs > 0) await new Promise((resolve) => setTimeout(resolve, settleMs));
 }
 
 /**
