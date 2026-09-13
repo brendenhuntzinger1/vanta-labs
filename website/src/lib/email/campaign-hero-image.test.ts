@@ -152,6 +152,25 @@ describe("every render path carries the hero", () => {
   it("persists the columns when a campaign is created or edited", () => {
     expect(SRC("lib/admin-email.ts")).toContain("heroImageUrl");
   });
+
+  // The hero shipped unlinked for its first three commits: campaignTemplate
+  // grew the href and not one caller passed it, so the biggest tap target in
+  // the message was inert in every real send while the tests above still
+  // passed. Asserting the URL is carried, not merely that the column is read.
+  it.each([
+    ["the scheduled sender", "lib/email/campaign-sender.ts"],
+    ["the manual send route", "app/api/admin/email/campaigns/[campaignId]/send/route.ts"],
+    ["the preview route", "app/api/admin/email/campaigns/preview/route.ts"],
+  ])("%s makes the hero clickable", (_label, rel) => {
+    expect(SRC(rel)).toContain("heroImageHref");
+  });
+
+  it("points the sender's hero at the same tracked URL as its button", () => {
+    const src = SRC("lib/email/campaign-sender.ts");
+    const call = (key: string) =>
+      src.slice(src.indexOf(`${key}:`)).split("\n")[0].replace(`${key}:`, "").trim().replace(/,$/, "");
+    expect(call("heroImageHref")).toBe(call("ctaUrl"));
+  });
 });
 
 // ---------------------------------------------------------------------------

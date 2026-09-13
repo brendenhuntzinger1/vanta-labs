@@ -131,6 +131,9 @@ export async function POST(request: Request, context: { params: Promise<{ campai
           // campaign that will go out. Same two columns, same renderer.
           heroImageUrl: campaign.hero_image_url as string | null,
           heroImageAlt: campaign.hero_image_alt as string | null,
+          // Linked in the test too, or the test does not show the operator the
+          // tap target the real send ships.
+          heroImageHref: safeCampaignDestination(campaign.cta_path as string),
         });
 
     // The same headers sendMarketingEmail sets, built from the same HMAC token,

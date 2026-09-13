@@ -75,6 +75,7 @@ export async function POST(request: Request) {
     // nothing here too, which is how the preview shows the truth.
     heroImageUrl: text(body.heroImageUrl, 600) || null,
     heroImageAlt: text(body.heroImageAlt, 300) || null,
+    heroImageHref: ctaLabel ? resolveSitePath(ctaPath, getSiteUrl()) : "",
   });
 
   return NextResponse.json({ success: true, subject: template.subject, html: template.html, text: template.text });
