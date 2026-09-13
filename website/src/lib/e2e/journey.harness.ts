@@ -52,6 +52,15 @@ export interface Harness {
   emailFailures: number;
   nextShippoOrderId: string;
   nextShipmentId: string;
+  /**
+   * When each Shippo transaction id was first seen, in arrival order.
+   *
+   * order-sync asks the API for object_created whenever the delivery does not
+   * carry one, and every payload this harness posts omits it. Stamping ids in
+   * first-seen order is the truth about them: a replacement label is bought
+   * after the label it replaces, so it compares as newer.
+   */
+  shippoTransactionSeenAt: Map<string, number>;
   reset(): void;
 }
 
@@ -63,12 +72,14 @@ export const harness: Harness = {
   emailFailures: 0,
   nextShippoOrderId: "shippo_order_default",
   nextShipmentId: "shippo_shipment_default",
+  shippoTransactionSeenAt: new Map<string, number>(),
   reset() {
     this.db = createFakeDb();
     this.emails = [];
     this.shippoCalls = [];
     this.shippoOrderFailures = 0;
     this.emailFailures = 0;
+    this.shippoTransactionSeenAt = new Map<string, number>();
   },
 };
 

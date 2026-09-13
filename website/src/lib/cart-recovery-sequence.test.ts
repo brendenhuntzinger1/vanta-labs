@@ -31,7 +31,7 @@ const DAY_MS = 24 * HOUR_MS;
 
 type Row = Record<string, unknown>;
 
-const db: { carts: Row[]; stages: Row[]; coupons: Row[]; orders: Row[] } = { carts: [], stages: [], coupons: [], orders: [] };
+const db: { carts: Row[]; stages: Row[]; coupons: Row[]; orders: Row[]; sends: Row[] } = { carts: [], stages: [], coupons: [], orders: [], sends: [] };
 const sent: Array<{ to: string; campaignType: string; templateKey: string; subject: string; text: string; html: string }> = [];
 
 const { sendMarketingEmail } = vi.hoisted(() => ({
@@ -63,6 +63,15 @@ vi.mock("@/lib/env", () => ({ getSiteUrl: () => "https://example.test" }));
 // snapshot (AUTH-3): the mock answers every slug the fixtures use.
 vi.mock("@/lib/catalog", () => ({
   getCatalogProductsBySlugs: async (slugs: string[]) => slugs.map((slug) => ({ slug, name: slug === "bpc-157" ? "BPC-157" : slug })),
+  // EVERY EXPORT THE SWEEP TOUCHES, OR THE SWEEP RUNS DEGRADED AND THIS FILE
+  // PROVES NOTHING. A vi.mock factory replaces the whole module, so an export
+  // it omits THROWS on access — and loadRecoveryCatalogue and the gift ladder
+  // both catch that and fail open ("cart stock unreadable; pricing every line
+  // as available"). Every test here was therefore exercising the degraded
+  // branch, in silence, with a stack trace on stderr that nothing failed on.
+  // An empty map is the honest fixture for a file that is about the LADDER:
+  // stock-driven skipping has its own suite in cart-recovery-sold-out-lines.
+  getStockLevelsBySlugs: async () => new Map<string, number>(),
 }));
 
 const config = {
@@ -79,7 +88,7 @@ let seq = 0;
 // PostgREST-shaped, honouring the filters the sweep actually uses.
 vi.mock("@/lib/supabase-server", () => {
   function builder(table: string) {
-    const TABLES: Record<string, keyof typeof db> = { abandoned_carts: "carts", abandoned_cart_emails: "stages", coupons: "coupons", orders: "orders" };
+    const TABLES: Record<string, keyof typeof db> = { abandoned_carts: "carts", abandoned_cart_emails: "stages", coupons: "coupons", orders: "orders", email_send_log: "sends" };
     const rows = () => db[TABLES[table]] ?? [];
     const filters: Array<(row: Row) => boolean> = [];
     let take: number | null = null;
@@ -146,7 +155,74 @@ vi.mock("@/lib/supabase-server", () => {
     };
     return b;
   }
-  return { supabaseAdmin: { from: (t: string) => builder(t) } };
+  // THE FREQUENCY GUARD, NOT THE ABSENCE OF ONE.
+  //
+  // supabaseAdmin.rpc was missing entirely, so claimMarketingSend threw,
+  // returned outcome "unavailable", and cart-recovery logged "frequency guard
+  // unavailable; sending without it" and sent anyway — on EVERY test in this
+  // file. The spacing rules in the header were being proven by a sweep that had
+  // no guard at all. This implements the contract marketing-frequency-guard.sql
+  // defines, in memory: a non-auth 'sent' row (or a 'sending' claim younger than
+  // fifteen minutes) inside the quiet window defers, except the sequence's own
+  // earlier steps for the same reference, which are exempt by family.
+  //
+  // There is no send-once unique index on cart recovery's campaign types, so
+  // "duplicate" is not reachable here and is not invented.
+  function marketingSendClaim(args: Record<string, unknown>) {
+    const email = String(args.p_email ?? "").trim().toLowerCase();
+    const type = String(args.p_campaign_type ?? "").trim();
+    if (!email || !type) return { outcome: "refused", log_id: null, last_marketing_at: null };
+
+    const quietMs = Math.max(0, Number(args.p_quiet_seconds ?? 0)) * 1000;
+    const family = args.p_exempt_family == null ? null : String(args.p_exempt_family);
+    const reference = args.p_reference_id ?? null;
+    const now = Date.now();
+    const STRANDED_MS = 15 * 60 * 1000;
+
+    let last = 0;
+    for (const row of db.sends) {
+      if (String(row.recipient_email) !== email) continue;
+      const campaign = String(row.campaign_type ?? "");
+      if (campaign.startsWith("auth:")) continue;
+      const at = new Date(String(row.sent_at)).getTime();
+      if (!(at > now - quietMs)) continue;
+      const counts = row.status === "sent"
+        || (row.status === "sending" && at > now - STRANDED_MS);
+      if (!counts) continue;
+      const exempt = family !== null && campaign.startsWith(family)
+        && String(row.reference_id ?? "") === String(reference ?? "");
+      if (exempt) continue;
+      last = Math.max(last, at);
+    }
+
+    if (last && quietMs > 0) {
+      return { outcome: "deferred", log_id: null, last_marketing_at: new Date(last).toISOString() };
+    }
+
+    const row: Row = {
+      id: `log-${++seq}`,
+      campaign_type: type,
+      reference_id: reference,
+      recipient_email: email,
+      template_key: args.p_template_key ?? type,
+      sent_at: new Date(now).toISOString(),
+      status: "sending",
+    };
+    db.sends.push(row);
+    return { outcome: "claimed", log_id: row.id, last_marketing_at: null };
+  }
+
+  return {
+    supabaseAdmin: {
+      from: (t: string) => builder(t),
+      rpc: async (name: string, args: Record<string, unknown>) => {
+        if (name !== "marketing_send_claim") {
+          return { data: null, error: { message: `unmocked rpc ${name}` } };
+        }
+        return { data: [marketingSendClaim(args)], error: null };
+      },
+    },
+  };
 });
 
 function seedCart(input: { id?: string; email?: string; firstSeenHoursAgo: number; lastUpdatedHoursAgo?: number; value?: number }): Row {
@@ -171,7 +247,7 @@ function seedCart(input: { id?: string; email?: string; firstSeenHoursAgo: numbe
 }
 
 beforeEach(() => {
-  db.carts = []; db.stages = []; db.coupons = []; db.orders = [];
+  db.carts = []; db.stages = []; db.coupons = []; db.orders = []; db.sends = [];
   sent.length = 0; seq = 0;
   config.t12hEnabled = false; config.discountPercent = 5;
   vi.clearAllMocks();

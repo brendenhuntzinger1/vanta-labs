@@ -72,6 +72,9 @@ vi.mock("@/lib/email/send", () => ({
   },
 }));
 
+/** A fixed base for stamped label-creation times; only the ORDER matters. */
+const SHIPPO_LABEL_EPOCH = Date.parse("2026-01-01T00:00:00.000Z");
+
 vi.mock("@/lib/shippo/client", () => ({
   SHIPPO_REQUEST_TIMEOUT_MS: 15_000,
   createShippoOrder: async (payload: unknown) => {
@@ -85,6 +88,27 @@ vi.mock("@/lib/shippo/client", () => ({
   createShipmentWithRates: async (payload: unknown) => {
     harness.shippoCalls.push({ kind: "shipment", payload });
     return { ok: true as const, data: { shipmentId: harness.nextShipmentId, rates: [] } };
+  },
+  // THE LOOKUP order-sync FALLS BACK TO, NOT A HOLE WHERE IT WAS.
+  //
+  // The transaction_created payloads posted here carry a status but no
+  // object_created, so isNewerThanRecordedLabel asks Shippo for it. This export
+  // was missing from the factory, so that call THREW: applyTransactionCreated
+  // bailed with "Unexpected failure handling a Shippo transaction webhook", the
+  // replacement label never reached the order, and PHASE 10 still went green on
+  // the columns it did assert. Ids are stamped in first-seen order, which is the
+  // order the labels were bought.
+  getTransaction: async (transactionId: string) => {
+    const seen = harness.shippoTransactionSeenAt;
+    if (!seen.has(transactionId)) seen.set(transactionId, SHIPPO_LABEL_EPOCH + seen.size * 60_000);
+    return {
+      ok: true as const,
+      data: {
+        object_id: transactionId,
+        status: "SUCCESS",
+        object_created: new Date(seen.get(transactionId)!).toISOString(),
+      },
+    };
   },
   parseAmountToCents: (amount: unknown) => {
     if (amount == null) return null;

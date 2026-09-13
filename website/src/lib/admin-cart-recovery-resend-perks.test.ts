@@ -67,6 +67,13 @@ vi.mock("@/lib/catalog", () => ({
     },
     { slug: "bac-water", name: "Recon Water (0.9% Benzyl Alcohol)", price: "$14.99", doses: [] },
   ]),
+  // The sweep reads stock too. A vi.mock factory replaces the whole module, so
+  // an export it omits throws on access and the sweep falls open ("cart stock
+  // unreadable; pricing every line as available") on every test in this file —
+  // silently, because nothing fails on a caught error. An empty map is the
+  // honest fixture for a file that is not about stock; the stock-driven
+  // skipping has its own suite in cart-recovery-sold-out-lines.test.ts.
+  getStockLevelsBySlugs: async () => new Map<string, number>(),
 }));
 
 vi.mock("@/lib/email/frequency", () => ({ claimMarketingSend: async () => ({ outcome: "claimed", logId: "log-1" }) }));

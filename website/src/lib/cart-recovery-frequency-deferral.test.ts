@@ -82,6 +82,13 @@ vi.mock("@/lib/env", () => ({ getSiteUrl: () => "https://example.test" }));
 // snapshot (AUTH-3): the mock answers every slug the fixtures use.
 vi.mock("@/lib/catalog", () => ({
   getCatalogProductsBySlugs: async (slugs: string[]) => slugs.map((slug) => ({ slug, name: slug === "bpc-157" ? "BPC-157" : slug })),
+  // The sweep reads stock too. A vi.mock factory replaces the whole module, so
+  // an export it omits throws on access and the sweep falls open ("cart stock
+  // unreadable; pricing every line as available") on every test in this file —
+  // silently, because nothing fails on a caught error. An empty map is the
+  // honest fixture for a file that is not about stock; the stock-driven
+  // skipping has its own suite in cart-recovery-sold-out-lines.test.ts.
+  getStockLevelsBySlugs: async () => new Map<string, number>(),
 }));
 
 const config = {

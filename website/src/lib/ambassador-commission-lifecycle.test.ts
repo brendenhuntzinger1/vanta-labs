@@ -133,6 +133,12 @@ vi.mock("@/lib/shippo/order-sync", () => ({ syncOrderToShippo: vi.fn(async () =>
 vi.mock("@/lib/store-credit", () => ({
   redeemStoreCredit: vi.fn(async () => {}),
   refundStoreCreditForOrder: vi.fn(async () => {}),
+  // tender-reservation.ts imports this constant to release a hold. A vi.mock
+  // factory replaces the whole module, so omitting it made every release throw
+  // ("Unable to release the tender hold for order ...") on the failed- and
+  // cancelled-payment tests — caught, logged to stderr, and failing nothing.
+  // The real value, so the release path here is the release path.
+  STORE_CREDIT_REDEMPTION_REASON: "membership_redemption",
 }));
 vi.mock("@/lib/cart-recovery", () => ({ markAbandonedCartsRecovered: vi.fn(async () => {}) }));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: vi.fn(async () => {}) }));
