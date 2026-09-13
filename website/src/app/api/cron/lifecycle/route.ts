@@ -4,6 +4,7 @@ import { runAutomationSweep } from "@/lib/email/automations";
 import { drainMarketingSendQueue } from "@/lib/email/marketing-queue";
 import { retryPendingEmails } from "@/lib/email/retry-queue";
 import { reapStrandedOrderEmails } from "@/lib/email/order-email-reaper";
+import { reapStrandedMarketingSends } from "@/lib/email/marketing-send-reaper";
 import { handleCronRequest, type CronJobMap } from "@/lib/cron-runner";
 
 export const dynamic = "force-dynamic";
@@ -26,12 +27,12 @@ export const maxDuration = 60;
  * being killed at sixty seconds never goes at all, and the shopper is simply
  * never reminded.
  *
- * So these six jobs run here, on their own schedule, and the sweep keeps the
- * rest. Nothing is duplicated: each job appears in exactly one of the two
+ * So these seven jobs run here, on their own schedule, and the sweep keeps
+ * the rest. Nothing is duplicated: each job appears in exactly one of the two
  * routes, and both share one runner (cron-runner.ts) so the watchdog, the
  * once-only auth retry and the alerting cannot drift apart.
  *
- * WHY THESE SIX. They are the jobs that put a message in front of a customer,
+ * WHY THESE SEVEN. They are the jobs that put a message in front of a customer,
  * and nothing else. Payments, fulfilment, inventory, commissions and every
  * other job stay in the sweep — this route is deliberately not a second place
  * for "whatever needs running".
@@ -52,6 +53,10 @@ const JOBS: CronJobMap = {
   // finished. A stranded claim holds the unique index for ever and blocks that
   // order's confirmation permanently, so it travels with the retry above.
   orderEmailReaper: { label: "order_email_reaper", run: reapStrandedOrderEmails },
+  // The same hole in the other log. A marketing claim stranded at 'sending'
+  // holds email_send_log_automation_once for ever, so that recipient's win-back
+  // is blocked permanently — and invisibly, because the ledger hides 'sending'.
+  marketingSendReaper: { label: "marketing_send_reaper", run: reapStrandedMarketingSends },
 };
 
 /** Ten seconds short of maxDuration: enough to still report an overrun. */
@@ -62,8 +67,8 @@ const DEADLINE_MS = 50_000;
  *
  * The comment above says the recovery ladder is "first because it is the one
  * with a closing window". Until now that was only true of the order of the keys
- * in this object: runCronGroup started every job in the same tick, so all six
- * raced. The one resource they genuinely contend for is the 24-hour quiet
+ * in this object: runCronGroup started every job in the same tick, so they
+ * all raced. The one resource they genuinely contend for is the 24-hour quiet
  * period held per recipient by marketing_send_claim, and the loser of that race
  * is deferred.
  *
