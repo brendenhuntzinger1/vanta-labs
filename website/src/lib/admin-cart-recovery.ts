@@ -1,6 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { evaluateRecoveryOffer, RECOVERY_FLOOR_ENFORCED } from "@/lib/cart-recovery-offer-floor";
 import { getCartRecoveryControlConfig, getShippingConfig, getProfitSettings } from "@/lib/admin-control";
 import {
   cartRecoveryGiftTemplate,
@@ -24,6 +25,7 @@ import {
   lastStageSentAtFor,
 } from "@/lib/cart-recovery";
 import { getSiteUrl } from "@/lib/env";
+import { recordSystemAlert } from "@/lib/monitoring";
 import { isFreeShippingSitewide } from "@/lib/shipping";
 import { formatDisplayDate } from "@/lib/format-date";
 import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
@@ -629,6 +631,79 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
     rowId = inserted.id;
   }
 
+  // ---- THE ECONOMIC FLOOR, IN REPORT-ONLY MODE ----------------------------
+  //
+  // P0-4. The banded ladder sizes a gift against cart value and is defensible
+  // by construction. An OVERRIDE has no arithmetic anywhere: a row names an
+  // offer_key for one cart, written by hand, and this button attaches whatever
+  // it says. So the most expensive gift in the catalogue can reach the cheapest
+  // cart in the store with nothing in between having an opinion.
+  //
+  // At today's live figures a $40 cart contributes about $22 before any
+  // incentive and the top band's gifts cost about $31 at COGS: that order ships
+  // at a loss of roughly $9 and every screen reports it as a recovered cart.
+  //
+  // NOTHING IS REFUSED YET, deliberately. An override exists because a human
+  // has a reason the rules do not know — a complaint being made right, a
+  // customer owed something — and turning a brand-new floor straight into a
+  // refusal would break that on its first day in the hands of the one person
+  // who cannot ask anybody else to unblock it. It computes, names the figure,
+  // alerts, and returns the warning to the operator. Enforcing is a one-line
+  // change in cart-recovery-offer-floor.ts.
+  let floorWarning: string | null = null;
+  if (override?.offerKey) {
+    try {
+      const [economics, giftables] = await Promise.all([
+        loadRecoveryEconomicsInputs(),
+        listGiftableProducts(),
+      ]);
+      const giftCostCents: Record<string, number> = {};
+      for (const product of giftables) {
+        if (product.costCents != null) giftCostCents[product.slug] = product.costCents;
+      }
+      const verdict = evaluateRecoveryOffer({
+        offerKey: override.offerKey,
+        // The reconciled value of the lines this message will actually print,
+        // not the browser's stored snapshot — literally the figure the email
+        // shows, so the guardrail and the customer are reading one number.
+        cartValueCents,
+        inputs: {
+          productCostRatio: economics.productCostRatio,
+          postageCents: economics.postageCents,
+          processorFeePercent: economics.estimatedProcessorFeePercent,
+          giftCostCents,
+        },
+      });
+      if (verdict.belowFloor) {
+        floorWarning = verdict.summary;
+        await recordSystemAlert({
+          type: "recovery_offer_below_floor",
+          severity: "warning",
+          message: `Manual recovery resend: ${verdict.summary}`,
+          context: {
+            cartId: cart.id,
+            stage,
+            offerKey: verdict.offerKey,
+            cartValueCents: verdict.cartValueCents,
+            contributionBeforeCents: verdict.contributionBeforeCents,
+            contributionAfterCents: verdict.contributionAfterCents,
+            incentiveCents: verdict.incentiveCents,
+            enforced: verdict.enforced,
+          },
+          dedupeWindowMs: 60 * 60 * 1000,
+        }).catch(() => {});
+        if (RECOVERY_FLOOR_ENFORCED) {
+          return { success: false, error: verdict.summary };
+        }
+      }
+    } catch (error) {
+      // A guardrail that cannot be computed must not stop a send an operator
+      // deliberately asked for. It is reported and the send proceeds — which is
+      // what report-only means in the failure case too.
+      console.error("[admin-cart-recovery] offer floor could not be evaluated", error);
+    }
+  }
+
   // The gift is minted only once the tracking row exists, mirroring the sweep's
   // claim-first order: a mint in front of it can be repeated by a failing send.
   let offerToken: string | null = null;
@@ -709,7 +784,10 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
     if (result.success) {
       await markCartRecoveryOverrideConsumed({ cartId: cart.id, stage, reservationId: rowId });
     }
-    return result;
+    // The floor's verdict travels back with the send, so the operator who
+    // pressed the button reads it — a warning only they will ever see in an
+    // alert feed is a warning aimed at the wrong person.
+    return floorWarning ? { ...result, floorWarning } : result;
   }
 
   if (stage === "t30m") {

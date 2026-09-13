@@ -324,18 +324,39 @@ function sumItems(list: RecoveryGiftItem[], prices: Readonly<Record<string, numb
  * a subset of the same catalogue, so a band affordable at stage 4 is
  * affordable at stage 3 by construction.
  */
-export function tierEconomics(
-  tier: RecoveryTier,
-  cartValueCents: number,
-  inputs: TierEconomicsInputs,
-): TierEconomics {
-  const revenue = Math.max(0, Math.round(cartValueCents));
-  const cogs = Math.round(revenue * inputs.productCostRatio);
-  const feeRate = Math.max(0, Number(inputs.processorFeePercent ?? 0)) / 100;
-
-  const giftCost = sumItems(tier.stage4.gifts, inputs.giftCostCents);
-  const percentCost = Math.round(revenue * (tier.stage4.percent / 100));
-  const incentive = giftCost + percentCost;
+/**
+ * WHAT ONE ORDER LEAVES, WITH AND WITHOUT THE OFFER ATTACHED.
+ *
+ * The arithmetic itself, separated from the band editor so the SEND-TIME floor
+ * (cart-recovery-offer-floor.ts) judges an offer by exactly the sum this screen
+ * shows. Two copies of a contribution calculation is how a screen and a guard
+ * come to disagree about whether the same offer is affordable, and this file
+ * already carries two comments about the cost of duplicating a rule.
+ *
+ * Everything is ESTIMATED, and the processor fee most of all: Vanta does not
+ * reconcile per-transaction processor cost here, so this is the Control
+ * Centre's conservative model and every surface that renders it says so.
+ */
+export function offerContribution(input: {
+  cartValueCents: number;
+  /** Gift COGS in cents, already summed. */
+  giftCostCents: number;
+  /** The percentage the offer takes off, 0 for none. */
+  percentOff: number;
+  productCostRatio: number;
+  postageCents: number;
+  processorFeePercent?: number;
+}): {
+  revenueCents: number;
+  contributionCents: number;
+  estimatedProcessorFeeCents: number;
+  percentCostCents: number;
+  netCents: number;
+} {
+  const revenue = Math.max(0, Math.round(input.cartValueCents));
+  const cogs = Math.round(revenue * input.productCostRatio);
+  const feeRate = Math.max(0, Number(input.processorFeePercent ?? 0)) / 100;
+  const percentCost = Math.round(revenue * (Math.max(0, input.percentOff) / 100));
 
   // THE FEE FOLLOWS THE MONEY, NOT THE LIST PRICE. The processor takes its cut
   // of what is actually charged, so a percentage discount reduces the fee with
@@ -346,21 +367,44 @@ export function tierEconomics(
   // Contribution BEFORE any incentive still carries the fee on undiscounted
   // revenue, because that is the counterfactual it is compared against: what
   // this cart would have left had no offer been attached at all.
-  const contribution = revenue - cogs - inputs.postageCents - Math.round(revenue * feeRate);
-
-  const net = revenue - percentCost - cogs - inputs.postageCents - giftCost - estimatedProcessorFee;
-  const perceived = sumItems(tier.stage4.gifts, inputs.giftRetailCents) + percentCost;
+  const contribution = revenue - cogs - input.postageCents - Math.round(revenue * feeRate);
 
   return {
-    cartValueCents: revenue,
+    revenueCents: revenue,
     contributionCents: contribution,
     estimatedProcessorFeeCents: estimatedProcessorFee,
+    percentCostCents: percentCost,
+    netCents: revenue - percentCost - cogs - input.postageCents - Math.max(0, input.giftCostCents) - estimatedProcessorFee,
+  };
+}
+
+export function tierEconomics(
+  tier: RecoveryTier,
+  cartValueCents: number,
+  inputs: TierEconomicsInputs,
+): TierEconomics {
+  const giftCost = sumItems(tier.stage4.gifts, inputs.giftCostCents);
+  const sums = offerContribution({
+    cartValueCents,
+    giftCostCents: giftCost,
+    percentOff: tier.stage4.percent,
+    productCostRatio: inputs.productCostRatio,
+    postageCents: inputs.postageCents,
+    processorFeePercent: inputs.processorFeePercent,
+  });
+  const incentive = giftCost + sums.percentCostCents;
+  const perceived = sumItems(tier.stage4.gifts, inputs.giftRetailCents) + sums.percentCostCents;
+
+  return {
+    cartValueCents: sums.revenueCents,
+    contributionCents: sums.contributionCents,
+    estimatedProcessorFeeCents: sums.estimatedProcessorFeeCents,
     incentiveCents: incentive,
     giftCostCents: giftCost,
-    percentCostCents: percentCost,
-    netCents: net,
-    netMarginPercent: revenue > 0 ? (net / revenue) * 100 : 0,
-    incentiveShareOfContributionPercent: contribution > 0 ? (incentive / contribution) * 100 : 0,
+    percentCostCents: sums.percentCostCents,
+    netCents: sums.netCents,
+    netMarginPercent: sums.revenueCents > 0 ? (sums.netCents / sums.revenueCents) * 100 : 0,
+    incentiveShareOfContributionPercent: sums.contributionCents > 0 ? (incentive / sums.contributionCents) * 100 : 0,
     perceivedValueCents: perceived,
   };
 }
