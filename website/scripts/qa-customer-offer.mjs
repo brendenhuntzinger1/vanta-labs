@@ -31,6 +31,19 @@ import { chromium } from "playwright";
 import pg from "pg";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
+
+/**
+ * LINKS INSIDE CAPTURED EMAILS POINT AT THE TLS PROXY, WHATEVER THIS IS DRIVEN AT.
+ *
+ * They are built from NEXT_PUBLIC_SITE_URL, which the runbook requires to be the
+ * https harness (section 5c). Without this, every "follow the link from the
+ * email" step dies at ERR_CERT_AUTHORITY_INVALID on a self-signed certificate
+ * — reported as a broken click-tracker rather than a missing context option.
+ * Scoped to loopback, so a run against anything else keeps full certificate
+ * checking.
+ */
+const LOOPBACK_TLS = { ignoreHTTPSErrors: true };
+
 const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/storefront";
 const SHOTS = process.env.QA_SHOT_DIR ?? "/tmp/vanta-qa/offer";
 
@@ -108,7 +121,7 @@ async function issueComboOffer(email, { hours = 24, minCents = 3500, percent = 1
 let ipCounter = 0;
 async function freshContext(viewport) {
   ipCounter += 1;
-  return browser.newContext({
+  return browser.newContext({ ...LOOPBACK_TLS,
     ...(viewport ? { viewport } : {}),
     extraHTTPHeaders: { "x-real-ip": "203.0.113." + ipCounter },
   });

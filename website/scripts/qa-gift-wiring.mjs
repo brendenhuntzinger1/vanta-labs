@@ -33,6 +33,19 @@ import pg from "pg";
 import { harnessSigningSecret, loadHarnessEnv } from "./lib/harness-env.mjs";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
+
+/**
+ * LINKS INSIDE CAPTURED EMAILS POINT AT THE TLS PROXY, WHATEVER THIS IS DRIVEN AT.
+ *
+ * They are built from NEXT_PUBLIC_SITE_URL, which the runbook requires to be the
+ * https harness (section 5c). Without this, every "follow the link from the
+ * email" step dies at ERR_CERT_AUTHORITY_INVALID on a self-signed certificate
+ * — reported as a broken click-tracker rather than a missing context option.
+ * Scoped to loopback, so a run against anything else keeps full certificate
+ * checking.
+ */
+const LOOPBACK_TLS = { ignoreHTTPSErrors: true };
+
 const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/storefront";
 const SHOTS = process.env.QA_SHOT_DIR ?? "/tmp/vanta-qa/gift";
 const CAPTURE = process.env.QA_EMAIL_CAPTURE ?? "/tmp/vanta-qa/captured-emails.jsonl";
@@ -108,7 +121,7 @@ let ipCounter = 0;
  *  become the thing under test. */
 async function freshContext() {
   ipCounter += 1;
-  return browser.newContext({ extraHTTPHeaders: { "x-real-ip": "198.51.100." + ipCounter } });
+  return browser.newContext({ ...LOOPBACK_TLS, extraHTTPHeaders: { "x-real-ip": "198.51.100." + ipCounter } });
 }
 
 /** Seed a customer who lapsed `days` ago: consented to marketing, with one
@@ -341,7 +354,7 @@ async function main() {
     executablePath: "/opt/pw-browsers/chromium",
     args: ["--no-sandbox", "--ssl-version-max=tls1.2"],
   });
-  const adminContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const adminContext = await browser.newContext({ ...LOOPBACK_TLS, viewport: { width: 1280, height: 900 } });
   const page = await adminContext.newPage();
 
   // Console noise is only meaningful once signed in. The sign-in page itself
@@ -657,7 +670,7 @@ async function main() {
   });
 
   await step("the cart drawer names it, at 390x844, without doubling 'free'", async () => {
-    const context = await browser.newContext({
+    const context = await browser.newContext({ ...LOOPBACK_TLS,
       viewport: { width: 390, height: 844 },
       extraHTTPHeaders: { "x-real-ip": "198.51.100.99" },
     });
@@ -811,7 +824,7 @@ async function main() {
   });
 
   await step("it renders at 390x844 without the button falling off the screen", async () => {
-    const context = await browser.newContext({
+    const context = await browser.newContext({ ...LOOPBACK_TLS,
       viewport: { width: 390, height: 844 },
       extraHTTPHeaders: { "x-real-ip": "198.51.100.200" },
     });
