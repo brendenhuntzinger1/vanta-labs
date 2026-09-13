@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { selectDueStage, STAGE_WINDOWS, type CartRecoveryConfig } from "@/lib/cart-recovery";
+import { selectDueStage, STAGE_WINDOWS } from "@/lib/cart-recovery";
+import type { CartRecoveryConfig } from "@/lib/admin-control";
 
 // ---------------------------------------------------------------------------
 // THE RECOVERY LADDER ONLY EVER GOES UP.

@@ -5,8 +5,11 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import {
   EMAIL_GRANT_COOKIE,
   EMAIL_GRANT_MAX_AGE_SECONDS,
+  emailGrantAllowsPath,
   signEmailLinkGrant,
 } from "@/lib/email/link-grant";
+import { signAttestationHandoff } from "@/lib/email/attestation-handoff";
+import { getSiteUrl } from "@/lib/env";
 
 /**
  * MAY THIS RECIPIENT BE WAVED PAST THE SIGN-IN WALL?
@@ -136,4 +139,90 @@ export async function partitionByAttestation(
     else unattested.add(email);
   }
   return { attested, unattested };
+}
+
+/**
+ * WHERE THIS CLICK SHOULD LAND, AND WHETHER IT CARRIES A GRANT.
+ *
+ * Both click trackers used to do one thing with the answer to
+ * `recipientHasAttested`: mint a grant, or not. "Or not" meant the customer was
+ * handed the sign-in page — which is right for somebody who has never made the
+ * 21+ and research-use representations, and is a dead end for the one holding a
+ * gift we just minted and promised them.
+ *
+ * So there are now three landings, not two:
+ *
+ *   ATTESTED            → the destination, with the grant. Unchanged, and it is
+ *                         the overwhelming majority: no new screen, no new tap,
+ *                         nothing at all is different for them.
+ *   NOT ATTESTED        → the interstitial, carrying a signed handoff naming
+ *                         this address, this destination and this offer. NO
+ *                         GRANT travels with it. The capability is minted on the
+ *                         far side, by POST /api/attest, only after the person
+ *                         has explicitly made both statements.
+ *   NOT ATTESTED, and
+ *   the handoff cannot
+ *   be built            → the destination, no grant: exactly the old behaviour,
+ *                         which is the sign-in page. A missing signing secret
+ *                         must degrade to what happened before this existed,
+ *                         never to an ungated catalogue.
+ *
+ * ONE ATTESTATION LOOKUP PER CLICK. This runs on a redirect a customer is
+ * waiting on, and the previous shape asked twice — once to decide, once inside
+ * attachEmailLinkGrant. The grant token comes back from here so the caller sets
+ * the cookie without a second round trip.
+ *
+ * THE DETOUR IS ONLY EVER OFFERED FOR A DESTINATION THE GRANT COULD HAVE
+ * OPENED. A path outside EMAIL_GRANT_BROWSE_* is not somewhere attesting gets
+ * anybody, so sending them through a screen that ends in a grant would be
+ * promising a second dead end. Those go to the destination as before.
+ */
+export async function emailLinkLanding(input: {
+  email: string;
+  /** Absolute URL the click resolved to, already tagged. */
+  destination: string;
+  offerToken?: string | null;
+}): Promise<{ destination: string; grant: string | null }> {
+  const unchanged = { destination: input.destination, grant: null as string | null };
+  try {
+    if (await recipientHasAttested(input.email)) {
+      return { destination: input.destination, grant: await signEmailLinkGrant() };
+    }
+
+    const target = new URL(input.destination);
+    const path = `${target.pathname}${target.search}`;
+    if (!emailGrantAllowsPath(target.pathname)) return unchanged;
+
+    const handoff = await signAttestationHandoff({
+      email: input.email,
+      destination: path,
+      offerToken: input.offerToken ?? null,
+    });
+    if (!handoff) return unchanged;
+
+    const detour = new URL("/attest", getSiteUrl());
+    detour.searchParams.set("h", handoff);
+    return { destination: detour.toString(), grant: null };
+  } catch {
+    // A customer who clicked a link in an email must reach a page. The worst
+    // outcome available here is the one they reached before any of this.
+    return unchanged;
+  }
+}
+
+/**
+ * Set the marketing-link grant cookie from a token `emailLinkLanding` returned.
+ * One place knows the cookie's attributes; both click trackers set an identical
+ * one, and so does POST /api/attest.
+ */
+export function setEmailLinkGrantCookie(response: NextResponse, token: string): void {
+  response.cookies.set({
+    name: EMAIL_GRANT_COOKIE,
+    value: token,
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: EMAIL_GRANT_MAX_AGE_SECONDS,
+  });
 }

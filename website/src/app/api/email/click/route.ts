@@ -12,7 +12,7 @@ import { utmForCampaign } from "@/lib/email/utm";
 import { normalizeLinkButtons } from "@/lib/email/affiliate-campaign-template";
 import { hashIpAddress } from "@/lib/ip-hash";
 import { recordCampaignEngagementEvent, stampCampaignEngagement } from "@/lib/email/engagement";
-import { attachEmailLinkGrant } from "@/lib/email/recipient-attestation";
+import { emailLinkLanding, setEmailLinkGrantCookie } from "@/lib/email/recipient-attestation";
 import { OFFER_COOKIE, OFFER_COOKIE_MAX_AGE_SECONDS } from "@/lib/offers/customer-offers";
 
 export const dynamic = "force-dynamic";
@@ -137,7 +137,26 @@ export async function GET(request: NextRequest) {
   // attribution above is the number this business runs on; this is what lets
   // GA4 agree with it instead of filing every one of these arrivals as
   // `direct`. Tagging cannot fail the redirect — see utm.ts.
-  const response = NextResponse.redirect(utmForCampaign(destination, campaignId), { status: 302 });
+  // The gift, read before the landing is decided: the interstitial has to carry
+  // it through, or attesting would cost the customer the thing they clicked for.
+  //
+  // Length-capped because anyone can put anything in `o`: junk should cost a
+  // failed lookup, not a Set-Cookie header no proxy will forward.
+  const offerToken = request.nextUrl.searchParams.get("o") ?? "";
+  const carriedOffer = offerToken && offerToken.length <= 128 ? offerToken : null;
+
+  // WHERE THIS CLICK CAN ACTUALLY GO. An attested recipient gets the
+  // destination and the grant, exactly as before; one who has never made the
+  // 21+ and research-use representations is sent to the step that collects
+  // them, carrying this destination and this gift, rather than to a sign-in
+  // page for an account they may not have. See recipient-attestation.ts.
+  const landing = await emailLinkLanding({
+    email,
+    destination: utmForCampaign(destination, campaignId).toString(),
+    offerToken: carriedOffer,
+  });
+
+  const response = NextResponse.redirect(landing.destination, { status: 302 });
   response.cookies.set({
     name: CAMPAIGN_COOKIE,
     value: encodeAttributionCookie(campaignId, clickedAt.getTime()),
@@ -158,13 +177,10 @@ export async function GET(request: NextRequest) {
   // shared the link. The checkout reads it server-side, so the browser never
   // needs to see it.
   //
-  // Length-capped because anyone can put anything in `o`: junk should cost a
-  // failed lookup, not a Set-Cookie header no proxy will forward.
-  const offerToken = request.nextUrl.searchParams.get("o") ?? "";
-  if (offerToken && offerToken.length <= 128) {
+  if (carriedOffer) {
     response.cookies.set({
       name: OFFER_COOKIE,
-      value: offerToken,
+      value: carriedOffer,
       httpOnly: true,
       sameSite: "lax",
       secure: process.env.NODE_ENV === "production",
@@ -175,16 +191,15 @@ export async function GET(request: NextRequest) {
 
   // AND THE CAPABILITY TO ACTUALLY REACH THE DESTINATION.
   //
-  // Without this the redirect above lands on /account/login. The store is
+  // Without it the redirect above lands on /account/login. The store is
   // account-only by default (access-policy.ts) and every campaign cta_path in
   // production points behind that wall, so the click was recorded, the
   // attribution cookie was set, and the shopper was handed a sign-in page. A
   // click that cannot become an order is a metric, not a sale.
   //
-  // Minted only for a recipient whose account already carries the 21+ and
-  // research-use representations — see recipient-attestation.ts. Everyone else
-  // reaches the sign-in page exactly as before and makes them there.
-  await attachEmailLinkGrant(response, email);
+  // Null when the recipient is on their way to the interstitial instead: the
+  // grant is minted there, after the two statements are made, and never before.
+  if (landing.grant) setEmailLinkGrantCookie(response, landing.grant);
 
   return response;
 }
