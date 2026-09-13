@@ -127,9 +127,113 @@ async function freshContext(viewport) {
   });
 }
 
-/** A browser that has clicked the emailed link, i.e. holds the offer cookie. */
-async function browserHoldingOffer(context, token) {
+const PASSWORD = "HarnessPass123!";
+
+/** A confirmed account, because the storefront no longer serves anyone else. */
+async function createConfirmedCustomer(email) {
+  await q(
+    `insert into auth.users (email, encrypted_password, email_confirmed_at, created_at)
+     values ($1,$2,now(),now())
+     on conflict (email) do update set encrypted_password = excluded.encrypted_password,
+       email_confirmed_at = now()`,
+    [email, PASSWORD],
+  );
+}
+
+/** Sign in through the real portal, which reveals its email field on request. */
+async function signInAs(page, email) {
+  await page.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded", timeout: 60000 });
+  const accept = page.getByRole("button", { name: /^Accept$/ });
+  if (await accept.count()) await accept.first().click().catch(() => {});
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    if (await page.$("form input[type=email]")) break;
+    await page.evaluate(() => {
+      const b = [...document.querySelectorAll("button")]
+        .find((x) => x.textContent.trim() === "Sign in with email");
+      if (b) b.click();
+    });
+    await page.waitForTimeout(500);
+  }
+  assert(await page.$("form input[type=email]"), "the sign-in form never appeared");
+  await page.fill("form input[type=email]", email);
+  await page.fill("form input[type=password]", PASSWORD);
+  await Promise.all([
+    page.waitForNavigation({ timeout: 60000 }).catch(() => {}),
+    page.click("form button[type=submit]"),
+  ]);
+  await page.waitForTimeout(1500);
+  assert(!/\/account\/login/.test(page.url()), `sign-in failed for ${email}`);
+}
+
+/**
+ * A browser in the state a real offer recipient is actually in.
+ *
+ * THIS USED TO SET THE OFFER COOKIE AND NOTHING ELSE, AND THAT CUSTOMER DOES
+ * NOT EXIST. access-policy.ts closed the storefront's default, so a visitor
+ * with no account and no grant is refused everywhere — every checkout in this
+ * file answered {"success":false,"error":"Sign in to continue"} and 21 of 23
+ * checks failed without ever reaching the offer logic they were written for.
+ *
+ * The offer cookie alone was never a complete state even before the wall: the
+ * click route that sets it (api/email/automation-click) sets it ALONGSIDE a
+ * marketing-link grant, and only for a recipient who has already made the 21+
+ * and research-use representations — see emailLinkLanding's three landings.
+ *
+ * So the recipient is signed in here, which is the state an attested customer
+ * who clicked their email is in, and the one the store is built around now.
+ * `signedInAs` is passed separately from the offer's bound address on purpose:
+ * the forwarded-link steps need a DIFFERENT person holding the cookie, which is
+ * exactly the threat those steps exist to check.
+ *
+ * The grant-holding guest — the other reachable recipient — is proven end to
+ * end by scripts/qa-offer-journey.mjs, which never mints a token itself and
+ * instead clicks the real tracked link out of a delivered email.
+ */
+/**
+ * The same reachable customer, WITHOUT a gift.
+ *
+ * Every control step here — the order that pays shipping, the two coupon
+ * cases, and the two "tell a browser with no offer nothing" probes — built a
+ * bare page and went shopping, which the wall refuses. They are controls, so
+ * their failure was the most misleading kind: "an ordinary order pays
+ * shipping" failing makes the gift steps beside it look unproven.
+ */
+/**
+ * Close whatever the storefront is legitimately showing over the page.
+ *
+ * Two real modals sit in this path and both are correct product behaviour: the
+ * promotional offer sheet, and the bacteriostatic-water reminder that opens
+ * after the first add to cart. Their backdrops intercept pointer events, so a
+ * click on ADD TO CART or OPEN CART times out behind them — reported as a
+ * broken drawer. A shopper closes them; so does this.
+ */
+async function dismissOverlays(page) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const dismissed = await page.evaluate(() => {
+      const targets = [
+        ...document.querySelectorAll('[aria-label="Dismiss reminder"]'),
+        ...document.querySelectorAll(".vl-offer-modal-backdrop"),
+      ];
+      const visible = targets.filter((el) => el.getBoundingClientRect().height > 0);
+      visible.forEach((el) => el.click());
+      return visible.length;
+    });
+    if (!dismissed) return;
+    await page.waitForTimeout(300);
+  }
+}
+
+async function browserSignedIn(context, email) {
   const page = await context.newPage();
+  await createConfirmedCustomer(email);
+  await signInAs(page, email);
+  return page;
+}
+
+async function browserHoldingOffer(context, token, signedInAs) {
+  const page = await context.newPage();
+  await createConfirmedCustomer(signedInAs);
+  await signInAs(page, signedInAs);
   // Set the cookie exactly as the click route does: httpOnly, path /.
   await context.addCookies([{
     name: "vl_offer", value: token, domain: "127.0.0.1", path: "/", httpOnly: true, sameSite: "Lax",
@@ -230,7 +334,7 @@ async function main() {
   await step("the free GHK-Cu is added at $0 with its COGS recorded", async () => {
     const token = await issueOffer(BUYER);
     const context = await freshContext();
-    const page = await browserHoldingOffer(context, token);
+    const page = await browserHoldingOffer(context, token, BUYER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
 
     const { body } = await checkout(page, { email: BUYER, items: [LINE] });
@@ -284,7 +388,7 @@ async function main() {
     // $100 minimum against a $69 cart.
     const token = await issueOffer(BUYER, { minCents: 10000 });
     const context = await freshContext();
-    const page = await browserHoldingOffer(context, token);
+    const page = await browserHoldingOffer(context, token, BUYER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
     const { body } = await checkout(page, { email: BUYER, items: [LINE] });
     const { rows } = await q("select unit_price from order_items where order_id = $1", [body.orderId]);
@@ -299,7 +403,7 @@ async function main() {
     await q("delete from customer_offers where email = $1", [BUYER]);
     const token = await issueOffer(BUYER);
     const context = await freshContext();
-    const page = await browserHoldingOffer(context, token);
+    const page = await browserHoldingOffer(context, token, STRANGER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
     // Same cookie, different checkout email — the exact shape of a shared link.
     const { body } = await checkout(page, { email: STRANGER, items: [LINE] });
@@ -313,7 +417,7 @@ async function main() {
     await q("delete from customer_offers where email = $1", [BUYER]);
     const token = await issueOffer(BUYER, { hours: -1 });
     const context = await freshContext();
-    const page = await browserHoldingOffer(context, token);
+    const page = await browserHoldingOffer(context, token, BUYER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
     const { body } = await checkout(page, { email: BUYER, items: [LINE] });
     const { rows } = await q("select unit_price from order_items where order_id = $1", [body.orderId]);
@@ -328,7 +432,7 @@ async function main() {
     await q("delete from customer_offers where email = $1", [BUYER]);
     const token = await issueOffer(BUYER);
     const context = await freshContext();
-    const page = await browserHoldingOffer(context, token);
+    const page = await browserHoldingOffer(context, token, BUYER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
 
     const first = await checkout(page, { email: BUYER, items: [LINE] });
@@ -353,7 +457,7 @@ async function main() {
     await q("delete from customer_offers where email = $1", [BUYER]);
     const token = await issueOffer(BUYER);
     const context = await freshContext();
-    const page = await browserHoldingOffer(context, token);
+    const page = await browserHoldingOffer(context, token, BUYER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
 
     const first = await checkout(page, { email: BUYER, items: [LINE] });
@@ -383,7 +487,7 @@ async function main() {
     // that line would pass with the feature removed.
     await q("delete from customer_offers where email = $1", [BUYER]);
     const context = await freshContext();
-    const page = await context.newPage();
+    const page = await browserSignedIn(context, BUYER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
     const { body } = await checkout(page, { email: BUYER, items: [LINE] });
     const { rows } = await q("select shipping_amount from orders where order_id = $1", [body.orderId]);
@@ -396,7 +500,7 @@ async function main() {
     await q("delete from customer_offers where email = $1", [BUYER]);
     const token = await issueShippingOffer(BUYER);
     const context = await freshContext();
-    const page = await browserHoldingOffer(context, token);
+    const page = await browserHoldingOffer(context, token, BUYER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
     const { body } = await checkout(page, { email: BUYER, items: [LINE] });
     const { rows } = await q("select shipping_amount, subtotal from orders where order_id = $1", [body.orderId]);
@@ -413,7 +517,7 @@ async function main() {
     // $100 minimum against a $69 cart.
     const token = await issueShippingOffer(BUYER, { minCents: 10000 });
     const context = await freshContext();
-    const page = await browserHoldingOffer(context, token);
+    const page = await browserHoldingOffer(context, token, BUYER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
     const { body } = await checkout(page, { email: BUYER, items: [LINE] });
     const { rows } = await q("select shipping_amount from orders where order_id = $1", [body.orderId]);
@@ -426,7 +530,7 @@ async function main() {
     await q("delete from customer_offers where email = $1", [BUYER]);
     const token = await issueShippingOffer(BUYER);
     const context = await freshContext();
-    const page = await browserHoldingOffer(context, token);
+    const page = await browserHoldingOffer(context, token, STRANGER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
     const { body } = await checkout(page, { email: STRANGER, items: [LINE] });
     const { rows } = await q("select shipping_amount from orders where order_id = $1", [body.orderId]);
@@ -439,7 +543,7 @@ async function main() {
     await q("delete from customer_offers where email = $1", [BUYER]);
     const token = await issueShippingOffer(BUYER);
     const context = await freshContext();
-    const page = await browserHoldingOffer(context, token);
+    const page = await browserHoldingOffer(context, token, BUYER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
 
     const first = await checkout(page, { email: BUYER, items: [LINE] });
@@ -458,7 +562,7 @@ async function main() {
     await q("delete from customer_offers where email = $1", [BUYER]);
     const token = await issueShippingOffer(BUYER);
     const context = await freshContext();
-    const page = await browserHoldingOffer(context, token);
+    const page = await browserHoldingOffer(context, token, BUYER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
     const status = await page.evaluate(async () => {
       const res = await fetch("/api/offer/status", { cache: "no-store" });
@@ -479,7 +583,7 @@ async function main() {
     await q("delete from customer_offers where email = $1", [BUYER]);
     const token = await issueComboOffer(BUYER, { percent: 15 });
     const context = await freshContext();
-    const page = await browserHoldingOffer(context, token);
+    const page = await browserHoldingOffer(context, token, BUYER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
     const { body } = await checkout(page, { email: BUYER, items: [LINE] });
     const { rows } = await q(
@@ -502,7 +606,7 @@ async function main() {
     await q("delete from customer_offers where email = $1", [BUYER]);
     const token = await issueComboOffer(BUYER, { minCents: 10000 });
     const context = await freshContext();
-    const page = await browserHoldingOffer(context, token);
+    const page = await browserHoldingOffer(context, token, BUYER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
     const { body } = await checkout(page, { email: BUYER, items: [LINE] });
     const { rows } = await q("select shipping_amount, discount_amount from orders where order_id = $1", [body.orderId]);
@@ -520,14 +624,17 @@ async function main() {
     await q("delete from customer_offers where email = $1", [BUYER]);
     const token = await issueComboOffer(BUYER);
     const context = await freshContext({ width: 390, height: 844 });
-    const page = await browserHoldingOffer(context, token);
+    const page = await browserHoldingOffer(context, token, BUYER);
     await page.goto(`${BASE}/products/bpc-157-10mg`, { waitUntil: "domcontentloaded" });
     await passAgeGate(page);
 
     // Put something in the basket that clears the $35 minimum, then open the
     // drawer the way a shopper does.
-    await page.getByRole("button", { name: /add to cart/i }).first().click();
-    await page.getByRole("button", { name: /open cart/i }).click();
+    await dismissOverlays(page);
+    await page.getByRole("button", { name: /add to cart/i }).first().click({ timeout: 20_000 });
+    await page.waitForTimeout(600);
+    await dismissOverlays(page);
+    await page.getByRole("button", { name: /open cart/i }).click({ timeout: 20_000 });
 
     const banner = page.locator('[data-testid="offer-banner"]');
     await banner.waitFor({ timeout: 15_000 });
@@ -558,7 +665,7 @@ async function main() {
        values ('QASHIP15', 'percent', 15, true, 0, true, now())`,
     );
     const context = await freshContext();
-    const page = await context.newPage();
+    const page = await browserSignedIn(context, BUYER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
     await clearRateLimit();
     const res = await page.evaluate(async ([payload]) => {
@@ -597,7 +704,7 @@ async function main() {
        values ('QAPLAIN15', 'percent', 15, true, 0, false, now())`,
     );
     const context = await freshContext();
-    const page = await context.newPage();
+    const page = await browserSignedIn(context, BUYER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
     await clearRateLimit();
     const res = await page.evaluate(async ([payload]) => {
@@ -629,7 +736,7 @@ async function main() {
     await q("delete from customer_offers where email = $1", [BUYER]);
     const token = await issueOffer(BUYER);
     const context = await freshContext({ width: 390, height: 844 });
-    const page = await browserHoldingOffer(context, token);
+    const page = await browserHoldingOffer(context, token, BUYER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
 
     const status = await page.evaluate(async () => {
@@ -647,7 +754,7 @@ async function main() {
   await step("the status endpoint leaks no token", async () => {
     const token = (await q("select token_hash from customer_offers where email = $1", [BUYER])).rows[0].token_hash;
     const context = await freshContext();
-    const page = await browserHoldingOffer(context, "irrelevant");
+    const page = await browserHoldingOffer(context, "irrelevant", BUYER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
     const raw = await page.evaluate(async () => {
       const res = await fetch("/api/offer/status", { cache: "no-store" });
@@ -661,7 +768,7 @@ async function main() {
 
   await step("a browser with no offer cookie is told nothing", async () => {
     const context = await freshContext();
-    const page = await context.newPage();
+    const page = await browserSignedIn(context, BUYER);
     await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
     const status = await page.evaluate(async () => {
       const res = await fetch("/api/offer/status", { cache: "no-store" });
