@@ -50,7 +50,10 @@ const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/s
 const SHOTS = process.env.QA_SHOT_DIR ?? "/tmp/vanta-qa/gift";
 const CAPTURE = process.env.QA_EMAIL_CAPTURE ?? "/tmp/vanta-qa/captured-emails.jsonl";
 const CRON = process.env.QA_CRON_SECRET ?? "harness-cron-secret";
-const USER = process.env.QA_ADMIN_USER ?? "vantaqa";
+// qa-seed-roles.mjs seeds the username too, and it seeds "qaadmin". This said
+// "vantaqa", so the form was filled with an account that does not exist, the
+// login answered 401 and the redirect this step waits for never came.
+const USER = process.env.QA_ADMIN_USER ?? "qaadmin";
 // qa-seed-roles.mjs is the seeder and therefore the authority on this
 // value; qa-role-boundaries already agrees with it, and its admin positive
 // control (74 admin routes reached) is what proves the pair works. Three
@@ -387,10 +390,29 @@ async function main() {
 
   await step("signs in and reaches the automations panel", async () => {
     await page.goto(`${BASE}/vault`, { waitUntil: "domcontentloaded" });
+    // The consent banner sits over the page until answered, including over the
+    // Enter button.
+    const accept = page.getByRole("button", { name: /^Accept$/ });
+    if (await accept.count()) await accept.first().click().catch(() => {});
+
+    // THE PASSCODE FIELD IS NOT ALWAYS THERE, AND THIS ASSUMED IT WAS.
+    //
+    // /vault renders four inputs: two hidden decoys (_vl_u, _vl_p) and two
+    // visible ones. A third VISIBLE field appears only when the admin has a
+    // passcode configured — the harness admin does not, and
+    // /api/admin/auth/login answers {"ok":true,"passcodeConfigured":false}. So
+    // `inputs.nth(2).fill(CODE)` waited thirty seconds for a field that will
+    // never exist and failed as "locator.fill: Timeout".
+    //
+    // That one timeout is why this file reported 22 failures. Section 1 is what
+    // ATTACHES the gift to the automation, so with it dead the sweep minted no
+    // offers and every section after it failed on an absent gift: "expected 2
+    // offers, found 0", "no offer token on the emailed link", "no GHK-Cu line".
+    // One selector, four sections of noise.
     const inputs = page.locator("form input:visible");
     await inputs.nth(0).fill(USER);
     await inputs.nth(1).fill(PASS);
-    await inputs.nth(2).fill(CODE);
+    if ((await inputs.count()) > 2) await inputs.nth(2).fill(CODE);
     await page.getByRole("button", { name: /enter/i }).click();
     await page.waitForURL(/\/admin/, { timeout: 20_000 });
     await page.goto(`${BASE}/admin/email`, { waitUntil: "domcontentloaded" });

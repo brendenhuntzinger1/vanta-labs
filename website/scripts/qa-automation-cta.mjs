@@ -28,7 +28,10 @@ import pg from "pg";
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
 const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/storefront";
 const SHOTS = process.env.QA_SHOT_DIR ?? "/tmp/vanta-qa/cta";
-const USER = process.env.QA_ADMIN_USER ?? "vantaqa";
+// qa-seed-roles.mjs seeds the username too, and it seeds "qaadmin". This said
+// "vantaqa", so the form was filled with an account that does not exist, the
+// login answered 401 and the redirect this step waits for never came.
+const USER = process.env.QA_ADMIN_USER ?? "qaadmin";
 // qa-seed-roles.mjs is the seeder and therefore the authority on this
 // value; qa-role-boundaries already agrees with it, and its admin positive
 // control (74 admin routes reached) is what proves the pair works. Three
