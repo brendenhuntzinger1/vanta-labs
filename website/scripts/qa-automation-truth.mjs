@@ -174,6 +174,39 @@ async function seedCustomer({ tag, ageDays, consent = true, suppress = null, sen
       [email, new Date(Date.now() - 400 * DAY).toISOString()],
     );
   }
+  // A PAID CUSTOMER HAS AN ACCOUNT, AND SINCE THE WALL WENT UP THEY CANNOT NOT
+  // HAVE ONE.
+  //
+  // This cohort seeded marketing_subscribers and a paid order and stopped
+  // there, which was a complete customer until two things changed. The store is
+  // default-deny now (lib/access-policy.ts), so /cart and /checkout are
+  // unreachable without an account — an address that paid for something and
+  // holds no auth record is a state the storefront can no longer produce.
+  //
+  // And partitionByAttestation (narrowed 2026-09-13) withholds any
+  // GIFT-BEARING automation from an address with no account, because the click
+  // would land them on "Sign in to continue" holding a real minted token they
+  // cannot spend. replenishment, winback_30 and winback_60 all carry an
+  // offer_key, so every rung this file exists to measure was withheld — the
+  // sweep reported `sent 0` against a correctly seeded thirteen-customer cohort
+  // and said why in its own errors array:
+  //
+  //   "replenishment: withheld 12 gift-bearing message(s) — no account exists
+  //    for the recipient, so the offer has nowhere to be redeemed yet."
+  //
+  // Five of this file's remaining passes were vacuous underneath that: the
+  // suppressed, bounced, complained and never-consented controls all assert
+  // SILENCE, and everything was silent. A control that cannot fail is not a
+  // control.
+  //
+  // The account is confirmed but carries no consent of its own — consent stays
+  // where it was, in marketing_subscribers — so the consent control below still
+  // measures consent and not account existence.
+  await q(
+    `insert into auth.users (email, encrypted_password, email_confirmed_at, created_at)
+     values ($1,'harness-not-a-real-password',$2,$2) on conflict (email) do nothing`,
+    [email, orderAt.toISOString()],
+  );
   await q(
     `insert into orders (order_id, customer_email, payment_status, order_type, amount_paid, created_at)
      values ($1,$2,'paid','product',100,$3)`,
