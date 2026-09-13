@@ -487,7 +487,23 @@ async function main() {
     const sweep = await runSweep();
     const outcome = sweep?.emailAutomations;
     assert(outcome, `sweep returned no emailAutomations result: ${JSON.stringify(sweep).slice(0, 200)}`);
-    assert(!outcome.errors?.length, `sweep reported: ${JSON.stringify(outcome.errors).slice(0, 200)}`);
+    // THE ERRORS THAT ARE THIS FILE'S, NOT EVERY ERROR IN THE STORE.
+    //
+    // This is the REAL sweep, so it serves whoever else the database holds. In
+    // a shuffled batch it ran after qa-offer-journey and reported
+    //
+    //   winback_60: no winback_60_free_ghkcu token could be issued for
+    //   offer.racer.847e6e@example.test; send deferred to the next sweep
+    //
+    // — that file's deliberate two-tab race, holding its own token live while a
+    // checkout settles, which is the reissue backstop working exactly as
+    // designed and is deferred to the next sweep rather than lost. It arrived
+    // here as a gift-wiring failure, three sections deep, with the evidence
+    // pointing at an address this file has never heard of. Each error names its
+    // recipient, so the ones about this file's customers are separable — and
+    // those are still absolutely required.
+    const mine = (outcome.errors ?? []).filter((e) => EVERYONE.some((address) => String(e).includes(address)));
+    assert(!mine.length, `sweep reported for this file's customers: ${JSON.stringify(mine).slice(0, 220)}`);
     assert(outcome.sent >= 2, `sweep sent ${outcome.sent}, expected at least 2 (byKey ${JSON.stringify(outcome.byKey)})`);
 
     const mails = capturedSince(mark).filter((m) => EVERYONE.includes(String(m.to ?? "").toLowerCase()));
