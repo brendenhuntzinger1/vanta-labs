@@ -583,10 +583,28 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
     }
   }
 
-  // "Resend" reuses the same (cart, stage) tracking row rather than
-  // inserting a duplicate - the unique index on abandoned_cart_emails
-  // enforces one row per stage per cart, and resetting opened_at/clicked_at
-  // means tracking reflects this new send, not a stale earlier one.
+  // "Resend" reuses the same (cart, stage) tracking row rather than inserting a
+  // duplicate: the unique index on abandoned_cart_emails enforces one row per
+  // stage per cart.
+  //
+  // IT NO LONGER CLEARS opened_at AND clicked_at, and that reversal is the
+  // point. It used to, on the reasoning that "tracking reflects this new send,
+  // not a stale earlier one" — but the effect was to DELETE a recorded fact. A
+  // shopper who opened their 72-hour message, clicked it and did not buy, whose
+  // cart an operator then resent, came out of that write looking as though they
+  // had never engaged at all.
+  //
+  // Two places read those columns, and both were wrong afterwards: the recovery
+  // panel's open and click rates, and — worse — the subject-line experiment's
+  // per-arm tallies, where losing engagement from whichever arm an operator
+  // happened to resend biases the comparison itself.
+  //
+  // Nothing is lost by keeping them. Each send has its OWN email_send_log row
+  // (marketing_send_claim writes one per claim, resends included) carrying its
+  // own sent/opened/clicked timeline, and stampSendLogEngagement now stamps
+  // exactly the newest of them — so the per-send view is exact there, and this
+  // row answers the per-cart question it is actually read for: did this cart's
+  // stage ever reach somebody who opened it.
   const { data: existingRow } = await supabaseAdmin
     .from("abandoned_cart_emails")
     .select("id")
@@ -599,7 +617,7 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
     rowId = existingRow.id;
     await supabaseAdmin
       .from("abandoned_cart_emails")
-      .update({ sent_at: new Date().toISOString(), opened_at: null, clicked_at: null, coupon_id: couponId })
+      .update({ sent_at: new Date().toISOString(), coupon_id: couponId })
       .eq("id", rowId);
   } else {
     const { data: inserted, error: insertError } = await supabaseAdmin
