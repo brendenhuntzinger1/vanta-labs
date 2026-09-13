@@ -27,6 +27,7 @@
 // ---------------------------------------------------------------------------
 
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { createHmac } from "node:crypto";
 import { chromium } from "playwright";
 import pg from "pg";
 
@@ -91,7 +92,42 @@ async function freshContext() {
 /** Seed a customer who lapsed `days` ago: consented to marketing, with one
  *  paid order that old and nothing since. That is exactly what the win-back
  *  rules look for — see selectAutomationTargets. */
-async function seedLapsedCustomer(email, days) {
+/**
+ * Give a CONTROL shopper ordinary access to the store.
+ *
+ * This store is account-only by default (access-policy.ts), so a fresh browser
+ * with no session and no grant cannot reach /products, /cart or /checkout at
+ * all. That is correct and is the whole reason the marketing-link grant exists.
+ *
+ * The control step below is not testing the grant — it is establishing what an
+ * ORDINARY order costs in shipping, so the free-shipping gift has something to
+ * waive. It therefore needs access by some legitimate means, and minting the
+ * same grant the click tracker mints is the cheapest one that does not invent a
+ * second door: same construction, same secret, same TTL as link-grant.ts.
+ *
+ * NOTE WHAT THIS DOES NOT DO. Attestation alone is not access — an attested
+ * address still has to arrive through a genuine link or sign in. Seeding the
+ * auth row would not have been enough here, and pretending otherwise would have
+ * made this harness prove something the product does not do.
+ */
+async function grantOrdinaryAccess(context) {
+  const secret = process.env.UNSUBSCRIBE_SECRET ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
+  assert(secret, "no UNSUBSCRIBE_SECRET / SUPABASE_SERVICE_ROLE_KEY — cannot mint a grant");
+  const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000;
+  const mac = createHmac("sha256", secret)
+    .update(`email_link_grant:v1:${expiresAt}`)
+    .digest("hex")
+    .slice(0, 32);
+  await context.addCookies([{
+    name: "vl_email_grant",
+    value: `v1.${expiresAt}.${mac}`,
+    url: BASE,
+    httpOnly: true,
+    sameSite: "Lax",
+  }]);
+}
+
+async function seedLapsedCustomer(email, days, { attested = true } = {}) {
   const orderId = `QA-GIFT-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
   await q(
     `insert into marketing_subscribers (email, source, opted_in_at)
@@ -106,6 +142,26 @@ async function seedLapsedCustomer(email, days) {
        now() - make_interval(days => $3))`,
     [orderId, email, days],
   );
+  // ATTESTATION IS WHAT DECIDES WHETHER THE GIFT IS EVEN SENDABLE.
+  //
+  // The storefront is default-deny and a marketing-link grant is minted only
+  // for an address whose auth account carries BOTH representations
+  // (auth_user_attested_by_email). An address without them cannot reach the
+  // cart from an email, so the sweep deliberately withholds gift-bearing
+  // messages to it rather than promising a benefit that dead-ends.
+  //
+  // So a fixture that wants the happy path has to say so. `attested: false`
+  // seeds the real-world case this whole change exists for: a lapsed GUEST with
+  // no attested account, whom production has three of.
+  if (attested) {
+    await q(
+      `insert into auth.users (email, email_confirmed_at, raw_user_meta_data, created_at)
+       values ($1, now(), '{"age_confirmed_21": true, "research_use_only_agreed": true}'::jsonb, now())
+       on conflict (email) do update set raw_user_meta_data = excluded.raw_user_meta_data`,
+      [email],
+    );
+  }
+
   // PAID_AT, NOT JUST CREATED_AT. selectAutomationTargets measures the lapse
   // from the moment the money landed, so a row that is payment_status='paid'
   // with a null paid_at has no last-order date at all and matches no win-back.
@@ -534,6 +590,7 @@ async function main() {
 
   await step("an ordinary order pays shipping, so the gift has something to waive", async () => {
     const context = await freshContext();
+    await grantOrdinaryAccess(context);
     const shopper = await context.newPage();
     await shopper.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
     const orderId = await checkout(shopper, "gift-control@example.test", [SMALL]);
@@ -600,6 +657,65 @@ async function main() {
     assert(Number(order.discount_amount) === 0,
       `a product gift also discounted $${order.discount_amount}`);
     return "$0 discount, as expected for a product gift";
+  });
+
+  // -------------------------------------------------------------------------
+  section("7. A gift is never promised to somebody who could not spend it");
+
+  const UNATTESTED = "gift-unattested@example.test";
+
+  await step("a lapsed customer with NO attested account is withheld, not mailed", async () => {
+    // The real-world case: production has three paid customers with no auth
+    // account at all, and forty accounts carrying no attestation. Each is a
+    // legitimate win-back target (selectAutomationTargets keys on
+    // customer_email), and each would receive a real minted token, click it,
+    // and reach "Sign in to continue" for an account they do not have.
+    await q("delete from customer_offers where email = $1", [UNATTESTED]);
+    await q("delete from email_send_log where recipient_email = $1", [UNATTESTED]);
+    await seedLapsedCustomer(UNATTESTED, 70, { attested: false });
+    await q("update email_automations set enabled = false");
+    await q("update email_automations set enabled = true where key = 'winback_60'");
+    await setAutomationDelay("winback_60", 60);
+
+    const mark = captureMark();
+    const sweep = await runSweep();
+    const mail = capturedSince(mark).filter((m) => (m.to ?? "").includes(UNATTESTED));
+    const { rows } = await q("select count(*)::int n from customer_offers where email = $1", [UNATTESTED]);
+
+    assert(mail.length === 0, `an unattested guest was mailed a gift: ${mail.map((m) => m.subject).join(", ")}`);
+    assert(rows[0].n === 0, `a token was minted for an unattested guest: ${rows[0].n}`);
+    // Counted and reported rather than silent — an operator must be able to see
+    // this is a policy decision and not a failure.
+    const withheld = sweep?.emailAutomations?.withheldUnattested ?? 0;
+    assert(withheld >= 1, `the sweep did not report withholding: ${JSON.stringify(sweep?.emailAutomations)}`);
+    return `withheld ${withheld}, minted 0, mailed 0`;
+  });
+
+  await step("nothing was consumed, so the same address is reconsidered next sweep", async () => {
+    // Filtered BEFORE the claim: no send-once slot, no frequency claim, no
+    // token. That is what makes failing closed safe — the moment the customer
+    // attests, the next sweep can mail them.
+    const { rows } = await q(
+      "select count(*)::int n from email_send_log where recipient_email = $1", [UNATTESTED],
+    );
+    assert(rows[0].n === 0, `a send-once slot was consumed for a withheld recipient: ${rows[0].n}`);
+    const second = await runSweep();
+    assert((second?.emailAutomations?.withheldUnattested ?? 0) >= 1, "the second sweep did not reconsider the address");
+    return "no slot consumed; reconsidered on the next sweep";
+  });
+
+  await step("a no-offer automation still reaches an unattested address", async () => {
+    // The rule is about the PROMISE, not the gate. A reminder that costs
+    // nothing and promises nothing has nothing to dead-end on, so withholding
+    // it would be the exclusion overreaching.
+    await q("update email_automations set enabled = false");
+    await q("update email_automations set enabled = true, offer_key = null where key = 'winback_60'");
+    await setAutomationDelay("winback_60", 60);
+    const mark = captureMark();
+    await runSweep();
+    const mail = capturedSince(mark).filter((m) => (m.to ?? "").includes(UNATTESTED));
+    assert(mail.length === 1, `expected one no-offer message, saw ${mail.length}`);
+    return `"${mail[0].subject}" delivered with no offer attached`;
   });
 
   await step("no console or network errors on the admin panel", async () => {

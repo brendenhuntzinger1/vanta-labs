@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendMarketingEmail } from "@/lib/email/marketing";
 import { campaignTemplate } from "@/lib/email/templates";
 import { getEmailRuntimeConfig, marketingBlockedReason } from "@/lib/email/settings";
+import { partitionByAttestation } from "@/lib/email/recipient-attestation";
 import { loadConsentedAudience } from "@/lib/email/audience";
 import { isPaidOrderStatus, isProductPurchaseOrder } from "@/lib/ledger";
 import { buildAutomationClickUrl, buildAutomationOpenUrl } from "@/lib/email/automation-links";
@@ -586,6 +587,13 @@ export type AutomationSweepResult = {
   failed: number;
   /** Held back by the marketing frequency guard this sweep; retried next sweep. */
   deferred: number;
+  /**
+   * Gift-bearing messages deliberately NOT sent because the recipient has not
+   * made the 21+/research-use representations, so the offer could not have been
+   * redeemed. Policy, not failure — counted separately from `skipped` so an
+   * operator can tell the difference at a glance.
+   */
+  withheldUnattested: number;
   byKey: Record<string, number>;
   errors: string[];
 };
@@ -631,7 +639,7 @@ function trackedOpenUrl(key: AutomationKey, email: string, referenceId: string):
 
 export async function runAutomationSweep(input?: { now?: number }): Promise<AutomationSweepResult> {
   const now = input?.now ?? Date.now();
-  const result: AutomationSweepResult = { sent: 0, skipped: 0, failed: 0, deferred: 0, byKey: {}, errors: [] };
+  const result: AutomationSweepResult = { sent: 0, skipped: 0, failed: 0, deferred: 0, withheldUnattested: 0, byKey: {}, errors: [] };
 
   const config = await getEmailRuntimeConfig();
   const blocked = marketingBlockedReason(config);
@@ -723,7 +731,40 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
         now,
       });
 
-      for (const target of targets) {
+      // B (interim). NEVER PROMISE A GIFT THAT CANNOT BE SPENT.
+      //
+      // An automation carrying an offer_key mails a real minted token. The
+      // storefront is default-deny and a marketing-link grant is issued only to
+      // an address that has already made the 21+/research-use representations,
+      // so a recipient without them cannot reach the cart from the email — they
+      // land on "Sign in to continue" holding a gift they cannot use.
+      //
+      // Filtered HERE, before the claim, so nothing is consumed: no send-once
+      // slot, no frequency claim, no token. The next sweep reconsiders the same
+      // address, which is what makes failing closed safe.
+      //
+      // This withholds the message. It does not weaken the gate, pre-fill an
+      // attestation or grant anything — and it is temporary, to be narrowed to
+      // whatever the attestation interstitial still cannot serve once that
+      // ships.
+      let eligibleTargets = targets;
+      const carriesOffer = Boolean(String(automation.offer_key ?? "").trim());
+      if (carriesOffer && targets.length > 0) {
+        const { unattested } = await partitionByAttestation(targets.map((t) => t.email));
+        if (unattested.size > 0) {
+          eligibleTargets = targets.filter((t) => !unattested.has(String(t.email ?? "").trim().toLowerCase()));
+          const withheld = targets.length - eligibleTargets.length;
+          result.withheldUnattested += withheld;
+          // Visible in the cron report rather than silent: this is marketing
+          // deliberately not sent, and an operator should be able to see that
+          // it is a policy decision and not a failure.
+          result.errors.push(
+            `${automation.key}: withheld ${withheld} gift-bearing message(s) — recipient has not made the 21+/research-use representations, so the offer could not be redeemed.`,
+          );
+        }
+      }
+
+      for (const target of eligibleTargets) {
         const campaignType = `automation:${automation.key}`;
         const templateKey = `automation_${automation.key}`;
 

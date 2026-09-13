@@ -87,3 +87,53 @@ export async function attachEmailLinkGrant(
     return false;
   }
 }
+
+/**
+ * WHICH OF THESE ADDRESSES COULD ACTUALLY SPEND A GIFT TODAY.
+ *
+ * The storefront is default-deny: /cart and /checkout require an account or a
+ * grant, because the 21+ and research-use representations are collected on the
+ * sign-in form and this is an age-gated catalogue. A marketing-link grant is
+ * minted only for an address that has already made both representations
+ * (recipientHasAttested above), so an address that has not cannot reach the
+ * cart from an email at all.
+ *
+ * That produced a specific, silent waste: a lapsed GUEST customer — targeted by
+ * email, because selectAutomationTargets keys on customer_email rather than on
+ * an account id — received "here is your free GHK-Cu", clicked it, and landed
+ * on "Sign in to continue" for an account they do not have, holding a real
+ * minted token they could not spend. Production, 2026-09-12: three of twelve
+ * paid customers have no auth account at all, and forty of a hundred and
+ * fifty-two accounts carry no attestation.
+ *
+ * So this is the interim rule, and it is deliberately about the PROMISE rather
+ * than about the gate: Vanta does not email somebody a benefit and then send
+ * them somewhere it cannot be used. It withholds the gift-bearing message; it
+ * does not weaken, bypass or pre-fill the attestation, and it grants nothing.
+ *
+ * FAILS CLOSED, and that is the cheaper mistake in both directions here. An
+ * unreadable attestation lookup withholds a marketing message that the next
+ * sweep will reconsider, because nothing is consumed when a target is filtered
+ * out before its claim. Sending anyway would spend a real token on a journey
+ * that dead-ends.
+ *
+ * TEMPORARY BY DESIGN. Once the attestation interstitial ships — a purpose-built
+ * 21+/research-use step that carries the offer through and records the
+ * representation on the authoritative auth record — an unattested recipient can
+ * complete the journey, and this exclusion should be narrowed to whatever the
+ * interstitial still cannot serve rather than left standing.
+ */
+export async function partitionByAttestation(
+  emails: readonly string[],
+): Promise<{ attested: Set<string>; unattested: Set<string> }> {
+  const attested = new Set<string>();
+  const unattested = new Set<string>();
+  // One lookup per distinct address, not per target: a sweep is capped at a few
+  // dozen recipients and the same address can appear under two automations.
+  const distinct = [...new Set(emails.map((e) => String(e ?? "").trim().toLowerCase()).filter(Boolean))];
+  for (const email of distinct) {
+    if (await recipientHasAttested(email)) attested.add(email);
+    else unattested.add(email);
+  }
+  return { attested, unattested };
+}

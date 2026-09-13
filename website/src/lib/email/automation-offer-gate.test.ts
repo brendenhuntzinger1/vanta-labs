@@ -48,6 +48,18 @@ vi.mock("@/lib/email/settings", () => ({
   marketingBlockedReason: () => null,
   resolveMarketingFrom: () => "marketing@example.test",
 }));
+// B: a gift-bearing automation now withholds from an address that has not made
+// the 21+/research-use representations, because the grant that opens the cart
+// is minted only for one that has — so an unattested recipient would receive a
+// real token they could not spend. This suite is about what happens once the
+// message IS allowed to go, so its recipient is attested.
+vi.mock("@/lib/email/recipient-attestation", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  partitionByAttestation: async (emails: readonly string[]) => ({
+    attested: new Set(emails.map((e) => String(e).trim().toLowerCase())),
+    unattested: new Set<string>(),
+  }),
+}));
 vi.mock("@/lib/email/audience", () => ({
   loadConsentedAudience: async () => ({ all: new Set([LAPSED]), accounts: new Set([LAPSED]) }),
 }));
