@@ -112,12 +112,19 @@ sleep 2
 #                             broken delivery pipeline rather than as an unset
 #                             variable. Same fail-closed shape as the payment
 #                             and Shippo secrets above it.
+#   RESEND_WEBHOOK_SIGNING_SECRET
+#                             the SECOND half of the same gate. The route
+#                             requires a valid Svix signature over each delivery
+#                             and answers 503 until this is set, so bounce and
+#                             complaint suppression cannot be exercised with only
+#                             the URL secret. A synthetic value is correct for the
+#                             harness — it signs with what the app verifies with.
 #
 # Reported together and by name, because finding them one at a time means one
 # rebuild-and-rerun cycle each.
 echo "==> required harness env"
 missing=""
-for var in CRON_SECRET EMAIL_ENABLED EMAIL_PROVIDER SMTP_HOST SMTP_PORT MARKETING_POSTAL_ADDRESS EMAIL_WEBHOOK_SECRET; do
+for var in CRON_SECRET EMAIL_ENABLED EMAIL_PROVIDER SMTP_HOST SMTP_PORT MARKETING_POSTAL_ADDRESS EMAIL_WEBHOOK_SECRET RESEND_WEBHOOK_SIGNING_SECRET; do
   grep -qE "^${var}=" "$HERE/.env.test.local" 2>/dev/null || missing="$missing $var"
 done
 if [ -n "$missing" ]; then
