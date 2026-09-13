@@ -35,6 +35,7 @@ const JOURNEY_HARNESSES = [
   "qa-offer-checkout-journey.mjs",
   "qa-purchase-path.mjs",
   "qa-customer-journey.mjs",
+  "qa-cart-recovery-override.mjs",
 ];
 
 /**
@@ -54,6 +55,12 @@ const MUST_DRIVE: Record<string, string[]> = {
     "/api/checkout/create-session",
   ],
   "qa-guest-recovery.mjs": ["/cart/restore"],
+  // This one had drifted exactly as qa-gift-wiring did: it drove
+  // /api/cron/sweep, which stopped running cart recovery when lifecycle mail
+  // moved to its own route and budget. The sweep still answered 200, so every
+  // one of its forty assertions ran against zero captured emails and reported
+  // forty product failures that were one wrong URL.
+  "qa-cart-recovery-override.mjs": ["/api/cron/lifecycle", "/cart/restore", "/api/checkout/create-session"],
   "qa-offer-checkout-journey.mjs": ["/api/checkout/create-session"],
 };
 

@@ -317,6 +317,19 @@ async function main() {
   // Start with every automation off, so each round's sweep can only mail the
   // one automation that round is about.
   await q("update email_automations set enabled = false, offer_key = null");
+  // AND SET THE SHIPPING POLICY THIS FILE ASSUMES, rather than inheriting it.
+  //
+  // Section 5 proves a free-shipping gift by showing an ordinary order paying
+  // shipping first — which is only true if sitewide free shipping is OFF.
+  // qa-cart-recovery-override turns it ON (production runs it that way, and its
+  // totals depend on it), so whichever harness ran last decided whether this one
+  // passed. A harness that inherits a precondition is a harness that reports a
+  // product failure when a sibling ran before it.
+  await q(
+    `insert into admin_audit_logs (action, target_table, target_id, metadata, created_at)
+     values ('admin_control_upsert', 'shipping', 'free_shipping_sitewide', $1, now())`,
+    [JSON.stringify({ value: false })],
+  ).catch(() => {});
 
   browser = await chromium.launch({
     executablePath: "/opt/pw-browsers/chromium",

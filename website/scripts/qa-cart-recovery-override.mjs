@@ -177,6 +177,21 @@ async function seedCatalogue() {
       [product.slug, product.name, product.doses[0].cents],
     );
     const productId = rows[0].id;
+    // THIS HARNESS OWNS THE DOSES OF THE PRODUCTS IT SEEDS, WHILE IT RUNS.
+    //
+    // Its cart fixtures reference dose rows BY ID, and every other harness
+    // against this database seeds the same catalogue with ids of its own. Left
+    // alone, the slug_suffix unique index turns this file's insert into an
+    // update of somebody else's row, the id the cart names then does not exist,
+    // and the checkout answers "that size is no longer available" — four red
+    // lines per cart that say nothing about the product.
+    //
+    // Each harness re-seeds on its own run, so clearing the strays is
+    // symmetrical rather than destructive.
+    await q(
+      `delete from product_doses where product_id = $1 and id <> all($2::uuid[])`,
+      [productId, product.doses.map((dose) => dose.id)],
+    );
     for (const dose of product.doses) {
       await q(
         `insert into product_doses (id, product_id, label, slug_suffix, sku, price_cents, product_cost_cents,
@@ -267,10 +282,27 @@ async function seedOverrides() {
   }
 }
 
+/**
+ * THE ROUTE THAT ACTUALLY RUNS CART RECOVERY.
+ *
+ * This called /api/cron/sweep, and it had stopped being true. Lifecycle mail
+ * was moved onto its own route and budget — a recovery stage is due inside a
+ * WINDOW that closes, so it cannot share a 60-second function with twenty-seven
+ * payment and fulfilment jobs. The sweep still answered 200, the harness still
+ * read a body, and every assertion below ran against zero captured emails: this
+ * file reported forty failures that were all one wrong URL, which is the same
+ * rot that left qa-gift-wiring proving nothing for two days.
+ *
+ * THE KEY IS ASSERTED, not just the status. A 200 from a route that no longer
+ * runs this job is exactly what made the old call look healthy, so the job's
+ * own result has to be present or this is not a sweep.
+ */
 async function runSweep() {
-  const res = await fetch(`${BASE}/api/cron/sweep`, { headers: { authorization: `Bearer ${CRON}` } });
+  const res = await fetch(`${BASE}/api/cron/lifecycle`, { headers: { authorization: `Bearer ${CRON}` } });
   const body = await res.json().catch(() => null);
   assert(res.status === 200, `sweep returned ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
+  assert(body && Object.prototype.hasOwnProperty.call(body, "cartRecovery"),
+    `the lifecycle route ran no cartRecovery job: ${JSON.stringify(body).slice(0, 200)}`);
   return body;
 }
 
@@ -379,6 +411,17 @@ async function main() {
 
   await step("seed the real catalogue rows", seedCatalogue);
   await step("configure Buy 2 Get 1 as production has it", seedPromotion);
+  // THE CONTROL SNAPSHOT IS CACHED FOR TEN SECONDS (CONTROL_SNAPSHOT_TTL_MS),
+  // and that is correct in production — the checkout must not pay for a
+  // settings read on every quote. It means a harness that writes a setting and
+  // sweeps immediately reads the PREVIOUS value, so this file's free-shipping
+  // promise silently became whichever harness ran last. Waiting out the
+  // documented window is the honest fix; invalidating a production cache from a
+  // test fixture would be testing a door this harness had propped open itself.
+  await step("wait out the control-snapshot cache so the sweep reads what was just written", async () => {
+    await new Promise((resolve) => setTimeout(resolve, 11_000));
+    return "11s";
+  });
   await step("reproduce each cart at its own stage", seedCarts);
   await step("add one override per cart, and nothing else", seedOverrides);
 
