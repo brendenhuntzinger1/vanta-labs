@@ -182,7 +182,7 @@ describe("drainMarketingSendQueue", () => {
 
     const result = await drainMarketingSendQueue({ now: NOW });
 
-    expect(result).toEqual({ sent: 1, deferredAgain: 0, cancelled: 0, failed: 0, errors: [] });
+    expect(result).toEqual({ sent: 1, alreadyDelivered: 0, deferredAgain: 0, cancelled: 0, failed: 0, errors: [] });
 
     // The guard is asked for THIS row's identity — a queued message is not a
     // way around the frequency rule.
@@ -208,7 +208,7 @@ describe("drainMarketingSendQueue", () => {
 
     const result = await drainMarketingSendQueue({ now: NOW });
 
-    expect(result).toEqual({ sent: 0, deferredAgain: 1, cancelled: 0, failed: 0, errors: [] });
+    expect(result).toEqual({ sent: 0, alreadyDelivered: 0, deferredAgain: 1, cancelled: 0, failed: 0, errors: [] });
     expect(state.sends).toHaveLength(0);
     expect(state.queueUpdates).toHaveLength(1);
     const { patch } = state.queueUpdates[0];
@@ -228,7 +228,7 @@ describe("drainMarketingSendQueue", () => {
 
     const result = await drainMarketingSendQueue({ now: NOW });
 
-    expect(result).toEqual({ sent: 0, deferredAgain: 0, cancelled: 1, failed: 0, errors: [] });
+    expect(result).toEqual({ sent: 0, alreadyDelivered: 0, deferredAgain: 0, cancelled: 1, failed: 0, errors: [] });
     expect(state.sends).toHaveLength(0);
     expect(state.rpcCalls).toHaveLength(0);
     expect(state.queueUpdates).toEqual([{ id: row.id, patch: expect.objectContaining({ status: "cancelled", attempts: 1 }) }]);
@@ -265,7 +265,7 @@ describe("drainMarketingSendQueue", () => {
 
     // Closed means closed: a later drain no longer sees it.
     const after = await drainMarketingSendQueue({ now: NOW + 30 * 24 * HOUR });
-    expect(after).toEqual({ sent: 0, deferredAgain: 0, cancelled: 0, failed: 0, errors: [] });
+    expect(after).toEqual({ sent: 0, alreadyDelivered: 0, deferredAgain: 0, cancelled: 0, failed: 0, errors: [] });
     expect(state.rpcCalls).toHaveLength(MARKETING_QUEUE_MAX_ATTEMPTS);
   });
 
@@ -273,7 +273,7 @@ describe("drainMarketingSendQueue", () => {
     state.blockedReason = "Email sending is disabled in Settings";
     const row = seedQueued();
     const result = await drainMarketingSendQueue({ now: NOW });
-    expect(result.sent + result.failed + result.deferredAgain + result.cancelled).toBe(0);
+    expect(result.sent + result.failed + result.deferredAgain + result.cancelled + result.alreadyDelivered).toBe(0);
     expect(result.errors[0]).toMatch(/^queue held: /);
     expect(state.rpcCalls).toHaveLength(0);
     expect(state.sends).toHaveLength(0);
@@ -309,7 +309,10 @@ describe("drainMarketingSendQueue", () => {
       status: "sent", sent_at: new Date(NOW - 20 * HOUR).toISOString(),
     }];
     const result = await drainMarketingSendQueue({ now: NOW });
-    expect(result.sent).toBe(1);
+    // NOT `sent`: this drain handed nothing to the provider. The row is
+    // satisfied and closes 'sent'; the counter says what actually happened.
+    expect(result.alreadyDelivered).toBe(1);
+    expect(result.sent).toBe(0);
     expect(state.sends).toHaveLength(0);
     expect(state.rpcCalls).toHaveLength(0);
     expect(row.status).toBe("sent");
@@ -328,7 +331,8 @@ describe("drainMarketingSendQueue", () => {
       status: "sent", sent_at: new Date(NOW - 30 * HOUR).toISOString(),
     }];
     const result = await drainMarketingSendQueue({ now: NOW });
-    expect(result.sent).toBe(1);
+    expect(result.alreadyDelivered).toBe(1);
+    expect(result.sent).toBe(0);
     expect(state.sends).toHaveLength(0);
     expect(state.rpcCalls).toHaveLength(0);
     expect(row.status).toBe("sent");
@@ -366,7 +370,7 @@ describe("drainMarketingSendQueue", () => {
 
     const result = await drainMarketingSendQueue({ now: NOW });
 
-    expect(result).toEqual({ sent: 0, deferredAgain: 0, cancelled: 0, failed: 0, errors: [] });
+    expect(result).toEqual({ sent: 0, alreadyDelivered: 0, deferredAgain: 0, cancelled: 0, failed: 0, errors: [] });
     expect(state.queueUpdates).toHaveLength(0);
     expect(state.sends).toHaveLength(0);
     expect(state.rpcCalls).toHaveLength(0);
