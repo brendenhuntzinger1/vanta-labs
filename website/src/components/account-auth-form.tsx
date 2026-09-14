@@ -913,12 +913,36 @@ export function AccountAuthForm() {
               under the fold on a real handset. So there is no room to ADD a
               value proposition here — these two lines are rewritten in place,
               same elements, same heights, no new rows. */}
+          {/* ONE SENTENCE, AND IT HAS TO DO THE WHOLE JOB.
+              It says what this screen is for and what is on the other side, in
+              the words a visitor would use. "View the full catalogue" named
+              the destination but not the action; this names both.
+
+              CATALOG, NOT CATALOGUE. The page on the other side of this door
+              is titled "Catalog", its eyebrow reads "Vanta Labs Catalog" and
+              its heading is "Premium Research Peptides". A door that promises
+              a catalogue and opens onto a Catalog is a small thing that reads
+              as carelessness, on the one screen that is asking to be trusted
+              with an address. The repo carries both spellings; the customer
+              sees this one.
+
+              THE SUB-HEADING IS GONE, AND THAT IS WHAT PAYS FOR THIS.
+              The heading fits about 23 characters on a line in this card, so
+              37 characters wrap to two and cost 32px. Measured on the deployed
+              page at 390x844, Continue with Google already ends at 695px with
+              the consent bar above it, and 708px is recorded below as under
+              the fold on a real handset — there was nothing spare.
+
+              Deleting the sub-heading returns 34px (24px of line plus its
+              10px of margin), so the second line is paid for and the button
+              does not move. Nothing is lost saying it: "how long will this
+              take" is answered twice more further down, by the Fastest option
+              badge and by "no lengthy signup" directly under the button —
+              both of them beside the control they describe, which is where
+              that promise is worth reading. */}
           <h1 className="mt-3 text-[1.75rem] font-semibold leading-[1.15] tracking-[-0.01em] text-white sm:text-[2rem]">
-            View the full catalogue
+            Sign in to view the full catalog
           </h1>
-          <p className="mt-2.5 text-[0.9375rem] leading-6 text-white/55">
-            Two confirmations. About ten seconds.
-          </p>
         </header>
 
         {/* TWO ROWS ABOVE THE DOOR, NOT FOUR.
