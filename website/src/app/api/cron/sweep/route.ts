@@ -14,6 +14,7 @@ import { runCouponHygiene } from "@/lib/coupon-hygiene";
 import { resealPlaintextControlSecrets } from "@/lib/admin-control";
 import { repairUnredeemedPaidOffers } from "@/lib/offers/customer-offer-repair";
 import { ingestAdSpend } from "@/lib/ads/spend-ingest";
+import { sweepUnsentMetaPurchases } from "@/lib/ads/meta-purchase-sync";
 import { pruneStaleHeartbeats } from "@/lib/admin-live-visitors";
 import { handleCronRequest, type CronJobMap } from "@/lib/cron-runner";
 
@@ -144,6 +145,12 @@ const JOBS: CronJobMap = {
   // hours, because the platforms restate a few times a day and 192 requests
   // daily would buy nothing.
   adSpendIngest: { label: "ad_spend_ingest", run: ingestAdSpend },
+  // Report every paid order to Meta's Conversions API, not only the ones whose
+  // confirmation page was opened — half of paid orders never were, measured
+  // 2026-09-14. Absence-keyed on the (order, platform) ledger and claimed
+  // before sending, so a concurrent confirmation-page send cannot double it.
+  // Bounded to Meta's seven-day window and 25 orders per tick.
+  metaPurchaseSync: { label: "meta_purchase_sync", run: sweepUnsentMetaPurchases },
   // Retention for /admin/live's heartbeat rows only — page_view/session_start
   // and every other event type are untouched (real funnel/attribution
   // reporting depends on those). A heartbeat is worthless past the 60s live

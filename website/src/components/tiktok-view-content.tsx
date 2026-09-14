@@ -42,6 +42,25 @@ export function TikTokViewContent({
 }) {
   const lastReported = useRef<string | null>(null);
 
+  // Meta is ungated: fbq exists from the inline base code before this runs,
+  // so it reports at once rather than waiting for the consent-gated pixels.
+  // Keyed on the slug like the others so a re-render reports once. The server
+  // leg is relayed for Meta alone here; TikTok's relay stays inside the
+  // consent wait below.
+  const metaReported = useRef<string | null>(null);
+  useEffect(() => {
+    if (!slug || metaReported.current === slug || !window.fbq) return;
+    metaReported.current = slug;
+    emitMetaEvent(
+      buildMetaViewContent({ slug, name, price, category }),
+      (eventName, properties, options) => {
+        window.fbq?.("track", eventName, properties, options);
+        relayToServer({ event: "ViewContent", eventId: options.eventID, lines: [{ slug, quantity: 1 }], platforms: ["meta"] });
+      },
+      browserFiredStore(),
+    );
+  }, [slug, name, price, category]);
+
   useEffect(() => {
     if (!slug || lastReported.current === slug) return;
 
@@ -52,7 +71,7 @@ export function TikTokViewContent({
         window.ttq?.track(eventName, properties, options);
         // Same event id, so TikTok collapses the two legs into one event. The
         // server leg is what survives an ad blocker eating the pixel.
-        relayToServer({ event: "ViewContent", eventId: options.event_id, lines: [{ slug, quantity: 1 }] });
+        relayToServer({ event: "ViewContent", eventId: options.event_id, lines: [{ slug, quantity: 1 }], platforms: ["tiktok"] });
       };
       emitEvent(buildViewContent({ slug, name, price }), emit, browserFiredStore());
 
@@ -70,15 +89,6 @@ export function TikTokViewContent({
       emitRedditEvent(
         buildRedditViewContent({ slug, name, price, category, conversionId: newConversionId("vc") }),
         (eventName, properties) => window.rdt?.("track", eventName, properties),
-      );
-
-      // Meta, from the same data and the same gate. The eventID is the same
-      // key TikTok's event_id uses, so a Conversions API leg added later
-      // collapses into this event rather than doubling it.
-      emitMetaEvent(
-        buildMetaViewContent({ slug, name, price, category }),
-        (eventName, properties, options) => window.fbq?.("track", eventName, properties, options),
-        browserFiredStore(),
       );
     });
   }, [slug, name, price, category]);

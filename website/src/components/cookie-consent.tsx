@@ -175,12 +175,14 @@ export function CookieConsent({ initiallyOpen = false }: { initiallyOpen?: boole
   // both options carry equal weight, the policy is one tap away, and the
   // decision is stored exactly as before, and the disclosure still NAMES EVERY
   // PIXEL. An earlier pass at this bar shortened the sentence and dropped
-  // "TikTok, Snapchat and Reddit" (now Meta too) to save two lines; the pixel source tests
+  // "TikTok, Snapchat and Reddit" to save two lines; the pixel source tests
   // caught it, correctly. Naming what accepting turns on is the substance of
   // the notice, not decoration, and it is not negotiable against layout.
   //
-  // GOOGLE IS NAMED IN A SEPARATE SENTENCE BECAUSE IT BEHAVES DIFFERENTLY.
-  // The four pixels are not loaded at all before Accept; the Google tag is
+  // GOOGLE AND META ARE NAMED IN SEPARATE SENTENCES BECAUSE THEY BEHAVE
+  // DIFFERENTLY. The three pixels are not loaded at all before Accept; the
+  // Meta pixel is loaded on every page, ungated, by the owner's decision (see
+  // components/meta-pixel.tsx and both policies); and the Google tag is
   // loaded on every page with consent mode denying every storage signal until
   // Accept (see components/google-ads-tag.tsx). Folding it into the first
   // sentence would tell the visitor it is held back, which is not true, and a
@@ -190,7 +192,7 @@ export function CookieConsent({ initiallyOpen = false }: { initiallyOpen?: boole
     <div className="vl-consent-bar" role="region" aria-label="Cookie consent">
       <div className="vl-consent-inner">
         <p className="vl-consent-copy">
-          Essential cookies run the store. Analytics and our advertising pixels (TikTok, Snapchat, Reddit and Meta) load only if you accept. Our Google Ads tag loads either way, but stores nothing and identifies no one unless you accept.{" "}
+          Essential cookies run the store. Analytics and our advertising pixels (TikTok, Snapchat and Reddit) load only if you accept. Our Google Ads tag loads either way, but stores nothing and identifies no one unless you accept. Our Meta Pixel loads either way and is not controlled by this choice.{" "}
           {/* py-1.5 -my-1.5 gives the link a comfortably-over-24px tap box
               (WCAG 2.2 AA 2.5.8) without changing the line box it sits in.
               py-1 landed on exactly 24px, which rounds under the threshold. */}

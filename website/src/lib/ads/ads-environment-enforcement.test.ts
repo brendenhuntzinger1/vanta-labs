@@ -18,6 +18,7 @@ const ORIGINAL = {
   ci: process.env.CI,
   tiktok: process.env.TIKTOK_EVENTS_API_ACCESS_TOKEN,
   reddit: process.env.REDDIT_CONVERSIONS_ACCESS_TOKEN,
+  meta: process.env.META_CONVERSIONS_ACCESS_TOKEN,
 };
 
 /** A deployment that is production in every respect, with both API tokens set. */
@@ -27,6 +28,7 @@ function makeProduction() {
   vi.stubEnv("CI", "");
   vi.stubEnv("TIKTOK_EVENTS_API_ACCESS_TOKEN", "tok-tiktok");
   vi.stubEnv("REDDIT_CONVERSIONS_ACCESS_TOKEN", "tok-reddit");
+  vi.stubEnv("META_CONVERSIONS_ACCESS_TOKEN", "tok-meta");
 }
 
 let fetchСalledWith: unknown[][] = [];
@@ -56,6 +58,7 @@ afterEach(() => {
   for (const [k, v] of Object.entries({
     VERCEL_ENV: ORIGINAL.vercelEnv, NODE_ENV: ORIGINAL.nodeEnv, CI: ORIGINAL.ci,
     TIKTOK_EVENTS_API_ACCESS_TOKEN: ORIGINAL.tiktok, REDDIT_CONVERSIONS_ACCESS_TOKEN: ORIGINAL.reddit,
+    META_CONVERSIONS_ACCESS_TOKEN: ORIGINAL.meta,
   })) {
     if (v === undefined) delete (process.env as Record<string, string | undefined>)[k];
     else (process.env as Record<string, string | undefined>)[k] = v;
@@ -250,6 +253,68 @@ describe("browserAdsReportingAllowed under real browser conditions", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Meta Conversions API
+// ---------------------------------------------------------------------------
+
+describe("sendMetaConversion refuses to leave a non-production deployment", () => {
+  const input = {
+    event: {
+      name: "Purchase",
+      eventId: "purchase-ord-123",
+      properties: { currency: "USD", value: 85.98, content_ids: ["bpc-157"], content_type: "product" },
+      dedupeKey: null,
+    },
+    user: { email: "jo@example.com", ipAddress: "203.0.113.9", userAgent: "Mozilla/5.0" },
+    occurredAt: new Date(),
+  };
+
+  it("sends on a real production deployment, with the token in the body and never the URL", async () => {
+    makeProduction();
+    const spy = stubFetch(200, { events_received: 1 });
+    const { sendMetaConversion } = await import("@/lib/ads/meta-conversions");
+
+    const outcome = await sendMetaConversion(input as never);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchСalledWith[0] as [string, { body: string }];
+    expect(String(url)).toContain("graph.facebook.com");
+    expect(String(url)).not.toContain("tok-meta");
+    expect(JSON.parse(init.body).access_token).toBe("tok-meta");
+    expect(outcome.delivered).toBe(true);
+  });
+
+  it.each([
+    ["a Vercel PREVIEW deployment", () => vi.stubEnv("VERCEL_ENV", "preview")],
+    ["an unset VERCEL_ENV", () => vi.stubEnv("VERCEL_ENV", "")],
+    ["a non-production build", () => vi.stubEnv("NODE_ENV", "development")],
+    ["CI", () => vi.stubEnv("CI", "true")],
+  ])("sends NOTHING from %s", async (_label, degrade) => {
+    makeProduction();
+    degrade();
+    const spy = stubFetch();
+    const { sendMetaConversion } = await import("@/lib/ads/meta-conversions");
+
+    const outcome = await sendMetaConversion(input as never);
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(outcome.delivered).toBe(false);
+    expect(outcome.transportError).toMatch(/^ads reporting disabled: /);
+  });
+
+  it("still sends no request when the environment is fine but the token is missing", async () => {
+    makeProduction();
+    vi.stubEnv("META_CONVERSIONS_ACCESS_TOKEN", "");
+    const spy = stubFetch();
+    const { sendMetaConversion } = await import("@/lib/ads/meta-conversions");
+
+    const outcome = await sendMetaConversion(input as never);
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(outcome.transportError).toBe("META_CONVERSIONS_ACCESS_TOKEN is not set");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The components are actually wired to it
 // ---------------------------------------------------------------------------
 
@@ -258,7 +323,19 @@ describe("every pixel component consults the gate", () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     (require("node:fs") as typeof import("node:fs")).readFileSync(`src/components/${p}`, "utf8");
 
-  it.each(["tiktok-pixel.tsx", "snap-pixel.tsx", "reddit-pixel.tsx", "meta-pixel.tsx", "consented-analytics.tsx"])(
+  it("the server-rendered Meta pixel resolves the same gate on the server, like the Google tag", () => {
+    // Ungated by consent, but never by environment: a preview deployment or a
+    // local run must not report into the live ad account.
+    for (const file of ["meta-pixel.tsx", "google-ads-tag.tsx"]) {
+      const source = read(file);
+      expect(source).toContain("adsReportingAllowed({");
+      expect(source).toContain("vercelEnv: process.env.VERCEL_ENV ?? process.env.NEXT_PUBLIC_VERCEL_ENV");
+      expect(source).toContain("nodeEnv: process.env.NODE_ENV");
+    }
+    expect(read("meta-pixel.tsx")).toContain("if (!pixelIsPermittedHere()) return null;");
+  });
+
+  it.each(["tiktok-pixel.tsx", "snap-pixel.tsx", "reddit-pixel.tsx", "consented-analytics.tsx"])(
     "%s imports the gate and refuses before rendering the SDK",
     (file) => {
       const source = read(file);
@@ -273,7 +350,7 @@ describe("every pixel component consults the gate", () => {
   );
 
   it("resolves the verdict in an effect, not during render, so hydration cannot mismatch", () => {
-    for (const file of ["tiktok-pixel.tsx", "snap-pixel.tsx", "reddit-pixel.tsx", "meta-pixel.tsx", "consented-analytics.tsx"]) {
+    for (const file of ["tiktok-pixel.tsx", "snap-pixel.tsx", "reddit-pixel.tsx", "consented-analytics.tsx"]) {
       const source = read(file);
       // Starting closed is what makes a hydration failure fail safe.
       expect(source).toContain("const [adsAllowed, setAdsAllowed] = useState(false);");

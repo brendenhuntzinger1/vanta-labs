@@ -35,11 +35,53 @@ export function TikTokCommerceEvents() {
     };
 
     const handler = (event: Event) => {
-      // If the pixel has not loaded, consent was declined or not yet given.
-      if (!window.ttq) return;
       const detail = (event as CustomEvent<AnalyticsDetail>).detail;
       const mapped = mapAnalyticsDetail(detail);
       if (!mapped) return;
+
+      // Meta first, and BEFORE the consent check below: it is ungated, so fbq
+      // exists for every visitor. Both events are in Meta's standard set and
+      // carry the same eventID TikTok uses; the server leg is relayed for
+      // Meta alone, with the pixel's own cookies riding on the request.
+      if (window.fbq) {
+        const metaEvent =
+          mapped.name === "AddToCart"
+            ? buildMetaAddToCart({
+                slug: String(detail?.productSlug ?? ""),
+                variantId: detail?.variantId ?? null,
+                name: detail?.productName ?? null,
+                category: detail?.productCategory ?? null,
+                quantity: Number(detail?.quantity ?? 1),
+                price: Number(detail?.price ?? 0),
+              })
+            : buildMetaInitiateCheckout({
+                itemCount: Number(detail?.itemCount ?? 0),
+                total: Number(detail?.total ?? 0),
+                items: detail?.items ?? [],
+              });
+        emitMetaEvent(
+          metaEvent,
+          (eventName, properties, options) => window.fbq?.("track", eventName, properties, options),
+          store,
+        );
+        if (metaEvent && (mapped.name === "AddToCart" || mapped.name === "InitiateCheckout")) {
+          const metaLines =
+            mapped.name === "AddToCart"
+              ? [{ slug: String(detail?.productSlug ?? ""), quantity: Number(detail?.quantity ?? 1) }]
+              : (detail?.items ?? []).map((item) => ({ slug: String(item.slug ?? ""), quantity: Number(item.quantity ?? 1) }));
+          relayToServer({
+            event: mapped.name,
+            eventId: metaEvent.eventId,
+            lines: metaLines.filter((line) => line.slug),
+            claimedTotal: mapped.properties.value,
+            platforms: ["meta"],
+          });
+        }
+      }
+
+      // If the TikTok pixel has not loaded, consent was declined or not yet
+      // given, and the three consent-gated platforms report nothing.
+      if (!window.ttq) return;
 
       emitEvent(mapped, emit, store);
 
@@ -103,36 +145,13 @@ export function TikTokCommerceEvents() {
         );
       }
 
-      // Meta, from the same broadcast. Gated on fbq's presence for the same
-      // reason ttq is: the pixel only exists after consent. Both events are
-      // in Meta's standard set and both carry the eventID TikTok also uses.
-      if (window.fbq) {
-        emitMetaEvent(
-          mapped.name === "AddToCart"
-            ? buildMetaAddToCart({
-                slug: String(detail?.productSlug ?? ""),
-                variantId: detail?.variantId ?? null,
-                name: detail?.productName ?? null,
-                category: detail?.productCategory ?? null,
-                quantity: Number(detail?.quantity ?? 1),
-                price: Number(detail?.price ?? 0),
-              })
-            : buildMetaInitiateCheckout({
-                itemCount: Number(detail?.itemCount ?? 0),
-                total: Number(detail?.total ?? 0),
-                items: detail?.items ?? [],
-              }),
-          (eventName, properties, options) => window.fbq?.("track", eventName, properties, options),
-          store,
-        );
-      }
-
       if (mapped.name === "AddToCart" || mapped.name === "InitiateCheckout") {
         relayToServer({
           event: mapped.name,
           eventId: mapped.eventId,
           lines: lines.filter((line) => line.slug),
           claimedTotal: mapped.properties.value,
+          platforms: ["tiktok"],
         });
       }
     };

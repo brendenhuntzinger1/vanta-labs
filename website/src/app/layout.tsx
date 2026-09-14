@@ -38,6 +38,7 @@ import { TikTokPixel } from "@/components/tiktok-pixel";
 import { SnapPixel } from "@/components/snap-pixel";
 import { RedditPixel } from "@/components/reddit-pixel";
 import { MetaPixel } from "@/components/meta-pixel";
+import { buildAdvancedMatching } from "@/lib/ads/advanced-matching";
 import { GoogleAdsTag } from "@/components/google-ads-tag";
 import { TikTokCommerceEvents } from "@/components/tiktok-commerce-events";
 import "./globals.css";
@@ -213,6 +214,14 @@ export default async function RootLayout({
   // every account screen) this costs nothing, and for a visitor with no cookie
   // it never touches the network.
   const signedIn = Boolean(await getAuthenticatedUser());
+  // Memoised per request, so this second call costs nothing.
+  const user = signedIn ? await getAuthenticatedUser() : null;
+
+  // Meta Advanced Matching for a signed-in visitor: SHA-256 digests only,
+  // produced here on the server by the module TikTok and Snap already use.
+  // A guest gets null and the pixel initialises with the id alone.
+  const metaHashes = user ? buildAdvancedMatching({ email: user.email ?? null, externalId: user.id }) : null;
+  const metaMatchKeys = metaHashes ? { em: metaHashes.email ?? null, external_id: metaHashes.external_id ?? null } : null;
 
   // A SHOPPER WHO ARRIVED FROM AN EMAIL IS NOT SIGNED IN AND STILL SHOPS HERE.
   //
@@ -288,6 +297,12 @@ export default async function RootLayout({
             every storage signal denied until the visitor accepts; see
             components/google-ads-tag.tsx. */}
         <GoogleAdsTag />
+        {/* THE META PIXEL IS SERVER-RENDERED AND UNGATED, LIKE THE GOOGLE TAG.
+            Present in the served HTML for every visitor, before and regardless
+            of the cookie banner — the owner's decision, documented in
+            components/meta-pixel.tsx and in both policies. The three client
+            pixels further down still wait for Accept. */}
+        <MetaPixel matchKeys={metaMatchKeys} />
         {/* Site-wide Organization + WebSite structured data for brand/knowledge
             panel eligibility. Rendered server-side so crawlers always see it. */}
         <script
@@ -371,7 +386,6 @@ export default async function RootLayout({
           <TikTokPixel />
           <SnapPixel />
           <RedditPixel />
-          <MetaPixel />
         </Suspense>
         <TikTokCommerceEvents />
         {/* Renders only for ?debug_entry=1 — see components/entry-diagnostics.tsx.
