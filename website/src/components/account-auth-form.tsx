@@ -918,6 +918,14 @@ export function AccountAuthForm() {
               the words a visitor would use. "View the full catalogue" named
               the destination but not the action; this names both.
 
+              CATALOG, NOT CATALOGUE. The page on the other side of this door
+              is titled "Catalog", its eyebrow reads "Vanta Labs Catalog" and
+              its heading is "Premium Research Peptides". A door that promises
+              a catalogue and opens onto a Catalog is a small thing that reads
+              as carelessness, on the one screen that is asking to be trusted
+              with an address. The repo carries both spellings; the customer
+              sees this one.
+
               THE SUB-HEADING IS GONE, AND THAT IS WHAT PAYS FOR THIS.
               The heading fits about 23 characters on a line in this card, so
               37 characters wrap to two and cost 32px. Measured on the deployed
@@ -933,7 +941,7 @@ export function AccountAuthForm() {
               both of them beside the control they describe, which is where
               that promise is worth reading. */}
           <h1 className="mt-3 text-[1.75rem] font-semibold leading-[1.15] tracking-[-0.01em] text-white sm:text-[2rem]">
-            Sign in to view the premium catalogue
+            Sign in to view the full catalog
           </h1>
         </header>
 

@@ -317,7 +317,10 @@ describe("the portal gates on the attestations, never on the marketing box", () 
     // under it sold the speed of the form. Neither said what is on the other
     // side, which is the only thing a visitor arriving cold from an ad does
     // not already know. The headline now names the catalogue itself.
-    expect(renderedPortal).toContain("Sign in to view the premium catalogue");
+    expect(renderedPortal).toContain("Sign in to view the full catalog");
+    // American spelling, matching the page this door opens onto: its title is
+    // "Catalog", its eyebrow "Vanta Labs Catalog". The repo carries both.
+    expect(renderedPortal).not.toContain("catalogue");
     expect(renderedPortal).not.toContain("Research Access Portal");
     expect(renderedPortal).not.toContain("Access is limited to verified account holders.");
   });
@@ -339,7 +342,7 @@ describe("the portal gates on the attestations, never on the marketing box", () 
     // An earlier draft added a sub-heading that wrapped to two lines and put
     // the button at 719px, past the recorded failure. If a sub-heading comes
     // back here, re-measure the fold before shipping it.
-    const headingAt = renderedPortal.indexOf("Sign in to view the premium catalogue");
+    const headingAt = renderedPortal.indexOf("Sign in to view the full catalog");
     expect(headingAt).toBeGreaterThan(-1);
     // From the end of the heading to the start of the "Confirm to continue"
     // label. Exactly one <p opens in that span — the label's own — so a second
