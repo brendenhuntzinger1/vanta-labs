@@ -362,9 +362,36 @@ async function main() {
   // -------------------------------------------------------------------------
   const mark = captureMark();
   const summary = await step("the sweep runs and reports no errors", async () => {
-    const s = await sweep();
-    assert(!s.errors?.length, `sweep errors: ${JSON.stringify(s.errors)}`);
-    return `sent ${s.sent}, deferred ${s.deferred}, skipped ${s.skipped}, failed ${s.failed}`;
+    // TICK UNTIL THIS FILE'S COHORT HAS BEEN DECIDED, THE WAY THE CRON DOES.
+    //
+    // AUTOMATION_BATCH_LIMIT is 50 recipients per automation per sweep — a
+    // deliberate backstop so switching an automation on against an existing
+    // customer base does not try to mail everyone inside one 60-second
+    // function, with the remainder picked up next sweep and the dedup keys
+    // keeping anyone from a second copy. One sweep is therefore only enough
+    // while the database is small. In a shuffled release batch, after a dozen
+    // suites have each left lapsed customers behind, the sweep reported
+    // "sent 102, deferred 38" and this file's own day-30 customer was not in
+    // the first fifty: "day 30 received """, for a reminder that was simply
+    // queued behind ninety strangers.
+    //
+    // The negative expectations are unaffected — an unsubscribed, bounced,
+    // complained or unconsented address receives nothing however many times
+    // the cron runs, and day 29 is never eligible — so the extra ticks cost
+    // this file none of its strictness.
+    const expected = [["r30", "replenishment"], ["r31", "replenishment"],
+      ["w40", "winback_30"], ["w41", "winback_30"], ["v50", "winback_60"], ["v51", "winback_60"]];
+    let s = null; let sent = 0; let deferred = 0; let skipped = 0; let failedCount = 0;
+    for (let tick = 0; tick < 8; tick += 1) {
+      s = await sweep();
+      assert(!s.errors?.length, `sweep errors: ${JSON.stringify(s.errors)}`);
+      sent += Number(s.sent ?? 0); deferred += Number(s.deferred ?? 0);
+      skipped += Number(s.skipped ?? 0); failedCount += Number(s.failed ?? 0);
+      const seen = await sentByAddress();
+      const served = expected.every(([tag, campaign]) => (seen.get(who(tag)) ?? []).includes(campaign));
+      if (served) break;
+    }
+    return `sent ${sent}, deferred ${deferred}, skipped ${skipped}, failed ${failedCount}`;
   });
 
   const sent = await sentByAddress();
