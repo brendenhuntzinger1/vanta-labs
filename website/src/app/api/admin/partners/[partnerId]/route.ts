@@ -90,6 +90,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
       const note = typeof body?.note === "string" ? body.note : undefined;
       const overrideMinimumThreshold = body?.overrideMinimumThreshold === true;
       const transactionReference = typeof body?.transactionReference === "string" ? body.transactionReference : null;
+      // Paying before the hold ends is opt-in per payout, never a default.
+      const includeHeld = body?.includeHeld === true;
+      const paidVia = typeof body?.paidVia === "string" ? body.paidVia : null;
+      const paidTo = typeof body?.paidTo === "string" ? body.paidTo : null;
 
       const payout = await markCommissionsPaid({
         partnerId,
@@ -104,11 +108,19 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
         // the server enforces it too (markCommissionsPaid throws without it).
         confirmedTransferred: body?.confirmedTransferred === true,
         transactionReference,
+        includeHeld,
+        paidVia,
+        paidTo,
       });
 
       if (!payout.payoutId) {
         return NextResponse.json(
-          { success: false, error: "No approved commissions are pending payout for this ambassador." },
+          {
+            success: false,
+            error: includeHeld
+              ? "Nothing is payable for this ambassador: no commissions have cleared the hold, and none in the hold come from a paid, unflagged order."
+              : "No approved commissions are pending payout for this ambassador. Tick \"include the held balance\" to pay commissions still in the hold period.",
+          },
           { status: 400 },
         );
       }

@@ -140,13 +140,17 @@ export interface PayoutHistoryRow {
   ambassadorName: string;
   amount: number;
   note: string | null;
+  // How the money went (payout-channels.ts) and where. Stamped at payout time,
+  // so a later change to the ambassador's profile does not rewrite history.
+  payoutMethod: string | null;
+  payoutHandle: string | null;
   createdAt: string;
 }
 
 export async function getPayoutHistory(limit = 50): Promise<PayoutHistoryRow[]> {
   const { data: payouts, error } = await supabaseAdmin
     .from("partner_payouts")
-    .select("id, ambassador_id, amount, note, created_at")
+    .select("id, ambassador_id, amount, note, payout_method, payout_handle, created_at")
     .order("created_at", { ascending: false })
     .limit(limit);
 
@@ -176,6 +180,8 @@ export async function getPayoutHistory(limit = 50): Promise<PayoutHistoryRow[]> 
     ambassadorName: nameById.get(row.ambassador_id) ?? "Unknown ambassador",
     amount: Number(row.amount ?? 0),
     note: row.note ? String(row.note) : null,
+    payoutMethod: row.payout_method ? String(row.payout_method) : null,
+    payoutHandle: row.payout_handle ? String(row.payout_handle) : null,
     createdAt: String(row.created_at),
   }));
 }
