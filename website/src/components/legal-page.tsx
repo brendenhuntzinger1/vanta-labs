@@ -4,21 +4,47 @@ import { SiteHeaderV2 } from "@/components/site-header-v2";
 // src/lib/legal-content.ts: a line starting with "## " is a heading; blank
 // lines separate paragraphs. Everything is treated as text (no raw HTML), so
 // admin-edited content is safe to render.
+// "**text**" renders as a bold span. Text-only: no raw HTML is ever emitted.
+function renderInline(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g).filter(Boolean);
+  return parts.map((part, i) =>
+    part.startsWith("**") && part.endsWith("**") && part.length > 4 ? (
+      <strong key={i} className="font-semibold text-white/90">
+        {part.slice(2, -2)}
+      </strong>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  );
+}
+
 function renderBody(body: string) {
   const blocks = body.split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean);
-  return blocks.map((block, index) => {
+  return blocks.flatMap((block, index) => {
     if (block.startsWith("## ")) {
-      return (
-        <h2 key={index} className="vl2-serif mt-8 text-xl text-white">
-          {block.slice(3).trim()}
-        </h2>
-      );
+      // A heading may be followed directly by its first paragraph on the next
+      // line with no blank line between (the defaults are written that way).
+      const [headingLine, ...rest] = block.split("\n");
+      const nodes = [
+        <h2 key={`${index}-h`} className="vl2-serif mt-8 text-xl text-white">
+          {headingLine.slice(3).trim()}
+        </h2>,
+      ];
+      const remainder = rest.join("\n").trim();
+      if (remainder) {
+        nodes.push(
+          <p key={`${index}-p`} className="text-sm leading-7 text-white/70">
+            {renderInline(remainder)}
+          </p>,
+        );
+      }
+      return nodes;
     }
-    return (
+    return [
       <p key={index} className="text-sm leading-7 text-white/70">
-        {block}
-      </p>
-    );
+        {renderInline(block)}
+      </p>,
+    ];
   });
 }
 

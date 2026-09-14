@@ -16,17 +16,45 @@ export async function PATCH(request: Request) {
   }
 
   try {
-    const body = await request.json() as { orderUpdateEmails?: boolean; marketingEmails?: boolean };
+    const body = await request.json() as { orderUpdateEmails?: boolean; marketingEmails?: boolean; smsMarketing?: boolean };
+    const now = new Date().toISOString();
 
     const { error } = await supabaseAdmin.from("customer_preferences").upsert({
       user_id: user.id,
       order_update_emails: body.orderUpdateEmails ?? true,
       marketing_emails: body.marketingEmails ?? false,
-      updated_at: new Date().toISOString(),
+      updated_at: now,
     }, { onConflict: "user_id" });
 
     if (error) {
       throw error;
+    }
+
+    // SMS consent (TCPA / A2P 10DLC). Written separately and best-effort so a
+    // database that has not yet run customer-sms-consent.sql still saves the
+    // email preferences above. The checkbox is never pre-ticked; the timestamp
+    // of the tick (or untick) is the consent record Twilio and carriers expect.
+    if (typeof body.smsMarketing === "boolean") {
+      try {
+        const { data: current } = await supabaseAdmin
+          .from("customer_preferences")
+          .select("sms_marketing")
+          .eq("user_id", user.id)
+          .maybeSingle();
+        const was = Boolean(current?.sms_marketing);
+        if (was !== body.smsMarketing) {
+          await supabaseAdmin
+            .from("customer_preferences")
+            .update({
+              sms_marketing: body.smsMarketing,
+              ...(body.smsMarketing ? { sms_consent_at: now } : { sms_opted_out_at: now }),
+              updated_at: now,
+            })
+            .eq("user_id", user.id);
+        }
+      } catch {
+        // Non-fatal; see note above.
+      }
     }
 
     // Mirror the marketing toggle into email_suppressions, which is the
