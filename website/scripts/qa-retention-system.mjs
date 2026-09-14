@@ -531,8 +531,9 @@ async function main() {
   await q(`update email_automations set offer_key = case key when 'welcome_no_purchase' then 'winback_60_percent_15' when 'replenishment' then 'winback_60_free_shipping' when 'winback_30' then 'winback_60_bac_water_10' when 'winback_60' then 'winback_60_free_ghkcu' else null end`);
   await q(`update email_automations set cta_path = '/account/orders', cta_label = 'REORDER NOW' where key = 'replenishment'`);
   await q(`update email_automations set cta_path = '/products' where key <> 'replenishment' and (cta_path is null or cta_path = '')`);
-  await q(`update products set inventory_quantity = 900, stock_status = 'In Stock' where slug in ('bpc-157-10mg','ghk-cu','recon-water')`);
-  await q(`update product_doses set inventory_quantity = 900, stock_status = 'In Stock'`).catch(() => {});
+  // Stocked AROUND the holds — see qa-gift-wiring.mjs.
+  await q(`update products set inventory_quantity = coalesce(reserved_quantity,0) + 900, stock_status = 'In Stock' where slug in ('bpc-157-10mg','ghk-cu','recon-water')`);
+  await q(`update product_doses set inventory_quantity = coalesce(reserved_quantity,0) + 900, stock_status = 'In Stock'`).catch(() => {});
   await q(`delete from inventory_reservations`).catch(() => {});
   await q(`delete from coupons where code like 'QA%-${stamp.toUpperCase()}'`).catch(() => {});
   await q(`insert into coupons (code, discount_type, discount_value, active) values ($1, 'percent', 50, true), ($2, 'percent', 5, true)`, [`QA50-${stamp.toUpperCase()}`, `QA5-${stamp.toUpperCase()}`]);

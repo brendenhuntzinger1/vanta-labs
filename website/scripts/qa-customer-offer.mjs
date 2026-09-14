@@ -336,8 +336,11 @@ async function main() {
   // and which means an un-topped-up harness runs the catalogue dry and the
   // later steps fail with "just sold out" rather than with anything about the
   // offer. Topping up first keeps a failure here meaningful.
-  await q("update products set inventory_quantity = 500, stock_status = 'In Stock' where slug in ('bpc-157-10mg', 'ghk-cu')");
-  await q("update product_doses set inventory_quantity = 500, stock_status = 'In Stock' where product_id in (select id from products where slug in ('bpc-157-10mg', 'ghk-cu'))").catch(() => {});
+  // Stocked AROUND the holds: reserve_inventory sells out of
+  // (inventory - reserved), so a flat number on a row carrying hundreds of
+  // reservations from earlier suites leaves it unsellable.
+  await q("update products set inventory_quantity = coalesce(reserved_quantity,0) + 500, stock_status = 'In Stock' where slug in ('bpc-157-10mg', 'ghk-cu')");
+  await q("update product_doses set inventory_quantity = coalesce(reserved_quantity,0) + 500, stock_status = 'In Stock' where product_id in (select id from products where slug in ('bpc-157-10mg', 'ghk-cu'))").catch(() => {});
   await q("delete from inventory_reservations where slug in ('bpc-157-10mg', 'ghk-cu')").catch(() => {});
 
   // EVERYTHING THAT POINTS AT THESE ORDERS, NOT JUST THE LINES.

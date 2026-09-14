@@ -375,8 +375,14 @@ async function main() {
   mkdirSync(SHOTS, { recursive: true });
 
   // A re-runnable starting state. The gift consumes real stock, so top it up.
-  await q("update products set inventory_quantity = 500, stock_status = 'In Stock' where slug in ('bpc-157-10mg','ipamorelin-5mg','ghk-cu')");
-  await q("update product_doses set inventory_quantity = 500, stock_status = 'In Stock'").catch(() => {});
+  // STOCKED AROUND THE HOLDS, NOT TO A FLAT NUMBER. reserve_inventory sells
+  // out of (inventory - reserved), and every pending order in the database is
+  // holding units. Setting inventory to a flat 500 on a row already carrying
+  // 900 reservations leaves it unsellable, and the store then refuses with
+  // "Product is out of stock: Ipamorelin 5mg" — the harness's own exhaustion,
+  // reported three sections deep as a checkout failure.
+  await q("update products set inventory_quantity = coalesce(reserved_quantity,0) + 500, stock_status = 'In Stock' where slug in ('bpc-157-10mg','ipamorelin-5mg','ghk-cu')");
+  await q("update product_doses set inventory_quantity = coalesce(reserved_quantity,0) + 500, stock_status = 'In Stock'").catch(() => {});
   await q("delete from inventory_reservations").catch(() => {});
   await q("delete from customer_offers where email = any($1)", [ALL_FIXTURES]);
   await q("delete from order_items where order_id in (select order_id from orders where customer_email = any($1))", [ALL_FIXTURES]);

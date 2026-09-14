@@ -871,8 +871,10 @@ async function main() {
     ["shipping", "free_shipping_sitewide", false],
     ["promotions", "bxgy_promotions", []],
   ]);
-  await q("update products set inventory_quantity = 900, stock_status = 'In Stock'");
-  await q("update product_doses set inventory_quantity = 900, stock_status = 'In Stock'").catch(() => {});
+  // Stocked AROUND the holds — see qa-gift-wiring.mjs for what a flat number
+  // does to a row that already carries hundreds of reservations.
+  await q("update products set inventory_quantity = coalesce(reserved_quantity,0) + 900, stock_status = 'In Stock'");
+  await q("update product_doses set inventory_quantity = coalesce(reserved_quantity,0) + 900, stock_status = 'In Stock'").catch(() => {});
   await q("delete from inventory_reservations").catch(() => {});
 
   for (const name of ENGINES) {

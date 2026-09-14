@@ -147,22 +147,46 @@ function cartClearing(lines, targetCents) {
   return best;
 }
 
-/** Make sure the catalogue can supply this run. Adds units only; never touches holds. */
+/**
+ * Make sure the catalogue can supply this run. Adds units only; never touches holds.
+ *
+ * MEASURED AGAINST WHAT IS AVAILABLE, NOT WHAT IS ON THE SHELF. This topped up
+ * to a flat `inventory_quantity`, which is the wrong number: reserve_inventory
+ * sells out of (inventory - reserved), and every pending order in the database
+ * is holding units. After a long batch, ipamorelin-5mg sat at 900 on hand with
+ * 900 reserved — genuinely unsellable — and the top-up no-opped because 900 is
+ * not less than 400. The store then refused correctly, with
+ *
+ *   HTTP 400 {"error":"Product is out of stock: Ipamorelin 5mg"}
+ *
+ * and five of eleven carts failed as though checkout were broken. The harness
+ * had made the shop unsellable and the suite reported it as a product defect.
+ *
+ * Expired holds are reclaimed FIRST, through the application's own sweep rather
+ * than by writing reserved_quantity back by hand — a harness that repairs
+ * inventory itself is a harness that can hide a broken release path. Whatever
+ * is still legitimately held is then simply stocked around.
+ */
 async function ensureStockForRun(minimum = 400) {
+  await fetch(`${BASE}/api/cron/sweep`, {
+    headers: { authorization: `Bearer ${process.env.CRON_SECRET ?? "harness-cron-secret"}` },
+  }).catch(() => {});
+
   // NEVER STOCK THE PARENT OF A DOSE-STOCKED PRODUCT — see the same note in
   // qa-post-3ds-high-value.mjs. A parent given units it never has in production
   // makes the cart use the parent while the sale resolves to the dose.
   await q(
-    `update products p set inventory_quantity = $1
+    `update products p set inventory_quantity = coalesce(p.reserved_quantity,0) + $1
       where coalesce(p.is_published,true) and coalesce(p.is_enabled,true)
         and not coalesce(p.is_archived,false) and coalesce(p.price_cents,0) > 0
-        and coalesce(p.inventory_quantity,0) < $1
+        and coalesce(p.inventory_quantity,0) - coalesce(p.reserved_quantity,0) < $1
         and not exists (select 1 from product_doses d where d.product_id = p.id)`,
     [minimum],
   );
   await q(
-    `update product_doses set inventory_quantity = $1
-      where coalesce(price_cents,0) > 0 and coalesce(inventory_quantity,0) < $1`,
+    `update product_doses set inventory_quantity = coalesce(reserved_quantity,0) + $1
+      where coalesce(price_cents,0) > 0
+        and coalesce(inventory_quantity,0) - coalesce(reserved_quantity,0) < $1`,
     [minimum],
   );
 }

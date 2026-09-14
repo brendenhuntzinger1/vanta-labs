@@ -87,17 +87,25 @@ const flat = (text) => String(text ?? "").replace(/\s+/g, " ").trim();
 async function ensureStock(minimum = 400) {
   // Never stock the PARENT of a dose-stocked product: production keeps stock on
   // the dose, and a stocked parent makes the cart use a line that does not exist.
+  // MEASURED AGAINST WHAT IS AVAILABLE, NOT WHAT IS ON THE SHELF.
+  // reserve_inventory sells out of (inventory - reserved), and every pending
+  // order in the database is holding units. A flat `inventory_quantity < $1`
+  // top-up no-ops on a row sitting at 900 on hand with 900 reserved, which is
+  // genuinely unsellable — the store then refuses with "Product is out of
+  // stock" and the suite reports the harness's own exhaustion as a checkout
+  // defect. Whatever is still legitimately held is stocked around instead.
   await q(
-    `update products p set inventory_quantity = $1
+    `update products p set inventory_quantity = coalesce(p.reserved_quantity,0) + $1
       where coalesce(p.is_published,true) and coalesce(p.is_enabled,true)
         and not coalesce(p.is_archived,false) and coalesce(p.price_cents,0) > 0
-        and coalesce(p.inventory_quantity,0) < $1
+        and coalesce(p.inventory_quantity,0) - coalesce(p.reserved_quantity,0) < $1
         and not exists (select 1 from product_doses d where d.product_id = p.id)`,
     [minimum],
   );
   await q(
-    `update product_doses set inventory_quantity = $1
-      where coalesce(price_cents,0) > 0 and coalesce(inventory_quantity,0) < $1`,
+    `update product_doses set inventory_quantity = coalesce(reserved_quantity,0) + $1
+      where coalesce(price_cents,0) > 0
+        and coalesce(inventory_quantity,0) - coalesce(reserved_quantity,0) < $1`,
     [minimum],
   );
 }
