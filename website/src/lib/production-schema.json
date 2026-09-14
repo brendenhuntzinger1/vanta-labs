@@ -573,7 +573,10 @@
     "birthday_bonus_year",
     "referral_code",
     "referred_by_code",
-    "phone"
+    "phone",
+    "sms_marketing",
+    "sms_consent_at",
+    "sms_opted_out_at"
   ],
   "email_automation_clicks": [
     "id",

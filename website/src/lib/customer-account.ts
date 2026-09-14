@@ -100,6 +100,7 @@ export async function getDefaultCustomerAddress(userId: string): Promise<Custome
 export interface CustomerPreferences {
   orderUpdateEmails: boolean;
   marketingEmails: boolean;
+  smsMarketing: boolean;
   birthday: string | null;
   phone: string | null;
   referralCode: string | null;
@@ -114,11 +115,22 @@ export async function getCustomerPreferences(userId: string): Promise<CustomerPr
   let data: Record<string, unknown> | null = null;
   const withPhone = await supabaseAdmin
     .from("customer_preferences")
-    .select("order_update_emails, marketing_emails, birthday, phone, referral_code, referred_by_code")
+    .select("order_update_emails, marketing_emails, sms_marketing, birthday, phone, referral_code, referred_by_code")
     .eq("user_id", userId)
     .maybeSingle();
 
   if (withPhone.error) {
+    // sms_marketing (customer-sms-consent.sql) may not be applied yet either;
+    // try the phone-only column set before the oldest one.
+    const withoutSms = await supabaseAdmin
+      .from("customer_preferences")
+      .select("order_update_emails, marketing_emails, birthday, phone, referral_code, referred_by_code")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (!withoutSms.error) {
+      data = withoutSms.data as Record<string, unknown> | null;
+      return build(data);
+    }
     const fallback = await supabaseAdmin
       .from("customer_preferences")
       .select("order_update_emails, marketing_emails, birthday, referral_code, referred_by_code")
@@ -132,9 +144,14 @@ export async function getCustomerPreferences(userId: string): Promise<CustomerPr
     data = withPhone.data as Record<string, unknown> | null;
   }
 
+  return build(data);
+}
+
+function build(data: Record<string, unknown> | null): CustomerPreferences {
   return {
     orderUpdateEmails: data ? Boolean(data.order_update_emails) : true,
     marketingEmails: data ? Boolean(data.marketing_emails) : false,
+    smsMarketing: data ? Boolean(data.sms_marketing) : false,
     birthday: data?.birthday ? String(data.birthday) : null,
     phone: data?.phone ? String(data.phone) : null,
     referralCode: data?.referral_code ? String(data.referral_code) : null,

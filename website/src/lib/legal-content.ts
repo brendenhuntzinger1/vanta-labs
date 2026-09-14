@@ -111,8 +111,17 @@ Only with service providers that help us operate — payment processing, email d
 ## Data retention & security
 We retain order records as required for accounting and legal purposes and use reasonable safeguards to protect your information.
 
+## SMS / text messaging
+If you choose to receive text messages from Vanta Labs, you do so by entering your mobile number and actively ticking an unticked consent box in your account settings. SMS consent is optional and is not a condition of any purchase.
+
+**What we send.** Promotional offers, product updates, restock notifications and subscriber-only promotions. Message frequency varies. Message and data rates may apply.
+
+**We do not share your mobile number.** Your mobile phone number and your SMS opt-in consent will not be shared with, or sold to, any third party or affiliate for their own marketing purposes. It is used only to send you the messages you agreed to, through the messaging provider that delivers them on our behalf.
+
+**Opting out.** Reply STOP to any message to cancel at any time, or untick the SMS box in your account settings. Reply HELP for help, or contact ${email}. We record the date and time you gave and withdrew consent so we can honour it.
+
 ## Your choices
-You may request access to, correction of, or deletion of your personal information, and can unsubscribe from marketing emails anytime. Contact ${email}.`,
+You may request access to, correction of, or deletion of your personal information, and can unsubscribe from marketing emails or text messages anytime. Contact ${email}.`,
   },
   terms: {
     title: "Terms of Service",
@@ -132,6 +141,13 @@ Orders ship after payment is verified. Delivery times are estimates. Risk of los
 
 ## Returns & refunds
 See our Return & Reimbursement Policy. Memberships are non-refundable.
+
+## SMS terms
+By entering your mobile number and ticking the SMS consent box, you agree to receive recurring automated marketing text messages from Vanta Labs at the number provided. Consent is not a condition of purchase.
+
+Messages may include promotional offers, product updates, restock notifications and subscriber-only promotions. Message frequency varies. Message and data rates may apply. Carriers are not liable for delayed or undelivered messages.
+
+Reply STOP at any time to cancel; you will receive a single confirmation message and no further texts. Reply HELP for help, or contact ${email}. Your mobile number is handled as described in our Privacy Policy and is never shared with third parties for their marketing.
 
 ## Limitation of liability
 To the maximum extent permitted by law, the seller is not liable for indirect, incidental, or consequential damages arising from the use or misuse of any product.

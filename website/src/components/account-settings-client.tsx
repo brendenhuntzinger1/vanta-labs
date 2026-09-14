@@ -196,6 +196,22 @@ export function AccountSettingsClient({
     setSavingPreferences(true);
     setPreferencesMessage(null);
     try {
+      if (preferences.smsMarketing && phone.trim() === "") {
+        setPreferencesMessage("Enter a mobile phone number to receive text messages.");
+        return;
+      }
+      if (phone.trim() !== (initialPreferences.phone ?? "")) {
+        const phoneResponse = await fetch("/api/account/phone", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone: phone.trim() }),
+        });
+        const phoneResult = (await phoneResponse.json()) as { success: boolean; error?: string };
+        if (!phoneResult.success) {
+          setPreferencesMessage(phoneResult.error ?? "Unable to save phone number.");
+          return;
+        }
+      }
       const response = await fetch("/api/account/preferences", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -374,6 +390,34 @@ export function AccountSettingsClient({
                 className="h-5 w-5 shrink-0 accent-cyan-400"
               />
             </label>
+          </div>
+
+          <h2 className="mt-8 text-lg font-semibold text-white">Text messages</h2>
+          <div className="mt-4 space-y-4">
+            <p className="text-sm text-zinc-400">
+              Get promotional offers, product updates, restock alerts and subscriber-only promotions by SMS. Optional, and not required to make a purchase.
+            </p>
+            <label className="text-sm text-zinc-300 block sm:max-w-sm">
+              Mobile phone number
+              <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(555) 123-4567" autoComplete="tel" className="vl-input mt-1 w-full px-3 py-2" />
+            </label>
+            <label className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-4 text-sm text-zinc-200">
+              <input
+                type="checkbox"
+                checked={preferences.smsMarketing}
+                onChange={(e) => setPreferences((prev) => ({ ...prev, smsMarketing: e.target.checked }))}
+                className="mt-0.5 h-5 w-5 shrink-0 accent-cyan-400"
+                aria-describedby="sms-consent-disclosure"
+              />
+              <span>
+                Yes, I would like to receive recurring automated marketing text messages from Vanta Labs at the number above. Consent is not a condition of purchase.
+              </span>
+            </label>
+            <p id="sms-consent-disclosure" className="text-xs leading-relaxed text-zinc-500">
+              Message frequency varies. Message and data rates may apply. Reply STOP to cancel at any time or HELP for help. Your number is never shared with third parties for their marketing. See our{" "}
+              <Link href="/legal/terms" className="underline hover:text-zinc-300">Terms of Service</Link> and{" "}
+              <Link href="/legal/privacy" className="underline hover:text-zinc-300">Privacy Policy</Link>.
+            </p>
           </div>
           {preferencesMessage ? <p className="mt-3 text-sm text-zinc-300">{preferencesMessage}</p> : null}
           <button type="button" onClick={handleSavePreferences} disabled={savingPreferences} className="vl-btn-primary vl-focus-ring mt-4 px-5 py-2.5 text-sm disabled:opacity-60">
