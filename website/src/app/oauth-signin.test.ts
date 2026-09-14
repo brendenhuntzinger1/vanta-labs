@@ -317,27 +317,38 @@ describe("the portal gates on the attestations, never on the marketing box", () 
     // under it sold the speed of the form. Neither said what is on the other
     // side, which is the only thing a visitor arriving cold from an ad does
     // not already know. The headline now names the catalogue itself.
-    expect(renderedPortal).toContain("View the full catalogue");
-    expect(renderedPortal).toContain("About ten seconds.");
+    expect(renderedPortal).toContain("Sign in to view the premium catalogue");
     expect(renderedPortal).not.toContain("Research Access Portal");
     expect(renderedPortal).not.toContain("Access is limited to verified account holders.");
   });
 
-  it("keeps the sub-heading to one line on a phone", () => {
+  it("spends nothing above the fold to say it", () => {
     // THE CONSTRAINT THAT MAKES THIS COPY HARD, AND IT IS NOT A STYLE NOTE.
     //
     // Measured on the deployed page at 390x844: the consent bar takes the top
     // 118px and "Continue with Google" already ends at 695px, with 708px
-    // recorded below as under the fold on a real handset. The sub-heading
-    // wraps at roughly 40 characters in this card, and every wrapped line
-    // costs 24px — straight off the fast path's place on the screen.
+    // recorded below as under the fold on a real handset. There is no spare
+    // vertical space on this screen at all.
     //
-    // The first draft of this change read "Two quick confirmations. About ten
-    // seconds.", wrapped to two lines, and pushed the button to 719px. This is
-    // the guard that would have caught it without a browser.
-    const match = renderedPortal.match(/Two confirmations\. About ten seconds\./);
-    expect(match, "the sub-heading copy moved; re-measure the fold before changing it").not.toBeNull();
-    expect(match![0].length).toBeLessThanOrEqual(40);
+    // The heading fits about 23 characters on a line in this card, so the
+    // current 37 wrap to two and cost 32px. That is paid for by deleting the
+    // sub-heading — 24px of line plus 10px of margin — which is why there is
+    // no <p> between the heading and "Confirm to continue". Measured after:
+    // 637-693, two pixels better than the page it replaced.
+    //
+    // An earlier draft added a sub-heading that wrapped to two lines and put
+    // the button at 719px, past the recorded failure. If a sub-heading comes
+    // back here, re-measure the fold before shipping it.
+    const headingAt = renderedPortal.indexOf("Sign in to view the premium catalogue");
+    expect(headingAt).toBeGreaterThan(-1);
+    // From the end of the heading to the start of the "Confirm to continue"
+    // label. Exactly one <p opens in that span — the label's own — so a second
+    // one is a sub-heading that has been added back without paying for it.
+    const between = renderedPortal.slice(
+      renderedPortal.indexOf("</h1>", headingAt),
+      renderedPortal.indexOf("Confirm to continue"),
+    );
+    expect((between.match(/<p[\s>]/g) ?? []).length).toBe(1);
   });
 
   it("shows the terms line", () => {
