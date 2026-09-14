@@ -1,86 +1,76 @@
+import { isBacWater } from "@/lib/bac-water";
+
 // -------------------------------------------------------------------------
-// PRODUCTS WHOSE CERTIFICATE OF ANALYSIS IS STILL COMING.
+// PRODUCTS WHOSE CERTIFICATE OF ANALYSIS IS STILL AT THE LABORATORY.
 //
-// The COA surfaces have one pending state: a product with no published record
-// is marked "Documentation Pending" and told, in general terms, that batch
-// documentation has not been published yet. That is accurate but it answers
-// the wrong question — a shopper looking at an empty COA panel wants to know
-// whether a report is coming, not that it is absent.
+// A product with no published COA used to be handled two ways. A hand-kept
+// list of slugs got an explanation ("batch COA in progress") on the product
+// page and in the library; everything else got a bare "not published yet" —
+// or, on the catalogue card, nothing at all: no pill, no action, the one card
+// in the grid with something missing on the signal a research buyer scans for
+// first.
 //
-// These products were not part of the batch submitted for testing, so they
-// will stay pending after the rest of the catalogue is documented. Naming them
-// here lets those two cards say so plainly instead of sitting silently in the
-// pending group.
+// The owner's rule now: every card looks the same. A compound without a
+// document says its certificate is on its way back from the laboratory and
+// where to ask in the meantime. So this is no longer a list; it is a rule —
+// any product that is not a solvent. Recon water is bacteriostatic water, was
+// never sent for testing, and must not start claiming a report that is not
+// coming.
 //
-// Client-safe: no server imports, so the public library, the product page and
-// tests can all pull from the same list. Deliberately a hand-maintained list
-// rather than an admin setting — it is two SKUs and one edit, and an admin
-// toggle for it would be more surface than the fact deserves. REMOVE A SLUG
-// FROM THIS LIST once its COA is published; leaving it in is harmless (the
-// copy only renders while a product has zero published records) but it is dead
-// weight.
+// Client-safe: no server imports, so the catalogue card, the public library,
+// the product page and tests all pull from the same rule and the same copy.
 // -------------------------------------------------------------------------
 
 /**
- * Slugs awaiting third-party testing.
+ * May the store say this product's certificate is on its way?
  *
- * `hgh-191aa` is the retired HGH row that `reconcile-catalog.sql` maps onto
- * `hgh-gh-191`. It is unpublished today, but it is one `is_published` flip away
- * from being a live product page, and a store that surfaced it should not lose
- * the notice on a technicality.
- */
-export const COA_TESTING_PENDING_SLUGS = ["hgh-gh-191", "hgh-191aa", "hcg"] as const;
-
-const PENDING_SLUGS = new Set<string>(COA_TESTING_PENDING_SLUGS);
-
-/**
- * Is this product one whose COA is still being tested?
- *
- * Slug only, never name: unlike the Recon Water exclusion this drives a CLAIM
- * shown to customers, so matching too much is the expensive direction. A name
- * regex for "HGH" would also catch an unrelated growth-hormone SKU added later
- * and tell shoppers its documented COA was still in a laboratory.
- *
- * Callers must already know the product has no published COA — this says which
- * pending products have an explanation, not which products are pending.
+ * Callers must already know the product has no published COA — this says
+ * whether an undocumented product gets the "returning from the laboratory"
+ * treatment, not whether a product is undocumented. Every compound does; a
+ * solvent never does. The solvent check reads the name as well as the slug,
+ * because matching too MUCH is the safe direction here: the cost of a false
+ * match is a solvent that stays quiet about a COA it was never going to have.
  */
 export function isCoaTestingPending(
-  product: { slug?: string | null } | string | null | undefined,
+  product: { slug?: string | null; name?: string | null } | string | null | undefined,
 ): boolean {
   const slug = (typeof product === "string" ? product : product?.slug ?? "").trim().toLowerCase();
-  if (!slug) return false;
-  return PENDING_SLUGS.has(slug);
+  const name = (typeof product === "string" ? "" : product?.name ?? "").trim();
+  if (!slug && !name) return false;
+  return !isBacWater({ slug, name });
 }
+
+/** Where a shopper with a question about a batch is sent. The footer's address. */
+export const COA_SUPPORT_EMAIL = "support@vantalabsresearch.com";
 
 /**
  * THE COPY, IN ONE PLACE.
  *
- * The COA library card and the product page's COA tab both render it, so the
- * two can never drift — and changing what the store says about these products
- * is a one-line edit here rather than a hunt through two components.
+ * The catalogue card's dialog, the COA library card and the product page's
+ * COA tab all render it, so the three can never drift — and changing what the
+ * store says about an undocumented product is a one-line edit here rather
+ * than a hunt through three components.
  *
  * Two wording constraints, both learned by reading the rendered page rather
  * than the source:
  *
- * 1. It says the BATCH COA is in progress, not that the compound is untested.
- *    On the product page this sits beside `CoaLibraryNotice`, which states that
- *    current inventory comes from batches its supplier has third-party tested
- *    and that Vanta-branded batch COAs are still being prepared. A first draft
- *    here read "independent third-party testing has not been completed for this
- *    compound" — which flatly contradicted the panel above it. What is missing
- *    for these two products is OUR batch report, and that is what this says.
+ * 1. It says the BATCH certificate is on its way, not that the compound is
+ *    untested. On the product page this sits beside `CoaLibraryNotice`, which
+ *    states that current inventory comes from batches its supplier has
+ *    third-party tested. What is missing for these products is OUR batch
+ *    report, and that is what this says.
  *
- * 2. It says testing is being ARRANGED, not that a sample is on a laboratory
- *    bench right now, because the batch has not been submitted yet. Once it
- *    has, "third-party testing is being arranged" → "third-party testing is
- *    underway" in both strings is the whole edit.
+ * 2. It says the certificate is RETURNING from the laboratory — the batch has
+ *    been submitted and the report is being issued — which is the owner's
+ *    account of where these documents are. It never names a purity figure or
+ *    calls anything verified: a promise of a document is not the document.
  */
-export const COA_TESTING_PENDING_HEADING = "Batch COA in progress";
+export const COA_TESTING_PENDING_HEADING = "COA returning from the laboratory";
 
-/** One line, for the COA library card where space is a card body. */
+/** One or two lines, for the catalogue card's dialog and the library card. */
 export const COA_TESTING_PENDING_SHORT =
-  "This compound's batch COA is still in progress — third-party testing is being arranged, and the report will be published here as soon as the laboratory issues it.";
+  "This batch's Certificate of Analysis is on its way back from the independent laboratory and will be published here as soon as it arrives.";
 
 /** The fuller version, for the product page's COA panel. */
 export const COA_TESTING_PENDING_BODY =
-  "This compound's Vanta Labs batch COA is still in progress. Independent third-party testing is being arranged, and the report will be published here — and in the COA Library — as soon as the laboratory issues it.";
+  "This batch's Vanta Labs Certificate of Analysis is on its way back from the independent laboratory. It will be published here — and in the COA Library — as soon as it arrives.";

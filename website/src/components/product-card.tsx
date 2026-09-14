@@ -6,13 +6,34 @@ import type { Product } from "@/lib/catalog-types";
 import { WishlistButton } from "@/components/wishlist-button";
 
 import { hasCoa } from "@/lib/coa-url";
+import { isCoaTestingPending } from "@/lib/coa-pending";
 import { isSoldOut } from "@/lib/catalog-order";
+import { CoaPendingDialog } from "@/components/coa-pending-dialog";
 
 const BADGE_LABELS: Record<NonNullable<Product["badge"]>, string> = {
   new: "New",
   best_seller: "Best Seller",
   sale: "Sale",
 };
+
+// ONE look for "View COA", whether it opens a document or the explanation
+// that the document is still at the laboratory. The class list and the label
+// are shared by construction so the two cards cannot be told apart at rest —
+// which is the owner's rule for the catalogue (see coa-pending.ts).
+const COA_ACTION_CLASS =
+  "vl-focus-ring col-span-2 -mb-1 inline-flex min-h-6 items-center justify-center gap-1.5 py-1.5 text-[11px] text-[color:var(--accent-gold)]/75 underline-offset-4 transition hover:text-[color:var(--accent-gold)] hover:underline";
+
+function CoaActionLabel() {
+  return (
+    <>
+      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <path d="M14 2v6h6" />
+      </svg>
+      View COA
+    </>
+  );
+}
 
 export function ProductCard({
   product,
@@ -31,6 +52,11 @@ export function ProductCard({
   // A COA is either the legacy link on the product row or the newest published
   // COA-library record; the library is where new certificates are uploaded.
   const coaHref = hasCoa(product.coaUrl) ? product.coaUrl : product.coaRecordUrl;
+  // No document, and a compound rather than a solvent: the certificate is on
+  // its way back from the laboratory. The card still wears the pill and the
+  // action — every card looks the same — but the action opens an explanation
+  // instead of a file. The rule and the copy live in coa-pending.ts.
+  const coaPending = !coaHref && isCoaTestingPending(product);
   const dosePreview = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0];
   // Out of stock is honored only when inventory enforcement is on (the
   // catalog resolves everything to "In Stock" otherwise), so this simply
@@ -99,15 +125,18 @@ export function ProductCard({
               <p className="text-xs text-white/55 line-through sm:text-sm">{product.compareAtPrice}</p>
             ) : null}
           </div>
-          {/* Trust badges — data-driven, so they only appear when the real
-              purity / COA / batch data is entered in Admin (no fabricated claims). */}
+          {/* Trust badges — data-driven: purity and batch appear only when the
+              real value is entered in Admin. The COA pill appears for a
+              documented product AND for one whose certificate is still at the
+              laboratory, so no card in the grid looks like the one with
+              something missing; the action below says which it is. */}
           <div className="mt-2.5 flex flex-wrap items-center gap-1.5 text-[10px] leading-none">
             {product.purityResult ? (
               <span className="rounded-full border border-[color:var(--accent-gold)]/30 bg-[color:var(--accent-gold)]/[0.08] px-2 py-1 font-medium text-[color:var(--accent-gold)]">
                 {product.purityResult.includes("%") ? product.purityResult : `${product.purityResult} pure`}
               </span>
             ) : null}
-            {coaHref ? (
+            {coaHref || coaPending ? (
               <span className="rounded-full border border-white/[0.08] bg-white/[0.03] px-2 py-1 font-medium text-[#a3a3a3]">
                 COA verified
               </span>
@@ -187,25 +216,23 @@ export function ProductCard({
             hasCoa() is the guard, not plain truthiness. The stored value is
             free text typed in admin, so " ", "pending" and "TBD" all read as
             true and would advertise a document that opens nothing — worse
-            than admitting the COA is not ready. Today 4 of 93 active products
-            clear it, so this action is rare by design.
+            than admitting the COA is not ready.
 
-            It sits OUTSIDE the card-wide <Link> — this block is after its
-            closing tag — because an anchor inside an anchor is invalid and
-            the browser would drop one of them. */}
+            A compound with no document gets the same action, opening a dialog
+            that says the certificate is on its way back from the laboratory.
+            It is a <button>, never an <a> with nothing behind it.
+
+            Both sit OUTSIDE the card-wide <Link> — this block is after its
+            closing tag — because an interactive element inside an anchor is
+            invalid and the browser would drop one of them. */}
         {coaHref ? (
-          <a
-            href={coaHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="vl-focus-ring col-span-2 -mb-1 inline-flex min-h-6 items-center justify-center gap-1.5 py-1.5 text-[11px] text-[color:var(--accent-gold)]/75 underline-offset-4 transition hover:text-[color:var(--accent-gold)] hover:underline"
-          >
-            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <path d="M14 2v6h6" />
-            </svg>
-            View COA
+          <a href={coaHref} target="_blank" rel="noopener noreferrer" className={COA_ACTION_CLASS}>
+            <CoaActionLabel />
           </a>
+        ) : coaPending ? (
+          <CoaPendingDialog productName={product.name} className={COA_ACTION_CLASS}>
+            <CoaActionLabel />
+          </CoaPendingDialog>
         ) : null}
       </div>
     </article>

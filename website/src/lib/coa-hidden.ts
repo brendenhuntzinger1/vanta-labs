@@ -1,5 +1,4 @@
 import { BAC_WATER_SLUG_CANDIDATES } from "@/lib/bac-water";
-import { COA_TESTING_PENDING_SLUGS } from "@/lib/coa-pending";
 
 // -------------------------------------------------------------------------
 // PRODUCTS KEPT OUT OF THE PUBLIC COA LIBRARY.
@@ -19,15 +18,30 @@ import { COA_TESTING_PENDING_SLUGS } from "@/lib/coa-pending";
 // -------------------------------------------------------------------------
 
 /**
+ * The HGH and HCG lines, by slug.
+ *
+ * `hgh-191aa` is the retired HGH row that `reconcile-catalog.sql` maps onto
+ * `hgh-gh-191`. It is unpublished today, but it is one `is_published` flip
+ * away from a live product page, and the library should not start listing it
+ * on a technicality.
+ *
+ * This used to be borrowed from a pending-testing list in coa-pending.ts.
+ * That list is gone — every undocumented compound is now told the same thing
+ * (its certificate is on its way back from the laboratory), so the only thing
+ * these slugs still decide is which library cards stay hidden until the owner
+ * chooses otherwise from /admin/coa.
+ */
+const UNTESTED_LINE_SLUGS = ["hgh-gh-191", "hgh-191aa", "hcg"] as const;
+
+/**
  * Hidden until the owner says otherwise.
  *
- * Built from the two lists that already name these products, so the HGH and
- * HCG slugs (and the retired `hgh-191aa` row) come from the pending-testing
- * list, and both accepted bacteriostatic-water slugs come from the cross-sell.
- * One place per product, no third copy to fall out of date.
+ * The HGH and HCG slugs above, plus every accepted bacteriostatic-water slug
+ * from the cross-sell — one place per product, no third copy to fall out of
+ * date.
  */
 export const DEFAULT_COA_HIDDEN_PRODUCT_SLUGS: readonly string[] = Array.from(
-  new Set<string>([...COA_TESTING_PENDING_SLUGS, ...BAC_WATER_SLUG_CANDIDATES]),
+  new Set<string>([...UNTESTED_LINE_SLUGS, ...BAC_WATER_SLUG_CANDIDATES]),
 );
 
 /** Enough for every product the store could plausibly carry; not a place to store junk. */

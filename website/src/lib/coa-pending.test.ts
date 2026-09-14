@@ -2,52 +2,42 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  COA_SUPPORT_EMAIL,
   COA_TESTING_PENDING_BODY,
+  COA_TESTING_PENDING_HEADING,
   COA_TESTING_PENDING_SHORT,
-  COA_TESTING_PENDING_SLUGS,
   isCoaTestingPending,
 } from "@/lib/coa-pending";
 
-const LIBRARY_CARD = readFileSync(
-  join(process.cwd(), "src/app/coa-library/coa-library-client.tsx"),
-  "utf8",
-);
-const PRODUCT_DETAIL = readFileSync(
-  join(process.cwd(), "src/components/product-detail-client.tsx"),
-  "utf8",
-);
+const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
+const LIBRARY_CARD = read("src/app/coa-library/coa-library-client.tsx");
+const PRODUCT_DETAIL = read("src/components/product-detail-client.tsx");
+const PRODUCT_CARD = read("src/components/product-card.tsx");
+const PENDING_DIALOG = read("src/components/coa-pending-dialog.tsx");
 
 describe("isCoaTestingPending", () => {
-  it("recognises the HGH and HCG slugs the catalogue actually publishes", () => {
-    // From public.products: "hgh-gh-191" and "hcg" are live, "hgh-191aa" is the
-    // retired HGH row reconcile-catalog.sql maps onto "hgh-gh-191".
-    expect(isCoaTestingPending("hgh-gh-191")).toBe(true);
-    expect(isCoaTestingPending("hcg")).toBe(true);
-    expect(isCoaTestingPending("hgh-191aa")).toBe(true);
-  });
-
-  it("takes a product object or a bare slug", () => {
-    expect(isCoaTestingPending({ slug: "hcg" })).toBe(true);
-    expect(isCoaTestingPending({ slug: "bpc-157" })).toBe(false);
-  });
-
-  it("does not match every other product in the catalogue", () => {
-    for (const slug of ["bpc-157", "glp-1", "nad", "tesamorelin", "ghrp-2", "kisspeptin"]) {
-      expect(isCoaTestingPending(slug)).toBe(false);
+  it("treats every compound without a document as one whose certificate is on its way", () => {
+    // Callers already know the product has no published COA; this only
+    // decides whether the store may say the certificate is coming.
+    for (const slug of ["tesamorelin", "hgh-gh-191", "hcg", "cjc-1295-no-dac", "5-amino-1mq", "mots-c", "bpc-157"]) {
+      expect(isCoaTestingPending(slug)).toBe(true);
+      expect(isCoaTestingPending({ slug })).toBe(true);
     }
   });
 
-  it("matches on slug, never on name — a claim shown to customers must not over-match", () => {
-    // A future "HGH Fragment 176-191" would carry the word but not the fact.
-    expect(isCoaTestingPending({ slug: "hgh-fragment-176-191", name: "HGH Fragment 176-191" } as { slug: string })).toBe(
-      false,
-    );
-    expect(isCoaTestingPending({ slug: "hcg-blend", name: "HCG" } as { slug: string })).toBe(false);
+  it("never says a solvent is at a laboratory", () => {
+    for (const slug of ["recon-water", "bac-water", "bacteriostatic-water", "bac-water-30ml"]) {
+      expect(isCoaTestingPending(slug)).toBe(false);
+      expect(isCoaTestingPending({ slug })).toBe(false);
+    }
+    // The name is enough on its own: a solvent republished under a new slug
+    // must not start claiming a laboratory report.
+    expect(isCoaTestingPending({ slug: "solvent-10ml", name: "Recon water (0.9% Benzyl Alcohol)" })).toBe(false);
   });
 
   it("survives the casing and padding a slug picks up in transit", () => {
     expect(isCoaTestingPending("  HCG  ")).toBe(true);
-    expect(isCoaTestingPending("HGH-GH-191")).toBe(true);
+    expect(isCoaTestingPending("RECON-WATER")).toBe(false);
   });
 
   it("treats absent input as not pending rather than throwing", () => {
@@ -58,6 +48,13 @@ describe("isCoaTestingPending", () => {
 });
 
 describe("the copy", () => {
+  it("says the certificate is returning from the laboratory", () => {
+    expect(COA_TESTING_PENDING_HEADING).toMatch(/returning from the laboratory/i);
+    for (const copy of [COA_TESTING_PENDING_SHORT, COA_TESTING_PENDING_BODY]) {
+      expect(copy).toMatch(/laboratory/i);
+    }
+  });
+
   it("promises publication rather than only reporting an absence", () => {
     for (const copy of [COA_TESTING_PENDING_SHORT, COA_TESTING_PENDING_BODY]) {
       expect(copy).toMatch(/will be published/i);
@@ -65,14 +62,19 @@ describe("the copy", () => {
   });
 
   it("never claims a completed test or a purity figure it cannot show", () => {
-    for (const copy of [COA_TESTING_PENDING_SHORT, COA_TESTING_PENDING_BODY]) {
+    for (const copy of [COA_TESTING_PENDING_HEADING, COA_TESTING_PENDING_SHORT, COA_TESTING_PENDING_BODY]) {
       expect(copy).not.toMatch(/tested to|verified|\d+(\.\d+)?%/i);
     }
   });
+
+  it("points questions at the address the footer already publishes", () => {
+    expect(COA_SUPPORT_EMAIL).toBe("support@vantalabsresearch.com");
+    expect(read("src/components/site-footer.tsx")).toContain(`mailto:${COA_SUPPORT_EMAIL}`);
+  });
 });
 
-// Both COA surfaces have to carry this, or a shopper gets the explanation on
-// one page and a bare "not published yet" on the other.
+// Every COA surface has to carry this, or a shopper gets the explanation on
+// one page and a bare "not published yet" — or nothing at all — on another.
 describe("the surfaces that render it", () => {
   it("is used by the COA library card, gated on the product being undocumented", () => {
     expect(LIBRARY_CARD).toContain("isCoaTestingPending(product.slug)");
@@ -86,21 +88,22 @@ describe("the surfaces that render it", () => {
     expect(PRODUCT_DETAIL).toContain("coaDocuments.length === 0 && isCoaTestingPending(product)");
   });
 
-  it("keeps the generic pending line for products that are not on the list", () => {
-    expect(LIBRARY_CARD).toContain("Batch documentation has not been published yet.");
+  it("is used by the catalogue card, gated on the product having no document", () => {
+    expect(PRODUCT_CARD).toContain("const coaPending = !coaHref && isCoaTestingPending(product);");
+    expect(PRODUCT_CARD).toContain("CoaPendingDialog");
   });
 
-  it("hard-codes the copy in neither surface, so the two cannot drift", () => {
-    for (const source of [LIBRARY_CARD, PRODUCT_DETAIL]) {
+  it("the dialog reads the heading, the short copy and the support address from here", () => {
+    expect(PENDING_DIALOG).toContain("COA_TESTING_PENDING_HEADING");
+    expect(PENDING_DIALOG).toContain("COA_TESTING_PENDING_SHORT");
+    expect(PENDING_DIALOG).toContain("COA_SUPPORT_EMAIL");
+  });
+
+  it("hard-codes the copy in no surface, so they cannot drift", () => {
+    for (const source of [LIBRARY_CARD, PRODUCT_DETAIL, PRODUCT_CARD, PENDING_DIALOG]) {
+      expect(source).not.toContain(COA_TESTING_PENDING_HEADING);
       expect(source).not.toContain(COA_TESTING_PENDING_SHORT);
       expect(source).not.toContain(COA_TESTING_PENDING_BODY);
-    }
-  });
-
-  it("lists only slugs that exist in the catalogue's SQL", () => {
-    const setup = readFileSync(join(process.cwd(), "src/lib/sql/SETUP-run-all.sql"), "utf8");
-    for (const slug of COA_TESTING_PENDING_SLUGS) {
-      expect(setup).toContain(`'${slug}'`);
     }
   });
 });
