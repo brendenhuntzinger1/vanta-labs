@@ -100,10 +100,47 @@ export default async function AccountLoginPage({
               <AccountAuthForm />
             </Suspense>
 
-            {/* Mobile-only trust line. The desktop panel already says this. */}
-            <p className="mt-6 text-center text-[11px] uppercase tracking-[0.2em] text-white/25 lg:hidden">
-              For laboratory research use only
-            </p>
+            {/* THE MOBILE HALF OF THE PITCH, WHICH DID NOT EXIST.
+
+                The brand panel opposite carries the whole value proposition —
+                the headline, the four proof points — and it is `hidden lg:flex`,
+                so a phone renders none of it. Most of the traffic that reaches
+                this page is mobile and arriving cold from an ad, and what it
+                got was a form and one line of small caps.
+
+                BELOW THE CARD, DELIBERATELY. The Google button already ends at
+                695px on a 390x844 viewport with the consent bar above it, and
+                708px is recorded as under the fold on a real handset, so
+                anything added above the fold here costs the fast path its
+                place on the screen. This is what a hesitating visitor finds
+                when they scroll, which is exactly when reassurance is worth
+                reading.
+
+                EVERY CLAIM CHECKED AGAINST PRODUCTION, 2026-09-14. 38 COA
+                records, all published, and every purity value on them reads
+                ">99%". The desktop panel's "COA on every batch" is NOT
+                repeated: 27 of 34 published products carry one, so the
+                universal claim is not true and is not made here. */}
+            <div className="mt-8 lg:hidden">
+              <div className="grid grid-cols-3 gap-px overflow-hidden rounded-[14px] border border-white/[0.07] bg-white/[0.05]">
+                {[
+                  { k: "Batch", v: "tested" },
+                  { k: ">99%", v: "purity" },
+                  { k: "Discreet", v: "shipping" },
+                ].map((item) => (
+                  <div key={item.k} className="bg-[#0d0e11] px-2 py-3.5 text-center">
+                    <p className="text-[0.8125rem] font-semibold leading-4 tracking-[-0.01em] text-white/85">{item.k}</p>
+                    <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-white/40">{item.v}</p>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-4 text-center text-[0.8125rem] leading-5 text-white/45">
+                Certificates of analysis on file, published per batch.
+              </p>
+              <p className="mt-5 text-center text-[11px] uppercase tracking-[0.2em] text-white/25">
+                For laboratory research use only
+              </p>
+            </div>
           </div>
         </section>
       </main>
