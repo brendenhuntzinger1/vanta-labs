@@ -279,6 +279,41 @@ function capturedSince(mark) {
 const captureMark = () => (existsSync(CAPTURE) ? statSync(CAPTURE).size : 0);
 
 /**
+ * SWEEP UNTIL THIS FILE'S OWN RECIPIENTS HAVE BEEN SERVED.
+ *
+ * AUTOMATION_BATCH_LIMIT is 50 per automation per sweep — a deliberate backstop
+ * so switching an automation on against an existing customer base does not try
+ * to mail everyone inside one 60-second function; "the remainder is picked up
+ * next sweep, and the dedup keys mean nobody gets a second copy".
+ *
+ * One sweep is therefore only enough while the database is small. In a shuffled
+ * release batch, after a dozen suites have each left lapsed customers behind,
+ * this file's fixture can sit outside the first fifty — and a single sweep
+ * reported "no email for gift-combo-buyer@example.test", taking the two
+ * sections after it down with it. Nothing was wrong: the customer was 51st.
+ *
+ * So this does what the cron does — keeps ticking — and gives up loudly, naming
+ * who was never reached and how many sweeps it took, rather than asserting on
+ * one tick's worth of a queue it does not control.
+ */
+async function sweepUntilMailed(addresses, { maxSweeps = 8 } = {}) {
+  const wanted = addresses.map((address) => String(address).toLowerCase());
+  const mark = captureMark();
+  // Summed across the sweeps, not read off the last one: a caller asking "did
+  // at least two go out" means across this wait, and the tick that served the
+  // second recipient may have served only that one.
+  let body = null; let sent = 0; const errors = [];
+  for (let sweep = 0; sweep < maxSweeps; sweep += 1) {
+    body = await runSweep();
+    sent += Number(body?.emailAutomations?.sent ?? 0);
+    errors.push(...(body?.emailAutomations?.errors ?? []));
+    const seen = new Set(capturedSince(mark).map((m) => String(m.to ?? "").toLowerCase()));
+    if (wanted.every((address) => seen.has(address))) return { body, mark, sweeps: sweep + 1, sent, errors };
+  }
+  return { body, mark, sweeps: maxSweeps, sent, errors };
+}
+
+/**
  * Pull the CTA link out of a rendered email.
  *
  * Deliberately NOT a lookup of the token in the database: the customer can only
@@ -483,8 +518,7 @@ async function main() {
     await seedLapsedCustomer(GHK_SMALL, 70);
     await q("update email_automations set enabled = true where key = 'winback_60'");
     await setAutomationDelay("winback_60", 60);
-    const mark = captureMark();
-    const sweep = await runSweep();
+    const { body: sweep, mark, sent: sweptSent, errors: sweptErrors } = await sweepUntilMailed([GHK_BUYER, GHK_SMALL]);
     const outcome = sweep?.emailAutomations;
     assert(outcome, `sweep returned no emailAutomations result: ${JSON.stringify(sweep).slice(0, 200)}`);
     // THE ERRORS THAT ARE THIS FILE'S, NOT EVERY ERROR IN THE STORE.
@@ -502,9 +536,9 @@ async function main() {
     // pointing at an address this file has never heard of. Each error names its
     // recipient, so the ones about this file's customers are separable — and
     // those are still absolutely required.
-    const mine = (outcome.errors ?? []).filter((e) => EVERYONE.some((address) => String(e).includes(address)));
+    const mine = sweptErrors.filter((e) => EVERYONE.some((address) => String(e).includes(address)));
     assert(!mine.length, `sweep reported for this file's customers: ${JSON.stringify(mine).slice(0, 220)}`);
-    assert(outcome.sent >= 2, `sweep sent ${outcome.sent}, expected at least 2 (byKey ${JSON.stringify(outcome.byKey)})`);
+    assert(sweptSent >= 2, `the sweeps sent ${sweptSent}, expected at least 2 (last tick byKey ${JSON.stringify(outcome.byKey)})`);
 
     const mails = capturedSince(mark).filter((m) => EVERYONE.includes(String(m.to ?? "").toLowerCase()));
     const forBuyer = mails.find((m) => String(m.to).toLowerCase() === GHK_BUYER);
@@ -675,10 +709,9 @@ async function main() {
     await q("update email_automations set enabled = false where key = 'winback_60'");
     await q("update email_automations set enabled = true where key = 'winback_30'");
     await setAutomationDelay("winback_30", 30);
-    const mark = captureMark();
-    await runSweep();
+    const { mark, sweeps } = await sweepUntilMailed([COMBO_BUYER]);
     const mail = capturedSince(mark).find((m) => String(m.to ?? "").toLowerCase() === COMBO_BUYER);
-    assert(mail, `no email for ${COMBO_BUYER}`);
+    assert(mail, `no email for ${COMBO_BUYER} after ${sweeps} sweeps`);
     comboLink = ctaLinkFrom(mail.html);
     const { rows } = await q(
       "select offer_key, reward_kind, product_slug, percent_off, min_subtotal_cents from customer_offers where email = $1",
