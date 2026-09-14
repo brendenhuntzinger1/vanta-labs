@@ -15,7 +15,6 @@ import { getFraudReviewRows, getPayoutHistory } from "@/lib/admin-ambassadors";
 import { failedReads, settleRead, UNKNOWN_FIGURE } from "@/lib/admin-read";
 import { AdminReadFailureNotice } from "@/components/admin-data-notices";
 import { AdminRecordPayoutButton } from "@/components/admin-record-payout-dialog";
-import { formatDisplayDate } from "@/lib/format-date";
 import { describePayoutDestination } from "@/lib/payout-channels";
 
 function currency(value: number) {
@@ -79,13 +78,8 @@ export default async function AdminPartnersPage() {
     ? payoutQueueRead.value
     : { rows: [], readyCount: 0, totalOwed: 0, minimumPayoutThreshold: 0 };
 
-  function formatDate(value: string | null) {
-    if (!value) return "—";
-    const d = new Date(value);
-    return formatDisplayDate(d, "medium") ?? "—";
-  }
-  // The roster row for a queue entry: the queue knows what has cleared the
-  // hold, the roster knows what is still inside it and the ambassador's status.
+  // The roster row for a queue entry: the queue knows what is owed, the
+  // roster knows the ambassador's code and status.
   const rowById = new Map(rows.map((row) => [row.id, row]));
 
   return (
@@ -122,8 +116,7 @@ export default async function AdminPartnersPage() {
             </div>
           ) : payoutQueue.rows.length === 0 ? (
             <p className="mt-4 text-sm text-zinc-500">
-              No commissions have cleared the hold period yet. Approved commissions appear here, ready to pay.
-              Already paid someone whose commission is still in the {ambassadorSettings.commissionHoldDays}-day hold? Use <span className="text-zinc-300">Mark Paid</span> on their row in the Ambassadors tab below — it can release the held balance early.
+              Nobody is owed a payout right now. An ambassador appears here as soon as one of their referred orders is paid.
             </p>
           ) : (
             <div className="mt-4 overflow-x-auto">
@@ -132,9 +125,7 @@ export default async function AdminPartnersPage() {
                   <tr className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
                     <th className="py-2 pr-4">Ambassador</th>
                     <th className="py-2 pr-4">Amount owed</th>
-                    <th className="py-2 pr-4">Approved orders</th>
                     <th className="py-2 pr-4">Payout method</th>
-                    <th className="py-2 pr-4">Eligible since</th>
                     <th className="py-2 pr-4">Status</th>
                     <th className="py-2 pr-4">Action</th>
                   </tr>
@@ -148,9 +139,7 @@ export default async function AdminPartnersPage() {
                           <a href={`/admin/partners/${row.partnerId}`} className="hover:text-cyan-200">{row.name}</a>
                         </td>
                         <td className="py-2 pr-4">{currency(row.amountOwed)}</td>
-                        <td className="py-2 pr-4">{row.approvedOrderCount}</td>
                         <td className={`py-2 pr-4 ${row.payoutMethod ? "" : "text-amber-300"}`}>{describePayoutDestination(row.payoutMethod, row.payoutHandle) ?? "Not set"}</td>
-                        <td className="py-2 pr-4">{formatDate(row.eligibleSince)}</td>
                         <td className="py-2 pr-4">
                           {row.onHold ? (
                             <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-xs text-amber-200">Not approved</span>
@@ -169,11 +158,9 @@ export default async function AdminPartnersPage() {
                               status: roster?.status ?? (row.onHold ? "disabled" : "approved"),
                               payoutMethod: row.payoutMethod,
                               payoutHandle: row.payoutHandle,
-                              readyAmount: row.amountOwed,
-                              heldAmount: roster?.pendingCommissions ?? 0,
+                              amountOwed: row.amountOwed,
                             }}
                             minimumPayoutThreshold={ambassadorSettings.minimumPayoutThreshold}
-                            commissionHoldDays={ambassadorSettings.commissionHoldDays}
                           >
                             Mark Paid
                           </AdminRecordPayoutButton>
@@ -184,8 +171,7 @@ export default async function AdminPartnersPage() {
                 </tbody>
               </table>
               <p className="mt-3 text-xs text-zinc-500">
-                <span className="text-zinc-300">Mark Paid</span> records money you have already sent and emails the ambassador a confirmation.
-                An ambassador whose commission is still inside the {ambassadorSettings.commissionHoldDays}-day hold is not listed here yet — their <span className="text-zinc-300">Mark Paid</span> in the Ambassadors tab below can release it early.
+                <span className="text-zinc-300">Mark Paid</span> records money you have already sent and emails the ambassador a confirmation. Pay whenever you like — there is no waiting period.
               </p>
             </div>
           )}

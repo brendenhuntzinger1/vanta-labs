@@ -296,7 +296,21 @@ vi.mock("@/lib/supabase-server", () => {
     }
     if (table === "orders") {
       return {
-        select: () => { const b: Record<string, unknown> = { eq() { return b; }, limit() { return b; }, order() { return b; }, async maybeSingle() { return { data: orderRow(), error: null }; } }; return b; },
+        select: () => {
+          const b: Record<string, unknown> = {
+            eq() { return b; }, limit() { return b; }, order() { return b; },
+            async maybeSingle() { return { data: orderRow(), error: null }; },
+            // The payout's "is this order actually paid?" read
+            // (readReleasableUnclearedCommissions). The suite's one real order
+            // answers with its live status; any other id the test has invented
+            // is a paid order.
+            in(_c: string, ids: string[]) {
+              const rows = ids.map((id) => ({ order_id: id, payment_status: id === ORDER ? db.paymentStatus : "paid" }));
+              return { then: (r: (v: unknown) => unknown) => Promise.resolve(r({ data: rows, error: null })) };
+            },
+          };
+          return b;
+        },
         update: () => {
           const filters: Array<[string, unknown]> = [];
           const b: Record<string, unknown> = {
@@ -527,32 +541,45 @@ describe("6. payout removes it from owed and records it once", () => {
   });
 
 
-  // BLOCK E / E-03 — the boundary this suite never crossed.
+  // BLOCK E / E-03, REVERSED ON THE OWNER'S INSTRUCTION (2026-09-14).
   //
-  // Mutation testing found that changing markCommissionsPaid's status filter from
-  //     .in("payment_status", ["approved_for_payout"])
-  // to  .in("payment_status", ["approved_for_payout", "pending"])
-  // left the ENTIRE 3,593-test suite green. This suite drives the real function,
-  // but its fixture never held a commission still inside its hold period, so
-  // widening the filter changed nothing it could observe.
+  // This test used to pin the opposite: markCommissionsPaid claimed only
+  // approved_for_payout, and a `pending` commission stayed behind until the
+  // sweep's hold period had run. The owner pays ambassadors by hand whenever
+  // they choose — "dont make the hold i can pay them whenever i want and mark
+  // it as paid" — so a payout now covers every commission the sweep WOULD
+  // clear, cleared or not.
   //
-  // A payout that also sweeps up `pending` commissions pays an ambassador for
-  // orders that can still be refunded — the hold period exists precisely to stop
-  // that, and it is worthless if the payout query ignores it.
-  it("pays only what is approved, leaving commissions still inside the hold period alone", async () => {
+  // What the hold was protecting against still holds, one layer down: the
+  // sweep's eligibility rule. A commission flagged for fraud, marked
+  // ineligible, or sitting on an order that was never paid is not swept up
+  // (payout-early-release.test.ts drives all three gates against the fake
+  // database). And a refund after an early payout has the reversal path.
+  it("pays a commission the sweep has not cleared yet alongside the approved one, but never a flagged one", async () => {
     await payFor("evt-1");
     const row = db.referralOrders.get(ORDER)!;
     db.referralOrders.set(ORDER, { ...row, payment_status: "approved_for_payout", approved_for_payout_at: new Date().toISOString() });
 
-    // A second commission for the same ambassador, still held.
-    const HELD = "order-e2e-held";
-    db.referralOrders.set(HELD, {
+    // A second commission for the same ambassador the sweep has not reached.
+    const RECENT = "order-e2e-recent";
+    db.referralOrders.set(RECENT, {
       ...row,
-      id: `${HELD}-r`,
-      order_id: HELD,
+      id: `${RECENT}-r`,
+      order_id: RECENT,
       payment_status: "pending",
       approved_for_payout_at: null,
       commission_amount: 60,
+    });
+    // And one the sweep would refuse.
+    const FLAGGED = "order-e2e-flagged";
+    db.referralOrders.set(FLAGGED, {
+      ...row,
+      id: `${FLAGGED}-r`,
+      order_id: FLAGGED,
+      payment_status: "pending",
+      approved_for_payout_at: null,
+      commission_amount: 45,
+      fraud_flag: true,
     });
 
     const { markCommissionsPaid } = await import("@/lib/partner-portal");
@@ -561,14 +588,16 @@ describe("6. payout removes it from owed and records it once", () => {
       overrideMinimumThreshold: true, actorUsername: "owner",
     });
 
-    // The approved one, and only the approved one.
-    expect(result.amount).toBe(EXPECTED_COMMISSION);
-    expect(result.orderCount).toBe(1);
+    // The approved one and the recent one, as one payout.
+    expect(result.amount).toBe(EXPECTED_COMMISSION + 60);
+    expect(result.orderCount).toBe(2);
+    expect(result.unclearedAmount).toBe(60);
+    expect(db.referralOrders.get(RECENT)!.payment_status).toBe("paid");
 
-    // The held one is untouched and still owed to nobody yet.
-    expect(db.referralOrders.get(HELD)!.payment_status).toBe("pending");
-    expect(paidHistory()).toHaveLength(1);
-    expect(paidHistory()[0].order_id).toBe(ORDER);
+    // The flagged one is untouched.
+    expect(db.referralOrders.get(FLAGGED)!.payment_status).toBe("pending");
+    expect(paidHistory()).toHaveLength(2);
+    expect(paidHistory().map((r) => r.order_id).sort()).toEqual([RECENT, ORDER].sort());
   });
 
   it("the display mirror is flipped to paid as well", async () => {

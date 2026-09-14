@@ -143,7 +143,7 @@ describe("/admin/partners payout queue", () => {
     expect(html).toContain("Did not load: Payout queue");
     expect(html).toContain("— owed (could not be loaded)");
     expect(html).not.toContain("$0.00 owed");
-    expect(html).not.toContain("No commissions have cleared the hold period yet");
+    expect(html).not.toContain("Nobody is owed a payout right now");
   });
 
   it("renders the empty-queue copy only when the read answered", async () => {
@@ -152,7 +152,7 @@ describe("/admin/partners payout queue", () => {
     const html = renderToStaticMarkup(await Page());
 
     expect(html).toContain("$0.00 owed");
-    expect(html).toContain("No commissions have cleared the hold period yet");
+    expect(html).toContain("Nobody is owed a payout right now");
     expect(html).not.toContain("could not be loaded");
   });
 });

@@ -13,14 +13,15 @@ import {
 // ---------------------------------------------------------------------------
 // RECORDING A PAYOUT THE OWNER HAS ALREADY MADE.
 //
-// The money leaves by hand — Zelle, Cash App, cash — and this card writes it
-// down. It does not move funds. Everything the owner needs to pay someone and
-// then record it sits on one screen: where the ambassador asked to be paid,
-// what has cleared the hold, what is still inside it, and how the money went.
+// The money leaves by hand — Zelle, Cash App, cash — whenever the owner
+// chooses, and this card writes it down. It does not move funds. Everything
+// the owner needs to pay someone and then record it sits on one screen: where
+// the ambassador asked to be paid, what is owed, and how the money went.
 //
-// It replaces three browser pop-ups (confirm, confirm, prompt) on a button
-// that was disabled for the one case the owner actually had: a commission
-// still in its 30-day hold, paid early because the owner chose to.
+// There is no hold here. The nightly sweep's wait is its own business; a
+// commission from two days ago is owed and paid like one from two months ago.
+// This replaces three browser pop-ups (confirm, confirm, prompt) on a button
+// that was disabled until the sweep had cleared the money.
 // ---------------------------------------------------------------------------
 
 function currency(value: number) {
@@ -47,32 +48,23 @@ export type RecordPayoutTarget = {
   status: string;
   payoutMethod: string | null;
   payoutHandle: string | null;
-  /** Commissions that have cleared the hold (approved_for_payout). */
-  readyAmount: number;
-  /** Commissions still inside the hold period (pending). */
-  heldAmount: number;
+  /** Everything unpaid, whether or not the sweep has reached it yet. */
+  amountOwed: number;
 };
 
-export type RecordedPayout = { amount: number; orderCount: number; heldAmount: number };
+export type RecordedPayout = { amount: number; orderCount: number };
 
 type DialogProps = {
   target: RecordPayoutTarget;
   minimumPayoutThreshold: number;
-  commissionHoldDays: number;
   onClose: () => void;
   onRecorded: (payout: RecordedPayout) => void | Promise<void>;
 };
 
-export function AdminRecordPayoutDialog({ target, minimumPayoutThreshold, commissionHoldDays, onClose, onRecorded }: DialogProps) {
+export function AdminRecordPayoutDialog({ target, minimumPayoutThreshold, onClose, onRecorded }: DialogProps) {
   const approved = target.status === "approved";
-  const hasReady = target.readyAmount > 0;
-  const hasHeld = target.heldAmount > 0;
   const profileChannel = target.payoutMethod && isPayoutChannel(target.payoutMethod) ? target.payoutMethod : "";
 
-  // When nothing has cleared the hold, the held balance is the only thing the
-  // owner can be here to record — so it starts ticked. When a cleared balance
-  // exists the hold stays a deliberate extra step.
-  const [includeHeld, setIncludeHeld] = useState(!hasReady && hasHeld);
   const [paidVia, setPaidVia] = useState<PayoutChannel | "">(profileChannel);
   const [paidTo, setPaidTo] = useState(profileChannel ? target.payoutHandle ?? "" : "");
   const [reference, setReference] = useState("");
@@ -95,7 +87,7 @@ export function AdminRecordPayoutDialog({ target, minimumPayoutThreshold, commis
     return () => window.removeEventListener("keydown", onKey);
   }, [busy, onClose]);
 
-  const total = roundMoney(target.readyAmount + (includeHeld && hasHeld ? target.heldAmount : 0));
+  const total = roundMoney(target.amountOwed);
   const belowMinimum = total > 0 && total < minimumPayoutThreshold;
   const canSubmit = approved && confirmed && total > 0 && paidVia !== "" && !busy;
   const destination = describePayoutDestination(target.payoutMethod, target.payoutHandle);
@@ -123,7 +115,6 @@ export function AdminRecordPayoutDialog({ target, minimumPayoutThreshold, commis
           amount: total,
           confirmedTransferred: true,
           overrideMinimumThreshold: belowMinimum,
-          includeHeld: includeHeld && hasHeld,
           paidVia,
           paidTo: paidTo.trim() || null,
           transactionReference: reference.trim() || null,
@@ -137,7 +128,6 @@ export function AdminRecordPayoutDialog({ target, minimumPayoutThreshold, commis
       await onRecorded({
         amount: Number(json.payout?.amount ?? 0),
         orderCount: Number(json.payout?.orderCount ?? 0),
-        heldAmount: Number(json.payout?.heldAmount ?? 0),
       });
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Unable to record the payout.");
@@ -183,29 +173,7 @@ export function AdminRecordPayoutDialog({ target, minimumPayoutThreshold, commis
 
           <div className="space-y-2 rounded-xl border border-zinc-800/70 bg-zinc-900/40 p-3">
             <div className="flex items-baseline justify-between gap-3">
-              <span className="text-sm text-zinc-300">Cleared the hold</span>
-              <span className="font-semibold text-white">{currency(target.readyAmount)}</span>
-            </div>
-            {hasHeld ? (
-              <label className="flex cursor-pointer items-start gap-2 text-sm text-zinc-300">
-                <input
-                  type="checkbox"
-                  name="includeHeld"
-                  checked={includeHeld}
-                  onChange={(event) => setIncludeHeld(event.target.checked)}
-                  disabled={busy}
-                  className="mt-0.5"
-                />
-                <span>
-                  Include <span className="font-semibold text-white">{currency(target.heldAmount)}</span> still in the {commissionHoldDays}-day hold
-                  <span className="mt-0.5 block text-xs text-zinc-500">
-                    The hold protects you from refunds. If a held order is refunded after you pay, reverse the payout from Payout History.
-                  </span>
-                </span>
-              </label>
-            ) : null}
-            <div className="flex items-baseline justify-between gap-3 border-t border-zinc-800/70 pt-2">
-              <span className="text-sm text-zinc-300">Recording</span>
+              <span className="text-sm text-zinc-300">Amount owed</span>
               <span className="text-lg font-semibold text-cyan-200">{currency(total)}</span>
             </div>
             {belowMinimum ? (
@@ -321,20 +289,18 @@ export function AdminRecordPayoutDialog({ target, minimumPayoutThreshold, commis
 export function AdminRecordPayoutButton({
   target,
   minimumPayoutThreshold,
-  commissionHoldDays,
   className,
   children,
 }: {
   target: RecordPayoutTarget;
   minimumPayoutThreshold: number;
-  commissionHoldDays: number;
   className?: string;
   children?: React.ReactNode;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [recorded, setRecorded] = useState<string | null>(null);
-  const payable = target.readyAmount + target.heldAmount > 0;
+  const payable = target.amountOwed > 0;
 
   return (
     <>
@@ -351,7 +317,6 @@ export function AdminRecordPayoutButton({
         <AdminRecordPayoutDialog
           target={target}
           minimumPayoutThreshold={minimumPayoutThreshold}
-          commissionHoldDays={commissionHoldDays}
           onClose={() => setOpen(false)}
           onRecorded={(payout) => {
             setOpen(false);

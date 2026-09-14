@@ -266,9 +266,10 @@ export function AdminPartnersClient({
   };
 
   // Marking paid RECORDS a transfer you've already made — it does not send
-  // money. The dialog carries the confirmation, the threshold notice, the
-  // hold-period release and the channel used; the server enforces every one of
-  // them again.
+  // money. The dialog carries the confirmation, the threshold notice and the
+  // channel used; the server enforces every one of them again. There is no
+  // hold: what is owed is pending + approved, whether or not the sweep has
+  // reached it.
   const openPayoutDialog = (row: AdminPartnerRow) => {
     setPayoutTarget({
       id: row.id,
@@ -277,12 +278,11 @@ export function AdminPartnersClient({
       status: row.status,
       payoutMethod: row.payoutMethod,
       payoutHandle: row.payoutHandle,
-      readyAmount: row.approvedForPayoutCommissions,
-      heldAmount: row.pendingCommissions,
+      amountOwed: row.approvedForPayoutCommissions + row.pendingCommissions,
     });
   };
 
-  const handlePayoutRecorded = async (payout: { amount: number; heldAmount: number }) => {
+  const handlePayoutRecorded = async (payout: { amount: number }) => {
     const name = payoutTarget?.name ?? "the ambassador";
     setPayoutTarget(null);
     setLoading(true);
@@ -290,11 +290,7 @@ export function AdminPartnersClient({
     try {
       await refreshRows();
       await refreshFraudAndPayouts();
-      setMessage(
-        payout.heldAmount > 0
-          ? `Recorded ${currency(payout.amount)} paid to ${name} (${currency(payout.heldAmount)} of it released early from the hold).`
-          : `Recorded ${currency(payout.amount)} paid to ${name}.`,
-      );
+      setMessage(`Recorded ${currency(payout.amount)} paid to ${name}.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Payout recorded, but the list could not be refreshed. Reload the page.");
     } finally {
@@ -555,7 +551,6 @@ export function AdminPartnersClient({
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Commission Owed</p>
             <p className="mt-2 text-2xl font-semibold text-cyan-300">{currency(balanceOwed)}</p>
-            <p className="mt-1 text-[11px] text-zinc-500">{currency(approvedForPayoutCommissions)} ready · {currency(pendingCommissions)} holding</p>
           </div>
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Commission Paid</p>
@@ -1091,8 +1086,8 @@ export function AdminPartnersClient({
                       ) : null}
                       <button
                         type="button"
-                        // Live whenever anything is owed — including a balance
-                        // still in the hold, which the dialog can release early.
+                        // Live whenever anything is owed, whether or not the
+                        // sweep has reached it yet.
                         disabled={loading || row.approvedForPayoutCommissions + row.pendingCommissions <= 0}
                         onClick={() => openPayoutDialog(row)}
                         className="rounded border border-cyan-400/35 bg-cyan-500/10 px-2 py-1 text-xs text-cyan-100 disabled:opacity-50"
@@ -1194,7 +1189,6 @@ export function AdminPartnersClient({
         <AdminRecordPayoutDialog
           target={payoutTarget}
           minimumPayoutThreshold={settings.minimumPayoutThreshold}
-          commissionHoldDays={settings.commissionHoldDays}
           onClose={() => setPayoutTarget(null)}
           onRecorded={handlePayoutRecorded}
         />

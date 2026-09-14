@@ -103,11 +103,16 @@ vi.mock("@/lib/supabase-server", () => {
   /** Server-side aggregate: ONE row per partner, whatever the cap. */
   async function affiliateBalancesRpc() {
     state.rpcCalls.push("affiliate_balances");
-    const byPartner = new Map<string, { approved: number; count: number; earliest: string | null }>();
+    const byPartner = new Map<string, { approved: number; pending: number; count: number; earliest: string | null }>();
     for (const row of state.referralOrders) {
-      if (row.payment_status !== "approved_for_payout") continue;
+      if (row.payment_status !== "approved_for_payout" && row.payment_status !== "pending") continue;
       const id = String(row.ambassador_id);
-      const agg = byPartner.get(id) ?? { approved: 0, count: 0, earliest: null };
+      const agg = byPartner.get(id) ?? { approved: 0, pending: 0, count: 0, earliest: null };
+      if (row.payment_status === "pending") {
+        agg.pending += Number(row.commission_amount ?? 0);
+        byPartner.set(id, agg);
+        continue;
+      }
       agg.approved += Number(row.commission_amount ?? 0);
       agg.count += 1;
       const at = row.approved_for_payout_at ? String(row.approved_for_payout_at) : null;
@@ -118,7 +123,7 @@ vi.mock("@/lib/supabase-server", () => {
     // above the number of partners — which is the whole point of aggregating.
     let rows = [...byPartner.entries()].map(([id, a]) => ({
       ambassador_id: id, approved_amount: a.approved, approved_count: a.count,
-      earliest_approved_at: a.earliest, pending_amount: 0, paid_amount: 0, lifetime_earned: a.approved,
+      earliest_approved_at: a.earliest, pending_amount: a.pending, paid_amount: 0, lifetime_earned: a.approved + a.pending,
     }));
     if (state.rowCap !== null) rows = rows.slice(0, state.rowCap);
     return { data: rows, error: null };
@@ -381,7 +386,6 @@ describe("what the owner is told they owe is never short", () => {
     const queue = await getPayoutQueue();
     for (const row of queue.rows) {
       expect(row.amountOwed).toBeCloseTo(1234, 2); // 100 x 12.34
-      expect(row.approvedOrderCount).toBe(100);
     }
   });
 
@@ -411,13 +415,31 @@ describe("what the owner is told they owe is never short", () => {
     expect(queue.totalOwed).toBeCloseTo(expected, 2);
   });
 
-  it("a partner with nothing approved is not in the queue", async () => {
-    seed(3, 5);
+  /**
+   * THERE IS NO HOLD. A commission the sweep has not cleared yet is still owed,
+   * and the owner — who pays whenever they choose — must see it here rather
+   * than "no commissions have cleared the hold period yet".
+   */
+  it("a partner whose commission the sweep has not cleared yet is in the queue", async () => {
+    const cleared = seed(3, 5);
     state.referralOrders.push({
-      id: "ro-x", ambassador_id: "amb-empty", commission_amount: 50,
+      id: "ro-x", ambassador_id: "amb-recent", commission_amount: 50,
       payment_status: "pending",
     });
+    state.partners.set("amb-recent", { id: "amb-recent", name: "Recent", status: "approved" });
     const queue = await getPayoutQueue();
-    expect(queue.rows.map((r) => r.partnerId)).not.toContain("amb-empty");
+    const row = queue.rows.find((r) => r.partnerId === "amb-recent");
+    expect(row?.amountOwed).toBe(50);
+    expect(queue.totalOwed).toBeCloseTo(cleared + 50, 2);
+  });
+
+  it("a partner with nothing unpaid is not in the queue", async () => {
+    seed(3, 5);
+    state.referralOrders.push({
+      id: "ro-y", ambassador_id: "amb-settled", commission_amount: 50,
+      payment_status: "paid",
+    });
+    const queue = await getPayoutQueue();
+    expect(queue.rows.map((r) => r.partnerId)).not.toContain("amb-settled");
   });
 });

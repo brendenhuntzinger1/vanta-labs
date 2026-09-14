@@ -7,6 +7,7 @@ import { ReferralShare } from "@/components/referral-share";
 import type { PartnerSummary } from "@/lib/partner-portal";
 import { formatDisplayDate } from "@/lib/format-date";
 import { commissionHoldDuration, commissionHoldLabel, personalDiscountLabel } from "@/lib/partner-dashboard-copy";
+import { describePayoutDestination } from "@/lib/payout-channels";
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -274,6 +275,7 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
                 <tr className="text-left text-[11px] uppercase tracking-[0.12em] text-zinc-500">
                   <th className="px-2 py-2 font-medium">Date</th>
                   <th className="px-2 py-2 text-right font-medium">Amount</th>
+                  <th className="px-2 py-2 font-medium">Sent via</th>
                   <th className="px-2 py-2 font-medium">Note</th>
                 </tr>
               </thead>
@@ -282,6 +284,7 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
                   <tr key={row.id} className="border-t border-white/[0.06] text-zinc-200">
                     <td className="px-2 py-2.5 text-zinc-400">{formatDisplayDate(row.createdAt, "medium")}</td>
                     <td className="px-2 py-2.5 text-right font-medium text-white">{currency(row.amount)}</td>
+                    <td className="px-2 py-2.5 text-zinc-400">{describePayoutDestination(row.payoutMethod, row.payoutHandle) ?? "—"}</td>
                     <td className="px-2 py-2.5 text-zinc-400">{row.note ?? "—"}</td>
                   </tr>
                 ))}

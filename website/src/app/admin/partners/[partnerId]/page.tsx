@@ -178,7 +178,6 @@ export default async function AdminAmbassadorProfilePage({ params }: { params: P
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Balance Owed</p>
             <p className="mt-2 text-2xl font-semibold text-cyan-300">{currency(balanceOwed)}</p>
-            <p className="mt-1 text-[11px] text-zinc-500">{currency(row.approvedForPayoutCommissions)} ready · {currency(row.pendingCommissions)} holding</p>
             <div className="mt-3">
               <AdminRecordPayoutButton
                 target={{
@@ -188,11 +187,9 @@ export default async function AdminAmbassadorProfilePage({ params }: { params: P
                   status: row.status,
                   payoutMethod: row.payoutMethod,
                   payoutHandle: row.payoutHandle,
-                  readyAmount: row.approvedForPayoutCommissions,
-                  heldAmount: row.pendingCommissions,
+                  amountOwed: balanceOwed,
                 }}
                 minimumPayoutThreshold={ambassadorSettings.minimumPayoutThreshold}
-                commissionHoldDays={ambassadorSettings.commissionHoldDays}
               >
                 Mark Paid
               </AdminRecordPayoutButton>

@@ -3,24 +3,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createFakeDb, type FakeDb } from "@/lib/e2e/fake-db";
 
 // ---------------------------------------------------------------------------
-// RECORDING A PAYOUT THE OWNER ALREADY MADE.
+// RECORDING A PAYOUT THE OWNER ALREADY MADE — WITH NO HOLD ON PAYING.
 //
 // The owner pays ambassadors by hand — Zelle, Cash App, cash at the counter —
 // and comes back here to write it down. Two things stopped that from being
 // possible for a real payout on 2026-09-14:
 //
-//   1. The commission was still inside its 30-day hold, so it sat in `pending`
-//      and markCommissionsPaid, which only ever claimed approved_for_payout,
-//      answered "No approved commissions are pending payout". The money had
-//      left the owner's account; the books could not say so.
+//   1. The commission was two days old, so it sat in `pending` waiting for the
+//      nightly sweep's 30-day wait, and markCommissionsPaid, which only ever
+//      claimed approved_for_payout, answered "No approved commissions are
+//      pending payout". The money had left the owner's account; the books
+//      could not say so. The owner's instruction: there is no hold — they pay
+//      whenever they choose, and Mark Paid records it.
 //   2. The money went by Zelle, which the ambassador-facing method list does
 //      not offer. The payout row and the "we've sent your payout" email were
 //      stamped with the ambassador's PROFILE method instead of the one the
 //      money actually travelled by.
 //
-// `includeHeld` releases hold-period commissions early, under the same
-// eligibility rule the nightly sweep applies (order paid, not fraud-flagged,
-// not marked ineligible) minus the wait. `paidVia` / `paidTo` record the real
+// So a payout now covers every commission the sweep WOULD clear — the sweep's
+// eligibility rule (order paid, not fraud-flagged, not marked ineligible) still
+// applies, only its wait does not — and `paidVia` / `paidTo` record the real
 // channel. Both drive the REAL route and the REAL markCommissionsPaid against
 // the stateful fake database.
 // ---------------------------------------------------------------------------
@@ -120,109 +122,100 @@ beforeEach(() => {
   session.mockResolvedValue({ username: "owner", role: "super_admin" });
 });
 
-describe("paying a commission that is still in its hold period", () => {
-  it("is refused by default — the hold is the rule, early release is the exception", async () => {
-    seed({ commissions: [{ id: "held", amount: 31.5, status: "pending" }] });
-
-    const { status, body } = await patch(MARK_PAID);
-
-    expect(status).toBe(400);
-    expect(String(body?.error)).toMatch(/no approved commissions/i);
-    expect(referral("held").payment_status).toBe("pending");
-    expect(payouts()).toHaveLength(0);
-  });
-
-  it("records the payout when the admin explicitly includes the held balance", async () => {
+describe("there is no hold on paying", () => {
+  it("records a payout for a commission the sweep has not cleared yet, with no extra flag", async () => {
     // Flavia's exact situation: one referred order, paid, two days old, and
     // the owner has already sent the $31.50.
-    seed({ commissions: [{ id: "held", amount: 31.5, status: "pending" }] });
+    seed({ commissions: [{ id: "recent", amount: 31.5, status: "pending" }] });
 
-    const { status, body } = await patch({ ...MARK_PAID, includeHeld: true });
+    const { status, body } = await patch(MARK_PAID);
 
     expect(status).toBe(200);
     expect(body?.payout?.amount).toBe(31.5);
     expect(body?.payout?.orderCount).toBe(1);
-    expect(referral("held").payment_status).toBe("paid");
-    expect(referral("held").commission_paid_at).toBeTruthy();
-    expect(commissionMirror("held").status).toBe("paid");
+    expect(referral("recent").payment_status).toBe("paid");
+    expect(referral("recent").commission_paid_at).toBeTruthy();
+    expect(commissionMirror("recent").status).toBe("paid");
     expect(payouts()).toHaveLength(1);
     expect(Number(payouts()[0].amount)).toBe(31.5);
   });
 
-  it("pays the ready balance and the held balance together, as one payout", async () => {
+  it("pays cleared and not-yet-cleared commissions together, as one payout", async () => {
     seed({ commissions: [
-      { id: "ready", amount: 60, status: "approved_for_payout" },
-      { id: "held", amount: 31.5, status: "pending" },
+      { id: "cleared", amount: 60, status: "approved_for_payout" },
+      { id: "recent", amount: 31.5, status: "pending" },
     ] });
 
-    const { status, body } = await patch({ ...MARK_PAID, includeHeld: true });
+    const { status, body } = await patch(MARK_PAID);
 
     expect(status).toBe(200);
     expect(body?.payout?.amount).toBe(91.5);
     expect(body?.payout?.orderCount).toBe(2);
     expect(payouts()).toHaveLength(1);
-    expect(referral("ready").payout_id).toBe(payouts()[0].id);
-    expect(referral("held").payout_id).toBe(payouts()[0].id);
+    expect(referral("cleared").payout_id).toBe(payouts()[0].id);
+    expect(referral("recent").payout_id).toBe(payouts()[0].id);
   });
 
-  it("never releases a held commission the sweep itself would refuse", async () => {
-    // Early release skips the WAIT, not the eligibility rule. A fraud-flagged
+  it("never pays a commission the sweep itself would refuse", async () => {
+    // Skipping the sweep's WAIT is not skipping its RULE. A fraud-flagged
     // commission, one marked ineligible, or one whose order was never paid
     // stays exactly where it is — the same three gates
     // autoApproveEligibleCommissions applies.
     seed({ commissions: [
-      { id: "held", amount: 31.5, status: "pending" },
+      { id: "recent", amount: 31.5, status: "pending" },
       { id: "fraud", amount: 40, status: "pending", fraud: true },
       { id: "ineligible", amount: 12, status: "pending", ineligible: "below_minimum_order" },
       { id: "unpaid", amount: 25, status: "pending", orderPaid: false },
     ] });
 
-    const { status, body } = await patch({ ...MARK_PAID, includeHeld: true });
+    const { status, body } = await patch(MARK_PAID);
 
     expect(status).toBe(200);
     expect(body?.payout?.amount).toBe(31.5);
-    expect(referral("held").payment_status).toBe("paid");
+    expect(referral("recent").payment_status).toBe("paid");
     expect(referral("fraud").payment_status).toBe("pending");
     expect(referral("ineligible").payment_status).toBe("pending");
     expect(referral("unpaid").payment_status).toBe("pending");
     expect(commissionMirror("fraud").status).toBe("pending");
   });
 
-  it("still refuses an ambassador who is not currently approved", async () => {
-    // Andrew's situation: money in the hold, but his application is still in
-    // info_requested. Early release must not become a way around the status
-    // gate that holds a suspended ambassador's balance.
-    seed({ status: "info_requested", commissions: [{ id: "held", amount: 24, status: "pending" }] });
+  it("says so, and moves nothing, when nothing is payable", async () => {
+    seed({ commissions: [{ id: "fraud", amount: 40, status: "pending", fraud: true }] });
 
-    const { status, body } = await patch({ ...MARK_PAID, includeHeld: true });
+    const { status, body } = await patch(MARK_PAID);
 
     expect(status).toBe(400);
-    expect(String(body?.error)).toMatch(/not currently approved/i);
-    expect(referral("held").payment_status).toBe("pending");
+    expect(String(body?.error)).toMatch(/nothing is payable/i);
+    expect(referral("fraud").payment_status).toBe("pending");
     expect(payouts()).toHaveLength(0);
   });
 
-  it("a truthy-but-not-true includeHeld does not release anything", async () => {
-    for (const value of ["true", 1, "yes", {}]) {
-      seed({ commissions: [{ id: "held", amount: 31.5, status: "pending" }] });
-      const { status } = await patch({ ...MARK_PAID, includeHeld: value });
-      expect(status).toBe(400);
-      expect(referral("held").payment_status).toBe("pending");
-    }
+  it("still refuses an ambassador who is not currently approved", async () => {
+    // Money owed, but the application sits in info_requested. Paying whenever
+    // the owner likes must not become a way around the status gate that holds
+    // a suspended ambassador's balance.
+    seed({ status: "info_requested", commissions: [{ id: "recent", amount: 24, status: "pending" }] });
+
+    const { status, body } = await patch(MARK_PAID);
+
+    expect(status).toBe(400);
+    expect(String(body?.error)).toMatch(/not currently approved/i);
+    expect(referral("recent").payment_status).toBe("pending");
+    expect(payouts()).toHaveLength(0);
   });
 
-  it("writes what was released early into the audit trail", async () => {
+  it("writes what was paid ahead of the sweep into the audit trail", async () => {
     seed({ commissions: [
-      { id: "ready", amount: 60, status: "approved_for_payout" },
-      { id: "held", amount: 31.5, status: "pending" },
+      { id: "cleared", amount: 60, status: "approved_for_payout" },
+      { id: "recent", amount: 31.5, status: "pending" },
     ] });
 
-    await patch({ ...MARK_PAID, includeHeld: true });
+    await patch(MARK_PAID);
 
     const [entry] = audit();
     const meta = entry.metadata as Record<string, unknown>;
-    expect(meta.heldOrderCount).toBe(1);
-    expect(meta.heldAmount).toBe(31.5);
+    expect(meta.unclearedOrderCount).toBe(1);
+    expect(meta.unclearedAmount).toBe(31.5);
   });
 });
 
@@ -230,7 +223,7 @@ describe("recording how the money was actually sent", () => {
   it("stamps the channel the admin used on the payout, not the ambassador's profile method", async () => {
     // Profile says Cash App; the owner paid by Zelle. The record must say Zelle,
     // or nothing in the books matches the bank statement.
-    seed({ commissions: [{ id: "ready", amount: 120, status: "approved_for_payout" }] });
+    seed({ commissions: [{ id: "cleared", amount: 120, status: "approved_for_payout" }] });
 
     const { status } = await patch({ ...MARK_PAID, paidVia: "zelle", paidTo: "407-555-0100" });
 
@@ -243,7 +236,7 @@ describe("recording how the money was actually sent", () => {
   });
 
   it("tells the ambassador the channel that was used", async () => {
-    seed({ commissions: [{ id: "ready", amount: 120, status: "approved_for_payout" }] });
+    seed({ commissions: [{ id: "cleared", amount: 120, status: "approved_for_payout" }] });
 
     await patch({ ...MARK_PAID, paidVia: "zelle" });
 
@@ -255,7 +248,7 @@ describe("recording how the money was actually sent", () => {
   });
 
   it("falls back to the ambassador's profile method when no channel is given", async () => {
-    seed({ commissions: [{ id: "ready", amount: 120, status: "approved_for_payout" }] });
+    seed({ commissions: [{ id: "cleared", amount: 120, status: "approved_for_payout" }] });
 
     await patch(MARK_PAID);
 
@@ -265,19 +258,19 @@ describe("recording how the money was actually sent", () => {
   });
 
   it("refuses a channel it does not know, and moves nothing", async () => {
-    seed({ commissions: [{ id: "ready", amount: 120, status: "approved_for_payout" }] });
+    seed({ commissions: [{ id: "cleared", amount: 120, status: "approved_for_payout" }] });
 
     const { status, body } = await patch({ ...MARK_PAID, paidVia: "bitcoin" });
 
     expect(status).toBe(400);
     expect(String(body?.error)).toMatch(/how the money was sent/i);
-    expect(referral("ready").payment_status).toBe("approved_for_payout");
+    expect(referral("cleared").payment_status).toBe("approved_for_payout");
     expect(payouts()).toHaveLength(0);
     expect(sentEmails).toHaveLength(0);
   });
 
   it("keeps the channel and reference in the audit trail", async () => {
-    seed({ commissions: [{ id: "ready", amount: 120, status: "approved_for_payout" }] });
+    seed({ commissions: [{ id: "cleared", amount: 120, status: "approved_for_payout" }] });
 
     await patch({ ...MARK_PAID, paidVia: "zelle", paidTo: "407-555-0100", transactionReference: "ZL-1234" });
 
