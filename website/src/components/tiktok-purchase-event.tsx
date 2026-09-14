@@ -81,17 +81,20 @@ export function TikTokPurchaseEvent({
       settled.current = true;
       return;
     }
-    // Gate on consent itself, not on whether the SDK loaded.
+    // Consent gates TikTok, Snap and Reddit — both their browser legs and the
+    // server sends the route makes on their behalf. It does NOT gate Meta,
+    // which is ungated by the owner's decision, so the request is made either
+    // way and carries the answer: with consent=0 the route sends only Meta,
+    // and only fbq fires below.
     //
-    // Checking `window.ttq` conflated the two: an ad blocker that stops
-    // analytics.tiktok.com leaves consent granted but ttq absent, and the
-    // server-side event — the whole reason the Events API exists — would never
-    // be requested. The inline stub defines ttq before the remote script
-    // loads, so this also stays correct when the SDK is merely slow.
+    // Judged on consent itself, not on whether the SDK loaded: an ad blocker
+    // leaves consent granted but ttq absent, and the server-side event is the
+    // whole reason the Events API exists.
+    let consented = false;
     try {
-      if (!hasAcceptedConsent()) return;
+      consented = hasAcceptedConsent();
     } catch {
-      return;
+      consented = false;
     }
 
     // Claimed BEFORE the request and released in the finally below, so an
@@ -99,7 +102,7 @@ export function TikTokPurchaseEvent({
     // announcement that follows, while an overlapping ask is refused outright.
     inFlight.current = true;
     try {
-      const response = await fetch(`/api/ads/purchase-event/${encodeURIComponent(orderId)}`, { cache: "no-store" });
+      const response = await fetch(`/api/ads/purchase-event/${encodeURIComponent(orderId)}?consent=${consented ? "1" : "0"}`, { cache: "no-store" });
       if (!response.ok) return;
       const body = (await response.json()) as {
         event?: TikTokEvent | null;
@@ -120,6 +123,20 @@ export function TikTokPurchaseEvent({
       // Identify before tracking, so the conversion carries the match keys.
       // Only ever digests, and only on a confirmed paid order — the one moment
       // this customer's identity is both known and relevant.
+      // Meta, behind the same single paid gate, for every visitor. No identity
+      // here: the browser pixel only accepts match keys at init, which runs in
+      // the root layout, and the server leg carries the full hashed identity.
+      // The eventID is the order id, so the two legs count as one purchase.
+      if (body.metaPurchase) {
+        emitMetaEvent(
+          body.metaPurchase,
+          (name, properties, options) => window.fbq?.("track", name, properties, options),
+          browserFiredStore(),
+        );
+      }
+
+      if (!consented) return;
+
       if (advancedMatching) window.ttq?.identify(advancedMatching);
       emitEvent(
         body.event,
@@ -143,18 +160,6 @@ export function TikTokPurchaseEvent({
       // nothing to send again here.
       if (body.redditPurchase) {
         emitRedditEvent(body.redditPurchase, (name, properties) => window.rdt?.("track", name, properties));
-      }
-
-      // Meta, behind the same single paid gate. No identity: the browser
-      // pixel only accepts match keys at init, which runs in the root layout
-      // where the visitor is unknown. The eventID is the order id, so a
-      // Conversions API leg later reports the same purchase once.
-      if (body.metaPurchase) {
-        emitMetaEvent(
-          body.metaPurchase,
-          (name, properties, options) => window.fbq?.("track", name, properties, options),
-          browserFiredStore(),
-        );
       }
     } catch {
       // A failed check must never invent a conversion. Staying silent loses at

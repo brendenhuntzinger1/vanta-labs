@@ -16,13 +16,15 @@
 
 const CLICK_ID_KEY = "vl_attribution";
 
+type StoredTouch = { ttclid?: string | null; fbclid?: string | null };
+
 /** The click id captured on arrival, if this visitor arrived from an ad. */
-function readClickId(): string | null {
+function readClickId(key: "ttclid" | "fbclid"): string | null {
   try {
     const raw = window.localStorage.getItem(CLICK_ID_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as { last?: { ttclid?: string | null }; first?: { ttclid?: string | null } };
-    return parsed?.last?.ttclid ?? parsed?.first?.ttclid ?? null;
+    const parsed = JSON.parse(raw) as { last?: StoredTouch; first?: StoredTouch };
+    return parsed?.last?.[key] ?? parsed?.first?.[key] ?? null;
   } catch {
     return null;
   }
@@ -33,12 +35,18 @@ export function relayToServer(input: {
   eventId: string;
   lines: { slug: string; quantity?: number }[];
   claimedTotal?: number;
+  /**
+   * Which server legs this call is for. Meta is ungated and relays at once;
+   * TikTok relays only from inside its consent wait. Each call names its own,
+   * so one browser action never reports twice to either platform.
+   */
+  platforms: ("tiktok" | "meta")[];
 }): void {
   try {
     void fetch("/api/ads/funnel-event", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...input, ttclid: readClickId(), pageUrl: window.location.href }),
+      body: JSON.stringify({ ...input, ttclid: readClickId("ttclid"), fbclid: readClickId("fbclid"), pageUrl: window.location.href }),
       keepalive: true, // survives the navigation that a checkout click causes
       cache: "no-store",
     }).catch(() => {});

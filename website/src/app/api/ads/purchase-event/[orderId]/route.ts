@@ -5,10 +5,12 @@ import { buildSnapPurchase } from "@/lib/ads/snap-events";
 import { buildRedditPurchase } from "@/lib/ads/reddit-events";
 import { buildMetaPurchase } from "@/lib/ads/meta-events";
 import { describeRedditResult, redditCredentialStatus, sendRedditConversion } from "@/lib/ads/reddit-conversions";
+import { sendMetaPurchaseForOrder } from "@/lib/ads/meta-purchase-sync";
 import { buildAdvancedMatching } from "@/lib/ads/advanced-matching";
 import { getOrderAttribution } from "@/lib/order-attribution";
 import { credentialStatus, describeResult, sendServerEvents } from "@/lib/ads/tiktok-events-api";
 import { getRequestIpAddress, verifyAdminSessionFromCookie } from "@/lib/admin-auth";
+import { readPixelCookies } from "@/lib/ads/meta-cookies";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { rateLimitKeyForRequest } from "@/lib/request-ip";
 
@@ -351,6 +353,38 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
 
   let serverDelivery: string | null = null;
   let redditDelivery: string | null = null;
+  let metaDelivery: string | null = null;
+
+  // CONSENT, AS THE PAGE REPORTED IT. TikTok, Snap and Reddit are consent-gated
+  // in the browser and their server legs below honour the same answer: with
+  // consent=0 neither sends. Meta is ungated by the owner's decision and sends
+  // regardless. The browser event builders above are unaffected — the page
+  // decides which of them to fire.
+  const consented = new URL(request.url).searchParams.get("consent") !== "0";
+
+  // Meta, on its OWN gate and its own ledger row, for the same reason Reddit
+  // is: two platforms, two independent gates. The send itself lives in
+  // meta-purchase-sync.ts so the cron sweep can make the identical call for an
+  // order whose confirmation page was never opened — half of all paid orders,
+  // measured on 2026-09-14 — and the two paths cannot drift.
+  //
+  // This request carries what the sweep cannot know: the browser's IP and user
+  // agent, and the pixel's own _fbp/_fbc cookies, which are Meta's strongest
+  // match signals after the hashed identity.
+  if (metaPurchase && !sentPlatforms.has("meta")) {
+    const cookies = readPixelCookies(request.headers.get("cookie"));
+    metaDelivery = await sendMetaPurchaseForOrder({
+      orderId: String(order.order_id),
+      event: metaPurchase,
+      ledger: { claimSend, recordSend, releaseSend },
+      browser: {
+        ipAddress: getRequestIpAddress(request) ?? null,
+        userAgent: request.headers.get("user-agent"),
+        fbp: cookies.fbp,
+        fbc: cookies.fbc,
+      },
+    });
+  }
 
   // Reddit, on its OWN credential check — deliberately not nested inside
   // TikTok's.
@@ -367,7 +401,8 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   // it because each is best-effort telemetry that must not fail the response.
   const redditEventId = redditPurchase?.properties.conversionId ?? String(order.order_id);
   if (
-    redditPurchase
+    consented
+    && redditPurchase
     && !sentPlatforms.has("reddit")
     && redditCredentialStatus().configured
     // The claim, not the read. A concurrent ask is refused here rather than
@@ -401,7 +436,8 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   }
 
   if (
-    event
+    consented
+    && event
     && !sentPlatforms.has("tiktok")
     && credentialStatus().configured
     && await claimSend("tiktok", event.eventId)
@@ -437,7 +473,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
     await recordSend("tiktok", event.eventId, outcome.delivered, outcome.tiktokCode);
     // Diagnostics only. No token, no customer data — describeResult is built
     // from a fixed field set precisely so this line cannot leak either.
-    console.info(`[ads] order ${String(order.order_id)} — ${[serverDelivery, redditDelivery].filter(Boolean).join(" | ")}`);
+    console.info(`[ads] order ${String(order.order_id)} — ${[serverDelivery, redditDelivery, metaDelivery].filter(Boolean).join(" | ")}`);
     } catch (sendError) {
       // The send never happened, so the claim must not outlive it.
       await releaseSend("tiktok");
@@ -446,7 +482,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   }
 
   return NextResponse.json(
-    { found: true, isPaid, event, snapPurchase, redditPurchase, metaPurchase, serverDelivery: [serverDelivery, redditDelivery].filter(Boolean).join(" | ") || null },
+    { found: true, isPaid, event, snapPurchase, redditPurchase, metaPurchase, serverDelivery: [serverDelivery, redditDelivery, metaDelivery].filter(Boolean).join(" | ") || null },
     { headers: { "cache-control": "no-store" } },
   );
 }

@@ -4,6 +4,9 @@ import { getRequestIpAddress } from "@/lib/admin-auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { decideRelay, type CatalogEntry } from "@/lib/ads/funnel-relay";
 import { credentialStatus, sendServerEvents } from "@/lib/ads/tiktok-events-api";
+import { metaCredentialStatus, sendMetaConversion } from "@/lib/ads/meta-conversions";
+import { readPixelCookies } from "@/lib/ads/meta-cookies";
+import type { MetaEvent } from "@/lib/ads/meta-events";
 
 /**
  * Report a browsing event to TikTok from the server as well as the browser.
@@ -62,7 +65,11 @@ const ACK = { received: true } as const;
 
 export async function POST(request: Request) {
   try {
-    if (!credentialStatus().configured) {
+    // Two platforms, two independent gates: a Meta token alone must still
+    // relay to Meta, and vice versa.
+    const tiktokConfigured = credentialStatus().configured;
+    const metaConfigured = metaCredentialStatus().configured;
+    if (!tiktokConfigured && !metaConfigured) {
       return NextResponse.json(ACK, { status: 200, headers: { "cache-control": "no-store" } });
     }
 
@@ -80,7 +87,10 @@ export async function POST(request: Request) {
       lines?: { slug?: unknown; quantity?: unknown }[];
       claimedTotal?: unknown;
       ttclid?: unknown;
+      fbclid?: unknown;
       pageUrl?: unknown;
+      /** Which server legs the page is asking for. Absent means both. */
+      platforms?: unknown;
     };
 
     const slugs = [
@@ -100,6 +110,16 @@ export async function POST(request: Request) {
     const userAgent = request.headers.get("user-agent");
     const ttclid =
       typeof body.ttclid === "string" && body.ttclid.trim() ? body.ttclid.trim().slice(0, 260) : null;
+    const fbclid =
+      typeof body.fbclid === "string" && body.fbclid.trim() ? body.fbclid.trim().slice(0, 260) : null;
+    // The pixel's own first-party cookies, forwarded only to Meta — they are
+    // its identifiers, not ours.
+    const pixelCookies = readPixelCookies(request.headers.get("cookie"));
+    const requested = new Set(
+      Array.isArray(body.platforms) ? body.platforms.map((p) => String(p)) : ["tiktok", "meta"],
+    );
+    const wantTikTok = tiktokConfigured && requested.has("tiktok");
+    const wantMeta = metaConfigured && requested.has("meta");
     const pageUrl = typeof body.pageUrl === "string" ? body.pageUrl.slice(0, 1200) : undefined;
     const lines = Array.isArray(body.lines) ? body.lines : [];
     const event = String(body.event ?? "");
@@ -133,6 +153,40 @@ export async function POST(request: Request) {
         const decision = decideRelay({ event, eventId, lines, claimedTotal }, catalog);
         if (!decision.ok) return;
 
+        if (wantMeta) {
+          // The same event the pixel sent, in Meta's own shape, under the same
+          // id. Prices come from the catalogue via the decision, never from
+          // the page. Identity here is the browser's: IP, user agent, the
+          // pixel cookies and the click id. Hashed customer identity is sent
+          // only on a paid order.
+          const metaEvent: MetaEvent = {
+            name: decision.event,
+            properties: {
+              content_ids: decision.contents.map((entry) => entry.content_id),
+              content_type: "product",
+              contents: decision.contents.map((entry) => ({
+                id: entry.content_id,
+                quantity: entry.quantity ?? 1,
+                ...(typeof entry.price === "number" ? { item_price: entry.price } : {}),
+              })),
+              value: decision.value,
+              currency: "USD",
+              ...(decision.event === "InitiateCheckout"
+                ? { num_items: decision.contents.reduce((sum, entry) => sum + (entry.quantity ?? 1), 0) || 1 }
+                : {}),
+            },
+            eventId: decision.eventId,
+            dedupeKey: null,
+          };
+          await sendMetaConversion({
+            event: metaEvent,
+            occurredAt: new Date(),
+            eventSourceUrl: pageUrl ?? null,
+            user: { ipAddress: ip, userAgent, fbp: pixelCookies.fbp, fbc: pixelCookies.fbc, fbclid },
+          });
+        }
+
+        if (!wantTikTok) return;
         await sendServerEvents([
           {
             event: decision.event,
