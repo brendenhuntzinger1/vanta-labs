@@ -311,10 +311,33 @@ describe("the portal gates on the attestations, never on the marketing box", () 
     // "Research Access Portal / Access is limited to verified account holders."
     // told a first-time visitor they were not on a list and there was a
     // process. The process is one tap of Google; they left before finding out.
-    expect(renderedPortal).toContain("Access Vanta Labs");
-    expect(renderedPortal).toContain("Sign in in seconds to continue.");
+    //
+    // "Access Vanta Labs / Sign in in seconds to continue." fixed the tone but
+    // still described the DOOR: the heading named the checkpoint and the line
+    // under it sold the speed of the form. Neither said what is on the other
+    // side, which is the only thing a visitor arriving cold from an ad does
+    // not already know. The headline now names the catalogue itself.
+    expect(renderedPortal).toContain("View the full catalogue");
+    expect(renderedPortal).toContain("About ten seconds.");
     expect(renderedPortal).not.toContain("Research Access Portal");
     expect(renderedPortal).not.toContain("Access is limited to verified account holders.");
+  });
+
+  it("keeps the sub-heading to one line on a phone", () => {
+    // THE CONSTRAINT THAT MAKES THIS COPY HARD, AND IT IS NOT A STYLE NOTE.
+    //
+    // Measured on the deployed page at 390x844: the consent bar takes the top
+    // 118px and "Continue with Google" already ends at 695px, with 708px
+    // recorded below as under the fold on a real handset. The sub-heading
+    // wraps at roughly 40 characters in this card, and every wrapped line
+    // costs 24px — straight off the fast path's place on the screen.
+    //
+    // The first draft of this change read "Two quick confirmations. About ten
+    // seconds.", wrapped to two lines, and pushed the button to 719px. This is
+    // the guard that would have caught it without a browser.
+    const match = renderedPortal.match(/Two confirmations\. About ten seconds\./);
+    expect(match, "the sub-heading copy moved; re-measure the fold before changing it").not.toBeNull();
+    expect(match![0].length).toBeLessThanOrEqual(40);
   });
 
   it("shows the terms line", () => {

@@ -903,11 +903,21 @@ export function AccountAuthForm() {
           <p className="text-[11px] font-medium uppercase tracking-[0.28em] text-[color:var(--accent-gold)]">
             Vanta Labs
           </p>
+          {/* NAME THE REWARD, NOT THE DOOR — and pay nothing for it.
+              "Access Vanta Labs" described the checkpoint and "Sign in in
+              seconds" sold the speed of the form. Neither said what is on the
+              other side, which is the one thing a visitor arriving cold from
+              an ad does not know. Measured on the live page at 390x844, the
+              Google button already ends at 695px with the consent bar above
+              it; the comment on the checkbox group below records 708px as
+              under the fold on a real handset. So there is no room to ADD a
+              value proposition here — these two lines are rewritten in place,
+              same elements, same heights, no new rows. */}
           <h1 className="mt-3 text-[1.75rem] font-semibold leading-[1.15] tracking-[-0.01em] text-white sm:text-[2rem]">
-            Access Vanta Labs
+            View the full catalogue
           </h1>
           <p className="mt-2.5 text-[0.9375rem] leading-6 text-white/55">
-            Sign in in seconds to continue.
+            Two confirmations. About ten seconds.
           </p>
         </header>
 
