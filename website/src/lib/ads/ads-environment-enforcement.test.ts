@@ -258,7 +258,7 @@ describe("every pixel component consults the gate", () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     (require("node:fs") as typeof import("node:fs")).readFileSync(`src/components/${p}`, "utf8");
 
-  it.each(["tiktok-pixel.tsx", "snap-pixel.tsx", "reddit-pixel.tsx", "consented-analytics.tsx"])(
+  it.each(["tiktok-pixel.tsx", "snap-pixel.tsx", "reddit-pixel.tsx", "meta-pixel.tsx", "consented-analytics.tsx"])(
     "%s imports the gate and refuses before rendering the SDK",
     (file) => {
       const source = read(file);
@@ -273,7 +273,7 @@ describe("every pixel component consults the gate", () => {
   );
 
   it("resolves the verdict in an effect, not during render, so hydration cannot mismatch", () => {
-    for (const file of ["tiktok-pixel.tsx", "snap-pixel.tsx", "reddit-pixel.tsx", "consented-analytics.tsx"]) {
+    for (const file of ["tiktok-pixel.tsx", "snap-pixel.tsx", "reddit-pixel.tsx", "meta-pixel.tsx", "consented-analytics.tsx"]) {
       const source = read(file);
       // Starting closed is what makes a hydration failure fail safe.
       expect(source).toContain("const [adsAllowed, setAdsAllowed] = useState(false);");

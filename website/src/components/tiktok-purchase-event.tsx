@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { browserFiredStore, emitEvent, type TikTokEvent } from "@/lib/ads/tiktok-events";
 import { emitSnapEvent, type SnapEvent } from "@/lib/ads/snap-events";
 import { emitRedditEvent, type RedditEvent } from "@/lib/ads/reddit-events";
+import { emitMetaEvent, type MetaEvent } from "@/lib/ads/meta-events";
 import { hasAcceptedConsent } from "@/lib/cookie-consent-client";
 
 /**
@@ -104,6 +105,7 @@ export function TikTokPurchaseEvent({
         event?: TikTokEvent | null;
         snapPurchase?: SnapEvent | null;
         redditPurchase?: RedditEvent | null;
+        metaPurchase?: MetaEvent | null;
       };
       if (!body?.event) return; // not paid — nothing to report, and that is correct
 
@@ -141,6 +143,18 @@ export function TikTokPurchaseEvent({
       // nothing to send again here.
       if (body.redditPurchase) {
         emitRedditEvent(body.redditPurchase, (name, properties) => window.rdt?.("track", name, properties));
+      }
+
+      // Meta, behind the same single paid gate. No identity: the browser
+      // pixel only accepts match keys at init, which runs in the root layout
+      // where the visitor is unknown. The eventID is the order id, so a
+      // Conversions API leg later reports the same purchase once.
+      if (body.metaPurchase) {
+        emitMetaEvent(
+          body.metaPurchase,
+          (name, properties, options) => window.fbq?.("track", name, properties, options),
+          browserFiredStore(),
+        );
       }
     } catch {
       // A failed check must never invent a conversion. Staying silent loses at

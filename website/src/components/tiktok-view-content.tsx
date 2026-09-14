@@ -6,6 +6,7 @@ import { whenPixelReady } from "@/lib/ads/pixel-ready";
 import { buildSnapViewContent, emitSnapEvent } from "@/lib/ads/snap-events";
 import { buildRedditViewContent, emitRedditEvent, newConversionId } from "@/lib/ads/reddit-events";
 import { relayToServer } from "@/lib/ads/relay-client";
+import { buildMetaViewContent, emitMetaEvent } from "@/lib/ads/meta-events";
 
 /**
  * ViewContent for a product page.
@@ -69,6 +70,15 @@ export function TikTokViewContent({
       emitRedditEvent(
         buildRedditViewContent({ slug, name, price, category, conversionId: newConversionId("vc") }),
         (eventName, properties) => window.rdt?.("track", eventName, properties),
+      );
+
+      // Meta, from the same data and the same gate. The eventID is the same
+      // key TikTok's event_id uses, so a Conversions API leg added later
+      // collapses into this event rather than doubling it.
+      emitMetaEvent(
+        buildMetaViewContent({ slug, name, price, category }),
+        (eventName, properties, options) => window.fbq?.("track", eventName, properties, options),
+        browserFiredStore(),
       );
     });
   }, [slug, name, price, category]);
