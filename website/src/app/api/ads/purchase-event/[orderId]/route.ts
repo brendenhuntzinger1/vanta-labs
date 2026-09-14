@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { buildPurchase } from "@/lib/ads/tiktok-events";
 import { buildSnapPurchase } from "@/lib/ads/snap-events";
 import { buildRedditPurchase } from "@/lib/ads/reddit-events";
+import { buildMetaPurchase } from "@/lib/ads/meta-events";
 import { describeRedditResult, redditCredentialStatus, sendRedditConversion } from "@/lib/ads/reddit-conversions";
 import { buildAdvancedMatching } from "@/lib/ads/advanced-matching";
 import { getOrderAttribution } from "@/lib/order-attribution";
@@ -169,6 +170,12 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   // where the site knows who the visitor is. conversionId is the order id, so a
   // Conversions API leg added later collapses into one conversion instead of
   // doubling the reported revenue.
+  // Meta, from the SAME paid order and the same category lookup. It carries
+  // no identity — see meta-events.ts — and its eventID is the order id.
+  const metaPurchase = buildMetaPurchase(paidOrder, {
+    categories: items.map((item) => (item.product_id ? categoryByProductId.get(item.product_id) ?? null : null)),
+  });
+
   const redditPurchase = isPaid
     ? buildRedditPurchase({
         orderId: paidOrder.orderId,
@@ -330,6 +337,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
         event: event ? { name: event.name, eventId: event.eventId, properties: event.properties } : null,
         snapPurchase,
         redditPurchase,
+        metaPurchase,
         // The reason an unpaid order reports nothing, stated rather than implied.
         reason: event
           ? null
@@ -438,7 +446,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   }
 
   return NextResponse.json(
-    { found: true, isPaid, event, snapPurchase, redditPurchase, serverDelivery: [serverDelivery, redditDelivery].filter(Boolean).join(" | ") || null },
+    { found: true, isPaid, event, snapPurchase, redditPurchase, metaPurchase, serverDelivery: [serverDelivery, redditDelivery].filter(Boolean).join(" | ") || null },
     { headers: { "cache-control": "no-store" } },
   );
 }

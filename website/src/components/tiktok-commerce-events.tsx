@@ -6,6 +6,7 @@ import { LISTENER_FLAG } from "@/lib/ads/tracking-health-browser";
 import { relayToServer } from "@/lib/ads/relay-client";
 import { buildSnapAddToCart, buildSnapCheckout, emitSnapEvent } from "@/lib/ads/snap-events";
 import { buildRedditAddToCart, emitRedditEvent, newConversionId } from "@/lib/ads/reddit-events";
+import { buildMetaAddToCart, buildMetaInitiateCheckout, emitMetaEvent } from "@/lib/ads/meta-events";
 
 /**
  * AddToCart and InitiateCheckout, forwarded to the TikTok pixel.
@@ -98,6 +99,30 @@ export function TikTokCommerceEvents() {
                 items: detail?.items ?? [],
               }),
           snapEmit,
+          store,
+        );
+      }
+
+      // Meta, from the same broadcast. Gated on fbq's presence for the same
+      // reason ttq is: the pixel only exists after consent. Both events are
+      // in Meta's standard set and both carry the eventID TikTok also uses.
+      if (window.fbq) {
+        emitMetaEvent(
+          mapped.name === "AddToCart"
+            ? buildMetaAddToCart({
+                slug: String(detail?.productSlug ?? ""),
+                variantId: detail?.variantId ?? null,
+                name: detail?.productName ?? null,
+                category: detail?.productCategory ?? null,
+                quantity: Number(detail?.quantity ?? 1),
+                price: Number(detail?.price ?? 0),
+              })
+            : buildMetaInitiateCheckout({
+                itemCount: Number(detail?.itemCount ?? 0),
+                total: Number(detail?.total ?? 0),
+                items: detail?.items ?? [],
+              }),
+          (eventName, properties, options) => window.fbq?.("track", eventName, properties, options),
           store,
         );
       }
