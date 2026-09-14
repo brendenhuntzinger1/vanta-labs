@@ -29,6 +29,7 @@ import { DEFAULT_REFERRAL_DISCOUNT_PERCENT, getBusinessSettings, getReferralProg
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 import { getAmbassadorProgramSettings, getAmbassadorMarketingResources, type AmbassadorMarketingResource } from "@/lib/ambassador-settings";
 import { DEFAULT_COMMISSION_HOLD_DAYS } from "@/lib/referral-config";
+import { isPayoutChannel, payoutChannelLabel } from "@/lib/payout-channels";
 
 function formatSupabaseError(error: unknown) {
   if (!error) {
@@ -114,7 +115,17 @@ export interface PartnerSummary {
   marketingResources: AmbassadorMarketingResource[];
   // The CONFIGURED hold, read from the Control Center — never a literal in the
   accountStatus: string;
-  payoutHistory: Array<{ id: string; amount: number; note: string | null; createdAt: string }>;
+  payoutHistory: Array<{
+    id: string;
+    amount: number;
+    note: string | null;
+    // How the money was sent (payout-channels.ts) and where, as stamped at
+    // payout time — so the ambassador's history says "Zelle" when it went by
+    // Zelle, not whatever their profile said.
+    payoutMethod: string | null;
+    payoutHandle: string | null;
+    createdAt: string;
+  }>;
 }
 
 export interface AdminPartnerRow {
@@ -142,6 +153,10 @@ export interface AdminPartnerRow {
   social: string | null;
   followerCount: number | null;
   preferredReferralCode: string | null;
+  // Where the ambassador asked to be paid, shown beside the payout action so
+  // the owner does not have to open a second page to find the handle.
+  payoutMethod: string | null;
+  payoutHandle: string | null;
 }
 
 export interface AdminOperationsSummary {
@@ -1076,27 +1091,34 @@ export async function updatePartnerPayoutMethod(authUserId: string, method: stri
 export interface PayoutQueueRow {
   partnerId: string;
   name: string;
+  // Everything unpaid — pending AND approved_for_payout. The sweep's wait is
+  // not a hold on the owner; see markCommissionsPaid.
   amountOwed: number;
-  approvedOrderCount: number;
   payoutMethod: string | null;
   payoutHandle: string | null;
-  eligibleSince: string | null; // earliest approved_for_payout_at
   meetsMinimum: boolean;
   onHold: boolean; // ambassador not currently approved — balance is held, not payable
 }
 
 export interface PayoutQueue {
   rows: PayoutQueueRow[];
-  readyCount: number; // ambassadors whose approved balance meets the minimum payout
+  readyCount: number; // ambassadors whose owed balance meets the minimum payout
   totalOwed: number;
   minimumPayoutThreshold: number;
 }
 
-// Builds the admin payout queue: every ambassador with commissions that have
-// cleared the hold period (approved_for_payout) and are awaiting the next
-// payout, with the amount owed, order count, when they became eligible, and
-// their chosen payout method + handle. `readyCount` drives the "N ambassadors
-// ready for payout" notification badge.
+// Builds the admin payout queue: every ambassador who is owed anything, with
+// the amount and their chosen payout method + handle. `readyCount` drives the
+// "N ambassadors ready for payout" notification badge.
+//
+// THERE IS NO HOLD. This used to list only balances the nightly sweep had
+// moved to approved_for_payout, so an ambassador whose referred order was two
+// days old was invisible here — and the owner, who had already paid them,
+// was told "no commissions have cleared the hold period yet". The sweep's wait
+// is a queue for the sweep, not a lock on the owner: `pending` money is owed
+// money. (A pending commission the sweep would refuse — fraud-flagged,
+// ineligible — is included in the figure here but not in a payout; those rows
+// sit in Fraud & Review, and markCommissionsPaid reports what it actually paid.)
 export async function getPayoutQueue(): Promise<PayoutQueue> {
   // AGGREGATED IN THE DATABASE, NOT HERE.
   //
@@ -1121,21 +1143,16 @@ export async function getPayoutQueue(): Promise<PayoutQueue> {
   }
 
   const minimum = ambassadorSettings.minimumPayoutThreshold;
-  const byPartner = new Map<string, { amount: number; count: number; earliest: string | null }>();
+  const byPartner = new Map<string, number>();
   for (const row of (balanceRows ?? []) as Array<{
-    ambassador_id: string; approved_amount: number | string;
-    approved_count: number | string; earliest_approved_at: string | null;
+    ambassador_id: string; pending_amount: number | string | null; approved_amount: number | string | null;
   }>) {
     const id = String(row.ambassador_id ?? "");
     if (!id) continue;
-    const amount = Number(row.approved_amount ?? 0);
-    // A partner with nothing approved is not in the queue at all.
-    if (!(amount > 0)) continue;
-    byPartner.set(id, {
-      amount,
-      count: Number(row.approved_count ?? 0),
-      earliest: row.earliest_approved_at ? String(row.earliest_approved_at) : null,
-    });
+    const owed = Number(row.pending_amount ?? 0) + Number(row.approved_amount ?? 0);
+    // A partner with nothing unpaid is not in the queue at all.
+    if (!(owed > 0)) continue;
+    byPartner.set(id, owed);
   }
 
   const partnerIds = Array.from(byPartner.keys());
@@ -1156,18 +1173,15 @@ export async function getPayoutQueue(): Promise<PayoutQueue> {
   }
 
   const queueRows: PayoutQueueRow[] = partnerIds.map((id) => {
-    const agg = byPartner.get(id)!;
     const info = partnerInfo.get(id);
-    const amountOwed = roundMoney(agg.amount);
+    const amountOwed = roundMoney(byPartner.get(id) ?? 0);
     const onHold = (info?.status ?? "") !== "approved";
     return {
       partnerId: id,
       name: info?.name ?? "Unknown",
       amountOwed,
-      approvedOrderCount: agg.count,
       payoutMethod: info?.payout_method ?? null,
       payoutHandle: info?.payout_handle ?? null,
-      eligibleSince: agg.earliest,
       meetsMinimum: amountOwed >= minimum,
       onHold,
     };
@@ -1205,6 +1219,8 @@ type PartnerSummaryPayoutRow = {
   id: string;
   amount: number | null;
   note: string | null;
+  payout_method: string | null;
+  payout_handle: string | null;
   created_at: string;
 };
 
@@ -1272,7 +1288,7 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
     readAllRowsBounded<PartnerSummaryPayoutRow>(
       (from, to) => supabaseAdmin
         .from("partner_payouts")
-        .select("id, amount, note, created_at")
+        .select("id, amount, note, payout_method, payout_handle, created_at")
         .eq("ambassador_id", partnerId)
         .order("created_at", { ascending: false })
         .order("id", { ascending: true })
@@ -1422,6 +1438,8 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
       id: String(row.id),
       amount: roundMoney(Number(row.amount ?? 0)),
       note: row.note ? String(row.note) : null,
+      payoutMethod: row.payout_method ? String(row.payout_method) : null,
+      payoutHandle: row.payout_handle ? String(row.payout_handle) : null,
       createdAt: String(row.created_at),
     })),
   };
@@ -1604,6 +1622,8 @@ export async function getAdminPartnerRows(input?: { search?: string; status?: st
       social: partner.social ? String(partner.social) : null,
       followerCount: partner.follower_count != null ? Number(partner.follower_count) : null,
       preferredReferralCode: partner.preferred_referral_code ? String(partner.preferred_referral_code) : null,
+      payoutMethod: partner.payout_method ? String(partner.payout_method) : null,
+      payoutHandle: partner.payout_handle ? String(partner.payout_handle) : null,
     };
   });
 
@@ -2389,6 +2409,12 @@ export async function markCommissionsPaid(input: {
   // Optional external transfer/transaction reference (e.g. PayPal txn id),
   // recorded on the immutable payout row + audit log.
   transactionReference?: string | null;
+  // The channel the money actually travelled by (payout-channels.ts) and the
+  // address it went to. When given they replace the ambassador's PROFILE
+  // method on the payout record and in the confirmation email: the profile
+  // says where they asked to be paid, this says where they were.
+  paidVia?: string | null;
+  paidTo?: string | null;
 }) {
   // Require explicit confirmation that funds were sent — never mark paid (or
   // email the ambassador) off a click alone.
@@ -2397,6 +2423,17 @@ export async function markCommissionsPaid(input: {
   }
   const transactionReference = typeof input.transactionReference === "string"
     ? input.transactionReference.trim().slice(0, 200) || null
+    : null;
+  // Validated BEFORE anything is claimed: a refused channel must leave every
+  // commission exactly where it was.
+  const paidVia = typeof input.paidVia === "string" && input.paidVia.trim()
+    ? input.paidVia.trim().toLowerCase()
+    : null;
+  if (paidVia && !isPayoutChannel(paidVia)) {
+    throw new Error("Choose how the money was sent: PayPal, Venmo, Cash App, Zelle, cash or other.");
+  }
+  const paidTo = typeof input.paidTo === "string"
+    ? input.paidTo.trim().slice(0, 200) || null
     : null;
   // Fold the transfer reference into the payout note so it lives on the
   // immutable payout record without a schema change.
@@ -2466,9 +2503,20 @@ export async function markCommissionsPaid(input: {
     assertNoSupabaseError("referral_orders.select(pending payouts)", pendingError);
   }
 
-  const ids = (pendingRows ?? []).map((row) => row.id);
+  // THERE IS NO HOLD ON PAYING. The nightly sweep moves a commission from
+  // `pending` to `approved_for_payout` after the configured wait, and that is
+  // all the wait is for — a queue for the sweep, not a lock on the owner. The
+  // owner pays whenever they choose and records it here, so a commission the
+  // sweep has not reached yet is paid in the same payout as one it has. What
+  // still applies is the sweep's own eligibility rule (order paid, not
+  // fraud-flagged, not marked ineligible) — see readReleasableUnclearedCommissions.
+  const unclearedRows = await readReleasableUnclearedCommissions(input.partnerId);
+  const unclearedIds = new Set(unclearedRows.map((row) => String(row.id)));
+
+  const payableRows = [...(pendingRows ?? []), ...unclearedRows];
+  const ids = payableRows.map((row) => row.id);
   if (ids.length === 0) {
-    return { payoutId: null, orderCount: 0, amount: 0 };
+    return { payoutId: null, orderCount: 0, amount: 0, unclearedOrderCount: 0, unclearedAmount: 0 };
   }
 
   // The payout amount is ALWAYS the sum of the commissions actually owed, never
@@ -2476,7 +2524,7 @@ export async function markCommissionsPaid(input: {
   // over-pay an ambassador (e.g. flip $500 of commissions to "paid" while
   // recording a $50 payout). We keep the param only for the threshold display.
   const pendingTotal = roundMoney(
-    (pendingRows ?? []).reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0),
+    payableRows.reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0),
   );
 
   if (!input.overrideMinimumThreshold) {
@@ -2500,13 +2548,17 @@ export async function markCommissionsPaid(input: {
   // not reached yet; that produces two payout rows which each accurately cover
   // the commissions they claimed, which is the safe direction.
   const claimedAt = new Date().toISOString();
+  // An uncleared row is claimed from `pending`; a cleared one from
+  // approved_for_payout. Both are still per-row guards — a row reversed, or
+  // paid by a concurrent run, between the read and this update matches
+  // neither status and is left alone.
   const claimed: Array<{ id: string; commission_amount: number | null; order_id: string }> = [];
   for (const slice of chunkIds(ids)) {
     const { data: claimedRows, error: updateError } = await supabaseAdmin
       .from("referral_orders")
       .update({ payment_status: "paid", commission_paid_at: claimedAt, updated_at: claimedAt })
       .in("id", slice)
-      .eq("payment_status", "approved_for_payout")
+      .in("payment_status", ["approved_for_payout", "pending"])
       .select("id, commission_amount, order_id");
 
     if (updateError) {
@@ -2517,22 +2569,30 @@ export async function markCommissionsPaid(input: {
 
   if (claimed.length === 0) {
     // Another concurrent payout already claimed these commissions.
-    return { payoutId: null, orderCount: 0, amount: 0 };
+    return { payoutId: null, orderCount: 0, amount: 0, unclearedOrderCount: 0, unclearedAmount: 0 };
   }
 
   const payoutAmount = roundMoney(
     claimed.reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0),
   );
+  const claimedUncleared = claimed.filter((row) => unclearedIds.has(String(row.id)));
+  const unclearedAmount = roundMoney(
+    claimedUncleared.reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0),
+  );
 
   // Load the ambassador's recorded payout destination so we can stamp it on the
-  // payout record (accounting history) and confirm it in the email.
+  // payout record (accounting history) and confirm it in the email — unless the
+  // admin said how the money actually went, in which case THAT is the record.
+  // A channel without a typed address does not inherit the profile handle: a
+  // Zelle payout stamped with a Cash App tag tells the ambassador to look in
+  // the wrong app.
   const { data: partner } = await supabaseAdmin
     .from("partners")
     .select("name, email, payout_method, payout_handle")
     .eq("id", input.partnerId)
     .maybeSingle();
-  const payoutMethod = partner?.payout_method ? String(partner.payout_method) : null;
-  const payoutHandle = partner?.payout_handle ? String(partner.payout_handle) : null;
+  const payoutMethod = paidVia ?? (partner?.payout_method ? String(partner.payout_method) : null);
+  const payoutHandle = paidVia ? paidTo : (partner?.payout_handle ? String(partner.payout_handle) : null);
 
   // A8: flip the mirror by the EXACT order_ids the authoritative update just
   // claimed — not by partner_id+status. A concurrent payout or a partial claim
@@ -2606,6 +2666,12 @@ export async function markCommissionsPaid(input: {
       partnerId: input.partnerId,
       amount: payoutAmount,
       orderCount: claimed.length,
+      // What was paid before the sweep had cleared it, so a payout on an order
+      // that is later refunded can be traced back to the decision that paid it.
+      unclearedOrderCount: claimedUncleared.length,
+      unclearedAmount,
+      paidVia,
+      paidTo,
       transactionReference,
       confirmedTransferred: true,
       actorUsername: input.actorUsername ?? null,
@@ -2618,9 +2684,7 @@ export async function markCommissionsPaid(input: {
   // never undo a completed payout).
   if (partner?.email) {
     try {
-      const methodLabel = payoutMethod && isValidPayoutMethod(payoutMethod)
-        ? AMBASSADOR_PAYOUT_METHOD_LABELS[payoutMethod]
-        : (payoutMethod ?? "your chosen method");
+      const methodLabel = payoutChannelLabel(payoutMethod) ?? "your chosen method";
       // Money has already moved. If this email fails the ambassador is owed a
       // "we paid you" that must still arrive, so it goes on the retry queue
       // rather than being dropped.
@@ -2646,7 +2710,48 @@ export async function markCommissionsPaid(input: {
     payoutId,
     orderCount: claimed.length,
     amount: payoutAmount,
+    unclearedOrderCount: claimedUncleared.length,
+    unclearedAmount,
   };
+}
+
+// The commissions the sweep has not cleared yet that a payout may include:
+// everything autoApproveEligibleCommissions would approve once its wait is
+// over, minus the wait. The three gates are the sweep's own — a commission
+// flagged for fraud, marked ineligible, or sitting on an order that was never
+// paid stays `pending` whatever the owner recorded.
+async function readReleasableUnclearedCommissions(partnerId: string): Promise<Array<{ id: string; commission_amount: number | null }>> {
+  const { data, error } = await supabaseAdmin
+    .from("referral_orders")
+    .select("id, order_id, commission_amount, fraud_flag, ineligible_reason")
+    .eq("ambassador_id", partnerId)
+    .eq("payment_status", "pending");
+  assertNoSupabaseError("referral_orders.select(uncleared commissions)", error);
+
+  const candidates = ((data ?? []) as Array<{
+    id: string; order_id: string; commission_amount: number | null;
+    fraud_flag: boolean | null; ineligible_reason: string | null;
+  }>).filter((row) => !row.fraud_flag && !row.ineligible_reason && row.order_id);
+
+  if (candidates.length === 0) {
+    return [];
+  }
+
+  const paidOrderIds = new Set<string>();
+  for (const slice of chunkIds(candidates.map((row) => String(row.order_id)))) {
+    const { data: orders, error: orderError } = await supabaseAdmin
+      .from("orders")
+      .select("order_id, payment_status")
+      .in("order_id", slice);
+    assertNoSupabaseError("orders.select(uncleared commissions)", orderError);
+    for (const order of (orders ?? []) as Array<{ order_id: string; payment_status: string | null }>) {
+      if (order.payment_status === "paid") paidOrderIds.add(String(order.order_id));
+    }
+  }
+
+  return candidates
+    .filter((row) => paidOrderIds.has(String(row.order_id)))
+    .map((row) => ({ id: row.id, commission_amount: row.commission_amount }));
 }
 
 // Reverse a mistaken ambassador payout. The payout row is KEPT as an immutable

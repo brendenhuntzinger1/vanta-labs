@@ -7,7 +7,10 @@ import { getAmbassadorRefundedOrderCount, getPayoutHistory } from "@/lib/admin-a
 import { getSiteUrl } from "@/lib/env";
 import { getReferralProgramConfig } from "@/lib/admin-control";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
+import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
+import { describePayoutDestination } from "@/lib/payout-channels";
 import AdminAmbassadorRatesCard from "@/components/admin-ambassador-rates-card";
+import { AdminRecordPayoutButton } from "@/components/admin-record-payout-dialog";
 import { formatDisplayDate } from "@/lib/format-date";
 
 function currency(value: number) {
@@ -49,11 +52,13 @@ export default async function AdminAmbassadorProfilePage({ params }: { params: P
   const { partnerId } = await params;
   const siteUrl = getSiteUrl();
 
-  const [rows, payoutHistory, refundedOrders, referralProgram] = await Promise.all([
+  const [rows, payoutHistory, refundedOrders, referralProgram, ambassadorSettings] = await Promise.all([
     getAdminPartnerRows({ status: "all" }).catch(() => []),
     getPayoutHistory(200).catch(() => []),
     getAmbassadorRefundedOrderCount(partnerId).catch(() => 0),
     getReferralProgramConfig(),
+    // Falls back to the real defaults internally, never to zero.
+    getAmbassadorProgramSettings(),
   ]);
 
   const row = rows.find((r) => r.id === partnerId);
@@ -69,6 +74,7 @@ export default async function AdminAmbassadorProfilePage({ params }: { params: P
   const monthlySeries = summary?.monthlyRevenueSeries ?? [];
   const maxMonthly = monthlySeries.reduce((max, point) => Math.max(max, point.value), 0);
   const statusBadge = STATUS_STYLES[row.status] ?? "border-zinc-500/40 text-zinc-300";
+  const payoutDestination = describePayoutDestination(row.payoutMethod, row.payoutHandle);
   // Resolved with the same rule checkout uses, so the header states what a
   // shopper would actually be charged rather than what the column contains.
   const effectiveDiscountPercent = resolveAmbassadorCustomerDiscount(row.customerDiscountPercent, referralProgram.discountPercent);
@@ -92,7 +98,7 @@ export default async function AdminAmbassadorProfilePage({ params }: { params: P
             </span>
           </div>
 
-          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <div className="rounded-xl border border-zinc-800/70 bg-zinc-900/40 p-4">
               <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Referral Code</p>
               <p className="mt-1 font-mono text-lg text-white">{row.referralCode}</p>
@@ -102,6 +108,15 @@ export default async function AdminAmbassadorProfilePage({ params }: { params: P
               <a href={referralLink} className="mt-1 block truncate font-mono text-sm text-cyan-300 hover:text-cyan-200" target="_blank" rel="noreferrer">
                 {referralLink}
               </a>
+            </div>
+            <div className="rounded-xl border border-zinc-800/70 bg-zinc-900/40 p-4">
+              <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Pay them by</p>
+              {payoutDestination ? (
+                <p className="mt-1 text-lg font-semibold text-white">{payoutDestination}</p>
+              ) : (
+                <p className="mt-1 text-sm text-amber-300">No payout method on file</p>
+              )}
+              {row.phone ? <p className="mt-1 text-xs text-zinc-500">📞 {row.phone}</p> : null}
             </div>
           </div>
           <p className="mt-3 text-xs text-zinc-500">
@@ -163,7 +178,22 @@ export default async function AdminAmbassadorProfilePage({ params }: { params: P
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Balance Owed</p>
             <p className="mt-2 text-2xl font-semibold text-cyan-300">{currency(balanceOwed)}</p>
-            <p className="mt-1 text-[11px] text-zinc-500">{currency(row.approvedForPayoutCommissions)} ready · {currency(row.pendingCommissions)} holding</p>
+            <div className="mt-3">
+              <AdminRecordPayoutButton
+                target={{
+                  id: row.id,
+                  name: row.name,
+                  referralCode: row.referralCode,
+                  status: row.status,
+                  payoutMethod: row.payoutMethod,
+                  payoutHandle: row.payoutHandle,
+                  amountOwed: balanceOwed,
+                }}
+                minimumPayoutThreshold={ambassadorSettings.minimumPayoutThreshold}
+              >
+                Mark Paid
+              </AdminRecordPayoutButton>
+            </div>
           </div>
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Reversed</p>
@@ -200,6 +230,7 @@ export default async function AdminAmbassadorProfilePage({ params }: { params: P
                   <tr className="text-left text-zinc-500">
                     <th className="px-2 py-2">Date Paid</th>
                     <th className="px-2 py-2">Amount</th>
+                    <th className="px-2 py-2">Sent via</th>
                     <th className="px-2 py-2">Notes</th>
                   </tr>
                 </thead>
@@ -208,6 +239,7 @@ export default async function AdminAmbassadorProfilePage({ params }: { params: P
                     <tr key={payment.id} className="border-t border-zinc-800/70 text-zinc-200">
                       <td className="px-2 py-2">{formatDate(payment.createdAt)}</td>
                       <td className="px-2 py-2 font-semibold text-white">{currency(payment.amount)}</td>
+                      <td className="px-2 py-2 text-zinc-400">{describePayoutDestination(payment.payoutMethod, payment.payoutHandle) ?? "—"}</td>
                       <td className="px-2 py-2 text-zinc-400">{payment.note ?? "—"}</td>
                     </tr>
                   ))}

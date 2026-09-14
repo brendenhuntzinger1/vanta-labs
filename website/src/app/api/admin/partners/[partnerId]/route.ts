@@ -90,6 +90,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
       const note = typeof body?.note === "string" ? body.note : undefined;
       const overrideMinimumThreshold = body?.overrideMinimumThreshold === true;
       const transactionReference = typeof body?.transactionReference === "string" ? body.transactionReference : null;
+      const paidVia = typeof body?.paidVia === "string" ? body.paidVia : null;
+      const paidTo = typeof body?.paidTo === "string" ? body.paidTo : null;
 
       const payout = await markCommissionsPaid({
         partnerId,
@@ -104,11 +106,16 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
         // the server enforces it too (markCommissionsPaid throws without it).
         confirmedTransferred: body?.confirmedTransferred === true,
         transactionReference,
+        paidVia,
+        paidTo,
       });
 
       if (!payout.payoutId) {
         return NextResponse.json(
-          { success: false, error: "No approved commissions are pending payout for this ambassador." },
+          {
+            success: false,
+            error: "Nothing is payable for this ambassador: every commission is already paid or reversed, or comes from an order that is unpaid or flagged for review.",
+          },
           { status: 400 },
         );
       }

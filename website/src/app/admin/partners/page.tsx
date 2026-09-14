@@ -14,7 +14,8 @@ import { getAmbassadorMarketingResources, getAmbassadorProgramSettings } from "@
 import { getFraudReviewRows, getPayoutHistory } from "@/lib/admin-ambassadors";
 import { failedReads, settleRead, UNKNOWN_FIGURE } from "@/lib/admin-read";
 import { AdminReadFailureNotice } from "@/components/admin-data-notices";
-import { formatDisplayDate } from "@/lib/format-date";
+import { AdminRecordPayoutButton } from "@/components/admin-record-payout-dialog";
+import { describePayoutDestination } from "@/lib/payout-channels";
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -77,16 +78,9 @@ export default async function AdminPartnersPage() {
     ? payoutQueueRead.value
     : { rows: [], readyCount: 0, totalOwed: 0, minimumPayoutThreshold: 0 };
 
-  function formatDate(value: string | null) {
-    if (!value) return "—";
-    const d = new Date(value);
-    return formatDisplayDate(d, "medium") ?? "—";
-  }
-  function methodLabel(method: string | null, handle: string | null) {
-    if (!method) return "Not set";
-    const label = method === "paypal" ? "PayPal" : method === "venmo" ? "Venmo" : method === "cashapp" ? "Cash App" : method;
-    return handle ? `${label} · ${handle}` : label;
-  }
+  // The roster row for a queue entry: the queue knows what is owed, the
+  // roster knows the ambassador's code and status.
+  const rowById = new Map(rows.map((row) => [row.id, row]));
 
   return (
     <div className="vl-page-shell min-h-screen bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.1),transparent_52%),linear-gradient(145deg,#04060f_0%,#0b1324_50%,#060911_100%)] px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
@@ -121,7 +115,9 @@ export default async function AdminPartnersPage() {
               <AdminReadFailureNotice failures={failedReads([payoutQueueRead])} />
             </div>
           ) : payoutQueue.rows.length === 0 ? (
-            <p className="mt-4 text-sm text-zinc-500">No commissions have cleared the hold period yet. Approved commissions appear here, ready to pay.</p>
+            <p className="mt-4 text-sm text-zinc-500">
+              Nobody is owed a payout right now. An ambassador appears here as soon as one of their referred orders is paid.
+            </p>
           ) : (
             <div className="mt-4 overflow-x-auto">
               <table className="w-full min-w-[720px] text-left text-sm">
@@ -129,32 +125,54 @@ export default async function AdminPartnersPage() {
                   <tr className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
                     <th className="py-2 pr-4">Ambassador</th>
                     <th className="py-2 pr-4">Amount owed</th>
-                    <th className="py-2 pr-4">Approved orders</th>
                     <th className="py-2 pr-4">Payout method</th>
-                    <th className="py-2 pr-4">Eligible since</th>
                     <th className="py-2 pr-4">Status</th>
+                    <th className="py-2 pr-4">Action</th>
                   </tr>
                 </thead>
                 <tbody className="text-zinc-300">
-                  {payoutQueue.rows.map((row) => (
-                    <tr key={row.partnerId} className="border-t border-white/10">
-                      <td className="py-2 pr-4 font-medium text-white">{row.name}</td>
-                      <td className="py-2 pr-4">{currency(row.amountOwed)}</td>
-                      <td className="py-2 pr-4">{row.approvedOrderCount}</td>
-                      <td className={`py-2 pr-4 ${row.payoutMethod ? "" : "text-amber-300"}`}>{methodLabel(row.payoutMethod, row.payoutHandle)}</td>
-                      <td className="py-2 pr-4">{formatDate(row.eligibleSince)}</td>
-                      <td className="py-2 pr-4">
-                        {row.meetsMinimum ? (
-                          <span className="rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-xs text-emerald-200">Ready</span>
-                        ) : (
-                          <span className="rounded-full border border-white/15 px-2 py-0.5 text-xs text-zinc-400">Below min</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                  {payoutQueue.rows.map((row) => {
+                    const roster = rowById.get(row.partnerId);
+                    return (
+                      <tr key={row.partnerId} className="border-t border-white/10">
+                        <td className="py-2 pr-4 font-medium text-white">
+                          <a href={`/admin/partners/${row.partnerId}`} className="hover:text-cyan-200">{row.name}</a>
+                        </td>
+                        <td className="py-2 pr-4">{currency(row.amountOwed)}</td>
+                        <td className={`py-2 pr-4 ${row.payoutMethod ? "" : "text-amber-300"}`}>{describePayoutDestination(row.payoutMethod, row.payoutHandle) ?? "Not set"}</td>
+                        <td className="py-2 pr-4">
+                          {row.onHold ? (
+                            <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-xs text-amber-200">Not approved</span>
+                          ) : row.meetsMinimum ? (
+                            <span className="rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-xs text-emerald-200">Ready</span>
+                          ) : (
+                            <span className="rounded-full border border-white/15 px-2 py-0.5 text-xs text-zinc-400">Below min</span>
+                          )}
+                        </td>
+                        <td className="py-2 pr-4 whitespace-nowrap">
+                          <AdminRecordPayoutButton
+                            target={{
+                              id: row.partnerId,
+                              name: row.name,
+                              referralCode: roster?.referralCode ?? "",
+                              status: roster?.status ?? (row.onHold ? "disabled" : "approved"),
+                              payoutMethod: row.payoutMethod,
+                              payoutHandle: row.payoutHandle,
+                              amountOwed: row.amountOwed,
+                            }}
+                            minimumPayoutThreshold={ambassadorSettings.minimumPayoutThreshold}
+                          >
+                            Mark Paid
+                          </AdminRecordPayoutButton>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
-              <p className="mt-3 text-xs text-zinc-500">Use each partner&apos;s <span className="text-zinc-300">Mark Paid</span> action in the table below to complete a payout; the ambassador is emailed a confirmation automatically.</p>
+              <p className="mt-3 text-xs text-zinc-500">
+                <span className="text-zinc-300">Mark Paid</span> records money you have already sent and emails the ambassador a confirmation. Pay whenever you like — there is no waiting period.
+              </p>
             </div>
           )}
         </section>

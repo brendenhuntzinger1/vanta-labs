@@ -6,6 +6,8 @@ import type { CommissionTierRule } from "@/lib/ambassador-commission";
 import type { AmbassadorMarketingResource, AmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import type { FraudReviewRow, PayoutHistoryRow } from "@/lib/admin-ambassadors";
 import { formatDisplayDate } from "@/lib/format-date";
+import { describePayoutDestination } from "@/lib/payout-channels";
+import { AdminRecordPayoutDialog, type RecordPayoutTarget } from "@/components/admin-record-payout-dialog";
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -108,6 +110,8 @@ export function AdminPartnersClient({
   const [settingDrafts, setSettingDrafts] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // The ambassador whose payout is being recorded; null when the dialog is shut.
+  const [payoutTarget, setPayoutTarget] = useState<RecordPayoutTarget | null>(null);
 
   const liveSales = useMemo(() => rows.reduce((sum, row) => sum + row.totalRevenue, 0), [rows]);
   const paidCommissions = useMemo(() => rows.reduce((sum, row) => sum + row.paidCommissions, 0), [rows]);
@@ -261,41 +265,37 @@ export function AdminPartnersClient({
     }
   };
 
-  const handleMarkPaid = async (row: AdminPartnerRow) => {
-    let overrideMinimumThreshold = false;
-    if (row.approvedForPayoutCommissions < settings.minimumPayoutThreshold) {
-      const confirmed = window.confirm(
-        `${currency(row.approvedForPayoutCommissions)} is below the ${currency(settings.minimumPayoutThreshold)} minimum payout threshold. Pay out anyway?`,
-      );
-      if (!confirmed) return;
-      overrideMinimumThreshold = true;
-    }
-
-    // Marking paid RECORDS a transfer you've already made — it does not send
-    // money. Require the admin to affirm the funds were actually sent (the
-    // server enforces this too) before we flip commissions to paid and email
-    // the ambassador "we sent you $X".
-    const affirmed = window.confirm(
-      `Have you ALREADY sent ${currency(row.approvedForPayoutCommissions)} to ${row.name} (${row.referralCode})?\n\n` +
-      `Click OK ONLY if the money has actually been transferred. This records the payment and notifies the ambassador — it does not move any funds.`,
-    );
-    if (!affirmed) return;
-
-    const transactionReference = window.prompt(
-      "Optional: transfer/transaction reference (e.g. PayPal transaction ID). Leave blank to skip.",
-      "",
-    );
-    // Cancel on the reference prompt aborts the whole action (safer default).
-    if (transactionReference === null) return;
-
-    await applyPartnerAction(row.id, {
-      action: "mark_paid",
-      amount: row.approvedForPayoutCommissions,
-      note: "Bulk payout",
-      overrideMinimumThreshold,
-      confirmedTransferred: true,
-      transactionReference: transactionReference.trim() || null,
+  // Marking paid RECORDS a transfer you've already made — it does not send
+  // money. The dialog carries the confirmation, the threshold notice and the
+  // channel used; the server enforces every one of them again. There is no
+  // hold: what is owed is pending + approved, whether or not the sweep has
+  // reached it.
+  const openPayoutDialog = (row: AdminPartnerRow) => {
+    setPayoutTarget({
+      id: row.id,
+      name: row.name,
+      referralCode: row.referralCode,
+      status: row.status,
+      payoutMethod: row.payoutMethod,
+      payoutHandle: row.payoutHandle,
+      amountOwed: row.approvedForPayoutCommissions + row.pendingCommissions,
     });
+  };
+
+  const handlePayoutRecorded = async (payout: { amount: number }) => {
+    const name = payoutTarget?.name ?? "the ambassador";
+    setPayoutTarget(null);
+    setLoading(true);
+    setMessage(null);
+    try {
+      await refreshRows();
+      await refreshFraudAndPayouts();
+      setMessage(`Recorded ${currency(payout.amount)} paid to ${name}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Payout recorded, but the list could not be refreshed. Reload the page.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleRemove = async (row: AdminPartnerRow) => {
@@ -551,7 +551,6 @@ export function AdminPartnersClient({
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Commission Owed</p>
             <p className="mt-2 text-2xl font-semibold text-cyan-300">{currency(balanceOwed)}</p>
-            <p className="mt-1 text-[11px] text-zinc-500">{currency(approvedForPayoutCommissions)} ready · {currency(pendingCommissions)} holding</p>
           </div>
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Commission Paid</p>
@@ -935,6 +934,12 @@ export function AdminPartnersClient({
                     {row.social ? <p className="text-xs text-zinc-500 break-all">🔗 {row.social}</p> : null}
                     {row.followerCount != null ? <p className="text-xs text-zinc-500">👥 {row.followerCount.toLocaleString()} followers</p> : null}
                     <p className="mt-1 font-mono text-xs text-cyan-300/80">/r/{row.referralCode}</p>
+                    {/* Where they asked to be paid, beside the button that pays them. */}
+                    {describePayoutDestination(row.payoutMethod, row.payoutHandle) ? (
+                      <p className="mt-1 text-xs text-emerald-200/90">💸 {describePayoutDestination(row.payoutMethod, row.payoutHandle)}</p>
+                    ) : (
+                      <p className="mt-1 text-xs text-zinc-600">💸 No payout method on file</p>
+                    )}
                   </td>
                   <td className="px-2 py-2">{row.status}</td>
                   <td className="px-2 py-2 whitespace-nowrap">
@@ -1081,8 +1086,10 @@ export function AdminPartnersClient({
                       ) : null}
                       <button
                         type="button"
-                        disabled={loading || row.approvedForPayoutCommissions <= 0}
-                        onClick={() => handleMarkPaid(row)}
+                        // Live whenever anything is owed, whether or not the
+                        // sweep has reached it yet.
+                        disabled={loading || row.approvedForPayoutCommissions + row.pendingCommissions <= 0}
+                        onClick={() => openPayoutDialog(row)}
                         className="rounded border border-cyan-400/35 bg-cyan-500/10 px-2 py-1 text-xs text-cyan-100 disabled:opacity-50"
                       >Mark Paid</button>
                       <button
@@ -1157,6 +1164,7 @@ export function AdminPartnersClient({
                   <th className="px-2 py-2">Date Paid</th>
                   <th className="px-2 py-2">Ambassador</th>
                   <th className="px-2 py-2">Amount</th>
+                  <th className="px-2 py-2">Sent via</th>
                   <th className="px-2 py-2">Note</th>
                 </tr>
               </thead>
@@ -1166,6 +1174,7 @@ export function AdminPartnersClient({
                     <td className="px-2 py-2 text-xs text-zinc-400">{formatDate(row.createdAt)}</td>
                     <td className="px-2 py-2">{row.ambassadorName}</td>
                     <td className="px-2 py-2 font-semibold text-white">{currency(row.amount)}</td>
+                    <td className="px-2 py-2 text-xs text-zinc-400">{describePayoutDestination(row.payoutMethod, row.payoutHandle) ?? "-"}</td>
                     <td className="px-2 py-2 text-xs text-zinc-400">{row.note ?? "-"}</td>
                   </tr>
                 ))}
@@ -1175,6 +1184,15 @@ export function AdminPartnersClient({
         )}
       </section>
       </>) : null}
+
+      {payoutTarget ? (
+        <AdminRecordPayoutDialog
+          target={payoutTarget}
+          minimumPayoutThreshold={settings.minimumPayoutThreshold}
+          onClose={() => setPayoutTarget(null)}
+          onRecorded={handlePayoutRecorded}
+        />
+      ) : null}
     </div>
   );
 }
