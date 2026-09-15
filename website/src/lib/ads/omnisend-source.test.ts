@@ -239,8 +239,9 @@ describe("Omnisend receives page views only, and nothing identifying", () => {
     for (const path of files) {
       if (path === OMNISEND) continue; // the inline snippet defines it
       for (const line of executableSource(path).split("\n")) {
-        // A call on the vendor object, not the component's file name in an import.
-        if (!/\bomnisend\./.test(line)) continue;
+        // A call on the vendor object, not the component's file name in an
+        // import and not the API host in the server transport.
+        if (!/\bomnisend\./.test(line) || line.includes("omnisend.com")) continue;
         expect(/window\.omnisend\?\./.test(line), `${relative(path)} touches omnisend unguarded: ${line.trim()}`).toBe(true);
       }
     }

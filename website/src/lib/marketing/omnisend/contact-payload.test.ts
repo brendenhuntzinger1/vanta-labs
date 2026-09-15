@@ -1,0 +1,290 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildContactPayload,
+  normalizeE164,
+  splitName,
+  type ContactFacts,
+} from "@/lib/marketing/omnisend/contact-payload";
+
+// ---------------------------------------------------------------------------
+// The payload shape is the entire risk here. A wrong field name does not
+// error — Omnisend answers 200 and ignores the property, or records a channel
+// status we did not mean — so every name from spec §5.1 is pinned against
+// fixed inputs, exactly as meta-conversions.test.ts does for Meta.
+// ---------------------------------------------------------------------------
+
+const facts: ContactFacts = {
+  email: "Jane.Doe@Example.COM",
+  firstName: "Jane",
+  lastName: "Doe",
+  phone: "(312) 555-0142",
+  countryCode: "us",
+  state: "IL",
+  city: "Chicago",
+  postalCode: "60601",
+  emailConsent: { status: "subscribed", changedAt: "2026-09-01T12:00:00.000Z", source: "checkout" },
+  smsConsent: { status: "subscribed", changedAt: "2026-09-02T12:00:00.000Z", source: "account-settings" },
+  attested: true,
+  orders: 2,
+  totalSpent: 189.981,
+  firstOrderAt: "2026-08-01T15:00:00.000Z",
+  // 01:30Z on the 10th is 21:30 Eastern on the 9th; the date must say the 9th.
+  lastOrderAt: "2026-09-10T01:30:00.000Z",
+  referralCode: "JANE10",
+  link: { token: "v1.1760000000000.0123456789abcdef", endsAt: "2026-10-15T12:00:00.000Z" },
+  codes: { welcome: { code: "VLWELCOME-ABC234", endsAt: "2026-09-29T01:00:00.000Z" } },
+};
+
+type Identifier = Record<string, unknown>;
+const payload = buildContactPayload(facts) as {
+  identifiers: Identifier[];
+  tags: string[];
+  customProperties: Record<string, unknown>;
+} & Record<string, unknown>;
+
+describe("the contact envelope matches Omnisend's contacts reference", () => {
+  it("carries exactly the top-level fields the spec names, in a fixed order", () => {
+    expect(Object.keys(payload)).toEqual([
+      "identifiers", "firstName", "lastName", "countryCode", "state", "city", "postalCode", "tags", "customProperties",
+    ]);
+    expect(payload.firstName).toBe("Jane");
+    expect(payload.lastName).toBe("Doe");
+    expect(payload.countryCode).toBe("US");
+    expect(payload.state).toBe("IL");
+    expect(payload.city).toBe("Chicago");
+    expect(payload.postalCode).toBe("60601");
+  });
+
+  it("builds the email identifier with the channel status, its change time and the consent block", () => {
+    expect(payload.identifiers[0]).toEqual({
+      type: "email",
+      id: "jane.doe@example.com",
+      channels: { email: { status: "subscribed", statusChangedAt: "2026-09-01T12:00:00.000Z" } },
+      consent: { source: "checkout", createdAt: "2026-09-01T12:00:00.000Z" },
+      sendWelcomeMessage: false,
+    });
+  });
+
+  it("lowercases the address, because Omnisend identifiers are case-sensitive and the store's are not", () => {
+    expect(payload.identifiers[0].id).toBe("jane.doe@example.com");
+    const spaced = buildContactPayload({ ...facts, email: "  MIXED@Case.Org " }) as { identifiers: Identifier[] };
+    expect(spaced.identifiers[0].id).toBe("mixed@case.org");
+  });
+
+  it("builds the phone identifier in E.164 with the SMS channel and its consent", () => {
+    expect(payload.identifiers).toHaveLength(2);
+    expect(payload.identifiers[1]).toEqual({
+      type: "phone",
+      id: "+13125550142",
+      channels: { sms: { status: "subscribed", statusChangedAt: "2026-09-02T12:00:00.000Z" } },
+      consent: { source: "account-settings", createdAt: "2026-09-02T12:00:00.000Z" },
+    });
+  });
+
+  it("omits the consent block when the status has no source, since nonSubscribed is not consent", () => {
+    const known = buildContactPayload({
+      ...facts,
+      emailConsent: { status: "nonSubscribed", changedAt: "2026-09-03T00:00:00.000Z" },
+      smsConsent: null,
+    }) as { identifiers: Identifier[] };
+    expect(known.identifiers[0]).toEqual({
+      type: "email",
+      id: "jane.doe@example.com",
+      channels: { email: { status: "nonSubscribed", statusChangedAt: "2026-09-03T00:00:00.000Z" } },
+      sendWelcomeMessage: false,
+    });
+    expect(known.identifiers[0]).not.toHaveProperty("consent");
+  });
+
+  it("carries an unsubscribed status verbatim, with its change time", () => {
+    const off = buildContactPayload({
+      ...facts,
+      emailConsent: { status: "unsubscribed", changedAt: "2026-09-04T09:00:00.000Z" },
+    }) as { identifiers: Identifier[] };
+    expect(off.identifiers[0].channels).toEqual({ email: { status: "unsubscribed", statusChangedAt: "2026-09-04T09:00:00.000Z" } });
+  });
+});
+
+describe("the phone identifier exists only when there is a number to send and consent to send it under", () => {
+  it("is omitted when the phone is absent", () => {
+    for (const phone of [undefined, null, "", "   "]) {
+      const built = buildContactPayload({ ...facts, phone }) as { identifiers: Identifier[] };
+      expect(built.identifiers).toHaveLength(1);
+      expect(built.identifiers[0].type).toBe("email");
+    }
+  });
+
+  it("is omitted when the number does not normalise to E.164", () => {
+    const built = buildContactPayload({ ...facts, phone: "555-0142" }) as { identifiers: Identifier[] };
+    expect(built.identifiers).toHaveLength(1);
+  });
+
+  it("is omitted when there is a number but no SMS consent record (spec §9: phone only with SMS consent)", () => {
+    for (const smsConsent of [undefined, null]) {
+      const built = buildContactPayload({ ...facts, smsConsent }) as { identifiers: Identifier[] };
+      expect(built.identifiers).toHaveLength(1);
+    }
+  });
+
+  it("is sent as unsubscribed when the customer opted out, so Omnisend records the opt-out", () => {
+    const built = buildContactPayload({
+      ...facts,
+      smsConsent: { status: "unsubscribed", changedAt: "2026-09-05T10:00:00.000Z" },
+    }) as { identifiers: Identifier[] };
+    expect(built.identifiers[1]).toEqual({
+      type: "phone",
+      id: "+13125550142",
+      channels: { sms: { status: "unsubscribed", statusChangedAt: "2026-09-05T10:00:00.000Z" } },
+    });
+  });
+});
+
+describe("normalizeE164", () => {
+  it.each([
+    ["(312) 555-0142", "+13125550142"],
+    ["312.555.0142", "+13125550142"],
+    ["1 312 555 0142", "+13125550142"],
+    ["+1 (312) 555-0142", "+13125550142"],
+    ["+44 20 7946 0958", "+442079460958"],
+    ["+12345678", "+12345678"],
+    ["+123456789012345", "+123456789012345"],
+  ])("%s → %s", (raw, expected) => {
+    expect(normalizeE164(raw)).toBe(expected);
+  });
+
+  it.each([
+    [null], [undefined], [""], ["   "], ["555-0142"], ["2 312 555 0142"], ["312555014"], ["+1234567"], ["+1234567890123456"], ["not a number"],
+  ])("refuses %s", (raw) => {
+    expect(normalizeE164(raw as string | null | undefined)).toBeNull();
+  });
+
+  it("only assumes the North American trunk for a North American default country", () => {
+    expect(normalizeE164("3125550142", "CA")).toBe("+13125550142");
+    expect(normalizeE164("3125550142", "ca")).toBe("+13125550142");
+    expect(normalizeE164("3125550142", "GB")).toBeNull();
+    // An explicit prefix is trusted regardless of the default.
+    expect(normalizeE164("+442079460958", "GB")).toBe("+442079460958");
+  });
+});
+
+describe("tags", () => {
+  it("always carry the source, and customer / attested only when earned", () => {
+    expect(payload.tags).toEqual(["source: website", "customer", "attested"]);
+    const fresh = buildContactPayload({ ...facts, orders: 0, attested: false }) as { tags: string[] };
+    expect(fresh.tags).toEqual(["source: website"]);
+    const buyer = buildContactPayload({ ...facts, orders: 1, attested: false }) as { tags: string[] };
+    expect(buyer.tags).toEqual(["source: website", "customer"]);
+    const attested = buildContactPayload({ ...facts, orders: 0, attested: true }) as { tags: string[] };
+    expect(attested.tags).toEqual(["source: website", "attested"]);
+  });
+});
+
+describe("custom properties", () => {
+  it("are exactly the vl_ set from spec §5.1, with dates as YYYY-MM-DD in the display zone", () => {
+    expect(payload.customProperties).toEqual({
+      vl_link: "v1.1760000000000.0123456789abcdef",
+      vl_link_ends: "2026-10-15",
+      vl_attested: true,
+      vl_orders: 2,
+      vl_total_spent: 189.98,
+      vl_first_order_at: "2026-08-01",
+      vl_last_order_at: "2026-09-09",
+      vl_referral_code: "JANE10",
+      vl_welcome_code: "VLWELCOME-ABC234",
+      // 01:00Z on the 29th is 9 pm Eastern on the 28th: the code is dead
+      // before the UTC date arrives, so the email must not name the 29th.
+      vl_welcome_ends: "2026-09-28",
+      vl_winback_code: "",
+      vl_winback_ends: "",
+      vl_recovery_code: "",
+      vl_recovery_ends: "",
+      vl_welcome_ready: "yes",
+      vl_winback_ready: "no",
+      vl_recovery_ready: "no",
+    });
+  });
+
+  it("send every absent value as the empty string, which is how Omnisend removes a property", () => {
+    const bare = buildContactPayload({
+      email: "someone@example.com",
+      emailConsent: { status: "nonSubscribed", changedAt: "2026-09-03T00:00:00.000Z" },
+      attested: false,
+      orders: 0,
+      totalSpent: 0,
+    }) as { customProperties: Record<string, unknown> } & Record<string, unknown>;
+    expect(bare.customProperties).toEqual({
+      vl_link: "",
+      vl_link_ends: "",
+      vl_attested: false,
+      vl_orders: 0,
+      vl_total_spent: 0,
+      vl_first_order_at: "",
+      vl_last_order_at: "",
+      vl_referral_code: "",
+      vl_welcome_code: "",
+      vl_welcome_ends: "",
+      vl_winback_code: "",
+      vl_winback_ends: "",
+      vl_recovery_code: "",
+      vl_recovery_ends: "",
+      vl_welcome_ready: "no",
+      vl_winback_ready: "no",
+      vl_recovery_ready: "no",
+    });
+    // Profile fields are OMITTED rather than blanked, so a value Omnisend
+    // already holds from a form is not erased; the country still defaults.
+    expect(Object.keys(bare)).toEqual(["identifiers", "countryCode", "tags", "customProperties"]);
+    expect(bare.countryCode).toBe("US");
+  });
+
+  it("carry every code kind under its own pair of names", () => {
+    const all = buildContactPayload({
+      ...facts,
+      codes: {
+        welcome: { code: "VLWELCOME-AAAAAA", endsAt: "2026-09-20T12:00:00.000Z" },
+        winback: { code: "VLBACK-BBBBBB", endsAt: "2026-09-21T12:00:00.000Z" },
+        recovery: { code: "VLCART-CCCCCC", endsAt: "2026-09-22T12:00:00.000Z" },
+      },
+    }) as { customProperties: Record<string, unknown> };
+    expect(all.customProperties).toMatchObject({
+      vl_welcome_code: "VLWELCOME-AAAAAA",
+      vl_welcome_ends: "2026-09-20",
+      vl_winback_code: "VLBACK-BBBBBB",
+      vl_winback_ends: "2026-09-21",
+      vl_recovery_code: "VLCART-CCCCCC",
+      vl_recovery_ends: "2026-09-22",
+      vl_welcome_ready: "yes",
+      vl_winback_ready: "yes",
+      vl_recovery_ready: "yes",
+    });
+  });
+
+  it("keep vl_orders an integer and vl_total_spent a number at two places, never negative or NaN", () => {
+    const odd = buildContactPayload({ ...facts, orders: 2.9, totalSpent: Number.NaN }) as { customProperties: Record<string, unknown> };
+    expect(odd.customProperties.vl_orders).toBe(2);
+    expect(odd.customProperties.vl_total_spent).toBe(0);
+    const negative = buildContactPayload({ ...facts, orders: -1, totalSpent: 10.005 }) as { customProperties: Record<string, unknown> };
+    expect(negative.customProperties.vl_orders).toBe(0);
+    expect(negative.customProperties.vl_total_spent).toBe(10.01);
+  });
+
+  it("send an unparseable date as the empty string rather than an Invalid Date", () => {
+    const broken = buildContactPayload({ ...facts, lastOrderAt: "not a date" }) as { customProperties: Record<string, unknown> };
+    expect(broken.customProperties.vl_last_order_at).toBe("");
+  });
+});
+
+describe("splitName", () => {
+  it.each([
+    ["Jane Doe", { firstName: "Jane", lastName: "Doe" }],
+    ["Jane Q Doe", { firstName: "Jane", lastName: "Q Doe" }],
+    ["  Jane   Doe  ", { firstName: "Jane", lastName: "Doe" }],
+    ["Jane", { firstName: "Jane", lastName: null }],
+    ["", { firstName: null, lastName: null }],
+    ["   ", { firstName: null, lastName: null }],
+    [null, { firstName: null, lastName: null }],
+    [undefined, { firstName: null, lastName: null }],
+  ])("%j", (full, expected) => {
+    expect(splitName(full as string | null | undefined)).toEqual(expected);
+  });
+});
