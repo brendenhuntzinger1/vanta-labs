@@ -7,25 +7,25 @@ import { describe, expect, it } from "vitest";
  *
  * Omnisend is the store's email and SMS marketing platform, and its snippet is
  * a tracker: it sets a session and a visitor identifier, reports page views,
- * and can identify a contact. The same cheap mistakes the pixel suites guard
- * against apply here, plus one of its own:
+ * and can identify a contact. It is loaded for EVERY visitor, before and
+ * regardless of the cookie banner — the owner's decision, the same one made
+ * for the Meta Pixel. That makes the guarantees here MORE important than for
+ * the gated pixels, not less:
  *
- * - the launcher injected from two places, so every visit is counted twice;
- * - the script loading before consent, which breaks the promise the banner
- *   makes ("load only if you accept") and the cookie policy's "Decline stops
- *   all non-essential storage";
- * - an email address handed to `identifyContact` from client code, which the
- *   vendor docs invite ("call the function as soon as the customer logs in")
- *   and which no policy paragraph describes;
- * - the policies not naming it. The privacy policy promises that any new
- *   tracker is named, with the data shared and the purpose, BEFORE it is
- *   switched on.
+ * - The policies must describe it honestly. A "nothing loads if you decline"
+ *   sentence that sweeps Omnisend in is a false statement about a live script.
+ * - No email address may ever reach it from client code. The script is on
+ *   every page for everyone, so an `identifyContact` call — which the vendor
+ *   docs invite "as soon as the customer logs in" — would hand a raw address
+ *   to a third party at scale, and no policy paragraph describes that.
  *
- * So they are asserted against the source tree itself, as for the pixels.
+ * Plus the usual: one loader, one brand id, one mount, the environment gate.
  */
 
 const SRC = join(process.cwd(), "src");
 const OMNISEND = join(SRC, "components", "omnisend-snippet.tsx");
+const ROUTE_VIEWS = join(SRC, "components", "omnisend-route-views.tsx");
+const META_PIXEL = join(SRC, "components", "meta-pixel.tsx");
 const LAYOUT = join(SRC, "app", "layout.tsx");
 const BANNER = join(SRC, "components", "cookie-consent.tsx");
 const LEGAL = join(SRC, "lib", "legal-content.ts");
@@ -58,12 +58,12 @@ function executableSource(path: string): string {
     .join("\n");
 }
 
-/** The snippet actually injected into the page, between the <Script> tags. */
+/** The snippet actually written into the document, inside the inline <script>. */
 function injectedSnippet(): string {
   const source = read(OMNISEND);
-  const start = source.indexOf("<Script");
-  const end = source.indexOf("</Script>");
-  expect(start, "omnisend-snippet.tsx no longer renders a <Script>").toBeGreaterThan(-1);
+  const start = source.indexOf("__html: `");
+  expect(start, "omnisend-snippet.tsx no longer renders an inline <script>").toBeGreaterThan(-1);
+  const end = source.indexOf("`", start + "__html: `".length);
   expect(end).toBeGreaterThan(start);
   return source.slice(start, end);
 }
@@ -114,67 +114,112 @@ describe("exactly one Omnisend data source", () => {
     expect(snippet).not.toContain(BRAND_ID);
   });
 
-  it("is mounted once, globally, from the root layout", () => {
+  it("is rendered on the SERVER, so it reaches the HTML without JavaScript", () => {
+    // Omnisend's own installation check reads the document. A client component
+    // is absent from the served HTML, so it could never be verified.
+    const source = read(OMNISEND);
+    expect(source).not.toMatch(/^"use client";/m);
+    expect(source).not.toContain('from "next/script"');
+    expect(source).toContain("dangerouslySetInnerHTML");
+  });
+
+  it("is mounted once, globally, from the root layout, as the last thing in <body>", () => {
     const mounts = files.filter((path) => /<OmnisendSnippet\s*\/>/.test(read(path)));
     expect(mounts.map(relative)).toEqual(["src/app/layout.tsx"]);
-    // Inside the SAME Suspense boundary as the three pixels: all of them call
-    // useSearchParams, and a second boundary is a second place to fall out of step.
+    // "Right before the closing </body> tag" is where Omnisend's install
+    // screen asks for it, so nothing else is rendered after it.
     const layout = read(LAYOUT);
-    const start = layout.indexOf("<TikTokPixel />");
-    const boundary = layout.slice(start, layout.indexOf("</Suspense>", start));
-    expect(boundary).toContain("<OmnisendSnippet />");
+    const mount = layout.indexOf("<OmnisendSnippet />");
+    const bodyEnd = layout.lastIndexOf("</body>");
+    expect(mount).toBeGreaterThan(-1);
+    expect(bodyEnd).toBeGreaterThan(mount);
+    expect(layout.slice(mount + "<OmnisendSnippet />".length, bodyEnd)).not.toMatch(/<[A-Za-z]/);
   });
 });
 
-describe("the Omnisend script is gated on consent, exactly like the three pixels", () => {
-  const source = read(OMNISEND);
+describe("Omnisend is ungated by consent, and the policies say so", () => {
+  const snippet = read(OMNISEND);
+  const routeViews = read(ROUTE_VIEWS);
+  const banner = read(BANNER);
+  const legal = read(LEGAL);
+  const cookiesStart = legal.indexOf('title: "Cookie Policy"');
+  const privacy = legal.slice(0, cookiesStart);
+  const cookies = legal.slice(cookiesStart);
 
-  it("reads the shared consent module, not its own copy of the key", () => {
-    expect(source).toContain('from "@/lib/cookie-consent-client"');
-    expect(source).toContain("hasAcceptedConsent()");
-    expect(source).not.toContain('"vl_cookie_consent"');
+  it("does not consult the consent store at all", () => {
+    for (const source of [snippet, routeViews]) {
+      expect(source).not.toContain("cookie-consent-client");
+      expect(source).not.toContain("hasAcceptedConsent");
+    }
+    expect(snippet).not.toContain("consentManager");
   });
 
-  it("renders nothing at all until consent is recorded", () => {
-    // Not Omnisend's consent-signal API, which would fetch the launcher first
-    // and then ask it to behave: the launcher is never fetched, so there is no
-    // third-party request, no cookie, and nothing to revoke.
-    expect(source).toContain("if (!accepted) return null;");
-    // Executable source: the component documents the API it declines to use.
-    expect(executableSource(OMNISEND)).not.toContain("consentManager");
+  it("still applies the environment gate on the server, exactly as the Meta pixel does", () => {
+    for (const source of [snippet, read(META_PIXEL)]) {
+      expect(source).toContain("adsReportingAllowed({");
+      expect(source).toContain("vercelEnv: process.env.VERCEL_ENV ?? process.env.NEXT_PUBLIC_VERCEL_ENV");
+      expect(source).toContain("nodeEnv: process.env.NODE_ENV");
+    }
+    expect(snippet).toContain("if (!snippetIsPermittedHere()) return null;");
+    expect(snippet.indexOf("if (!snippetIsPermittedHere()) return null;")).toBeLessThan(snippet.indexOf("dangerouslySetInnerHTML"));
   });
 
-  it("starts from declined rather than assuming consent while it checks", () => {
-    expect(source).toContain("const [accepted, setAccepted] = useState(false);");
-  });
-
-  it("reacts to consent being granted later in the visit", () => {
-    expect(source).toContain("subscribeToConsent(sync)");
-  });
-
-  it("applies the environment gate before the consent gate (K-16)", () => {
-    // A preview deployment or a QA run must never feed the live Omnisend
-    // account: every page view there would be a real visitor to Omnisend, and
-    // a browse-abandonment automation could email someone over it.
-    expect(source).toContain("browserAdsReportingAllowed");
-    expect(source).toContain("if (!adsAllowed) return null;");
-    expect(source.indexOf("if (!adsAllowed) return null;")).toBeLessThan(source.indexOf("if (!accepted) return null;"));
-  });
-
-  it("reports client-side navigations as page views, and only through the vendor queue", () => {
+  it("reports client-side navigations as page views from a client component, guarded", () => {
     // A single-page app: after the first load, navigation never reloads the
     // document, so without this every visit is exactly one page view.
-    expect(source).toContain("usePathname");
-    expect(source).toContain("initialPageSent");
-    expect(executableSource(OMNISEND)).toContain('window.omnisend?.push(["track", "$pageViewed"]);');
+    expect(routeViews).toMatch(/^"use client";/m);
+    expect(routeViews).toContain("usePathname");
+    expect(routeViews).toContain("initialPageSent");
+    expect(executableSource(ROUTE_VIEWS)).toContain('window.omnisend?.push(["track", "$pageViewed"]);');
+    expect(snippet).toContain("<OmnisendRouteViews />");
+  });
+
+  it("the banner names Omnisend as loading either way, and keeps it out of the gated sentence", () => {
+    expect(banner).toMatch(/Meta Pixel loads either way[^.]*Omnisend/);
+    expect(banner).toMatch(/Analytics and our advertising pixels \(TikTok, Snapchat and Reddit\) load only if you accept/);
+    expect(banner).not.toMatch(/Omnisend[^.]*only if you accept/);
+  });
+
+  it("the privacy policy describes Omnisend as always present, with the data shared and the purpose", () => {
+    expect(cookiesStart).toBeGreaterThan(-1);
+    expect(privacy).toMatch(/\*\*Omnisend is present on every page, whether or not you accept cookies\.\*\*/);
+    expect(privacy).toMatch(/Declining cookies does not stop the Omnisend script/);
+    expect(privacy).toMatch(/When you accept, five things run/);
+    expect(privacy).toMatch(/Three more — the Meta Pixel, the Google Ads tag and the Omnisend script — are present whether or not you accept/);
+    expect(privacy).toMatch(/email and text-message marketing/);
+    expect(privacy).toMatch(/Omnisend is present[\s\S]{0,1500}?told about page views only/);
+  });
+
+  it("the cookie policy describes Omnisend as not controlled by the banner", () => {
+    const start = cookies.indexOf("**Omnisend — always present, and not controlled by this banner.**");
+    expect(start).toBeGreaterThan(-1);
+    const bullet = cookies.slice(start, cookies.indexOf("\n\n", start));
+    expect(bullet).toMatch(/loads on every page whether you accept or decline/);
+    expect(bullet).toMatch(/Declining cookies does not stop it/);
+    expect(bullet).toMatch(/never sends it your email address/);
+  });
+
+  it("never sweeps Omnisend into a \"nothing loads if you decline\" promise", () => {
+    for (const promise of legal.match(/no request (?:is made to|reaches)[^.]*/gi) ?? []) {
+      expect(promise, "Omnisend is inside a \"nothing reaches\" promise, which is false").not.toContain("Omnisend");
+    }
+    expect(legal).not.toMatch(/none of (them|these|the four|the five|the six)[^.]*(is|are) (ever )?loaded[^.]*Omnisend/i);
+    expect(legal).not.toMatch(/Omnisend[^.]*loads only if you accept/i);
+    expect(legal).not.toMatch(/Omnisend[^.]*(is|are) never (loaded|fetched)/i);
+    expect(banner).not.toMatch(/Omnisend[^.]*only if you accept/);
+  });
+
+  it("counts it, so the closing promise stays true", () => {
+    // The closing sentence counts the trackers. Adding one without recounting
+    // publishes a false statement in the very sentence that promises honesty.
+    expect(privacy).not.toMatch(/beyond the five named above/);
+    expect(privacy).toMatch(/beyond the six named above/);
+    expect(privacy).not.toMatch(/narrowest of the five/);
   });
 });
 
 describe("Omnisend receives page views only, and nothing identifying", () => {
   it("never calls identifyContact from anywhere in the codebase", () => {
-    // Omnisend's docs say to call it "as soon as the customer logs in". Doing
-    // so would hand a raw email address to a third party from client code,
-    // which no other integration here does and no policy paragraph describes.
     for (const path of files) {
       expect(executableSource(path), `${relative(path)} identifies a contact to Omnisend`).not.toContain("identifyContact");
     }
@@ -183,7 +228,7 @@ describe("Omnisend receives page views only, and nothing identifying", () => {
   it("sends only the page-view event, so the policy's 'page views only' is true", () => {
     const names = new Set<string>();
     for (const path of files) {
-      for (const match of executableSource(path).matchAll(/omnisend\.push\(\[\s*["']track["'],\s*["']([^"']+)["']/g)) {
+      for (const match of executableSource(path).matchAll(/omnisend\??\.push\(\[\s*["']track["'],\s*["']([^"']+)["']/g)) {
         names.add(match[1]);
       }
     }
@@ -192,57 +237,12 @@ describe("Omnisend receives page views only, and nothing identifying", () => {
 
   it("only ever calls omnisend optionally outside the loader, so a blocked SDK is a no-op", () => {
     for (const path of files) {
-      if (path === OMNISEND) continue;
+      if (path === OMNISEND) continue; // the inline snippet defines it
       for (const line of executableSource(path).split("\n")) {
         // A call on the vendor object, not the component's file name in an import.
         if (!/\bomnisend\./.test(line)) continue;
         expect(/window\.omnisend\?\./.test(line), `${relative(path)} touches omnisend unguarded: ${line.trim()}`).toBe(true);
       }
     }
-  });
-});
-
-describe("the disclosure names Omnisend", () => {
-  const banner = read(BANNER);
-  const legal = read(LEGAL);
-  const cookiesStart = legal.indexOf('title: "Cookie Policy"');
-  const privacy = legal.slice(0, cookiesStart);
-  const cookies = legal.slice(cookiesStart);
-
-  it("names it on the consent banner, where the choice is made", () => {
-    expect(banner).toMatch(/Omnisend/);
-    // In the held-back sentence, not in the Google or Meta ones.
-    expect(banner).toMatch(/Omnisend[^.]*only if you accept/);
-  });
-
-  it("names it in the privacy policy with the data shared and the purpose", () => {
-    expect(cookiesStart).toBeGreaterThan(-1);
-    expect(privacy).toMatch(/\*\*Omnisend\.\*\*/);
-    expect(privacy).toMatch(/When you accept, six things run/);
-    expect(privacy).toMatch(/Omnisend[^.]*loads only if you accept/i);
-    expect(privacy).toMatch(/page views/);
-    expect(privacy).toMatch(/email and text-message marketing/);
-  });
-
-  it("names it in the cookie policy as something Decline prevents", () => {
-    expect(cookies).toMatch(/\*\*Omnisend — only if you accept\.\*\*/);
-    expect(cookies).toMatch(/Omnisend receives nothing/);
-  });
-
-  it("no longer claims there is nothing beyond the five", () => {
-    // The closing sentence counted the trackers. Adding one without recounting
-    // publishes a false statement in the very sentence that promises honesty.
-    expect(privacy).not.toMatch(/beyond the five named above/);
-    expect(privacy).toMatch(/beyond the six named above/);
-    expect(privacy).not.toMatch(/narrowest of the five/);
-  });
-
-  it("never describes Omnisend the way the ungated Meta and Google tags are described", () => {
-    expect(legal).not.toMatch(/Omnisend[^.]*(loads on every page|present on every page|loads either way)/i);
-  });
-
-  it("does not claim Omnisend receives things it is never sent", () => {
-    // Page views only: no shopping actions, no email address from this site.
-    expect(privacy).toMatch(/Omnisend[\s\S]{0,1200}?told about page views only/);
   });
 });
