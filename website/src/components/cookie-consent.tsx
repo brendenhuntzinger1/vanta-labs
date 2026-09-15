@@ -180,7 +180,8 @@ export function CookieConsent({ initiallyOpen = false }: { initiallyOpen?: boole
   // the notice, not decoration, and it is not negotiable against layout.
   //
   // GOOGLE AND META ARE NAMED IN SEPARATE SENTENCES BECAUSE THEY BEHAVE
-  // DIFFERENTLY. The three pixels are not loaded at all before Accept; the
+  // DIFFERENTLY. The three pixels and the Omnisend script are not loaded at
+  // all before Accept; the
   // Meta pixel is loaded on every page, ungated, by the owner's decision (see
   // components/meta-pixel.tsx and both policies); and the Google tag is
   // loaded on every page with consent mode denying every storage signal until
@@ -192,7 +193,7 @@ export function CookieConsent({ initiallyOpen = false }: { initiallyOpen?: boole
     <div className="vl-consent-bar" role="region" aria-label="Cookie consent">
       <div className="vl-consent-inner">
         <p className="vl-consent-copy">
-          Essential cookies run the store. Analytics and our advertising pixels (TikTok, Snapchat and Reddit) load only if you accept. Our Google Ads tag loads either way, but stores nothing and identifies no one unless you accept. Our Meta Pixel loads either way and is not controlled by this choice.{" "}
+          Essential cookies run the store. Analytics, our Omnisend marketing script and our advertising pixels (TikTok, Snapchat and Reddit) load only if you accept. Our Google Ads tag loads either way, but stores nothing and identifies no one unless you accept. Our Meta Pixel loads either way and is not controlled by this choice.{" "}
           {/* py-1.5 -my-1.5 gives the link a comfortably-over-24px tap box
               (WCAG 2.2 AA 2.5.8) without changing the line box it sits in.
               py-1 landed on exactly 24px, which rounds under the threshold. */}

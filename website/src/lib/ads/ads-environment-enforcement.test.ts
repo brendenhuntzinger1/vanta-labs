@@ -335,7 +335,7 @@ describe("every pixel component consults the gate", () => {
     expect(read("meta-pixel.tsx")).toContain("if (!pixelIsPermittedHere()) return null;");
   });
 
-  it.each(["tiktok-pixel.tsx", "snap-pixel.tsx", "reddit-pixel.tsx", "consented-analytics.tsx"])(
+  it.each(["tiktok-pixel.tsx", "snap-pixel.tsx", "reddit-pixel.tsx", "consented-analytics.tsx", "omnisend-snippet.tsx"])(
     "%s imports the gate and refuses before rendering the SDK",
     (file) => {
       const source = read(file);
@@ -350,7 +350,7 @@ describe("every pixel component consults the gate", () => {
   );
 
   it("resolves the verdict in an effect, not during render, so hydration cannot mismatch", () => {
-    for (const file of ["tiktok-pixel.tsx", "snap-pixel.tsx", "reddit-pixel.tsx", "consented-analytics.tsx"]) {
+    for (const file of ["tiktok-pixel.tsx", "snap-pixel.tsx", "reddit-pixel.tsx", "consented-analytics.tsx", "omnisend-snippet.tsx"]) {
       const source = read(file);
       // Starting closed is what makes a hydration failure fail safe.
       expect(source).toContain("const [adsAllowed, setAdsAllowed] = useState(false);");
