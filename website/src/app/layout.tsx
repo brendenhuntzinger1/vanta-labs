@@ -37,6 +37,7 @@ import { ConsentedAnalytics } from "@/components/consented-analytics";
 import { TikTokPixel } from "@/components/tiktok-pixel";
 import { SnapPixel } from "@/components/snap-pixel";
 import { RedditPixel } from "@/components/reddit-pixel";
+import { OmnisendSnippet } from "@/components/omnisend-snippet";
 import { MetaPixel } from "@/components/meta-pixel";
 import { buildAdvancedMatching } from "@/lib/ads/advanced-matching";
 import { GoogleAdsTag } from "@/components/google-ads-tag";
@@ -392,6 +393,13 @@ export default async function RootLayout({
             It exists to answer, from inside an app's own browser, which build
             that browser was handed. Delete this line and the file to remove it. */}
         <EntryDiagnostics />
+        {/* OMNISEND IS SERVER-RENDERED AND UNGATED, LIKE THE META PIXEL, AND
+            IT IS LAST: Omnisend's install screen asks for the snippet "right
+            before the closing </body> tag". Present in the served HTML for
+            every visitor, before and regardless of the cookie banner — the
+            owner's decision, documented in components/omnisend-snippet.tsx
+            and in both policies. */}
+        <OmnisendSnippet />
       </body>
     </html>
   );

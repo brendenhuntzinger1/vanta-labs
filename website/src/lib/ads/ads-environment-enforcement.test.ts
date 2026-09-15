@@ -326,13 +326,14 @@ describe("every pixel component consults the gate", () => {
   it("the server-rendered Meta pixel resolves the same gate on the server, like the Google tag", () => {
     // Ungated by consent, but never by environment: a preview deployment or a
     // local run must not report into the live ad account.
-    for (const file of ["meta-pixel.tsx", "google-ads-tag.tsx"]) {
+    for (const file of ["meta-pixel.tsx", "google-ads-tag.tsx", "omnisend-snippet.tsx"]) {
       const source = read(file);
       expect(source).toContain("adsReportingAllowed({");
       expect(source).toContain("vercelEnv: process.env.VERCEL_ENV ?? process.env.NEXT_PUBLIC_VERCEL_ENV");
       expect(source).toContain("nodeEnv: process.env.NODE_ENV");
     }
     expect(read("meta-pixel.tsx")).toContain("if (!pixelIsPermittedHere()) return null;");
+    expect(read("omnisend-snippet.tsx")).toContain("if (!snippetIsPermittedHere()) return null;");
   });
 
   it.each(["tiktok-pixel.tsx", "snap-pixel.tsx", "reddit-pixel.tsx", "consented-analytics.tsx"])(
