@@ -160,7 +160,10 @@ export async function spin(input: {
     ...(reward.kind === "free_product" ? { quantity: 1 } : {}),
     min_subtotal_cents: prize.minSubtotalCents,
     expires_at: expiresAt,
-    created_at: new Date(now).toISOString(),
+    // `issued_at`, not `created_at`: this table names it the former and has no
+    // column by the latter. Written explicitly rather than left to the now()
+    // default so an injected clock is honoured end to end.
+    issued_at: new Date(now).toISOString(),
   });
 
   if (error) {
