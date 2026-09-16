@@ -468,7 +468,9 @@ async function buildContactItem(email: string, dryRun: boolean): Promise<BuiltCo
     const { codes, mintedWinback } = await gatherCodes(email, facts, nowMs, dryRun);
     return { payload: buildContactPayload({ ...facts, link, codes }), mintedWinback };
   } catch (error) {
-    console.error(LOG, "contact build failed", { email, error });
+    // The address is the contact's identity and stays out of the log stream;
+    // the domain is enough to tell a broken import from a broken address.
+    console.error(LOG, "contact build failed", { domain: email.slice(email.indexOf("@") + 1), error });
     return null;
   }
 }
