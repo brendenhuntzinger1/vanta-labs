@@ -295,7 +295,7 @@ describe("custom properties", () => {
 describe("the recovery offer properties", () => {
   const gift = {
     text: "a free GHK-Cu 50mg and a free Recon Water",
-    link: "https://www.vantalabsresearch.com/api/email/omnisend-link?t=v1.1.aa&e=jane.doe%40example.com&to=%2Fapi%2Femail%2Ftrack%2Fclick",
+    link: "https://www.vantalabsresearch.com/api/email/omnisend-link?t=v2.aa&to=%2Fapi%2Femail%2Ftrack%2Fclick",
     minCartCents: 10_000,
     // 03:00Z on the 27th is 11 pm Eastern on the 26th: the gift dies before
     // the UTC date arrives, so the email must say the 26th.

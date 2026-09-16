@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { SUBJECTS, TEMPLATES, TEMPLATE_KEYS } from "./templates.mjs";
 import { SMS } from "./sms.mjs";
 
-const GRANT_LINK = "/api/email/omnisend-link?t=[[contact.custom_properties.vl_link]]&e=[[contact.email]]&";
+const GRANT_LINK = "/api/email/omnisend-link?t=[[contact.custom_properties.vl_link]]&";
 const GIFT_LINK = "[[contact.custom_properties.vl_recovery_gift_link]]";
 
 const EXPECTED_KEYS = [

@@ -91,7 +91,7 @@ function absoluteImage(image: string | null | undefined, origin: string): string
 export function contactLinkFor(email: string, campaign: string): (path: string) => Promise<string> {
   return async (path: string) => {
     const token = (await signOmnisendLink(email)) ?? "";
-    return `${siteUrl()}/api/email/omnisend-link?t=${token}&e=${encodeURIComponent(email)}&to=${encodeURIComponent(path)}&utm_source=omnisend&utm_medium=email&utm_campaign=${encodeURIComponent(campaign)}`;
+    return `${siteUrl()}/api/email/omnisend-link?t=${token}&to=${encodeURIComponent(path)}&utm_source=omnisend&utm_medium=email&utm_campaign=${encodeURIComponent(campaign)}`;
   };
 }
 

@@ -12,10 +12,11 @@ export const dynamic = "force-dynamic";
  *
  * Omnisend sends the mail, so it cannot mint the per-recipient browse grant
  * the in-house click routes mint. Instead every contact carries a signed
- * token in the custom property `vl_link` (link-token.ts), every template link
- * hands it back here with the contact's address, and this route does what
- * /api/email/click does on the far side of its own signature check: verify,
- * check attestation, mint the grant, stamp attribution, redirect.
+ * token in the custom property `vl_link` (link-token.ts) with the address
+ * sealed inside it, every template link hands it back here, and this route
+ * does what /api/email/click does on the far side of its own signature check:
+ * open the token, check attestation, mint the grant, stamp attribution,
+ * redirect. The address is never in the URL.
  *
  * THE REDIRECT TARGET NEVER COMES FROM THE REQUEST UNVALIDATED. The in-house
  * routes read their destination from a database row; Omnisend has no row for
@@ -73,7 +74,6 @@ export async function GET(request: NextRequest) {
 
   try {
     const params = request.nextUrl.searchParams;
-    const email = (params.get("e") ?? "").trim().toLowerCase();
     const token = params.get("t");
     const campaign = label(params.get("utm_campaign"));
     // Two media exist; anything else is a typo in a template, filed as email
@@ -91,14 +91,16 @@ export async function GET(request: NextRequest) {
     );
     login.searchParams.set("next", sitePathOf(destination));
 
-    // The token is signed over the address, so a contact's link replayed under
-    // another contact's address fails here. An absent address cannot be
-    // verified against anything and is refused the same way.
-    const verified = email !== "" && (await verifyOmnisendLink(token, email)) !== null;
+    // THE ADDRESS COMES FROM INSIDE THE TOKEN AND NOWHERE ELSE. v2 seals it
+    // (link-token.ts), so the URL never carries it and nothing on the request
+    // can name a different one: a token replayed by somebody else still opens
+    // to the contact it was minted for, and only their attestation is checked.
+    const verified = await verifyOmnisendLink(token);
     if (!verified) {
       // Record nothing: an unverifiable click is not evidence of a campaign.
       return NextResponse.redirect(login, { status: 302 });
     }
+    const email = verified.email;
 
     // WHERE THIS CLICK CAN ACTUALLY GO. An attested recipient gets the
     // destination and the grant; one who has never made the 21+ and

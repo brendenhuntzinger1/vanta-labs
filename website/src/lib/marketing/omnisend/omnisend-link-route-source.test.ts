@@ -49,8 +49,10 @@ describe("the Omnisend click route verifies before it redirects", () => {
     expect(route).toMatch(/import \{[^}]*verifyOmnisendLink[^}]*\} from "@\/lib\/marketing\/omnisend\/link-token";/);
   });
 
-  it("lowercases the address before verifying, as the contact payload does", () => {
-    expect(route).toContain('(params.get("e") ?? "").trim().toLowerCase()');
+  it("takes the address from the opened token and never from the request", () => {
+    expect(route).not.toContain('params.get("e")');
+    expect(route).toContain("const verified = await verifyOmnisendLink(token);");
+    expect(route).toContain("const email = verified.email;");
   });
 });
 
@@ -130,18 +132,23 @@ describe("every failure still redirects", () => {
 });
 
 describe("the token module is middleware-safe", () => {
-  it("imports neither server-only nor node:crypto, and signs with Web Crypto", () => {
+  it("imports neither server-only nor node:crypto, and seals with Web Crypto", () => {
     const token = executable(TOKEN);
     expect(token).not.toContain('"server-only"');
     expect(token).not.toContain("node:crypto");
+    expect(token).not.toContain("Buffer.");
     expect(token).toContain("crypto.subtle.importKey(");
-    expect(token).toContain("crypto.subtle.sign(");
+    expect(token).toContain("crypto.subtle.encrypt(");
+    expect(token).toContain("crypto.subtle.decrypt(");
+    expect(token).toContain("crypto.getRandomValues(");
   });
 
-  it("signs over its own namespace and caps token length", () => {
+  it("seals under its own namespace, caps token length, and never puts the address beside the token", () => {
     const token = executable(TOKEN);
-    expect(token).toContain("`omnisend_link:${VERSION}:${email}:${expiresAtMs}`");
-    expect(token).toContain("const MAX_TOKEN_LENGTH = 128;");
+    expect(token).toContain('const NAMESPACE = `omnisend_link:${VERSION}:`;');
+    expect(token).toContain("`${NAMESPACE}${address}:${expiresAtMs}`");
+    expect(token).toContain("const MAX_TOKEN_LENGTH = 512;");
     expect(token).toContain("process.env.UNSUBSCRIBE_SECRET ?? process.env.SUPABASE_SERVICE_ROLE_KEY");
+    expect(token).not.toContain("[[contact.email]]");
   });
 });

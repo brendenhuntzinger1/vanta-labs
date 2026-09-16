@@ -64,8 +64,9 @@ export function hexId(seed) {
 export function link(path, { campaign, medium = "email", content } = {}) {
   const params = new URLSearchParams({ to: path, utm_source: "omnisend", utm_medium: medium, utm_campaign: campaign ?? "omnisend" });
   if (content) params.set("utm_content", content);
-  // Personalisation tags must survive untouched, so they are appended raw.
-  return `${SITE}/api/email/omnisend-link?t=[[contact.custom_properties.vl_link]]&e=[[contact.email]]&${params.toString()}`;
+  // The personalisation tag must survive untouched, so it is appended raw. The
+  // address is sealed inside vl_link (link-token.ts v2); it never rides in the URL.
+  return `${SITE}/api/email/omnisend-link?t=[[contact.custom_properties.vl_link]]&${params.toString()}`;
 }
 
 // ---------------------------------------------------------------------------

@@ -7,11 +7,14 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 // recipient link, and mint a browse grant only when that recipient's account is
 // attested. Omnisend sends its own mail, so the only way a click can be tied
 // back to an attestable contact is a token WE minted onto the contact record
-// and Omnisend hands back. That makes three properties load-bearing:
+// and Omnisend hands back. That makes four properties load-bearing:
 //
-//   * it verifies only for the address it was signed for, or one contact's
-//     link replayed under another's address would borrow their attestation;
-//   * it expires, and the expiry cannot be edited;
+//   * it opens to exactly the address it was minted for, and to nothing the
+//     request can substitute, or one contact's link could borrow another's
+//     attestation;
+//   * the address is SEALED, so it never travels in a URL, a click log or a
+//     referrer;
+//   * it expires, and neither the expiry nor the address can be edited;
 //   * it is disjoint from the cart and marketing grants that share its secret,
 //     because the cart grant is minted for guests with no attestation at all.
 // ---------------------------------------------------------------------------
@@ -27,52 +30,73 @@ afterAll(() => {
 const tokens = () => import("@/lib/marketing/omnisend/link-token");
 
 const EMAIL = "a@x.com";
+const NOW = 1_760_000_000_000;
 
-/** A token of our exact shape signed over a different namespace, by hand. */
-async function signedOver(payload: string, expiresAtMs: number): Promise<string> {
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode("test-secret"),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const mac = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
-  const hex = [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
-  return `v1.${expiresAtMs}.${hex.slice(0, 32)}`;
+const encoder = new TextEncoder();
+
+function toBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** Exactly the module's construction, so a plaintext of our choosing can be sealed under the real key. */
+async function sealed(plaintext: string, secret = "test-secret"): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(`omnisend_link:v2:${secret}`));
+  const key = await crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt"]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const body = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoder.encode(plaintext)));
+  const bytes = new Uint8Array(iv.length + body.length);
+  bytes.set(iv);
+  bytes.set(body, iv.length);
+  return `v2.${toBase64Url(bytes)}`;
 }
 
 describe("the token round trip", () => {
-  it("verifies a token it just minted, for the address it was minted for", async () => {
+  it("opens to the address it was minted for, with the expiry", async () => {
     const { signOmnisendLink, verifyOmnisendLink, OMNISEND_LINK_TTL_MS } = await tokens();
-    const now = 1_760_000_000_000;
-    const token = await signOmnisendLink(EMAIL, now);
+    const token = await signOmnisendLink(EMAIL, NOW);
     expect(token).toBeTruthy();
-    expect(await verifyOmnisendLink(token, EMAIL, now)).toEqual({ expiresAtMs: now + OMNISEND_LINK_TTL_MS });
+    expect(await verifyOmnisendLink(token, NOW)).toEqual({ email: EMAIL, expiresAtMs: NOW + OMNISEND_LINK_TTL_MS });
   });
 
-  it("is version, expiry and 32 hex — the address is signed over, never carried", async () => {
+  it("is version and an opaque base64url payload; the address is sealed, never readable", async () => {
     const { signOmnisendLink } = await tokens();
     const token = (await signOmnisendLink(EMAIL))!;
-    const [version, expiry, mac, ...rest] = token.split(".");
+    const [version, payload, ...rest] = token.split(".");
     expect(rest).toHaveLength(0);
-    expect(version).toBe("v1");
-    expect(expiry).toMatch(/^\d+$/);
-    expect(mac).toMatch(/^[0-9a-f]{32}$/);
+    expect(version).toBe("v2");
+    expect(payload).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(token).not.toMatch(/@/);
-    expect(token.length).toBeLessThanOrEqual(128);
+    expect(token).not.toContain(EMAIL);
+    expect(token).not.toContain(btoa(EMAIL).replace(/=+$/, ""));
+    expect(token.length).toBeLessThanOrEqual(512);
+  });
+
+  it("mints a different token every time, and every one of them opens", async () => {
+    const { signOmnisendLink, verifyOmnisendLink } = await tokens();
+    const first = (await signOmnisendLink(EMAIL, NOW))!;
+    const second = (await signOmnisendLink(EMAIL, NOW))!;
+    expect(first).not.toBe(second);
+    expect((await verifyOmnisendLink(first, NOW))?.email).toBe(EMAIL);
+    expect((await verifyOmnisendLink(second, NOW))?.email).toBe(EMAIL);
   });
 
   // Omnisend lowercases identifiers and the contact payload lowercases before
-  // sending, so `[[contact.email]]` comes back lowercase whatever the operator
-  // typed. A token that only verified for the typed spelling would never
-  // verify in practice.
-  it("treats the address case- and whitespace-insensitively", async () => {
+  // sending, so the address the token yields must be the store's own spelling.
+  it("normalises the address before sealing it", async () => {
     const { signOmnisendLink, verifyOmnisendLink } = await tokens();
     const token = await signOmnisendLink("  A@X.com ");
-    expect(await verifyOmnisendLink(token, "a@x.com")).not.toBeNull();
-    expect(await verifyOmnisendLink(token, "A@X.COM")).not.toBeNull();
+    expect((await verifyOmnisendLink(token))?.email).toBe("a@x.com");
+  });
+
+  it("seals the longest address a mailbox can have inside the length cap", async () => {
+    const { signOmnisendLink, verifyOmnisendLink } = await tokens();
+    const long = `${"a".repeat(64)}@${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(58)}.com`;
+    expect(long.length).toBeGreaterThanOrEqual(250);
+    const token = (await signOmnisendLink(long, NOW))!;
+    expect(token.length).toBeLessThanOrEqual(512);
+    expect((await verifyOmnisendLink(token, NOW))?.email).toBe(long);
   });
 
   it("lives thirty days", async () => {
@@ -87,122 +111,117 @@ describe("the token round trip", () => {
 });
 
 describe("what a token is refused for", () => {
-  it("does not verify for a different address", async () => {
-    const { signOmnisendLink, verifyOmnisendLink } = await tokens();
-    const token = await signOmnisendLink(EMAIL);
-    expect(await verifyOmnisendLink(token, "b@x.com")).toBeNull();
-  });
-
-  it("does not verify for a blank address", async () => {
-    const { signOmnisendLink, verifyOmnisendLink } = await tokens();
-    const token = await signOmnisendLink(EMAIL);
-    expect(await verifyOmnisendLink(token, "")).toBeNull();
-    expect(await verifyOmnisendLink(token, "   ")).toBeNull();
+  it("mints nothing for a blank address", async () => {
+    const { signOmnisendLink } = await tokens();
+    expect(await signOmnisendLink("")).toBeNull();
+    expect(await signOmnisendLink("   ")).toBeNull();
   });
 
   it("refuses one that has expired", async () => {
     const { signOmnisendLink, verifyOmnisendLink, OMNISEND_LINK_TTL_MS } = await tokens();
-    const now = Date.now();
-    const token = await signOmnisendLink(EMAIL, now);
-    expect(await verifyOmnisendLink(token, EMAIL, now + OMNISEND_LINK_TTL_MS)).toBeNull();
-    expect(await verifyOmnisendLink(token, EMAIL, now + OMNISEND_LINK_TTL_MS + 1)).toBeNull();
+    const token = await signOmnisendLink(EMAIL, NOW);
+    expect(await verifyOmnisendLink(token, NOW + OMNISEND_LINK_TTL_MS)).toBeNull();
+    expect(await verifyOmnisendLink(token, NOW + OMNISEND_LINK_TTL_MS + 1)).toBeNull();
   });
 
-  // Stamped further out than the TTL permits was not minted here, even if the
-  // signature somehow matched — belt and braces against a future change that
-  // lengthens the TTL and leaves old long-dated tokens honoured.
+  // Stamped further out than the TTL permits was not minted here, even if it
+  // opens cleanly — belt and braces against a future change that lengthens the
+  // TTL and leaves old long-dated tokens honoured.
   it("refuses one stamped beyond the ceiling", async () => {
     const { signOmnisendLink, verifyOmnisendLink, OMNISEND_LINK_TTL_MS } = await tokens();
-    const now = Date.now();
-    const token = await signOmnisendLink(EMAIL, now + 1);
-    expect(await verifyOmnisendLink(token, EMAIL, now)).toBeNull();
-    expect(await verifyOmnisendLink(await signOmnisendLink(EMAIL, now + OMNISEND_LINK_TTL_MS), EMAIL, now)).toBeNull();
+    expect(await verifyOmnisendLink(await signOmnisendLink(EMAIL, NOW + 1), NOW)).toBeNull();
+    expect(await verifyOmnisendLink(await signOmnisendLink(EMAIL, NOW + OMNISEND_LINK_TTL_MS), NOW)).toBeNull();
   });
 
-  it("refuses an extended expiry, because the expiry is signed", async () => {
+  it("refuses a token with a single flipped character, because it is authenticated", async () => {
     const { signOmnisendLink, verifyOmnisendLink } = await tokens();
-    const [version, expiry, mac] = (await signOmnisendLink(EMAIL))!.split(".");
-    expect(await verifyOmnisendLink(`${version}.${Number(expiry) + 1000}.${mac}`, EMAIL)).toBeNull();
+    const token = (await signOmnisendLink(EMAIL, NOW))!;
+    const [version, payload] = token.split(".");
+    for (const index of [0, Math.floor(payload.length / 2), payload.length - 1]) {
+      const original = payload[index];
+      const flipped = original === "A" ? "B" : "A";
+      expect(await verifyOmnisendLink(`${version}.${payload.slice(0, index)}${flipped}${payload.slice(index + 1)}`, NOW)).toBeNull();
+    }
   });
 
-  it("refuses an edited signature", async () => {
-    const { signOmnisendLink, verifyOmnisendLink } = await tokens();
-    const [version, expiry, mac] = (await signOmnisendLink(EMAIL))!.split(".");
-    const flipped = mac[0] === "0" ? `1${mac.slice(1)}` : `0${mac.slice(1)}`;
-    expect(await verifyOmnisendLink(`${version}.${expiry}.${flipped}`, EMAIL)).toBeNull();
+  it("refuses a token sealed under the key but outside the namespace", async () => {
+    const { verifyOmnisendLink, OMNISEND_LINK_TTL_MS } = await tokens();
+    const expiresAtMs = NOW + OMNISEND_LINK_TTL_MS;
+    expect(await verifyOmnisendLink(await sealed(`cart_recovery_grant:v2:${EMAIL}:${expiresAtMs}`), NOW)).toBeNull();
+    expect(await verifyOmnisendLink(await sealed(`omnisend_link:v1:${EMAIL}:${expiresAtMs}`), NOW)).toBeNull();
+    // And the control: our namespace, sealed the same way, opens.
+    expect(await verifyOmnisendLink(await sealed(`omnisend_link:v2:${EMAIL}:${expiresAtMs}`), NOW)).toEqual({ email: EMAIL, expiresAtMs });
   });
 
-  it("refuses anything longer than 128 characters without hashing it", async () => {
+  it("refuses a sealed address that is not in the store's spelling, or an expiry that is not an integer", async () => {
+    const { verifyOmnisendLink, OMNISEND_LINK_TTL_MS } = await tokens();
+    const expiresAtMs = NOW + OMNISEND_LINK_TTL_MS;
+    expect(await verifyOmnisendLink(await sealed(`omnisend_link:v2:A@X.com:${expiresAtMs}`), NOW)).toBeNull();
+    expect(await verifyOmnisendLink(await sealed(`omnisend_link:v2::${expiresAtMs}`), NOW)).toBeNull();
+    expect(await verifyOmnisendLink(await sealed(`omnisend_link:v2:${EMAIL}:1.7e12`), NOW)).toBeNull();
+    expect(await verifyOmnisendLink(await sealed(`omnisend_link:v2:${EMAIL}`), NOW)).toBeNull();
+  });
+
+  it("refuses a token sealed under another secret", async () => {
+    const { verifyOmnisendLink, OMNISEND_LINK_TTL_MS } = await tokens();
+    expect(await verifyOmnisendLink(await sealed(`omnisend_link:v2:${EMAIL}:${NOW + OMNISEND_LINK_TTL_MS}`, "other-secret"), NOW)).toBeNull();
+  });
+
+  it("refuses anything longer than 512 characters without decoding it", async () => {
     const { signOmnisendLink, verifyOmnisendLink } = await tokens();
-    const genuine = (await signOmnisendLink(EMAIL))!;
-    // A genuine token padded past the ceiling is refused on length alone.
-    expect(await verifyOmnisendLink(`${genuine}${"a".repeat(129 - genuine.length)}`, EMAIL)).toBeNull();
-    expect(await verifyOmnisendLink(`v1.${Date.now() + 1000}.${"a".repeat(5000)}`, EMAIL)).toBeNull();
+    const genuine = (await signOmnisendLink(EMAIL, NOW))!;
+    expect(await verifyOmnisendLink(`${genuine}${"a".repeat(513 - genuine.length)}`, NOW)).toBeNull();
+    expect(await verifyOmnisendLink(`v2.${"a".repeat(5000)}`, NOW)).toBeNull();
   });
 
   it.each<[string | null | undefined, string]>([
     [null, "null"],
     [undefined, "undefined"],
     ["", "empty"],
-    ["v1", "no fields"],
-    ["v1.123", "two fields"],
-    ["v1.123.abc.def", "four fields"],
-    ["v2.9999999999999.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "wrong version"],
-    ["v1.notanumber.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "expiry is not a number"],
-    ["v1.1.7e9.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "expiry in exponent form"],
+    ["v2", "no payload"],
+    ["v2.", "empty payload"],
+    ["v2.abc.def", "three fields"],
+    ["v1.1760000000000.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "the retired v1 shape"],
+    ["v2.not+base64/url", "not base64url"],
+    ["v2.YWJj", "too short to hold an IV and a tag"],
+    [`v2.${"A".repeat(60)}`, "random bytes of a plausible length"],
   ])("refuses %o (%s)", async (token) => {
     const { verifyOmnisendLink } = await tokens();
-    expect(await verifyOmnisendLink(token, EMAIL)).toBeNull();
+    expect(await verifyOmnisendLink(token, NOW)).toBeNull();
   });
 
-  it("mints nothing and verifies nothing without a secret, rather than throwing", async () => {
+  it("mints nothing and opens nothing without a secret, rather than throwing", async () => {
     const { signOmnisendLink, verifyOmnisendLink } = await tokens();
     const genuine = (await signOmnisendLink(EMAIL))!;
     vi.stubEnv("UNSUBSCRIBE_SECRET", "");
     vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "");
     try {
       expect(await signOmnisendLink(EMAIL)).toBeNull();
-      expect(await verifyOmnisendLink(genuine, EMAIL)).toBeNull();
+      expect(await verifyOmnisendLink(genuine)).toBeNull();
     } finally {
       vi.stubEnv("UNSUBSCRIBE_SECRET", "test-secret");
     }
   });
 });
 
-// All three grant families sign with the SAME secret. Without the namespace
-// prefix inside the signed payload, a token minted for one could verify as
-// another — and the cart grant is minted for guests with no attestation at all,
-// so a cart token verifying as an Omnisend link would let an unattested guest
-// borrow a browse grant.
+// All three grant families derive from the SAME secret. The cart grant is
+// minted for guests with no attestation at all, so a cart token opening as an
+// Omnisend link would let an unattested guest borrow a browse grant.
 describe("the grant families are disjoint", () => {
-  it("a token of the same shape signed over the cart namespace does not verify", async () => {
-    const { verifyOmnisendLink, OMNISEND_LINK_TTL_MS } = await tokens();
-    const now = Date.now();
-    const expiresAtMs = now + OMNISEND_LINK_TTL_MS;
-    // Identical address, identical expiry, identical secret: only the
-    // namespace differs, so this isolates the property being tested.
-    const cartShaped = await signedOver(`cart_recovery_grant:v1:${EMAIL}:${expiresAtMs}`, expiresAtMs);
-    expect(cartShaped).toMatch(/^v1\.\d+\.[0-9a-f]{32}$/);
-    expect(await verifyOmnisendLink(cartShaped, EMAIL, now)).toBeNull();
-    // And the control: the same construction over OUR namespace does verify.
-    const ours = await signedOver(`omnisend_link:v1:${EMAIL}:${expiresAtMs}`, expiresAtMs);
-    expect(await verifyOmnisendLink(ours, EMAIL, now)).toEqual({ expiresAtMs });
-  });
-
-  it("a real cart-recovery grant does not verify as an Omnisend link", async () => {
+  it("a real cart-recovery grant does not open as an Omnisend link", async () => {
     const { verifyOmnisendLink } = await tokens();
     const { signGuestRecoveryGrant } = await import("@/lib/cart-recovery-grant");
     const cartToken = await signGuestRecoveryGrant("11111111-2222-3333-4444-555555555555");
     expect(cartToken).toBeTruthy();
-    expect(await verifyOmnisendLink(cartToken, EMAIL)).toBeNull();
+    expect(await verifyOmnisendLink(cartToken)).toBeNull();
   });
 
-  it("a real marketing-link grant does not verify as an Omnisend link", async () => {
+  it("a real marketing-link grant does not open as an Omnisend link", async () => {
     const { verifyOmnisendLink } = await tokens();
     const { signEmailLinkGrant } = await import("@/lib/email/link-grant");
     const grant = await signEmailLinkGrant();
     expect(grant).toBeTruthy();
-    expect(await verifyOmnisendLink(grant, EMAIL)).toBeNull();
+    expect(await verifyOmnisendLink(grant)).toBeNull();
   });
 
   it("an Omnisend link does not verify as a marketing-link grant", async () => {
@@ -215,12 +234,11 @@ describe("the grant families are disjoint", () => {
 describe("omnisendLinkUrl, the link a template carries", () => {
   const ORIGIN = "https://www.example.test";
 
-  it("is pinned exactly, with the personalisation tags left literal", async () => {
+  it("is pinned exactly, with the personalisation tag left literal and no address beside it", async () => {
     const { omnisendLinkUrl } = await tokens();
     expect(omnisendLinkUrl("/products/bpc-157", { campaign: "welcome", medium: "email" }, ORIGIN)).toBe(
       "https://www.example.test/api/email/omnisend-link"
       + "?t=[[contact.custom_properties.vl_link]]"
-      + "&e=[[contact.email]]"
       + "&to=%2Fproducts%2Fbpc-157"
       + "&utm_source=omnisend"
       + "&utm_medium=email"
@@ -233,7 +251,6 @@ describe("omnisendLinkUrl, the link a template carries", () => {
     expect(omnisendLinkUrl("/cart", { campaign: "cart recovery", medium: "sms", content: "hero cta" }, ORIGIN)).toBe(
       "https://www.example.test/api/email/omnisend-link"
       + "?t=[[contact.custom_properties.vl_link]]"
-      + "&e=[[contact.email]]"
       + "&to=%2Fcart"
       + "&utm_source=omnisend"
       + "&utm_medium=sms"
@@ -245,11 +262,11 @@ describe("omnisendLinkUrl, the link a template carries", () => {
 
   // Omnisend matches `[[...]]` as written. Percent-encoded brackets would go
   // out verbatim as a broken token in every email.
-  it("never percent-encodes the tags", async () => {
+  it("never percent-encodes the tag, and never names the address", async () => {
     const { omnisendLinkUrl } = await tokens();
     const url = omnisendLinkUrl("/products", { campaign: "welcome", medium: "email" }, ORIGIN);
     expect(url).toContain("t=[[contact.custom_properties.vl_link]]");
-    expect(url).toContain("e=[[contact.email]]");
+    expect(url).not.toContain("contact.email");
     expect(url).not.toContain("%5B");
     expect(url).not.toContain("%5D");
   });
