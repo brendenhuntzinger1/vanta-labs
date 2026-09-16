@@ -37,10 +37,16 @@ export const FONTS = {
   mono: "'Geist Mono', SFMono-Regular, Menlo, monospace",
 };
 
-/** Uploaded through the Images API on 2026-09-15; ids are stable per account. */
+/**
+ * Uploaded through the Images API; ids are stable per account. `hero` is the
+ * email's own dark-field vial (uploaded 2026-09-16, 1024x688, no label, no
+ * text): the home-page vial poster (6aa98560b313445127d393b8, still in the
+ * account) is the site's hero and is not reused in email at the owner's
+ * request.
+ */
 export const IMAGES = {
   logo: { id: "6aa9857db313445127d393bd", url: "https://app.omnisend.com/images/6aa9857db313445127d393be", width: 1024, height: 1024 },
-  hero: { id: "6aa98560b313445127d393b8", url: "https://app.omnisend.com/images/6aa98560b313445127d393b9", width: 960, height: 960 },
+  hero: { id: "6aab0150b313445127d3c61c", url: "https://app.omnisend.com/images/6aab0151b313445127d3c61d", width: 1024, height: 688 },
   og: { id: "6aa9857eb313445127d393bf", url: "https://app.omnisend.com/images/6aa9857eb313445127d393c1", width: 2000, height: 1050 },
 };
 

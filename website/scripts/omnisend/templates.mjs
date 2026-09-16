@@ -62,7 +62,7 @@ function spacerSection(seed, height = 12) {
 /** The hero card: eyebrow, heading, lead, extra lines, one primary button and an optional tertiary link. */
 function hero(seed, { kicker, title, lead, extra = [], cta, secondary, showImage = false, campaign }) {
   const blocks = [];
-  if (showImage) blocks.push(image(`${seed}:image`, IMAGES.hero, { alt: "A Vanta Labs vial on a dark field", width: 536, padding: "0px 32px 22px" }));
+  if (showImage) blocks.push(image(`${seed}:image`, IMAGES.hero, { alt: "A glass vial on a dark field", width: 536, padding: "0px 32px 22px" }));
   blocks.push(eyebrow(`${seed}:eyebrow`, kicker));
   blocks.push(heading(`${seed}:heading`, title));
   blocks.push(text(`${seed}:lead`, lead));
