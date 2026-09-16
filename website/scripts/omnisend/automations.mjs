@@ -194,9 +194,11 @@ export const AUTOMATIONS = {
         wait("w2", 9, "d"),
         email("post-purchase-2"),
         wait("w3", 3, "d"),
-        // A second order earns the repeat thank-you; the milestone note is for VIPs only.
+        // A second order earns the repeat thank-you; the milestone note is for
+        // VIPs only, a week later so the two thank-yous never land together.
         splitOnSegment("repeat", "vl-repeat-customers", [
           email("repeat-customer"),
+          wait("w4", 7, "d"),
           splitOnSegment("vip", "vl-vip", [email("vip-milestone")], []),
         ], []),
       ],

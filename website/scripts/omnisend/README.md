@@ -151,6 +151,14 @@ repeat buyer out for 180 days from their first order. The segment encodes the
 one run. Entering on a segment uses the same trigger shape as the sunset flow
 (`enteredSegment()` in `automations.mjs`).
 
+### Post-purchase thank-yous
+
+Post-purchase waits a day, sends the batch-report email, waits nine days,
+sends the support-and-reordering email, waits three more days and then splits
+on `vl-repeat-customers`: a repeat buyer gets `repeat-customer`, and a week
+later a further split on `vl-vip` sends `vip-milestone` to VIPs only. The
+week keeps the two thank-yous from landing in the same minute.
+
 ## What the plan and the API allow
 
 Learned from the validator and from the account; do not spend time trying

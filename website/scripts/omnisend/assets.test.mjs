@@ -397,7 +397,7 @@ describe("automations", () => {
     expect(flow.settings.frequencyLimiter).toEqual({ mode: "interval", duration: { amount: 7, units: "d" } });
   });
 
-  it("post-purchase: 1d, E1, 9d, E2, 3d, then the repeat thank-you and, for VIPs, the milestone", async () => {
+  it("post-purchase: 1d, E1, 9d, E2, 3d, then the repeat thank-you and, 7d later for VIPs, the milestone", async () => {
     await load();
     const flow = AUTOMATIONS["post-purchase"]();
     expect(flow.trigger).toEqual({ condition: { event: "paid for order", origin: "api" } });
@@ -409,9 +409,11 @@ describe("automations", () => {
     expect(emailOf(e2).templateID).toBe(created["post-purchase-2"]);
     expect(delay(d3)).toBe("3d");
     expect(segSplit(split).value).toBe(segments["vl-repeat-customers"]);
-    expect(split.split.trueBlocks).toHaveLength(2);
-    const [repeat, vip] = split.split.trueBlocks;
+    expect(split.split.trueBlocks).toHaveLength(3);
+    const [repeat, d4, vip] = split.split.trueBlocks;
     expect(emailOf(repeat).templateID).toBe(created["repeat-customer"]);
+    // A VIP gets both thank-yous, a week apart rather than in the same minute.
+    expect(delay(d4)).toBe("7d");
     expect(segSplit(vip).value).toBe(segments["vl-vip"]);
     expect(emailOf(vip.split.trueBlocks[0]).templateID).toBe(created["vip-milestone"]);
     expect(vip.split.falseBlocks).toEqual([]);
