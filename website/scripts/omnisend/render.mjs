@@ -17,8 +17,16 @@ async function main() {
     const mod = await import("./automations.mjs");
     entry = () => mod.AUTOMATIONS[name.slice("automation:".length)]();
   }
+  if (!entry && name?.startsWith("segment:")) {
+    const mod = await import("./segments.mjs");
+    entry = () => mod.SEGMENTS[name.slice("segment:".length)]();
+  }
+  if (!entry && name === "form") {
+    const mod = await import("./form.mjs");
+    entry = () => mod.form();
+  }
   if (!entry) {
-    console.error(`Unknown asset: ${name}. Known: ${Object.keys(registry).join(", ")}, template:<key>, automation:<key>`);
+    console.error(`Unknown asset: ${name}. Known: ${Object.keys(registry).join(", ")}, template:<key>, automation:<key>, segment:<key>, form`);
     process.exit(1);
   }
   process.stdout.write(JSON.stringify(await entry()));

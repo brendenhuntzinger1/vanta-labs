@@ -439,3 +439,98 @@ describe("segments: recovery readiness", () => {
     expect(winback.conditionGroups[0].conditions[0].filters[0]).toEqual({ property: "custom", name: "vl_winback_ready", valueType: "text", operator: "anyOf", value: ["yes"] });
   });
 });
+
+describe("form", () => {
+  const LINE_HEIGHTS = ["100%", "115%", "125%", "150%", "200%"];
+  const BUTTON_STYLE_KEYS = ["borderRadius", "borderStyle", "borderWidth", "color", "fontFamily", "fontSize", "fontStyle", "fontWeight", "textDecoration"];
+
+  /** Every node of the form content tree, depth first. */
+  function nodes(node, out = []) {
+    if (!node || typeof node !== "object") return out;
+    if (Array.isArray(node)) {
+      node.forEach((child) => nodes(child, out));
+      return out;
+    }
+    out.push(node);
+    Object.values(node).forEach((child) => nodes(child, out));
+    return out;
+  }
+
+  // A block names its type and carries the config of that type (a text block carries `text`);
+  // a button's own config object also has a `type`, so it is excluded by the second test.
+  const isBlock = (n) => typeof n.type === "string" && (n.type === "text" ? typeof n.text === "string" : typeof n[n.type] === "object");
+  const formBlocks = (f) => nodes(f.content).filter(isBlock);
+  const strings = (f) => nodes(f.content).flatMap((n) => Object.values(n).filter((v) => typeof v === "string"));
+
+  it("matches the post_forms schema: no client ids, stylePresetID, shorthand-free padding", async () => {
+    const { form } = await import("./form.mjs");
+    const f = form();
+    expect(f.displayType).toBe("popup");
+    // Presets carry their well-known ids; the content tree must carry none.
+    for (const n of nodes([...f.content.steps, f.content.successStep, f.content.subscribedStep])) {
+      expect(n.id, "server assigns ids; the request must not carry any").toBeUndefined();
+      expect(n.stylePresetId, "the schema key is stylePresetID").toBeUndefined();
+      expect(n.styleProperties?.padding, "padding is four sides, not a shorthand").toBeUndefined();
+      expect(n.styleProperties?.letterSpacing).toBeUndefined();
+    }
+    for (const preset of f.content.generalSettings.textPresets) {
+      expect(LINE_HEIGHTS).toContain(preset.styles.lineHeight);
+      expect(preset.styles.letterSpacing).toBeUndefined();
+    }
+    for (const preset of f.content.generalSettings.buttonPresets) {
+      for (const key of BUTTON_STYLE_KEYS) expect(preset.styles[key], `${preset.id}.${key}`).toBeDefined();
+      expect(preset.styles.border, "border shorthand is not a preset style").toBeUndefined();
+      expect(["underline", "none"]).toContain(preset.styles.textDecoration);
+    }
+    // The validator refuses rgba colours, font stacks it does not ship, and input blocks without styleProperties.
+    for (const n of nodes(f.content.generalSettings)) {
+      for (const [key, value] of Object.entries(n)) {
+        if (/color/i.test(key)) expect(value, key).toMatch(/^#[0-9a-f]{6}$/i);
+        if (key === "fontFamily") expect(value).toBe("Inter, Helvetica Neue, Helvetica, Arial, sans-serif");
+      }
+    }
+    for (const b of formBlocks(f)) expect(b.styleProperties, `${b.type} needs styleProperties`).toBeDefined();
+    expect(f.content.generalSettings.textPresets.map((p) => p.id)).toEqual(["heading_large", "heading_medium", "heading_small", "paragraph", "footnote"]);
+    expect(f.content.generalSettings.buttonPresets.map((p) => p.id)).toEqual(["primary_button", "secondary_button", "tertiary_button"]);
+    expect(f.content.generalSettings.body).toMatchObject({ borderStyle: "solid", borderWidth: expect.any(String), borderRadius: expect.any(String) });
+    expect(f.targeting.device, "device is a single enum value; omit it to target both").toBeUndefined();
+    expect(f.targeting.location.includes).toEqual([{ code: "US", name: "United States" }, { code: "CA", name: "Canada" }]);
+    expect(f.targeting.source.excludes).toEqual(["omnisendCommunication"]);
+    for (const step of [...f.content.steps, f.content.successStep, f.content.subscribedStep]) {
+      expect(step.sections).toHaveLength(1);
+      expect(step.sections[0].rows[0].columns[0].width).toBe("100%");
+    }
+  });
+
+  it("collects email on step one and optional SMS consent with the TCPA sentence on step two", async () => {
+    const { form } = await import("./form.mjs");
+    const f = form();
+    const step1 = formBlocks({ content: f.content.steps[0] });
+    const step2 = formBlocks({ content: f.content.steps[1] });
+    expect(step1.some((b) => b.type === "emailField" && b.emailField.isRequired)).toBe(true);
+    expect(step1.filter((b) => b.button?.type === "submit")).toHaveLength(1);
+    expect(step2.some((b) => b.type === "phoneNumberField" && b.phoneNumberField.isRequired === false)).toBe(true);
+    const legal = step2.find((b) => b.type === "legal").legal;
+    expect(legal.type).toBe("tcpa");
+    expect(legal.link).toBe("https://www.vantalabsresearch.com/legal/privacy");
+    expect(legal.label).toBeTruthy();
+    expect(legal.requiredMessage).toBeTruthy();
+    for (const needle of ["Vanta Labs", "Message frequency varies", "Message and data rates may apply", "STOP", "HELP", "not a condition of purchase"]) {
+      expect(legal.description).toContain(needle);
+    }
+    expect(step2.some((b) => b.button?.type === "nextStep")).toBe(true);
+  });
+
+  it("follows the copy rules and never claims a discount it cannot mint", async () => {
+    const { form } = await import("./form.mjs");
+    const f = form();
+    const copy = strings(f).join("\n");
+    expect(copy).not.toMatch(/!/);
+    expect(copy).not.toMatch(/BAC Water/i);
+    expect(copy).not.toMatch(/\p{Extended_Pictographic}/u);
+    expect(copy).not.toMatch(/\d+% off/i);
+    expect(copy).toMatch(/research use only/i);
+    expect(formBlocks(f).some((b) => b.type === "discount")).toBe(false);
+    expect(f.content.successStep.sections[0].rows[0].columns[0].blocks.find((b) => b.button).button.link).toMatch(/^https:\/\/www\.vantalabsresearch\.com\//);
+  });
+});
