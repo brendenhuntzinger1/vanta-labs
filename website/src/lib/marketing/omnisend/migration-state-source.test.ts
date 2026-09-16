@@ -82,9 +82,13 @@ describe("the migration row", () => {
 });
 
 describe("the batches row", () => {
-  it("reads through the pure parser and writes the bounded list", () => {
+  it("reads through the pure parser, telling an unreadable row from an empty one, and writes the bounded list", () => {
+    // Null, not []: the reconcile merges its write onto a fresh read of this
+    // row, and an unreadable row read as "no batches" would be written over,
+    // dropping every unfinished id the next run was going to poll.
     const read = fn(state, "readBatchRecords");
-    expect(read).toContain("parseBatchRecords(await readState(BATCHES_STATE_KEY))");
+    expect(read).toContain("const value = await readState(BATCHES_STATE_KEY);");
+    expect(read).toContain("return value === null ? null : parseBatchRecords(value);");
     const write = fn(state, "writeBatchRecords");
     expect(write).toContain("await writeState(BATCHES_STATE_KEY, { batches: records.slice(-MAX_BATCH_RECORDS) })");
   });

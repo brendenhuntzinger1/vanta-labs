@@ -78,13 +78,19 @@ describe("the snapshot walks the push's population through the push's loaders", 
 
   it("refuses to snapshot a population it could not read in full", () => {
     const entry = fn(snapshot, "snapshotOmnisendConsent");
-    expect(entry).toContain("if (!audience || !suppressions)");
+    expect(entry).toContain("if (!audience || !suppressions || !withdrawn)");
   });
 
-  it("adds the suppressed addresses to the push targets, so a resubscribe would show", () => {
+  it("adds the suppressed and the withdrawn addresses to the push targets, so a resubscribe would show", () => {
+    // A guest who unsubscribed on the site with no order and no suppression
+    // row, and an account with the marketing box unticked, are in neither
+    // the audience nor the suppression list; they are exactly the people a
+    // re-subscribe would harm, so they are in the snapshot.
+    expect(snapshot).toMatch(/import \{[^}]*loadWithdrawnConsent[^}]*\} from "@\/lib\/marketing\/omnisend\/reconcile";/);
     const entry = fn(snapshot, "snapshotOmnisendConsent");
     expect(entry).toContain("orderPushTargets(audience, buyers)");
     expect(entry).toContain("[...suppressions.keys()].sort()");
+    expect(entry).toContain("[...withdrawn].sort()");
   });
 
   it("collects every address through collectContactFacts", () => {

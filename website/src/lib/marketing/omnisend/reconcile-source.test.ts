@@ -124,29 +124,66 @@ describe("the write-back reads and advances the watermark in omnisend_sync_state
   });
 });
 
-describe("the write-back writes the store's own shapes", () => {
+describe("the write-back writes the store's own shapes, dated when the person acted", () => {
+  // Omnisend's statusChangedAt is when the person unsubscribed, opted out or
+  // signed up; the reconcile's run time is when the store found out. The
+  // store is stamped with the former (never later than now), through the
+  // pure stampFor, so a suppression written tonight for an unsubscribe last
+  // Tuesday says Tuesday.
+  it("takes each address's instants from the planner and clamps them through stampFor", () => {
+    const run = fn(reconcile, "runWriteBack");
+    expect(run).toContain("const stamps = writeBackStamps(contacts);");
+    expect(run).toContain("await applySuppression(email, stamps.get(email)?.email ?? null, input.now)");
+    expect(run).toContain("await applyFormSubscriber(email, stamps.get(email)?.email ?? null, input.now)");
+    expect(run).toContain("await applySmsOptOut(email, stamps.get(email)?.sms ?? null, input.now)");
+    for (const name of ["applySuppression", "applyFormSubscriber", "applySmsOptOut"]) {
+      expect(fn(reconcile, name), name).toContain("const at = stampFor(changedAt, now);");
+    }
+  });
+
   it("suppresses exactly as the unsubscribe route does, with source omnisend", () => {
     const apply = fn(reconcile, "applySuppression");
-    expect(apply).toContain('const row = { email, reason: "unsubscribed", created_at: now };');
+    expect(apply).toContain('const row = { email, reason: "unsubscribed", created_at: at };');
     expect(apply).toMatch(/from\("email_suppressions"\)\s*\.upsert\(\{ \.\.\.row, source: "omnisend" \}, \{ onConflict: "email" \}\)/);
     // The retry without `source` for a database behind on the lifecycle migration.
     expect(apply).toMatch(/from\("email_suppressions"\)\s*\.upsert\(row, \{ onConflict: "email" \}\)/);
-    // The account toggle mirror, by direct lookup, best-effort.
+    // The account toggle mirror, by direct lookup, best-effort; updated_at is
+    // when the row changed, which is now.
     expect(apply).toContain("await findUserByEmail(email)");
     expect(apply).toMatch(/from\("customer_preferences"\)\s*\.upsert\(\{ user_id: user\.id, marketing_emails: false, updated_at: now \}, \{ onConflict: "user_id" \}\)/);
   });
 
-  it("mirrors a form sign-up as a guest subscriber from omnisend-form", () => {
+  it("mirrors a form sign-up as a guest subscriber from omnisend-form, and never re-opens a site opt-out it does not postdate", () => {
     const apply = fn(reconcile, "applyFormSubscriber");
-    expect(apply).toMatch(/from\("marketing_subscribers"\)\s*\.upsert\(\{ email, source: "omnisend-form", opted_in_at: now, unsubscribed_at: null \}, \{ onConflict: "email" \}\)/);
+    // The existing row first: a guest who unsubscribed on the site is absent
+    // from the audience, so the planner offers them as a new subscriber
+    // whenever Omnisend still says subscribed. Only a subscribe Omnisend
+    // dates AFTER the site's opt-out (a real re-subscribe through the form)
+    // may null unsubscribed_at; no date, or an earlier one, writes nothing.
+    expect(apply).toMatch(/from\("marketing_subscribers"\)\s*\.select\("unsubscribed_at"\)\s*\.eq\("email", email\)\s*\.maybeSingle\(\)/);
+    expect(apply).toMatch(/if \(error\) \{[\s\S]*?return "failed";/);
+    expect(apply).toContain('if (existing?.unsubscribed_at && !isLaterInstant(changedAt, existing.unsubscribed_at)) return "nothing";');
+    expect(apply).toMatch(/from\("marketing_subscribers"\)\s*\.upsert\(\{ email, source: "omnisend-form", opted_in_at: at, unsubscribed_at: null \}, \{ onConflict: "email" \}\)/);
+    expect(apply).toMatch(/if \(writeError\) \{[\s\S]*?return "failed";/);
+    const run = fn(reconcile, "runWriteBack");
+    expect(run).toMatch(/if \(form === "applied"\) counts\.formSubscribers \+= 1;\s*else if \(form === "failed"\) failures \+= 1;/);
   });
 
-  it("stamps an SMS opt-out on the account, keeping an existing stamp", () => {
+  it("stamps an SMS opt-out on the account, keeping an existing stamp, and counts a refused write as a failure", () => {
     const apply = fn(reconcile, "applySmsOptOut");
     expect(apply).toContain("await findUserByEmail(email)");
+    expect(apply).toContain('if (!user?.id) return "nothing";');
     expect(apply).toContain('.select("sms_opted_out_at")');
-    expect(apply).toContain("?.sms_opted_out_at) return false;");
-    expect(apply).toContain("sms_marketing: false, sms_opted_out_at: now, updated_at: now }, { onConflict: \"user_id\" }");
+    expect(apply).toMatch(/if \(error\) \{[\s\S]*?return "failed";/);
+    expect(apply).toContain('?.sms_opted_out_at) return "nothing";');
+    expect(apply).toContain("sms_marketing: false, sms_opted_out_at: at, updated_at: now }, { onConflict: \"user_id\" }");
+    expect(apply).toMatch(/if \(writeError\) \{[\s\S]*?return "failed";/);
+    expect(apply).toMatch(/\} catch \(error\) \{[\s\S]*?return "failed";/);
+    // A refused opt-out write holds the watermark like every other refusal,
+    // so the same contact is re-read tomorrow; "nothing" is not a failure.
+    const run = fn(reconcile, "runWriteBack");
+    expect(run).toMatch(/if \(sms === "applied"\) counts\.smsOptOuts \+= 1;\s*else if \(sms === "failed"\) failures \+= 1;/);
+    expect(run).toContain("if (complete && failures === 0 && latest) await writeWatermark(latest);");
   });
 });
 
@@ -177,7 +214,35 @@ describe("the push is batched, refreshed and never per-contact", () => {
     const build = fn(reconcile, "buildContactItem");
     expect(build).toContain("await signOmnisendLink(email, nowMs)");
     expect(build).toContain("OMNISEND_LINK_TTL_MS");
-    expect(build).toContain("buildContactPayload({ ...facts, link, codes })");
+    expect(build).toContain("buildContactPayload({ ...facts, link, codes, recoveryGift })");
+  });
+
+  it("is honest about the recovery gift: preserved while a live offer row exists, cleared when none is, never cleared on a guess", () => {
+    // The gift's claim link carries a bearer token that customer-offers.ts
+    // never persists, so the reconcile cannot rebuild the object the sweep
+    // pushed. What it can do is tell Omnisend when the gift is GONE: an
+    // expired, redeemed or revoked row clears the five properties (null),
+    // and a live row leaves them as the sweep set them (undefined, omitted).
+    const build = fn(reconcile, "buildContactItem");
+    expect(build).toContain("const recoveryGift = await liveRecoveryGift(email, nowMs);");
+    const gift = fn(reconcile, "liveRecoveryGift");
+    expect(gift).toMatch(
+      /from\("customer_offers"\)\s*\.select\("id"\)\s*\.eq\("offer_key", RECOVERY_GIFT_OFFER_KEY\)\s*\.eq\("email", email\)\s*\.is\("revoked_at", null\)\s*\.is\("redeemed_at", null\)\s*\.gt\("expires_at", new Date\(nowMs\)\.toISOString\(\)\)\s*\.limit\(1\)/,
+    );
+    expect(gift).toMatch(/if \(error\) \{[\s\S]*?return undefined;/);
+    expect(gift).toMatch(/\} catch \(error\) \{[\s\S]*?return undefined;/);
+    expect(gift).toContain("return Array.isArray(data) && data.length > 0 ? undefined : null;");
+    expect(reconcile).toMatch(/import \{ RECOVERY_GIFT_OFFER_KEY \} from "@\/lib\/cart-recovery-offers";/);
+  });
+
+  it("counts an address whose store record could not be read, and reports it rather than dropping it silently", () => {
+    // collectContactFacts answers null when the suppression store could not
+    // be read (fail closed means do not push); the address is not in any
+    // batch, and the report has to say so.
+    const push = fn(reconcile, "runPush");
+    expect(push).toMatch(/if \(!entry\) \{\s*outcome\.unreadable \+= 1;\s*continue;\s*\}/);
+    const entry = fn(reconcile, "reconcileOmnisendContacts");
+    expect(entry).toContain("if (push.unreadable > 0) report.unresolved.push(`${push.unreadable} address(es) skipped: store record unreadable; re-read next run`);");
   });
 
   it("mints a win-back code only for a subscribed buyer with no live one", () => {
@@ -213,7 +278,22 @@ describe("the push is batched, refreshed and never per-contact", () => {
     expect(reconcile).toContain("export async function loadAudience(");
     expect(reconcile).toContain("export async function loadPaidBuyers(");
     expect(reconcile).toContain("export async function loadSuppressionReasons(");
+    expect(reconcile).toContain("export async function loadWithdrawnConsent(");
     expect(reconcile).toContain("export async function mapWithConcurrency<");
+  });
+
+  it("loads withdrawn consent for the snapshot: guest opt-outs and unticked account boxes, resolved like the audience, in full or not at all", () => {
+    // A guest whose unsubscribed_at is set with no order and no suppression
+    // row, and an account with marketing_emails = false, are in neither the
+    // audience nor the suppression list — and they are exactly the people a
+    // re-subscribe would harm, so the snapshot has to hold them.
+    const loader = fn(reconcile, "loadWithdrawnConsent");
+    expect(loader).toMatch(/from\("marketing_subscribers"\)\s*\.select\("email"\)\s*\.not\("unsubscribed_at", "is", null\)/);
+    expect(loader).toMatch(/from\("customer_preferences"\)\s*\.select\("user_id"\)\s*\.eq\("marketing_emails", false\)/);
+    expect(loader).toContain("await resolveAccountEmails(");
+    expect(loader).toMatch(/if \(guestsTruncated \|\| accountsTruncated\) \{[\s\S]*?return null;/);
+    expect(loader).toMatch(/\} catch \(error\) \{[\s\S]*?return null;/);
+    expect(reconcile).toMatch(/import \{[^}]*resolveAccountEmails[^}]*\} from "@\/lib\/email\/audience";/);
   });
 
   it("derives the suppression set from the reasons map, which is read in full or not at all", () => {
@@ -249,19 +329,36 @@ describe("the migration is accountable: report, batch polling and the cutoff", (
     expect(before).toBeLessThan(writeBack);
   });
 
-  it("remembers every batch id the push submitted", () => {
+  it("remembers every batch id the push submitted, merged onto a FRESH read of the row, or refuses to write", () => {
     const push = fn(reconcile, "runPush");
     const post = push.indexOf('path: "/batches"');
     const parse = push.indexOf("parseBatchSubmission(result.body)");
     expect(parse).toBeGreaterThan(post);
     expect(push).toContain("outcome.batchIds.push(submission.id)");
-    expect(entry).toContain("rememberBatches(records, push.submissions, now)");
-    expect(entry).toContain("await writeBatchRecords(");
+    // The row read at run start is stale by write time (another run, a
+    // refused poll write), and readBatchRecords answers null when the row
+    // cannot be read: writing over either would drop unfinished ids.
+    const fresh = entry.indexOf("const fresh = await readBatchRecords();");
+    const write = entry.indexOf("await writeBatchRecords(rememberBatches(mergeBatchRecords(fresh, records), push.submissions, now))");
+    expect(fresh).toBeGreaterThan(entry.indexOf("await runPush("));
+    expect(write).toBeGreaterThan(fresh);
+    expect(entry.slice(fresh, write)).toMatch(/if \(fresh === null\) \{[\s\S]*?report\.unresolved\.push\(`\$\{push\.submissions\.length\} batch id\(s\) not remembered: batches row unreadable; the next run cannot poll them`\);/);
+    expect(entry).not.toContain("rememberBatches(records, push.submissions, now)");
+  });
+
+  it("says when the after-count is incomplete, as it does for the before-count", () => {
+    const before = entry.indexOf("const before = await countOmnisendContacts()");
+    const after = entry.indexOf("const after = await countOmnisendContacts()");
+    expect(before).toBeGreaterThan(-1);
+    expect(after).toBeGreaterThan(before);
+    expect(entry.slice(before, after)).toContain('report.unresolved.push("omnisend contact count incomplete: a contacts page was refused")');
+    expect(entry.slice(after)).toContain("if (after.capped) report.unresolved.push(`omnisend contact count capped at ${MAX_CONTACT_PAGES} pages (after)`);");
+    expect(entry.slice(after)).toContain('else if (!after.complete) report.unresolved.push("omnisend contact count incomplete (after): a contacts page was refused");');
   });
 
   it("polls the unfinished batches from the last runs before pushing, and folds their errors into unresolved", () => {
     const poll = fn(reconcile, "pollBatches");
-    expect(poll).toContain("await readBatchRecords()");
+    expect(poll).toContain("const records = (await readBatchRecords()) ?? [];");
     expect(poll).toContain("batchUnfinished(record)");
     expect(poll).toContain("path: `/batches/${encodeURIComponent(record.id)}`");
     expect(poll).toContain("applyBatchRead(record, parseBatchStatus(result.body), input.now)");

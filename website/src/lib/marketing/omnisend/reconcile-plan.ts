@@ -26,7 +26,11 @@ export type OmnisendContactRead = {
   email: string | null;
   phone: string | null;
   emailStatus: OmnisendChannelStatus | null;
+  /** channels.email.statusChangedAt: when the person acted, as Omnisend recorded it. */
+  emailStatusChangedAt?: string | null;
   smsStatus: OmnisendChannelStatus | null;
+  /** channels.sms.statusChangedAt. */
+  smsStatusChangedAt?: string | null;
   updatedAt?: string | null;
 };
 
@@ -127,7 +131,9 @@ export function parseOmnisendContacts(body: unknown): OmnisendContactRead[] {
     let email: string | null = null;
     let phone: string | null = null;
     let emailStatus: OmnisendChannelStatus | null = null;
+    let emailStatusChangedAt: string | null = null;
     let smsStatus: OmnisendChannelStatus | null = null;
+    let smsStatusChangedAt: string | null = null;
 
     for (const rawIdentifier of identifiers) {
       const identifier = asRecord(rawIdentifier);
@@ -135,18 +141,73 @@ export function parseOmnisendContacts(body: unknown): OmnisendContactRead[] {
       const channels = asRecord(identifier.channels);
       if (identifier.type === "email" && email === null) {
         email = normalizeEmail(identifier.id);
-        emailStatus = statusOf(asRecord(channels?.email)?.status);
+        const channel = asRecord(channels?.email);
+        emailStatus = statusOf(channel?.status);
+        emailStatusChangedAt = textOrNull(channel?.statusChangedAt);
       } else if (identifier.type === "phone" && phone === null) {
         phone = textOrNull(identifier.id);
-        smsStatus = statusOf(asRecord(channels?.sms)?.status);
+        const channel = asRecord(channels?.sms);
+        smsStatus = statusOf(channel?.status);
+        smsStatusChangedAt = textOrNull(channel?.statusChangedAt);
       }
     }
 
     if (email === null && phone === null) continue;
-    contacts.push({ email, phone, emailStatus, smsStatus, updatedAt: textOrNull(contact.updatedAt) });
+    contacts.push({
+      email,
+      phone,
+      emailStatus,
+      emailStatusChangedAt,
+      smsStatus,
+      smsStatusChangedAt,
+      updatedAt: textOrNull(contact.updatedAt),
+    });
   }
 
   return contacts;
+}
+
+/** Omnisend's statusChangedAt per address, the newest where an address repeats; keyed like the plan. */
+export function writeBackStamps(contacts: OmnisendContactRead[]): Map<string, { email: string | null; sms: string | null }> {
+  const stamps = new Map<string, { email: string | null; sms: string | null }>();
+  const newer = (candidate: string | null | undefined, current: string | null): string | null => {
+    const text = textOrNull(candidate);
+    if (!text) return current;
+    if (!current) return text;
+    return isLaterInstant(text, current) ? text : current;
+  };
+  for (const contact of contacts) {
+    const email = normalizeEmail(contact.email);
+    if (!email) continue;
+    const current = stamps.get(email) ?? { email: null, sms: null };
+    stamps.set(email, {
+      email: newer(contact.emailStatusChangedAt, current.email),
+      sms: newer(contact.smsStatusChangedAt, current.sms),
+    });
+  }
+  return stamps;
+}
+
+/**
+ * The instant the store is stamped with: when the person acted, as Omnisend
+ * recorded it, falling back to now when Omnisend gave nothing usable and
+ * never later than now (a clock ahead of ours must not date a suppression
+ * into the future, where "since" comparisons would misread it).
+ */
+export function stampFor(at: string | null | undefined, now: string): string {
+  const text = textOrNull(at);
+  if (!text) return now;
+  const instant = Date.parse(text);
+  const nowMs = Date.parse(now);
+  if (!Number.isFinite(instant) || !Number.isFinite(nowMs) || instant > nowMs) return now;
+  return text;
+}
+
+/** True only when both parse and the first is strictly after the second. */
+export function isLaterInstant(candidate: string | null | undefined, than: string | null | undefined): boolean {
+  const a = Date.parse(textOrNull(candidate) ?? "");
+  const b = Date.parse(textOrNull(than) ?? "");
+  return Number.isFinite(a) && Number.isFinite(b) && a > b;
 }
 
 /** The cursor to follow, if Omnisend says there is another page. */
@@ -311,6 +372,25 @@ export function rememberBatches(existing: BatchRecord[], submitted: BatchSubmiss
   return [...byId.values()]
     .sort((a, b) => submittedAtOf(a) - submittedAtOf(b))
     .slice(-MAX_BATCH_RECORDS);
+}
+
+/**
+ * This run's polls folded onto a FRESH read of the batches row, taken at
+ * write time. The row read at run start is stale by then: another run may
+ * have added ids, and a poll's own write may have been refused. The fresh
+ * read decides WHICH batches exist; a record this run polled replaces its
+ * fresh twin only when its poll is newer than what the row already holds.
+ * An id the fresh read no longer carries has aged out and stays out.
+ */
+export function mergeBatchRecords(fresh: BatchRecord[], polled: BatchRecord[]): BatchRecord[] {
+  const byId = new Map<string, BatchRecord>();
+  for (const record of polled) byId.set(record.id, record);
+  return fresh.map((record) => {
+    const mine = byId.get(record.id);
+    if (!mine?.checkedAt) return record;
+    if (record.checkedAt && !isLaterInstant(mine.checkedAt, record.checkedAt)) return record;
+    return mine;
+  });
 }
 
 export function batchUnfinished(record: BatchRecord): boolean {

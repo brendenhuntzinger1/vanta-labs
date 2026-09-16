@@ -8,6 +8,7 @@ import {
   loadAudience,
   loadPaidBuyers,
   loadSuppressionReasons,
+  loadWithdrawnConsent,
   mapWithConcurrency,
 } from "@/lib/marketing/omnisend/reconcile";
 import { isValidSnapshotLabel, orderPushTargets } from "@/lib/marketing/omnisend/reconcile-plan";
@@ -28,9 +29,11 @@ import { supabaseAdmin } from "@/lib/supabase-server";
  *
  * The population is the push's population — the consented audience, then
  * the paid buyers without consent — walked through the loaders reconcile.ts
- * exports, plus every address on the suppression list. The suppressed are
- * not pushed, but they are the people a resubscribe would harm, so a
- * snapshot that left them out could not prove the one thing it exists for.
+ * exports, plus every address on the suppression list, plus everyone who
+ * withdrew consent without landing there: a guest whose unsubscribed_at is
+ * set and an account with the marketing box unticked. None of those are
+ * pushed, but they are the people a resubscribe would harm, so a snapshot
+ * that left them out could not prove the one thing it exists for.
  *
  * One snapshot per label. A label that already has rows is skipped, never
  * appended to, so an operator who runs it twice gets the same evidence, not
@@ -151,14 +154,26 @@ export async function snapshotOmnisendConsent(opts: { label: string }): Promise<
     if (existing === null) return { ...result, skipped: "snapshot table unreadable; nothing recorded" };
     if (existing > 0) return { ...result, rows: existing, skipped: `label already has ${existing} row(s); nothing recorded` };
 
-    const [audience, buyerRead, suppressions] = await Promise.all([loadAudience(), loadPaidBuyers(), loadSuppressionReasons()]);
-    // A partial population is not evidence: without the whole audience or
-    // the whole suppression list, a later comparison could not tell "missing
-    // from the snapshot" from "changed since", so nothing is recorded.
-    if (!audience || !suppressions) return { ...result, skipped: "audience or suppression list unreadable; nothing recorded" };
+    const [audience, buyerRead, suppressions, withdrawn] = await Promise.all([
+      loadAudience(),
+      loadPaidBuyers(),
+      loadSuppressionReasons(),
+      loadWithdrawnConsent(),
+    ]);
+    // A partial population is not evidence: without the whole audience, the
+    // whole suppression list or the whole withdrawn set, a later comparison
+    // could not tell "missing from the snapshot" from "changed since", so
+    // nothing is recorded.
+    if (!audience || !suppressions || !withdrawn) {
+      return { ...result, skipped: "audience, suppression list or withdrawn consent unreadable; nothing recorded" };
+    }
     const buyers = buyerRead.buyers;
 
-    const targets = [...new Set([...orderPushTargets(audience, buyers), ...[...suppressions.keys()].sort()])];
+    const targets = [...new Set([
+      ...orderPushTargets(audience, buyers),
+      ...[...suppressions.keys()].sort(),
+      ...[...withdrawn].sort(),
+    ])];
     result.addresses = targets.length;
 
     const facts = await mapWithConcurrency(targets, FACTS_CONCURRENCY, (email) => collectContactFacts(email));

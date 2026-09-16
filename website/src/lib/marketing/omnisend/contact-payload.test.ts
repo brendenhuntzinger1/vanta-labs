@@ -81,7 +81,13 @@ describe("the contact envelope matches Omnisend's contacts reference", () => {
     });
   });
 
-  it("omits the consent block when the status has no source, since nonSubscribed is not consent", () => {
+  it("omits the email channel block AND the consent block for nonSubscribed, so a status Omnisend collected itself stands", () => {
+    // Omnisend's contacts reference: nonSubscribed means "channel's status is
+    // unknown", and "the system will return the status with the latest status
+    // update date". Sending nonSubscribed with statusChangedAt = now would
+    // therefore overwrite a `subscribed` the contact gave through Omnisend's
+    // own form and demote them out of every flow. The identifier still goes,
+    // so the profile, tags and properties are refreshed.
     const known = buildContactPayload({
       ...facts,
       emailConsent: { status: "nonSubscribed", changedAt: "2026-09-03T00:00:00.000Z" },
@@ -90,10 +96,23 @@ describe("the contact envelope matches Omnisend's contacts reference", () => {
     expect(known.identifiers[0]).toEqual({
       type: "email",
       id: "jane.doe@example.com",
-      channels: { email: { status: "nonSubscribed", statusChangedAt: "2026-09-03T00:00:00.000Z" } },
       sendWelcomeMessage: false,
     });
+    expect(known.identifiers[0]).not.toHaveProperty("channels");
     expect(known.identifiers[0]).not.toHaveProperty("consent");
+  });
+
+  it("omits the consent block for unsubscribed, which has no source, but keeps the channel status", () => {
+    const off = buildContactPayload({
+      ...facts,
+      emailConsent: { status: "unsubscribed", changedAt: "2026-09-04T09:00:00.000Z" },
+    }) as { identifiers: Identifier[] };
+    expect(off.identifiers[0]).toEqual({
+      type: "email",
+      id: "jane.doe@example.com",
+      channels: { email: { status: "unsubscribed", statusChangedAt: "2026-09-04T09:00:00.000Z" } },
+      sendWelcomeMessage: false,
+    });
   });
 
   it("carries an unsubscribed status verbatim, with its change time", () => {
@@ -202,11 +221,6 @@ describe("custom properties", () => {
       vl_winback_ready: "no",
       vl_recovery_ready: "no",
       vl_recovery_percent: 0,
-      vl_recovery_gift: "",
-      vl_recovery_gift_link: "",
-      vl_recovery_gift_min: "",
-      vl_recovery_gift_ends: "",
-      vl_recovery_gift_ready: "no",
     });
   });
 
@@ -237,16 +251,20 @@ describe("custom properties", () => {
       vl_winback_ready: "no",
       vl_recovery_ready: "no",
       vl_recovery_percent: 0,
-      vl_recovery_gift: "",
-      vl_recovery_gift_link: "",
-      vl_recovery_gift_min: "",
-      vl_recovery_gift_ends: "",
-      vl_recovery_gift_ready: "no",
     });
     // Profile fields are OMITTED rather than blanked, so a value Omnisend
-    // already holds from a form is not erased; the country still defaults.
-    expect(Object.keys(bare)).toEqual(["identifiers", "countryCode", "tags", "customProperties"]);
-    expect(bare.countryCode).toBe("US");
+    // already holds from a form is not erased. The country included: a US
+    // default here would overwrite a country Omnisend collected itself.
+    expect(Object.keys(bare)).toEqual(["identifiers", "tags", "customProperties"]);
+    expect(bare).not.toHaveProperty("countryCode");
+  });
+
+  it("send countryCode only when the store knows it, uppercased", () => {
+    for (const countryCode of [undefined, null, "", "  "]) {
+      const built = buildContactPayload({ ...facts, countryCode }) as Record<string, unknown>;
+      expect(built).not.toHaveProperty("countryCode");
+    }
+    expect((buildContactPayload({ ...facts, countryCode: "ca" }) as Record<string, unknown>).countryCode).toBe("CA");
   });
 
   it("carry every code kind under its own pair of names", () => {
@@ -348,8 +366,23 @@ describe("the recovery offer properties", () => {
     expect(floor.customProperties.vl_recovery_gift_min).toBe("$35");
   });
 
-  it("are empty, and not ready, when there is no gift or the gift has no text or link", () => {
-    for (const recoveryGift of [undefined, null, { ...gift, text: "" }, { ...gift, link: "  " }]) {
+  const GIFT_KEYS = ["vl_recovery_gift", "vl_recovery_gift_link", "vl_recovery_gift_min", "vl_recovery_gift_ends", "vl_recovery_gift_ready"];
+
+  it("OMIT the five gift keys when the caller says nothing about the gift, so another upsert cannot wipe one the sweep set", () => {
+    // Every contact upsert is a POST merge on the identifier. The cart-offer
+    // sweep is the one caller that knows the gift; the nightly reconcile, the
+    // consent hooks and the order hook do not, and each of them used to send
+    // "" / "no" and clear it, so the gift template never sent.
+    const { recoveryGift: _ignored, ...silent } = { ...facts, recoveryGift: gift };
+    void _ignored;
+    const built = buildContactPayload(silent) as { customProperties: Record<string, unknown> };
+    for (const key of GIFT_KEYS) expect(built.customProperties).not.toHaveProperty(key);
+    const explicit = buildContactPayload({ ...facts, recoveryGift: undefined }) as { customProperties: Record<string, unknown> };
+    for (const key of GIFT_KEYS) expect(explicit.customProperties).not.toHaveProperty(key);
+  });
+
+  it("send the cleared values only when the caller passes null, or a gift with no text or link", () => {
+    for (const recoveryGift of [null, { ...gift, text: "" }, { ...gift, link: "  " }]) {
       const built = buildContactPayload({ ...facts, recoveryGift }) as { customProperties: Record<string, unknown> };
       expect(built.customProperties).toMatchObject({
         vl_recovery_gift: "",

@@ -7,8 +7,10 @@ import {
   countContactsOnPage,
   defaultSnapshotLabel,
   emptyReconcileReport,
+  isLaterInstant,
   isValidSnapshotLabel,
   latestUpdatedAt,
+  mergeBatchRecords,
   orderPushTargets,
   parseBatchRecords,
   parseBatchStatus,
@@ -17,6 +19,8 @@ import {
   parseOmnisendPaging,
   planWriteBack,
   rememberBatches,
+  stampFor,
+  writeBackStamps,
   type BatchRecord,
   type OmnisendContactRead,
 } from "@/lib/marketing/omnisend/reconcile-plan";
@@ -188,17 +192,39 @@ const envelope = {
 };
 
 describe("parseOmnisendContacts reads the GET /contacts envelope", () => {
-  it("maps the first email and phone identifiers to their channel statuses", () => {
+  it("maps the first email and phone identifiers to their channel statuses and the instants they changed", () => {
+    // statusChangedAt is when the PERSON acted; the write-back stamps the
+    // store with it rather than with the reconcile's run time.
     expect(parseOmnisendContacts(envelope)).toEqual([
       {
         email: "jane.doe@example.com",
         phone: "+13125550142",
         emailStatus: "unsubscribed",
+        emailStatusChangedAt: "2026-09-14T10:00:00Z",
         smsStatus: "subscribed",
+        smsStatusChangedAt: "2026-09-01T10:00:00Z",
         updatedAt: "2026-09-14T10:00:00Z",
       },
-      { email: "form@example.com", phone: null, emailStatus: "subscribed", smsStatus: null, updatedAt: "2026-09-13T08:00:00Z" },
+      {
+        email: "form@example.com",
+        phone: null,
+        emailStatus: "subscribed",
+        emailStatusChangedAt: null,
+        smsStatus: null,
+        smsStatusChangedAt: null,
+        updatedAt: "2026-09-13T08:00:00Z",
+      },
     ]);
+  });
+
+  it("reads a junk or missing statusChangedAt as null, never as an instant", () => {
+    const parsed = parseOmnisendContacts({
+      contacts: [
+        { identifiers: [{ type: "email", id: "a@example.com", channels: { email: { status: "unsubscribed", statusChangedAt: 42 } } }] },
+        { identifiers: [{ type: "email", id: "b@example.com", channels: { email: { status: "unsubscribed", statusChangedAt: "  " } } }] },
+      ],
+    });
+    expect(parsed.map((entry) => entry.emailStatusChangedAt)).toEqual([null, null]);
   });
 
   it("reads a missing channel, an unknown status or a junk identifier as null, never as a status", () => {
@@ -210,11 +236,12 @@ describe("parseOmnisendContacts reads the GET /contacts envelope", () => {
         { identifiers: [{ type: "phone", id: "+13125550142", channels: { sms: { status: "unsubscribed" } } }] },
       ],
     });
+    const blank = { emailStatusChangedAt: null, smsStatusChangedAt: null, updatedAt: null };
     expect(parsed).toEqual([
-      { email: "a@example.com", phone: null, emailStatus: null, smsStatus: null, updatedAt: null },
-      { email: "b@example.com", phone: null, emailStatus: null, smsStatus: null, updatedAt: null },
-      { email: "c@example.com", phone: null, emailStatus: null, smsStatus: null, updatedAt: null },
-      { email: null, phone: "+13125550142", emailStatus: null, smsStatus: "unsubscribed", updatedAt: null },
+      { email: "a@example.com", phone: null, emailStatus: null, smsStatus: null, ...blank },
+      { email: "b@example.com", phone: null, emailStatus: null, smsStatus: null, ...blank },
+      { email: "c@example.com", phone: null, emailStatus: null, smsStatus: null, ...blank },
+      { email: null, phone: "+13125550142", emailStatus: null, smsStatus: "unsubscribed", ...blank },
     ]);
   });
 
@@ -241,6 +268,61 @@ describe("parseOmnisendPaging follows paging.cursors.after only while hasMore", 
     expect(parseOmnisendPaging({ paging: { cursors: {}, hasMore: true } })).toEqual({ after: null, hasMore: false });
     expect(parseOmnisendPaging({})).toEqual({ after: null, hasMore: false });
     expect(parseOmnisendPaging(null)).toEqual({ after: null, hasMore: false });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The write-back stamps the store with WHEN THE PERSON ACTED — Omnisend's
+// statusChangedAt — not with the reconcile's run time, and never with an
+// instant later than now. Suppressions, SMS opt-out stamps and form sign-ups
+// are all dated this way, which is what lets applyFormSubscriber tell a
+// re-subscribe through the form from a stale `subscribed` that predates the
+// site's own opt-out.
+// ---------------------------------------------------------------------------
+
+describe("writeBackStamps: each address's channel instants, keyed the way the plan is", () => {
+  it("maps the lowercased address to its email and sms statusChangedAt", () => {
+    const stamps = writeBackStamps(parseOmnisendContacts(envelope));
+    expect(stamps.get("jane.doe@example.com")).toEqual({ email: "2026-09-14T10:00:00Z", sms: "2026-09-01T10:00:00Z" });
+    expect(stamps.get("form@example.com")).toEqual({ email: null, sms: null });
+  });
+
+  it("keeps the newest instant when an address appears on more than one contact, and skips contacts without an address", () => {
+    const stamps = writeBackStamps([
+      contact({ email: "Twice@example.com", emailStatus: "unsubscribed", emailStatusChangedAt: "2026-09-10T00:00:00Z" }),
+      contact({ email: "twice@example.com", emailStatus: "unsubscribed", emailStatusChangedAt: "2026-09-12T00:00:00Z" }),
+      contact({ email: "twice@example.com", emailStatus: "unsubscribed", emailStatusChangedAt: "2026-09-11T00:00:00Z" }),
+      contact({ phone: "+13125550142", smsStatus: "unsubscribed", smsStatusChangedAt: "2026-09-12T00:00:00Z" }),
+    ]);
+    expect([...stamps.keys()]).toEqual(["twice@example.com"]);
+    expect(stamps.get("twice@example.com")).toEqual({ email: "2026-09-12T00:00:00Z", sms: null });
+  });
+});
+
+describe("stampFor: the instant to write, never later than now", () => {
+  const now = "2026-09-16T03:00:00.000Z";
+
+  it("uses Omnisend's instant when it is present and not in the future", () => {
+    expect(stampFor("2026-09-14T10:00:00Z", now)).toBe("2026-09-14T10:00:00Z");
+    expect(stampFor(now, now)).toBe(now);
+  });
+
+  it("falls back to now when the instant is absent, unparseable or later than now", () => {
+    for (const at of [null, undefined, "", "yesterday", "2026-09-16T03:00:01.000Z", "2030-01-01T00:00:00Z"]) {
+      expect(stampFor(at, now), String(at)).toBe(now);
+    }
+  });
+});
+
+describe("isLaterInstant: a form re-subscribe only re-opens a site opt-out it postdates", () => {
+  it("is true only when the first instant parses and is strictly after the second", () => {
+    expect(isLaterInstant("2026-09-15T00:00:00Z", "2026-09-14T00:00:00Z")).toBe(true);
+    expect(isLaterInstant("2026-09-14T00:00:00Z", "2026-09-14T00:00:00Z")).toBe(false);
+    expect(isLaterInstant("2026-09-13T00:00:00Z", "2026-09-14T00:00:00Z")).toBe(false);
+    expect(isLaterInstant(null, "2026-09-14T00:00:00Z")).toBe(false);
+    expect(isLaterInstant("junk", "2026-09-14T00:00:00Z")).toBe(false);
+    // An unparseable store instant cannot be postdated: the record stays closed.
+    expect(isLaterInstant("2026-09-15T00:00:00Z", "junk")).toBe(false);
   });
 });
 
@@ -368,6 +450,33 @@ describe("rememberBatches keeps the last fifty submissions", () => {
     ];
     const records = rememberBatches(existing, [], "2026-09-16T06:00:00Z");
     expect(records.map((entry) => entry.id)).toEqual(["earlier", "later"]);
+  });
+});
+
+describe("mergeBatchRecords folds this run's polls onto a FRESH read of the batches row", () => {
+  // The row is read at run start and again at write time. Between the two,
+  // another run may have added ids or a poll may have failed to write; the
+  // fresh read is the truth for WHICH batches exist, and this run's polls
+  // are the truth for what Omnisend said about each, if newer.
+  it("keeps every record the fresh read holds, taking this run's poll where it is newer", () => {
+    const fresh = [
+      record({ id: "b1", status: "pending", checkedAt: "2026-09-15T02:00:00Z" }),
+      record({ id: "b2", status: "unknown" }),
+      record({ id: "b3", status: "finished", finishedCount: 100, errorsCount: 0, checkedAt: "2026-09-16T02:00:00Z" }),
+    ];
+    const polled = [
+      record({ id: "b1", status: "finished", finishedCount: 100, errorsCount: 1, checkedAt: "2026-09-16T01:00:00Z" }),
+      record({ id: "b2", status: "inProgress", checkedAt: "2026-09-16T01:00:00Z" }),
+      record({ id: "b3", status: "inProgress", checkedAt: "2026-09-16T01:00:00Z" }),
+      record({ id: "gone", status: "finished", checkedAt: "2026-09-16T01:00:00Z" }),
+    ];
+    expect(mergeBatchRecords(fresh, polled)).toEqual([polled[0], polled[1], fresh[2]]);
+  });
+
+  it("is the fresh read itself when nothing was polled", () => {
+    const fresh = [record({ id: "b1" })];
+    expect(mergeBatchRecords(fresh, [])).toEqual(fresh);
+    expect(mergeBatchRecords(fresh, [record({ id: "b1" })])).toEqual(fresh);
   });
 });
 

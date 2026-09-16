@@ -111,9 +111,16 @@ export async function recordMigrationSnapshot(input: { label: string; at: string
   return await writeState(MIGRATION_STATE_KEY, { ...existing, snapshotLabel: input.label, snapshotAt: input.at });
 }
 
-/** Every remembered batch submission; empty when none or unreadable. */
-export async function readBatchRecords(): Promise<BatchRecord[]> {
-  return parseBatchRecords(await readState(BATCHES_STATE_KEY));
+/**
+ * Every remembered batch submission; empty when none, NULL when the row
+ * could not be read. The two are different to the reconcile, which merges
+ * its write onto a fresh read of this row: an unreadable row read as "no
+ * batches" would be written over, dropping every unfinished id the next
+ * run was going to poll.
+ */
+export async function readBatchRecords(): Promise<BatchRecord[] | null> {
+  const value = await readState(BATCHES_STATE_KEY);
+  return value === null ? null : parseBatchRecords(value);
 }
 
 export async function writeBatchRecords(records: BatchRecord[]): Promise<boolean> {
