@@ -253,3 +253,189 @@ describe("SMS catalogue", () => {
     expect(SMS["promotion-final-day"].text).toContain("ends today at 11:59 PM ET");
   });
 });
+
+describe("automations", () => {
+  const THRESHOLDS = { email: "subscribed", sms: "subscribed" };
+  let AUTOMATIONS, AUTOMATION_KEYS, created, segments, smsBody, STOP_SENTENCE;
+  const load = async () => {
+    ({ AUTOMATIONS, AUTOMATION_KEYS } = await import("./automations.mjs"));
+    ({ smsBody, STOP_SENTENCE } = await import("./sms.mjs"));
+    const { readFileSync } = await import("node:fs");
+    created = JSON.parse(readFileSync(new URL("./assets/created.json", import.meta.url), "utf8"));
+    segments = JSON.parse(readFileSync(new URL("./assets/segments.json", import.meta.url), "utf8"));
+  };
+
+  /** A delay may only end a sequence when the enclosing split has downstream siblings. */
+  function noTrailingDelay(blocks, hasDownstream, path) {
+    blocks.forEach((block, index) => {
+      const last = index === blocks.length - 1;
+      if (block.type === "delay") expect(last && !hasDownstream, `${path}[${index}] ends with a delay`).toBe(false);
+      if (block.type === "split") {
+        noTrailingDelay(block.split.trueBlocks ?? [], hasDownstream || !last, `${path}[${index}].true`);
+        noTrailingDelay(block.split.falseBlocks ?? [], hasDownstream || !last, `${path}[${index}].false`);
+      }
+    });
+  }
+  const emailOf = (block) => block.action.sendEmail;
+  const segSplit = (block) => block.split.filterGroup.filters[0];
+  const delay = (block) => `${block.delay.duration.amount}${block.delay.duration.units}`;
+
+  it("builds the eight flows with thresholds, a limiter and no trailing delay", async () => {
+    await load();
+    expect(AUTOMATION_KEYS).toEqual(["welcome", "abandoned-cart", "abandoned-checkout", "browse-abandonment", "post-purchase", "replenishment", "win-back", "sunset"]);
+    for (const key of AUTOMATION_KEYS) {
+      const flow = AUTOMATIONS[key]();
+      expect(flow.settings.sendingThresholds, key).toEqual(THRESHOLDS);
+      expect(flow.settings.frequencyLimiter?.mode, key).toMatch(/^(once|interval)$/);
+      noTrailingDelay(flow.blocks, false, key);
+      const ids = JSON.stringify(flow).match(/"temporaryID":"([^"]+)"/g);
+      expect(new Set(ids).size, `${key} temporaryIDs unique`).toBe(ids.length);
+    }
+  });
+
+  it("sends every email from created.json with its SUBJECTS entry and every text from the SMS catalogue", async () => {
+    await load();
+    const walk = (blocks, out) => { for (const b of blocks) { if (b.type === "action") out.push(b); if (b.type === "split") { walk(b.split.trueBlocks ?? [], out); walk(b.split.falseBlocks ?? [], out); } } return out; };
+    for (const key of AUTOMATION_KEYS) {
+      for (const block of walk(AUTOMATIONS[key]().blocks, [])) {
+        if (block.action.type === "sendEmail") {
+          const email = block.action.sendEmail;
+          const templateKey = Object.keys(created).find((k) => created[k] === email.templateID);
+          expect(templateKey, `${key}: ${email.templateID}`).toBeDefined();
+          expect(email.subject, key).toBe(SUBJECTS[templateKey].subject);
+          expect(email.preheader, key).toBe(SUBJECTS[templateKey].preview);
+          expect(email.language, key).toBe("en_US");
+          expect(email.senderName, key).toBe("Vanta Labs");
+        }
+        if (block.action.type === "sendSms") {
+          const sms = block.action.sendSms;
+          expect(sms.message, key).toMatch(/^Vanta Labs: /);
+          expect(sms.message, key).not.toMatch(/vl_(welcome|winback|recovery)_code|% off/);
+          expect(sms.compliance.stopKeywordText, key).toBe(STOP_SENTENCE);
+          expect(sms.compliance.unsubscribeLinkText, key).toContain("[[unsubscribe_link]]");
+          expect(Object.values(SMS).some((entry) => smsBody(Object.keys(SMS).find((k) => SMS[k] === entry)) === sms.message), key).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("welcome: E1, SMS without the code, 2d, E2, 3d, E3, once per contact", async () => {
+    await load();
+    const flow = AUTOMATIONS.welcome();
+    expect(flow.trigger).toEqual({ condition: { event: "subscribed to marketing" } });
+    const [e1, sms, d1, e2, d2, e3] = flow.blocks;
+    expect(emailOf(e1).templateID).toBe(created["welcome-1"]);
+    expect(sms.action.type).toBe("sendSms");
+    expect(delay(d1)).toBe("2d");
+    expect(emailOf(e2).templateID).toBe(created["welcome-2"]);
+    expect(delay(d2)).toBe("3d");
+    expect(emailOf(e3).templateID).toBe(created["welcome-3"]);
+    expect(flow.settings.frequencyLimiter).toEqual({ mode: "once" });
+  });
+
+  it.each([
+    ["abandoned-cart", "added product to cart", "cart", ["placed order", "started checkout"]],
+    ["abandoned-checkout", "started checkout", "checkout", ["placed order"]],
+  ])("%s: E1, 23h, E2, 3h, SMS, 45h, then the gift and code splits", async (key, event, kind, exits) => {
+    await load();
+    const flow = AUTOMATIONS[key]();
+    expect(flow.trigger).toEqual({ condition: { event, origin: "api" }, inactivitySettings: { duration: { amount: 1, units: "h" } } });
+    const [e1, d1, e2, d2, sms, d3, split] = flow.blocks;
+    expect(flow.blocks).toHaveLength(7);
+    expect(emailOf(e1).templateID).toBe(created[`${kind}-1`]);
+    expect(delay(d1)).toBe("23h");
+    expect(emailOf(e2).templateID).toBe(created[`${kind}-2`]);
+    expect(delay(d2)).toBe("3h");
+    expect(sms.action.type).toBe("sendSms");
+    expect(delay(d3)).toBe("45h");
+    expect(segSplit(split)).toEqual({ type: "contact", field: "segmentID", operator: "eq", value: segments["vl-recovery-gift-ready"] });
+    const [giftSplit] = split.split.trueBlocks;
+    const [noGiftSplit] = split.split.falseBlocks;
+    for (const inner of [giftSplit, noGiftSplit]) expect(segSplit(inner)).toEqual({ type: "contact", field: "segmentID", operator: "eq", value: segments["vl-recovery-code-ready"] });
+    expect(emailOf(giftSplit.split.trueBlocks[0]).templateID).toBe(created[`${kind}-3-gift-code`]);
+    expect(emailOf(giftSplit.split.falseBlocks[0]).templateID).toBe(created[`${kind}-3-gift`]);
+    expect(emailOf(noGiftSplit.split.trueBlocks[0]).templateID).toBe(created[`${kind}-3-code`]);
+    expect(emailOf(noGiftSplit.split.falseBlocks[0]).templateID).toBe(created[`${kind}-3-plain`]);
+    expect(flow.exitConditions).toEqual(exits.map((e) => ({ event: e, origin: "api" })));
+    expect(flow.settings.frequencyLimiter).toEqual({ mode: "interval", duration: { amount: 7, units: "d" } });
+  });
+
+  it("browse-abandonment: one email after 4h of quiet, exits on cart, checkout and order, once per 7 days", async () => {
+    await load();
+    const flow = AUTOMATIONS["browse-abandonment"]();
+    expect(flow.trigger).toEqual({ condition: { event: "viewed product", origin: "api" }, inactivitySettings: { duration: { amount: 4, units: "h" } } });
+    expect(flow.blocks).toHaveLength(1);
+    expect(emailOf(flow.blocks[0]).templateID).toBe(created["browse-1"]);
+    expect(flow.exitConditions).toEqual([{ event: "added product to cart", origin: "api" }, { event: "started checkout", origin: "api" }, { event: "placed order", origin: "api" }]);
+    expect(flow.settings.frequencyLimiter).toEqual({ mode: "interval", duration: { amount: 7, units: "d" } });
+  });
+
+  it("post-purchase: 1d, E1, 9d, E2, then the repeat-customer thank-you", async () => {
+    await load();
+    const flow = AUTOMATIONS["post-purchase"]();
+    expect(flow.trigger).toEqual({ condition: { event: "paid for order", origin: "api" } });
+    const [d1, e1, d2, e2, split] = flow.blocks;
+    expect(delay(d1)).toBe("1d");
+    expect(emailOf(e1).templateID).toBe(created["post-purchase-1"]);
+    expect(delay(d2)).toBe("9d");
+    expect(emailOf(e2).templateID).toBe(created["post-purchase-2"]);
+    expect(segSplit(split).value).toBe(segments["vl-repeat-customers"]);
+    expect(emailOf(split.split.trueBlocks[0]).templateID).toBe(created["vip-milestone"]);
+    expect(split.split.falseBlocks).toEqual([]);
+  });
+
+  it("replenishment: 45d, then only those who have not bought again", async () => {
+    await load();
+    const flow = AUTOMATIONS.replenishment();
+    const [d1, split] = flow.blocks;
+    expect(delay(d1)).toBe("45d");
+    expect(segSplit(split).value).toBe(segments["vl-bought-30d"]);
+    expect(split.split.trueBlocks).toEqual([]);
+    expect(emailOf(split.split.falseBlocks[0]).templateID).toBe(created["replenishment"]);
+  });
+
+  it("win-back: 60d, E1 without a code, 1d, SMS, 30d, then the code split", async () => {
+    await load();
+    const flow = AUTOMATIONS["win-back"]();
+    expect(flow.trigger).toEqual({ condition: { event: "paid for order", origin: "api" } });
+    const [d1, e1, d2, sms, d3, split] = flow.blocks;
+    expect(delay(d1)).toBe("60d");
+    expect(emailOf(e1).templateID).toBe(created["winback-1"]);
+    expect(delay(d2)).toBe("1d");
+    expect(sms.action.type).toBe("sendSms");
+    expect(delay(d3)).toBe("30d");
+    expect(segSplit(split).value).toBe(segments["vl-winback-ready"]);
+    expect(emailOf(split.split.trueBlocks[0]).templateID).toBe(created["winback-2"]);
+    expect(emailOf(split.split.falseBlocks[0]).templateID).toBe(created["winback-2-nocode"]);
+    expect(flow.exitConditions).toEqual([{ event: "paid for order", origin: "api" }]);
+  });
+
+  it("sunset: one email on entering the unengaged segment, then tag by click", async () => {
+    await load();
+    const flow = AUTOMATIONS.sunset();
+    expect(flow.trigger.condition.event).toBe("entered segment");
+    expect(flow.trigger.condition.filterGroups[0].filters[0].value).toBe(segments["vl-unengaged-120"]);
+    const [ask, d1, split] = flow.blocks;
+    expect(emailOf(ask).templateID).toBe(created["sunset"]);
+    expect(delay(d1)).toBe("7d");
+    expect(split.split.filterGroup.filters[0]).toMatchObject({ type: "message", field: "blockID", operator: "clickedEmail", value: ask.temporaryID });
+    expect(split.split.trueBlocks.map((b) => [b.action.type, (b.action.addTag ?? b.action.removeTag).value])).toEqual([["addTag", "engaged"], ["removeTag", "sunset"]]);
+    expect(split.split.falseBlocks.map((b) => [b.action.type, b.action.addTag.value])).toEqual([["addTag", "sunset"]]);
+  });
+});
+
+describe("segments: recovery readiness", () => {
+  it("defines the two split segments the abandonment automations need", async () => {
+    const { SEGMENTS, PROPERTY_SEGMENTS } = await import("./segments.mjs");
+    const gift = PROPERTY_SEGMENTS["vl-recovery-gift-ready"]();
+    const code = PROPERTY_SEGMENTS["vl-recovery-code-ready"]();
+    expect(gift.name).toBe("VL · Recovery gift ready");
+    expect(code.name).toBe("VL · Recovery code ready");
+    expect(gift.conditionGroups[0].conditions[0]).toEqual({ entity: "contact", junction: "and", filters: [{ property: "custom", name: "vl_recovery_gift_ready", valueType: "text", operator: "anyOf", value: ["yes"] }] });
+    expect(code.conditionGroups[0].conditions[0]).toEqual({ entity: "contact", junction: "and", filters: [{ property: "custom", name: "vl_recovery_ready", valueType: "text", operator: "anyOf", value: ["yes"] }] });
+    expect(SEGMENTS["vl-recovery-gift-ready"]).toBe(PROPERTY_SEGMENTS["vl-recovery-gift-ready"]);
+    const winback = PROPERTY_SEGMENTS["vl-winback-ready"]();
+    expect(winback.name).toBe("VL · Win-back code ready");
+    expect(winback.conditionGroups[0].conditions[0].filters[0]).toEqual({ property: "custom", name: "vl_winback_ready", valueType: "text", operator: "anyOf", value: ["yes"] });
+  });
+});

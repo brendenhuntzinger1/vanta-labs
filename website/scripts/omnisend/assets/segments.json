@@ -12,5 +12,8 @@
   "vl-engaged-90": "6aa9894deba844d1e0e953a0",
   "vl-unengaged-120": "6aa9895956e90f08f163f5ae",
   "vl-repeat-customers": "6aa9895a56e90f08f163f5af",
-  "vl-browsed-no-order-30d": "6aa9895c56e90f08f163f5b0"
+  "vl-browsed-no-order-30d": "6aa9895c56e90f08f163f5b0",
+  "vl-recovery-gift-ready": "6aaaae67f658a847e55713a6",
+  "vl-recovery-code-ready": "6aaaae68f658a847e55713a7",
+  "vl-winback-ready": "6aaaaefc171138e617aa7178"
 }
