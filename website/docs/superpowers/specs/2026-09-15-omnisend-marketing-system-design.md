@@ -307,13 +307,13 @@ conversation; UTM `source=omnisend`, `medium=email|sms`,
 
 | Key | Trigger | Steps | Notes |
 | --- | --- | --- | --- |
-| `welcome` | `subscribed to marketing` | E1 immediately "Welcome to Vanta Labs" (what the store is, COA library, code) → 2d → E2 "Every batch has a published report" → 3d → E3 "How ordering works" (dispatch cutoff, destinations, tracking, code reminder) | once per lifetime. SMS: one text on SMS subscribe with the code (separate `welcome-sms` flow triggered by SMS consent). |
+| `welcome` | `subscribed to marketing` | E1 immediately "Welcome to Vanta Labs" (what the store is, COA library; no code, it may not exist yet) → SMS for SMS subscribers (no code) → 2d → split *Welcome code ready*: E2 "Every batch has a published report" with the code, else without → 3d → split again: E3 "How ordering works" (dispatch cutoff, destinations, tracking) with the code reminder, else without | once per lifetime. The store mints the code at a site sign-up, on the next nightly reconcile for a form sign-up, and never for a checkout opt-in (§3.4); `vl_welcome_ready` is "yes" only once it exists, so no email can show a blank code card. |
 | `abandoned-cart` | 1h inactivity after `added product to cart` | E1 "Your cart is saved" (cart section) → 23h → E2 "Still here when you are" (cart + COA angle) → 48h → split on segment *Bought in last 30 days*: no → E3 with `vl_recovery_code`; yes → E3 without code. SMS text at +26h for SMS subscribers. | exits on `placed order`, `started checkout`; once per 7 days |
 | `abandoned-checkout` | 1h inactivity after `started checkout` | E1 "Finish when you are ready" (checkout link) → SMS at +3h → 21h → E2 → 48h → E3 with/without code (same split) | exits on `placed order`; once per 7 days |
 | `browse-abandonment` | 4h inactivity after `viewed product` | E1 "You were looking at this" (viewed products section) | exits on `added product to cart`, `placed order`; once per 7 days |
-| `post-purchase` | `paid for order` | 1d → E1 "Your batch report" (how to find the COA for what they bought, support, what happens next) → 9d → E2 cross-sell with `product_recommender` (popular, excluding purchased 30d) | once per 30 days |
+| `post-purchase` | `paid for order` | 1d → E1 "Your batch report" (how to find the COA for what they bought, support, what happens next) → 9d → E2 cross-sell with `product_recommender` (popular, excluding purchased 30d) → 3d → split *Repeat customers* (2+ paid orders): E3 repeat thank-you → 7d → split *VIP*: E4 milestone | once per 30 days; the two thank-yous are a week apart so they never land together |
 | `replenishment` | `paid for order` | 45d → split *Bought in last 30 days*: no → E1 "When you need to reorder" (recommender: personalized, fallback popular) | once per 60 days |
-| `win-back` | `paid for order` | 60d → split *Bought in last 30 days* no → E1 "It has been a while" with `vl_winback_code` → SMS +1d → 30d → E2 "Last note from us" | once per 180 days; exits on `placed order` |
+| `win-back` | `entered segment` *Lapsed 60* | E1 "It has been a while" (no code) → SMS +1d → 30d → split *Win-back code ready*: E2 "Last note from us" with `vl_winback_code`, else a plain note | once per 32 days (one run plus a day); exits on `paid for order`. Entering on the segment, not the order: a `paid for order` trigger with a 60-day wait and a 180-day limiter locked a repeat buyer out for 180 days from the first order. |
 | `sunset` | `entered segment` *Unengaged 120 days* | E1 "Do you want to keep hearing from us?" → 7d → split on clicked E1: no → remove tag `engaged`, add tag `sunset` | the *Campaign audience* segment excludes `sunset`, so cold addresses stop dragging deliverability |
 
 ## 7. Segments
@@ -324,7 +324,10 @@ conversation; UTM `source=omnisend`, `medium=email|sms`,
 (opened or clicked in 90d), `Unengaged 120 days` (subscribed, no open or click
 in 120d, added > 120d ago), `Subscribers who never bought`,
 `Browsed, no order (30d)`, `Attested account holders` (`vl_attested`),
-`Campaign audience` (email subscribed, not `sunset`, not unengaged).
+`Campaign audience` (email subscribed, not `sunset`, not unengaged), and the
+four readiness splits `Welcome code ready`, `Recovery gift ready`,
+`Recovery code ready`, `Win-back code ready` (each `vl_*_ready = yes`, which
+the store sets only while the offer exists).
 
 ## 8. Sign-up form
 

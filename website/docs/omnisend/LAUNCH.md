@@ -25,8 +25,8 @@ the document to read before authorising any step in `OPERATIONS.md` §4.
   admin resend refuses Omnisend-owned carts.
 * **Privacy**: no email address travels in any URL. The Omnisend link token
   (v2) and the attestation handoff (v2) both seal it.
-* **Omnisend account**: 2 universal layouts, 30 templates, SMS catalogue,
-  17 segments, 8 automations (disabled), 1 sign-up form (draft), 3 campaign
+* **Omnisend account**: 2 universal layouts, 32 templates, SMS catalogue,
+  18 segments, 8 automations (disabled), 1 sign-up form (draft), 3 campaign
   drafts. All generated from `website/scripts/omnisend/` and re-creatable.
 * **Policies**: privacy, cookie and terms text name Omnisend, what it
   receives, and the SMS program terms; pinned by tests.
@@ -53,7 +53,9 @@ Layouts: header `6aa985ecfa261ac55e04bae3`, footer `6aa985f7c29076c61d3838b1`.
 |---|---|
 | welcome-1 | `6aa98802072042c2a4166153` |
 | welcome-2 | `6aa98867072042c2a4166279` |
+| welcome-2-code | `6aaae3a55322cd96de57bc97` |
 | welcome-3 | `6aa988a450c3f856bc4fb830` |
+| welcome-3-nocode | `6aaae36b5322cd96de57bc76` |
 | cart-1 | `6aaaa7eb7aea37873281b0d0` |
 | cart-2 | `6aaaa85150c3f856bc51eca1` |
 | cart-3-gift-code | `6aaaa89e50c3f856bc51edae` |
@@ -95,12 +97,13 @@ Layouts: header `6aa985ecfa261ac55e04bae3`, footer `6aa985f7c29076c61d3838b1`.
 | vl-vip | `6aa9891737e7762ce4afac2b` |
 | vl-campaign-audience | `6aa9891856e90f08f163f5ad` |
 | vl-engaged-90 | `6aa9894deba844d1e0e953a0` |
-| vl-unengaged-120 | `6aa9895956e90f08f163f5ae` |
+| vl-unengaged-120 | `6aaae34d9ca7eb31e5d9e654` |
 | vl-repeat-customers | `6aa9895a56e90f08f163f5af` |
 | vl-browsed-no-order-30d | `6aa9895c56e90f08f163f5b0` |
 | vl-recovery-gift-ready | `6aaaae67f658a847e55713a6` |
 | vl-recovery-code-ready | `6aaaae68f658a847e55713a7` |
 | vl-winback-ready | `6aaaaefc171138e617aa7178` |
+| vl-welcome-ready | `6aaac3f27cbd2da70ddb4dc7` |
 
 | Automation (all disabled) | Omnisend id |
 |---|---|
@@ -127,6 +130,24 @@ The stray draft form `6aaa9bef27f565e8b3f4b22f` ("Email & SMS branded
 Multi-step welcome discount") was created from Omnisend's stock template on
 2026-09-16 and not by this work; it is left untouched for the owner to delete
 or keep.
+
+Each automation holds its own copies of the templates it sends; the live copy
+ids are in `scripts/omnisend/assets/automation-content.json`. Replacing an
+automation's block tree (done on 2026-09-16 for the welcome split, the
+win-back re-entry and the post-purchase spacing) copies the templates again,
+so the copies from the first build are now orphaned inside Omnisend. They are
+unreferenced, send nothing and cost nothing; the owner may delete them in the
+Omnisend editor or leave them. The first `vl-unengaged-120` segment
+(`6aa9895956e90f08f163f5ae`) was superseded the same day because its
+`dateAdded` filter carried a literal placeholder rather than a date; the
+sunset flow now points at the replacement and the old segment is still in the
+account, unreferenced.
+
+Welcome design: the first email and the SMS never carry a code, because the
+code may not exist yet. The store mints it at a site sign-up, on the next
+nightly reconcile for a form sign-up, and never for a checkout opt-in; the
+second and third emails split on `vl-welcome-ready` so a contact without a
+code sees the plain variant rather than a blank card.
 
 ## 4. Contact reconciliation
 
@@ -181,6 +202,22 @@ limiter; email opens are unreliable and SMS opens do not exist.
 | Sender domain | awaiting DNS (owner) |
 | SMS | awaiting verification and plan (owner) |
 | Postal address in footer | awaiting owner |
+
+Owner actions, in the order they unblock things (details in `OPERATIONS.md`
+§1 and §4 and `MIGRATION.md`):
+
+1. Authenticate the sender domain in Omnisend (DNS records the dashboard
+   shows) and set the sender name and reply-to; until then campaigns fall
+   back to Omnisend's shared address.
+2. Choose the plan and complete US SMS verification if SMS is wanted; SMS
+   steps stay off until the dashboard says approved.
+3. Put the postal address into the footer layout.
+4. Apply `src/lib/sql/omnisend-sync.sql` to production (three tables, no
+   data change) and set `OMNISEND_API_KEY` in Vercel.
+5. Run the contact reconciliation: snapshot, dry run, read the report, push.
+6. Set `OMNISEND_MARKETING_OWNER=true` first, then enable flows one at a
+   time in the §4 order. The switch must precede the flows so that no cart
+   has two owners.
 
 ## 8. Rollback
 

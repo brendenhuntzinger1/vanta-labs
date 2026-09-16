@@ -222,20 +222,26 @@ may not (`preferences/route.ts:87-91`).
 
 ### 3.3 After cutover
 
-* Store → Omnisend (push): `collectContactFacts` (`contacts.ts:250-295`)
-  derives the email channel in this precedence: suppression unreadable →
-  `unsubscribed`; suppressed → `unsubscribed` with the suppression's
-  `created_at`; guest row active or `marketing_emails` → `subscribed` with
-  the store's own timestamp and source; guest `unsubscribed_at` →
-  `unsubscribed`; otherwise `nonSubscribed` (`contacts.ts:190-215`). SMS is
-  `subscribed` only when `sms_marketing` is true AND a phone number is stored,
-  with `sms_consent_at` as the consent time; `sms_opted_out_at` →
-  `unsubscribed`; anything else sends no phone identifier at all
-  (`contacts.ts:218-228`, `contact-payload.ts:141-153`). A checkout phone
-  number is never SMS consent: the loader reads only
+* Store → Omnisend (push): `collectContactFacts` (`contacts.ts:263`) reads
+  the suppression list first. If that read fails the address has NO facts:
+  `readSuppression` answers `known: false` (`contacts.ts:111-125`), the
+  loader returns `null`, and every caller skips the address. Nothing is
+  pushed on a guess, because a guessed `unsubscribed` would be mirrored back
+  into the store by the next write-back; fail closed means do not push. With
+  the list readable the email channel is derived in this precedence:
+  suppressed → `unsubscribed` with the suppression's `created_at`; guest row
+  active or `marketing_emails` → `subscribed` with the store's own timestamp
+  and source; guest `unsubscribed_at` → `unsubscribed`; otherwise
+  `nonSubscribed`, which sends no email channel block at all
+  (`contact-payload.ts:178-185`, so Omnisend's own record is never
+  overwritten with "unknown"). SMS is `subscribed` only when `sms_marketing`
+  is true AND a phone number is stored, with `sms_consent_at` as the consent
+  time; `sms_opted_out_at` → `unsubscribed`; anything else sends no phone
+  identifier at all (`contacts.ts:234-238`, `contact-payload.ts:206`). A
+  checkout phone number is never SMS consent: the loader reads only
   `customer_preferences.phone`. `sendWelcomeMessage: false` disables
   Omnisend's own stock welcome message, not the welcome automation
-  (`contact-payload.ts:137`).
+  (`contact-payload.ts:198`).
 * Omnisend → store (write-back), nightly by the reconcile: `planWriteBack`
   (`reconcile-plan.ts:57-90`) turns an Omnisend `unsubscribed` into
   `email_suppressions {reason: unsubscribed, source: omnisend}` plus the
@@ -243,10 +249,13 @@ may not (`preferences/route.ts:87-91`).
   `sms_opted_out_at` on the matching account only (`reconcile.ts:297-323`),
   and a `subscribed` address absent from both consent stores and not
   suppressed into `marketing_subscribers {source: omnisend-form}`. It never
-  re-opens a suppression (`reconcile-plan.ts:70-78`). The write-back is
-  skipped entirely if the suppression list cannot be read in full
-  (`reconcile.ts:330-334`), and the watermark is held if any page or write
-  failed (`reconcile.ts:381-383`).
+  re-opens a suppression (`reconcile-plan.ts:61`). Every stamp it writes is
+  dated with Omnisend's `statusChangedAt` (when the person actually
+  unsubscribed), never with the run's own time. The write-back is skipped
+  entirely if the suppression list cannot be read in full
+  (`reconcile.ts:474-475`), the push is skipped if the consented audience
+  cannot be read in full (`reconcile.ts:904`), and the watermark is held if
+  any page or write failed (`reconcile.ts:539-540`).
 * Bounces and complaints inside Omnisend stay in Omnisend (its own
   suppression); the store learns of them only as an `unsubscribed` status on
   the next reconcile, and only if Omnisend reports them that way.

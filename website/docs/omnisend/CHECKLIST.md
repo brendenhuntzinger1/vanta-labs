@@ -59,7 +59,7 @@ Legend: `[x]` done and verified · `[~]` in progress / partial · `[ ]` not star
 
 ## 7. Account customisation and templates
 - [x] Header/footer universal layouts, brand images uploaded
-- [x] 30 templates in Omnisend (assets/created.json)
+- [x] 32 templates in Omnisend (assets/created.json), including the welcome-2-code and welcome-3-nocode twins for the welcome split
 - [x] Remaining templates uploaded (cart, checkout, browse, post-purchase-2, replenishment, winback-1, campaigns)
 - [x] New templates: new product, general promotion, final-day promotion, VIP milestone, repeat-customer
 - [x] SMS variants catalogued (scripts/omnisend/sms.mjs)
@@ -72,6 +72,9 @@ Legend: `[x]` done and verified · `[~]` in progress / partial · `[ ]` not star
 - [x] Welcome, abandoned cart, abandoned checkout, browse abandonment, post-purchase, replenishment, win-back, sunset created — all DISABLED
 - [x] Timings and rationale documented as hypotheses (scripts/omnisend/README.md, OPERATIONS.md §3)
 - [x] Frequency limiter + sending thresholds on every automation
+- [x] Welcome never shows a blank code: E1 and the SMS carry none; E2/E3 split on vl-welcome-ready
+- [x] Win-back enters on vl-lapsed-60 (not on every paid order) so a repeat buyer who lapses again is won back again; limiter 32 d
+- [x] Post-purchase: repeat thank-you only for a second order, VIP milestone a week later
 
 ## 9. Offer economics
 - [x] Live gift/discount system audited and reused (cart-offers.ts, cart-plan.ts)
