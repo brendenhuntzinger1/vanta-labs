@@ -178,8 +178,9 @@ Not run. The first run is the owner's call, in this order: `snapshot` →
 
 See `VERIFICATION.md`. Passed: unit and source suites (full run green),
 typecheck, lint, production build, and the harness checks of the click route
-(seven cases at phone width), the old recovery link, the legal pages and the
-gated cron jobs. Blocked on the owner: seed sends (no authenticated sender
+(seven cases at phone width), the old recovery link, the legal pages, the
+gated cron jobs, the guest checkout beacon and the sealed attestation handoff
+(both at phone width, after the review fixes). Blocked on the owner: seed sends (no authenticated sender
 domain, no authorisation), SMS (no verified sender, zero consents), and
 production evidence (no cutover). Known limitations: conditional content is
 not on the current plan, so the recovery flows use four template variants

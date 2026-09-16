@@ -86,7 +86,9 @@ Legend: `[x]` done and verified · `[~]` in progress / partial · `[ ]` not star
 - [x] Metrics list and baseline documented (OPERATIONS.md §3)
 
 ## 11. End-to-end verification
-- [~] Test matrix executed (VERIFICATION.md: 18 PASS, 1 PARTIAL, 3 BLOCKED on the owner) against the local harness with test contacts; passed/failed/blocked recorded
+- [~] Test matrix executed (VERIFICATION.md: 20 PASS, 1 PARTIAL, 3 BLOCKED on the owner) against the local harness with test contacts; passed/failed/blocked recorded
+- [x] Adversarial review of the merged diff, three fix branches merged and re-verified (contacts fail closed by not pushing; order events carry no phone and release the claim on a transient refusal; the cart-offer claim fails closed and the welcome code is retired at first payment); full suite, lint and typecheck green after each
+- [x] Harness carries the Omnisend tables (omnisend-sync.sql in setup-local-harness.sh; applied twice without error); guest checkout beacon and sealed attestation handoff browser-checked at 390×844 (VERIFICATION.md rows 23–24)
 
 ## 12. Controlled transition
 - [x] Launch summary, rollout order, cohort and spend limits, rollback steps (LAUNCH.md, OPERATIONS.md §4-5)
