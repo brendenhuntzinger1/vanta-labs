@@ -22,6 +22,7 @@ import { pointsToDollars } from "@/lib/points-math";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { isPaymentStatusDemotion } from "@/lib/order-status";
 import { hasCapturedPayment } from "@/lib/ledger";
+import { onOrderRefunded } from "@/lib/marketing/omnisend/order-hooks";
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
@@ -642,6 +643,21 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         nonCashReturned,
       });
       await updateCommissionOnRefund(orderId, { refundedFraction });
+
+      // TELL OMNISEND ON A FULL REFUND ONLY.
+      //
+      // A partial refund is represented here as payment_status
+      // "partially_refunded" with refund_amount below amount_paid (the
+      // compare-and-set above wrote exactly that), and it fires NOTHING: the
+      // customer kept goods, the purchase stands, and an `order refunded`
+      // event would pull them out of the post-purchase flows for an order
+      // they still have. A full refund — cash back to amount_paid, or a
+      // credit-settled order returned in its entirety — is the one case the
+      // event describes. after() so the request is answered first; the hook
+      // never throws, and only fires for an order Omnisend was told about.
+      if (isFullRefund) {
+        after(() => onOrderRefunded(orderId));
+      }
 
       // Only reverse earned points and re-credit spent store credit on a
       // full refund - a partial refund leaves earned points untouched rather

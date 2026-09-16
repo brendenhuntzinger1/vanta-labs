@@ -17,6 +17,11 @@ import { ingestAdSpend } from "@/lib/ads/spend-ingest";
 import { sweepUnsentMetaPurchases } from "@/lib/ads/meta-purchase-sync";
 import { pruneStaleHeartbeats } from "@/lib/admin-live-visitors";
 import { mintOmnisendCartOffers } from "@/lib/marketing/omnisend/cart-offers";
+import {
+  omnisendCatalogSyncJob,
+  omnisendContactsReconcileJob,
+  omnisendOrderBackstop,
+} from "@/lib/marketing/omnisend/sweeps";
 import { handleCronRequest, type CronJobMap } from "@/lib/cron-runner";
 
 export const dynamic = "force-dynamic";
@@ -161,6 +166,10 @@ const JOBS: CronJobMap = {
   liveVisitorHeartbeatPrune: { label: "live_visitor_heartbeat_prune", run: pruneStaleHeartbeats },
   // Mint the 72-hour recovery code and gift for carts Omnisend owns and push them as contact properties; mails nothing, gated on OMNISEND_MARKETING_OWNER, claimed once per cart (marketing/omnisend/cart-offers.ts).
   omnisendCartOffers: { label: "omnisend_cart_offers", run: () => mintOmnisendCartOffers() },
+  // Omnisend: retry unsent paid-order events (ledger-keyed, 7 days, 50 a run), then the catalogue and contacts syncs on their own cadence (6h / 24h, stamped in omnisend_sync_state). Each asks the gate first and never throws.
+  omnisendOrderBackstop: { label: "omnisend_order_backstop", run: omnisendOrderBackstop },
+  omnisendCatalogSync: { label: "omnisend_catalog_sync", run: omnisendCatalogSyncJob },
+  omnisendContactsReconcile: { label: "omnisend_contacts_reconcile", run: omnisendContactsReconcileJob },
 };
 
 /**

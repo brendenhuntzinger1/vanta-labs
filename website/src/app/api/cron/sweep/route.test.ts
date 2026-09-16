@@ -33,6 +33,9 @@ const partnerAccess = sentinel("partnerAccess");
 const birthdayBonus = sentinel("birthdayBonus");
 const orderPushHealth = sentinel("orderPushHealth");
 const liveVisitorHeartbeatPrune = sentinel("liveVisitorHeartbeatPrune");
+const omnisendOrderBackstop = sentinel("omnisendOrderBackstop");
+const omnisendCatalogSync = sentinel("omnisendCatalogSync");
+const omnisendContactsReconcile = sentinel("omnisendContactsReconcile");
 interface SystemAlert {
   type: string;
   severity: string;
@@ -90,6 +93,13 @@ vi.mock("@/lib/ads/spend-ingest", () => ({
   ingestAdSpend: async () => ({ ran: false, reason: "WINDSOR_API_KEY is not set", connectors: [], totalWritten: 0, totalSpend: 0 }),
 }));
 vi.mock("@/lib/admin-live-visitors", () => ({ pruneStaleHeartbeats: () => liveVisitorHeartbeatPrune() }));
+// The Omnisend jobs: the order backstop and the two cadence-limited syncs.
+// Distinct sentinels, like every other job, so a swapped key cannot pass.
+vi.mock("@/lib/marketing/omnisend/sweeps", () => ({
+  omnisendOrderBackstop: () => omnisendOrderBackstop(),
+  omnisendCatalogSyncJob: () => omnisendCatalogSync(),
+  omnisendContactsReconcileJob: () => omnisendContactsReconcile(),
+}));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: (alert: SystemAlert) => recordSystemAlert(alert) }));
 
 const SECRET = "test-cron-secret";
@@ -132,12 +142,17 @@ describe("the scheduled sweep", () => {
     // Asserted for the same reason as inventoryCommitRepair above: a job that
     // is mocked but never wired into JOBS would still import cleanly.
     expect(body.liveVisitorHeartbeatPrune).toEqual({ job: "liveVisitorHeartbeatPrune" });
+    // The Omnisend jobs, asserted for the same reason: a mock lets the route
+    // import cleanly whether or not the job is in the map.
+    expect(body.omnisendOrderBackstop).toEqual({ job: "omnisendOrderBackstop" });
+    expect(body.omnisendCatalogSync).toEqual({ job: "omnisendCatalogSync" });
+    expect(body.omnisendContactsReconcile).toEqual({ job: "omnisendContactsReconcile" });
   });
 
   it("runs every job exactly once", async () => {
     await callSweep();
 
-    for (const job of [commissions, reservations, tenderHolds, paymentReconcile, expressIntents, shippoSync, shipmentRepair, inventoryCommitRepair, shippingCostRepair, refundEffectRepair, signupConfirmations, partnerAccess, orderPushHealth]) {
+    for (const job of [commissions, reservations, tenderHolds, paymentReconcile, expressIntents, shippoSync, shipmentRepair, inventoryCommitRepair, shippingCostRepair, refundEffectRepair, signupConfirmations, partnerAccess, orderPushHealth, omnisendOrderBackstop, omnisendCatalogSync, omnisendContactsReconcile]) {
       expect(job).toHaveBeenCalledTimes(1);
     }
   });
