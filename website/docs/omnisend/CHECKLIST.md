@@ -24,7 +24,7 @@ Legend: `[x]` done and verified · `[~]` in progress / partial · `[ ]` not star
 - [x] Marketing unsubscribe stops marketing in both systems (write-back + push); transactional unaffected
 
 ## 3. Omnisend eligibility and readiness
-- [!] Sender domain authentication in Omnisend — owner adds the DNS records Omnisend shows under Store settings → Sender domains (no API exposes this)
+- [x] Sender domain authentication in Omnisend — verified 2026-09-16 (SPF merged with the existing Google record, DKIM `krs._domainkey` added, DMARC unchanged); every automation and campaign draft now sends from `support@` on the domain
 - [!] US SMS approval / toll-free or 10DLC verification — owner checks Omnisend → SMS settings; treat as NOT approved until the dashboard says so
 - [!] Business and catalogue disclosure to Omnisend — owner confirms the account application names research peptides honestly
 - [x] Plan limits learned: conditional content (section filters) is NOT on this plan (402); discount blocks cannot mint codes for API stores; back-in-stock trigger unsupported for API stores; recommenders fall back silently
@@ -69,7 +69,7 @@ Legend: `[x]` done and verified · `[~]` in progress / partial · `[ ]` not star
 - [x] Welcome hero is the store's own product vial, never a generic or generated one
 - [!] Dark-mode preview (Gmail iOS, Outlook) in Omnisend before the first send — owner
 - [!] Postal address in the footer — owner supplies
-- [!] Sender name / reply-to configured in Omnisend — owner
+- [x] Sender name / reply-to configured in Omnisend — Vanta Labs, `support@` on the verified domain (2026-09-16)
 
 ## 8. Automations
 - [x] Welcome, abandoned cart, abandoned checkout, browse abandonment, post-purchase, replenishment, win-back, sunset created — all DISABLED
@@ -89,7 +89,7 @@ Legend: `[x]` done and verified · `[~]` in progress / partial · `[ ]` not star
 - [x] Metrics list and baseline documented (OPERATIONS.md §3)
 
 ## 11. End-to-end verification
-- [~] Test matrix executed (VERIFICATION.md: 20 PASS, 1 PARTIAL, 3 BLOCKED on the owner) against the local harness with test contacts; passed/failed/blocked recorded
+- [~] Test matrix executed (VERIFICATION.md: 21 PASS, 1 PARTIAL, 3 BLOCKED on the owner) against the local harness with test contacts; passed/failed/blocked recorded
 - [x] Adversarial review of the merged diff, three fix branches merged and re-verified (contacts fail closed by not pushing; order events carry no phone and release the claim on a transient refusal; the cart-offer claim fails closed and the welcome code is retired at first payment); full suite, lint and typecheck green after each
 - [x] Harness carries the Omnisend tables (omnisend-sync.sql in setup-local-harness.sh; applied twice without error); guest checkout beacon and sealed attestation handoff browser-checked at 390×844 (VERIFICATION.md rows 23–24)
 

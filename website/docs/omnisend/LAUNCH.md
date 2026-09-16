@@ -136,8 +136,9 @@ or keep.
 Each automation holds its own copies of the templates it sends; the live copy
 ids are in `scripts/omnisend/assets/automation-content.json`. Replacing an
 automation's block tree (done on 2026-09-16 for the welcome split, the
-win-back re-entry and the post-purchase spacing) copies the templates again,
-so the copies from the first build are now orphaned inside Omnisend. They are
+win-back re-entry and the post-purchase spacing, and again that evening for
+the design pass in `DESIGN.md`) copies the templates again, so the copies
+from the earlier builds are now orphaned inside Omnisend. They are
 unreferenced, send nothing and cost nothing; the owner may delete them in the
 Omnisend editor or leave them. The first `vl-unengaged-120` segment
 (`6aa9895956e90f08f163f5ae`) was superseded the same day because its
@@ -202,7 +203,7 @@ limiter; email opens are unreliable and SMS opens do not exist.
 | Automations | 8, all disabled |
 | Form | draft |
 | Campaigns | 3 drafts |
-| Sender domain | awaiting DNS (owner) |
+| Sender domain | verified 2026-09-16; automations and campaign drafts send from `support@` on it |
 | SMS | awaiting verification and plan (owner) |
 | Postal address in footer | awaiting owner |
 

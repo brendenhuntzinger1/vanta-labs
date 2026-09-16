@@ -36,6 +36,7 @@ Statuses: PASS · FAIL · BLOCKED (named dependency) · UNTESTED.
 | 22 | Production: first real event of each type observed in omnisend_events_sent and in Omnisend | production evidence | BLOCKED (cutover) | nothing has been enabled in production |
 | 23 | Guest checkout beacon at 390×844: reaching /checkout stamps `checkout_started_at` on the guest's cart row once an address is typed; the Omnisend gate stays off | harness | PASS (harness) | 2026-09-16 local harness at 390×844, guest holding a marketing-link grant: product page → Add to Cart → /checkout. The arrival beacon posted `items: [], reachedCheckout: true` (a guest has no row yet, so nothing to stamp); typing the address fired the debounced items beacon with `reachedCheckout: true`, and the store answered 200 having created and stamped the row in the same call: one `abandoned_carts` row for the test address, status active, one line, `first_seen_at` and `checkout_started_at` equal (19:18:32). `omnisend_events_sent` stayed empty (gate off outside production). Screenshot checkout-guest-beacon-mobile.png |
 | 24 | Sealed attestation handoff (v2): link click → /attest → confirm → destination preserved with UTM; the address never in any URL | harness | PASS (harness; the recorded branch needs an account) | 2026-09-16 local harness at 390×844: a v2 link token minted with the harness secret, opened through the click route with `to=/products/bpc-157-10mg` → 302 to `/attest?h=v2.<expiry>.<sealed>.<mac>`; both confirmations ticked, Confirm and continue → POST /api/attest 200 with only the handoff and the two booleans in the body. The harness has no auth users, so the outcome was `no_account` and the page went to `/account/login?next=/products/bpc-157-10mg?utm_source=omnisend&utm_medium=email`, destination and UTM intact. No request URL in the session contained the address or an `@` (network log filtered). The recorded/grant branch is pinned by api/attest/route.test.ts and needs a real account (GoTrue) to see in a browser. Screenshot attest-sealed-handoff-mobile.png |
+| 25 | Regenerated template set in the account: every template, automation copy and campaign copy carries the reviewed design; nothing enabled | configuration + render | PASS (configuration) | 2026-09-16 21:40 to 21:49 UTC: 32 of 32 templates accepted by `put_email_templates_id` (after one refusal, "borderRadius must be not bigger than 200 pixels size", fixed in the generator and pinned by assets.test.mjs, 44 tests); 8 of 8 automations re-copied with `put_automations_id_blocks`, 27 new content ids in automation-content.json, `isEnabled` false on all 8 read back; 3 of 3 campaign copies updated with `put_email_content_id`, status draft on all 3, sender set to the verified domain address. Omnisend's own render of welcome-1, cart-1, cart-3-gift-code, checkout-2, post-purchase-1 and winback-1 captured at 390 wide (v2-*.png): one ivory primary button, the store's own product vial, the trust card, product placeholders where Omnisend fills real products at send time. Sender domain verified by the owner the same evening; every automation reads `support@` on the domain |
 
 ## Harness session, 2026-09-16
 
@@ -58,6 +59,16 @@ Not possible on the harness: a signed-in product view, cart or checkout event
 (the shim has no auth), a real Omnisend round trip (gated off outside
 production by design), SMS. Those are covered by unit and source tests and by
 the seed-test step of the launch order.
+
+## Design pass, 2026-09-16 evening
+
+The review in `DESIGN.md` changed the primary button, added the trust card
+and the welcome grid, and kept the store's own product vial as the only
+photograph. The push to the account went through the generator only (no
+hand edits), so the registry ids and the tests describe what the account
+holds. Six of Omnisend's own renders were screenshotted at phone width and
+shown to the owner. Not seen yet: a real send (sender domain verified, seed
+sends still the owner's call) and the dark-mode preview in Omnisend's editor.
 
 ## Harness session 2, 2026-09-16 (after the review fixes)
 
