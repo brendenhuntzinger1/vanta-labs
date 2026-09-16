@@ -223,9 +223,15 @@ Nothing below happens until the owner authorises it explicitly, step by step.
    recovery runs in legacy-only mode (finishing the carts it already started),
    and new carts, checkouts, views and orders flow to Omnisend.
 7. **Enable flows in this order**, each after 48 hours of clean results on the
-   previous: abandoned checkout → abandoned cart → welcome → post-purchase →
+   previous: abandoned checkout → abandoned cart → welcome and welcome offer
+   together (the offer flow enters on the readiness segment the welcome
+   flow's splits use, so the two are one programme) → post-purchase →
    browse abandonment → replenishment → win-back → sunset. SMS steps stay off
    until SMS is approved and the quiet-hours setting is confirmed in Omnisend.
+   Before the welcome pair: confirm in the dashboard that no legacy contact
+   sits in `VL · Welcome code ready` (the store only sets the flag for a
+   never-bought address at the moment it subscribes, and entering the segment
+   is the trigger, so the import must precede enabling).
 8. **Cohort and spend limits**: the audience is about 106 consented addresses,
    so "limited cohort" means enabling flows (event-driven, a handful of
    contacts a day) before any campaign. First campaign: the `vl-engaged-90`

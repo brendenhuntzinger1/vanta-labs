@@ -18,11 +18,11 @@ from the Omnisend dashboard after review.
 |------|---------------|
 | `lib.mjs` | The template DSL: palette, fonts, `hexId()`, `link()` (the grant route), text/button/image/section helpers, product sections with role-tagged components. The primary button preset is the site's own `.vl-btn-primary` (ivory fill, pill), one per email; product slots use the outlined secondary |
 | `layouts.mjs` | The universal header and footer (`layouts:header`, `layouts:footer`) |
-| `templates.mjs` | `TEMPLATES` (32 email templates, keyed), `LAYOUTS` (the two universal layout ids), `SUBJECTS` (subject and preview per key), `TEMPLATE_KEYS` |
-| `sms.mjs` | `SMS` (seven texts with `text` and `whenUsed`), `smsBody()`, `STOP_SENTENCE` |
+| `templates.mjs` | `TEMPLATES` (34 email templates, keyed), `LAYOUTS` (the two universal layout ids), `SUBJECTS` (subject and preview per key), `TEMPLATE_KEYS` |
+| `sms.mjs` | `SMS` (nine texts with `text` and `whenUsed`; the two welcome-offer texts may name the code because their split guarantees it), `smsBody()`, `STOP_SENTENCE` |
 | `segments.mjs` | `PROPERTY_SEGMENTS` (creatable at any time) and `EVENT_SEGMENTS` (creatable only once the event has been recorded) |
-| `automations.mjs` | `AUTOMATIONS` (eight flows), built from the ids in `assets/` |
-| `form.mjs` | The two-step sign-up popup with the TCPA consent block |
+| `automations.mjs` | `AUTOMATIONS` (nine flows), built from the ids in `assets/`; every send-email block names the verified sender, which `post_automations` requires |
+| `form.mjs` | The two-step sign-up popup: the welcome offer first, then the TCPA consent step |
 | `render.mjs` | Prints any asset as JSON: `node scripts/omnisend/render.mjs <asset>` |
 | `assets.test.mjs` | Offline tests for all of the above (`npx vitest run scripts/omnisend/assets.test.mjs`) |
 

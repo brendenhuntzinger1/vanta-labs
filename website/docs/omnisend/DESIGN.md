@@ -102,5 +102,8 @@ is made on their account.
 * Seed every template to an owner mailbox once the sender domain is
   authenticated, and open them on a phone in Gmail with dark mode on.
 * Replace the footer placeholder with the postal address.
-* Decide the offer sizes (welcome 10 percent, win-back 15 percent, recovery
-  bands) before enabling the flows that carry them.
+* Decided 2026-09-16: the welcome offer is 15 percent off a first order,
+  alone for now; a free GHK-Cu half is built and dormant
+  (`docs/superpowers/specs/2026-09-16-welcome-offer-and-sms-capture.md`).
+  Still to decide: an SMS incentive's shape, the win-back percentage (15)
+  and the recovery bands, before enabling the flows that carry them.

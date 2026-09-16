@@ -5,7 +5,11 @@ import { link } from "./lib.mjs";
  * recipient reads it: it opens "Vanta Labs:", puts the link straight after
  * the message, then "Research use only." and closes "Reply STOP to opt out."
  * A text cannot be conditional, so no entry carries a code, and no text
- * claims an email was sent: an SMS-only consent may never receive one.
+ * claims an email was sent: an SMS-only consent may never receive one. The
+ * two welcome-offer texts are the exception and the reason is structural:
+ * they are sent only inside the welcome-offer automation's segment splits,
+ * where the store has already minted the code (and, in one branch, the
+ * vial), so the properties they name are never blank.
  *
  * Omnisend appends its own STOP keyword when an automation or campaign has
  * `compliance.isStopKeywordIncluded` on. automations.mjs therefore strips the
@@ -28,6 +32,19 @@ export const SMS = {
   welcome: {
     text: text("thanks for subscribing. Batch reports for every product are in the COA library.", "/coa-library", "welcome"),
     whenUsed: "Welcome automation, straight after the first email, for contacts subscribed to SMS. It stands alone: an SMS-only consent may never get the email, so it promises nothing about one, and the code stays in the email because a text cannot be hidden when the property is empty.",
+  },
+  // The welcome-offer automation's texts. Each sits in a split-guaranteed
+  // branch (vl-welcome-gift-ready, inside vl-welcome-ready), so unlike every
+  // other text they may name the code: the property is filled wherever they
+  // are sent. The vial is claimed through the email's button (the claim link
+  // is a bearer token the text does not carry); the code works anywhere.
+  "welcome-offer-gift": {
+    text: text("welcome offer: free GHK-Cu vial or 15% off a first order. Code [[contact.custom_properties.vl_welcome_code]].", "/products", "welcome-offer"),
+    whenUsed: "Welcome-offer automation, 20 minutes after the offer email, in the branch where the vial was minted (segment vl-welcome-gift-ready). The property is never empty there.",
+  },
+  "welcome-offer-code": {
+    text: text("welcome code [[contact.custom_properties.vl_welcome_code]]: 15% off a first order. One use, this address.", "/products", "welcome-offer"),
+    whenUsed: "Welcome-offer automation, 20 minutes after the code-only email, in the branch where no vial could be minted (segment vl-welcome-ready without vl-welcome-gift-ready).",
   },
   cart: {
     text: text("your cart is still saved. Batch reports are on each product page.", "/cart", "abandoned-cart"),

@@ -1,10 +1,14 @@
 {
   "welcome": [
-    { "template": "welcome-1", "contentID": "6aab0ce25322cd96de57ebdf" },
-    { "template": "welcome-2-code", "contentID": "6aab0ce2ae53f2fc18c91efc" },
-    { "template": "welcome-2", "contentID": "6aab0ce2ae53f2fc18c91f01" },
-    { "template": "welcome-3", "contentID": "6aab0ce2fe9daa7b181e8f15" },
-    { "template": "welcome-3-nocode", "contentID": "6aab0ce25322cd96de57ebe4" }
+    { "template": "welcome-1", "contentID": "6aab22d850c3f856bc52f361" },
+    { "template": "welcome-2-code", "contentID": "6aab22d85322cd96de580264" },
+    { "template": "welcome-2", "contentID": "6aab22d8fe9daa7b181ea5a4" },
+    { "template": "welcome-3", "contentID": "6aab22d850c3f856bc52f362" },
+    { "template": "welcome-3-nocode", "contentID": "6aab22d85322cd96de580265" }
+  ],
+  "welcome-offer": [
+    { "template": "welcome-offer", "contentID": "6aab20deae53f2fc18c93423" },
+    { "template": "welcome-offer-code", "contentID": "6aab20defe9daa7b181ea461" }
   ],
   "abandoned-cart": [
     { "template": "cart-1", "contentID": "6aab0ceeae53f2fc18c91f0a" },

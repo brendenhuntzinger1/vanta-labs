@@ -25,9 +25,16 @@ the document to read before authorising any step in `OPERATIONS.md` §4.
   admin resend refuses Omnisend-owned carts.
 * **Privacy**: no email address travels in any URL. The Omnisend link token
   (v2) and the attestation handoff (v2) both seal it.
-* **Omnisend account**: 2 universal layouts, 32 templates, SMS catalogue,
-  18 segments, 8 automations (disabled), 1 sign-up form (draft), 3 campaign
-  drafts. All generated from `website/scripts/omnisend/` and re-creatable.
+* **Omnisend account**: 2 universal layouts, 34 templates, SMS catalogue
+  (9 texts), 19 segments, 9 automations (disabled), 1 sign-up form (draft),
+  3 campaign drafts. All generated from `website/scripts/omnisend/` and
+  re-creatable.
+* **Welcome offer (2026-09-16)**: 15% off a first order, minted by the store
+  at sign-up (site at once, pop-up within the half hour) and sent by the
+  `welcome-offer` flow the moment it exists. A free GHK-Cu half is built and
+  dormant (`WELCOME_GIFT_ENABLED = false`). SMS consent is collected on the
+  sign-up page and at the checkout as well as in account settings and the
+  pop-up. Design: `docs/superpowers/specs/2026-09-16-welcome-offer-and-sms-capture.md`.
 * **Policies**: privacy, cookie and terms text name Omnisend, what it
   receives, and the SMS program terms; pinned by tests.
 * **Documents**: `AUDIT.md` (what sends today, ownership table, findings),
@@ -58,6 +65,8 @@ Layouts: header `6aa985ecfa261ac55e04bae3`, footer `6aa985f7c29076c61d3838b1`.
 | welcome-2-code | `6aaae3a55322cd96de57bc97` |
 | welcome-3 | `6aa988a450c3f856bc4fb830` |
 | welcome-3-nocode | `6aaae36b5322cd96de57bc76` |
+| welcome-offer | `6aab2004072042c2a4193a25` |
+| welcome-offer-code | `6aab2032072042c2a4193a3e` |
 | cart-1 | `6aaaa7eb7aea37873281b0d0` |
 | cart-2 | `6aaaa85150c3f856bc51eca1` |
 | cart-3-gift-code | `6aaaa89e50c3f856bc51edae` |
@@ -106,10 +115,12 @@ Layouts: header `6aa985ecfa261ac55e04bae3`, footer `6aa985f7c29076c61d3838b1`.
 | vl-recovery-code-ready | `6aaaae68f658a847e55713a7` |
 | vl-winback-ready | `6aaaaefc171138e617aa7178` |
 | vl-welcome-ready | `6aaac3f27cbd2da70ddb4dc7` |
+| vl-welcome-gift-ready | `6aab1fc6b9539893816902de` |
 
 | Automation (all disabled) | Omnisend id |
 |---|---|
 | welcome | `6aaaafe4db06f9edc9ed232e` |
+| welcome-offer | `6aab20de8c9071b61a081004` |
 | abandoned-cart | `6aaaaff3db06f9edc9ed2337` |
 | abandoned-checkout | `6aaab003db06f9edc9ed233f` |
 | browse-abandonment | `6aaab005cb1ca6f74dc35ee6` |
@@ -199,12 +210,13 @@ limiter; email opens are unreliable and SMS opens do not exist.
 | `OMNISEND_API_KEY` in Vercel | not set (owner) |
 | `OMNISEND_MARKETING_OWNER` | unset |
 | `omnisend-sync.sql` migration | not applied (owner) |
+| `sms-subscribers.sql` migration | not applied (owner) |
 | Contacts in Omnisend | 0 pushed |
-| Automations | 8, all disabled |
+| Automations | 9, all disabled |
 | Form | draft |
 | Campaigns | 3 drafts |
 | Sender domain | verified 2026-09-16; automations and campaign drafts send from `support@` on it |
-| SMS | awaiting verification and plan (owner) |
+| SMS | Pro plan with SMS bought and US verification submitted 2026-09-16; awaiting approval (owner) |
 | Postal address in footer | awaiting owner |
 
 Owner actions, in the order they unblock things (details in `OPERATIONS.md`
@@ -216,8 +228,10 @@ Owner actions, in the order they unblock things (details in `OPERATIONS.md`
 2. Choose the plan and complete US SMS verification if SMS is wanted; SMS
    steps stay off until the dashboard says approved.
 3. Put the postal address into the footer layout.
-4. Apply `src/lib/sql/omnisend-sync.sql` to production (three tables, no
-   data change) and set `OMNISEND_API_KEY` in Vercel.
+4. Apply `src/lib/sql/omnisend-sync.sql` (three tables) and
+   `src/lib/sql/sms-subscribers.sql` (one table) to production, no data
+   change, and set `OMNISEND_API_KEY` in Vercel (set 2026-09-16, not yet
+   redeployed).
 5. Run the contact reconciliation: snapshot, dry run, read the report, push.
 6. Set `OMNISEND_MARKETING_OWNER=true` first, then enable flows one at a
    time in the §4 order. The switch must precede the flows so that no cart

@@ -41,6 +41,8 @@ export const PROPERTY_SEGMENTS = {
   "vl-winback-ready": () => seg("VL · Win-back code ready", [contact([customYes("vl_winback_ready")])]),
   // The welcome split: the opt-in upsert sets vl_welcome_ready to "yes" only when it minted a welcome code; a checkout-sourced opt-in gets none.
   "vl-welcome-ready": () => seg("VL · Welcome code ready", [contact([customYes("vl_welcome_ready")])]),
+  // The welcome-offer split: the same upsert sets vl_welcome_gift_ready to "yes" only when it minted the free GHK-Cu and the vial can ship (welcome-gift.ts).
+  "vl-welcome-gift-ready": () => seg("VL · Welcome gift ready", [contact([customYes("vl_welcome_gift_ready")])]),
 };
 
 export const EVENT_SEGMENTS = {

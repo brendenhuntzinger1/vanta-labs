@@ -31,6 +31,8 @@ function readJson(name) {
 const created = () => ({ templates: readJson("created.json"), segments: readJson("segments.json") });
 
 const SENDER = "Vanta Labs";
+/** The verified sender (OPERATIONS.md §1): post_automations refuses a send-email block without one since the domain was authenticated. */
+const SENDER_EMAIL = "support@vantalabsresearch.com";
 const LANG = "en_US";
 
 let counter = 0;
@@ -42,7 +44,7 @@ export function email(templateKey) {
   if (!templateID) throw new Error(`template ${templateKey} has not been created yet`);
   const copy = SUBJECTS[templateKey];
   if (!copy) throw new Error(`no SUBJECTS entry for ${templateKey}`);
-  return { temporaryID: tid(templateKey), type: "action", action: { type: "sendEmail", sendEmail: { templateID, subject: copy.subject, preheader: copy.preview, senderName: SENDER, language: LANG } } };
+  return { temporaryID: tid(templateKey), type: "action", action: { type: "sendEmail", sendEmail: { templateID, subject: copy.subject, preheader: copy.preview, senderName: SENDER, senderEmail: SENDER_EMAIL, language: LANG } } };
 }
 
 /**
@@ -118,17 +120,47 @@ export const AUTOMATIONS = {
       name: "VL · Welcome",
       trigger: { condition: { event: "subscribed to marketing" } },
       blocks: [
-        // Informational: the welcome code may not exist yet (form sign-ups get
-        // theirs on the next nightly reconcile) and a checkout opt-in never gets one.
+        // Informational: the welcome offer travels in its own flow (below),
+        // because it may not exist yet (form sign-ups get theirs on the next
+        // half-hourly write-back) and a checkout opt-in never gets one.
         email("welcome-1"),
-        // Skipped by the SMS threshold for anyone without SMS consent.
-        sms("welcome"),
-        wait("w1", 2, "d"),
+        // The generic text, an hour in, only for a contact WITHOUT the offer:
+        // the welcome-offer flow texts everyone with one, and two texts in an
+        // hour is one too many. The hour is for the half-hourly write-back
+        // that mints a pop-up sign-up's offer. Skipped by the SMS threshold
+        // for anyone without SMS consent either way.
+        wait("w0", 1, "h"),
+        splitOnSegment("offer-sms", "vl-welcome-ready", [], [sms("welcome")]),
+        wait("w1", 47, "h"),
         // vl_welcome_ready is "yes" only once the store has minted the code, so
         // the card is sent only where it can never be blank.
         splitOnSegment("code-2", "vl-welcome-ready", [email("welcome-2-code")], [email("welcome-2")]),
         wait("w2", 3, "d"),
         splitOnSegment("code-3", "vl-welcome-ready", [email("welcome-3")], [email("welcome-3-nocode")]),
+      ],
+      settings: { sendingThresholds: thresholds, frequencyLimiter: once },
+    };
+  },
+
+  /**
+   * The welcome offer enters on the readiness segment, not on the
+   * subscription: the store sets vl_welcome_ready when it mints the code
+   * (at once for a site sign-up, within the half-hourly write-back for a
+   * pop-up sign-up), so the email goes out the moment the offer is real and
+   * never before. The gift split sends the vial card only where the vial was
+   * minted and can ship; the other branch carries the code alone. Once per
+   * lifetime: a first order retires the offer and the segment, and a second
+   * subscription mints nothing new.
+   */
+  "welcome-offer": () => {
+    counter = 0;
+    return {
+      name: "VL · Welcome offer",
+      trigger: enteredSegment("vl-welcome-ready"),
+      blocks: [
+        splitOnSegment("gift", "vl-welcome-gift-ready",
+          [email("welcome-offer"), wait("w1", 20, "m"), sms("welcome-offer-gift")],
+          [email("welcome-offer-code"), wait("w2", 20, "m"), sms("welcome-offer-code")]),
       ],
       settings: { sendingThresholds: thresholds, frequencyLimiter: once },
     };

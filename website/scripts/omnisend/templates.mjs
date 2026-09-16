@@ -13,13 +13,15 @@ export const LAYOUTS = { header: "6aa985ecfa261ac55e04bae3", footer: "6aa985f7c2
  * per cart (vl_recovery_percent).
  */
 const CODES = {
-  welcome: { prop: "vl_welcome_code", ends: "vl_welcome_ends", percent: "10", terms: "One use, tied to this address, on a first order." },
+  welcome: { prop: "vl_welcome_code", ends: "vl_welcome_ends", percent: "15", terms: "One use, tied to this address, on a first order." },
   winback: { prop: "vl_winback_code", ends: "vl_winback_ends", percent: "15", terms: "One use, tied to this address." },
   recovery: { prop: "vl_recovery_code", ends: "vl_recovery_ends", percent: "[[contact.custom_properties.vl_recovery_percent]]", terms: "One use, tied to this address." },
 };
 
 /** The store-built claim URL for a recovery gift. It already carries the grant, so it is not wrapped in link(). */
 const GIFT_LINK = "[[contact.custom_properties.vl_recovery_gift_link]]";
+/** The same for the welcome gift (welcome-gift.ts): the click sets the offer cookie and lands on the catalogue. */
+const WELCOME_GIFT_LINK = "[[contact.custom_properties.vl_welcome_gift_link]]";
 
 /**
  * The code card. Conditional sections are a paid Omnisend feature this account
@@ -48,6 +50,40 @@ function giftCard(seed) {
     text(`${seed}:gift`, "[[contact.custom_properties.vl_recovery_gift]]", { preset: "heading_small", padding: "0px 32px 8px" }),
     text(`${seed}:terms`, "Added free on any order of [[contact.custom_properties.vl_recovery_gift_min]] or more, if claimed by [[contact.custom_properties.vl_recovery_gift_ends]]. One claim, tied to this address.", { padding: "0px 32px 4px" }),
     button(`${seed}:button`, "Claim the gift", GIFT_LINK, { preset: "secondary_button", padding: "12px 32px 24px" }),
+  ], { background: PALETTE.surfaceRaised, padding: "24px 0px 4px", radius: "16px", border: `1px solid ${PALETTE.goldHairline}` });
+}
+
+/**
+ * THE WELCOME OFFER, ONE EMAIL, TWO SHAPES. The store mints a free GHK-Cu and
+ * a 15% code together for a never-bought address the moment it subscribes
+ * (hooks.ts onMarketingOptIn; the reconcile for pop-up sign-ups), and the
+ * checkout honours ONE of them (quote-order.ts: a welcome code typed over the
+ * vial withdraws the vial). So the vial leads — it is the one the owner would
+ * rather give, and "free" reads bigger than a percentage on an ordinary
+ * first order — and the code is offered beneath it as the alternative for a
+ * larger order. The welcome-offer automation splits on vl-welcome-gift-ready,
+ * so the gift card is only ever sent where the vial was minted and can ship;
+ * the code-only twin carries the code alone.
+ */
+function welcomeOfferGiftHero(seed) {
+  return card(seed, [
+    image(`${seed}:image`, IMAGES.hero, { alt: "A Vanta Labs GHK-Cu vial on a dark field", width: 536, padding: "0px 32px 22px" }),
+    eyebrow(`${seed}:eyebrow`, "Your welcome offer"),
+    heading(`${seed}:heading`, "A free GHK-Cu with your first order."),
+    text(`${seed}:lead`, "[[contact.custom_properties.vl_welcome_gift]] is added to a first order of [[contact.custom_properties.vl_welcome_gift_min]] or more when you claim it through the button below, until [[contact.custom_properties.vl_welcome_gift_ends]]. One claim, tied to this address. Its batch number and report are on the product page, like every listing."),
+    button(`${seed}:cta`, "Claim the free GHK-Cu", WELCOME_GIFT_LINK),
+    button(`${seed}:secondary`, "Browse the catalogue", link("/products", { campaign: "welcome-offer", content: "secondary" }), { preset: "tertiary_button", padding: "0px 32px 20px" }),
+  ]);
+}
+
+/** The code, as the alternative under the vial: same card as the code card, headed as a choice. */
+function welcomeAlternativeCard(seed) {
+  const code = CODES.welcome;
+  return section(seed, [
+    eyebrow(`${seed}:eyebrow`, "Or take 15% off instead"),
+    text(`${seed}:code`, `[[contact.custom_properties.${code.prop}]]`, { preset: "mono", padding: "0px 32px 8px" }),
+    text(`${seed}:terms`, `${code.percent}% off a first order with this code. Valid until [[contact.custom_properties.${code.ends}]]. One use, tied to this address. The checkout honours the vial or the code, whichever you use.`, { padding: "0px 32px 4px" }),
+    button(`${seed}:button`, "Use the code", link("/products", { campaign: "welcome-offer", content: "code" }), { preset: "secondary_button", padding: "12px 32px 24px" }),
   ], { background: PALETTE.surfaceRaised, padding: "24px 0px 4px", radius: "16px", border: `1px solid ${PALETTE.goldHairline}` });
 }
 
@@ -185,6 +221,27 @@ export const TEMPLATES = {
     recommended("welcome-1", "welcome", { type: "popular", fallbackType: "newest", isOutOfStockIncluded: false }),
     spacerSection("welcome-1:gap2"),
     trustStrip("welcome-1:trust"),
+  ]),
+
+  "welcome-offer": () => frame("welcome-offer", [
+    welcomeOfferGiftHero("welcome-offer:hero"),
+    spacerSection("welcome-offer:gap"),
+    welcomeAlternativeCard("welcome-offer:code"),
+    spacerSection("welcome-offer:gap2"),
+    trustStrip("welcome-offer:trust"),
+  ]),
+
+  "welcome-offer-code": () => frame("welcome-offer-code", [
+    hero("welcome-offer-code:hero", {
+      kicker: "Your welcome offer", title: "15% off your first order.",
+      lead: "Your code is below: one use, tied to this address, on a first order, until the date shown. Every listing in the catalogue shows its current batch number and links to the report.",
+      cta: { label: "Browse the catalogue", path: "/products" }, secondary: { label: "Read a batch report", path: "/coa-library" },
+      showImage: true, campaign: "welcome-offer",
+    }),
+    spacerSection("welcome-offer-code:gap"),
+    codeCard("welcome-offer-code:code", "welcome", "welcome-offer"),
+    spacerSection("welcome-offer-code:gap2"),
+    trustStrip("welcome-offer-code:trust"),
   ]),
 
   "welcome-2": () => frame("welcome-2", [hero("welcome-2:hero", WELCOME_HERO[2])]),
@@ -417,6 +474,8 @@ export const TEMPLATES = {
  */
 export const SUBJECTS = {
   "welcome-1": { subject: "Welcome to Vanta Labs", preview: "What we supply, and how every batch is documented." },
+  "welcome-offer": { subject: "Your welcome offer: a free GHK-Cu, or 15% off", preview: "Choose either on a first order. Dates and terms inside." },
+  "welcome-offer-code": { subject: "Your welcome code: 15% off a first order", preview: "One use, tied to this address. Valid until the date inside." },
   "welcome-2": { subject: "Every batch has a published report", preview: "Search a lot number and read the certificate itself." },
   "welcome-2-code": { subject: "Every batch has a published report", preview: "Read the certificate itself. Your welcome code is inside." },
   "welcome-3": { subject: "How ordering works", preview: "Dispatch by 2PM ET on business days, tracking after dispatch." },

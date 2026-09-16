@@ -567,7 +567,9 @@ the Resend webhook as part of any rollback.
   it. Discount blocks cannot mint codes for API stores and the back-in-stock
   trigger is unsupported, so restock alerts stay in-house. Confirm the plan
   change before flows that show a code are enabled.
-* **Q-5 Discount amounts.** Defaults in `codes.ts:25-29`: welcome 10 percent
+* **Q-5 Discount amounts.** *Welcome resolved 2026-09-16: 15 percent off a
+  first order, alone for now; a free GHK-Cu half is built and dormant (the
+  addendum spec of that date).* Defaults in `codes.ts`: welcome 15 percent
   for 14 days, win-back 15 percent for 14 days, recovery 10 percent for 5 days
   (the spec table says 72 hours; the code says 5 days, choose one). The
   in-house ladder uses banded percentages and a product gift rather than a

@@ -122,7 +122,7 @@ pattern; `validateCoupon` already refuses a code used by any other address.
 
 | Property | Minted when | Default offer (owner to confirm) |
 | --- | --- | --- |
-| `vl_welcome_code` / `vl_welcome_ends` | first time a contact becomes email-subscribed | 10% off first order, 14 days |
+| `vl_welcome_code` / `vl_welcome_ends` | first time a contact becomes email-subscribed | 15% off first order, 14 days (*amended 2026-09-16*, was 10%; a free GHK-Cu half, `vl_welcome_gift*`, is built and dormant, see the addendum spec of that date) |
 | `vl_winback_code` / `vl_winback_ends` | nightly, for buyers with no paid order in 60 days and no live code | 15% off, 14 days |
 | `vl_recovery_code` / `vl_recovery_ends` | *amended 2026-09-16, see below* | the cart-value band's percentage, 5 days |
 
@@ -307,7 +307,8 @@ conversation; UTM `source=omnisend`, `medium=email|sms`,
 
 | Key | Trigger | Steps | Notes |
 | --- | --- | --- | --- |
-| `welcome` | `subscribed to marketing` | E1 immediately "Welcome to Vanta Labs" (what the store is, COA library; no code, it may not exist yet) → SMS for SMS subscribers (no code) → 2d → split *Welcome code ready*: E2 "Every batch has a published report" with the code, else without → 3d → split again: E3 "How ordering works" (dispatch cutoff, destinations, tracking) with the code reminder, else without | once per lifetime. The store mints the code at a site sign-up, on the next nightly reconcile for a form sign-up, and never for a checkout opt-in (§3.4); `vl_welcome_ready` is "yes" only once it exists, so no email can show a blank code card. |
+| `welcome` | `subscribed to marketing` | E1 immediately "Welcome to Vanta Labs" (what the store is, COA library; no code, it may not exist yet) → 1h → the generic SMS only for a contact without the offer → 47h → split *Welcome code ready*: E2 "Every batch has a published report" with the code, else without → 3d → split again: E3 "How ordering works" (dispatch cutoff, destinations, tracking) with the code reminder, else without | once per lifetime. The store mints the offer at a site sign-up, within the half-hourly write-back for a form sign-up, and never for a checkout opt-in (§3.4); `vl_welcome_ready` is "yes" only once it exists, so no email can show a blank code card. |
+| `welcome-offer` (*added 2026-09-16*) | entered segment *Welcome code ready* | split *Welcome gift ready* (never true while the vial is dormant): the vial email + text, else the code email + text 20 minutes later | once per lifetime; see the addendum spec |
 | `abandoned-cart` | 1h inactivity after `added product to cart` | E1 "Your cart is saved" (cart section) → 23h → E2 "Still here when you are" (cart + COA angle) → 48h → split on segment *Bought in last 30 days*: no → E3 with `vl_recovery_code`; yes → E3 without code. SMS text at +26h for SMS subscribers. | exits on `placed order`, `started checkout`; once per 7 days |
 | `abandoned-checkout` | 1h inactivity after `started checkout` | E1 "Finish when you are ready" (checkout link) → SMS at +3h → 21h → E2 → 48h → E3 with/without code (same split) | exits on `placed order`; once per 7 days |
 | `browse-abandonment` | 4h inactivity after `viewed product` | E1 "You were looking at this" (viewed products section) | exits on `added product to cart`, `placed order`; once per 7 days |
@@ -338,6 +339,11 @@ success step naming the welcome code arriving by email. Targeting: after 12
 seconds or exit intent, once per 7 days, desktop and mobile, never to visitors
 arriving from Omnisend messages, US and Canada. Tags `form_subscriber`,
 `source: omnisend-form`. Created disabled; A/B setup left for later.
+
+*Amended 2026-09-16:* step 1 now leads with the welcome offer (15% off a
+first order) and the checkable purity sentence, appears after 4 seconds, and
+the success step promises the code "shortly" and only for a first order. See
+the addendum spec.
 
 ## 9. Policy and copy changes in the repo
 

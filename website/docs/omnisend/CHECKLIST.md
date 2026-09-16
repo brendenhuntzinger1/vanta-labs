@@ -59,7 +59,7 @@ Legend: `[x]` done and verified · `[~]` in progress / partial · `[ ]` not star
 
 ## 7. Account customisation and templates
 - [x] Header/footer universal layouts, brand images uploaded
-- [x] 32 templates in Omnisend (assets/created.json), including the welcome-2-code and welcome-3-nocode twins for the welcome split
+- [x] 34 templates in Omnisend (assets/created.json), including the welcome-2-code and welcome-3-nocode twins for the welcome split and the welcome-offer / welcome-offer-code pair (2026-09-16)
 - [x] Remaining templates uploaded (cart, checkout, browse, post-purchase-2, replenishment, winback-1, campaigns)
 - [x] New templates: new product, general promotion, final-day promotion, VIP milestone, repeat-customer
 - [x] SMS variants catalogued (scripts/omnisend/sms.mjs)
@@ -67,6 +67,7 @@ Legend: `[x]` done and verified · `[~]` in progress / partial · `[ ]` not star
 - [~] Rendered previews: structure pinned by assets.test.mjs; visual check in Omnisend's editor is the owner's
 - [x] Premium and conversion review against Omnisend's published benchmarks, its design guidance and premium brands on the platform (DESIGN.md): one ivory primary action per email, "good to know" card of canonical claims on cart, checkout and welcome, real product photographs in the welcome grid, image weights under 100 KB
 - [x] Welcome hero is the store's own product vial, never a generic or generated one
+- [x] Pop-up leads with the welcome offer (15% off a first order, 14 days stated), purity sentence in its checkable form ("Every batch report we publish shows above 99% purity"), shown after 4 seconds; re-read the purity sentence whenever a report is published
 - [!] Dark-mode preview (Gmail iOS, Outlook) in Omnisend before the first send — owner
 - [!] Postal address in the footer — owner supplies
 - [x] Sender name / reply-to configured in Omnisend — Vanta Labs, `support@` on the verified domain (2026-09-16)
@@ -75,12 +76,16 @@ Legend: `[x]` done and verified · `[~]` in progress / partial · `[ ]` not star
 - [x] Welcome, abandoned cart, abandoned checkout, browse abandonment, post-purchase, replenishment, win-back, sunset created — all DISABLED
 - [x] Timings and rationale documented as hypotheses (scripts/omnisend/README.md, OPERATIONS.md §3)
 - [x] Frequency limiter + sending thresholds on every automation
-- [x] Welcome never shows a blank code: E1 and the SMS carry none; E2/E3 split on vl-welcome-ready
+- [x] Welcome never shows a blank code: E1 carries none; the generic SMS goes only to contacts without an offer; E2/E3 split on vl-welcome-ready
+- [x] Welcome offer flow (disabled): enters on vl-welcome-ready, splits on vl-welcome-gift-ready, vial email + text or code email + text; once per lifetime
 - [x] Win-back enters on vl-lapsed-60 (not on every paid order) so a repeat buyer who lapses again is won back again; limiter 32 d
 - [x] Post-purchase: repeat thank-you only for a second order, VIP milestone a week later
 
 ## 9. Offer economics
 - [x] Live gift/discount system audited and reused (cart-offers.ts, cart-plan.ts)
+- [x] Welcome offer decided by the owner (2026-09-16): 15% off a first order, alone for now; the free GHK-Cu half is built and dormant (WELCOME_GIFT_ENABLED), with the checkout rule that a welcome code typed over the vial withdraws the vial (welcome-offer-exclusive.test.ts)
+- [!] GHK-Cu unit cost: the catalogue records a figure far above the couple of dollars the owner quoted; confirm which is right before flipping the vial on
+- [!] SMS incentive: shape to be decided (a stacked open-ended percentage is not recommended; see the addendum spec §1)
 - [x] Boundary tests: below floor, band edges, out-of-stock gift, expired token, repeat redemption, recent buyer
 
 ## 10. Deliverability and analytics
