@@ -16,6 +16,11 @@ import { repairUnredeemedPaidOffers } from "@/lib/offers/customer-offer-repair";
 import { ingestAdSpend } from "@/lib/ads/spend-ingest";
 import { sweepUnsentMetaPurchases } from "@/lib/ads/meta-purchase-sync";
 import { pruneStaleHeartbeats } from "@/lib/admin-live-visitors";
+import {
+  omnisendCatalogSyncJob,
+  omnisendContactsReconcileJob,
+  omnisendOrderBackstop,
+} from "@/lib/marketing/omnisend/sweeps";
 import { handleCronRequest, type CronJobMap } from "@/lib/cron-runner";
 
 export const dynamic = "force-dynamic";
@@ -158,6 +163,10 @@ const JOBS: CronJobMap = {
   // every 15s per open tab, forever. Idempotent: it only ever deletes rows
   // already past the retention cutoff.
   liveVisitorHeartbeatPrune: { label: "live_visitor_heartbeat_prune", run: pruneStaleHeartbeats },
+  // Omnisend: retry unsent paid-order events (ledger-keyed, 7 days, 50 a run), then the catalogue and contacts syncs on their own cadence (6h / 24h, stamped in omnisend_sync_state). Each asks the gate first and never throws.
+  omnisendOrderBackstop: { label: "omnisend_order_backstop", run: omnisendOrderBackstop },
+  omnisendCatalogSync: { label: "omnisend_catalog_sync", run: omnisendCatalogSyncJob },
+  omnisendContactsReconcile: { label: "omnisend_contacts_reconcile", run: omnisendContactsReconcileJob },
 };
 
 /**
