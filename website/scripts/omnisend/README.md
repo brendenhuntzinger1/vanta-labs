@@ -69,7 +69,7 @@ There is no API key in the repo, so creation goes through the Omnisend MCP
 | Segment | `post_segments` | recreate (segments are cheap; update the registry) | `get_segment_id` |
 | Automation | `post_automations` (created disabled) | `put_automations_id` | `get_automations_id` (`isEnabled` must stay `false` until the owner enables it) |
 | Form | `post_forms` (created as `draft`) | `patch_form_id` | `get_form_id`, `post_forms_form_id_render` |
-| Campaign | `post_campaigns` (created as `draft`) | `patch_campaigns_id` (the template is fixed at creation; copy a new draft to change it) | `get_campaigns_id` |
+| Campaign | `post_campaigns` (created as `draft`) | `patch_campaigns_id` for settings; the body is a copy (see below) | `get_campaigns_id` |
 
 After a create, add the returned `id` to the matching `assets/*.json` under
 the generator key. After an update, nothing changes in the registry.
@@ -77,6 +77,33 @@ the generator key. After an update, nothing changes in the registry.
 Templates are also confirmable in one call: `get_email_templates` lists every
 template and its name, which is how the thirty `VL ·` templates were checked
 after upload.
+
+### Changing a template after it has been used
+
+`put_email_templates_id` changes the template object and nothing else.
+Automations and campaigns do not reference templates by id: when either is
+created, Omnisend copies the template into its own email-content object and
+references that copy by `contentID`. A template change therefore reaches
+nothing that has already been built from it until the copies are updated too.
+
+- Every `sendEmail` action in `get_automations_id` carries its own
+  `action.sendEmail.contentID`; every campaign draft carries
+  `content.email.contentID` (`get_campaigns_id`). Update each copy with
+  `put_email_content_id`: read it with `get_email_content_id`, send the
+  template's `generalSettings` and `sections` plus the copy's `id`, and keep
+  the trailing `badge` section exactly as read (it is accepted on write).
+  There is no registry of these ids in `assets/`; read them from the
+  automation or campaign each time.
+- The header and footer links live in the universal layouts, not in the
+  template, so a change to `link()` also needs `put_email_universal_layouts_id`
+  for both layouts, with `{ id, name, content }` from `layouts:header` and
+  `layouts:footer`.
+- SMS text is stored inside the automation itself (`action.sendSms.message`),
+  so a link change there needs `put_automations_id`.
+
+`get_email_templates_id` returns `rows: null` for `universal_layout` sections,
+so checking a template body says nothing about the header or footer; read the
+two layouts separately.
 
 ### The abandonment split
 
