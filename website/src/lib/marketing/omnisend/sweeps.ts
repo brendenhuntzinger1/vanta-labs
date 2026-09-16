@@ -8,6 +8,7 @@ import { onOrderPaid } from "@/lib/marketing/omnisend/order-hooks";
 import { reconcileOmnisendContacts, type OmnisendReconcileResult } from "@/lib/marketing/omnisend/reconcile";
 import { emptyReconcileReport } from "@/lib/marketing/omnisend/reconcile-plan";
 import { readSyncState, writeSyncState } from "@/lib/marketing/omnisend/sync-state";
+import type { SyncStateRead } from "@/lib/marketing/omnisend/sync-state";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 /**
@@ -24,7 +25,10 @@ import { supabaseAdmin } from "@/lib/supabase-server";
  *     exactly-once: the claim is an insert, so the sweep and a late callback
  *     cannot both send. A claim that is undelivered and old enough to be dead
  *     is handed back first, so an order Omnisend refused is retried rather
- *     than stranded behind its own claim.
+ *     than stranded behind its own claim. The run has a wall-clock budget:
+ *     the sweep route's watchdog gives every job fifty seconds together, and
+ *     fifty sequential onOrderPaid calls do not fit in that, so the backstop
+ *     stops starting orders at twenty seconds and says how many it left.
  *
  *   * omnisendCatalogSyncJob — the catalogue push, at most once per six
  *     hours. The push is a full replace and cheap, but 48 pushes a day of a
@@ -60,6 +64,22 @@ export const OMNISEND_BACKSTOP_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
  * that a refused send is retried on the next few ticks rather than tomorrow.
  */
 export const OMNISEND_STALE_CLAIM_MS = 15 * 60 * 1000;
+/**
+ * How far before the first tick the floor is stamped: one sweep cadence
+ * (vercel.json runs /api/cron/sweep every thirty minutes). The key going live
+ * and the first tick after it are up to a cadence apart, and an order paid
+ * in between whose webhook after() died would be older than a floor stamped
+ * at the tick and never reported. Reaching one cadence back admits at most
+ * thirty minutes of orders from before the key, which is not the week F-02
+ * guards against.
+ */
+export const OMNISEND_BACKSTOP_FLOOR_GRACE_MS = 30 * 60 * 1000;
+/**
+ * The wall-clock budget for starting orders. The sweep route kills the whole
+ * tick at fifty seconds; twenty leaves the other jobs their share, and what
+ * is not started is reported and picked up next tick.
+ */
+export const OMNISEND_BACKSTOP_BUDGET_MS = 20_000;
 const DEFAULT_BACKSTOP_LIMIT = 50;
 /** Rows read per tick; the window holds far fewer paid orders than this. */
 const BACKSTOP_READ_LIMIT = 200;
@@ -156,25 +176,76 @@ export function staleOmnisendClaims(
     .map((row) => ({ entityId: row.entity_id, eventName: row.event_name }));
 }
 
-export async function omnisendOrderBackstop(opts: { now?: Date; limit?: number } = {}): Promise<OmnisendOrderBackstopResult> {
+export type BackstopFloorDecision =
+  | { action: "use"; floor: number }
+  | { action: "stamp"; floor: number }
+  | { action: "skip"; skipped: string };
+
+/**
+ * Pure: what the backstop does with its floor record.
+ *
+ * A recorded floor is used as it is. No record is a first run, and the floor
+ * is stamped one sweep cadence back (OMNISEND_BACKSTOP_FLOOR_GRACE_MS). A
+ * record whose `since` is not a date is re-stamped the same way. A record
+ * that could not be READ is none of these: stamping on a refused read would
+ * move the floor forward past every order paid since the real one, and those
+ * orders would never be reported, so the run stands down and the next tick
+ * asks again.
+ */
+export function backstopFloorDecision(input: { record: SyncStateRead<BackstopFloorRecord>; now: number }): BackstopFloorDecision {
+  if (input.record.unreadable) return { action: "skip", skipped: "backstop floor unreadable; nothing pushed" };
+  const recorded = Date.parse(String(input.record.value?.since ?? ""));
+  if (Number.isFinite(recorded)) return { action: "use", floor: recorded };
+  return { action: "stamp", floor: input.now - OMNISEND_BACKSTOP_FLOOR_GRACE_MS };
+}
+
+/** Pure: may another order be started, given when the run began? */
+export function backstopBudgetAllows(input: { startedAtMs: number; nowMs: number; budgetMs: number }): boolean {
+  return input.nowMs - input.startedAtMs < input.budgetMs;
+}
+
+/** Pure: the operator-facing note for a run, or null when there is nothing to say. */
+export function backstopRunNotes(input: { pending: number; attempted: number; stale: number; budgetExhausted: boolean }): string | null {
+  const notes: string[] = [];
+  if (input.stale > 0) notes.push(`${input.stale} stale claim(s) released`);
+  const left = input.pending - input.attempted;
+  if (left > 0) {
+    notes.push(
+      input.budgetExhausted
+        ? `${left} left for the next run (time budget reached after ${input.attempted})`
+        : `${left} left for the next run`,
+    );
+  }
+  return notes.length > 0 ? notes.join("; ") : null;
+}
+
+export async function omnisendOrderBackstop(
+  opts: { now?: Date; limit?: number; budgetMs?: number } = {},
+): Promise<OmnisendOrderBackstopResult> {
   const gate = omnisendActive();
   if (!gate.active) return { scanned: 0, sent: 0, skipped: gate.reason };
 
+  // The wall clock, from entry: the reads count against the budget too.
+  const startedAtMs = Date.now();
+  const budgetMs = Math.max(0, Number(opts.budgetMs ?? OMNISEND_BACKSTOP_BUDGET_MS) || 0);
   const now = opts.now ?? new Date();
   const limit = Math.max(0, Math.trunc(Number(opts.limit ?? DEFAULT_BACKSTOP_LIMIT) || 0));
   let scanned = 0;
   let sent = 0;
   try {
-    // THE FLOOR, read before any order is: the first run stamps now and pushes
-    // nothing older; every later run pushes only what was paid after that. A
-    // stamp that cannot be written leaves no floor for THIS run, which would
-    // report the week — so an unwritable stamp means the run does nothing.
+    // THE FLOOR, read before any order is: the first run stamps one cadence
+    // back and pushes nothing older; every later run pushes only what was
+    // paid after that. A record that cannot be read is not a first run and
+    // is never re-stamped (backstopFloorDecision). A stamp that cannot be
+    // written leaves no floor for THIS run, which would report the week — so
+    // an unwritable stamp means the run does nothing.
     const record = await readSyncState<BackstopFloorRecord>(ORDER_BACKSTOP_KEY, LOG);
-    let floor = Date.parse(String(record?.since ?? ""));
-    if (!Number.isFinite(floor)) {
-      const stamped = await writeSyncState(ORDER_BACKSTOP_KEY, { since: now.toISOString() }, LOG);
+    const decision = backstopFloorDecision({ record, now: now.getTime() });
+    if (decision.action === "skip") return { scanned, sent, skipped: decision.skipped };
+    const floor = decision.floor;
+    if (decision.action === "stamp") {
+      const stamped = await writeSyncState(ORDER_BACKSTOP_KEY, { since: new Date(floor).toISOString() }, LOG);
       if (!stamped) return { scanned, sent, skipped: "backstop floor could not be recorded; nothing pushed" };
-      floor = now.getTime();
     }
 
     // paid_at is the moment that matters; a row from before the column was
@@ -220,16 +291,23 @@ export async function omnisendOrderBackstop(opts: { now?: Date; limit?: number }
     }
 
     const batch = pending.slice(0, limit);
+    let attempted = 0;
+    let budgetExhausted = false;
     for (const candidate of batch) {
+      // An order already started runs to its end; the budget only decides
+      // whether the next one starts. What is left keeps its place next tick.
+      if (!backstopBudgetAllows({ startedAtMs, nowMs: Date.now(), budgetMs })) {
+        budgetExhausted = true;
+        break;
+      }
+      attempted += 1;
       const delivered = await onOrderPaid(candidate.order_id);
       if (delivered) sent += 1;
     }
 
-    const notes: string[] = [];
-    if (stale.length > 0) notes.push(`${stale.length} stale claim(s) released`);
-    if (pending.length > batch.length) notes.push(`${pending.length - batch.length} left for the next run`);
-    console.info(LOG, "order backstop", { scanned, sent, attempted: batch.length, stale: stale.length });
-    return { scanned, sent, skipped: notes.length > 0 ? notes.join("; ") : null };
+    const notes = backstopRunNotes({ pending: pending.length, attempted, stale: stale.length, budgetExhausted });
+    console.info(LOG, "order backstop", { scanned, sent, attempted, stale: stale.length, budgetExhausted });
+    return { scanned, sent, skipped: notes };
   } catch (error) {
     console.error(LOG, "order backstop threw", error);
     return { scanned, sent, skipped: `order backstop threw: ${error instanceof Error ? error.message : String(error)}` };
@@ -241,9 +319,10 @@ export async function omnisendOrderBackstop(opts: { now?: Date; limit?: number }
 // ---------------------------------------------------------------------------
 
 /**
- * omnisend_sync_state row `{ since }`: the instant the backstop first ran with
- * the integration live. Orders paid before it are the in-house engine's and
- * are never reported (F-02). Written once; a later run only reads it.
+ * omnisend_sync_state row `{ since }`: one sweep cadence before the instant
+ * the backstop first ran with the integration live. Orders paid before it are
+ * the in-house engine's and are never reported (F-02). Written once; a later
+ * run only reads it, and a run that cannot read it does nothing.
  */
 const ORDER_BACKSTOP_KEY = "order_backstop";
 type BackstopFloorRecord = { since?: string };
@@ -282,8 +361,9 @@ export async function omnisendCatalogSyncJob(): Promise<OmnisendCatalogSyncResul
 
   try {
     const startedAt = new Date();
+    // An unreadable record reads as "not recorded": the sync runs rather than stalls.
     const record = await readSyncState<CadenceRecord>(CATALOG_SYNC_KEY, LOG);
-    const decision = cadenceDecision({ lastRunAt: record?.lastRunAt, now: startedAt.getTime(), intervalMs: CATALOG_SYNC_INTERVAL_MS });
+    const decision = cadenceDecision({ lastRunAt: record.value?.lastRunAt, now: startedAt.getTime(), intervalMs: CATALOG_SYNC_INTERVAL_MS });
     if (!decision.due) return { products: 0, categories: 0, batches: 0, skipped: decision.skipped };
 
     const result = await syncOmnisendCatalog();
@@ -316,8 +396,9 @@ export async function omnisendContactsReconcileJob(): Promise<OmnisendReconcileR
 
   try {
     const startedAt = new Date();
+    // As above: unreadable is "not recorded", so a hiccup cannot stall the reconcile.
     const record = await readSyncState<CadenceRecord>(CONTACTS_RECONCILE_KEY, LOG);
-    const decision = cadenceDecision({ lastRunAt: record?.lastRunAt, now: startedAt.getTime(), intervalMs: CONTACTS_RECONCILE_INTERVAL_MS });
+    const decision = cadenceDecision({ lastRunAt: record.value?.lastRunAt, now: startedAt.getTime(), intervalMs: CONTACTS_RECONCILE_INTERVAL_MS });
     if (!decision.due) return { ...emptyReconcile(), skipped: decision.skipped };
 
     const result = await reconcileOmnisendContacts();

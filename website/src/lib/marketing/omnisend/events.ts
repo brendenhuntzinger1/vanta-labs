@@ -54,7 +54,13 @@ export type OmnisendEvent = {
   eventVersion: string;
   eventID: string;
   eventTime: string;
-  contact: { email: string; phone?: string; firstName?: string; lastName?: string };
+  /**
+   * Email only. Omnisend creates or updates the contact from this block, so a
+   * phone here would become a phone identifier (the SMS channel) on a contact
+   * whose upsert deliberately sent none. SMS consent lives in
+   * contact-payload.ts and nowhere else; no event carries a phone.
+   */
+  contact: { email: string; firstName?: string; lastName?: string };
   properties: Record<string, unknown>;
 };
 
@@ -87,7 +93,6 @@ export type OmnisendOrder = {
   replacementOf?: string | null;
   email: string;
   customerName?: string | null;
-  phone?: string | null;
   currency: string;
   /** The settled figure from the row, never a recomputed sum. */
   amountPaid: number;
@@ -130,20 +135,6 @@ export function slugify(value: string): string {
 
 function normaliseEmail(email: string): string {
   return String(email ?? "").trim().toLowerCase();
-}
-
-/**
- * E.164 or nothing. Stored phones carry whatever punctuation the customer
- * typed; a ten-digit number is a US number for this store, eleven to fifteen
- * digits are taken as already carrying a country code. Anything else is
- * omitted rather than sent malformed, because Omnisend validates the contact
- * block as a whole and a bad phone would cost the event.
- */
-function e164(phone: string | null | undefined): string | undefined {
-  const digits = String(phone ?? "").replace(/\D/g, "");
-  if (digits.length === 10) return `+1${digits}`;
-  if (digits.length >= 11 && digits.length <= 15) return `+${digits}`;
-  return undefined;
 }
 
 function splitName(name: string | null | undefined): { firstName?: string; lastName?: string } {
@@ -308,7 +299,8 @@ export function buildOrderEvent(input: {
         : new Date(now).toISOString();
 
   const { firstName, lastName } = splitName(order.customerName);
-  const phone = e164(order.phone);
+  // The checkout number is for the courier, not for marketing: it is not on
+  // the address block either. See the contact type above.
   const address = compact({
     firstName,
     lastName,
@@ -318,7 +310,6 @@ export function buildOrderEvent(input: {
     state: order.address?.state ?? undefined,
     zip: order.address?.postalCode ?? undefined,
     country: order.address?.country ?? undefined,
-    phone,
   });
   const lineItems = order.lineItems.map(normaliseLineItem);
   const couponCode = String(order.couponCode ?? "").trim();
@@ -340,7 +331,7 @@ export function buildOrderEvent(input: {
     eventVersion: EVENT_VERSIONS[name],
     eventID: `${order.orderId}:${name}`,
     eventTime,
-    contact: compact({ email, phone, firstName, lastName }) as OmnisendEvent["contact"],
+    contact: compact({ email, firstName, lastName }) as OmnisendEvent["contact"],
     properties: {
       orderID: order.orderId,
       orderNumber: order.orderNumber ?? order.orderId,
@@ -363,6 +354,20 @@ export function buildOrderEvent(input: {
       ...(refunded ? { refundedLineItems: lineItems } : {}),
     },
   };
+}
+
+/**
+ * The refusals that may not recur: status 0 (the transport's answer to every
+ * network failure, timeout and gate refusal), a rate limit and the gateway
+ * 5xx. Every other 4xx is the request's own fault and will be refused again
+ * the same way. The order hooks hand a ledger claim back on a transient
+ * refusal, so a later legitimate notice or the backstop can retry, and keep
+ * it recorded undelivered on a permanent one. Pure.
+ */
+const TRANSIENT_STATUSES = new Set([0, 429, 500, 502, 503, 504]);
+
+export function transientOmnisendRefusal(status: number): boolean {
+  return TRANSIENT_STATUSES.has(status);
 }
 
 /**

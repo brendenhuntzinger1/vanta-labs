@@ -7,6 +7,7 @@ import { upsertOmnisendContact, type ContactExtras } from "@/lib/marketing/omnis
 import {
   buildOrderEvent,
   sendOmnisendEvent,
+  transientOmnisendRefusal,
   type OmnisendOrder,
   type OmnisendOrderEventName,
 } from "@/lib/marketing/omnisend/events";
@@ -34,9 +35,14 @@ import { supabaseAdmin } from "@/lib/supabase-server";
  * EXACTLY ONCE PER (ORDER, EVENT). The ledger claim is an INSERT taken before
  * the send, so the webhook's after() callback and the sweep cannot both
  * report the same order; the loser sees a duplicate key and sends nothing. A
- * send that never happened hands its claim back, so the sweep can retry; a
- * send Omnisend refused is recorded undelivered, and the sweep retries that
- * too once the attempt is old enough to be dead (sweeps.ts).
+ * send that never happened hands its claim back, so the sweep can retry. A
+ * send Omnisend refused is one of two things: a TRANSIENT refusal (a
+ * transport failure, a rate limit, a gateway error — transientOmnisendRefusal
+ * in events.ts) also hands the claim back, because only paid-order claims
+ * are ever released by the sweep and a fulfilment, cancel or refund notice
+ * that was refused once would otherwise never be retried; a PERMANENT one is
+ * recorded undelivered, and for a paid order the sweep retries that too once
+ * the attempt is old enough to be dead (sweeps.ts).
  *
  * Consent, cart, checkout and product-view hooks live in hooks.ts. This file
  * is only the order lifecycle.
@@ -127,9 +133,21 @@ async function deliverOrderEvent(orderId: string, name: OmnisendOrderEventName, 
       return false;
     }
     const result = await sendOmnisendEvent(event);
-    await ledger.recordSend(name, event.eventID, result.ok, result.error);
-    if (!result.ok) console.error(LOG, name, "refused", orderId, { status: result.status, error: result.error });
-    return result.ok;
+    if (result.ok) {
+      await ledger.recordSend(name, event.eventID, true, null);
+      return true;
+    }
+    console.error(LOG, name, "refused", orderId, { status: result.status, error: result.error });
+    if (transientOmnisendRefusal(result.status)) {
+      // The refusal may not recur: the claim goes back so a later legitimate
+      // notice, or the backstop for a paid order, can try again.
+      await ledger.releaseSend(name);
+    } else {
+      // The request's own fault: kept, recorded undelivered, so the same
+      // notice is not re-sent to be refused the same way.
+      await ledger.recordSend(name, event.eventID, false, result.error);
+    }
+    return false;
   } catch (error) {
     // The send never happened, so the claim must not outlive it.
     await ledger.releaseSend(name);

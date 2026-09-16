@@ -1,8 +1,15 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  OMNISEND_BACKSTOP_BUDGET_MS,
+  OMNISEND_BACKSTOP_FLOOR_GRACE_MS,
   OMNISEND_BACKSTOP_LOOKBACK_MS,
   OMNISEND_STALE_CLAIM_MS,
+  backstopBudgetAllows,
+  backstopFloorDecision,
+  backstopRunNotes,
   cadenceDecision,
   ordersNeedingOmnisendPaid,
   staleOmnisendClaims,
@@ -114,6 +121,103 @@ describe("staleOmnisendClaims", () => {
   it("leaves a claim with an unreadable timestamp alone", () => {
     const rows = [{ entity_id: "a", event_name: "paid for order", delivered: false, first_sent_at: null }];
     expect(staleOmnisendClaims(rows, NOW)).toEqual([]);
+  });
+});
+
+describe("backstopFloorDecision", () => {
+  const now = NOW.getTime();
+
+  it("uses a recorded floor as it is", () => {
+    const since = "2026-09-10T08:00:00.000Z";
+    expect(backstopFloorDecision({ record: { value: { since }, unreadable: false }, now })).toEqual({
+      action: "use",
+      floor: Date.parse(since),
+    });
+  });
+
+  // A refused read is not a first run. Stamping the floor again on a database
+  // hiccup would move it forward past every order paid since the real floor,
+  // and those orders would never be reported: the run must stand down instead.
+  it("skips the run, and never stamps, when the record could not be read", () => {
+    const decision = backstopFloorDecision({ record: { value: null, unreadable: true }, now });
+    expect(decision.action).toBe("skip");
+    expect(decision).toMatchObject({ skipped: expect.stringContaining("backstop floor unreadable") });
+    expect(decision).not.toHaveProperty("floor");
+  });
+
+  // The key goes live and the first sweep tick can be a full cadence apart.
+  // An order paid in between whose webhook after() died would be older than
+  // a floor stamped at the tick and never reported, so the first floor is
+  // one cadence back. It costs at most a cadence of pre-key orders, which is
+  // what F-02 (a week of them) was about, not this.
+  it("stamps a first run one sweep cadence before now, not at now", () => {
+    expect(backstopFloorDecision({ record: { value: null, unreadable: false }, now })).toEqual({
+      action: "stamp",
+      floor: now - OMNISEND_BACKSTOP_FLOOR_GRACE_MS,
+    });
+  });
+
+  it("re-stamps a record whose since is not a date, the same way as a first run", () => {
+    expect(backstopFloorDecision({ record: { value: { since: "not a date" }, unreadable: false }, now })).toEqual({
+      action: "stamp",
+      floor: now - OMNISEND_BACKSTOP_FLOOR_GRACE_MS,
+    });
+    expect(backstopFloorDecision({ record: { value: {}, unreadable: false }, now }).action).toBe("stamp");
+  });
+
+  it("the grace is the sweep cadence in vercel.json", () => {
+    const vercel = JSON.parse(readFileSync(join(process.cwd(), "vercel.json"), "utf8")) as {
+      crons: Array<{ path: string; schedule: string }>;
+    };
+    const sweep = vercel.crons.find((cron) => cron.path === "/api/cron/sweep");
+    expect(sweep).toBeDefined();
+    const every = /^\*\/(\d+) \* \* \* \*$/.exec(sweep!.schedule);
+    expect(every, `sweep schedule ${sweep!.schedule} is not every-N-minutes`).not.toBeNull();
+    expect(OMNISEND_BACKSTOP_FLOOR_GRACE_MS).toBe(Number(every![1]) * 60 * 1000);
+    expect(OMNISEND_BACKSTOP_FLOOR_GRACE_MS).toBe(30 * 60 * 1000);
+  });
+});
+
+describe("backstopBudgetAllows", () => {
+  // Fifty sequential onOrderPaid calls inside a 50-second cron watchdog is
+  // not bounded; twenty seconds leaves the rest of the sweep its share.
+  it("defaults to twenty seconds, inside the sweep's fifty-second watchdog", () => {
+    expect(OMNISEND_BACKSTOP_BUDGET_MS).toBe(20_000);
+    expect(OMNISEND_BACKSTOP_BUDGET_MS).toBeLessThan(50_000);
+  });
+
+  it("allows another order while the budget has not elapsed, and refuses at and beyond it", () => {
+    const startedAtMs = NOW.getTime();
+    expect(backstopBudgetAllows({ startedAtMs, nowMs: startedAtMs, budgetMs: 20_000 })).toBe(true);
+    expect(backstopBudgetAllows({ startedAtMs, nowMs: startedAtMs + 19_999, budgetMs: 20_000 })).toBe(true);
+    expect(backstopBudgetAllows({ startedAtMs, nowMs: startedAtMs + 20_000, budgetMs: 20_000 })).toBe(false);
+    expect(backstopBudgetAllows({ startedAtMs, nowMs: startedAtMs + 60_000, budgetMs: 20_000 })).toBe(false);
+  });
+
+  it("a zero budget starts nothing", () => {
+    const startedAtMs = NOW.getTime();
+    expect(backstopBudgetAllows({ startedAtMs, nowMs: startedAtMs, budgetMs: 0 })).toBe(false);
+  });
+});
+
+describe("backstopRunNotes", () => {
+  it("is null when everything pending was attempted and nothing was released", () => {
+    expect(backstopRunNotes({ pending: 3, attempted: 3, stale: 0, budgetExhausted: false })).toBeNull();
+    expect(backstopRunNotes({ pending: 0, attempted: 0, stale: 0, budgetExhausted: false })).toBeNull();
+  });
+
+  it("counts released claims and what the batch limit left", () => {
+    expect(backstopRunNotes({ pending: 3, attempted: 3, stale: 2, budgetExhausted: false })).toBe("2 stale claim(s) released");
+    expect(backstopRunNotes({ pending: 60, attempted: 50, stale: 0, budgetExhausted: false })).toBe("10 left for the next run");
+    expect(backstopRunNotes({ pending: 60, attempted: 50, stale: 1, budgetExhausted: false })).toBe(
+      "1 stale claim(s) released; 10 left for the next run",
+    );
+  });
+
+  it("says when the time budget, not the batch limit, is what stopped it", () => {
+    expect(backstopRunNotes({ pending: 30, attempted: 7, stale: 0, budgetExhausted: true })).toBe(
+      "23 left for the next run (time budget reached after 7)",
+    );
   });
 });
 

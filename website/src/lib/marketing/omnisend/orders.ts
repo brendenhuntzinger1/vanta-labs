@@ -49,7 +49,6 @@ type OrderRow = {
   customer_email?: string | null;
   customer_name?: string | null;
   customer_user_id?: string | null;
-  phone?: string | null;
   shipping_address?: string | null;
   shipping_address_2?: string | null;
   city?: string | null;
@@ -71,8 +70,13 @@ type ProductRow = {
   image_url?: string | null;
 };
 
+/**
+ * Not selected: the checkout phone. It is the courier's number, not a
+ * marketing identifier, and the privacy policy says a phone reaches Omnisend
+ * only with SMS consent, which is contact-payload.ts's business alone.
+ */
 const ORDER_COLUMNS =
-  "order_id, order_number, order_type, replacement_of, payment_status, fulfillment_status, amount_paid, subtotal, shipping_amount, discount_amount, tax_amount, currency, coupon_code, customer_email, customer_name, customer_user_id, phone, shipping_address, shipping_address_2, city, state, postal_code, country, paid_at, created_at, shipped_at, tracking_number, shipping_carrier, order_items(product_id, product_name, quantity, unit_price)";
+  "order_id, order_number, order_type, replacement_of, payment_status, fulfillment_status, amount_paid, subtotal, shipping_amount, discount_amount, tax_amount, currency, coupon_code, customer_email, customer_name, customer_user_id, shipping_address, shipping_address_2, city, state, postal_code, country, paid_at, created_at, shipped_at, tracking_number, shipping_carrier, order_items(product_id, product_name, quantity, unit_price)";
 
 function amount(value: number | string | null | undefined): number {
   return money(Number(value ?? 0));
@@ -138,7 +142,6 @@ export async function loadOrderForOmnisend(
       replacementOf: text(row.replacement_of),
       email,
       customerName: text(row.customer_name),
-      phone: text(row.phone),
       currency: (text(row.currency) ?? "USD").toUpperCase(),
       amountPaid: amount(row.amount_paid),
       subtotal: amount(row.subtotal),
