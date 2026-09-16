@@ -184,10 +184,29 @@ export function layoutRef(seed, universalLayoutID) {
 export function productSection(seed, type, { count = 3, recommender, buttonText = "View", campaign } = {}) {
   const blocks = [];
   for (let index = 0; index < count; index += 1) {
+    const slot = `${seed}:product:${index}`;
+    const href = link("/products", { campaign });
+    const label = buttonText.toUpperCase();
     blocks.push({
-      id: hexId(`${seed}:product:${index}`),
+      id: hexId(slot),
       type: "product",
-      product: { title: "Product", price: "$0.00", buttonText: buttonText.toUpperCase(), link: link("/products", { campaign }) },
+      product: { title: "Product", price: "$0.00", buttonText: label, link: href },
+      // Omnisend renders a product block through role-tagged components and
+      // rejects a block without them ("block must have at least 1 component").
+      // Each mirrors the placeholder above; the platform fills them per
+      // recipient at send time.
+      components: [
+        { id: hexId(`${slot}:image`), type: "image", role: "product_image", image: { link: href, altText: "Product" }, styleProperties: { padding: "0px 0px 12px", alignment: "center" } },
+        { id: hexId(`${slot}:title`), type: "text", role: "product_title", text: p("Product", "center"), stylePresetID: "heading_small", styleProperties: { padding: "0px 0px 6px", alignment: "center" } },
+        {
+          id: hexId(`${slot}:prices`), type: "price", role: "product_prices", styleProperties: { padding: "0px 0px 12px", alignment: "center" },
+          components: [
+            { id: hexId(`${slot}:price:current`), type: "text", role: "product_current_price", text: p("$0.00", "center"), stylePresetID: "paragraph", styleProperties: { alignment: "center", color: PALETTE.gold } },
+            { id: hexId(`${slot}:price:old`), type: "text", role: "product_old_price", text: p("$0.00", "center"), stylePresetID: "footnote", styleProperties: { alignment: "center", color: PALETTE.muted } },
+          ],
+        },
+        { id: hexId(`${slot}:button`), type: "button", role: "product_button", button: { text: label, link: href, isFullWidth: false }, stylePresetID: "primary_button", styleProperties: { padding: "0px", alignment: "center" } },
+      ],
       stylePresetID: "primary_button",
       styleProperties: { padding: "12px 16px", backgroundColor: PALETTE.surface, borderRadius: "16px", color: PALETTE.foreground, priceColor: PALETTE.gold, secondaryColor: PALETTE.muted, fontFamily: FONTS.body },
     });

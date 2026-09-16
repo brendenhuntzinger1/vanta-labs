@@ -7,7 +7,34 @@ import { ctaPathReachesStore } from "@/lib/email/link-grant";
 import { findCopyComplianceIssueIn } from "@/lib/email/copy-compliance";
 import { isOfferKey } from "@/lib/offers/customer-offers";
 import { getSiteUrl } from "@/lib/env";
+import { marketingSendBlockedByOmnisend } from "@/lib/marketing/omnisend/ownership";
 import { supabaseAdmin } from "@/lib/supabase-server";
+
+/**
+ * Who is sending marketing right now: the in-house engine, or Omnisend.
+ *
+ * The admin page renders its automations from server props, and the one fact
+ * it cannot get from a row is whether those automations will actually run.
+ * While OMNISEND_MARKETING_OWNER is set the lifecycle cron stands the
+ * automations, cart recovery and campaigns down (spec §3.1, ownership.ts), and
+ * an operator editing a win-back that will never fire deserves to be told. The
+ * flag is a server-only environment value, so the client asks for it here
+ * rather than importing the Omnisend module into a client bundle.
+ */
+export async function GET(request: Request) {
+  const session = await verifyAdminSessionFromRequest(request);
+  if (!session) {
+    return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+  }
+  if (!canManageEmailCampaigns(session.role)) {
+    return NextResponse.json({ success: false, error: "Forbidden" }, { status: 403 });
+  }
+
+  return NextResponse.json({
+    success: true,
+    marketingOwner: marketingSendBlockedByOmnisend() ? "omnisend" : "native",
+  });
+}
 
 // Edit one retention automation (copy, delay, on/off).
 export async function PATCH(request: Request) {

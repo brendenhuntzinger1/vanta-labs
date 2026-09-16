@@ -11,6 +11,7 @@ import { extractEmailAddress, isMarketingSuppressed } from "@/lib/email/marketin
 import { generateUnsubscribeToken } from "@/lib/email/unsubscribe";
 import { getSiteUrl } from "@/lib/env";
 import { safeCampaignDestination } from "@/lib/email/campaign-links";
+import { marketingSendBlockedByOmnisend } from "@/lib/marketing/omnisend/ownership";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 /**
@@ -29,6 +30,22 @@ export async function POST(request: Request, context: { params: Promise<{ campai
   }
   if (!canManageEmailCampaigns(session.role)) {
     return NextResponse.json({ success: false, error: "Your role does not have permission to send email campaigns." }, { status: 403 });
+  }
+
+  // ONE OWNER OF MARKETING SENDS (spec §3.1, ownership.ts). While Omnisend
+  // owns marketing, nothing in-house may schedule or start a campaign: the
+  // frequency guard cannot see Omnisend's sends, so a campaign from here could
+  // land on top of one of theirs. Checked once, before any branch, so neither
+  // "schedule" nor "send now" can reach the status write below it. 409 rather
+  // than 400: the request is well-formed, it conflicts with who owns sending.
+  if (marketingSendBlockedByOmnisend()) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: "Campaign sends are handled by Omnisend while OMNISEND_MARKETING_OWNER is set. Send this from Omnisend, or unset the switch to use the in-house sender.",
+      },
+      { status: 409 },
+    );
   }
 
   const { campaignId } = await context.params;
