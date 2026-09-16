@@ -186,8 +186,57 @@ describe("Omnisend is ungated by consent, and the policies say so", () => {
     expect(privacy).toMatch(/Declining cookies does not stop the Omnisend script/);
     expect(privacy).toMatch(/When you accept, five things run/);
     expect(privacy).toMatch(/Three more — the Meta Pixel, the Google Ads tag and the Omnisend script — are present whether or not you accept/);
-    expect(privacy).toMatch(/email and text-message marketing/);
-    expect(privacy).toMatch(/Omnisend is present[\s\S]{0,1500}?told about page views only/);
+    expect(privacy).toMatch(/Omnisend is our marketing email and SMS service provider/);
+    // The SCRIPT still reports page views only; the server-side sync is a
+    // separate paragraph that names every category it hands over.
+    expect(privacy).toMatch(/The script itself is told about page views only and is never handed your email address by code running in your browser\./);
+    expect(privacy).not.toMatch(/this site never hands it your email address/);
+    expect(privacy).not.toMatch(/receives no shopping actions, product identifiers or order values/);
+  });
+
+  it("the privacy policy names every category the server sends Omnisend, and why", () => {
+    const start = privacy.indexOf("**What our server sends Omnisend.**");
+    expect(start).toBeGreaterThan(-1);
+    const paragraph = privacy.slice(start, privacy.indexOf("\n\n", start));
+    expect(paragraph).toContain("our server sends Omnisend your email address");
+    expect(paragraph).toContain("your phone number, only where you have given SMS marketing consent");
+    expect(paragraph).toContain("your marketing consent status for email and SMS and the date and time it was given or withdrawn");
+    expect(paragraph).toContain("your order history (the products, amounts and dates)");
+    expect(paragraph).toContain("the contents of your cart");
+    expect(paragraph).toContain("while you are signed in, the products you view");
+    expect(paragraph).toContain("so that it can send the marketing email and SMS you agreed to and measure how they perform");
+    // Consent is copied, never widened: the policy must not describe a phone
+    // number as reaching Omnisend on any other basis than SMS consent.
+    expect(paragraph).not.toMatch(/phone number[^;]*(checkout|order)/i);
+  });
+
+  it("the privacy policy separates transactional email (Resend) from marketing (Omnisend)", () => {
+    expect(privacy).toMatch(/Transactional email — order confirmations, shipping and delivery updates, refunds, password and account security messages — is not marketing and is sent through Resend/);
+    expect(privacy).toMatch(/marketing email and SMS delivery \(Omnisend\)/);
+    expect(privacy).toMatch(/transactional email delivery \(Resend\)/);
+  });
+
+  it("the privacy policy says how to stop the messages, not only the script", () => {
+    const start = privacy.indexOf("**How to stop Omnisend.**");
+    expect(start).toBeGreaterThan(-1);
+    const paragraph = privacy.slice(start, privacy.indexOf("\n\n", start));
+    expect(paragraph).toContain("Declining cookies does not stop the Omnisend script.");
+    expect(paragraph).toContain("Unsubscribing from our marketing email, or replying STOP to a text message, stops those messages");
+  });
+
+  it("the SMS section names Omnisend as the provider that receives the number, only after opt-in", () => {
+    const start = privacy.indexOf("## SMS / text messaging");
+    expect(start).toBeGreaterThan(-1);
+    const section = privacy.slice(start, privacy.indexOf("## Your choices", start));
+    expect(section).toContain("Our text messages are sent through Omnisend, our marketing email and SMS service provider");
+    expect(section).toContain("which receives your mobile number and your SMS consent record only once you have opted in");
+    expect(section).toContain("will not be shared with, or sold to, any third party or affiliate for their own marketing purposes");
+    expect(section).toContain("Reply STOP to any message to cancel at any time");
+    expect(section).toContain("Reply HELP for help");
+    expect(section).toContain("Message frequency varies. Message and data rates may apply.");
+    expect(section).toContain("pass the withdrawal to Omnisend");
+    // The old wording hid the provider behind a generic phrase.
+    expect(section).not.toContain("through the messaging provider that delivers them on our behalf");
   });
 
   it("the cookie policy describes Omnisend as not controlled by the banner", () => {
@@ -196,7 +245,37 @@ describe("Omnisend is ungated by consent, and the policies say so", () => {
     const bullet = cookies.slice(start, cookies.indexOf("\n\n", start));
     expect(bullet).toMatch(/loads on every page whether you accept or decline/);
     expect(bullet).toMatch(/Declining cookies does not stop it/);
-    expect(bullet).toMatch(/never sends it your email address/);
+    expect(bullet).toMatch(/Omnisend is our marketing email and SMS service provider/);
+    expect(bullet).toMatch(/The script itself reports page views only and is never handed your email address by code running in your browser\./);
+    expect(bullet).toMatch(/our server sends Omnisend your email address, your phone number where you have given SMS consent, your marketing consent and its date, your order history, your cart contents and, while you are signed in, the products you view/);
+    expect(bullet).not.toMatch(/this site never sends it your email address/);
+    expect(bullet).not.toMatch(/never told about shopping actions or order values/);
+  });
+
+  it("the SMS program terms match between the consent box and the policies", () => {
+    // Twilio and the carriers review the opt-in form against the policy. The
+    // program name, frequency line, STOP/HELP and rates sentence must agree,
+    // so a change to one without the other fails here.
+    const settings = read(join(SRC, "components", "account-settings-client.tsx"));
+    const terms = legal.slice(legal.indexOf('title: "Terms of Service"'), cookiesStart);
+    const smsPolicy = privacy.slice(privacy.indexOf("## SMS / text messaging"), privacy.indexOf("## Your choices"));
+    const smsTerms = terms.slice(terms.indexOf("## SMS terms"), terms.indexOf("## Limitation of liability"));
+    expect(smsTerms.length).toBeGreaterThan(0);
+    for (const text of [settings, smsPolicy, smsTerms]) {
+      expect(text).toMatch(/recurring automated marketing text messages from Vanta Labs/i);
+      expect(text).toContain("Message frequency varies. Message and data rates may apply.");
+      expect(text).toMatch(/Reply STOP/);
+      expect(text).toMatch(/HELP for help/);
+      expect(text).toMatch(/Consent is not a condition of (any )?purchase\./);
+    }
+    expect(settings).toContain("Your number is never shared with third parties for their marketing.");
+    expect(smsTerms).toContain("Messages are delivered through Omnisend, our marketing email and SMS service provider.");
+    expect(smsTerms).toContain("is never shared with third parties for their marketing");
+  });
+
+  it("keeps every policy free of emoji and exclamation marks", () => {
+    expect(legal).not.toMatch(/!/);
+    expect(legal).not.toMatch(/\p{Extended_Pictographic}/u);
   });
 
   it("never sweeps Omnisend into a \"nothing loads if you decline\" promise", () => {
@@ -225,7 +304,7 @@ describe("Omnisend receives page views only, and nothing identifying", () => {
     }
   });
 
-  it("sends only the page-view event, so the policy's 'page views only' is true", () => {
+  it("sends only the page-view event from the browser, so the policy's 'the script itself is told about page views only' is true", () => {
     const names = new Set<string>();
     for (const path of files) {
       for (const match of executableSource(path).matchAll(/omnisend\??\.push\(\[\s*["']track["'],\s*["']([^"']+)["']/g)) {
