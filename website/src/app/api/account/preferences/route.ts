@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
+import { after } from "next/server";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { customerSafeMessage } from "@/lib/safe-error";
 import { CUSTOMER_CHOSEN_SUPPRESSION_REASONS } from "@/lib/email/suppression-reasons";
+import { onPreferencesChanged } from "@/lib/marketing/omnisend/hooks";
 
 function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
@@ -93,6 +95,13 @@ export async function PATCH(request: Request) {
       } catch {
         // Non-fatal; the preference row is saved regardless.
       }
+
+      // OMNISEND SEES THE PREFERENCE EXACTLY AS STORED. The hook re-reads
+      // marketing_emails, sms_marketing, sms_consent_at, sms_opted_out_at and
+      // the phone from the rows written above (contacts.ts) and pushes the
+      // contact — after the response, never on its path, and never widening
+      // consent: a number typed without the SMS box ticked is not SMS consent.
+      after(() => onPreferencesChanged(email));
     }
 
     return NextResponse.json({ success: true });

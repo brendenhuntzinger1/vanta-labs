@@ -5,6 +5,7 @@ import { sendMarketingEmail } from "@/lib/email/marketing";
 import { couponAnnouncementTemplate } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
 import { readAllRowsBounded } from "@/lib/supabase-page";
+import { omnisendAfter } from "@/lib/marketing/omnisend/after";
 import type { AdminCoupon } from "@/lib/admin-coupons";
 
 /**
@@ -161,6 +162,15 @@ export async function recordMarketingOptIn(email: string, source: string): Promi
       console.error("[marketing] opt-in row was refused", { source, message: error.message });
       return false;
     }
+    // OMNISEND LEARNS OF THE CONSENT ONCE IT IS ON RECORD, and never on the
+    // caller's path. The three callers — signup, the OAuth portal and the
+    // checkout — variously await this or fire it and forget it, and none of
+    // them may wait on a marketing sync; after() runs the hook once the
+    // response has gone, and the hook itself asks the Omnisend gate first,
+    // catches everything and mints the welcome code only for a first-time
+    // address (hooks.ts onMarketingOptIn). Loaded on demand so this module
+    // stays as light as it was for every caller that never reaches here.
+    omnisendAfter(() => import("@/lib/marketing/omnisend/hooks").then((hooks) => hooks.onMarketingOptIn(normalized, source)));
     return true;
   } catch (err) {
     // Table missing (migration not run) or transient error — never fatal.

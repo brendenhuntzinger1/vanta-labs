@@ -48,12 +48,25 @@ export const maxDuration = 60;
  * job that quietly stopped being scheduled. The other four are transactional
  * mail, retries and reapers, which Omnisend does not replace, so they never
  * ask.
+ *
+ * WHY RECOVERY DOES NOT STAND DOWN FULLY. ONE OWNER PER CART: Omnisend cannot
+ * import a sequence's execution state, so the carts that were mid-ladder on
+ * cutover day (12 open carts on 2026-09-16, each with stages already sent)
+ * would be restarted at Omnisend's message one. While the switch is set the
+ * ladder therefore runs in LEGACY-ONLY mode — it finishes every cart that
+ * already has a stage and touches nothing else — and reports the mode and
+ * the reason beside its counts. Once the last legacy cart ages out the job
+ * does nothing but count, which is the same outcome as skipping.
  */
 const JOBS: CronJobMap = {
   // The recovery ladder. First because it is the one with a closing window.
   cartRecovery: {
     label: "cart_recovery",
-    run: () => (marketingSendBlockedByOmnisend() ? Promise.resolve({ skipped: MARKETING_OWNED_BY_OMNISEND }) : runAbandonedCartSweep()),
+    run: async () => {
+      if (!marketingSendBlockedByOmnisend()) return runAbandonedCartSweep();
+      const result = await runAbandonedCartSweep({ legacyOnly: true });
+      return { ...result, mode: "legacy", reason: MARKETING_OWNED_BY_OMNISEND };
+    },
   },
   // Retention sequences: welcome, post-purchase, win-back, reorder.
   emailAutomations: {

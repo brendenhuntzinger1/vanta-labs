@@ -30,7 +30,12 @@ export const CONTACT_CODE_OFFERS = {
 
 export type ContactCodeKind = keyof typeof CONTACT_CODE_OFFERS;
 
-export type ContactCode = { code: string; endsAt: string };
+export type ContactCode = {
+  code: string;
+  endsAt: string;
+  /** The percentage the coupon row actually carries — read back, never remembered. */
+  percent: number;
+};
 
 const HOUR_MS = 60 * 60 * 1000;
 /**
@@ -59,7 +64,32 @@ type LiveCodeRow = {
   ends_at?: string | null;
   redemptions_count?: number | null;
   max_redemptions?: number | null;
+  discount_value?: number | string | null;
+  discount_type?: string | null;
 };
+
+/**
+ * The percentage a live row carries. Read back rather than remembered, for
+ * the reason cart-recovery.ts findLiveCouponForCart gives: a code minted at
+ * 15% is described as 15% even if the band has since been edited to 10%.
+ */
+function percentOf(row: LiveCodeRow): number {
+  if (String(row.discount_type ?? "percent") === "percent") {
+    return Math.max(0, Math.round(Number(row.discount_value ?? 0) || 0));
+  }
+  return 0;
+}
+
+/**
+ * A whole percentage inside 1..100, or the fallback. A band's percentage is
+ * operator-typed configuration, and "100" here is a free order.
+ */
+function boundedPercent(value: unknown, fallback: number): number {
+  if (value === null || value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(100, Math.max(1, Math.round(parsed)));
+}
 
 /**
  * The live code this address already holds for this kind, or null.
@@ -78,7 +108,7 @@ export async function findLiveContactCode(kind: ContactCodeKind, email: string):
   try {
     const { data, error } = await supabaseAdmin
       .from("coupons")
-      .select("code, ends_at, redemptions_count, max_redemptions")
+      .select("code, ends_at, redemptions_count, max_redemptions, discount_value, discount_type")
       .eq("assigned_email", address)
       .eq("source", offer.source)
       .eq("active", true)
@@ -93,7 +123,7 @@ export async function findLiveContactCode(kind: ContactCodeKind, email: string):
     if (!row?.code || !row.ends_at) return null;
     const unspent = row.max_redemptions === null || row.max_redemptions === undefined
       || Number(row.redemptions_count ?? 0) < Number(row.max_redemptions);
-    return unspent ? { code: String(row.code), endsAt: String(row.ends_at) } : null;
+    return unspent ? { code: String(row.code), endsAt: String(row.ends_at), percent: percentOf(row) } : null;
   } catch (error) {
     console.error("[omnisend/codes] live code lookup failed", { kind, error });
     return null;
@@ -101,11 +131,31 @@ export async function findLiveContactCode(kind: ContactCodeKind, email: string):
 }
 
 /**
+ * Every live code this address holds, by kind. Read, never minted, so a
+ * contact upsert reports what is real. A kind with no live code is absent.
+ */
+export async function findLiveContactCodes(email: string): Promise<Partial<Record<ContactCodeKind, ContactCode>>> {
+  const kinds = Object.keys(CONTACT_CODE_OFFERS) as ContactCodeKind[];
+  const found = await Promise.all(kinds.map((kind) => findLiveContactCode(kind, email)));
+  const codes: Partial<Record<ContactCodeKind, ContactCode>> = {};
+  kinds.forEach((kind, index) => {
+    const code = found[index];
+    if (code) codes[kind] = code;
+  });
+  return codes;
+}
+
+/**
  * The code to put in this contact's property: the live one if there is one,
  * otherwise a fresh mint. Null only when the database refused both, and the
  * caller then sends "" so Omnisend hides the offer section (spec §3.4).
+ *
+ * `options.percent` mints at a caller-chosen percentage — the cart-offer
+ * sweep passes the cart's value band — and defaults to the offer's own. A
+ * live code is re-offered at whatever percentage IT carries, because one
+ * address holds one live code per kind and the email must describe that one.
  */
-export async function ensureContactCode(kind: ContactCodeKind, email: string): Promise<ContactCode | null> {
+export async function ensureContactCode(kind: ContactCodeKind, email: string, options: { percent?: number } = {}): Promise<ContactCode | null> {
   const offer = CONTACT_CODE_OFFERS[kind];
   const address = normalizeEmail(email);
   if (!address) return null;
@@ -113,13 +163,14 @@ export async function ensureContactCode(kind: ContactCodeKind, email: string): P
     const live = await findLiveContactCode(kind, address);
     if (live) return live;
 
+    const percent = boundedPercent(options.percent, offer.percent);
     const endsAt = new Date(Date.now() + offer.ttlHours * HOUR_MS).toISOString();
     for (let attempt = 1; attempt <= MINT_ATTEMPTS; attempt += 1) {
       const code = generateContactCode(offer.prefix);
       const { error } = await supabaseAdmin.from("coupons").insert({
         code,
         discount_type: "percent",
-        discount_value: offer.percent,
+        discount_value: percent,
         ends_at: endsAt,
         max_redemptions: 1,
         redemptions_count: 0,
@@ -129,7 +180,7 @@ export async function ensureContactCode(kind: ContactCodeKind, email: string): P
         created_at: new Date().toISOString(),
         is_private: true,
       });
-      if (!error) return { code, endsAt };
+      if (!error) return { code, endsAt, percent };
       // 23505 is the unique index on coupons.code: another draw, not a failure.
       if ((error as { code?: string }).code === "23505") continue;
       console.error("[omnisend/codes] mint refused", { kind, message: error.message });

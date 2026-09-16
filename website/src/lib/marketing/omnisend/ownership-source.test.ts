@@ -62,10 +62,30 @@ describe("the lifecycle schedule stands down exactly the marketing jobs", () => 
     );
   });
 
-  it.each(["cartRecovery", "emailAutomations", "emailCampaigns"])("%s consults the switch before running", (name) => {
+  it.each(["emailAutomations", "emailCampaigns"])("%s consults the switch and stands down fully", (name) => {
     const entry = jobEntry(name);
     expect(entry).toContain(CHECK);
     expect(entry).toContain("skipped: MARKETING_OWNED_BY_OMNISEND");
+    expect(entry).not.toContain("legacyOnly");
+  });
+
+  // ONE OWNER PER CART. Omnisend cannot import a sequence's execution state,
+  // so while the switch is set the ladder finishes the carts it already
+  // started and starts none: legacy-only mode, reported as such with the
+  // same reason the other two log, and never a full sweep.
+  it("cartRecovery consults the switch and runs the ladder in legacy-only mode rather than skipping", () => {
+    const entry = jobEntry("cartRecovery");
+    expect(entry).toContain(CHECK);
+    expect(entry).toContain("runAbandonedCartSweep({ legacyOnly: true })");
+    expect(entry).toContain('mode: "legacy", reason: MARKETING_OWNED_BY_OMNISEND');
+    expect(entry).not.toContain("skipped: MARKETING_OWNED_BY_OMNISEND");
+    // The check decides between the two calls: the full sweep only when unblocked.
+    const check = entry.indexOf(CHECK);
+    const full = entry.indexOf("return runAbandonedCartSweep();");
+    const legacy = entry.indexOf("runAbandonedCartSweep({ legacyOnly: true })");
+    expect(check).toBeGreaterThan(-1);
+    expect(full).toBeGreaterThan(check);
+    expect(legacy).toBeGreaterThan(full);
   });
 
   it.each(["marketingQueue", "emailRetry", "orderEmailReaper", "marketingSendReaper"])(

@@ -201,6 +201,12 @@ describe("custom properties", () => {
       vl_welcome_ready: "yes",
       vl_winback_ready: "no",
       vl_recovery_ready: "no",
+      vl_recovery_percent: 0,
+      vl_recovery_gift: "",
+      vl_recovery_gift_link: "",
+      vl_recovery_gift_min: "",
+      vl_recovery_gift_ends: "",
+      vl_recovery_gift_ready: "no",
     });
   });
 
@@ -230,6 +236,12 @@ describe("custom properties", () => {
       vl_welcome_ready: "no",
       vl_winback_ready: "no",
       vl_recovery_ready: "no",
+      vl_recovery_percent: 0,
+      vl_recovery_gift: "",
+      vl_recovery_gift_link: "",
+      vl_recovery_gift_min: "",
+      vl_recovery_gift_ends: "",
+      vl_recovery_gift_ready: "no",
     });
     // Profile fields are OMITTED rather than blanked, so a value Omnisend
     // already holds from a form is not erased; the country still defaults.
@@ -271,6 +283,93 @@ describe("custom properties", () => {
   it("send an unparseable date as the empty string rather than an Invalid Date", () => {
     const broken = buildContactPayload({ ...facts, lastOrderAt: "not a date" }) as { customProperties: Record<string, unknown> };
     expect(broken.customProperties.vl_last_order_at).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The store-minted recovery offer for Omnisend's 72-hour message: the code's
+// percentage beside the code, and the gift as text, link, floor and deadline
+// with its own ready flag, so the template can show the gift block, the code
+// block, both or neither from properties alone.
+// ---------------------------------------------------------------------------
+describe("the recovery offer properties", () => {
+  const gift = {
+    text: "a free GHK-Cu 50mg and a free Recon Water",
+    link: "https://www.vantalabsresearch.com/api/email/omnisend-link?t=v1.1.aa&e=jane.doe%40example.com&to=%2Fapi%2Femail%2Ftrack%2Fclick",
+    minCartCents: 10_000,
+    // 03:00Z on the 27th is 11 pm Eastern on the 26th: the gift dies before
+    // the UTC date arrives, so the email must say the 26th.
+    endsAt: "2026-09-27T03:00:00.000Z",
+  };
+
+  it("carry the recovery code's percentage as an integer beside the code", () => {
+    const built = buildContactPayload({
+      ...facts,
+      codes: { recovery: { code: "VLCART-DDDDDD", endsAt: "2026-09-22T12:00:00.000Z", percent: 15 } },
+    }) as { customProperties: Record<string, unknown> };
+    expect(built.customProperties).toMatchObject({
+      vl_recovery_code: "VLCART-DDDDDD",
+      vl_recovery_ends: "2026-09-22",
+      vl_recovery_ready: "yes",
+      vl_recovery_percent: 15,
+    });
+  });
+
+  it("report 0 percent when there is no live recovery code, or when the code carries no percentage", () => {
+    const none = buildContactPayload({ ...facts, codes: {} }) as { customProperties: Record<string, unknown> };
+    expect(none.customProperties.vl_recovery_percent).toBe(0);
+    const unknown = buildContactPayload({
+      ...facts,
+      codes: { recovery: { code: "VLCART-EEEEEE", endsAt: "2026-09-22T12:00:00.000Z" } },
+    }) as { customProperties: Record<string, unknown> };
+    expect(unknown.customProperties.vl_recovery_percent).toBe(0);
+    const fractional = buildContactPayload({
+      ...facts,
+      codes: { recovery: { code: "VLCART-FFFFFF", endsAt: "2026-09-22T12:00:00.000Z", percent: 12.6 } },
+    }) as { customProperties: Record<string, unknown> };
+    expect(fractional.customProperties.vl_recovery_percent).toBe(13);
+  });
+
+  it("carry the gift as text, an absolute claim link, a dollar floor, a display-zone date and a ready flag", () => {
+    const built = buildContactPayload({ ...facts, recoveryGift: gift }) as { customProperties: Record<string, unknown> };
+    expect(built.customProperties).toMatchObject({
+      vl_recovery_gift: "a free GHK-Cu 50mg and a free Recon Water",
+      vl_recovery_gift_link: gift.link,
+      vl_recovery_gift_min: "$100",
+      vl_recovery_gift_ends: "2026-09-26",
+      vl_recovery_gift_ready: "yes",
+    });
+  });
+
+  it("format a floor with cents only when it has them", () => {
+    const odd = buildContactPayload({ ...facts, recoveryGift: { ...gift, minCartCents: 3_550 } }) as { customProperties: Record<string, unknown> };
+    expect(odd.customProperties.vl_recovery_gift_min).toBe("$35.50");
+    const floor = buildContactPayload({ ...facts, recoveryGift: { ...gift, minCartCents: 3_500 } }) as { customProperties: Record<string, unknown> };
+    expect(floor.customProperties.vl_recovery_gift_min).toBe("$35");
+  });
+
+  it("are empty, and not ready, when there is no gift or the gift has no text or link", () => {
+    for (const recoveryGift of [undefined, null, { ...gift, text: "" }, { ...gift, link: "  " }]) {
+      const built = buildContactPayload({ ...facts, recoveryGift }) as { customProperties: Record<string, unknown> };
+      expect(built.customProperties).toMatchObject({
+        vl_recovery_gift: "",
+        vl_recovery_gift_link: "",
+        vl_recovery_gift_min: "",
+        vl_recovery_gift_ends: "",
+        vl_recovery_gift_ready: "no",
+      });
+    }
+  });
+
+  it("keep the gift and the code independent: a gift without a code, and a code without a gift, are both complete", () => {
+    const giftOnly = buildContactPayload({ ...facts, codes: {}, recoveryGift: gift }) as { customProperties: Record<string, unknown> };
+    expect(giftOnly.customProperties).toMatchObject({ vl_recovery_ready: "no", vl_recovery_percent: 0, vl_recovery_gift_ready: "yes" });
+    const codeOnly = buildContactPayload({
+      ...facts,
+      codes: { recovery: { code: "VLCART-GGGGGG", endsAt: "2026-09-22T12:00:00.000Z", percent: 10 } },
+      recoveryGift: null,
+    }) as { customProperties: Record<string, unknown> };
+    expect(codeOnly.customProperties).toMatchObject({ vl_recovery_ready: "yes", vl_recovery_percent: 10, vl_recovery_gift_ready: "no" });
   });
 });
 

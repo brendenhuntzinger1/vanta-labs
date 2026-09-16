@@ -25,12 +25,26 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 
 export type OmnisendLedger = {
   claimSend: (eventName: string, eventId: string) => Promise<boolean>;
+  /**
+   * Claim, or re-claim once the previous claim is older than the window.
+   *
+   * For the events that recur — a cart changing, a product being viewed —
+   * exactly-once is the wrong contract; at-most-once-per-window is. The
+   * insert is tried first, exactly as claimSend does, so a first report is
+   * race-free. Only when the row already exists is it refreshed, and the
+   * refresh is ONE conditional update on `first_sent_at < now - window`:
+   * two beacons racing on the same cart both attempt it and the database
+   * lets exactly one row-change through, so a read-then-update cannot let
+   * both see "old". Fails OPEN on a ledger error, for the same reason the
+   * claim does.
+   */
+  claimSendWithin: (eventName: string, eventId: string, windowMs: number) => Promise<boolean>;
   recordSend: (eventName: string, eventId: string, delivered: boolean, error: string | null) => Promise<void>;
   releaseSend: (eventName: string) => Promise<void>;
 };
 
 export function omnisendLedger(entityId: string): OmnisendLedger {
-  return {
+  const ledger: OmnisendLedger = {
     claimSend: async (eventName, eventId) => {
       try {
         const { error } = await supabaseAdmin
@@ -39,6 +53,23 @@ export function omnisendLedger(entityId: string): OmnisendLedger {
         if (!error) return true;
         if ((error as { code?: string }).code === "23505") return false;
         return true;
+      } catch {
+        return true;
+      }
+    },
+    claimSendWithin: async (eventName, eventId, windowMs) => {
+      if (await ledger.claimSend(eventName, eventId)) return true;
+      try {
+        const now = Date.now();
+        const { data, error } = await supabaseAdmin
+          .from("omnisend_events_sent")
+          .update({ event_id: eventId, delivered: false, first_sent_at: new Date(now).toISOString(), last_error: null })
+          .eq("entity_id", entityId)
+          .eq("event_name", eventName)
+          .lt("first_sent_at", new Date(now - windowMs).toISOString())
+          .select("entity_id");
+        if (error) return true;
+        return Array.isArray(data) && data.length > 0;
       } catch {
         return true;
       }
@@ -68,4 +99,5 @@ export function omnisendLedger(entityId: string): OmnisendLedger {
       }
     },
   };
+  return ledger;
 }
