@@ -1,30 +1,65 @@
-import { FONTS, PALETTE, SITE, hexId } from "./lib.mjs";
+import { PALETTE, SITE } from "./lib.mjs";
 
 /**
  * The sign-up popup (spec §8): email first, an optional second step for SMS
- * with the store's own TCPA sentence, and a success screen naming the welcome
- * code. Restyled from Omnisend's email-and-SMS two-step template to the site
- * palette. Created DISABLED; the owner enables it after review.
+ * with the store's own TCPA sentence, and a success screen pointing at the
+ * catalogue. Restyled from Omnisend's email-and-SMS two-step template to the
+ * site palette. post_forms creates it in DRAFT; the owner enables it after
+ * review. Nothing here promises a discount amount, because the welcome code
+ * is minted by the store and arrives by email.
+ *
+ * Shape notes (post_forms schema, v2026-03-15, learned from its validator):
+ *   - sections, rows, columns and blocks carry no ids (the server assigns them);
+ *   - a block's preset key is `stylePresetID`; padding is four separate sides;
+ *   - every colour is a hex value (rgba is refused), so the email hairlines
+ *     are pre-blended over the surface colour below;
+ *   - `fontFamily` must be one of Omnisend's own font stacks, so the site's
+ *     Fraunces/Manrope pairing is not available here. Inter is the closest of
+ *     the stacks the form templates ship with; the owner can swap it in the
+ *     editor;
+ *   - input and legal blocks require `styleProperties`;
+ *   - text presets take one of five line heights; button presets need border,
+ *     font and decoration fields;
+ *   - `targeting.device` is a single value, so it is omitted to target both;
+ *   - `targeting.location` entries are `{ code, name }`.
  */
+
+export const FORM_FONT = "Inter, Helvetica Neue, Helvetica, Arial, sans-serif";
+
+/** Site hairlines blended over the surfaces they sit on, as hex. */
+const HEX = {
+  overlay: "#0a0a0a",
+  hairline: "#262626", // rgba(255,255,255,0.08) over #141414
+  hairlineStrong: "#333333", // rgba(255,255,255,0.16) over #141414
+  goldHairline: "#796c40", // rgba(199,174,94,0.55) over #1a1a1a
+};
 
 const p = (html, align = "left") => `<p style="margin:0;text-align:${align};">${html}</p>`;
 
-function text(seed, html, preset, { align = "left", padding = "0px 0px 12px" } = {}) {
-  return { id: hexId(seed), type: "text", text: p(html, align), stylePresetId: preset, styleProperties: { padding, alignment: align } };
+function pad(top, right, bottom, left = right) {
+  return { paddingTop: top, paddingRight: right, paddingBottom: bottom, paddingLeft: left };
 }
 
-function button(seed, label, type, preset = "primary_button") {
-  return { id: hexId(seed), type: "button", button: { text: label.toUpperCase(), link: "", type, isFullWidth: true }, stylePresetId: preset, styleProperties: { padding: "8px 0px 0px" } };
+function text(html, preset, { align = "left", padding = pad("0px", "0px", "12px") } = {}) {
+  return { type: "text", text: p(html, align), stylePresetID: preset, styleProperties: { ...padding, alignment: align } };
 }
 
-function step(seed, blocks, padding = "36px 32px 36px") {
-  return { sections: [{ id: hexId(`${seed}:section`), styleProperties: { backgroundColor: PALETTE.surface, opacity: 1, paddingTop: padding.split(" ")[0], paddingRight: padding.split(" ")[1], paddingBottom: padding.split(" ")[2], paddingLeft: padding.split(" ")[1] }, rows: [{ id: hexId(`${seed}:row`), columns: [{ id: hexId(`${seed}:col`), width: "100%", blocks }] }] }] };
+function button(label, type, preset = "primary_button", extra = {}) {
+  return { type: "button", button: { text: label.toUpperCase(), type, isFullWidth: true, ...extra }, stylePresetID: preset, styleProperties: pad("8px", "0px", "0px") };
 }
 
-const SMS_CONSENT = "Yes, I would like to receive recurring automated marketing text messages from Vanta Labs at the number above. Consent is not a condition of purchase. Message frequency varies. Message and data rates may apply. Reply STOP to cancel at any time or HELP for help.";
+function step(blocks, padding = pad("36px", "32px", "36px")) {
+  return { sections: [{ styleProperties: { backgroundColor: PALETTE.surface, opacity: 1, ...padding }, rows: [{ columns: [{ width: "100%", blocks }] }] }] };
+}
+
+/** The store's TCPA sentence, copied as written; never widened. */
+export const SMS_CONSENT = "Yes, I would like to receive recurring automated marketing text messages from Vanta Labs at the number above. Consent is not a condition of purchase. Message frequency varies. Message and data rates may apply. Reply STOP to cancel at any time or HELP for help.";
+
+export const PRIVACY_URL = `${SITE}/legal/privacy`;
 
 export function form() {
-  const base = { fontFamily: FONTS.body, fontSize: "13px", fontWeight: "bold", letterSpacing: "1px", paddingLeft: "24px", paddingRight: "24px", paddingTop: "14px", paddingBottom: "14px", borderRadius: "14px" };
+  const base = { fontFamily: FORM_FONT, fontSize: "13px", fontStyle: "normal", fontWeight: "bold", textDecoration: "none", textAlign: "center", paddingLeft: "24px", paddingRight: "24px", paddingTop: "14px", paddingBottom: "14px", borderRadius: "14px", borderStyle: "solid", borderWidth: "1px" };
+  const field = pad("0px", "0px", "4px");
   return {
     name: "VL · Sign-up (email + SMS)",
     displayType: "popup",
@@ -32,67 +67,66 @@ export function form() {
     clickOutside: { isEnabled: true },
     recaptcha: { isEnabled: true },
     targeting: {
-      device: { desktop: true, mobile: true },
       display: { afterSeconds: 12, isExitIntentEnabled: true },
       frequency: { type: "day", value: 7 },
       source: { excludes: ["omnisendCommunication"] },
-      location: { includes: ["US", "CA"] },
+      location: { includes: [{ code: "US", name: "United States" }, { code: "CA", name: "Canada" }] },
     },
     content: {
       generalSettings: {
-        content: { color: PALETTE.foreground, width: "440px" },
-        body: { backgroundColor: PALETTE.surface, borderRadius: "16px" },
+        content: { color: HEX.overlay, width: "440px" },
+        body: { backgroundColor: PALETTE.surface, borderRadius: "16px", borderStyle: "solid", borderWidth: "1px", borderColor: HEX.hairline },
         position: "middleCenter",
-        closeButton: { backgroundColor: "", color: PALETTE.muted },
+        closeButton: { color: PALETTE.muted, isVisible: true },
         link: { color: PALETTE.gold },
         fieldStyles: {
           errorColor: "#f09ca8",
-          fontFamily: FONTS.body,
+          fontFamily: FORM_FONT,
           fontSize: "15px",
-          field: { backgroundColor: PALETTE.background, borderColor: "rgba(255,255,255,0.16)", borderRadius: "12px", borderStyle: "solid", borderWidth: "1px", color: PALETTE.foreground, paddingTop: "14px", paddingBottom: "14px", paddingLeft: "16px", paddingRight: "16px" },
+          field: { backgroundColor: PALETTE.background, borderColor: HEX.hairlineStrong, borderRadius: "12px", borderStyle: "solid", borderWidth: "1px", color: PALETTE.foreground, paddingTop: "14px", paddingBottom: "14px", paddingLeft: "16px", paddingRight: "16px" },
           label: { color: PALETTE.muted, paddingTop: "8px", paddingBottom: "8px", paddingLeft: "0px", paddingRight: "0px" },
           placeholder: { color: PALETTE.subtle },
         },
         buttonPresets: [
-          { id: "primary_button", name: "Primary", styles: { ...base, backgroundColor: PALETTE.surfaceRaised, border: `1px solid ${PALETTE.goldHairline}`, color: PALETTE.buttonText } },
-          { id: "secondary_button", name: "Secondary", styles: { ...base, backgroundColor: "transparent", border: `1px solid ${PALETTE.hairlineStrong}`, color: PALETTE.foreground } },
-          { id: "tertiary_button", name: "Tertiary", styles: { ...base, backgroundColor: "transparent", border: "0px solid transparent", color: PALETTE.gold, textDecoration: "underline" } },
+          { id: "primary_button", name: "Primary", styles: { ...base, backgroundColor: PALETTE.surfaceRaised, borderColor: HEX.goldHairline, color: PALETTE.buttonText } },
+          { id: "secondary_button", name: "Secondary", styles: { ...base, backgroundColor: PALETTE.surface, borderColor: HEX.hairlineStrong, color: PALETTE.foreground } },
+          { id: "tertiary_button", name: "Tertiary", styles: { ...base, backgroundColor: PALETTE.surface, borderWidth: "0px", borderColor: PALETTE.surface, color: PALETTE.gold, textDecoration: "underline" } },
         ],
         textPresets: [
-          { id: "heading_large", name: "Heading Large", styles: { fontFamily: FONTS.display, fontSize: "30px", color: PALETTE.foreground, lineHeight: "120%", letterSpacing: "0px" } },
-          { id: "heading_medium", name: "Heading Medium", styles: { fontFamily: FONTS.display, fontSize: "24px", color: PALETTE.foreground, lineHeight: "125%", letterSpacing: "0px" } },
-          { id: "heading_small", name: "Heading Small", styles: { fontFamily: FONTS.display, fontSize: "19px", color: PALETTE.foreground, lineHeight: "130%", letterSpacing: "0px" } },
-          { id: "paragraph", name: "Paragraph", styles: { fontFamily: FONTS.body, fontSize: "15px", color: PALETTE.body, lineHeight: "155%", letterSpacing: "0px" } },
-          { id: "footnote", name: "Footnote", styles: { fontFamily: FONTS.body, fontSize: "11px", color: PALETTE.subtle, lineHeight: "150%", letterSpacing: "0px" } },
+          { id: "heading_large", name: "Heading Large", styles: { fontFamily: FORM_FONT, fontSize: "30px", color: PALETTE.foreground, lineHeight: "125%" } },
+          { id: "heading_medium", name: "Heading Medium", styles: { fontFamily: FORM_FONT, fontSize: "24px", color: PALETTE.foreground, lineHeight: "125%" } },
+          { id: "heading_small", name: "Heading Small", styles: { fontFamily: FORM_FONT, fontSize: "19px", color: PALETTE.foreground, lineHeight: "125%" } },
+          { id: "paragraph", name: "Paragraph", styles: { fontFamily: FORM_FONT, fontSize: "15px", color: PALETTE.body, lineHeight: "150%" } },
+          { id: "footnote", name: "Footnote", styles: { fontFamily: FORM_FONT, fontSize: "11px", color: PALETTE.subtle, lineHeight: "150%" } },
         ],
       },
       steps: [
-        step("form:step1", [
-          text("form:step1:eyebrow", "VANTA LABS", "footnote"),
-          text("form:step1:heading", "Batch reports, restocks and subscriber offers.", "heading_medium"),
-          text("form:step1:lead", "One or two emails a month. Every one links to the report for the batch it is about. Your welcome code arrives with the first.", "paragraph"),
-          { id: hexId("form:step1:email"), type: "emailField", emailField: { label: "", placeholder: "Email address", isRequired: true, requiredMessage: "An email address is required", errorMessage: "That does not look like an email address" } },
-          button("form:step1:submit", "Subscribe", "submit"),
-          text("form:step1:footnote", "For laboratory research use only. Not for human or veterinary use. Unsubscribe at any time.", "footnote", { padding: "12px 0px 0px" }),
+        step([
+          text("VANTA LABS", "footnote"),
+          text("Batch reports, restocks and subscriber offers.", "heading_medium"),
+          text("One or two emails a month. Every one links to the report for the batch it is about. Your welcome code arrives with the first.", "paragraph"),
+          { type: "emailField", emailField: { label: "", placeholder: "Email address", isRequired: true, requiredMessage: "An email address is required", errorMessage: "That does not look like an email address" }, styleProperties: field },
+          button("Subscribe", "submit"),
+          text("For laboratory research use only. Not for human or veterinary use. Unsubscribe at any time.", "footnote", { padding: pad("12px", "0px", "0px") }),
         ]),
-        step("form:step2", [
-          text("form:step2:eyebrow", "TEXT MESSAGES", "footnote"),
-          text("form:step2:heading", "Restock texts, if you want them.", "heading_medium"),
-          text("form:step2:lead", "Optional. Restocks and subscriber offers by text, a few times a month at most.", "paragraph"),
-          { id: hexId("form:step2:phone"), type: "phoneNumberField", phoneNumberField: { label: "", placeholder: "Mobile number", defaultCountryCode: "US", isRequired: false, requiredMessage: "A mobile number is required to receive texts", errorMessage: "That does not look like a mobile number" } },
-          { id: hexId("form:step2:legal"), type: "legal", legal: { description: SMS_CONSENT, isRequired: true, requiredMessage: "Tick the box to receive texts" } },
-          button("form:step2:submit", "Add texts", "submit"),
-          button("form:step2:skip", "Skip this step", "nextStep", "secondary_button"),
+        step([
+          text("TEXT MESSAGES", "footnote"),
+          text("Restock texts, if you want them.", "heading_medium"),
+          text("Optional. Restocks and subscriber offers by text, a few times a month at most.", "paragraph"),
+          { type: "phoneNumberField", phoneNumberField: { label: "", placeholder: "Mobile number", defaultCountryCode: "US", countryCodes: { includes: ["US", "CA"] }, isRequired: false, requiredMessage: "A mobile number is required to receive texts", errorMessage: "That does not look like a mobile number" }, styleProperties: field },
+          { type: "legal", legal: { type: "tcpa", label: "I agree to receive text messages from Vanta Labs", description: SMS_CONSENT, link: PRIVACY_URL, requiredMessage: "Tick the box to receive texts" }, styleProperties: { ...pad("4px", "0px", "8px"), fontSize: "11px", color: PALETTE.subtle } },
+          button("Add texts", "submit"),
+          button("Skip this step", "nextStep", "secondary_button"),
         ]),
       ],
-      successStep: step("form:success", [
-        text("form:success:heading", "You are on the list.", "heading_medium"),
-        text("form:success:lead", "Your welcome code is on its way by email. The catalogue and the COA library are open to account holders.", "paragraph"),
-        { id: hexId("form:success:link"), type: "button", button: { text: "BROWSE THE CATALOGUE", link: `${SITE}/products?utm_source=omnisend&utm_medium=form&utm_campaign=signup`, type: "link", isFullWidth: true }, stylePresetId: "primary_button", styleProperties: { padding: "8px 0px 0px" } },
+      successStep: step([
+        text("You are on the list.", "heading_medium"),
+        text("Your welcome code is on its way by email. The catalogue and the COA library are open to account holders.", "paragraph"),
+        button("Browse the catalogue", "link", "primary_button", { link: `${SITE}/products?utm_source=omnisend&utm_medium=form&utm_campaign=signup` }),
       ]),
-      subscribedStep: step("form:subscribed", [
-        text("form:subscribed:heading", "You are already subscribed.", "heading_medium"),
-        text("form:subscribed:lead", "Batch reports and restocks will keep arriving. Questions? support@vantalabsresearch.com", "paragraph"),
+      subscribedStep: step([
+        text("You are already subscribed.", "heading_medium"),
+        text("Batch reports and restocks will keep arriving. Questions? support@vantalabsresearch.com", "paragraph"),
       ]),
     },
   };

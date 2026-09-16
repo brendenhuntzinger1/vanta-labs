@@ -1,38 +1,53 @@
 import {
-  CLAIMS, IMAGES, PALETTE, button, card, eyebrow, footnote, heading, hexId, image, layoutRef, link,
+  CLAIMS, IMAGES, PALETTE, SUPPORT_EMAIL, button, card, eyebrow, footnote, heading, hexId, image, layoutRef, link,
   productSection, section, spacer, template, text,
 } from "./lib.mjs";
 
 /** Universal layouts created 2026-09-15 (post_email_universal_layouts). */
 export const LAYOUTS = { header: "6aa985ecfa261ac55e04bae3", footer: "6aa985f7c29076c61d3838b1" };
 
-/** The three per-contact codes the store mints (spec §3.4). Percentages here MUST match CONTACT_CODE_OFFERS in src/lib/marketing/omnisend/codes.ts. */
+/**
+ * The three per-contact codes the store mints (spec §3.4). Welcome and win-back
+ * percentages MUST match CONTACT_CODE_OFFERS in src/lib/marketing/omnisend/codes.ts;
+ * the recovery percentage is a contact property because the store decides it
+ * per cart (vl_recovery_percent).
+ */
 const CODES = {
-  welcome: { prop: "vl_welcome_code", ends: "vl_welcome_ends", ready: "vl_welcome_ready", percent: 10, terms: "One use, tied to this address, on a first order." },
-  winback: { prop: "vl_winback_code", ends: "vl_winback_ends", ready: "vl_winback_ready", percent: 15, terms: "One use, tied to this address." },
-  recovery: { prop: "vl_recovery_code", ends: "vl_recovery_ends", ready: "vl_recovery_ready", percent: 10, terms: "One use, tied to this address." },
+  welcome: { prop: "vl_welcome_code", ends: "vl_welcome_ends", percent: "10", terms: "One use, tied to this address, on a first order." },
+  winback: { prop: "vl_winback_code", ends: "vl_winback_ends", percent: "15", terms: "One use, tied to this address." },
+  recovery: { prop: "vl_recovery_code", ends: "vl_recovery_ends", percent: "[[contact.custom_properties.vl_recovery_percent]]", terms: "One use, tied to this address." },
 };
 
+/** The store-built claim URL for a recovery gift. It already carries the grant, so it is not wrapped in link(). */
+const GIFT_LINK = "[[contact.custom_properties.vl_recovery_gift_link]]";
+
 /**
- * A section shown only when the contact carries the code. Omnisend's content
- * filter hides the whole section when the property is empty, so nobody ever
- * sees a blank code line.
+ * The code card. Conditional sections are a paid Omnisend feature this account
+ * does not have, so the card is unconditional and appears ONLY in templates an
+ * automation split (or the minting upsert) guarantees a code for: welcome-1
+ * and welcome-3 (minted in the upsert that fires the flow), the *-3-code and
+ * *-3-gift-code abandonment variants (split on vl-recovery-code-ready) and
+ * winback-2 (split on vl-winback-ready). The button is secondary so every
+ * email keeps one primary action.
  */
-function codeCard(seed, kind, campaign) {
+function codeCard(seed, kind, campaign, path = "/products") {
   const code = CODES[kind];
-  const s = section(seed, [
+  return section(seed, [
     eyebrow(`${seed}:eyebrow`, "Your code"),
     text(`${seed}:code`, `[[contact.custom_properties.${code.prop}]]`, { preset: "mono", padding: "0px 32px 8px" }),
     text(`${seed}:terms`, `${code.percent}% off. Valid until [[contact.custom_properties.${code.ends}]]. ${code.terms}`, { padding: "0px 32px 4px" }),
-    button(`${seed}:button`, "Use the code", link("/products", { campaign, content: "code" }), { padding: "12px 32px 24px" }),
+    button(`${seed}:button`, "Use the code", link(path, { campaign, content: "code" }), { preset: "secondary_button", padding: "12px 32px 24px" }),
   ], { background: PALETTE.surfaceRaised, padding: "24px 0px 4px", radius: "16px", border: `1px solid ${PALETTE.goldHairline}` });
-  // No content filter: conditional sections are a paid Omnisend feature this
-  // account does not have. The card is therefore unconditional, and the store
-  // guarantees the code exists before any email that shows it can fire —
-  // welcome codes are minted in the same contact upsert that triggers the
-  // flow, recovery codes when the cart or checkout event is sent, and win-back
-  // codes by the reconcile sweep well before the 60-day email (spec §3.4).
-  return s;
+}
+
+/** The gift card: only in the *-3-gift and *-3-gift-code variants (split on vl-recovery-gift-ready). */
+function giftCard(seed) {
+  return section(seed, [
+    eyebrow(`${seed}:eyebrow`, "Your gift"),
+    text(`${seed}:gift`, "[[contact.custom_properties.vl_recovery_gift]]", { preset: "heading_small", padding: "0px 32px 8px" }),
+    text(`${seed}:terms`, "Added free on any order of [[contact.custom_properties.vl_recovery_gift_min]] or more, if claimed by [[contact.custom_properties.vl_recovery_gift_ends]]. One claim, tied to this address.", { padding: "0px 32px 4px" }),
+    button(`${seed}:button`, "Claim the gift", GIFT_LINK, { preset: "secondary_button", padding: "12px 32px 24px" }),
+  ], { background: PALETTE.surfaceRaised, padding: "24px 0px 4px", radius: "16px", border: `1px solid ${PALETTE.goldHairline}` });
 }
 
 function frame(key, sections) {
@@ -43,6 +58,7 @@ function spacerSection(seed, height = 12) {
   return section(seed, [spacer(`${seed}:space`, height)]);
 }
 
+/** The hero card: eyebrow, heading, lead, extra lines, one primary button and an optional tertiary link. */
 function hero(seed, { kicker, title, lead, extra = [], cta, secondary, showImage = false, campaign }) {
   const blocks = [];
   if (showImage) blocks.push(image(`${seed}:image`, IMAGES.hero, { alt: "A Vanta Labs vial on a dark field", width: 536, padding: "0px 32px 22px" }));
@@ -56,6 +72,59 @@ function hero(seed, { kicker, title, lead, extra = [], cta, secondary, showImage
 }
 
 const COA_LINE = "Every production batch is tested by an independent laboratory and its Certificate of Analysis is filed in a public library you can search by product, batch or lot number.";
+const SUPPORT_LINE = `Support answers anything the report does not: <a href="mailto:${SUPPORT_EMAIL}" style="color:${PALETTE.gold};text-decoration:underline;">${SUPPORT_EMAIL}</a>.`;
+const FINAL_NOTE = "One more note, then we will leave it with you.";
+
+const cartProducts = (key, campaign) => productSection(`${key}:products`, "product_cart_recovery", { count: 3, buttonText: "View", campaign });
+const recommended = (key, campaign, recommender) => productSection(`${key}:products`, "product_recommender", { count: 3, buttonText: "View", campaign, recommender });
+
+/** The four final-reminder variants an abandonment automation splits into. */
+function finalVariants(kind, { kicker, path, label, campaign }) {
+  const key = (variant) => `${kind}-3-${variant}`;
+  const saved = kind === "cart" ? "Your cart is still saved." : "Your checkout is still saved.";
+  return {
+    [key("gift-code")]: () => frame(key("gift-code"), [
+      hero(`${key("gift-code")}:hero`, {
+        kicker, title: FINAL_NOTE,
+        lead: `${saved} Two things are attached to it for a short time: a gift added to your order, and a code. Both are described below with their dates.`,
+        cta: { label, path }, campaign,
+      }),
+      spacerSection(`${key("gift-code")}:gap`),
+      giftCard(`${key("gift-code")}:gift`),
+      spacerSection(`${key("gift-code")}:gap2`),
+      codeCard(`${key("gift-code")}:code`, "recovery", campaign, path),
+      cartProducts(key("gift-code"), campaign),
+    ]),
+    [key("gift")]: () => frame(key("gift"), [
+      hero(`${key("gift")}:hero`, {
+        kicker, title: FINAL_NOTE,
+        lead: `${saved} For a short time a gift is attached to it, described below with its date.`,
+        cta: { label, path }, campaign,
+      }),
+      spacerSection(`${key("gift")}:gap`),
+      giftCard(`${key("gift")}:gift`),
+      cartProducts(key("gift"), campaign),
+    ]),
+    [key("code")]: () => frame(key("code"), [
+      hero(`${key("code")}:hero`, {
+        kicker, title: FINAL_NOTE,
+        lead: `${saved} If you want to complete it, the code below is valid until the date shown.`,
+        cta: { label, path }, campaign,
+      }),
+      spacerSection(`${key("code")}:gap`),
+      codeCard(`${key("code")}:code`, "recovery", campaign, path),
+      cartProducts(key("code"), campaign),
+    ]),
+    [key("plain")]: () => frame(key("plain"), [
+      hero(`${key("plain")}:hero`, {
+        kicker, title: FINAL_NOTE,
+        lead: `${saved} This is the last reminder about it. Batch numbers and reports are on each product page, and support can answer anything the report does not.`,
+        cta: { label, path }, campaign,
+      }),
+      cartProducts(key("plain"), campaign),
+    ]),
+  };
+}
 
 export const TEMPLATES = {
   "welcome-1": () => frame("welcome-1", [
@@ -84,7 +153,7 @@ export const TEMPLATES = {
     hero("welcome-3:hero", {
       kicker: "Ordering", title: "What happens after you order.",
       lead: CLAIMS.fulfilment,
-      extra: [`${CLAIMS.destinations} ${CLAIMS.tracking}`, "Checkout is encrypted. Card details never touch our servers.", "Solvents and reconstitution accessories are listed under Solvents & Solutions in the catalogue."],
+      extra: [`${CLAIMS.destinations} ${CLAIMS.tracking}`, "Checkout is encrypted. Card details never touch our servers.", "Recon Water and reconstitution accessories are listed under Solvents & Solutions in the catalogue."],
       cta: { label: "Browse the catalogue", path: "/products" },
       campaign: "welcome",
     }),
@@ -98,7 +167,7 @@ export const TEMPLATES = {
       lead: "The items below are held in your cart. Batch numbers and reports are on each product page.",
       cta: { label: "Return to cart", path: "/cart" }, campaign: "abandoned-cart",
     }),
-    productSection("cart-1:products", "product_cart_recovery", { count: 3, buttonText: "View", campaign: "abandoned-cart" }),
+    cartProducts("cart-1", "abandoned-cart"),
   ]),
 
   "cart-2": () => frame("cart-2", [
@@ -108,28 +177,10 @@ export const TEMPLATES = {
       extra: ["Your cart is still saved."],
       cta: { label: "Return to cart", path: "/cart" }, secondary: { label: "Open the COA library", path: "/coa-library" }, campaign: "abandoned-cart",
     }),
-    productSection("cart-2:products", "product_cart_recovery", { count: 3, buttonText: "View", campaign: "abandoned-cart" }),
+    cartProducts("cart-2", "abandoned-cart"),
   ]),
 
-  "cart-3": () => frame("cart-3", [
-    hero("cart-3:hero", {
-      kicker: "Your cart", title: "One more note, then we will leave it with you.",
-      lead: "Your cart is still saved. If you want to complete it, the code below is valid until the date shown.",
-      cta: { label: "Return to cart", path: "/cart" }, campaign: "abandoned-cart",
-    }),
-    spacerSection("cart-3:gap"),
-    codeCard("cart-3:code", "recovery", "abandoned-cart"),
-    productSection("cart-3:products", "product_cart_recovery", { count: 3, buttonText: "View", campaign: "abandoned-cart" }),
-  ]),
-
-  "cart-3-nocode": () => frame("cart-3-nocode", [
-    hero("cart-3-nocode:hero", {
-      kicker: "Your cart", title: "One more note, then we will leave it with you.",
-      lead: "Your cart is still saved. Batch numbers and reports are on each product page, and support can answer anything the report does not.",
-      cta: { label: "Return to cart", path: "/cart" }, campaign: "abandoned-cart",
-    }),
-    productSection("cart-3-nocode:products", "product_cart_recovery", { count: 3, buttonText: "View", campaign: "abandoned-cart" }),
-  ]),
+  ...finalVariants("cart", { kicker: "Your cart", path: "/cart", label: "Return to cart", campaign: "abandoned-cart" }),
 
   "checkout-1": () => frame("checkout-1", [
     hero("checkout-1:hero", {
@@ -137,7 +188,7 @@ export const TEMPLATES = {
       lead: "Your checkout is saved with the items below. Nothing has been charged.",
       cta: { label: "Return to checkout", path: "/checkout" }, campaign: "abandoned-checkout",
     }),
-    productSection("checkout-1:products", "product_cart_recovery", { count: 3, buttonText: "View", campaign: "abandoned-checkout" }),
+    cartProducts("checkout-1", "abandoned-checkout"),
   ]),
 
   "checkout-2": () => frame("checkout-2", [
@@ -147,28 +198,10 @@ export const TEMPLATES = {
       extra: ["Checkout is encrypted. Card details never touch our servers."],
       cta: { label: "Return to checkout", path: "/checkout" }, secondary: { label: "Open the COA library", path: "/coa-library" }, campaign: "abandoned-checkout",
     }),
-    productSection("checkout-2:products", "product_cart_recovery", { count: 3, buttonText: "View", campaign: "abandoned-checkout" }),
+    cartProducts("checkout-2", "abandoned-checkout"),
   ]),
 
-  "checkout-3": () => frame("checkout-3", [
-    hero("checkout-3:hero", {
-      kicker: "Your checkout", title: "One more note, then we will leave it with you.",
-      lead: "Your checkout is still saved. If you want to complete it, the code below is valid until the date shown.",
-      cta: { label: "Return to checkout", path: "/checkout" }, campaign: "abandoned-checkout",
-    }),
-    spacerSection("checkout-3:gap"),
-    codeCard("checkout-3:code", "recovery", "abandoned-checkout"),
-    productSection("checkout-3:products", "product_cart_recovery", { count: 3, buttonText: "View", campaign: "abandoned-checkout" }),
-  ]),
-
-  "checkout-3-nocode": () => frame("checkout-3-nocode", [
-    hero("checkout-3-nocode:hero", {
-      kicker: "Your checkout", title: "One more note, then we will leave it with you.",
-      lead: "Your checkout is still saved. Batch numbers and reports are on each product page, and support can answer anything the report does not.",
-      cta: { label: "Return to checkout", path: "/checkout" }, campaign: "abandoned-checkout",
-    }),
-    productSection("checkout-3-nocode:products", "product_cart_recovery", { count: 3, buttonText: "View", campaign: "abandoned-checkout" }),
-  ]),
+  ...finalVariants("checkout", { kicker: "Your checkout", path: "/checkout", label: "Return to checkout", campaign: "abandoned-checkout" }),
 
   "browse-1": () => frame("browse-1", [
     hero("browse-1:hero", {
@@ -176,7 +209,7 @@ export const TEMPLATES = {
       lead: "The products you viewed are below, each with its current batch number and a link to the report on its page.",
       cta: { label: "Browse the catalogue", path: "/products" }, campaign: "browse-abandonment",
     }),
-    productSection("browse-1:products", "product_cart_recovery", { count: 3, buttonText: "View", campaign: "browse-abandonment" }),
+    cartProducts("browse-1", "browse-abandonment"),
   ]),
 
   "post-purchase-1": () => frame("post-purchase-1", [
@@ -190,11 +223,17 @@ export const TEMPLATES = {
 
   "post-purchase-2": () => frame("post-purchase-2", [
     hero("post-purchase-2:hero", {
-      kicker: "Catalogue", title: "Also in the catalogue.",
-      lead: "A few products chosen from what is ordered alongside yours. Every one links to its batch report.",
-      cta: { label: "Browse the catalogue", path: "/products" }, campaign: "post-purchase",
+      kicker: "After your order", title: "Support, reports and reordering.",
+      lead: "Three things worth keeping from this email.",
+      extra: [
+        SUPPORT_LINE,
+        "The COA library holds the certificate for every batch we have shipped, searchable by product, batch or lot number, for as long as you need it.",
+        "Your order history is in your account. Each product there links back to its listing, which shows the current batch number for a reorder.",
+        "A few products chosen from what is ordered alongside yours are below. Every one links to its batch report.",
+      ],
+      cta: { label: "Open the COA library", path: "/coa-library" }, secondary: { label: "View your orders", path: "/account/orders" }, campaign: "post-purchase",
     }),
-    productSection("post-purchase-2:products", "product_recommender", { count: 3, buttonText: "View", campaign: "post-purchase", recommender: { type: "popular", fallbackType: "newest", isOutOfStockIncluded: false, purchaseExclusionDays: 30 } }),
+    recommended("post-purchase-2", "post-purchase", { type: "popular", fallbackType: "newest", isOutOfStockIncluded: false, purchaseExclusionDays: 30 }),
   ]),
 
   "replenishment": () => frame("replenishment", [
@@ -203,18 +242,17 @@ export const TEMPLATES = {
       lead: "Batches change. The current batch number for each product is on its page, with the report filed under it.",
       cta: { label: "Browse the catalogue", path: "/products" }, secondary: { label: "View your orders", path: "/account/orders" }, campaign: "replenishment",
     }),
-    productSection("replenishment:products", "product_recommender", { count: 3, buttonText: "View", campaign: "replenishment", recommender: { type: "personalized", fallbackType: "popular", isOutOfStockIncluded: false } }),
+    // `personalized` needs the Pro plan; Omnisend substitutes the fallback silently.
+    recommended("replenishment", "replenishment", { type: "personalized", fallbackType: "popular", isOutOfStockIncluded: false }),
   ]),
 
   "winback-1": () => frame("winback-1", [
     hero("winback-1:hero", {
       kicker: "Since your last order", title: "It has been a while.",
-      lead: "New batches have been filed since your last order. If you are ordering again, the code below is valid for 14 days.",
-      cta: { label: "Browse the catalogue", path: "/products" }, campaign: "win-back",
+      lead: "New batches have been filed since your last order, each with its report in the COA library. Nothing is waiting in your cart; this is a note that the catalogue has moved on.",
+      cta: { label: "Browse the catalogue", path: "/products" }, secondary: { label: "Open the COA library", path: "/coa-library" }, campaign: "win-back",
     }),
-    spacerSection("winback-1:gap"),
-    codeCard("winback-1:code", "winback", "win-back"),
-    productSection("winback-1:products", "product_recommender", { count: 3, buttonText: "View", campaign: "win-back", recommender: { type: "popular", fallbackType: "newest", isOutOfStockIncluded: false } }),
+    recommended("winback-1", "win-back", { type: "popular", fallbackType: "newest", isOutOfStockIncluded: false }),
   ]),
 
   "winback-2": () => frame("winback-2", [
@@ -227,6 +265,15 @@ export const TEMPLATES = {
     codeCard("winback-2:code", "winback", "win-back"),
   ]),
 
+  "winback-2-nocode": () => frame("winback-2-nocode", [
+    hero("winback-2-nocode:hero", {
+      kicker: "Since your last order", title: "One last note.",
+      lead: "This is the last note in this series. The catalogue and the COA library stay open to you whenever you want them, and if you order again the reports for your new batches will be filed the same way.",
+      extra: [SUPPORT_LINE],
+      cta: { label: "Browse the catalogue", path: "/products" }, campaign: "win-back",
+    }),
+  ]),
+
   "sunset": () => frame("sunset", [
     hero("sunset:hero", {
       kicker: "Your subscription", title: "Do you want to keep hearing from us?",
@@ -236,6 +283,63 @@ export const TEMPLATES = {
     section("sunset:unsub", [footnote("sunset:unsub:text", `Or <a href="[[unsubscribe_link]]" style="color:${PALETTE.muted};text-decoration:underline;">unsubscribe</a> now and we will stop straight away.`, { align: "center" })]),
   ]),
 
+  "new-product": () => frame("new-product", [
+    hero("new-product:hero", {
+      kicker: "New in the catalogue", title: "A new product is listed.",
+      lead: "PRODUCT NAME is now in the catalogue. Replace this line with the listing's own description before sending; state only what the product page and its report state.",
+      extra: ["Its first batch has been tested by an independent laboratory and the report is filed in the COA library under its batch number."],
+      cta: { label: "View the product", path: "/products" }, secondary: { label: "Read the report", path: "/coa-library" }, campaign: "campaign-new-product",
+    }),
+    recommended("new-product", "campaign-new-product", { type: "newest", fallbackType: "popular", isOutOfStockIncluded: false }),
+  ]),
+
+  "promotion": () => frame("promotion", [
+    hero("promotion:hero", {
+      kicker: "Subscriber offer", title: "An offer for subscribers.",
+      lead: "OFFER DESCRIPTION. Replace this line with the offer exactly as it is set up in the store: what it applies to, the amount and the end date. Nothing here may promise stock, delivery times or results.",
+      cta: { label: "Browse the catalogue", path: "/products" }, campaign: "campaign-promotion",
+    }),
+    spacerSection("promotion:gap"),
+    section("promotion:code", [
+      eyebrow("promotion:code:eyebrow", "Your code"),
+      text("promotion:code:code", "CODE", { preset: "mono", padding: "0px 32px 8px" }),
+      text("promotion:code:terms", "Replace CODE with the campaign code before sending, and state its terms here in one line: what it applies to, any minimum, and the end date.", { padding: "0px 32px 24px" }),
+    ], { background: PALETTE.surfaceRaised, padding: "24px 0px 4px", radius: "16px", border: `1px solid ${PALETTE.goldHairline}` }),
+  ]),
+
+  "promotion-final-day": () => frame("promotion-final-day", [
+    hero("promotion-final-day:hero", {
+      kicker: "Subscriber offer", title: "Last day of the offer.",
+      lead: "OFFER DESCRIPTION. Replace this line with the offer exactly as it is set up in the store: what it applies to and the amount.",
+      extra: ["The offer ends today at 11:59 PM ET."],
+      cta: { label: "Browse the catalogue", path: "/products" }, campaign: "campaign-final-day",
+    }),
+    spacerSection("promotion-final-day:gap"),
+    section("promotion-final-day:code", [
+      eyebrow("promotion-final-day:code:eyebrow", "Your code"),
+      text("promotion-final-day:code:code", "CODE", { preset: "mono", padding: "0px 32px 8px" }),
+      text("promotion-final-day:code:terms", "Replace CODE with the campaign code before sending, and state its terms here in one line: what it applies to and any minimum.", { padding: "0px 32px 24px" }),
+    ], { background: PALETTE.surfaceRaised, padding: "24px 0px 4px", radius: "16px", border: `1px solid ${PALETTE.goldHairline}` }),
+  ]),
+
+  "vip-milestone": () => frame("vip-milestone", [
+    hero("vip-milestone:hero", {
+      kicker: "Thank you", title: "Thank you for your continued orders.",
+      lead: "Our records show [[contact.custom_properties.vl_orders]] orders on this account. Every one of them was tested by an independent laboratory before it shipped, and the reports stay in the COA library for as long as you need them.",
+      extra: ["If anything about an order or a report needs a second look, reply to this email and a person will answer."],
+      cta: { label: "Open the COA library", path: "/coa-library" }, secondary: { label: "View your orders", path: "/account/orders" }, campaign: "post-purchase",
+    }),
+  ]),
+
+  "repeat-customer": () => frame("repeat-customer", [
+    hero("repeat-customer:hero", {
+      kicker: "Thank you", title: "Thank you for ordering again.",
+      lead: "A second order is the clearest signal we get that the documentation is doing its job. Every batch you have received has its certificate filed in the COA library under its batch number.",
+      extra: [SUPPORT_LINE],
+      cta: { label: "Open the COA library", path: "/coa-library" }, secondary: { label: "View your orders", path: "/account/orders" }, campaign: "post-purchase",
+    }),
+  ]),
+
   "campaign-batch-report": () => frame("campaign-batch-report", [
     hero("campaign-batch-report:hero", {
       kicker: "Batch report", title: "A new batch report is filed.",
@@ -243,7 +347,7 @@ export const TEMPLATES = {
       extra: ["The report is filed in the COA library under its batch number."],
       cta: { label: "Read the report", path: "/coa-library" }, secondary: { label: "Browse the catalogue", path: "/products" }, campaign: "campaign",
     }),
-    productSection("campaign-batch-report:products", "product_recommender", { count: 3, buttonText: "View", campaign: "campaign", recommender: { type: "newest", fallbackType: "popular", isOutOfStockIncluded: false } }),
+    recommended("campaign-batch-report", "campaign", { type: "newest", fallbackType: "popular", isOutOfStockIncluded: false }),
   ]),
 
   "campaign-restock": () => frame("campaign-restock", [
@@ -252,8 +356,47 @@ export const TEMPLATES = {
       lead: "PRODUCT NAME is back in stock, with a new batch number and its report filed. Replace this line before sending; state stock only as the live store shows it.",
       cta: { label: "View the product", path: "/products" }, secondary: { label: "Read the report", path: "/coa-library" }, campaign: "campaign",
     }),
-    productSection("campaign-restock:products", "product_recommender", { count: 3, buttonText: "View", campaign: "campaign", recommender: { type: "newest", fallbackType: "popular", isOutOfStockIncluded: false } }),
+    recommended("campaign-restock", "campaign", { type: "newest", fallbackType: "popular", isOutOfStockIncluded: false }),
   ]),
+};
+
+/**
+ * Subject and preview per template. Omnisend's email_content reference
+ * documents [[contact.first_name]] but no default or fallback syntax, so every
+ * subject is written to need no name. Campaign subjects are starting points
+ * the owner edits in the draft.
+ */
+export const SUBJECTS = {
+  "welcome-1": { subject: "Welcome to Vanta Labs", preview: "What we supply, and how every batch is documented." },
+  "welcome-2": { subject: "Every batch has a published report", preview: "Search a lot number and read the certificate itself." },
+  "welcome-3": { subject: "How ordering works", preview: "Dispatch by 2PM ET on business days, tracking after dispatch." },
+  "cart-1": { subject: "Your cart is saved", preview: "Everything is still in it, with batch reports on each product page." },
+  "cart-2": { subject: "Before you decide, read the report", preview: "Your cart is still saved. The certificate for each batch is a click away." },
+  "cart-3-gift-code": { subject: "A gift and a code for your saved cart", preview: "Both are attached for a short time. Dates inside." },
+  "cart-3-gift": { subject: "A gift for your saved cart", preview: "Attached for a short time. The date is inside." },
+  "cart-3-code": { subject: "A code for your saved cart", preview: "Valid until the date inside." },
+  "cart-3-plain": { subject: "One more note about your cart", preview: "This is the last reminder. Your cart is still saved." },
+  "checkout-1": { subject: "Finish when you are ready", preview: "Your checkout is saved. Nothing has been charged." },
+  "checkout-2": { subject: "Still here when you are", preview: "Dispatch by 2PM ET on business days, tracking after dispatch." },
+  "checkout-3-gift-code": { subject: "A gift and a code for your saved checkout", preview: "Both are attached for a short time. Dates inside." },
+  "checkout-3-gift": { subject: "A gift for your saved checkout", preview: "Attached for a short time. The date is inside." },
+  "checkout-3-code": { subject: "A code for your saved checkout", preview: "Valid until the date inside." },
+  "checkout-3-plain": { subject: "One more note about your checkout", preview: "This is the last reminder. Nothing has been charged." },
+  "browse-1": { subject: "You were looking at this", preview: "The batch report is on the product page." },
+  "post-purchase-1": { subject: "Your batch report", preview: "How to find the certificate for what you ordered." },
+  "post-purchase-2": { subject: "Support, reports and reordering", preview: "Three things worth keeping after an order." },
+  "replenishment": { subject: "When it is time to reorder", preview: "Batches change. The current batch number is on each product page." },
+  "winback-1": { subject: "It has been a while", preview: "New batch reports have been filed since your last order." },
+  "winback-2": { subject: "One last note from us", preview: "Your code is valid until the date inside." },
+  "winback-2-nocode": { subject: "One last note from us", preview: "The catalogue and the COA library stay open to you." },
+  "sunset": { subject: "Do you want to keep hearing from us?", preview: "One click keeps you on the list." },
+  "new-product": { subject: "New in the catalogue", preview: "Listed with its first batch report filed." },
+  "promotion": { subject: "An offer for subscribers", preview: "The code and its terms are inside." },
+  "promotion-final-day": { subject: "Last day of the subscriber offer", preview: "The offer ends today at 11:59 PM ET." },
+  "vip-milestone": { subject: "Thank you for your continued orders", preview: "Every report stays in the COA library for as long as you need it." },
+  "repeat-customer": { subject: "Thank you for ordering again", preview: "Every batch you have received has its certificate filed." },
+  "campaign-batch-report": { subject: "A new batch report is filed", preview: "Read the certificate in the COA library." },
+  "campaign-restock": { subject: "Back in the catalogue", preview: "Restocked with a new batch number and its report filed." },
 };
 
 export const TEMPLATE_KEYS = Object.keys(TEMPLATES);

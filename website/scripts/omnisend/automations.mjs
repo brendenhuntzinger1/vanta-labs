@@ -1,12 +1,23 @@
 import { readFileSync } from "node:fs";
-import { link } from "./lib.mjs";
+import { SMS, STOP_SENTENCE, smsBody } from "./sms.mjs";
+import { SUBJECTS } from "./templates.mjs";
 
 /**
- * Automations (spec §6). Every flow is created DISABLED; the owner enables
- * each one from the Omnisend dashboard after reviewing the test sends.
+ * Automations (spec §6). Every flow is created DISABLED (post_automations
+ * creates them that way; nothing here calls enable). The owner enables each
+ * one from the Omnisend dashboard after reviewing the test sends.
  *
- * Template and segment ids come from assets/created.json, written by the build
- * as assets are created, so a flow can only be rendered once its emails exist.
+ * Template ids come from assets/created.json and segment ids from
+ * assets/segments.json, both written as each asset was created, so a flow can
+ * only be rendered once the emails and segments it references exist.
+ *
+ * Every send block is subject to sendingThresholds subscribed/subscribed
+ * (spec §3.2): an SMS block is skipped for a contact without SMS consent and
+ * the flow continues, which is why an SMS can sit in the main sequence.
+ *
+ * Recipient-timezone sending: post_automations exposes no timezone option on
+ * delays or send blocks (only allowedWeekdays and a specificTime mode), so
+ * none is set. Quiet hours for SMS are an account setting the owner turns on.
  */
 
 function readJson(name) {
@@ -17,11 +28,7 @@ function readJson(name) {
   }
 }
 
-/** Template ids from created.json; segment ids from segments.json (written as each was created). */
-function created() {
-  const all = readJson("created.json");
-  return { templates: all.templates ?? {}, segments: { ...(all.segments ?? {}), ...readJson("segments.json") } };
-}
+const created = () => ({ templates: readJson("created.json"), segments: readJson("segments.json") });
 
 const SENDER = "Vanta Labs";
 const LANG = "en_US";
@@ -29,16 +36,35 @@ const LANG = "en_US";
 let counter = 0;
 const tid = (label) => `${label}-${(counter += 1)}`;
 
-export function email(label, templateKey, subject, preheader) {
-  const ids = created();
-  const templateID = ids.templates?.[templateKey];
+/** A send-email block: template id from created.json, subject and preview from SUBJECTS. */
+export function email(templateKey) {
+  const templateID = created().templates[templateKey];
   if (!templateID) throw new Error(`template ${templateKey} has not been created yet`);
-  return { temporaryID: tid(label), type: "action", action: { type: "sendEmail", sendEmail: { templateID, subject, preheader, senderName: SENDER, language: LANG } } };
+  const copy = SUBJECTS[templateKey];
+  if (!copy) throw new Error(`no SUBJECTS entry for ${templateKey}`);
+  return { temporaryID: tid(templateKey), type: "action", action: { type: "sendEmail", sendEmail: { templateID, subject: copy.subject, preheader: copy.preview, senderName: SENDER, language: LANG } } };
 }
 
-/** Texts keep Omnisend's STOP / unsubscribe compliance text switched on. */
-export function sms(label, message) {
-  return { temporaryID: tid(label), type: "action", action: { type: "sendSms", sendSms: { message, compliance: { isStopKeywordIncluded: true, isUnsubscribeLinkIncluded: true }, isLinkShorteningEnabled: true } } };
+/**
+ * A send-SMS block from the catalogue. The catalogue text ends with the STOP
+ * sentence; Omnisend appends its own opt-out keyword, so the body is the text
+ * without that sentence and the sentence is handed over as stopKeywordText.
+ * The unsubscribe link is what non-US/CA recipients get instead.
+ */
+export function sms(key) {
+  if (!SMS[key]) throw new Error(`unknown SMS ${key}`);
+  return {
+    temporaryID: tid(`sms-${key}`),
+    type: "action",
+    action: {
+      type: "sendSms",
+      sendSms: {
+        message: smsBody(key),
+        compliance: { isStopKeywordIncluded: true, stopKeywordText: STOP_SENTENCE, isUnsubscribeLinkIncluded: true, unsubscribeLinkText: "Unsubscribe: [[unsubscribe_link]]" },
+        isLinkShorteningEnabled: true,
+      },
+    },
+  };
 }
 
 export function wait(label, amount, units) {
@@ -51,8 +77,7 @@ export function tag(label, value, remove = false) {
 
 /** Split on membership of a segment (contact filter, field segmentID). */
 export function splitOnSegment(label, segmentKey, trueBlocks, falseBlocks) {
-  const ids = created();
-  const segmentID = ids.segments?.[segmentKey];
+  const segmentID = created().segments[segmentKey];
   if (!segmentID) throw new Error(`segment ${segmentKey} has not been created yet`);
   return { temporaryID: tid(label), type: "split", split: { filterGroup: { logicalOperator: "and", filters: [{ type: "contact", field: "segmentID", operator: "eq", value: segmentID }] }, trueBlocks, falseBlocks } };
 }
@@ -63,7 +88,20 @@ export function splitOnClick(label, blockTemporaryID, trueBlocks, falseBlocks) {
 }
 
 const thresholds = { email: "subscribed", sms: "subscribed" };
-const smsLink = (path, campaign) => link(path, { campaign, medium: "sms" });
+const once = { mode: "once" };
+const every = (amount, units) => ({ mode: "interval", duration: { amount, units } });
+const api = (event) => ({ event, origin: "api" });
+
+/**
+ * The final-reminder split an abandonment flow ends on. The store sets the
+ * readiness flags only when a gift or code exists (segments.mjs), so each of
+ * the four variants is only ever sent to a contact whose card is filled.
+ */
+function finalReminder(kind) {
+  return splitOnSegment(`${kind}-gift`, "vl-recovery-gift-ready",
+    [splitOnSegment(`${kind}-gift-code`, "vl-recovery-code-ready", [email(`${kind}-3-gift-code`)], [email(`${kind}-3-gift`)])],
+    [splitOnSegment(`${kind}-code`, "vl-recovery-code-ready", [email(`${kind}-3-code`)], [email(`${kind}-3-plain`)])]);
+}
 
 export const AUTOMATIONS = {
   welcome: () => {
@@ -72,14 +110,15 @@ export const AUTOMATIONS = {
       name: "VL · Welcome",
       trigger: { condition: { event: "subscribed to marketing" } },
       blocks: [
-        email("welcome-1", "welcome-1", "Welcome to Vanta Labs", "What we sell, and how we document it."),
-        sms("welcome-sms", `Vanta Labs: thanks for subscribing. Code [[contact.custom_properties.vl_welcome_code]] takes 10% off a first order until [[contact.custom_properties.vl_welcome_ends]]. Research use only. ${smsLink("/products", "welcome")}`),
+        email("welcome-1"),
+        // Skipped by the SMS threshold for anyone without SMS consent.
+        sms("welcome"),
         wait("w1", 2, "d"),
-        email("welcome-2", "welcome-2", "Every batch has a published report", "Search a lot number and read the actual document."),
+        email("welcome-2"),
         wait("w2", 3, "d"),
-        email("welcome-3", "welcome-3", "How ordering works", "Dispatch by 2PM ET, tracking after dispatch."),
+        email("welcome-3"),
       ],
-      settings: { sendingThresholds: thresholds, frequencyLimiter: { mode: "once" } },
+      settings: { sendingThresholds: thresholds, frequencyLimiter: once },
     };
   },
 
@@ -87,20 +126,18 @@ export const AUTOMATIONS = {
     counter = 0;
     return {
       name: "VL · Abandoned cart",
-      trigger: { condition: { event: "added product to cart", origin: "api" }, inactivitySettings: { duration: { amount: 1, units: "h" } } },
+      trigger: { condition: api("added product to cart"), inactivitySettings: { duration: { amount: 1, units: "h" } } },
       blocks: [
-        email("cart-1", "cart-1", "Your cart is saved", "Everything is still in it."),
+        email("cart-1"),
         wait("w1", 23, "h"),
-        email("cart-2", "cart-2", "Every batch has a published report", "Search a lot number and read the actual document."),
+        email("cart-2"),
         wait("w2", 3, "h"),
-        sms("cart-sms", `Vanta Labs: your cart is still saved. Batch reports are on each product page. ${smsLink("/cart", "abandoned-cart")}`),
+        sms("cart"),
         wait("w3", 45, "h"),
-        splitOnSegment("recent-buyer", "vl-bought-30d",
-          [email("cart-3-nocode", "cart-3-nocode", "One more note about your cart", "Your cart is still saved.")],
-          [email("cart-3", "cart-3", "A code for your saved cart", "10% off, valid until the date inside.")]),
+        finalReminder("cart"),
       ],
-      exitConditions: [{ event: "placed order", origin: "api" }, { event: "started checkout", origin: "api" }],
-      settings: { sendingThresholds: thresholds, frequencyLimiter: { mode: "interval", duration: { amount: 7, units: "d" } } },
+      exitConditions: [api("placed order"), api("started checkout")],
+      settings: { sendingThresholds: thresholds, frequencyLimiter: every(7, "d") },
     };
   },
 
@@ -108,20 +145,18 @@ export const AUTOMATIONS = {
     counter = 0;
     return {
       name: "VL · Abandoned checkout",
-      trigger: { condition: { event: "started checkout", origin: "api" }, inactivitySettings: { duration: { amount: 1, units: "h" } } },
+      trigger: { condition: api("started checkout"), inactivitySettings: { duration: { amount: 1, units: "h" } } },
       blocks: [
-        email("checkout-1", "checkout-1", "Finish when you are ready", "Your checkout is saved. Nothing has been charged."),
-        wait("w1", 3, "h"),
-        sms("checkout-sms", `Vanta Labs: your checkout is saved and nothing has been charged. Finish here: ${smsLink("/checkout", "abandoned-checkout")}`),
-        wait("w2", 20, "h"),
-        email("checkout-2", "checkout-2", "Still here when you are", "Dispatch by 2PM ET, tracking after dispatch."),
-        wait("w3", 48, "h"),
-        splitOnSegment("recent-buyer", "vl-bought-30d",
-          [email("checkout-3-nocode", "checkout-3-nocode", "One more note about your checkout", "Your checkout is still saved.")],
-          [email("checkout-3", "checkout-3", "A code for your saved checkout", "10% off, valid until the date inside.")]),
+        email("checkout-1"),
+        wait("w1", 23, "h"),
+        email("checkout-2"),
+        wait("w2", 3, "h"),
+        sms("checkout"),
+        wait("w3", 45, "h"),
+        finalReminder("checkout"),
       ],
-      exitConditions: [{ event: "placed order", origin: "api" }],
-      settings: { sendingThresholds: thresholds, frequencyLimiter: { mode: "interval", duration: { amount: 7, units: "d" } } },
+      exitConditions: [api("placed order")],
+      settings: { sendingThresholds: thresholds, frequencyLimiter: every(7, "d") },
     };
   },
 
@@ -129,10 +164,10 @@ export const AUTOMATIONS = {
     counter = 0;
     return {
       name: "VL · Browse abandonment",
-      trigger: { condition: { event: "viewed product", origin: "api" }, inactivitySettings: { duration: { amount: 4, units: "h" } } },
-      blocks: [email("browse-1", "browse-1", "You were looking at this", "The batch report is on the product page.")],
-      exitConditions: [{ event: "added product to cart", origin: "api" }, { event: "placed order", origin: "api" }],
-      settings: { sendingThresholds: thresholds, frequencyLimiter: { mode: "interval", duration: { amount: 7, units: "d" } } },
+      trigger: { condition: api("viewed product"), inactivitySettings: { duration: { amount: 4, units: "h" } } },
+      blocks: [email("browse-1")],
+      exitConditions: [api("added product to cart"), api("started checkout"), api("placed order")],
+      settings: { sendingThresholds: thresholds, frequencyLimiter: every(7, "d") },
     };
   },
 
@@ -140,14 +175,15 @@ export const AUTOMATIONS = {
     counter = 0;
     return {
       name: "VL · Post-purchase",
-      trigger: { condition: { event: "paid for order", origin: "api" } },
+      trigger: { condition: api("paid for order") },
       blocks: [
         wait("w1", 1, "d"),
-        email("post-purchase-1", "post-purchase-1", "Your batch report", "Find the certificate for what you bought."),
+        email("post-purchase-1"),
         wait("w2", 9, "d"),
-        email("post-purchase-2", "post-purchase-2", "Also in the catalogue", "Selected from what is ordered alongside yours."),
+        email("post-purchase-2"),
+        splitOnSegment("repeat", "vl-repeat-customers", [email("vip-milestone")], []),
       ],
-      settings: { sendingThresholds: thresholds, frequencyLimiter: { mode: "interval", duration: { amount: 30, units: "d" } } },
+      settings: { sendingThresholds: thresholds, frequencyLimiter: every(30, "d") },
     };
   },
 
@@ -155,12 +191,12 @@ export const AUTOMATIONS = {
     counter = 0;
     return {
       name: "VL · Replenishment",
-      trigger: { condition: { event: "paid for order", origin: "api" } },
+      trigger: { condition: api("paid for order") },
       blocks: [
         wait("w1", 45, "d"),
-        splitOnSegment("recent-buyer", "vl-bought-30d", [], [email("replenishment", "replenishment", "When you need to reorder", "Your previous items, and their current batches.")]),
+        splitOnSegment("bought-again", "vl-bought-30d", [], [email("replenishment")]),
       ],
-      settings: { sendingThresholds: thresholds, frequencyLimiter: { mode: "interval", duration: { amount: 60, units: "d" } } },
+      settings: { sendingThresholds: thresholds, frequencyLimiter: every(60, "d") },
     };
   },
 
@@ -168,28 +204,25 @@ export const AUTOMATIONS = {
     counter = 0;
     return {
       name: "VL · Win-back",
-      trigger: { condition: { event: "paid for order", origin: "api" } },
+      trigger: { condition: api("paid for order") },
       blocks: [
         wait("w1", 60, "d"),
-        splitOnSegment("recent-buyer", "vl-bought-30d", [], [
-          email("winback-1", "winback-1", "It has been a while", "A code, and the current batch reports."),
-          wait("w2", 1, "d"),
-          sms("winback-sms", `Vanta Labs: code [[contact.custom_properties.vl_winback_code]] takes 15% off until [[contact.custom_properties.vl_winback_ends]]. New batch reports are on the site. ${smsLink("/products", "win-back")}`),
-          wait("w3", 30, "d"),
-          email("winback-2", "winback-2", "Last note from us", "Your code is valid until it expires."),
-        ]),
+        email("winback-1"),
+        wait("w2", 1, "d"),
+        sms("winback"),
+        wait("w3", 30, "d"),
+        splitOnSegment("code-ready", "vl-winback-ready", [email("winback-2")], [email("winback-2-nocode")]),
       ],
-      exitConditions: [{ event: "placed order", origin: "api" }],
-      settings: { sendingThresholds: thresholds, frequencyLimiter: { mode: "interval", duration: { amount: 180, units: "d" } } },
+      exitConditions: [api("paid for order")],
+      settings: { sendingThresholds: thresholds, frequencyLimiter: every(180, "d") },
     };
   },
 
   sunset: () => {
     counter = 0;
-    const ids = created();
-    const segmentID = ids.segments?.["vl-unengaged-120"];
+    const segmentID = created().segments["vl-unengaged-120"];
     if (!segmentID) throw new Error("segment vl-unengaged-120 has not been created yet");
-    const ask = email("sunset", "sunset", "Do you want to keep hearing from us?", "One click keeps you on the list.");
+    const ask = email("sunset");
     return {
       name: "VL · Sunset",
       trigger: { condition: { event: "entered segment", origin: "omnisend", filterGroups: [{ logicalOperator: "and", filters: [{ field: "segment_id", operator: "eq", value: segmentID }] }] } },
@@ -198,7 +231,7 @@ export const AUTOMATIONS = {
         wait("w1", 7, "d"),
         splitOnClick("clicked", ask.temporaryID, [tag("engaged", "engaged"), tag("unsunset", "sunset", true)], [tag("sunset", "sunset")]),
       ],
-      settings: { sendingThresholds: thresholds, frequencyLimiter: { mode: "interval", duration: { amount: 180, units: "d" } } },
+      settings: { sendingThresholds: thresholds, frequencyLimiter: every(180, "d") },
     };
   },
 };

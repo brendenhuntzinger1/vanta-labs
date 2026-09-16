@@ -15,6 +15,8 @@ const customDateInLast = (name, value, unit = "days") => ({ property: "custom", 
 const customDateNotInLast = (name, value, unit = "days") => ({ property: "custom", name, valueType: "date", operator: "notInTheLast", value, unit });
 const customNumberMoreThan = (name, value) => ({ property: "custom", name, valueType: "number", operator: "moreThan", value });
 const customBool = (name, value) => ({ property: "custom", name, valueType: "bool", operator: "equals", value });
+/** The store writes its readiness flags as the text "yes" / "no", so they are matched as text, not bool. */
+const customYes = (name) => ({ property: "custom", name, valueType: "text", operator: "anyOf", value: ["yes"] });
 const contact = (filters, junction = "and") => ({ entity: "contact", junction, filters });
 const event = (filters, junction = "and") => ({ entity: "event", junction, filters });
 const seg = (name, conditions) => ({ name, conditionGroups: [{ conditions }] });
@@ -30,6 +32,13 @@ export const PROPERTY_SEGMENTS = {
   "vl-lapsed-90": () => seg("VL · Lapsed 90 days", [contact([tagAny(["customer"]), customDateNotInLast("vl_last_order_at", 90)])]),
   "vl-vip": () => seg("VL · VIP (spent over 500)", [contact([customNumberMoreThan("vl_total_spent", 500)])]),
   "vl-campaign-audience": () => seg("VL · Campaign audience", [contact([subscribed("email"), tagNone(["sunset"])])]),
+  // Abandonment splits (spec §6). The store sets vl_recovery_gift_ready and
+  // vl_recovery_ready to "yes" only once the gift or code exists, so the
+  // *-3-gift* and *-3-code* variants can never show a blank card.
+  "vl-recovery-gift-ready": () => seg("VL · Recovery gift ready", [contact([customYes("vl_recovery_gift_ready")])]),
+  "vl-recovery-code-ready": () => seg("VL · Recovery code ready", [contact([customYes("vl_recovery_ready")])]),
+  // The win-back split: the nightly sweep sets vl_winback_ready to "yes" once the code is minted.
+  "vl-winback-ready": () => seg("VL · Win-back code ready", [contact([customYes("vl_winback_ready")])]),
 };
 
 export const EVENT_SEGMENTS = {
