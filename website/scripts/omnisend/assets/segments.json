@@ -1,0 +1,16 @@
+{
+  "vl-subscribers": "6aa9890aeba844d1e0e9539d",
+  "vl-sms-subscribers": "6aa9890b37e7762ce4afac26",
+  "vl-customers": "6aa9890eeba844d1e0e9539e",
+  "vl-attested": "6aa98910eba844d1e0e9539f",
+  "vl-never-bought": "6aa9891037e7762ce4afac28",
+  "vl-bought-30d": "6aa9891237e7762ce4afac29",
+  "vl-lapsed-60": "6aa9891356e90f08f163f5ac",
+  "vl-lapsed-90": "6aa9891537e7762ce4afac2a",
+  "vl-vip": "6aa9891737e7762ce4afac2b",
+  "vl-campaign-audience": "6aa9891856e90f08f163f5ad",
+  "vl-engaged-90": "6aa9894deba844d1e0e953a0",
+  "vl-unengaged-120": "6aa9895956e90f08f163f5ae",
+  "vl-repeat-customers": "6aa9895a56e90f08f163f5af",
+  "vl-browsed-no-order-30d": "6aa9895c56e90f08f163f5b0"
+}
