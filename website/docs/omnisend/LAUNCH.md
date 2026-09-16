@@ -33,8 +33,10 @@ the document to read before authorising any step in `OPERATIONS.md` §4.
 * **Documents**: `AUDIT.md` (what sends today, ownership table, findings),
   `MIGRATION.md` (field map, operator sequence, report, rollback),
   `OPERATIONS.md` (deliverability, attribution, metrics, launch order,
-  rollback, cost, monitoring, promotions), `VERIFICATION.md` (evidence),
-  `CHECKLIST.md` (state of the work).
+  rollback, cost, monitoring, promotions), `DESIGN.md` (the premium and
+  conversion review against Omnisend's benchmarks and premium brands on the
+  platform), `VERIFICATION.md` (evidence), `CHECKLIST.md` (state of the
+  work).
 
 ## 2. Ownership table
 

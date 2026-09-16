@@ -16,7 +16,7 @@ from the Omnisend dashboard after review.
 
 | File | What it holds |
 |------|---------------|
-| `lib.mjs` | The template DSL: palette, fonts, `hexId()`, `link()` (the grant route), text/button/image/section helpers, product sections with role-tagged components |
+| `lib.mjs` | The template DSL: palette, fonts, `hexId()`, `link()` (the grant route), text/button/image/section helpers, product sections with role-tagged components. The primary button preset is the site's own `.vl-btn-primary` (ivory fill, pill), one per email; product slots use the outlined secondary |
 | `layouts.mjs` | The universal header and footer (`layouts:header`, `layouts:footer`) |
 | `templates.mjs` | `TEMPLATES` (32 email templates, keyed), `LAYOUTS` (the two universal layout ids), `SUBJECTS` (subject and preview per key), `TEMPLATE_KEYS` |
 | `sms.mjs` | `SMS` (seven texts with `text` and `whenUsed`), `smsBody()`, `STOP_SENTENCE` |

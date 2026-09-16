@@ -65,6 +65,9 @@ Legend: `[x]` done and verified · `[~]` in progress / partial · `[ ]` not star
 - [x] SMS variants catalogued (scripts/omnisend/sms.mjs)
 - [x] "Recon Water" everywhere customer-facing; no invented claims (assets.test.mjs)
 - [~] Rendered previews: structure pinned by assets.test.mjs; visual check in Omnisend's editor is the owner's
+- [x] Premium and conversion review against Omnisend's published benchmarks, its design guidance and premium brands on the platform (DESIGN.md): one ivory primary action per email, "good to know" card of canonical claims on cart, checkout and welcome, real product photographs in the welcome grid, image weights under 100 KB
+- [x] Welcome hero is the store's own product vial, never a generic or generated one
+- [!] Dark-mode preview (Gmail iOS, Outlook) in Omnisend before the first send — owner
 - [!] Postal address in the footer — owner supplies
 - [!] Sender name / reply-to configured in Omnisend — owner
 
