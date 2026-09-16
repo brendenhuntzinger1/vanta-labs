@@ -62,7 +62,7 @@ function spacerSection(seed, height = 12) {
 /** The hero card: eyebrow, heading, lead, extra lines, one primary button and an optional tertiary link. */
 function hero(seed, { kicker, title, lead, extra = [], cta, secondary, showImage = false, campaign }) {
   const blocks = [];
-  if (showImage) blocks.push(image(`${seed}:image`, IMAGES.hero, { alt: "A glass vial on a dark field", width: 536, padding: "0px 32px 22px" }));
+  if (showImage) blocks.push(image(`${seed}:image`, IMAGES.hero, { alt: "A Vanta Labs GHK-Cu vial on a dark field", width: 536, padding: "0px 32px 22px" }));
   blocks.push(eyebrow(`${seed}:eyebrow`, kicker));
   blocks.push(heading(`${seed}:heading`, title));
   blocks.push(text(`${seed}:lead`, lead));
@@ -78,6 +78,20 @@ const FINAL_NOTE = "One more note, then we will leave it with you.";
 
 const cartProducts = (key, campaign) => productSection(`${key}:products`, "product_cart_recovery", { count: 3, buttonText: "View", campaign });
 const recommended = (key, campaign, recommender) => productSection(`${key}:products`, "product_recommender", { count: 3, buttonText: "View", campaign, recommender });
+
+/**
+ * The quiet card that answers why carts are abandoned (Baymard: unexpected
+ * cost, slow delivery, card distrust): dispatch, destinations and tracking,
+ * and the encrypted checkout, each the site's canonical sentence verbatim.
+ * No free-shipping figure: that threshold is an admin setting and is never
+ * baked into a template.
+ */
+function trustStrip(seed) {
+  return card(seed, [
+    eyebrow(`${seed}:eyebrow`, "Good to know"),
+    text(`${seed}:lines`, [CLAIMS.fulfilment, `${CLAIMS.destinations} ${CLAIMS.tracking}`, "Checkout is encrypted. Card details never touch our servers."], { padding: "0px 32px 20px" }),
+  ]);
+}
 
 /** The four final-reminder variants an abandonment automation splits into. */
 function finalVariants(kind, { kicker, path, label, campaign }) {
@@ -140,7 +154,6 @@ const WELCOME_HERO = {
   1: {
     kicker: "Welcome", title: "Precision, in every vial.",
     lead: `Vanta Labs Research supplies laboratory research materials. ${COA_LINE}`,
-    extra: [`Two things worth knowing before a first order. ${CLAIMS.fulfilment} Every listing shows its current batch number and links to the report.`],
     cta: { label: "Browse the catalogue", path: "/products" }, secondary: { label: "Read a batch report", path: "/coa-library" },
     showImage: true, campaign: "welcome",
   },
@@ -161,7 +174,18 @@ const WELCOME_HERO = {
 };
 
 export const TEMPLATES = {
-  "welcome-1": () => frame("welcome-1", [hero("welcome-1:hero", WELCOME_HERO[1])]),
+  "welcome-1": () => frame("welcome-1", [
+    hero("welcome-1:hero", WELCOME_HERO[1]),
+    spacerSection("welcome-1:gap"),
+    card("welcome-1:catalogue", [
+      eyebrow("welcome-1:catalogue:eyebrow", "From the catalogue"),
+      text("welcome-1:catalogue:lead", "A few products from the catalogue. Every listing shows its current batch number and links to the report.", { padding: "0px 32px 4px" }),
+    ]),
+    // Real product photographs and prices, chosen by Omnisend at send time.
+    recommended("welcome-1", "welcome", { type: "popular", fallbackType: "newest", isOutOfStockIncluded: false }),
+    spacerSection("welcome-1:gap2"),
+    trustStrip("welcome-1:trust"),
+  ]),
 
   "welcome-2": () => frame("welcome-2", [hero("welcome-2:hero", WELCOME_HERO[2])]),
 
@@ -186,6 +210,8 @@ export const TEMPLATES = {
       cta: { label: "Return to cart", path: "/cart" }, campaign: "abandoned-cart",
     }),
     cartProducts("cart-1", "abandoned-cart"),
+    spacerSection("cart-1:gap"),
+    trustStrip("cart-1:trust"),
   ]),
 
   "cart-2": () => frame("cart-2", [
@@ -196,6 +222,8 @@ export const TEMPLATES = {
       cta: { label: "Return to cart", path: "/cart" }, secondary: { label: "Open the COA library", path: "/coa-library" }, campaign: "abandoned-cart",
     }),
     cartProducts("cart-2", "abandoned-cart"),
+    spacerSection("cart-2:gap"),
+    trustStrip("cart-2:trust"),
   ]),
 
   ...finalVariants("cart", { kicker: "Your cart", path: "/cart", label: "Return to cart", campaign: "abandoned-cart" }),
@@ -207,16 +235,19 @@ export const TEMPLATES = {
       cta: { label: "Return to checkout", path: "/checkout" }, campaign: "abandoned-checkout",
     }),
     cartProducts("checkout-1", "abandoned-checkout"),
+    spacerSection("checkout-1:gap"),
+    trustStrip("checkout-1:trust"),
   ]),
 
   "checkout-2": () => frame("checkout-2", [
     hero("checkout-2:hero", {
       kicker: "Your checkout", title: "Still here when you are.",
-      lead: `${CLAIMS.fulfilment} ${CLAIMS.tracking}`,
-      extra: ["Checkout is encrypted. Card details never touch our servers."],
+      lead: "Your checkout is saved and nothing has been charged. The items are below; batch numbers and reports are on each product page.",
       cta: { label: "Return to checkout", path: "/checkout" }, secondary: { label: "Open the COA library", path: "/coa-library" }, campaign: "abandoned-checkout",
     }),
     cartProducts("checkout-2", "abandoned-checkout"),
+    spacerSection("checkout-2:gap"),
+    trustStrip("checkout-2:trust"),
   ]),
 
   ...finalVariants("checkout", { kicker: "Your checkout", path: "/checkout", label: "Return to checkout", campaign: "abandoned-checkout" }),

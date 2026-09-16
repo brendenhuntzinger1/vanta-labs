@@ -38,15 +38,15 @@ export const FONTS = {
 };
 
 /**
- * Uploaded through the Images API; ids are stable per account. `hero` is the
- * email's own dark-field vial (uploaded 2026-09-16, 1024x688, no label, no
- * text): the home-page vial poster (6aa98560b313445127d393b8, still in the
- * account) is the site's hero and is not reused in email at the owner's
- * request.
+ * Uploaded through the Images API on 2026-09-15; ids are stable per account.
+ * `hero` is the site's own product vial (GHK-Cu on a dark field, the home-page
+ * poster, 960x960, 37 KB): a real Vanta Labs product, at the owner's request,
+ * never a generic or generated vial. A generated vial uploaded on 2026-09-16
+ * (6aab0150b313445127d3c61c) is unused and can be deleted from the library.
  */
 export const IMAGES = {
   logo: { id: "6aa9857db313445127d393bd", url: "https://app.omnisend.com/images/6aa9857db313445127d393be", width: 1024, height: 1024 },
-  hero: { id: "6aab0150b313445127d3c61c", url: "https://app.omnisend.com/images/6aab0151b313445127d3c61d", width: 1024, height: 688 },
+  hero: { id: "6aa98560b313445127d393b8", url: "https://app.omnisend.com/images/6aa98560b313445127d393b9", width: 960, height: 960 },
   og: { id: "6aa9857eb313445127d393bf", url: "https://app.omnisend.com/images/6aa9857eb313445127d393c1", width: 2000, height: 1050 },
 };
 
@@ -95,8 +95,9 @@ export function textPresets() {
 export function buttonPresets() {
   const base = { fontFamily: FONTS.body, fontSize: "13px", fontWeight: "bold", letterSpacing: "1px", paddingLeft: "24px", paddingRight: "24px", paddingTop: "14px", paddingBottom: "14px", borderRadius: "14px" };
   return [
-    // The site's glass button: charcoal fill, champagne hairline, off-white label.
-    { id: "primary_button", name: "Primary", styles: { ...base, backgroundColor: PALETTE.surface, border: `1px solid ${PALETTE.goldHairline}`, color: PALETTE.buttonText } },
+    // The site's primary (.vl-btn-primary): ivory fill, near-black label, pill. One per
+    // email, so the single action is the focal point; never a gold fill (brand.md).
+    { id: "primary_button", name: "Primary", styles: { ...base, backgroundColor: PALETTE.buttonText, border: "1px solid rgba(255,255,255,0.84)", color: "#111111", borderRadius: "999px" } },
     { id: "secondary_button", name: "Secondary", styles: { ...base, backgroundColor: "transparent", border: `1px solid ${PALETTE.hairlineStrong}`, color: PALETTE.foreground } },
     { id: "tertiary_button", name: "Tertiary", styles: { ...base, backgroundColor: "transparent", border: "0px solid transparent", color: PALETTE.gold, textDecoration: "underline", paddingLeft: "0px", paddingRight: "0px" } },
   ];
@@ -212,10 +213,12 @@ export function productSection(seed, type, { count = 3, recommender, buttonText 
             { id: hexId(`${slot}:price:old`), type: "text", role: "product_old_price", text: p("$0.00", "center"), stylePresetID: "footnote", styleProperties: { alignment: "center", color: PALETTE.muted } },
           ],
         },
-        { id: hexId(`${slot}:button`), type: "button", role: "product_button", button: { text: label, link: href, isFullWidth: false }, stylePresetID: "primary_button", styleProperties: { padding: "0px", alignment: "center" } },
+        { id: hexId(`${slot}:button`), type: "button", role: "product_button", button: { text: label, link: href, isFullWidth: false }, stylePresetID: "secondary_button", styleProperties: { padding: "0px", alignment: "center" } },
       ],
-      stylePresetID: "primary_button",
-      styleProperties: { padding: "12px 16px", backgroundColor: PALETTE.surface, borderRadius: "16px", color: PALETTE.foreground, priceColor: PALETTE.gold, secondaryColor: PALETTE.muted, fontFamily: FONTS.body },
+      // Outlined, so the email's one primary button stays the focal point; the
+      // image runs to the tile's edges the way the site's product card shows it.
+      stylePresetID: "secondary_button",
+      styleProperties: { padding: "0px 0px 16px", backgroundColor: PALETTE.surface, borderRadius: "16px", color: PALETTE.foreground, priceColor: PALETTE.gold, secondaryColor: PALETTE.muted, fontFamily: FONTS.body },
     });
   }
   const out = {
