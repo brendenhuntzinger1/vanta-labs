@@ -29,6 +29,8 @@ const PREFERENCES = executable(read("src/app/api/account/preferences/route.ts"))
 const CART_RECOVERY = executable(read("src/lib/cart-recovery.ts"));
 const PRODUCT_PAGE = executable(read("src/app/products/[slug]/page.tsx"));
 const SWEEP = executable(read("src/app/api/cron/sweep/route.ts"));
+const TRACK_ROUTE = executable(read("src/app/api/cart/track/route.ts"));
+const CART_CONTEXT = executable(read("src/components/cart-context.tsx"));
 
 function fn(source: string, name: string): string {
   const start = source.indexOf(`async function ${name}(`);
@@ -127,6 +129,56 @@ describe("cart-recovery.ts reports carts to Omnisend after the row is written", 
     expect(CART_RECOVERY).toContain("export async function loadRecoveryContext(emails: string[], now: number): Promise<RecoveryContext>");
     expect(CART_RECOVERY).toContain("export function lastGiftForOtherCarts(");
     expect(CART_RECOVERY).toContain("export async function unshippableGiftSlugsFor(giftSlugs: string[]): Promise<Set<string>>");
+  });
+});
+
+// A FIRST-TIME GUEST NEVER PRODUCED `started checkout`. The client fired the
+// arrival beacon once, with items: [], and the route stamped the checkout
+// start on a row that did not exist yet: a guest has no abandoned_carts row
+// until an address is typed, and the beacon that follows the typed address
+// only ever ran trackCart. So the debounced items beacon also says
+// reachedCheckout while the shopper is on /checkout, and the route, given
+// items AND reachedCheckout, tracks the cart first and stamps it after, so
+// the row exists to stamp and the hook has a row to report. The one-shot
+// arrival beacon and the empty-items path stay as they were.
+describe("the checkout beacon reaches a guest's cart row", () => {
+  it("the client's debounced items beacon carries reachedCheckout while the pathname is under /checkout", () => {
+    const beacon = CART_CONTEXT.slice(CART_CONTEXT.indexOf("const timeout = setTimeout(() => {"), CART_CONTEXT.indexOf("}, 1500);"));
+    expect(beacon).toContain("cartValueCents: Math.round(subtotal * 100),");
+    expect(beacon).toContain('...(pathname?.startsWith("/checkout") ? { reachedCheckout: true } : {}),');
+    // The pathname is a dependency of that effect, not something read inside it.
+    const deps = CART_CONTEXT.indexOf("}, [isSignedIn, hasTrackableIdentity, trackedEmail, cartSessionId, items, customerName, subtotal, pathname]);");
+    expect(deps).toBeGreaterThan(-1);
+    // usePathname is called once, before the tracking effect.
+    expect(CART_CONTEXT.split("usePathname()").length - 1).toBe(1);
+    expect(CART_CONTEXT.indexOf("const pathname = usePathname();")).toBeLessThan(CART_CONTEXT.indexOf("const timeout = setTimeout(() => {"));
+  });
+
+  it("keeps the one-shot arrival beacon", () => {
+    expect(CART_CONTEXT).toContain("body: JSON.stringify({ sessionId: cartSessionId, items: [], reachedCheckout: true }),");
+    expect(CART_CONTEXT).toContain("const checkoutStartSentRef = useRef(false);");
+  });
+
+  it("the route stamps an empty arrival before identity, and a tracked cart after trackCart", () => {
+    const post = TRACK_ROUTE.slice(TRACK_ROUTE.indexOf("export async function POST("));
+    const emptyArrival = post.indexOf("if (body.reachedCheckout === true && body.items.length === 0) {");
+    const firstStamp = post.indexOf("await markCheckoutStarted(sessionId);", emptyArrival);
+    const identity = post.indexOf("const user = await getAuthenticatedUser();");
+    const ipLimit = post.indexOf('checkRateLimit(rateLimitKeyForRequest("cart-track-ip", request)');
+    const emailLimit = post.indexOf("checkRateLimit(`cart-track-email:${typed}`");
+    const track = post.indexOf("await trackCart({");
+    const secondStamp = post.indexOf("if (body.reachedCheckout === true) await markCheckoutStarted(sessionId);");
+    expect(emptyArrival).toBeGreaterThan(-1);
+    expect(firstStamp).toBeGreaterThan(emptyArrival);
+    expect(identity).toBeGreaterThan(firstStamp);
+    expect(ipLimit).toBeGreaterThan(identity);
+    expect(emailLimit).toBeGreaterThan(ipLimit);
+    expect(track).toBeGreaterThan(emailLimit);
+    expect(secondStamp).toBeGreaterThan(track);
+    // Exactly two stamps: the empty arrival and the tracked cart.
+    expect(post.split("await markCheckoutStarted(sessionId);").length - 1).toBe(2);
+    // The old shape — stamping before knowing whether there is a row — is gone.
+    expect(post).not.toContain("if (body.reachedCheckout === true) {\n    await markCheckoutStarted(sessionId);");
   });
 });
 

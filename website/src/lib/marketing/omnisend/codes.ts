@@ -193,3 +193,37 @@ export async function ensureContactCode(kind: ContactCodeKind, email: string, op
     return null;
   }
 }
+
+/**
+ * Retire every live code of this kind the address holds: `active = false`
+ * on the unredeemed rows, so findLiveContactCode stops returning them and
+ * the next contact push carries "" for the property. A first order ends the
+ * welcome code (order-hooks.ts onOrderPaid) whether or not it was used.
+ *
+ * Never a delete — the row is the record of what was offered — and never a
+ * redeemed row, whose count is the record of the order it priced. Returns
+ * how many rows were retired; 0 on any failure, and never throws.
+ */
+export async function retireContactCode(kind: ContactCodeKind, email: string): Promise<number> {
+  const offer = CONTACT_CODE_OFFERS[kind];
+  const address = normalizeEmail(email);
+  if (!address) return 0;
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("coupons")
+      .update({ active: false })
+      .eq("assigned_email", address)
+      .eq("source", offer.source)
+      .eq("active", true)
+      .eq("redemptions_count", 0)
+      .select("id");
+    if (error) {
+      console.error("[omnisend/codes] retire refused", { kind, message: error.message });
+      return 0;
+    }
+    return Array.isArray(data) ? data.length : 0;
+  } catch (error) {
+    console.error("[omnisend/codes] retireContactCode failed", { kind, error });
+    return 0;
+  }
+}

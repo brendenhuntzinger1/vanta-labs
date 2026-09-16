@@ -19,6 +19,7 @@ import { DEFAULT_RECOVERY_TIERS } from "@/lib/cart-recovery-tiers";
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
 import { omnisendActive } from "@/lib/marketing/omnisend/client";
 import {
+  CART_EVENT_DEBOUNCE_MS,
   CART_OFFER_MAX_AGE_MS,
   cartOfferQualifies,
   describeRecoveryGift,
@@ -28,7 +29,7 @@ import {
 import { ensureContactCode, findLiveContactCodes } from "@/lib/marketing/omnisend/codes";
 import { omnisendOwnsMarketing } from "@/lib/marketing/omnisend/config";
 import type { RecoveryGiftFacts } from "@/lib/marketing/omnisend/contact-payload";
-import { upsertOmnisendContact } from "@/lib/marketing/omnisend/contacts";
+import { collectContactFacts, upsertOmnisendContact } from "@/lib/marketing/omnisend/contacts";
 import { contactLinkFor, sendCartEventOnce } from "@/lib/marketing/omnisend/hooks";
 import { omnisendLedger } from "@/lib/marketing/omnisend/ledger";
 import { OMNISEND_LINK_TTL_MS, signOmnisendLink } from "@/lib/marketing/omnisend/link-token";
@@ -49,9 +50,11 @@ import { supabaseAdmin } from "@/lib/supabase-server";
  *
  * THE RULES ARE THE LADDER'S, NOT A SECOND SET. The band planner
  * (planStageOffer at stage t72h), the per-address cooldowns
- * (loadRecoveryContext), the shippable-gift test (unshippableGiftSlugsFor)
- * and the offer helper (issueResolvedOffer) are the in-house sweep's own,
- * so the two owners of a cart can never disagree about what an address has
+ * (loadRecoveryContext, whose coupon read names BOTH ladders' recovery
+ * sources, so one address gets one recovery code per 30 days whichever
+ * owner minted it), the shippable-gift test (unshippableGiftSlugsFor) and
+ * the offer helper (issueResolvedOffer) are the in-house sweep's own, so
+ * the two owners of a cart can never disagree about what an address has
  * already been given or what the box will hold. The percentage is the
  * BAND's, carried into the coupon row (ensureContactCode with percent), so
  * the property describes the code the till will price.
@@ -62,6 +65,34 @@ import { supabaseAdmin } from "@/lib/supabase-server";
  * 30 minutes cannot re-mint, and a cart is never re-planned even when the
  * push failed — a refused push is recorded, not retried, exactly as the
  * ladder keeps a failed stage's claim (C-06).
+ *
+ * A MINT FAILS CLOSED; AN EVENT MAY FAIL OPEN. The ledger's default answer
+ * to an insert failure other than a duplicate key is "claimed", and that is
+ * right for an event: a lost `paid for order` costs a post-purchase flow,
+ * and a duplicate costs nothing because Omnisend deduplicates historical
+ * events on eventID. There is no dedup for money. With omnisend_events_sent
+ * missing or the insert refused, a fail-open claim here would let every
+ * 30-minute tick re-plan and re-mint a code and a gift for every qualifying
+ * cart, so the plan claim asks for the closed direction (failClosed) and an
+ * unreachable ledger mints nothing.
+ *
+ * IN THIS ORDER, PER CART. The catch-up `added product to cart` first, and
+ * awaited: a cart that has no DELIVERED cart event has one sent before
+ * anything is claimed, and if it is not delivered the cart is left for the
+ * next tick, unclaimed and unminted — an incentive for a shopper who never
+ * entered the flow is money spent on nobody. Then consent: only an address
+ * whose email channel is `subscribed` is claimed, because Omnisend's own
+ * sending threshold (spec §6) means nobody else will ever be mailed the
+ * message this incentive is for; an unsubscribed address is counted and
+ * left UNCLAIMED, so a later tick inside the window mints if they subscribe
+ * meanwhile. Only then the claim, the plan and the push.
+ *
+ * THE GIFT IS NAMED ON EVERY PUSH. contact-payload.ts leaves the
+ * vl_recovery_gift* properties alone when recoveryGift is undefined and
+ * clears them when it is null, so this sweep — the one writer of the gift —
+ * always passes it: the planned gift, or null to clear, never undefined. A
+ * stale gift from an earlier cart can then never show in a later cart's
+ * final email.
  *
  * Gate FIRST, before any database read: the environment gate, then the
  * ownership switch. With the switch unset the ladder owns every cart and
@@ -87,12 +118,14 @@ export type OmnisendCartOffersResult = {
   gifts: number;
   /** Catch-up `added product to cart` events accepted. */
   events: number;
-  /** Contact pushes Omnisend refused, or plans that threw. */
+  /** Qualifying carts whose address is not email-subscribed: left unclaimed, nothing minted. */
+  unsubscribed: number;
+  /** Contact pushes or catch-up events Omnisend refused, or plans that threw. */
   failed: number;
 };
 
 function empty(): OmnisendCartOffersResult {
-  return { skipped: null, scanned: 0, qualified: 0, planned: 0, codes: 0, gifts: 0, events: 0, failed: 0 };
+  return { skipped: null, scanned: 0, qualified: 0, planned: 0, codes: 0, gifts: 0, events: 0, unsubscribed: 0, failed: 0 };
 }
 
 type CartRow = CartOfferCartRow & { session_id?: string | null };
@@ -125,7 +158,13 @@ async function inHouseStagesFor(cartIds: string[]): Promise<Map<string, number> 
   }
 }
 
-/** Has this cart's `added product to cart` ever been delivered? Fails OPEN (true), so a ledger outage does not re-trigger flows. */
+/**
+ * Has this cart's `added product to cart` ever been DELIVERED? A claimed but
+ * refused row does not count: that cart is sent again (per debounce window)
+ * before anything is minted for it. Fails OPEN (true), so a ledger outage
+ * does not re-trigger flows; the fail-closed claim that follows then mints
+ * nothing.
+ */
 async function cartEventKnown(cartId: string): Promise<boolean> {
   try {
     const { data, error } = await supabaseAdmin
@@ -133,6 +172,7 @@ async function cartEventKnown(cartId: string): Promise<boolean> {
       .select("entity_id")
       .eq("entity_id", cartId)
       .eq("event_name", "added product to cart")
+      .eq("delivered", true)
       .limit(1);
     if (error) return true;
     return Array.isArray(data) && data.length > 0;
@@ -205,10 +245,49 @@ export async function mintOmnisendCartOffers(input: { now?: number; limit?: numb
       if (result.planned >= limit) break;
       const cartId = String(row.id);
       const email = String(row.email ?? "").trim().toLowerCase();
+
+      // THE EVENT FIRST. A cart abandoned just before cutover never produced
+      // a cart event (the hooks did not exist), and a cart whose event
+      // Omnisend refused is not in the flow either. Omnisend's flow starting
+      // at step one is correct for both, so the event is sent, awaited, and
+      // retried per debounce window until it lands; until it has, nothing
+      // below is claimed or minted for the cart. A cart already delivered
+      // is already in the flow.
+      if (!(await cartEventKnown(cartId))) {
+        const sentEvent = await sendCartEventOnce({
+          name: "added product to cart",
+          cart: {
+            cartId,
+            sessionId: String(row.session_id ?? ""),
+            email,
+            items: (Array.isArray(row.items) ? row.items : []) as AbandonedCartItemSnapshot[],
+            cartValueCents: Math.max(0, Math.round(Number(row.cart_value_cents ?? 0) || 0)),
+          },
+          campaign: "abandoned-cart",
+          debounceMs: CART_EVENT_DEBOUNCE_MS,
+        });
+        if (!sentEvent) {
+          result.failed += 1;
+          continue;
+        }
+        result.events += 1;
+      }
+
+      // CONSENT BEFORE MONEY. Read, compared, never written: the status is
+      // the store's own record (contacts.ts), and only `subscribed` can be
+      // mailed by a flow whose threshold is subscribed. Anyone else is left
+      // unclaimed for a later tick.
+      const facts = await collectContactFacts(email);
+      if (!facts || facts.emailConsent.status !== "subscribed") {
+        result.unsubscribed += 1;
+        continue;
+      }
+
       const ledger = omnisendLedger(cartId);
       // ONCE PER CART. The claim is an insert; a second tick, or a second
-      // instance of this tick, loses the race and plans nothing.
-      if (!(await ledger.claimSend("recovery offer", `${cartId}:recovery offer`))) continue;
+      // instance of this tick, loses the race and plans nothing. Fail
+      // CLOSED: an unreachable ledger plans nothing either (see the header).
+      if (!(await ledger.claimSend("recovery offer", `${cartId}:recovery offer`, { failClosed: true }))) continue;
       result.planned += 1;
 
       try {
@@ -234,6 +313,8 @@ export async function mintOmnisendCartOffers(input: { now?: number; limit?: numb
         // THE GIFT, ONLY WHAT CAN SHIP. Dropped entirely when nothing in the
         // band's gift is on the shelf: a message promising a vial the box
         // will not hold is the one failure this programme cannot afford.
+        // Null, never undefined: null CLEARS the gift properties on the
+        // push, so a gift from an earlier cart cannot outlive its cart.
         let recoveryGift: RecoveryGiftFacts | null = null;
         const gifts = plan.gifts.filter((item) => !unshippable.has(item.slug));
         if (gifts.length > 0) {
@@ -261,32 +342,13 @@ export async function mintOmnisendCartOffers(input: { now?: number; limit?: numb
 
         // THE CONTACT, WITH EVERYTHING THAT IS NOW TRUE OF IT: a fresh
         // 30-day door, every live code (the recovery one now among them) and
-        // the gift. The plan's own words are logged for the operator; the
-        // codes and the token are not.
+        // the gift, named explicitly (a gift, or null to clear). The plan's
+        // own words are logged for the operator; the codes and the token
+        // are not.
         const [token, codes] = await Promise.all([signOmnisendLink(email, now), findLiveContactCodes(email)]);
         const link = token ? { token, endsAt: new Date(now + OMNISEND_LINK_TTL_MS).toISOString() } : null;
         const accepted = await upsertOmnisendContact(email, { link, codes, recoveryGift });
         if (!accepted) result.failed += 1;
-
-        // A CART ABANDONED JUST BEFORE CUTOVER never produced a cart event —
-        // the hooks did not exist — and has received nothing from the
-        // ladder, so Omnisend's flow starting at step one is correct. Sent
-        // exactly once; a cart already in the ledger is already in the flow.
-        if (!(await cartEventKnown(cartId))) {
-          const sentEvent = await sendCartEventOnce({
-            name: "added product to cart",
-            cart: {
-              cartId,
-              sessionId: String(row.session_id ?? ""),
-              email,
-              items: (Array.isArray(row.items) ? row.items : []) as AbandonedCartItemSnapshot[],
-              cartValueCents: Math.max(0, Math.round(Number(row.cart_value_cents ?? 0) || 0)),
-            },
-            campaign: "abandoned-cart",
-            debounceMs: null,
-          });
-          if (sentEvent) result.events += 1;
-        }
 
         await ledger.recordSend("recovery offer", `${cartId}:recovery offer`, accepted, accepted ? null : "contact upsert refused");
         console.log(LOG, "planned", cartId, { reason: plan.reason, gift: recoveryGift !== null, accepted, ttlDays: RECOVERY_GIFT_TTL_DAYS });

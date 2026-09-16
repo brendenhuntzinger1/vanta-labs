@@ -35,6 +35,7 @@ function executable(source: string): string {
     .join("\n");
 }
 
+const ORDER_HOOKS = executable(read("src/lib/marketing/omnisend/order-hooks.ts"));
 const WEBHOOK = executable(read("src/lib/payment-webhook.ts"));
 const SERVICE = executable(read("src/lib/shippo/service.ts"));
 const ADMIN_ROUTE = executable(read("src/app/api/admin/orders/[orderId]/route.ts"));
@@ -65,6 +66,31 @@ describe("the deferral every lib call site uses", () => {
     // No request scope (a sweep, a script, a test): fall back rather than
     // throw into a caller that is in the middle of confirming a payment.
     expect(DEFER).toMatch(/try \{\s*after\(guarded\);\s*\} catch \{\s*void guarded\(\);/);
+  });
+});
+
+// A FIRST ORDER ENDS THE WELCOME CODE. The code is a first-order discount
+// (spec §3.4), minted at subscribe for an address with no paid order; the
+// paid hook is the first moment the store knows the first order happened.
+// It is retired BEFORE the live codes are read for the contact push, so the
+// push that adds the `customer` tag never carries the code that is now dead.
+describe("order-hooks.ts retires the welcome code on the paid hook, before the contact push", () => {
+  const paid = fn(ORDER_HOOKS, "export async function onOrderPaid(");
+
+  it("imports retireContactCode from codes.ts and calls it for the welcome kind", () => {
+    expect(ORDER_HOOKS).toMatch(/import \{[^}]*\bretireContactCode\b[^}]*\} from "@\/lib\/marketing\/omnisend\/codes";/);
+    expect(paid).toContain('await retireContactCode("welcome", email);');
+  });
+
+  it("after the purchase test and before the codes are read and the contact is pushed", () => {
+    const purchase = paid.indexOf("if (!isProductPurchaseOrder(");
+    const retire = paid.indexOf('await retireContactCode("welcome", email);');
+    const codes = paid.indexOf("liveCodes(email)");
+    const upsert = paid.indexOf("await upsertOmnisendContact(email, { link, codes });");
+    expect(purchase).toBeGreaterThan(-1);
+    expect(retire).toBeGreaterThan(purchase);
+    expect(codes).toBeGreaterThan(retire);
+    expect(upsert).toBeGreaterThan(codes);
   });
 });
 

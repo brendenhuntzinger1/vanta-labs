@@ -12,10 +12,16 @@ import { supabaseAdmin } from "@/lib/supabase-server";
  *     and the backstop sweep — can ask at the same moment; a read-then-write
  *     lets both see "unsent". The unique key lets exactly one insert land.
  *   * 23505 (duplicate key) means somebody else has it: return false.
- *   * any OTHER failure returns TRUE. The ledger being unreachable must not
- *     silence the event; Omnisend deduplicates historical events on
- *     eventID + eventTime, so a rare duplicate costs nothing and a lost
- *     "paid for order" costs a post-purchase flow.
+ *   * any OTHER failure returns TRUE by default. The ledger being
+ *     unreachable must not silence the event; Omnisend deduplicates
+ *     historical events on eventID + eventTime, so a rare duplicate costs
+ *     nothing and a lost "paid for order" costs a post-purchase flow.
+ *   * ... unless the caller asks for `failClosed`, and then any other
+ *     failure returns FALSE. That is the contract for a claim that guards
+ *     MONEY rather than an event: the cart-offer sweep mints a discount code
+ *     and a gift behind its once-per-cart claim, and there is no upstream
+ *     dedup for those. With the table missing or the insert refused, a
+ *     fail-open claim would let every tick re-mint for every cart.
  *   * release deletes only an UNDELIVERED claim, so a delivered row can never
  *     be reopened by a late failure elsewhere.
  *
@@ -24,7 +30,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
  */
 
 export type OmnisendLedger = {
-  claimSend: (eventName: string, eventId: string) => Promise<boolean>;
+  claimSend: (eventName: string, eventId: string, options?: { failClosed?: boolean }) => Promise<boolean>;
   /**
    * Claim, or re-claim once the previous claim is older than the window.
    *
@@ -45,16 +51,17 @@ export type OmnisendLedger = {
 
 export function omnisendLedger(entityId: string): OmnisendLedger {
   const ledger: OmnisendLedger = {
-    claimSend: async (eventName, eventId) => {
+    claimSend: async (eventName, eventId, options) => {
+      const failClosed = options?.failClosed === true;
       try {
         const { error } = await supabaseAdmin
           .from("omnisend_events_sent")
           .insert({ entity_id: entityId, event_name: eventName, event_id: eventId, delivered: false });
         if (!error) return true;
         if ((error as { code?: string }).code === "23505") return false;
-        return true;
+        return !failClosed;
       } catch {
-        return true;
+        return !failClosed;
       }
     },
     claimSendWithin: async (eventName, eventId, windowMs) => {

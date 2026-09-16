@@ -9,6 +9,7 @@ import {
   splitName,
   type ChannelConsent,
   type ContactFacts,
+  type RecoveryGiftFacts,
 } from "@/lib/marketing/omnisend/contact-payload";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -33,8 +34,18 @@ const LOG = "[omnisend/contacts]";
 export type ContactExtras = {
   link?: ContactFacts["link"];
   codes?: ContactFacts["codes"];
-  /** The store-minted gift for Omnisend's abandoned-cart flow (cart-offers.ts). */
-  recoveryGift?: ContactFacts["recoveryGift"];
+  /**
+   * The store-minted gift for Omnisend's abandoned-cart flow (cart-offers.ts).
+   *
+   * THREE MEANINGS, passed through to the payload untouched: a gift is
+   * written; `null` CLEARS the vl_recovery_gift* properties; `undefined` (a
+   * push that is not about the gift) leaves whatever they hold. The
+   * cart-offer sweep is the one writer and always says which; every other
+   * caller leaves the gift alone, so an upsert from the paid hook or a
+   * preference change cannot wipe a gift the 72-hour message is about to
+   * show.
+   */
+  recoveryGift?: RecoveryGiftFacts | null;
 };
 
 type SubscriberRow = { email: string; source: string | null; opted_in_at: string | null; unsubscribed_at: string | null };
@@ -293,7 +304,8 @@ export async function collectContactFacts(email: string, extras: ContactExtras =
     referralCode: prefs?.referral_code ?? null,
     link: extras.link ?? null,
     codes: extras.codes ?? {},
-    recoveryGift: extras.recoveryGift ?? null,
+    // Untouched: undefined and null mean different things to the payload.
+    recoveryGift: extras.recoveryGift,
   };
 }
 

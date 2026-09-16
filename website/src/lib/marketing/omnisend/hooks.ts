@@ -109,6 +109,14 @@ async function contactExtras(email: string): Promise<ContactExtras> {
  * bought, then upsert the contact so the consent, the link and every live
  * code reach Omnisend together. A buyer who opts in later gets no welcome
  * code — the offer is for a first order.
+ *
+ * NOT FOR THE CHECKOUT OPT-IN. recordMarketingOptIn runs from create-session
+ * with source "checkout", BEFORE payment: a welcome code minted there is a
+ * first-order discount handed to someone in the middle of their first order,
+ * and the push would carry it into the welcome flow's first email at once.
+ * The consent still reaches Omnisend; the code waits for a sign-up or an
+ * account opt-in, and the paid hook retires it once a first order lands
+ * (order-hooks.ts onOrderPaid).
  */
 export async function onMarketingOptIn(email: string, source: string): Promise<void> {
   if (!omnisendActive().active) return;
@@ -117,7 +125,7 @@ export async function onMarketingOptIn(email: string, source: string): Promise<v
     if (!address) return;
     const facts = await collectContactFacts(address);
     if (!facts) return;
-    if (facts.orders === 0) await ensureContactCode("welcome", address);
+    if (source !== "checkout" && facts.orders === 0) await ensureContactCode("welcome", address);
     const accepted = await upsertOmnisendContact(address, await contactExtras(address));
     if (!accepted) console.error(LOG, "opt-in contact upsert refused", { source });
   } catch (error) {
@@ -168,35 +176,36 @@ async function cartHasInHouseStage(cartId: string): Promise<boolean> {
 }
 
 /**
- * Was this cart's arrival at the checkout just reported?
+ * Has this cart reached the checkout?
  *
- * The tracking beacon that says "reached checkout" carries the items too, so
- * the route stamps the checkout start AND tracks the cart in one request,
- * and after() runs the two hooks concurrently. An `added product to cart`
- * landing after `started checkout` would put the shopper back into
- * Omnisend's abandoned-cart flow they had just exited. Two reads, either of
- * which is enough: the row's first-touch stamp (set before trackCart ran) or
- * a `started checkout` claim inside the debounce window. Fails OPEN — a
- * cart event is the cheaper mistake.
+ * ONCE A CART HAS REACHED THE CHECKOUT, THE CHECKOUT FLOW OWNS IT. An `added
+ * product to cart` after `started checkout` would put the shopper back into
+ * Omnisend's abandoned-cart flow they had just left for the abandoned-
+ * checkout one, and the two flows would then mail the same inbox about the
+ * same cart. This used to ask only about the last ten minutes, so a cart
+ * edited later in the same session re-entered the cart flow. The question
+ * is the fact, not the time: the row's first-touch stamp (written by
+ * /api/cart/track before after() runs either hook), or a `started checkout`
+ * claim for the cart, whenever either was set. Fails OPEN — a cart event is
+ * the cheaper mistake.
  */
-async function checkoutReportedRecently(cartId: string): Promise<boolean> {
-  const since = Date.now() - CART_EVENT_DEBOUNCE_MS;
+async function cartReachedCheckout(cartId: string): Promise<boolean> {
   try {
     const [{ data: cart }, { data: claim }] = await Promise.all([
       supabaseAdmin.from("abandoned_carts").select("checkout_started_at").eq("id", cartId).maybeSingle(),
       supabaseAdmin
         .from("omnisend_events_sent")
-        .select("first_sent_at")
+        .select("entity_id")
         .eq("entity_id", cartId)
         .eq("event_name", "started checkout")
         .maybeSingle(),
     ]);
-    const stamped = Date.parse(String((cart as { checkout_started_at?: string | null } | null)?.checkout_started_at ?? ""));
-    if (Number.isFinite(stamped) && stamped >= since) return true;
-    const claimed = Date.parse(String((claim as { first_sent_at?: string | null } | null)?.first_sent_at ?? ""));
-    return Number.isFinite(claimed) && claimed >= since;
+    const stamped = Boolean((cart as { checkout_started_at?: string | null } | null)?.checkout_started_at);
+    if (stamped) return true;
+    const claimed = Boolean((claim as { entity_id?: string | null } | null)?.entity_id);
+    return claimed;
   } catch (error) {
-    console.error(LOG, "checkout stamp read failed; sending the cart event", cartId, error);
+    console.error(LOG, "checkout read failed; sending the cart event", cartId, error);
     return false;
   }
 }
@@ -276,14 +285,15 @@ export async function sendCartEventOnce(input: {
 
 /**
  * Cart changed, email known (trackCart): `added product to cart`, at most
- * once per cart per ten minutes, never for a cart the in-house ladder owns.
+ * once per cart per ten minutes, never for a cart the in-house ladder owns,
+ * and never again for a cart that has reached the checkout.
  */
 export async function onCartTracked(input: OmnisendCartHookInput): Promise<void> {
   if (!omnisendActive().active) return;
   try {
     if (!normalizeEmail(input.email) || !input.cartId || input.items.length === 0) return;
     if (await cartHasInHouseStage(input.cartId)) return;
-    if (await checkoutReportedRecently(input.cartId)) return;
+    if (await cartReachedCheckout(input.cartId)) return;
     await sendCartEventOnce({ name: "added product to cart", cart: input, campaign: "abandoned-cart", debounceMs: CART_EVENT_DEBOUNCE_MS });
   } catch (error) {
     console.error(LOG, "onCartTracked failed", input.cartId, error);

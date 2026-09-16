@@ -2,7 +2,7 @@ import "server-only";
 
 import { isProductPurchaseOrder } from "@/lib/ledger";
 import { omnisendActive } from "@/lib/marketing/omnisend/client";
-import { findLiveContactCode, type ContactCode, type ContactCodeKind } from "@/lib/marketing/omnisend/codes";
+import { findLiveContactCode, retireContactCode, type ContactCode, type ContactCodeKind } from "@/lib/marketing/omnisend/codes";
 import { upsertOmnisendContact, type ContactExtras } from "@/lib/marketing/omnisend/contacts";
 import {
   buildOrderEvent,
@@ -184,6 +184,12 @@ export async function onOrderPaid(orderId: string): Promise<boolean> {
     if (!isProductPurchaseOrder({ order_type: order.orderType, replacement_of: order.replacementOf })) return false;
 
     const email = order.email;
+    // A FIRST ORDER ENDS THE WELCOME CODE. It is a first-order discount (spec
+    // §3.4), and this is the first moment the store knows the first order
+    // happened, so it is retired BEFORE the live codes are read: the push
+    // below, the one that adds the `customer` tag, must not carry it. A code
+    // this order redeemed is already spent and is left as the record of that.
+    await retireContactCode("welcome", email);
     const [token, codes] = await Promise.all([signOmnisendLink(email), liveCodes(email)]);
     const link = token ? { token, endsAt: new Date(Date.now() + OMNISEND_LINK_TTL_MS).toISOString() } : null;
     // The upsert is not gated on the event ledger: a customer's order count
