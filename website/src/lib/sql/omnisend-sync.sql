@@ -35,3 +35,30 @@ create table if not exists public.omnisend_sync_state (
 );
 
 alter table public.omnisend_sync_state enable row level security;
+
+-- omnisend_consent_snapshot is the migration's evidence: one row per address
+-- the contacts push walks (the consented audience, the paid buyers and the
+-- suppression list), recording what the STORE said about that address at the
+-- instant the snapshot was taken, under a label. Taken once before the first
+-- write to Omnisend and again whenever the operator wants to prove that
+-- nothing widened consent; compared label against label, by address (see
+-- docs/omnisend/MIGRATION.md). Service-role only: RLS on, no policies.
+
+create table if not exists public.omnisend_consent_snapshot (
+  id bigserial primary key,
+  taken_at timestamptz not null,
+  label text not null,
+  email text not null,
+  email_status text not null,
+  sms_status text not null,
+  phone_present boolean not null,
+  sources jsonb not null,
+  suppressed_reason text null,
+  orders integer not null,
+  last_order_at timestamptz null
+);
+
+alter table public.omnisend_consent_snapshot enable row level security;
+
+create index if not exists omnisend_consent_snapshot_label_email
+  on public.omnisend_consent_snapshot (label, email);

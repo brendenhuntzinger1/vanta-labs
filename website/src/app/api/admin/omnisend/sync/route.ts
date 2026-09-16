@@ -2,19 +2,25 @@ import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageEmailCampaigns } from "@/lib/admin-roles";
 import { syncOmnisendCatalog } from "@/lib/marketing/omnisend/catalog-sync";
+import { snapshotOmnisendConsent } from "@/lib/marketing/omnisend/migration-snapshot";
 import { reconcileOmnisendContacts } from "@/lib/marketing/omnisend/reconcile";
+import { defaultSnapshotLabel, isValidSnapshotLabel } from "@/lib/marketing/omnisend/reconcile-plan";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 /**
  * "Run the Omnisend sync now" (design spec §4): the contacts reconcile or the
  * catalogue push, on demand, with a dry-run report so the owner can see what
- * WOULD be pushed before anything is.
+ * WOULD be pushed before anything is; and the consent snapshot, taken before
+ * the first live push so the migration can be checked afterwards
+ * (docs/omnisend/MIGRATION.md). Body: `{ what: "contacts" | "catalog" |
+ * "snapshot", dryRun?: boolean, label?: string }`. The contacts result
+ * carries the reconciliation report; nothing returned names an address.
  *
  * Gated exactly as the email automations route is — an admin session AND a
  * role that may manage email campaigns — because a contacts push hands every
  * consented address to a third party, which is a marketing decision, not a
- * support one. Neither job throws; the try below is defence in depth, and
- * what it returns is a fixed sentence, never the error.
+ * support one. None of the jobs throws; the try below is defence in depth,
+ * and what it returns is a fixed sentence, never the error.
  */
 
 export const dynamic = "force-dynamic";
@@ -34,14 +40,20 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   const what = body?.what;
   const dryRun = body?.dryRun === true;
-  if (what !== "contacts" && what !== "catalog") {
-    return NextResponse.json({ success: false, error: 'Unknown sync. Use "contacts" or "catalog".' }, { status: 400 });
+  const label = typeof body?.label === "string" && body.label.trim() ? body.label.trim() : defaultSnapshotLabel();
+  if (what !== "contacts" && what !== "catalog" && what !== "snapshot") {
+    return NextResponse.json({ success: false, error: 'Unknown sync. Use "contacts", "catalog" or "snapshot".' }, { status: 400 });
+  }
+  if (what === "snapshot" && !isValidSnapshotLabel(label)) {
+    return NextResponse.json({ success: false, error: "A snapshot label is 1 to 64 letters, digits or hyphens." }, { status: 400 });
   }
 
   try {
     const result = what === "contacts"
       ? await reconcileOmnisendContacts({ dryRun })
-      : await syncOmnisendCatalog();
+      : what === "catalog"
+        ? await syncOmnisendCatalog()
+        : await snapshotOmnisendConsent({ label });
 
     // A manual push to a third party is worth a line in the audit log: "who
     // sent the list to Omnisend, and when" should have an answer.
@@ -53,6 +65,7 @@ export async function POST(request: Request) {
         metadata: {
           what,
           dryRun,
+          ...(what === "snapshot" ? { label } : {}),
           result,
           performedAt: new Date().toISOString(),
           performedBy: session.username,

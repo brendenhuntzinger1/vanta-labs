@@ -118,7 +118,7 @@ describe("the write-back reads and advances the watermark in omnisend_sync_state
     expect(load).toBeGreaterThan(-1);
     expect(plan).toBeGreaterThan(load);
     expect(run.slice(load, plan)).toContain("if (!suppressed) {");
-    const loader = fn(reconcile, "loadSuppressed");
+    const loader = fn(reconcile, "loadSuppressionReasons");
     expect(loader).toContain('from("email_suppressions")');
     expect(loader).toMatch(/if \(truncated\) \{[\s\S]*?return null;/);
   });
@@ -197,7 +197,7 @@ describe("the push is batched, refreshed and never per-contact", () => {
     expect(buyers).toContain("if (!isProductPurchaseOrder(row)) continue;");
     expect(buyers).toContain("isNonMailableAddress(email)");
     const push = fn(reconcile, "runPush");
-    expect(push).toContain("if (!input.audience.has(email)) targets.push(email);");
+    expect(push).toContain("orderPushTargets(input.audience, buyers)");
   });
 
   it("is bounded: a push limit and a time budget", () => {
@@ -205,6 +205,94 @@ describe("the push is batched, refreshed and never per-contact", () => {
     const push = fn(reconcile, "runPush");
     expect(push).toContain("targets.slice(0, input.limit)");
     expect(push).toContain("if (Date.now() > input.deadline) {");
+  });
+
+  it("orders its targets through the pure planner, and exports its loaders for the snapshot", () => {
+    const push = fn(reconcile, "runPush");
+    expect(push).toContain("orderPushTargets(input.audience, buyers)");
+    expect(reconcile).toContain("export async function loadAudience(");
+    expect(reconcile).toContain("export async function loadPaidBuyers(");
+    expect(reconcile).toContain("export async function loadSuppressionReasons(");
+    expect(reconcile).toContain("export async function mapWithConcurrency<");
+  });
+
+  it("derives the suppression set from the reasons map, which is read in full or not at all", () => {
+    const reasons = fn(reconcile, "loadSuppressionReasons");
+    expect(reasons).toMatch(/from\("email_suppressions"\)\s*\.select\("email, reason"\)/);
+    expect(reasons).toMatch(/if \(truncated\) \{[\s\S]*?return null;/);
+    const loader = fn(reconcile, "loadSuppressed");
+    expect(loader).toContain("await loadSuppressionReasons()");
+    expect(loader).toContain("new Set(reasons.keys())");
+  });
+});
+
+describe("the migration is accountable: report, batch polling and the cutoff", () => {
+  const entry = fn(reconcile, "reconcileOmnisendContacts");
+
+  it("returns a report built from the pure shape, with counts and batch ids only", () => {
+    expect(reconcile).toContain("report: emptyReconcileReport()");
+    expect(reconcile).toMatch(/report: OmnisendReconcileReport;/);
+  });
+
+  it("counts Omnisend's contacts by paging GET /contacts at 250, at most 40 pages, and says when it capped", () => {
+    const count = fn(reconcile, "countOmnisendContacts");
+    expect(reconcile).toContain("const MAX_CONTACT_PAGES = 40;");
+    expect(count).toContain("for (let page = 0; page < MAX_CONTACT_PAGES; page += 1)");
+    expect(count).toContain("limit: String(CONTACTS_PAGE_SIZE)");
+    expect(count).toContain('method: "GET", path: `/contacts?${query.toString()}`');
+    expect(count).toContain("countContactsOnPage(result.body)");
+    expect(count).toContain("return { count, capped: true, complete: false };");
+    // Before the write-back, so the "before" number predates every change this run makes.
+    const before = entry.indexOf("await countOmnisendContacts()");
+    const writeBack = entry.indexOf("await runWriteBack(");
+    expect(before).toBeGreaterThan(-1);
+    expect(before).toBeLessThan(writeBack);
+  });
+
+  it("remembers every batch id the push submitted", () => {
+    const push = fn(reconcile, "runPush");
+    const post = push.indexOf('path: "/batches"');
+    const parse = push.indexOf("parseBatchSubmission(result.body)");
+    expect(parse).toBeGreaterThan(post);
+    expect(push).toContain("outcome.batchIds.push(submission.id)");
+    expect(entry).toContain("rememberBatches(records, push.submissions, now)");
+    expect(entry).toContain("await writeBatchRecords(");
+  });
+
+  it("polls the unfinished batches from the last runs before pushing, and folds their errors into unresolved", () => {
+    const poll = fn(reconcile, "pollBatches");
+    expect(poll).toContain("await readBatchRecords()");
+    expect(poll).toContain("batchUnfinished(record)");
+    expect(poll).toContain("path: `/batches/${encodeURIComponent(record.id)}`");
+    expect(poll).toContain("applyBatchRead(record, parseBatchStatus(result.body), input.now)");
+    expect(poll).toContain("retries: 0");
+    const polled = entry.indexOf("await pollBatches(");
+    const push = entry.indexOf("await runPush(");
+    expect(polled).toBeGreaterThan(-1);
+    expect(polled).toBeLessThan(push);
+    expect(entry).toContain("report.unresolved.push(...batchNotes(");
+  });
+
+  it("records the migration cutoff once, before the first live push, never on a dry run", () => {
+    const cutoff = entry.indexOf("await recordMigrationCutoff(now)");
+    const push = entry.indexOf("await runPush(");
+    expect(cutoff).toBeGreaterThan(-1);
+    expect(cutoff).toBeLessThan(push);
+    expect(entry.slice(cutoff - 40, cutoff)).toContain("if (!dryRun)");
+    expect(entry.match(/recordMigrationCutoff\(/g)).toHaveLength(1);
+  });
+
+  it("never logs an address: the contact build failure names the domain only", () => {
+    const build = fn(reconcile, "buildContactItem");
+    expect(build).not.toContain("{ email, error }");
+    expect(build).toContain("domain: email.slice(email.indexOf(\"@\") + 1)");
+    // No log object carries the address as a value: neither the shorthand
+    // `{ email }` nor `{ anything: email }`. Deriving the domain from it is fine.
+    const logs = reconcile.match(/console\.\w+\([^\n]*/g) ?? [];
+    for (const line of logs) {
+      expect(line).not.toMatch(/[{,]\s*email\s*[,}]/);
+      expect(line).not.toMatch(/:\s*email\s*[,}]/);
+    }
   });
 });
 
@@ -230,12 +318,22 @@ describe("the admin sync route", () => {
     expect(route).not.toMatch(/export async function (GET|PUT|PATCH|DELETE)\(/);
   });
 
-  it("refuses an unknown `what` with a 400 and runs exactly the two jobs", () => {
-    expect(route).toContain('if (what !== "contacts" && what !== "catalog") {');
-    expect(route).toMatch(/what !== "contacts" && what !== "catalog"\) \{\s*return NextResponse\.json\([^;]*\{ status: 400 \}\);/);
+  it("refuses an unknown `what` with a 400 and runs exactly the three jobs", () => {
+    expect(route).toContain('if (what !== "contacts" && what !== "catalog" && what !== "snapshot") {');
+    expect(route).toMatch(/what !== "contacts" && what !== "catalog" && what !== "snapshot"\) \{\s*return NextResponse\.json\([^;]*\{ status: 400 \}\);/);
     expect(route).toContain("await reconcileOmnisendContacts({ dryRun })");
     expect(route).toContain("await syncOmnisendCatalog()");
+    expect(route).toContain("await snapshotOmnisendConsent({ label })");
     expect(route).toContain("return NextResponse.json({ success: true, result });");
+  });
+
+  it("labels a snapshot from the body, defaulting to pre-migration-<date>, and refuses a label it cannot store", () => {
+    expect(route).toContain('typeof body?.label === "string" && body.label.trim() ? body.label.trim() : defaultSnapshotLabel()');
+    expect(route).toMatch(/if \(what === "snapshot" && !isValidSnapshotLabel\(label\)\) \{\s*return NextResponse\.json\([^;]*\{ status: 400 \}\);/);
+    const validate = route.indexOf("isValidSnapshotLabel(label)");
+    const run = route.indexOf("await snapshotOmnisendConsent({ label })");
+    expect(validate).toBeGreaterThan(-1);
+    expect(run).toBeGreaterThan(validate);
   });
 
   it("never leaks a stack trace or an error message to the client", () => {

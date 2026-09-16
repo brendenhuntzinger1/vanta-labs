@@ -1,9 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_BATCH_RECORDS,
+  applyBatchRead,
+  batchNotes,
+  batchUnfinished,
+  countContactsOnPage,
+  defaultSnapshotLabel,
+  emptyReconcileReport,
+  isValidSnapshotLabel,
   latestUpdatedAt,
+  orderPushTargets,
+  parseBatchRecords,
+  parseBatchStatus,
+  parseBatchSubmission,
   parseOmnisendContacts,
   parseOmnisendPaging,
   planWriteBack,
+  rememberBatches,
+  type BatchRecord,
   type OmnisendContactRead,
 } from "@/lib/marketing/omnisend/reconcile-plan";
 
@@ -243,5 +257,256 @@ describe("latestUpdatedAt picks the newest instant for the next watermark", () =
   it("ignores blanks and unparseable values, and is null for none", () => {
     expect(latestUpdatedAt([contact({ updatedAt: null }), contact({ updatedAt: "yesterday" }), contact({})])).toBeNull();
     expect(latestUpdatedAt([])).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Batches are asynchronous: POST /batches answers { batchID, totalCount } and
+// GET /batches/{batchID} reports { status, totalCount, finishedCount,
+// errorsCount, ... } with status pending → inProgress → finished | stopped.
+// The reconcile remembers what it submitted and folds what it learns on the
+// next run into the report; the bookkeeping is pure and pinned here.
+// ---------------------------------------------------------------------------
+
+describe("parseBatchSubmission reads the POST /batches answer", () => {
+  it("returns the batch id and the item count", () => {
+    expect(parseBatchSubmission({ batchID: "5f92cbf10cf217478ba93561", totalCount: 2 }))
+      .toEqual({ id: "5f92cbf10cf217478ba93561", totalCount: 2 });
+  });
+
+  it("tolerates a missing count and refuses a missing id", () => {
+    expect(parseBatchSubmission({ batchID: "abc" })).toEqual({ id: "abc", totalCount: null });
+    expect(parseBatchSubmission({ batchID: "abc", totalCount: "two" })).toEqual({ id: "abc", totalCount: null });
+    for (const body of [null, undefined, "", 7, [], {}, { batchID: "" }, { batchID: 12 }, { totalCount: 2 }]) {
+      expect(parseBatchSubmission(body)).toBeNull();
+    }
+  });
+});
+
+describe("parseBatchStatus reads the GET /batches/{batchID} answer", () => {
+  it("maps the documented fields and nothing else", () => {
+    expect(parseBatchStatus({
+      batchID: "5f92cbf10cf217478ba93561",
+      status: "finished",
+      endpoint: "contacts",
+      method: "POST",
+      totalCount: 2,
+      finishedCount: 2,
+      errorsCount: 0,
+      createdAt: "2021-01-01T00:00:00Z",
+      startedAt: "2021-01-01T00:00:01Z",
+      endedAt: "2021-01-01T00:00:05Z",
+    })).toEqual({
+      id: "5f92cbf10cf217478ba93561",
+      status: "finished",
+      totalCount: 2,
+      finishedCount: 2,
+      errorsCount: 0,
+      endedAt: "2021-01-01T00:00:05Z",
+    });
+  });
+
+  it("reads every lifecycle status and nothing outside it", () => {
+    for (const status of ["pending", "inProgress", "finished", "stopped"]) {
+      expect(parseBatchStatus({ batchID: "x", status }).status).toBe(status);
+    }
+    expect(parseBatchStatus({ batchID: "x", status: "FINISHED" }).status).toBeNull();
+    expect(parseBatchStatus({ batchID: "x", status: "done" }).status).toBeNull();
+    expect(parseBatchStatus({ batchID: "x" }).status).toBeNull();
+  });
+
+  it("reads junk as nulls, never as counts", () => {
+    expect(parseBatchStatus({ batchID: "x", totalCount: "2", finishedCount: -1, errorsCount: 1.5, endedAt: 3 }))
+      .toEqual({ id: "x", status: null, totalCount: null, finishedCount: null, errorsCount: null, endedAt: null });
+    for (const body of [null, undefined, "", 7, [], {}]) {
+      expect(parseBatchStatus(body)).toEqual({ id: null, status: null, totalCount: null, finishedCount: null, errorsCount: null, endedAt: null });
+    }
+  });
+});
+
+function record(overrides: Partial<BatchRecord>): BatchRecord {
+  return {
+    id: "b1",
+    submittedAt: "2026-09-16T01:00:00Z",
+    status: "unknown",
+    totalCount: 100,
+    finishedCount: null,
+    errorsCount: null,
+    checkedAt: null,
+    ...overrides,
+  };
+}
+
+describe("rememberBatches keeps the last fifty submissions", () => {
+  it("appends a submission as unknown until it is polled", () => {
+    const records = rememberBatches([], [{ id: "b1", totalCount: 100 }], "2026-09-16T01:00:00Z");
+    expect(records).toEqual([record({ id: "b1" })]);
+  });
+
+  it("does not duplicate an id already remembered", () => {
+    const existing = [record({ id: "b1", status: "finished", finishedCount: 100, errorsCount: 0, checkedAt: "2026-09-16T02:00:00Z" })];
+    const records = rememberBatches(existing, [{ id: "b1", totalCount: 100 }, { id: "b2", totalCount: 7 }], "2026-09-17T01:00:00Z");
+    expect(records.map((entry) => entry.id)).toEqual(["b1", "b2"]);
+    expect(records[0]).toEqual(existing[0]);
+    expect(records[1]).toEqual(record({ id: "b2", totalCount: 7, submittedAt: "2026-09-17T01:00:00Z" }));
+  });
+
+  it("drops the oldest submissions past the bound, newest kept", () => {
+    expect(MAX_BATCH_RECORDS).toBe(50);
+    const existing = Array.from({ length: 50 }, (_, index) =>
+      record({ id: `old-${index}`, submittedAt: `2026-09-01T00:00:${String(index).padStart(2, "0")}Z` }));
+    const records = rememberBatches(existing, [{ id: "new-1", totalCount: 1 }, { id: "new-2", totalCount: 1 }], "2026-09-16T01:00:00Z");
+    expect(records).toHaveLength(50);
+    expect(records[0].id).toBe("old-2");
+    expect(records[49].id).toBe("new-2");
+  });
+
+  it("orders by submission instant, not by array position", () => {
+    const existing = [
+      record({ id: "later", submittedAt: "2026-09-16T05:00:00Z" }),
+      record({ id: "earlier", submittedAt: "2026-09-16T01:00:00Z" }),
+    ];
+    const records = rememberBatches(existing, [], "2026-09-16T06:00:00Z");
+    expect(records.map((entry) => entry.id)).toEqual(["earlier", "later"]);
+  });
+});
+
+describe("parseBatchRecords reads the omnisend_sync_state row defensively", () => {
+  it("round-trips what rememberBatches wrote", () => {
+    const records = rememberBatches([], [{ id: "b1", totalCount: 3 }], "2026-09-16T01:00:00Z");
+    expect(parseBatchRecords({ batches: JSON.parse(JSON.stringify(records)) })).toEqual(records);
+  });
+
+  it("drops entries without an id or a submission instant, and normalises the rest", () => {
+    expect(parseBatchRecords({
+      batches: [
+        {
+          id: "ok",
+          submittedAt: "2026-09-16T01:00:00Z",
+          status: "finished",
+          totalCount: 1,
+          finishedCount: 1,
+          errorsCount: 0,
+          checkedAt: "2026-09-16T02:00:00Z",
+        },
+        { id: "odd", submittedAt: "2026-09-16T01:00:00Z", status: "weird", totalCount: "1" },
+        { submittedAt: "2026-09-16T01:00:00Z" },
+        { id: "no-time" },
+        null,
+        "x",
+      ],
+    })).toEqual([
+      record({ id: "ok", status: "finished", totalCount: 1, finishedCount: 1, errorsCount: 0, checkedAt: "2026-09-16T02:00:00Z" }),
+      record({ id: "odd", status: "unknown", totalCount: null }),
+    ]);
+  });
+
+  it("is empty for anything that is not the row", () => {
+    for (const value of [null, undefined, "", 7, [], {}, { batches: "x" }, { batches: null }]) {
+      expect(parseBatchRecords(value)).toEqual([]);
+    }
+  });
+});
+
+describe("applyBatchRead folds a poll into the record", () => {
+  it("records the status and counts with the instant they were read", () => {
+    const read = parseBatchStatus({ batchID: "b1", status: "stopped", totalCount: 100, finishedCount: 40, errorsCount: 3 });
+    expect(applyBatchRead(record({ id: "b1" }), read, "2026-09-16T03:00:00Z")).toEqual(
+      record({ id: "b1", status: "stopped", totalCount: 100, finishedCount: 40, errorsCount: 3, checkedAt: "2026-09-16T03:00:00Z" }),
+    );
+  });
+
+  it("keeps what it knew when the poll answered without a status or count", () => {
+    const known = record({ id: "b1", status: "inProgress", totalCount: 100, finishedCount: 10, errorsCount: 0 });
+    const read = parseBatchStatus({ batchID: "b1" });
+    expect(applyBatchRead(known, read, "2026-09-16T03:00:00Z")).toEqual({ ...known, checkedAt: "2026-09-16T03:00:00Z" });
+  });
+});
+
+describe("batchUnfinished says which records still need a poll", () => {
+  it("is true for unknown, pending and inProgress, false once finished or stopped", () => {
+    expect(batchUnfinished(record({ status: "unknown" }))).toBe(true);
+    expect(batchUnfinished(record({ status: "pending" }))).toBe(true);
+    expect(batchUnfinished(record({ status: "inProgress" }))).toBe(true);
+    expect(batchUnfinished(record({ status: "finished" }))).toBe(false);
+    expect(batchUnfinished(record({ status: "stopped" }))).toBe(false);
+  });
+});
+
+describe("batchNotes names what did not resolve, by batch id and count only", () => {
+  it("is silent for a finished batch without errors", () => {
+    expect(batchNotes([record({ status: "finished", finishedCount: 100, errorsCount: 0 })])).toEqual([]);
+  });
+
+  it("reports item errors on a finished batch", () => {
+    expect(batchNotes([record({ id: "b1", status: "finished", totalCount: 100, finishedCount: 100, errorsCount: 2 })]))
+      .toEqual(["batch b1 finished with 2 item error(s) of 100"]);
+  });
+
+  it("reports a stopped batch with what it managed", () => {
+    expect(batchNotes([record({ id: "b2", status: "stopped", totalCount: 100, finishedCount: 40, errorsCount: 1 })]))
+      .toEqual(["batch b2 stopped after 40 of 100 items, 1 item error(s)"]);
+    expect(batchNotes([record({ id: "b3", status: "stopped" })]))
+      .toEqual(["batch b3 stopped after ? of 100 items, ? item error(s)"]);
+  });
+
+  it("reports a batch Omnisend has not finished yet", () => {
+    expect(batchNotes([
+      record({ id: "b4", status: "pending" }),
+      record({ id: "b5", status: "inProgress" }),
+      record({ id: "b6", status: "unknown" }),
+    ])).toEqual(["batch b4 not finished (pending)", "batch b5 not finished (inProgress)", "batch b6 not finished (unknown)"]);
+  });
+});
+
+describe("countContactsOnPage counts a GET /contacts page without reading it", () => {
+  it("counts every entry in the contacts array, identifiers or not", () => {
+    expect(countContactsOnPage(envelope)).toBe(2);
+    expect(countContactsOnPage({ contacts: [{}, null, { identifiers: [] }] })).toBe(3);
+  });
+
+  it("is zero for anything that is not the envelope", () => {
+    for (const body of [null, undefined, "", 7, [], {}, { contacts: "x" }, { contacts: null }]) {
+      expect(countContactsOnPage(body)).toBe(0);
+    }
+  });
+});
+
+describe("orderPushTargets puts the consented audience first, then buyers without consent", () => {
+  it("sorts each set and never lists an address twice", () => {
+    const targets = orderPushTargets(new Set(["b@example.com", "a@example.com"]), new Set(["c@example.com", "a@example.com"]));
+    expect(targets).toEqual(["a@example.com", "b@example.com", "c@example.com"]);
+  });
+
+  it("is empty for empty sets", () => {
+    expect(orderPushTargets(new Set(), new Set())).toEqual([]);
+  });
+});
+
+describe("snapshot labels", () => {
+  it("defaults to pre-migration-<UTC date>", () => {
+    expect(defaultSnapshotLabel(Date.parse("2026-09-16T23:59:59Z"))).toBe("pre-migration-2026-09-16");
+    expect(defaultSnapshotLabel(Date.parse("2026-09-17T00:00:00Z"))).toBe("pre-migration-2026-09-17");
+  });
+
+  it("accepts a short slug and refuses anything that is not one", () => {
+    for (const label of ["pre-migration-2026-09-16", "post-cutover-1", "A", "x".repeat(64)]) {
+      expect(isValidSnapshotLabel(label), label).toBe(true);
+    }
+    for (const label of ["", " ", "-leading", "has space", "has/slash", "x".repeat(65), "tab\t", "émigré"]) {
+      expect(isValidSnapshotLabel(label), JSON.stringify(label)).toBe(false);
+    }
+  });
+});
+
+describe("emptyReconcileReport is every counter at zero and nothing unresolved", () => {
+  it("has the documented shape", () => {
+    expect(emptyReconcileReport()).toEqual({
+      store: { consented: 0, buyersWithoutConsent: 0, suppressed: 0, smsConsented: 0, nonMailable: 0 },
+      omnisend: { contactsBefore: 0, contactsAfter: 0, capped: false },
+      push: { submitted: 0, batches: 0, batchIds: [], failedBatches: 0 },
+      writeBack: { suppressed: 0, smsOptOuts: 0, formSubscribers: 0 },
+      unresolved: [],
+    });
   });
 });

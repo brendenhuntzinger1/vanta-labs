@@ -172,3 +172,242 @@ export function latestUpdatedAt(contacts: OmnisendContactRead[]): string | null 
   }
   return latest?.text ?? null;
 }
+
+/** How many contacts a `GET /contacts` page carries, counted without reading any of them. */
+export function countContactsOnPage(body: unknown): number {
+  const root = asRecord(body);
+  return Array.isArray(root?.contacts) ? root.contacts.length : 0;
+}
+
+/**
+ * The order the push visits addresses in: the consented audience first, so
+ * the people Omnisend may actually mail are the ones a capped run is sure to
+ * refresh, then every buyer the store has no consent for (pushed as
+ * nonSubscribed, for segments and lifetime value only). Sorted so two runs
+ * over the same store walk the same list, and never an address twice.
+ */
+export function orderPushTargets(audience: Set<string>, buyers: Set<string>): string[] {
+  const targets = [...audience].sort();
+  for (const email of [...buyers].sort()) {
+    if (!audience.has(email)) targets.push(email);
+  }
+  return targets;
+}
+
+// ---------------------------------------------------------------------------
+// Batches. Omnisend processes a batch in the background: POST /batches answers
+// { batchID, totalCount } at once, and GET /batches/{batchID} later reports
+// { status, totalCount, finishedCount, errorsCount, createdAt, startedAt,
+// endedAt } with status pending → inProgress → finished | stopped. A 200 on
+// the POST therefore proves nothing about the contacts; what happened to
+// them is only known on the next run, which is why the ids are remembered.
+// ---------------------------------------------------------------------------
+
+export type OmnisendBatchStatus = "pending" | "inProgress" | "finished" | "stopped";
+
+/** `POST /batches`, reduced to what is remembered. */
+export type BatchSubmission = { id: string; totalCount: number | null };
+
+/** `GET /batches/{batchID}`, reduced to what the report reads. */
+export type OmnisendBatchRead = {
+  id: string | null;
+  status: OmnisendBatchStatus | null;
+  totalCount: number | null;
+  finishedCount: number | null;
+  errorsCount: number | null;
+  endedAt: string | null;
+};
+
+/** One remembered submission, as stored under omnisend_sync_state "batches". */
+export type BatchRecord = {
+  id: string;
+  submittedAt: string;
+  /** The last status a poll reported; "unknown" until the first poll answers. */
+  status: OmnisendBatchStatus | "unknown";
+  totalCount: number | null;
+  finishedCount: number | null;
+  errorsCount: number | null;
+  checkedAt: string | null;
+};
+
+/** Enough to see a full nightly push (2000 contacts is 20 batches) with room for a bad week. */
+export const MAX_BATCH_RECORDS = 50;
+
+function countOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function batchStatusOf(value: unknown): OmnisendBatchStatus | null {
+  return value === "pending" || value === "inProgress" || value === "finished" || value === "stopped" ? value : null;
+}
+
+export function parseBatchSubmission(body: unknown): BatchSubmission | null {
+  const root = asRecord(body);
+  const id = textOrNull(root?.batchID);
+  if (!id) return null;
+  return { id, totalCount: countOrNull(root?.totalCount) };
+}
+
+export function parseBatchStatus(body: unknown): OmnisendBatchRead {
+  const root = asRecord(body);
+  return {
+    id: textOrNull(root?.batchID),
+    status: batchStatusOf(root?.status),
+    totalCount: countOrNull(root?.totalCount),
+    finishedCount: countOrNull(root?.finishedCount),
+    errorsCount: countOrNull(root?.errorsCount),
+    endedAt: textOrNull(root?.endedAt),
+  };
+}
+
+function submittedAtOf(record: BatchRecord): number {
+  const at = Date.parse(record.submittedAt);
+  return Number.isFinite(at) ? at : 0;
+}
+
+/** The stored `{ batches: [...] }` value, read defensively: a junk entry is dropped, a junk field is null. */
+export function parseBatchRecords(value: unknown): BatchRecord[] {
+  const root = asRecord(value);
+  const list = Array.isArray(root?.batches) ? root.batches : [];
+  const records: BatchRecord[] = [];
+  for (const raw of list) {
+    const entry = asRecord(raw);
+    const id = textOrNull(entry?.id);
+    const submittedAt = textOrNull(entry?.submittedAt);
+    if (!entry || !id || !submittedAt) continue;
+    records.push({
+      id,
+      submittedAt,
+      status: batchStatusOf(entry.status) ?? "unknown",
+      totalCount: countOrNull(entry.totalCount),
+      finishedCount: countOrNull(entry.finishedCount),
+      errorsCount: countOrNull(entry.errorsCount),
+      checkedAt: textOrNull(entry.checkedAt),
+    });
+  }
+  return records;
+}
+
+/**
+ * The remembered list after this run's submissions: known ids keep what a
+ * poll already told us, new ids start as unknown, and only the newest
+ * MAX_BATCH_RECORDS survive, ordered by submission instant.
+ */
+export function rememberBatches(existing: BatchRecord[], submitted: BatchSubmission[], submittedAt: string): BatchRecord[] {
+  const byId = new Map<string, BatchRecord>();
+  for (const record of existing) byId.set(record.id, record);
+  for (const submission of submitted) {
+    if (byId.has(submission.id)) continue;
+    byId.set(submission.id, {
+      id: submission.id,
+      submittedAt,
+      status: "unknown",
+      totalCount: submission.totalCount,
+      finishedCount: null,
+      errorsCount: null,
+      checkedAt: null,
+    });
+  }
+  return [...byId.values()]
+    .sort((a, b) => submittedAtOf(a) - submittedAtOf(b))
+    .slice(-MAX_BATCH_RECORDS);
+}
+
+export function batchUnfinished(record: BatchRecord): boolean {
+  return record.status !== "finished" && record.status !== "stopped";
+}
+
+/** A poll's answer folded into the record; a field the poll did not carry keeps its last value. */
+export function applyBatchRead(record: BatchRecord, read: OmnisendBatchRead, checkedAt: string): BatchRecord {
+  return {
+    ...record,
+    status: read.status ?? record.status,
+    totalCount: read.totalCount ?? record.totalCount,
+    finishedCount: read.finishedCount ?? record.finishedCount,
+    errorsCount: read.errorsCount ?? record.errorsCount,
+    checkedAt,
+  };
+}
+
+function countText(value: number | null): string {
+  return value === null ? "?" : String(value);
+}
+
+/**
+ * What the report cannot yet call resolved, one line per batch. Ids and
+ * counts only: a batch note never names an address.
+ */
+export function batchNotes(records: BatchRecord[]): string[] {
+  const notes: string[] = [];
+  for (const record of records) {
+    if (record.status === "finished") {
+      if ((record.errorsCount ?? 0) > 0) {
+        notes.push(`batch ${record.id} finished with ${countText(record.errorsCount)} item error(s) of ${countText(record.totalCount)}`);
+      }
+    } else if (record.status === "stopped") {
+      notes.push(
+        `batch ${record.id} stopped after ${countText(record.finishedCount)} of ${countText(record.totalCount)} items, `
+        + `${countText(record.errorsCount)} item error(s)`,
+      );
+    } else {
+      notes.push(`batch ${record.id} not finished (${record.status})`);
+    }
+  }
+  return notes;
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot labels. A label names one consent snapshot; the operator compares
+// two of them. Short and plain so it can sit in a SQL literal and a log line.
+// ---------------------------------------------------------------------------
+
+const SNAPSHOT_LABEL = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
+
+/** `pre-migration-<UTC date>`: the label the admin route uses when none is given. */
+export function defaultSnapshotLabel(nowMs = Date.now()): string {
+  return `pre-migration-${new Date(nowMs).toISOString().slice(0, 10)}`;
+}
+
+export function isValidSnapshotLabel(label: string): boolean {
+  return SNAPSHOT_LABEL.test(label);
+}
+
+// ---------------------------------------------------------------------------
+// The reconciliation report. Every field is a count or a batch id; no
+// address, phone number, token or code is ever carried here, because the
+// report is returned to the admin browser and written to the audit log.
+// ---------------------------------------------------------------------------
+
+export type OmnisendReconcileReport = {
+  /** What the store says, at the start of the run. */
+  store: {
+    /** The consented audience: both consent stores, minus suppressions and non-mailable sinks. */
+    consented: number;
+    /** Paid product buyers outside the consented audience; pushed as nonSubscribed. */
+    buyersWithoutConsent: number;
+    /** Rows on email_suppressions. */
+    suppressed: number;
+    /** Contacts walked this run whose account carries SMS consent with a number. */
+    smsConsented: number;
+    /** Buyer addresses dropped because they are provider sinks or otherwise non-mailable. */
+    nonMailable: number;
+  };
+  /** Omnisend's own contact count, paged at 250; `capped` when the page ceiling stopped the count. */
+  omnisend: { contactsBefore: number; contactsAfter: number; capped: boolean };
+  /** What went out (or, in a dry run, what would have). */
+  push: { submitted: number; batches: number; batchIds: string[]; failedBatches: number };
+  /** What Omnisend changed in the store. */
+  writeBack: { suppressed: number; smsOptOuts: number; formSubscribers: number };
+  /** Everything the run could not settle, one line each, counts and ids only. */
+  unresolved: string[];
+};
+
+export function emptyReconcileReport(): OmnisendReconcileReport {
+  return {
+    store: { consented: 0, buyersWithoutConsent: 0, suppressed: 0, smsConsented: 0, nonMailable: 0 },
+    omnisend: { contactsBefore: 0, contactsAfter: 0, capped: false },
+    push: { submitted: 0, batches: 0, batchIds: [], failedBatches: 0 },
+    writeBack: { suppressed: 0, smsOptOuts: 0, formSubscribers: 0 },
+    unresolved: [],
+  };
+}

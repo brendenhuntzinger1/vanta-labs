@@ -15,11 +15,28 @@ import { buildContactPayload, type ContactFacts } from "@/lib/marketing/omnisend
 import { collectContactFacts } from "@/lib/marketing/omnisend/contacts";
 import { OMNISEND_LINK_TTL_MS, signOmnisendLink } from "@/lib/marketing/omnisend/link-token";
 import {
+  readBatchRecords,
+  recordMigrationCutoff,
+  writeBatchRecords,
+} from "@/lib/marketing/omnisend/migration-state";
+import {
+  applyBatchRead,
+  batchNotes,
+  batchUnfinished,
+  countContactsOnPage,
+  emptyReconcileReport,
   latestUpdatedAt,
+  orderPushTargets,
+  parseBatchStatus,
+  parseBatchSubmission,
   parseOmnisendContacts,
   parseOmnisendPaging,
   planWriteBack,
+  rememberBatches,
+  type BatchRecord,
+  type BatchSubmission,
   type OmnisendContactRead,
+  type OmnisendReconcileReport,
 } from "@/lib/marketing/omnisend/reconcile-plan";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 import { supabaseAdmin } from "@/lib/supabase-server";
@@ -52,9 +69,18 @@ import { supabaseAdmin } from "@/lib/supabase-server";
  * unsubscribed). A run that cannot read the suppression list skips the
  * write-back entirely rather than guessing.
  *
+ * ACCOUNTABILITY (docs/omnisend/MIGRATION.md). Every run also returns a
+ * report that accounts for every record as counts — what the store holds,
+ * what Omnisend holds before and after, what went out in which batches,
+ * what came back, and what could not be settled — and never an address.
+ * Omnisend processes a batch in the background, so the ids it returns are
+ * remembered in omnisend_sync_state and polled on the next run; a batch
+ * that stopped or finished with item errors is reported there rather than
+ * lost. The first live push records the migration cutoff, once.
+ *
  * Never throws: it runs from cron and from an admin button, and neither may
  * fail over a marketing sync. Whatever went wrong is in the log under
- * `[omnisend/reconcile]` and in `skipped`.
+ * `[omnisend/reconcile]`, in `skipped` and in `report.unresolved`.
  */
 
 const LOG = "[omnisend/reconcile]";
@@ -102,6 +128,8 @@ export type OmnisendReconcileResult = {
   winbackCodes: number;
   dryRun: boolean;
   skipped: string | null;
+  /** Counts and batch ids only; see reconcile-plan.ts. */
+  report: OmnisendReconcileReport;
 };
 
 function normalizeEmail(value: unknown): string | null {
@@ -115,7 +143,7 @@ function chunk<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
-async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+export async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array<R>(items.length);
   let next = 0;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -197,13 +225,18 @@ async function fetchChangedContacts(watermark: string | null): Promise<{ contact
   return { contacts, complete: false };
 }
 
-/** Null when the list could not be read IN FULL: a short suppression list is not a suppression list. */
-async function loadSuppressed(): Promise<Set<string> | null> {
+/**
+ * Every suppressed address with the reason recorded against it, or null when
+ * the list could not be read IN FULL: a short suppression list is not a
+ * suppression list. The consent snapshot records the reason; the write-back
+ * only needs the keys.
+ */
+export async function loadSuppressionReasons(): Promise<Map<string, string | null> | null> {
   try {
-    const { rows, truncated } = await readAllRowsBounded<{ email: string }>(
+    const { rows, truncated } = await readAllRowsBounded<{ email: string; reason: string | null }>(
       (from, to) => supabaseAdmin
         .from("email_suppressions")
-        .select("email")
+        .select("email, reason")
         .order("email", { ascending: true })
         .range(from, to),
       { maxRows: MAX_STORE_ROWS, label: "omnisend suppression read" },
@@ -212,10 +245,10 @@ async function loadSuppressed(): Promise<Set<string> | null> {
       console.error(LOG, "suppression list truncated; write-back skipped");
       return null;
     }
-    const suppressed = new Set<string>();
+    const suppressed = new Map<string, string | null>();
     for (const row of rows) {
       const email = normalizeEmail(row.email);
-      if (email) suppressed.add(email);
+      if (email) suppressed.set(email, typeof row.reason === "string" && row.reason.trim() ? row.reason.trim() : null);
     }
     return suppressed;
   } catch (error) {
@@ -224,8 +257,14 @@ async function loadSuppressed(): Promise<Set<string> | null> {
   }
 }
 
+/** The suppressed addresses alone, with the same all-or-nothing contract. */
+async function loadSuppressed(): Promise<Set<string> | null> {
+  const reasons = await loadSuppressionReasons();
+  return reasons ? new Set(reasons.keys()) : null;
+}
+
 /** The union of both consent stores minus suppressions, or null when it could not be read in full. */
-async function loadAudience(): Promise<Set<string> | null> {
+export async function loadAudience(): Promise<Set<string> | null> {
   try {
     return (await loadConsentedAudience()).all;
   } catch (error) {
@@ -322,16 +361,26 @@ async function applySmsOptOut(email: string, now: string): Promise<boolean> {
   }
 }
 
-type WriteBackCounts = { suppressed: number; smsOptOuts: number; formSubscribers: number };
+type WriteBackCounts = {
+  suppressed: number;
+  smsOptOuts: number;
+  formSubscribers: number;
+  /** Rows on the suppression list, or null when it could not be read in full. */
+  suppressionRows: number | null;
+  /** What the pass could not settle, for report.unresolved. Counts only. */
+  notes: string[];
+};
 
 async function runWriteBack(input: { dryRun: boolean; audience: Set<string> | null; now: string }): Promise<WriteBackCounts> {
-  const counts: WriteBackCounts = { suppressed: 0, smsOptOuts: 0, formSubscribers: 0 };
+  const counts: WriteBackCounts = { suppressed: 0, smsOptOuts: 0, formSubscribers: 0, suppressionRows: null, notes: [] };
 
   const suppressed = await loadSuppressed();
   if (!suppressed) {
     console.error(LOG, "write-back skipped: the suppression list could not be read");
+    counts.notes.push("write-back skipped: suppression list unreadable");
     return counts;
   }
+  counts.suppressionRows = suppressed.size;
 
   const watermark = await readWatermark();
   const { contacts, complete } = await fetchChangedContacts(watermark);
@@ -346,7 +395,9 @@ async function runWriteBack(input: { dryRun: boolean; audience: Set<string> | nu
   const newSubscribers = input.audience ? plan.newSubscribers : [];
   if (!input.audience && plan.newSubscribers.length > 0) {
     console.warn(LOG, "form sign-ups not mirrored: the consented audience could not be read", { count: plan.newSubscribers.length });
+    counts.notes.push(`${plan.newSubscribers.length} form sign-up(s) not mirrored: audience unreadable`);
   }
+  if (!complete) counts.notes.push("write-back read incomplete: a contacts page was refused or the page ceiling was hit");
 
   console.info(LOG, "write-back plan", {
     watermark,
@@ -359,7 +410,12 @@ async function runWriteBack(input: { dryRun: boolean; audience: Set<string> | nu
   });
 
   if (input.dryRun) {
-    return { suppressed: plan.suppress.length, smsOptOuts: plan.smsOptOut.length, formSubscribers: newSubscribers.length };
+    return {
+      ...counts,
+      suppressed: plan.suppress.length,
+      smsOptOuts: plan.smsOptOut.length,
+      formSubscribers: newSubscribers.length,
+    };
   }
 
   let failures = 0;
@@ -381,6 +437,7 @@ async function runWriteBack(input: { dryRun: boolean; audience: Set<string> | nu
   const latest = latestUpdatedAt(contacts);
   if (complete && failures === 0 && latest) await writeWatermark(latest);
   else if (!complete || failures > 0) console.warn(LOG, "watermark held", { complete, failures });
+  if (failures > 0) counts.notes.push(`${failures} write-back write(s) refused; watermark held`);
 
   return counts;
 }
@@ -391,9 +448,14 @@ async function runWriteBack(input: { dryRun: boolean; audience: Set<string> | nu
 
 type OrderRow = { customer_email: string | null; order_type: string | null; replacement_of: string | null };
 
-/** Everyone with a paid product order, whether or not they consented to marketing. */
-async function loadPaidBuyers(): Promise<Set<string>> {
+/**
+ * Everyone with a paid product order, whether or not they consented to
+ * marketing, and how many buyer addresses were dropped as non-mailable
+ * (provider sinks and the like) so the report can account for them.
+ */
+export async function loadPaidBuyers(): Promise<{ buyers: Set<string>; nonMailable: number }> {
   const buyers = new Set<string>();
+  const dropped = new Set<string>();
   try {
     const { rows, truncated } = await readAllRowsBounded<OrderRow>(
       (from, to) => supabaseAdmin
@@ -408,12 +470,14 @@ async function loadPaidBuyers(): Promise<Set<string>> {
     for (const row of rows) {
       if (!isProductPurchaseOrder(row)) continue;
       const email = normalizeEmail(row.customer_email);
-      if (email && !isNonMailableAddress(email)) buyers.add(email);
+      if (!email) continue;
+      if (isNonMailableAddress(email)) dropped.add(email);
+      else buyers.add(email);
     }
   } catch (error) {
     console.error(LOG, "buyer read failed", error);
   }
-  return buyers;
+  return { buyers, nonMailable: dropped.size };
 }
 
 /**
@@ -456,7 +520,7 @@ async function gatherCodes(
   return { codes, mintedWinback };
 }
 
-type BuiltContact = { payload: Record<string, unknown>; mintedWinback: boolean };
+type BuiltContact = { payload: Record<string, unknown>; mintedWinback: boolean; smsSubscribed: boolean };
 
 async function buildContactItem(email: string, dryRun: boolean): Promise<BuiltContact | null> {
   try {
@@ -466,27 +530,61 @@ async function buildContactItem(email: string, dryRun: boolean): Promise<BuiltCo
     const token = await signOmnisendLink(email, nowMs);
     const link = token ? { token, endsAt: new Date(nowMs + OMNISEND_LINK_TTL_MS).toISOString() } : null;
     const { codes, mintedWinback } = await gatherCodes(email, facts, nowMs, dryRun);
-    return { payload: buildContactPayload({ ...facts, link, codes }), mintedWinback };
+    return {
+      payload: buildContactPayload({ ...facts, link, codes }),
+      mintedWinback,
+      smsSubscribed: facts.smsConsent?.status === "subscribed" && Boolean(String(facts.phone ?? "").trim()),
+    };
   } catch (error) {
-    console.error(LOG, "contact build failed", { email, error });
+    // The address is the contact's identity and stays out of the log stream;
+    // the domain is enough to tell a broken import from a broken address.
+    console.error(LOG, "contact build failed", { domain: email.slice(email.indexOf("@") + 1), error });
     return null;
   }
 }
 
-type PushOutcome = { pushed: number; winbackCodes: number; failedBatches: number; stopped: string | null };
+type PushOutcome = {
+  /** Contacts submitted (or, in a dry run, that would have been). */
+  pushed: number;
+  winbackCodes: number;
+  /** Batches accepted (or, in a dry run, that would have been posted). */
+  batches: number;
+  failedBatches: number;
+  batchIds: string[];
+  submissions: BatchSubmission[];
+  /** Contacts walked whose account carries SMS consent with a number. */
+  smsConsented: number;
+  buyersWithoutConsent: number;
+  nonMailable: number;
+  /** Targets past the push limit, left for the next run. */
+  capped: number;
+  stopped: string | null;
+};
 
 async function runPush(input: { dryRun: boolean; audience: Set<string>; limit: number; deadline: number }): Promise<PushOutcome> {
-  const outcome: PushOutcome = { pushed: 0, winbackCodes: 0, failedBatches: 0, stopped: null };
+  const outcome: PushOutcome = {
+    pushed: 0,
+    winbackCodes: 0,
+    batches: 0,
+    failedBatches: 0,
+    batchIds: [],
+    submissions: [],
+    smsConsented: 0,
+    buyersWithoutConsent: 0,
+    nonMailable: 0,
+    capped: 0,
+    stopped: null,
+  };
 
   // Consented first, so the people Omnisend may actually mail are the ones a
   // capped run is sure to refresh; buyers without consent go afterwards as
   // nonSubscribed, for segments and lifetime value only.
-  const buyers = await loadPaidBuyers();
-  const targets = [...input.audience].sort();
-  for (const email of [...buyers].sort()) {
-    if (!input.audience.has(email)) targets.push(email);
-  }
+  const { buyers, nonMailable } = await loadPaidBuyers();
+  outcome.nonMailable = nonMailable;
+  const targets = orderPushTargets(input.audience, buyers);
+  outcome.buyersWithoutConsent = targets.length - input.audience.size;
   if (targets.length > input.limit) {
+    outcome.capped = targets.length - input.limit;
     console.warn(LOG, "push capped", { targets: targets.length, limit: input.limit });
   }
   const list = targets.slice(0, input.limit);
@@ -503,10 +601,12 @@ async function runPush(input: { dryRun: boolean; audience: Set<string>; limit: n
       if (!entry) continue;
       items.push(entry.payload);
       if (entry.mintedWinback) outcome.winbackCodes += 1;
+      if (entry.smsSubscribed) outcome.smsConsented += 1;
     }
     if (items.length === 0) continue;
     if (input.dryRun) {
       outcome.pushed += items.length;
+      outcome.batches += 1;
       continue;
     }
     const result = await omnisendRequest({
@@ -520,9 +620,85 @@ async function runPush(input: { dryRun: boolean; audience: Set<string>; limit: n
       continue;
     }
     outcome.pushed += items.length;
+    outcome.batches += 1;
+    // Omnisend answers { batchID, totalCount } and processes the batch in the
+    // background; the id is what lets the next run find out how it went.
+    const submission = parseBatchSubmission(result.body);
+    if (submission) {
+      outcome.batchIds.push(submission.id);
+      outcome.submissions.push(submission);
+    } else {
+      console.warn(LOG, "contact batch accepted without a batch id", { batch: index, size: items.length });
+    }
   }
 
   return outcome;
+}
+
+// ---------------------------------------------------------------------------
+// Accountability: Omnisend's contact count and the fate of earlier batches
+// ---------------------------------------------------------------------------
+
+/**
+ * How many contacts Omnisend holds, by paging GET /contacts at the page
+ * ceiling. Bounded by MAX_CONTACT_PAGES (10,000 contacts), past which the
+ * count is reported as capped rather than wrong. The report reads it before
+ * anything is changed and again after a live push, though a batch that is
+ * still processing is not yet in the second number: the next run's "before"
+ * is the settled one.
+ */
+async function countOmnisendContacts(): Promise<{ count: number; capped: boolean; complete: boolean }> {
+  let count = 0;
+  let after: string | null = null;
+  for (let page = 0; page < MAX_CONTACT_PAGES; page += 1) {
+    const query = new URLSearchParams({ limit: String(CONTACTS_PAGE_SIZE) });
+    if (after) query.set("after", after);
+    const result = await omnisendRequest<unknown>({ method: "GET", path: `/contacts?${query.toString()}` });
+    if (!result.ok) {
+      console.error(LOG, "contact count page refused", { page, status: result.status, error: result.error });
+      return { count, capped: false, complete: false };
+    }
+    count += countContactsOnPage(result.body);
+    const paging = parseOmnisendPaging(result.body);
+    if (!paging.hasMore || !paging.after) return { count, capped: false, complete: true };
+    after = paging.after;
+  }
+  console.warn(LOG, "contact count stopped at the page ceiling", { pages: MAX_CONTACT_PAGES, count });
+  return { count, capped: true, complete: false };
+}
+
+/**
+ * Ask Omnisend how the batches remembered from earlier runs went, and keep
+ * the answers. Only the unfinished ones are asked about, one GET each with
+ * no retry, and a transport failure stops the round rather than spending the
+ * budget on a host that is not answering. A dry run polls but records
+ * nothing, like every other dry-run read.
+ */
+async function pollBatches(input: { now: string; deadline: number; dryRun: boolean }): Promise<BatchRecord[]> {
+  const records = await readBatchRecords();
+  const updated: BatchRecord[] = [];
+  let polled = 0;
+  let changed = false;
+  let halted = false;
+  for (const record of records) {
+    if (halted || !batchUnfinished(record) || Date.now() > input.deadline) {
+      updated.push(record);
+      continue;
+    }
+    const result = await omnisendRequest<unknown>({ method: "GET", path: `/batches/${encodeURIComponent(record.id)}`, retries: 0 });
+    polled += 1;
+    if (!result.ok) {
+      console.warn(LOG, "batch poll refused", { batch: record.id, status: result.status });
+      if (result.status === 0) halted = true;
+      updated.push(record);
+      continue;
+    }
+    updated.push(applyBatchRead(record, parseBatchStatus(result.body), input.now));
+    changed = true;
+  }
+  if (changed && !input.dryRun) await writeBatchRecords(updated);
+  if (records.length > 0) console.info(LOG, "batches polled", { remembered: records.length, polled, halted });
+  return updated;
 }
 
 // ---------------------------------------------------------------------------
@@ -539,7 +715,9 @@ export async function reconcileOmnisendContacts(opts: OmnisendReconcileOptions =
     winbackCodes: 0,
     dryRun,
     skipped: null,
+    report: emptyReconcileReport(),
   };
+  const report = result.report;
 
   // Gate first, before any database work, in the same order the transport
   // itself enforces: a preview deployment returns here having done nothing.
@@ -552,23 +730,65 @@ export async function reconcileOmnisendContacts(opts: OmnisendReconcileOptions =
 
   try {
     const now = new Date().toISOString();
+
+    // Omnisend's side of the ledger, read before this run changes anything.
+    // (Bound to a local because the client-snippet invariant in
+    // lib/ads/omnisend-source.test.ts reads any `omnisend.` token as the
+    // browser SDK; the report field keeps its documented name.)
+    const remote = report.omnisend;
+    const before = await countOmnisendContacts();
+    remote.contactsBefore = before.count;
+    remote.contactsAfter = before.count;
+    remote.capped = before.capped;
+    if (before.capped) report.unresolved.push(`omnisend contact count capped at ${MAX_CONTACT_PAGES} pages`);
+    else if (!before.complete) report.unresolved.push("omnisend contact count incomplete: a contacts page was refused");
+
+    // How the batches from earlier runs went, before this run submits more.
+    const records = await pollBatches({ now, deadline, dryRun });
+    report.unresolved.push(...batchNotes(records));
+
     const audience = await loadAudience();
+    report.store.consented = audience?.size ?? 0;
 
     const writeBack = await runWriteBack({ dryRun, audience, now });
     result.suppressed = writeBack.suppressed;
     result.smsOptOuts = writeBack.smsOptOuts;
     result.formSubscribers = writeBack.formSubscribers;
+    report.writeBack = { suppressed: writeBack.suppressed, smsOptOuts: writeBack.smsOptOuts, formSubscribers: writeBack.formSubscribers };
+    report.store.suppressed = writeBack.suppressionRows ?? 0;
+    report.unresolved.push(...writeBack.notes);
 
     if (!audience) {
       result.skipped = "consented audience unreadable; nothing pushed";
+      report.unresolved.push(result.skipped);
     } else {
+      // The cutoff is the instant the first live push began; written once,
+      // by whichever run is first, and never by a dry run.
+      if (!dryRun) await recordMigrationCutoff(now);
       const push = await runPush({ dryRun, audience, limit, deadline });
       result.pushed = push.pushed;
       result.winbackCodes = push.winbackCodes;
+      report.push = { submitted: push.pushed, batches: push.batches, batchIds: push.batchIds, failedBatches: push.failedBatches };
+      report.store.buyersWithoutConsent = push.buyersWithoutConsent;
+      report.store.smsConsented = push.smsConsented;
+      report.store.nonMailable = push.nonMailable;
+
+      if (!dryRun && push.submissions.length > 0) {
+        await writeBatchRecords(rememberBatches(records, push.submissions, now));
+        report.unresolved.push(`${push.submissions.length} batch(es) submitted; Omnisend processes them in the background and the next run polls them`);
+      }
+      if (!dryRun && push.batches > 0) {
+        const after = await countOmnisendContacts();
+        remote.contactsAfter = after.count;
+        remote.capped = remote.capped || after.capped;
+      }
+
       const notes: string[] = [];
       if (push.failedBatches > 0) notes.push(`${push.failedBatches} batch(es) failed`);
+      if (push.capped > 0) notes.push(`push capped: ${push.capped} target(s) left for the next run`);
       if (push.stopped) notes.push(push.stopped);
       result.skipped = notes.length > 0 ? notes.join("; ") : null;
+      report.unresolved.push(...notes);
     }
 
     console.info(LOG, dryRun ? "dry run" : "done", { ...result, ms: Date.now() - startedAt });

@@ -96,6 +96,7 @@ const PENDING_MIGRATION_COLUMNS: Array<{ table: string; column: string; migratio
 const PENDING_MIGRATION_TABLES: Array<{ table: string; migration: string }> = [
   { table: "omnisend_events_sent", migration: "omnisend-sync.sql" },
   { table: "omnisend_sync_state", migration: "omnisend-sync.sql" },
+  { table: "omnisend_consent_snapshot", migration: "omnisend-sync.sql" },
 ];
 
 function pendingTableAllowed(table: string): boolean {
