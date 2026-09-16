@@ -1,45 +1,45 @@
 {
   "welcome": [
-    { "template": "welcome-1", "contentID": "6aaae462072042c2a418f9e6" },
-    { "template": "welcome-2-code", "contentID": "6aaae462fe9daa7b181e6450" },
-    { "template": "welcome-2", "contentID": "6aaae462072042c2a418f9eb" },
-    { "template": "welcome-3", "contentID": "6aaae4625322cd96de57bd6b" },
-    { "template": "welcome-3-nocode", "contentID": "6aaae46250c3f856bc527404" }
+    { "template": "welcome-1", "contentID": "6aab0ce25322cd96de57ebdf" },
+    { "template": "welcome-2-code", "contentID": "6aab0ce2ae53f2fc18c91efc" },
+    { "template": "welcome-2", "contentID": "6aab0ce2ae53f2fc18c91f01" },
+    { "template": "welcome-3", "contentID": "6aab0ce2fe9daa7b181e8f15" },
+    { "template": "welcome-3-nocode", "contentID": "6aab0ce25322cd96de57ebe4" }
   ],
   "abandoned-cart": [
-    { "template": "cart-1", "contentID": "6aaae46fae53f2fc18c8f196" },
-    { "template": "cart-2", "contentID": "6aaae46f50c3f856bc527415" },
-    { "template": "cart-3-gift-code", "contentID": "6aaae46ffe9daa7b181e6472" },
-    { "template": "cart-3-gift", "contentID": "6aaae46fae53f2fc18c8f19b" },
-    { "template": "cart-3-code", "contentID": "6aaae46fae53f2fc18c8f1a0" },
-    { "template": "cart-3-plain", "contentID": "6aaae46f072042c2a418f9fe" }
+    { "template": "cart-1", "contentID": "6aab0ceeae53f2fc18c91f0a" },
+    { "template": "cart-2", "contentID": "6aab0cee072042c2a4192545" },
+    { "template": "cart-3-gift-code", "contentID": "6aab0ceefe9daa7b181e8f22" },
+    { "template": "cart-3-gift", "contentID": "6aab0cee5322cd96de57ebf9" },
+    { "template": "cart-3-code", "contentID": "6aab0ceefe9daa7b181e8f27" },
+    { "template": "cart-3-plain", "contentID": "6aab0cee5322cd96de57ebfe" }
   ],
   "abandoned-checkout": [
-    { "template": "checkout-1", "contentID": "6aaae47cae53f2fc18c8f1b1" },
-    { "template": "checkout-2", "contentID": "6aaae47c5322cd96de57bd84" },
-    { "template": "checkout-3-gift-code", "contentID": "6aaae47c50c3f856bc52742a" },
-    { "template": "checkout-3-gift", "contentID": "6aaae47cfe9daa7b181e648b" },
-    { "template": "checkout-3-code", "contentID": "6aaae47c072042c2a418fa13" },
-    { "template": "checkout-3-plain", "contentID": "6aaae47dfe9daa7b181e6490" }
+    { "template": "checkout-1", "contentID": "6aab0cfbfe9daa7b181e8f34" },
+    { "template": "checkout-2", "contentID": "6aab0cfbae53f2fc18c91f13" },
+    { "template": "checkout-3-gift-code", "contentID": "6aab0cfb072042c2a4192556" },
+    { "template": "checkout-3-gift", "contentID": "6aab0cfb072042c2a419255b" },
+    { "template": "checkout-3-code", "contentID": "6aab0cfbfe9daa7b181e8f39" },
+    { "template": "checkout-3-plain", "contentID": "6aab0cfb072042c2a4192560" }
   ],
   "browse-abandonment": [
-    { "template": "browse-1", "contentID": "6aaabf41ae53f2fc18c8c3e9" }
+    { "template": "browse-1", "contentID": "6aab0cfdae53f2fc18c91f18" }
   ],
   "post-purchase": [
-    { "template": "post-purchase-1", "contentID": "6aaae56150c3f856bc527661" },
-    { "template": "post-purchase-2", "contentID": "6aaae56150c3f856bc527666" },
-    { "template": "repeat-customer", "contentID": "6aaae561fe9daa7b181e65c3" },
-    { "template": "vip-milestone", "contentID": "6aaae561fe9daa7b181e65c8" }
+    { "template": "post-purchase-1", "contentID": "6aab0d05fe9daa7b181e8f47" },
+    { "template": "post-purchase-2", "contentID": "6aab0d055322cd96de57ec0b" },
+    { "template": "repeat-customer", "contentID": "6aab0d05072042c2a4192569" },
+    { "template": "vip-milestone", "contentID": "6aab0d05072042c2a419256e" }
   ],
   "replenishment": [
-    { "template": "replenishment", "contentID": "6aaabf9dae53f2fc18c8c45b" }
+    { "template": "replenishment", "contentID": "6aab0d09ae53f2fc18c91f21" }
   ],
   "win-back": [
-    { "template": "winback-1", "contentID": "6aaae48dfe9daa7b181e64ba" },
-    { "template": "winback-2", "contentID": "6aaae48dfe9daa7b181e64bf" },
-    { "template": "winback-2-nocode", "contentID": "6aaae48dae53f2fc18c8f1c7" }
+    { "template": "winback-1", "contentID": "6aab0d11ae53f2fc18c91f2a" },
+    { "template": "winback-2", "contentID": "6aab0d11ae53f2fc18c91f2f" },
+    { "template": "winback-2-nocode", "contentID": "6aab0d11072042c2a419257f" }
   ],
   "sunset": [
-    { "template": "sunset", "contentID": "6aaabfaa072042c2a418cdf0" }
+    { "template": "sunset", "contentID": "6aab0d14ae53f2fc18c91f38" }
   ]
 }
