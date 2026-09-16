@@ -81,7 +81,21 @@ describe("onMarketingOptIn", () => {
     expect(facts).toBeGreaterThan(-1);
     expect(welcome).toBeGreaterThan(facts);
     expect(upsert).toBeGreaterThan(welcome);
-    expect(body).toContain("if (facts.orders === 0) await ensureContactCode");
+  });
+
+  // THE CHECKOUT OPT-IN IS NOT A FIRST SUBSCRIBE. recordMarketingOptIn runs
+  // from create-session with source "checkout", BEFORE payment: a welcome code
+  // minted there is a first-order discount handed to someone in the middle
+  // of their first order, and the contact push carries it into the welcome
+  // flow's first email at once. The consent still reaches Omnisend; the
+  // code waits for a sign-up or an account opt-in.
+  it("mints nothing for the checkout opt-in, whatever the order count, and pushes the contact either way", () => {
+    expect(body).toContain('if (source !== "checkout" && facts.orders === 0) await ensureContactCode("welcome", address);');
+    expect(body).not.toContain("if (facts.orders === 0) await ensureContactCode");
+    // The push is unconditional on the source: the guard returns nothing early.
+    const guard = body.indexOf('if (source !== "checkout" && facts.orders === 0)');
+    const upsert = body.indexOf("await upsertOmnisendContact(address, await contactExtras(address))");
+    expect(body.slice(guard, upsert)).not.toContain("return");
   });
 });
 
@@ -118,17 +132,38 @@ describe("the cart hooks", () => {
     expect(fn("onCheckoutStarted")).toContain("debounceMs: CART_EVENT_DEBOUNCE_MS");
   });
 
-  it("do not send a cart event for the arrival that was just reported as a checkout", () => {
+  // ONCE A CART HAS REACHED THE CHECKOUT, THE CHECKOUT FLOW OWNS IT. A cart
+  // change ten minutes after arriving at the till used to send `added product
+  // to cart` again, which put the shopper back into Omnisend's abandoned-cart
+  // flow they had just left for the abandoned-checkout one, and the two flows
+  // then mailed the same inbox about the same cart. The test is the fact, not
+  // the time: the row's first-touch stamp, or a `started checkout` claim for
+  // the cart, whenever either was set.
+  it("never send a cart event for a cart that has reached the checkout, however long ago", () => {
     const body = fn("onCartTracked");
-    const checkout = body.indexOf("if (await checkoutReportedRecently(input.cartId)) return;");
+    const checkout = body.indexOf("if (await cartReachedCheckout(input.cartId)) return;");
     const send = body.indexOf("await sendCartEventOnce(");
     expect(checkout).toBeGreaterThan(-1);
     expect(send).toBeGreaterThan(checkout);
-    expect(fn("onCheckoutStarted")).not.toContain("checkoutReportedRecently(");
+    expect(fn("onCheckoutStarted")).not.toContain("cartReachedCheckout(");
+    expect(hooks).not.toContain("checkoutReportedRecently");
+
+    const check = hooks.slice(hooks.indexOf("async function cartReachedCheckout("), hooks.indexOf("export async function sendCartEventOnce("));
+    expect(check).toMatch(/from\("abandoned_carts"\)\.select\("checkout_started_at"\)\.eq\("id", cartId\)/);
+    expect(check).toMatch(/from\("omnisend_events_sent"\)[\s\S]*\.eq\("entity_id", cartId\)[\s\S]*\.eq\("event_name", "started checkout"\)/);
+    // No window: neither the debounce nor any other clock is consulted.
+    expect(check).not.toContain("CART_EVENT_DEBOUNCE_MS");
+    expect(check).not.toContain("Date.now()");
+    expect(check).not.toContain("since");
+    // Either fact alone is enough.
+    expect(check).toContain("if (stamped) return true;");
+    expect(check).toContain("return claimed;");
+    // Fails OPEN: a read failure sends the cart event, the cheaper mistake.
+    expect(check).toMatch(/catch \(error\) \{[^}]*return false;/);
   });
 
   it("read the legacy stage from abandoned_cart_emails and fail CLOSED, because a wrong send double-mails a shopper mid-ladder", () => {
-    const check = hooks.slice(hooks.indexOf("async function cartHasInHouseStage("), hooks.indexOf("async function checkoutReportedRecently("));
+    const check = hooks.slice(hooks.indexOf("async function cartHasInHouseStage("), hooks.indexOf("async function cartReachedCheckout("));
     expect(check).toMatch(/from\("abandoned_cart_emails"\)\s*\.select\("id"\)\s*\.eq\("abandoned_cart_id", cartId\)\s*\.limit\(1\)/);
     expect(check).toMatch(/if \(error\) \{[^}]*return true;/);
     expect(check).toMatch(/catch \(error\) \{[^}]*return true;/);

@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
  * decisions themselves are pure and tested in cart-plan.test.ts.
  */
 const SOURCE = readFileSync(join(process.cwd(), "src/lib/marketing/omnisend/cart-offers.ts"), "utf8");
+const CART_RECOVERY = readFileSync(join(process.cwd(), "src/lib/cart-recovery.ts"), "utf8");
 
 /** Source with comments removed: documenting the rule is not applying it. */
 function executable(source: string): string {
@@ -73,6 +74,53 @@ describe("which carts are considered", () => {
     expect(offers).toMatch(/import \{[^}]*lastGiftForOtherCarts[^}]*\} from "@\/lib\/cart-recovery";/);
     expect(mint).toContain("await loadRecoveryContext(");
   });
+
+  // ONE RECOVERY CODE PER ADDRESS PER 30 DAYS, WHICHEVER LADDER MINTS IT. The
+  // parity claim above is only true if the shared loader can SEE this sweep's
+  // codes: it read coupons by source "cart_recovery" alone, so an address
+  // minted a VLCART code by this sweep could be minted a SAVE code by the
+  // in-house ladder a week later, and vice versa. The cooldown read now names
+  // both sources, so the two owners cannot disagree about what an address
+  // has already been given.
+  it("the shared cooldown read sees both ladders' recovery codes", () => {
+    const loader = executable(CART_RECOVERY).slice(executable(CART_RECOVERY).indexOf("export async function loadRecoveryContext("));
+    expect(loader).toMatch(/from\("coupons"\)\s*\.select\("assigned_email, created_at"\)\s*\.in\("source", \["cart_recovery", "omnisend_recovery"\]\)/);
+    expect(loader).not.toContain('.eq("source", "cart_recovery")');
+  });
+});
+
+// CONSENT BEFORE MONEY. Omnisend's automations send at threshold
+// email: subscribed (spec §6), so a contact who is nonSubscribed or
+// unsubscribed never receives the message this incentive is minted for. The
+// sweep read no consent, and minted a code and a gift — a coupons row and a
+// customer_offers row that spend the 30-day cooldowns — for an inbox that
+// would never see them. The facts are collected first, and only a
+// `subscribed` address is claimed; an unsubscribed one is counted and left
+// UNCLAIMED, so a later tick inside the window mints if they subscribe.
+describe("only a subscribed address is claimed or minted", () => {
+  it("collects the contact facts and requires email consent subscribed before the claim, counting the rest", () => {
+    expect(offers).toMatch(/import \{[^}]*\bcollectContactFacts\b[^}]*\} from "@\/lib\/marketing\/omnisend\/contacts";/);
+    const facts = mint.indexOf("const facts = await collectContactFacts(email);");
+    const gate = mint.indexOf('if (!facts || facts.emailConsent.status !== "subscribed") {');
+    const claim = mint.indexOf('await ledger.claimSend("recovery offer"');
+    expect(facts).toBeGreaterThan(-1);
+    expect(gate).toBeGreaterThan(facts);
+    expect(claim).toBeGreaterThan(gate);
+    const skip = mint.slice(gate, mint.indexOf("}", gate));
+    expect(skip).toContain("result.unsubscribed += 1;");
+    expect(skip).toContain("continue;");
+    expect(skip).not.toContain("claimSend");
+    expect(skip).not.toContain("ensureContactCode");
+    expect(offers).toContain("unsubscribed: number;");
+    expect(offers).toContain("unsubscribed: 0");
+  });
+
+  it("never widens consent: the status is read, compared to the literal, and nothing here writes a consent store", () => {
+    expect(mint).not.toContain('status: "subscribed"');
+    expect(offers).not.toContain("marketing_subscribers");
+    expect(offers).not.toContain("email_suppressions");
+    expect(offers).not.toContain("customer_preferences");
+  });
 });
 
 describe("the plan is the in-house planner's, at stage four", () => {
@@ -99,7 +147,7 @@ describe("the plan is the in-house planner's, at stage four", () => {
 
 describe("the code and the gift are minted by the shared helpers, behind a once-per-cart claim", () => {
   it("claims the cart first, records the outcome, and releases on a thrown error", () => {
-    const claim = mint.indexOf('await ledger.claimSend("recovery offer", `${cartId}:recovery offer`)');
+    const claim = mint.indexOf('await ledger.claimSend("recovery offer", `${cartId}:recovery offer`, { failClosed: true })');
     const plan = mint.indexOf("const plan = planStageOffer({");
     const record = mint.indexOf('await ledger.recordSend("recovery offer", `${cartId}:recovery offer`, accepted');
     const release = mint.indexOf('await ledger.releaseSend("recovery offer");');
@@ -108,6 +156,19 @@ describe("the code and the gift are minted by the shared helpers, behind a once-
     expect(record).toBeGreaterThan(plan);
     expect(release).toBeGreaterThan(record);
     expect(mint).toContain("const ledger = omnisendLedger(cartId);");
+  });
+
+  // A MINT FAILS CLOSED. The ledger's default is the event contract — any
+  // insert failure other than a duplicate key answers "claimed", because a
+  // lost event costs a flow and a duplicate costs nothing Omnisend cannot
+  // dedup. There is no dedup for money: with omnisend_events_sent missing or
+  // the insert refused, a fail-open claim let every 30-minute tick re-plan
+  // and re-mint a code and a gift for every qualifying cart. So the plan
+  // claim, and only the plan claim, asks for the closed direction.
+  it("takes the plan claim fail-CLOSED, so an unreachable ledger mints nothing", () => {
+    expect(mint).toContain("{ failClosed: true }");
+    // Exactly one claimSend in the sweep, and it is the closed one.
+    expect(mint.split("claimSend(").length - 1).toBe(1);
   });
 
   it("mints the recovery code at the band's percentage only when the plan carries one", () => {
@@ -134,10 +195,56 @@ describe("the code and the gift are minted by the shared helpers, behind a once-
     expect(mint).toContain("await upsertOmnisendContact(email, { link, codes, recoveryGift })");
   });
 
-  it("sends the catch-up cart event exactly once, only for a cart Omnisend has never heard of", () => {
+  // THE GIFT IS NAMED ON EVERY PUSH, NEVER LEFT TO CHANCE. contact-payload.ts
+  // omits the vl_recovery_gift* properties when recoveryGift is undefined and
+  // clears them when it is null, so a push that says nothing about the gift
+  // leaves whatever an earlier cart wrote. This sweep is the one writer of
+  // the gift, and it always says: the planned gift when there is one, null
+  // (clear) when the plan carries none, so a stale gift from an earlier cart
+  // can never show in a later cart's final email.
+  it("passes recoveryGift explicitly on every push: the planned gift, or null to clear, never undefined", () => {
+    expect(mint).toContain("let recoveryGift: RecoveryGiftFacts | null = null;");
+    expect(mint).not.toMatch(/recoveryGift: RecoveryGiftFacts \| null \| undefined/);
+    expect(mint).not.toMatch(/recoveryGift\s*=\s*undefined/);
+    // The one push the sweep makes carries it by name.
+    expect(mint.split("upsertOmnisendContact(").length - 1).toBe(1);
+    expect(mint).toContain("{ link, codes, recoveryGift }");
+  });
+
+  // THE EVENT COMES FIRST, AND A REFUSED EVENT STOPS THE CART. The catch-up
+  // `added product to cart` was sent fire-and-forget AFTER the claim, so a
+  // cart whose event Omnisend refused was claimed and minted anyway — an
+  // incentive for a shopper who never entered the flow the incentive is
+  // for — and the refusal was never retried. Now: a cart with no DELIVERED
+  // cart event has one sent (and awaited) before anything is claimed; if it
+  // is not delivered the cart is left for the next tick, unclaimed and
+  // unminted; only a delivered event, now or earlier, is followed by money.
+  it("sends and awaits the catch-up event before the claim, and skips the cart when it is not delivered", () => {
+    const known = mint.indexOf("if (!(await cartEventKnown(cartId))) {");
+    const send = mint.indexOf("const sentEvent = await sendCartEventOnce({");
+    const refused = mint.indexOf("if (!sentEvent) {");
+    const claim = mint.indexOf('await ledger.claimSend("recovery offer"');
+    expect(known).toBeGreaterThan(-1);
+    expect(send).toBeGreaterThan(known);
+    expect(refused).toBeGreaterThan(send);
+    expect(claim).toBeGreaterThan(refused);
+    const skip = mint.slice(refused, mint.indexOf("}", refused));
+    expect(skip).toContain("continue;");
     expect(mint).toContain('name: "added product to cart"');
-    expect(mint).toContain("debounceMs: null");
     expect(mint).toContain('campaign: "abandoned-cart"');
+    // Only the event that landed counts as sent.
+    expect(mint).toMatch(/if \(!sentEvent\) \{[\s\S]*?continue;[\s\S]*?\}\s*result\.events \+= 1;/);
+  });
+
+  it("asks the ledger for a DELIVERED cart event, and retries an undelivered one per debounce window rather than never", () => {
+    const known = offers.slice(offers.indexOf("async function cartEventKnown("), offers.indexOf("export async function mintOmnisendCartOffers("));
+    expect(known).toMatch(/\.eq\("event_name", "added product to cart"\)\s*\.eq\("delivered", true\)/);
+    // Fails OPEN (true) so a ledger outage does not restart a flow; the
+    // fail-closed claim that follows then mints nothing.
+    expect(known).toMatch(/if \(error\) return true;/);
+    expect(mint).toContain("debounceMs: CART_EVENT_DEBOUNCE_MS");
+    expect(mint).not.toContain("debounceMs: null");
+    expect(offers).toMatch(/import \{[^}]*\bCART_EVENT_DEBOUNCE_MS\b[^}]*\} from "@\/lib\/marketing\/omnisend\/cart-plan";/);
   });
 });
 

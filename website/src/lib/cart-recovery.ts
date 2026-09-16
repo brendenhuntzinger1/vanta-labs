@@ -1320,10 +1320,15 @@ export async function loadRecoveryContext(emails: string[], now: number): Promis
   }
 
   try {
+    // BOTH LADDERS' CODES. The Omnisend cart-offer sweep mints its recovery
+    // code into this table under "omnisend_recovery" (marketing/omnisend/
+    // codes.ts) and plans from this same context, so the 30-day per-address
+    // cooldown has to see both sources: one recovery code per address per
+    // 30 days, whichever owner of the cart minted it.
     const { data } = await supabaseAdmin
       .from("coupons")
       .select("assigned_email, created_at")
-      .eq("source", "cart_recovery")
+      .in("source", ["cart_recovery", "omnisend_recovery"])
       .in("assigned_email", emails)
       .gte("created_at", new Date(now - RECOVERY_DISCOUNT_COOLDOWN_MS).toISOString());
     for (const row of (data ?? []) as Array<Record<string, unknown>>) {

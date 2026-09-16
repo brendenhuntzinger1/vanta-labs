@@ -24,11 +24,16 @@ function fn(name: string): string {
 }
 
 describe("the Omnisend ledger claims by inserting and fails open", () => {
-  it("claims with an insert into omnisend_events_sent", () => {
+  it("claims with an insert into omnisend_events_sent, failing open unless the caller asks for closed", () => {
     const claim = fn("claimSend");
     expect(claim).toMatch(/from\("omnisend_events_sent"\)\s*\.insert\(/);
     expect(claim).toMatch(/=== "23505"\) return false/);
-    expect(claim).toMatch(/catch \{\s*return true;/);
+    // The direction of every non-duplicate failure is the caller's choice
+    // (ledger.test.ts pins both): open for an event, closed for a mint.
+    expect(claim).toMatch(/return !failClosed;/);
+    expect(claim).toMatch(/catch \{\s*return !failClosed;/);
+    expect(claim).not.toMatch(/catch \{\s*return true;/);
+    expect(LEDGER).toContain("claimSend: (eventName: string, eventId: string, options?: { failClosed?: boolean }) => Promise<boolean>;");
   });
 
   it("records on the composite key, so one event name cannot block another", () => {

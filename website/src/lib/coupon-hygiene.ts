@@ -14,8 +14,15 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 // without bound again.
 // ---------------------------------------------------------------------------
 
-/** Sources of codes the system mints on its own (never typed by an operator). */
-export const GENERATED_COUPON_SOURCES = ["cart_recovery"] as const;
+/**
+ * Sources of codes the system mints on its own (never typed by an operator).
+ *
+ * The three Omnisend contact codes (marketing/omnisend/codes.ts) are minted
+ * the same way as the cart-recovery code — by the system, bound to an
+ * address, with an `ends_at`, and nothing ever flipping `active` off — so
+ * without them here the same pile of dead-but-active rows would grow again.
+ */
+export const GENERATED_COUPON_SOURCES = ["cart_recovery", "omnisend_recovery", "omnisend_welcome", "omnisend_winback"] as const;
 
 /** The last recovery stage closes at 96h; a cart older than this is finished. */
 export const ABANDONED_CART_EXPIRY_MS = 96 * 60 * 60 * 1000;

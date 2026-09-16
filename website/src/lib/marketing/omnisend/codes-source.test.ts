@@ -102,6 +102,33 @@ describe("the mint writes the cart-recovery row shape, bound and private", () =>
   });
 });
 
+// THE WELCOME CODE IS FOR A FIRST ORDER, AND A FIRST ORDER ENDS IT. The code
+// is minted when an address subscribes with no paid order, and nothing
+// enforced "first order" after that: a contact who paid without it kept a
+// live code Omnisend would go on showing. order-hooks.ts retires it on the
+// paid hook. Retiring is `active = false` on the live rows — never a delete
+// (the row is the audit trail of what was offered), never a redeemed row
+// (that one is spent, and its count is the record of the order it priced).
+describe("retireContactCode deactivates the live codes of one kind for one address", () => {
+  const retire = fn("retireContactCode");
+
+  it("is exported with the kind and the address, and never throws", () => {
+    expect(CODES).toContain("export async function retireContactCode(kind: ContactCodeKind, email: string): Promise<number>");
+    expect(retire).toMatch(/\} catch \(error\) \{\s*console\.error\("\[omnisend\/codes\]/);
+    expect(retire).toMatch(/catch \(error\) \{\s*console\.error\([^\n]*\);\s*return 0;\s*\}/);
+  });
+
+  it("updates active to false on the address's live rows of that source, and only unredeemed ones", () => {
+    expect(retire).toMatch(/from\("coupons"\)\s*\.update\(\{ active: false \}\)/);
+    expect(retire).toContain('.eq("assigned_email", address)');
+    expect(retire).toContain('.eq("source", offer.source)');
+    expect(retire).toContain('.eq("active", true)');
+    expect(retire).toContain('.eq("redemptions_count", 0)');
+    expect(retire).not.toContain(".delete(");
+    expect(retire).not.toContain(".insert(");
+  });
+});
+
 describe("the live-code lookup only returns a code the checkout will still honour", () => {
   const lookup = fn("findLiveContactCode");
 
