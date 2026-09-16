@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveSitePath } from "@/lib/email/cta-path";
 import { withUtm } from "@/lib/email/utm";
 import { emailLinkLanding, setEmailLinkGrantCookie } from "@/lib/email/recipient-attestation";
-import { OMNISEND_ATTRIBUTION_COOKIE, verifyOmnisendLink } from "@/lib/marketing/omnisend/link-token";
+import { verifyOmnisendLink } from "@/lib/marketing/omnisend/link-token";
 import { siteUrl } from "@/lib/site-identity";
 
 export const dynamic = "force-dynamic";
@@ -26,9 +26,12 @@ export const dynamic = "force-dynamic";
  * difference between a tracking link and an open redirect on a domain
  * customers trust because it arrived in our email.
  *
- * The `utm_*` values are labels, not instructions. They tag the destination
- * and name the campaign in the attribution cookie; they cannot influence where
- * anyone is sent.
+ * The `utm_*` values are labels, not instructions. They tag the destination,
+ * which is how an order is later attributed (order_attribution reads the
+ * landing page's parameters); they cannot influence where anyone is sent.
+ * No cookie is set here beyond the browse grant: a campaign cookie set on a
+ * click regardless of the cookie banner would contradict the Cookie Policy,
+ * and nothing read one.
  *
  * A failure must never strand a customer on an error page: every path below
  * still redirects. An unverifiable link lands on sign-in with the validated
@@ -37,7 +40,6 @@ export const dynamic = "force-dynamic";
  */
 
 const UTM_SOURCE = "omnisend";
-const ATTRIBUTION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 
 /**
  * Anyone can put anything in a utm_ parameter. Junk should cost a truncated
@@ -113,22 +115,6 @@ export async function GET(request: NextRequest) {
     // recipient is on their way to the interstitial instead: the grant is
     // minted there, after the two statements are made, and never before.
     if (landing.grant) setEmailLinkGrantCookie(response, landing.grant);
-
-    // Attribution, set on every verified click whatever the landing: the click
-    // happened, and an order placed within the window belongs to this campaign
-    // whether or not attesting came first.
-    response.cookies.set({
-      name: OMNISEND_ATTRIBUTION_COOKIE,
-      value: JSON.stringify({ campaign, at: Date.now() }),
-      httpOnly: true,
-      // Lax, not Strict: the customer is arriving from their mail client, which
-      // is a cross-site navigation. Strict would withhold the cookie on exactly
-      // the request it was minted for.
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
-      maxAge: ATTRIBUTION_MAX_AGE_SECONDS,
-    });
 
     return response;
   } catch {

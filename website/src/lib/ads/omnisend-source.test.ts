@@ -204,6 +204,12 @@ describe("Omnisend is ungated by consent, and the policies say so", () => {
     expect(paragraph).toContain("your order history (the products, amounts and dates)");
     expect(paragraph).toContain("the contents of your cart");
     expect(paragraph).toContain("while you are signed in, the products you view");
+    expect(paragraph).toContain("whether you have confirmed that you are 21 or over and buying for research use");
+    expect(paragraph).toContain("your referral code");
+    expect(paragraph).toContain("any discount code or gift we have issued to you");
+    // Honest during the transition: the switch defaults to off, and until it is
+    // set the in-house engine still sends marketing through Resend.
+    expect(paragraph).toContain("Until the move to Omnisend is complete, some marketing email is still sent through Resend as well.");
     expect(paragraph).toContain("so that it can send the marketing email and SMS you agreed to and measure how they perform");
     // Consent is copied, never widened: the policy must not describe a phone
     // number as reaching Omnisend on any other basis than SMS consent.
@@ -213,7 +219,7 @@ describe("Omnisend is ungated by consent, and the policies say so", () => {
   it("the privacy policy separates transactional email (Resend) from marketing (Omnisend)", () => {
     expect(privacy).toMatch(/Transactional email — order confirmations, shipping and delivery updates, refunds, password and account security messages — is not marketing and is sent through Resend/);
     expect(privacy).toMatch(/marketing email and SMS delivery \(Omnisend\)/);
-    expect(privacy).toMatch(/transactional email delivery \(Resend\)/);
+    expect(privacy).toMatch(/transactional email delivery \(Resend, which also carries some marketing email until the move to Omnisend is complete\)/);
   });
 
   it("the privacy policy says how to stop the messages, not only the script", () => {

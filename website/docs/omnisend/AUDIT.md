@@ -16,10 +16,13 @@ Scope note on the branch. The Omnisend modules present on this commit are
 `ledger.ts`, `catalog-sync.ts`, `reconcile.ts` and `reconcile-plan.ts`, the
 click route `src/app/api/email/omnisend-link/route.ts`, the admin route
 `src/app/api/admin/omnisend/sync/route.ts`, and the ownership switch wired
-into the lifecycle cron and the campaign send route. The consent, cart,
-checkout and product-view hooks (`hooks.ts`), the order-hook call sites, and
-the three Omnisend cron jobs (`sweeps.ts`) are on sibling branches that have
-not been merged into this one yet; where the audit describes them it says so.
+into the lifecycle cron and the campaign send route. Amended 2026-09-16
+after the merge: the consent, cart, checkout and product-view hooks
+(`hooks.ts`), the order-hook call sites (payment webhook, Shippo, admin
+cancel and refund), the cart-offer sweep (`cart-offers.ts`) and the four
+Omnisend cron jobs (`sweeps.ts`, `cart-offers.ts`) are on this branch; the
+ownership gaps this audit found as F-02, F-04, F-06 and F-12 were fixed on
+it the same day, and the findings below say so where they apply.
 
 ---
 
@@ -126,9 +129,13 @@ universal layouts, one draft form created from Omnisend's stock template on
 2026-09-16 (not by this work), and no enabled sending. In the repo, every
 Omnisend transport call passes `omnisendActive()` (`src/lib/marketing/omnisend/client.ts:72-78`),
 which asks the ads environment gate before it reads `OMNISEND_API_KEY`, so a
-preview deployment sends nothing. On this branch the only entry points that
-reach Omnisend are the admin sync route (contacts reconcile or catalogue push,
-with dry run) and the exported order hooks, which have no caller yet.
+preview deployment sends nothing. The entry points that reach Omnisend are
+the admin sync route (contacts reconcile, catalogue push, snapshot; with dry
+run), the consent, cart, checkout and product-view hooks, the order hooks from
+the payment webhook, Shippo and the admin order actions, and the four cron
+jobs in the sweep route (order backstop, catalogue every 6 h, contacts
+reconcile every 24 h, cart offers every tick). All of them return at the gate
+until `OMNISEND_API_KEY` is set on production.
 
 ---
 
@@ -148,18 +155,18 @@ stand down at cutover. The deciding rule is `marketingSendBlockedByOmnisend`
 | Shipping update, delivery confirmation | Resend-transactional | Always. Omnisend receives `order fulfilled` for segments only (`order-hooks.ts:201-210`), never to mail |
 | Refund confirmation, reimbursement, replacement, cancellation | Resend-transactional | Always. Omnisend receives `order refunded` (full refunds only) and `order canceled` as data |
 | Membership mail | none live | Feature removed 2026-09-12; templates unused |
-| Affiliate / ambassador mail and affiliate campaigns | Resend-transactional for programme mail; In-house marketing via Resend for affiliate campaigns | Programme mail always Resend. Affiliate campaigns share the campaign sender and stand down with it at `lifecycle/route.ts:66` and `send/route.ts:41`; Omnisend has no affiliate audience, so affiliate broadcasts have no owner after cutover until one is chosen (finding F-12) |
-| Cart recovery t30m / t12h / t24h / t72h | In-house marketing via Resend (legacy, stands down) → Omnisend `abandoned-cart` and `abandoned-checkout` flows | `lifecycle/route.ts:54-57`: the whole sweep returns `skipped` when the switch is set. Omnisend triggers on `added product to cart` and `started checkout` sent by the hooks (sibling branch) |
-| Cart recovery manual resend (admin) | In-house marketing via Resend | Not switched: `admin-cart-recovery.ts:445` never consults the switch (finding F-06) |
+| Affiliate / ambassador mail and affiliate campaigns | Resend-transactional for programme mail; In-house marketing via Resend for affiliate campaigns, permanently | Programme mail always Resend. Affiliate campaigns keep their sender under the switch: the lifecycle job runs `runCampaignSweep({ affiliateOnly: true })` and the admin send route lets `audience_kind = affiliate` through (F-12, fixed 2026-09-16); Omnisend has no affiliate audience |
+| Cart recovery t30m / t12h / t24h / t72h | In-house marketing via Resend for carts already started (legacy-only mode) → Omnisend `abandoned-cart` and `abandoned-checkout` flows for every other cart | Under the switch the lifecycle job runs `runAbandonedCartSweep({ legacyOnly: true })`: only carts with a claimed stage continue, one owner per cart. Omnisend triggers on `added product to cart` and `started checkout` sent by `hooks.ts`; a cart with an in-house stage never sends either |
+| Cart recovery manual resend (admin) | In-house marketing via Resend, legacy carts only | Under the switch `resendCartRecoveryEmail` refuses a cart with no in-house stage (it is Omnisend's) and still finishes a legacy cart by hand (F-06, fixed 2026-09-16) |
 | Welcome pair | In-house marketing via Resend (legacy) → Omnisend `welcome` flow | `lifecycle/route.ts:59-62` stands the automation sweep down. Omnisend triggers on `subscribed to marketing` (`scripts/omnisend/automations.mjs:73`) |
 | Post-purchase | In-house (legacy) → Omnisend `post-purchase` | same stand-down; Omnisend triggers on `paid for order` (`automations.mjs:143`) |
 | Replenishment | In-house (legacy) → Omnisend `replenishment` | same; `paid for order` plus a 45-day wait |
 | Win-back 1 and 2 | In-house (legacy) → Omnisend `win-back` | same; `paid for order` plus 60 days; code minted nightly by the reconcile (`reconcile.ts:425-457`) |
-| Browse abandonment | In-house (legacy, disabled in production) → Omnisend `browse-abandonment` | same stand-down; Omnisend triggers on server-side `viewed product` (sibling branch hook) |
+| Browse abandonment | In-house (legacy, disabled in production) → Omnisend `browse-abandonment` | same stand-down; Omnisend triggers on the server-side `viewed product` sent by `hooks.ts` for signed-in viewers, once per address and product per six hours |
 | Sunset | Omnisend only | No in-house equivalent; segment-triggered (`automations.mjs:194-201`) |
 | Restock alert | In-house marketing via Resend, permanently | Spec §3.1 and `ownership.ts:26-28`: back-in-stock is unsupported for API stores; keeps running under the switch |
 | Coupon announcement | In-house marketing via Resend, permanently until the owner moves it | Spec §3.1: the owner may still want the one-off broadcast; keeps running under the switch |
-| Birthday bonus email | In-house marketing via Resend | Not named in the spec and not switched (`sweep/route.ts:102`); keeps running (finding F-06) |
+| Birthday bonus email | In-house marketing via Resend, stands down at cutover | Points are still granted; the email is not sent while the switch is set (F-04, fixed 2026-09-16). A birthday flow can be built in Omnisend later |
 | Campaigns (customer) | In-house marketing via Resend (legacy) → Omnisend campaigns | `lifecycle/route.ts:64-67` and the 409 at `send/route.ts:41-49` |
 | Marketing queue (parked event mail) | In-house marketing via Resend | Keeps draining under the switch by design (`ownership.ts:23-25`); only carries restock, coupon and birthday mail after cutover |
 | Transactional retries and both reapers | Resend-transactional | Never consult the switch (`lifecycle/route.ts:72-80`) |
@@ -258,9 +265,9 @@ inside the 60-second function budget, alerts de-duplicated for two hours.
 
 | Job | Under `OMNISEND_MARKETING_OWNER=true` | Why |
 |---|---|---|
-| `cartRecovery` (runs first, `:104`) | stands down: returns `{ skipped: "marketing owned by omnisend" }` (`:56`) | its windows would race Omnisend's abandoned-cart flow; the guard cannot see Omnisend sends |
+| `cartRecovery` (runs first) | legacy-only: `runAbandonedCartSweep({ legacyOnly: true })`, reported with `mode: "legacy"` and the reason | carts the ladder already started finish in-house; every other cart is Omnisend's, so the two never race on one cart |
 | `emailAutomations` | stands down (`:61`) | replaced by the Omnisend flows |
-| `emailCampaigns` | stands down (`:66`); admin send route answers 409 (`send/route.ts:41-49`) | replaced by Omnisend campaigns |
+| `emailCampaigns` | affiliate-only: `runCampaignSweep({ affiliateOnly: true })`; admin send route answers 409 for customer campaigns and lets affiliate ones through | customer campaigns are replaced by Omnisend campaigns; affiliate broadcasts have no Omnisend audience |
 | `marketingQueue` | keeps running (`:69`) | parked restock, coupon and birthday mail is not something Omnisend replaces (`ownership.ts:23-28`) |
 | `emailRetry` | keeps running | transactional |
 | `orderEmailReaper` | keeps running | transactional slot hygiene |
@@ -268,20 +275,20 @@ inside the 60-second function budget, alerts de-duplicated for two hours.
 
 ### 4.2 Sweep (`src/app/api/cron/sweep/route.ts:57-161`)
 
-Nothing here consults the switch. The jobs that put marketing in front of a
-customer from this route are `birthdayBonus` (`:102`, a marketing send) and
-the restock notifications reached through inventory writes rather than a
-cron job. Everything else is payments, fulfilment, inventory, commissions,
-ad spend and hygiene. `couponHygiene` (`:122`) also retires expired coupons,
-which includes the per-contact codes minted for Omnisend once they age out.
+Two jobs here consult the switch: `birthdayBonus` (grants the points and
+stands the email down while Omnisend owns marketing) and `omnisendCartOffers`
+(runs only while Omnisend owns marketing). The restock notifications are
+reached through inventory writes rather than a cron job. Everything else is
+payments, fulfilment, inventory, commissions, ad spend and hygiene.
+`couponHygiene` retires expired coupons, which includes the per-contact codes
+minted for Omnisend once they age out.
 
-On the sibling branch that registers them (commit fea1101), three Omnisend
-jobs join this route: `omnisendOrderBackstop` (paid product orders from the
-last 7 days with no delivered `paid for order` row, 50 a run),
-`omnisendCatalogSync` (every 6h) and `omnisendContactsReconcile` (every 24h),
-each asking `omnisendActive()` before any read. On this branch they are not
-registered, so the reconcile and catalogue sync run only from the admin
-route.
+Four Omnisend jobs are registered in this route: `omnisendOrderBackstop`
+(paid product orders since a recorded floor, at most 7 days back, with no
+delivered `paid for order` row, 50 a run), `omnisendCatalogSync` (every 6 h),
+`omnisendContactsReconcile` (every 24 h) and `omnisendCartOffers` (every
+tick; mints the band code and gift for Omnisend-owned carts 36 to 96 hours
+after their last activity), each asking `omnisendActive()` before any read.
 
 ### 4.3 Queues
 
@@ -290,7 +297,7 @@ route.
 | `pending_emails` | `retryPendingEmails` (lifecycle) and the admin manual retry | transactional; 5 attempts with backoff |
 | `marketing_send_queue` | `drainMarketingSendQueue` (lifecycle) | marketing; 8 attempts; empty in production today |
 | `email_campaign_recipients` | `sendCampaignBatch` (lifecycle) | stands down with the campaign job; a campaign mid-send at cutover stops where it is and resumes only if the switch is unset |
-| `omnisend_events_sent` | the order backstop (sibling branch) | exactly-once ledger, `(entity_id, event_name)` primary key (`src/lib/sql/omnisend-sync.sql:14-23`); claim is an insert, fails open on any error but a duplicate key (`ledger.ts:34-45`) |
+| `omnisend_events_sent` | the order backstop | exactly-once ledger, `(entity_id, event_name)` primary key (`src/lib/sql/omnisend-sync.sql:14-23`); claim is an insert, fails open on any error but a duplicate key (`ledger.ts:34-45`) |
 | `omnisend_sync_state` | reconcile watermark and cadence stamps | `sql:31-35` |
 
 ---
@@ -316,16 +323,14 @@ edge: an address the reconcile flips from `unsubscribed` to `subscribed`
 later (a customer re-ticking the box) will enter the flow then, which is
 correct behaviour but should be understood.
 
-**F-02 (P1) The seven-day order backstop will push a backlog of `paid for
-order` events the moment the key is set.** `onOrderPaid` and the backstop
-(sibling branch) send events for every paid product order inside 7 days with
-no ledger row. With flows enabled at that moment, up to 14 recent orders
-(the 30-day paid count) would enter post-purchase, replenishment and win-back
-at once, and the in-house `post_purchase` may already have mailed the same
-order (`automations.ts:384-395`). Same remedy as F-01: set the key and let
-one sweep tick drain the backstop before any order-triggered flow is enabled;
-Omnisend does not retro-enter contacts for events received while a flow was
-off.
+**F-02 (P1, fixed 2026-09-16) The seven-day order backstop would have pushed
+a backlog of `paid for order` events the moment the key was set.** The
+backstop now records a floor (`omnisend_sync_state` key `order_backstop`,
+`since`) the first time it runs with the integration live and never reports
+an order paid before it, so old orders cannot enter post-purchase,
+replenishment or win-back, and the in-house `post_purchase` that may already
+have mailed them is not doubled. The webhook hooks report only orders paid
+after the key is live. No drain step is needed in the launch order.
 
 **F-03 (P1) On this branch, cutover ends every in-house sequence
 mid-flight, and the exact consequence per sequence is:**
@@ -351,11 +356,11 @@ mid-flight, and the exact consequence per sequence is:**
 * Cart recovery: the 12 open carts ($2,306.85) stop at whatever stage they
   reached, and the stage windows (`cart-recovery.ts:814-818`) close, so the
   t72h message with the code is lost for any cart past 96 hours by the time
-  the switch is unset. The sibling branch (commit 96f5e82) adds a
-  `legacyOnly` mode that finishes carts with a claimed stage; this branch
-  does not have it, so on this branch the whole sweep is skipped
-  (`lifecycle/route.ts:56`). The 412 live recovery gift tokens and their
-  claims stay in `customer_offers` and expire on their own.
+  the switch is unset. Fixed on this branch: the lifecycle job runs the
+  ladder in `legacyOnly` mode under the switch, so a cart with a claimed
+  stage finishes its remaining stages in-house and only carts with none are
+  Omnisend's. The 412 live recovery gift tokens and their claims stay in
+  `customer_offers` and expire on their own.
 * Campaigns: a campaign with rows still `pending` at cutover stops and
   reports nothing; the admin sees the 409 only on a new send.
 
@@ -376,8 +381,10 @@ mid-flight, and the exact consequence per sequence is:**
 
 Because the in-house frequency guard cannot see Omnisend sends
 (`ownership.ts:6-13`), each of these can land on the same day as an Omnisend
-flow email. Birthday is the one the spec does not name and should either be
-switched or moved to an Omnisend date-triggered flow.
+flow email. Fixed 2026-09-16 for the two that were not deliberate: the
+birthday sweep still grants the points and stands the email down under the
+switch, and the admin resend refuses an Omnisend-owned cart (F-06). Restock
+alerts, the coupon announcement and the queue drain keep running by design.
 
 **F-05 (P2) The site's unsubscribe route does not stop SMS.**
 `unsubscribe/route.ts:80-120` writes `email_suppressions` and
@@ -394,12 +401,11 @@ texts STOP is stopped by Omnisend immediately but the store's record lags up
 to 24 hours, and a phone-only contact with no account is never stamped
 (`reconcile.ts:299-300`, `reconcile-plan.ts:64-66`).
 
-**F-06 (P2) Admin manual cart-recovery resend bypasses ownership.**
-`resendCartRecoveryEmail` (`admin-cart-recovery.ts:445`) can mail any of the
-four stages, mint an override gift, and take a frequency claim while Omnisend
-owns the cart, producing a second recovery conversation for one cart. It
-should refuse with the same 409 sentence as the campaign route, or be hidden
-from the admin while the switch is set.
+**F-06 (P2, fixed 2026-09-16) Admin manual cart-recovery resend bypassed
+ownership.** `resendCartRecoveryEmail` now refuses, before minting or
+sending, any cart that has no in-house stage while Omnisend owns marketing
+(`omnisendOwned: true` in its result), and still finishes a legacy cart by
+hand exactly as the sweep does.
 
 **F-07 (P2) DMARC is `p=none` with no reporting address.** The root DMARC
 record enforces nothing. With two ESPs about to sign for the same
@@ -440,17 +446,16 @@ consent-correct direction, and the revenue effect should be measured against
 the 30-day baseline (18 recovered).
 
 **F-11 (P2) Partial refunds send no Omnisend event.** `onOrderRefunded` is
-wired (sibling branch) only for a full refund; the in-house refund email goes
+wired (payment webhook and admin refund action) only for a full refund; the in-house refund email goes
 for every refund (`payment-webhook.ts:3556`). Omnisend segments that use
 lifetime value will overstate a partially refunded customer. Low volume;
 document or send `order refunded` with `refundedLineItems`.
 
-**F-12 (P2) Affiliate campaigns lose their sender at cutover.** They share
-the campaign job and route, so they stand down with customer campaigns, but
-Omnisend has no affiliate audience, tags or merge fields. Either exempt
-`audience_kind = affiliate` from the switch (they are programme
-communications, not customer marketing) or accept that affiliate broadcasts
-pause.
+**F-12 (P2, fixed 2026-09-16) Affiliate campaigns would have lost their
+sender at cutover.** `audience_kind = affiliate` is now exempt from the
+switch: the campaign sweep runs affiliate-only under it and the admin send
+route lets an affiliate campaign through. Omnisend has no affiliate audience,
+tags or merge fields, so this is permanent.
 
 **F-13 (P3) The reconcile watermark cannot narrow the write-back.** Each
 nightly push re-posts every contact (`reconcile.ts:494-523`), which updates
@@ -459,19 +464,19 @@ their `updatedAt` in Omnisend, so the next night's `updatedAtFrom` page
 unaffected; cost is audience/250 requests a night, capped at 40 pages
 (10,000 contacts). Fine at 200 contacts; worth a note for later.
 
-**F-14 (P3) The Omnisend click route carries the recipient's address in the
-query string.** `omnisend-link/route.ts:76` reads `e=` from the URL, which the
-in-house click routes avoid (they read the address from a signed row). It is
-needed because the token is bound to the address (`link-token.ts:15-22`) and
-Omnisend can only substitute a personalisation tag, but it means the address
-appears in CDN and access logs on every click. Accepted in the design;
-recorded here.
+**F-14 (P3, closed 2026-09-16) The Omnisend click route carried the
+recipient's address in the query string.** The v2 link token seals the
+address inside the token with AES-256-GCM under a key derived from
+`UNSUBSCRIBE_SECRET`; the route reads only `t`, `to` and the utm labels, and
+the attestation handoff that follows an unattested click seals its payload
+the same way. No address travels in any URL.
 
 **F-15 (P3) `omnisend_events_sent` fails open on ledger errors**
 (`ledger.ts:39-44`): an unreachable ledger sends the event anyway, relying
 on Omnisend's own historical de-duplication by event id. Correct trade for
-order events; note that cart events (sibling branch) are debounced by the
-same ledger and would lose the debounce during a ledger outage.
+order events; cart events are debounced by the same ledger and would lose the
+debounce during a ledger outage, and the cart-offer plan claim (a mint, not an
+event) is being changed to fail closed for that reason.
 
 **F-16 (P3) Data gaps that the contact push will surface as blanks.**
 Production has no phone numbers on any preferences row, so SMS starts at
@@ -502,7 +507,7 @@ Names confirmed in `.env.example:223-245` and
 | Flag | Where read | Effect | Default |
 |---|---|---|---|
 | `OMNISEND_API_KEY` | `config.ts:17-21` (configured), `client.ts:94-95` (the only read on a send path, after the environment gate at `client.ts:90-93`) | With it unset, `omnisendActive()` is false, every hook returns before any database read, the reconcile and catalogue sync report `skipped`, and the click route still works (the token is signed with the unsubscribe secret, not the key) | unset; production only |
-| `OMNISEND_MARKETING_OWNER` | `config.ts:31-34` via `ownership.ts:44-46` | `true`, `1` or `yes` stands down cart recovery, automations and campaigns and makes the admin send route answer 409; anything else, including a typo, means the in-house engine keeps sending, the direction that cannot double-mail | unset |
+| `OMNISEND_MARKETING_OWNER` | `config.ts:31-34` via `ownership.ts:44-46` | `true`, `1` or `yes`: cart recovery runs legacy-only (carts already started finish, no new ones), automations stand down, customer campaigns stand down and the admin send route answers 409 for them, affiliate campaigns keep sending, the birthday email stands down (points still granted), the admin cart resend refuses Omnisend-owned carts, and the cart-offer sweep runs; anything else, including a typo, means the in-house engine keeps sending, the direction that cannot double-mail | unset |
 | `NEXT_PUBLIC_OMNISEND_BRAND_ID` | `src/components/omnisend-snippet.tsx` | Overrides the built-in brand id for the page-view script on a staging deployment; not a secret and not part of the server sync | unset (built-in id) |
 | `UNSUBSCRIBE_SECRET` (fallback: the service-role key) | `link-token.ts:75-81`, `unsubscribe.ts:10-16`, `src/lib/email/link-grant.ts:99` | Signs the Omnisend link token, the unsubscribe token and the in-house browse grants; rotating it invalidates every `vl_link` on every contact until the next reconcile refreshes them (30-day tokens, `link-token.ts:61`) | falls back |
 | `EMAIL_WEBHOOK_SECRET`, `RESEND_WEBHOOK_SIGNING_SECRET` | `webhooks/email/route.ts:162,242` | Both required or the webhook answers 503 and Resend redelivers | must be set |

@@ -68,14 +68,6 @@ import { siteUrl } from "@/lib/site-identity";
  */
 export const OMNISEND_LINK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-/**
- * The attribution cookie the click route sets, so a later order can be
- * credited to the Omnisend campaign that brought the customer. httpOnly: no
- * script needs to read it. Named beside the token because the two are set by
- * the same route and read by the same reports.
- */
-export const OMNISEND_ATTRIBUTION_COOKIE = "vl_omnisend";
-
 const VERSION = "v2";
 const NAMESPACE = `omnisend_link:${VERSION}:`;
 /**
@@ -233,7 +225,7 @@ export async function verifyOmnisendLink(
  * UTMs ride on the click link rather than being re-applied by the route from
  * stored state, because Omnisend holds no stored state the route can read. The
  * route treats them as labels only: they name a campaign in a report and in
- * the attribution cookie, and they never influence where anyone is sent.
+ * order_attribution, and they never influence where anyone is sent.
  */
 export function omnisendLinkUrl(
   path: string,

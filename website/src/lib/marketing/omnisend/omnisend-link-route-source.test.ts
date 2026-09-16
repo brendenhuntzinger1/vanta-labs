@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
  *     fallback — never a request value;
  *   * the grant is minted through emailLinkLanding, so the attestation check
  *     cannot be skipped by a route that forgot to ask;
- *   * the attribution cookie is httpOnly.
+ *   * no cookie is set beyond the browse grant.
  */
 const ROUTE = readFileSync(join(process.cwd(), "src/app/api/email/omnisend-link/route.ts"), "utf8");
 const TOKEN = readFileSync(join(process.cwd(), "src/lib/marketing/omnisend/link-token.ts"), "utf8");
@@ -102,17 +102,11 @@ describe("the grant and the attribution cookie", () => {
     expect(route).toContain("if (landing.grant) setEmailLinkGrantCookie(response, landing.grant);");
   });
 
-  it("sets an httpOnly, lax, seven-day attribution cookie on every verified click", () => {
-    const start = route.indexOf("name: OMNISEND_ATTRIBUTION_COOKIE");
-    expect(start).toBeGreaterThan(-1);
-    const block = route.slice(start, route.indexOf("});", start));
-    expect(block).toContain("httpOnly: true");
-    expect(block).toContain('sameSite: "lax"');
-    expect(block).toContain('secure: process.env.NODE_ENV === "production"');
-    expect(block).toContain('path: "/"');
-    expect(block).toContain("maxAge: ATTRIBUTION_MAX_AGE_SECONDS");
-    expect(block).toContain("value: JSON.stringify({ campaign, at: Date.now() })");
-    expect(route).toContain("const ATTRIBUTION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;");
+  it("sets no cookie beyond the browse grant, because nothing reads one and the Cookie Policy gates campaign data on consent", () => {
+    expect(route).not.toContain("OMNISEND_ATTRIBUTION_COOKIE");
+    expect(route).not.toContain("vl_omnisend");
+    expect(route.split("cookies.set(").length - 1).toBe(0);
+    expect(route.split("setEmailLinkGrantCookie(").length - 1).toBe(1);
   });
 
   it("caps the labels anyone can put in a utm_ parameter", () => {

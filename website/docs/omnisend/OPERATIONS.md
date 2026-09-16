@@ -50,7 +50,8 @@ first send:
    outside the migration, but `p=none` gives no protection today.
 
 Reply handling: set the reply-to in Omnisend to the monitored support address
-(`support@vantalabsresearch.com`, the same one the in-house engine uses). The
+(the monitored support mailbox configured as `SUPPORT_EMAIL` in
+`scripts/omnisend/lib.mjs`, the same one the in-house engine uses). The
 footer layout already carries it as text.
 
 Placement is not promised. Gmail Primary tab placement and spam avoidance
@@ -85,8 +86,8 @@ destination with:
 |---|---|
 | `utm_source` | `omnisend` |
 | `utm_medium` | `email` or `sms` |
-| `utm_campaign` | the flow or campaign key (`welcome`, `cart`, `checkout`, `browse`, `post-purchase`, `winback`, `restock`, `promotion`, ...) |
-| `utm_content` | the slot in the message (`primary`, `secondary`, `code`, `gift`, `product-1`, `header`, `footer`) |
+| `utm_campaign` | the flow or campaign key as the generator and hooks emit it: `welcome`, `abandoned-cart`, `abandoned-checkout`, `browse-abandonment`, `post-purchase`, `replenishment`, `win-back`, `sunset`, `campaign-new-product`, `campaign-promotion`, `campaign-final-day`, `header`, `footer` (layout links), `order` (links inside order events) |
+| `utm_content` | the slot in the message: `primary`, `secondary`, `code` |
 
 The storefront's attribution client (`src/lib/attribution-client.ts`) stores
 the first and last touch in the browser, and checkout writes them to
@@ -95,9 +96,10 @@ campaign evidence there (`hasCampaignEvidence`). So an Omnisend-driven order is
 visible in the store's own records as `last_utm_source = omnisend` with the
 flow in `last_utm_campaign`, and in the admin attribution views alongside ads.
 
-The click route also sets a `vl_omnisend` cookie for seven days. Nothing reads
-it yet; it is there so a server-side fallback can be added for browsers that
-drop localStorage (some in-app browsers) without changing any email.
+The click route sets no cookie of its own (only the browse grant when the
+recipient is attested). A campaign cookie set on a click regardless of the
+cookie banner would contradict the Cookie Policy, and nothing read one; the
+landing URL's parameters are the attribution record.
 
 ### Windows, and why two systems will disagree
 
@@ -134,7 +136,7 @@ audience growth (`subscribedSms`, `unsubscribedSms` and the email equivalents).
 | SMS opens | not measurable | SMS has no open signal; do not report one |
 | Clicks | Omnisend `clickRate` + store session visits with `utm_source=omnisend` | |
 | Orders and revenue | store `order_attribution` (arbiter) and Omnisend `attributedOrders` | see section 2 |
-| Cart recovery by cohort | store: `abandoned_carts` joined to `orders` and `order_attribution` where `last_utm_campaign in ('cart','checkout')` | Omnisend-owned carts only, from the cutover timestamp in `omnisend_sync_state.migration` |
+| Cart recovery by cohort | store: `abandoned_carts` joined to `orders` and `order_attribution` where `last_utm_campaign in ('abandoned-cart','abandoned-checkout')` | Omnisend-owned carts only, from the cutover timestamp in `omnisend_sync_state.migration` |
 | Revenue per recipient | Omnisend `attributedRevenue / sent` per flow | |
 | Discount and gift cost | store: `coupons` where `assigned_email` and source `omnisend_*`, `customer_offers` with the recovery key, joined to orders | contribution = subtotal minus cost of goods, gifts at cost, discount, shipping and processing |
 | SMS segments and cost | Omnisend `sentCost` (SMS) | multipart messages count more than once; keep texts under 160 characters |

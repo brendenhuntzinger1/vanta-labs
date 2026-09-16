@@ -100,7 +100,8 @@ for recipients whose account is already attested (`link-grant.ts`,
   contact upsert and refreshed by the nightly reconcile;
 - template links point at `/api/email/omnisend-link?t=[[contact.custom_properties.vl_link]]&to=<site path>&utm_...`;
 - that route verifies the token, checks attestation, mints `vl_email_grant`,
-  sets the `vl_omnisend` attribution cookie (7 days) and redirects to the
+  (amended 2026-09-16: sets no attribution cookie; the landing URL's utm
+  parameters are what order_attribution reads) and redirects to the
   validated site path. An unattested account lands on `/attest` with the
   destination preserved; an invalid token lands on sign-in with `next=`.
 - cart and checkout URLs inside events (`abandonedCheckoutURL`, line-item
@@ -349,13 +350,16 @@ arriving from Omnisend messages, US and Canada. Tags `form_subscriber`,
    `OMNISEND_API_KEY` set in Vercel. Nothing changes for customers; contacts,
    consent, catalogue and events start flowing into Omnisend.
 2. Owner checks Omnisend: contacts match, products render, events arrive.
-3. Enable flows one at a time in Omnisend, starting with welcome and
-   abandoned checkout, and set `OMNISEND_MARKETING_OWNER=true` the same day so
-   the in-house ladder stops.
+3. Set `OMNISEND_MARKETING_OWNER=true` FIRST (amended 2026-09-16: the
+   in-house engine must stand down before any Omnisend flow is live, or both
+   mail the same inbox), then enable flows one at a time in Omnisend, starting
+   with abandoned checkout, each after 48 hours of clean results on the last.
+   The exact order is docs/omnisend/OPERATIONS.md §4.
 4. Enable the form. Send the first campaign from the drafts.
 
-Rollback is the reverse: unset the owner flag (in-house flows resume on the
-next lifecycle tick), disable the Omnisend flows.
+Rollback is the reverse, in this order: disable the Omnisend flows first,
+then unset the owner flag (in-house flows resume on the next lifecycle tick).
+Consent is never widened by any step, so there is nothing to restore.
 
 ## 12. What only the owner can do
 

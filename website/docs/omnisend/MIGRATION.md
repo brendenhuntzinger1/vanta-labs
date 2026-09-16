@@ -226,11 +226,11 @@ snapshot; the cutoff is written once; the watermark only advances.
 
 ## 5. Rollback
 
-1. Unset `OMNISEND_MARKETING_OWNER` in Vercel (or set it to anything but
-   `true`). On the next lifecycle tick the in-house cart recovery ladder,
-   automations and campaigns resume; the admin campaign send endpoint stops
-   refusing. Disable the Omnisend flows in the Omnisend dashboard so the two
-   systems never mail the same inbox on the same day.
+1. Disable the Omnisend flows in the Omnisend dashboard FIRST, then unset
+   `OMNISEND_MARKETING_OWNER` in Vercel (or set it to anything but `true`).
+   On the next lifecycle tick the in-house cart recovery ladder, automations
+   and campaigns resume and the admin campaign send endpoint stops refusing.
+   In that order, the two systems never mail the same inbox on the same day.
 2. There is no consent to restore. The migration copied consent from the
    store to Omnisend and never the other way except to shrink it (section 4),
    so the store's record after rollback is the store's record before it, plus
@@ -240,8 +240,11 @@ snapshot; the cutoff is written once; the watermark only advances.
    "post-migration-<date>" }`) and run section 6 against the pre-migration
    label. An empty result is the proof.
 4. `OMNISEND_API_KEY` can stay set: with the owner flag off, contacts, consent,
-   catalogue and events keep flowing to Omnisend and nothing sends. Unset it
-   too if the account is being abandoned; every hook then returns at the gate.
+   catalogue and events keep flowing to Omnisend, and nothing sends from
+   Omnisend only because the flows were disabled in step 1 (the switch is read
+   by the in-house senders alone; Omnisend's flows are enabled or disabled in
+   Omnisend). Unset the key too if the account is being abandoned; every hook
+   then returns at the gate.
 
 ## 6. The comparison
 

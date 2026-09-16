@@ -104,9 +104,9 @@ describe("the token round trip", () => {
     expect(OMNISEND_LINK_TTL_MS).toBe(30 * 24 * 60 * 60 * 1000);
   });
 
-  it("names the attribution cookie", async () => {
-    const { OMNISEND_ATTRIBUTION_COOKIE } = await tokens();
-    expect(OMNISEND_ATTRIBUTION_COOKIE).toBe("vl_omnisend");
+  it("exports no attribution cookie: the click route sets none", async () => {
+    const mod = await tokens();
+    expect("OMNISEND_ATTRIBUTION_COOKIE" in mod).toBe(false);
   });
 });
 
