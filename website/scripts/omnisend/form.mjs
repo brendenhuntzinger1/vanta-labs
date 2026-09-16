@@ -116,12 +116,12 @@ export function form() {
           // The brand name sits on this step too: a carrier reviewer sees the SMS
           // step alone as consent proof and must find the brand, the agreement,
           // an unticked box, STOP and HELP, the rates sentence and a policy link.
-          text("VANTA LABS · TEXT MESSAGES", "footnote"),
+          text("VANTA LABS: TEXT MESSAGES", "footnote"),
           text("Restock texts, if you want them.", "heading_medium"),
           text("Optional. Cart reminders, restocks and subscriber offers by text.", "paragraph"),
           { type: "phoneNumberField", phoneNumberField: { label: "", placeholder: "Mobile number", defaultCountryCode: "US", countryCodes: { includes: ["US", "CA"] }, isRequired: false, requiredMessage: "A mobile number is required to receive texts", errorMessage: "That does not look like a mobile number" }, styleProperties: field },
           { type: "legal", legal: { type: "tcpa", label: "I agree to receive text messages from Vanta Labs", description: SMS_CONSENT, link: PRIVACY_URL, requiredMessage: "Tick the box to receive texts" }, styleProperties: { ...pad("4px", "0px", "8px"), fontSize: "11px", color: PALETTE.subtle } },
-          text(`Consent is stored with your number. ${legalLink(PRIVACY_URL, "Privacy Policy")} · ${legalLink(TERMS_URL, "Terms")}`, "footnote", { padding: pad("0px", "0px", "8px") }),
+          text(`Consent is stored with your number. ${legalLink(PRIVACY_URL, "Privacy Policy")} and ${legalLink(TERMS_URL, "Terms")}`, "footnote", { padding: pad("0px", "0px", "8px") }),
           button("Add texts", "submit"),
           button("Skip this step", "nextStep", "secondary_button"),
         ]),
