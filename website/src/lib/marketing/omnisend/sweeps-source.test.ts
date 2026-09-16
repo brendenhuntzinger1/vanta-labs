@@ -112,6 +112,58 @@ describe("the backstop is bounded and retries only dead claims", () => {
     expect(SWEEPS).toContain('const LOG = "[omnisend/sweeps]";');
     expect(backstop).toMatch(/\} catch \(error\) \{\s*console\.error\(LOG, "order backstop threw", error\);\s*return \{/);
   });
+
+  // A refused sync-state read used to look exactly like a first run, and a
+  // first run stamps the floor. The decision is pure (backstopFloorDecision)
+  // and its skip return comes before the stamp and before any order read.
+  it("decides the floor with backstopFloorDecision and stands down on an unreadable record before stamping or reading orders", () => {
+    const decide = backstop.indexOf("backstopFloorDecision({ record, now: now.getTime() })");
+    const skip = backstop.indexOf('if (decision.action === "skip") return { scanned, sent, skipped: decision.skipped };');
+    const stamp = backstop.indexOf("writeSyncState(ORDER_BACKSTOP_KEY, { since: new Date(floor).toISOString() }, LOG)");
+    const orders = backstop.indexOf('from("orders")');
+    expect(decide).toBeGreaterThan(-1);
+    expect(skip).toBeGreaterThan(decide);
+    expect(stamp).toBeGreaterThan(skip);
+    expect(orders).toBeGreaterThan(stamp);
+    // The stamp is guarded by the decision, never by the record being null.
+    expect(backstop).toContain('if (decision.action === "stamp") {');
+    expect(backstop).not.toMatch(/if \(!Number\.isFinite\(floor\)\)/);
+  });
+
+  it("asks the wall-clock budget before every onOrderPaid and stops starting orders once it is spent", () => {
+    expect(SWEEPS).toContain("const OMNISEND_BACKSTOP_BUDGET_MS = 20_000;");
+    const loop = backstop.indexOf("for (const candidate of batch) {");
+    const ask = backstop.indexOf("backstopBudgetAllows({ startedAtMs, nowMs: Date.now(), budgetMs })", loop);
+    const retry = backstop.indexOf("await onOrderPaid(candidate.order_id)", loop);
+    expect(loop).toBeGreaterThan(-1);
+    expect(ask).toBeGreaterThan(loop);
+    expect(retry).toBeGreaterThan(ask);
+    expect(backstop.slice(ask, retry)).toContain("budgetExhausted = true;");
+    expect(backstop.slice(ask, retry)).toContain("break;");
+    // The clock starts at entry, so the reads count against the budget too.
+    const started = backstop.indexOf("const startedAtMs = Date.now();");
+    expect(started).toBeGreaterThan(-1);
+    expect(started).toBeLessThan(backstop.indexOf("readSyncState<BackstopFloorRecord>"));
+    // What was left is reported from the same pure function the test above pins.
+    expect(backstop).toContain("backstopRunNotes({ pending: pending.length, attempted, stale: stale.length, budgetExhausted })");
+  });
+});
+
+describe("sync-state.ts tells a missing record from a refused read", () => {
+  const readState = fn(SYNC_STATE, "export async function readSyncState");
+
+  it("answers { value, unreadable } and marks both the refused and the thrown read unreadable", () => {
+    expect(readState).toMatch(/if \(error\) \{[\s\S]*?return \{ value: null, unreadable: true \};/);
+    expect(readState).toMatch(/catch \(error\) \{[\s\S]*?return \{ value: null, unreadable: true \};/);
+    expect(readState).toContain("unreadable: false");
+    expect(readState).not.toMatch(/return null;/);
+  });
+
+  it("the cadence jobs still treat an unreadable record as not recorded, so a hiccup cannot stall a sync", () => {
+    for (const declaration of [JOBS[1], JOBS[2]]) {
+      expect(fn(SWEEPS, declaration)).toContain("lastRunAt: record.value?.lastRunAt");
+    }
+  });
 });
 
 describe("the cadence jobs keep their record in omnisend_sync_state", () => {

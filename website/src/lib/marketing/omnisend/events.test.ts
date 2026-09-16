@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   EVENT_VERSIONS,
@@ -7,6 +9,7 @@ import {
   buildViewedProduct,
   sendOmnisendEvent,
   slugify,
+  transientOmnisendRefusal,
   type OmnisendLineItem,
   type OmnisendOrder,
 } from "@/lib/marketing/omnisend/events";
@@ -52,7 +55,6 @@ function order(overrides: Partial<OmnisendOrder> = {}): OmnisendOrder {
     replacementOf: null,
     email: "  Jo@Example.COM ",
     customerName: "Jo Ann Smith",
-    phone: "(415) 555-0100",
     currency: "usd",
     amountPaid: 198.48,
     subtotal: 202.48,
@@ -295,19 +297,41 @@ describe("order events", () => {
     expect(buildOrderEvent({ name: "placed order", order: order(), at: AT + 1 })!.eventID).toBe(placed.eventID);
   });
 
-  it("lowercases the contact email and carries name and E.164 phone", () => {
+  it("lowercases the contact email and carries the name, and never a phone", () => {
     expect(placed.contact).toEqual({
       email: "jo@example.com",
-      phone: "+14155550100",
       firstName: "Jo",
       lastName: "Ann Smith",
     });
   });
 
-  it("omits a phone it cannot make E.164, rather than sending it malformed", () => {
-    const event = buildOrderEvent({ name: "placed order", order: order({ phone: "call me" }) })!;
-    expect(event.contact).not.toHaveProperty("phone");
-    expect(event.properties.shippingAddress).not.toHaveProperty("phone");
+  // THE PHONE IS THE SMS CHANNEL. Omnisend creates or updates the contact
+  // from an event's contact block, so a phone there becomes a phone
+  // identifier on a contact whose upsert (contact-payload.ts) deliberately
+  // sent none, because the customer never ticked the SMS box. The checkout
+  // phone is for the courier, not for marketing, and the privacy policy says
+  // it reaches Omnisend only with SMS consent; no order event carries it
+  // anywhere, contact block or address block.
+  it("carries no phone anywhere in any order event", () => {
+    for (const event of Object.values(all)) {
+      expect(event.contact).not.toHaveProperty("phone");
+      expect(event.properties.billingAddress).not.toHaveProperty("phone");
+      expect(event.properties.shippingAddress).not.toHaveProperty("phone");
+      expect(JSON.stringify(event)).not.toMatch(/phone/i);
+    }
+  });
+
+  it("the builders and the order loader never read a phone at all", () => {
+    const dir = join(process.cwd(), "src/lib/marketing/omnisend");
+    const strip = (source: string) =>
+      source
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .split("\n")
+        .filter((line) => !/^\s*(\/\/|\*)/.test(line))
+        .map((line) => line.replace(/\s\/\/.*$/, ""))
+        .join("\n");
+    expect(strip(readFileSync(join(dir, "events.ts"), "utf8"))).not.toMatch(/phone/i);
+    expect(strip(readFileSync(join(dir, "orders.ts"), "utf8"))).not.toMatch(/phone/i);
   });
 
   it("pins every order property name, with prices from the order row", () => {
@@ -366,14 +390,13 @@ describe("order events", () => {
       state: "TX",
       zip: "78701",
       country: "US",
-      phone: "+14155550100",
     };
     expect(placed.properties.billingAddress).toEqual(address);
     expect(placed.properties.shippingAddress).toEqual(address);
   });
 
   it("omits address fields the order does not carry", () => {
-    const event = buildOrderEvent({ name: "placed order", order: order({ address: null, customerName: null, phone: null }) })!;
+    const event = buildOrderEvent({ name: "placed order", order: order({ address: null, customerName: null }) })!;
     expect(event.properties.shippingAddress).toEqual({});
     expect(event.contact).toEqual({ email: "jo@example.com" });
   });
@@ -442,6 +465,23 @@ describe("order events", () => {
   it("treats an unset order type as a sale", () => {
     expect(buildOrderEvent({ name: "paid for order", order: order({ orderType: null }) })).not.toBeNull();
     expect(buildOrderEvent({ name: "paid for order", order: order({ orderType: undefined }) })).not.toBeNull();
+  });
+});
+
+describe("transientOmnisendRefusal", () => {
+  // The order hooks hand a claim back on a refusal that may not recur, so a
+  // later notice or the backstop can retry, and keep it (recorded
+  // undelivered) on one that will: a 4xx is the request's own fault.
+  it("names status 0 (every transport failure), 429 and the gateway 5xx as transient", () => {
+    for (const status of [0, 429, 500, 502, 503, 504]) expect(transientOmnisendRefusal(status), String(status)).toBe(true);
+  });
+
+  it("treats every other 4xx, and an unknown status, as permanent", () => {
+    for (const status of [400, 401, 403, 404, 409, 422, 501, 505]) expect(transientOmnisendRefusal(status), String(status)).toBe(false);
+  });
+
+  it("is never true for a success", () => {
+    for (const status of [200, 201, 204]) expect(transientOmnisendRefusal(status), String(status)).toBe(false);
   });
 });
 
