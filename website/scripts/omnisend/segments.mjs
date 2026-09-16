@@ -39,6 +39,8 @@ export const PROPERTY_SEGMENTS = {
   "vl-recovery-code-ready": () => seg("VL · Recovery code ready", [contact([customYes("vl_recovery_ready")])]),
   // The win-back split: the nightly sweep sets vl_winback_ready to "yes" once the code is minted.
   "vl-winback-ready": () => seg("VL · Win-back code ready", [contact([customYes("vl_winback_ready")])]),
+  // The welcome split: the opt-in upsert sets vl_welcome_ready to "yes" only when it minted a welcome code; a checkout-sourced opt-in gets none.
+  "vl-welcome-ready": () => seg("VL · Welcome code ready", [contact([customYes("vl_welcome_ready")])]),
 };
 
 export const EVENT_SEGMENTS = {
@@ -50,7 +52,7 @@ export const EVENT_SEGMENTS = {
     ], "or"),
   ]),
   "vl-unengaged-120": () => seg("VL · Unengaged 120 days", [
-    contact([subscribed("email"), { property: "dateAdded", operator: "before", value: "__120_DAYS_AGO__" }]),
+    contact([subscribed("email"), { property: "dateAdded", operator: "notInTheLast", value: 120, unit: "days" }]),
     event([
       { name: "opened message", operator: "hasNot", count: "atLeast", value: 1, period: { operator: "inTheLast", unit: "days", value: 120 } },
       { name: "clicked message", operator: "hasNot", count: "atLeast", value: 1, period: { operator: "inTheLast", unit: "days", value: 120 } },

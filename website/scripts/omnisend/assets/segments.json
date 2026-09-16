@@ -10,10 +10,11 @@
   "vl-vip": "6aa9891737e7762ce4afac2b",
   "vl-campaign-audience": "6aa9891856e90f08f163f5ad",
   "vl-engaged-90": "6aa9894deba844d1e0e953a0",
-  "vl-unengaged-120": "6aa9895956e90f08f163f5ae",
+  "vl-unengaged-120": "6aaae34d9ca7eb31e5d9e654",
   "vl-repeat-customers": "6aa9895a56e90f08f163f5af",
   "vl-browsed-no-order-30d": "6aa9895c56e90f08f163f5b0",
   "vl-recovery-gift-ready": "6aaaae67f658a847e55713a6",
   "vl-recovery-code-ready": "6aaaae68f658a847e55713a7",
-  "vl-winback-ready": "6aaaaefc171138e617aa7178"
+  "vl-winback-ready": "6aaaaefc171138e617aa7178",
+  "vl-welcome-ready": "6aaac3f27cbd2da70ddb4dc7"
 }

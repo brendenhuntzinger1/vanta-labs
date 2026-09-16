@@ -4,7 +4,7 @@ Everything Vanta Labs owns inside Omnisend is generated from this directory:
 the two universal layouts, every email template, the SMS catalogue, the
 segments, the automations, the sign-up form and the three campaign drafts.
 Nothing here runs at request time; the Next.js app only ever talks to
-Omnisend through `src/lib/omnisend/`. This directory is a build tool that
+Omnisend through `src/lib/marketing/omnisend/`. This directory is a build tool that
 renders JSON for the Omnisend Public API (v2026-03-15) and keeps a registry of
 the ids it created.
 
@@ -18,7 +18,7 @@ from the Omnisend dashboard after review.
 |------|---------------|
 | `lib.mjs` | The template DSL: palette, fonts, `hexId()`, `link()` (the grant route), text/button/image/section helpers, product sections with role-tagged components |
 | `layouts.mjs` | The universal header and footer (`layouts:header`, `layouts:footer`) |
-| `templates.mjs` | `TEMPLATES` (30 email templates, keyed), `SUBJECTS` (subject and preview per key), `TEMPLATE_KEYS` |
+| `templates.mjs` | `TEMPLATES` (32 email templates, keyed), `LAYOUTS` (the two universal layout ids), `SUBJECTS` (subject and preview per key), `TEMPLATE_KEYS` |
 | `sms.mjs` | `SMS` (seven texts with `text` and `whenUsed`), `smsBody()`, `STOP_SENTENCE` |
 | `segments.mjs` | `PROPERTY_SEGMENTS` (creatable at any time) and `EVENT_SEGMENTS` (creatable only once the event has been recorded) |
 | `automations.mjs` | `AUTOMATIONS` (eight flows), built from the ids in `assets/` |
@@ -41,7 +41,7 @@ from templates by id, and because updating an object needs its id.
 | `assets/campaigns.json` | `{ "<campaign name>": "<campaignID>" }` | a campaign draft is created |
 | `assets/automation-content.json` | `{ "<automation key>": [{ "template": "<template key>", "contentID": "<emailContentID>" }] }`, in block order (depth first, `trueBlocks` before `falseBlocks`) | an automation's blocks are created or replaced |
 
-Layout ids are fixed and referenced from `layouts.mjs` (header
+Layout ids are fixed and live in `templates.mjs` as `LAYOUTS` (header
 `6aa985ecfa261ac55e04bae3`, footer `6aa985f7c29076c61d3838b1`).
 
 `automations.mjs` refuses to render a flow whose templates or segments have
@@ -132,6 +132,25 @@ The store sets those properties only after the gift or code exists, so a
 variant never renders a blank card. The win-back flow does the same with
 `vl-winback-ready`.
 
+### The welcome split
+
+The store mints the welcome code for site sign-ups at once, for Omnisend
+form sign-ups on the next nightly reconcile (within a day) and for checkout
+opt-ins never, and sets `vl_welcome_ready` to "yes" only once the code
+exists. So `welcome-1` carries no code card and goes to everyone, and the flow
+splits on `vl-welcome-ready` two days in (`welcome-2-code` / `welcome-2`) and
+again five days in (`welcome-3` / `welcome-3-nocode`). The form promises the
+offer "by email within two days" for the same reason.
+
+### Win-back entry
+
+Win-back enters on the `vl-lapsed-60` segment rather than on "paid for
+order": an order trigger with a 60-day wait and a 180-day limiter locked a
+repeat buyer out for 180 days from their first order. The segment encodes the
+60 days, the flow starts with the email, and the limiter (32 d) only outlasts
+one run. Entering on a segment uses the same trigger shape as the sunset flow
+(`enteredSegment()` in `automations.mjs`).
+
 ## What the plan and the API allow
 
 Learned from the validator and from the account; do not spend time trying
@@ -163,6 +182,13 @@ these again.
   verified `vantalabsresearch.com` sender must be added in account settings
   before any campaign goes out.
 - Frequency limiters of seven days come back as `1w`; that is the same value.
+- Segment date filters take relative operators (`inTheLast` / `notInTheLast`
+  with `value` and `unit`); a placeholder such as `__120_DAYS_AGO__` is not a
+  date. `vl-unengaged-120` was re-created that way on 2026-09-16 and the
+  sunset trigger re-pointed with `patch_automations_id`; the original segment
+  is still in the account, unreferenced.
+- `patch_form_id` replaces each nested object it is given, so send `content`
+  complete (`generalSettings` and `steps`); `status` stays `draft`.
 
 ## Copy rules
 
@@ -174,15 +200,19 @@ Every customer-facing string in this directory follows the store's voice:
 - no invented claims, scarcity, countdowns, testimonials or shipping promises
   beyond the documented dispatch window;
 - one primary action per email; every link goes through `link()` so it passes
-  the grant route with the contact's token and UTM tags;
+  the grant route with the contact's token and UTM tags, except the footer's
+  two social profile links and `mailto:` support address, the
+  `[[unsubscribe_link]]` tag and the store-built gift claim URL;
 - alt text on every image;
 - a code or a gift appears only where the automation split guarantees it;
 - the final-day promotion says "ends today at 11:59 PM ET" once and uses no
   timer;
 - no first-name token, because Omnisend's fallback syntax is undocumented;
-- SMS starts "Vanta Labs:", ends "Reply STOP to opt out.", stays under 160
-  characters with the shortened link, carries no code, and links with
-  `medium: "sms"`.
+- SMS starts "Vanta Labs:", puts the link straight after the message, then
+  "Research use only." and "Reply STOP to opt out.", stays under 160
+  characters with the shortened link, carries no code, claims nothing about an
+  email (an SMS-only consent may never get one), links with `medium: "sms"`,
+  and sends no unsubscribe link (STOP only; the form takes US and CA numbers).
 
 The consent sentence in `form.mjs` (`SMS_CONSENT`) is the store's TCPA
 wording copied exactly; do not widen it.

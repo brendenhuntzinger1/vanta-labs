@@ -6,7 +6,8 @@ import { PALETTE, SITE } from "./lib.mjs";
  * catalogue. Restyled from Omnisend's email-and-SMS two-step template to the
  * site palette. post_forms creates it in DRAFT; the owner enables it after
  * review. Nothing here promises a discount amount, because the welcome code
- * is minted by the store and arrives by email.
+ * is minted by the store and arrives by email within two days (site sign-ups
+ * at once, form sign-ups after the nightly reconcile).
  *
  * Shape notes (post_forms schema, v2026-03-15, learned from its validator):
  *   - sections, rows, columns and blocks carry no ids (the server assigns them);
@@ -104,7 +105,7 @@ export function form() {
         step([
           text("VANTA LABS", "footnote"),
           text("Batch reports, restocks and subscriber offers.", "heading_medium"),
-          text("One or two emails a month. Every one links to the report for the batch it is about. Your welcome code arrives with the first.", "paragraph"),
+          text("One or two emails a month. Every one links to the report for the batch it is about. Your welcome offer follows by email within two days.", "paragraph"),
           { type: "emailField", emailField: { label: "", placeholder: "Email address", isRequired: true, requiredMessage: "An email address is required", errorMessage: "That does not look like an email address" }, styleProperties: field },
           button("Subscribe", "submit"),
           text("For laboratory research use only. Not for human or veterinary use. Unsubscribe at any time.", "footnote", { padding: pad("12px", "0px", "0px") }),
@@ -112,7 +113,7 @@ export function form() {
         step([
           text("TEXT MESSAGES", "footnote"),
           text("Restock texts, if you want them.", "heading_medium"),
-          text("Optional. Restocks and subscriber offers by text, a few times a month at most.", "paragraph"),
+          text("Optional. Cart reminders, restocks and subscriber offers by text.", "paragraph"),
           { type: "phoneNumberField", phoneNumberField: { label: "", placeholder: "Mobile number", defaultCountryCode: "US", countryCodes: { includes: ["US", "CA"] }, isRequired: false, requiredMessage: "A mobile number is required to receive texts", errorMessage: "That does not look like a mobile number" }, styleProperties: field },
           { type: "legal", legal: { type: "tcpa", label: "I agree to receive text messages from Vanta Labs", description: SMS_CONSENT, link: PRIVACY_URL, requiredMessage: "Tick the box to receive texts" }, styleProperties: { ...pad("4px", "0px", "8px"), fontSize: "11px", color: PALETTE.subtle } },
           button("Add texts", "submit"),
@@ -121,7 +122,7 @@ export function form() {
       ],
       successStep: step([
         text("You are on the list.", "heading_medium"),
-        text("Your welcome code is on its way by email. The catalogue and the COA library are open to account holders.", "paragraph"),
+        text("Your welcome offer arrives by email within two days. The catalogue and the COA library are open to account holders.", "paragraph"),
         button("Browse the catalogue", "link", "primary_button", { link: `${SITE}/products?utm_source=omnisend&utm_medium=form&utm_campaign=signup` }),
       ]),
       subscribedStep: step([

@@ -9,7 +9,7 @@ const GRANT_LINK = "/api/email/omnisend-link?t=[[contact.custom_properties.vl_li
 const GIFT_LINK = "[[contact.custom_properties.vl_recovery_gift_link]]";
 
 const EXPECTED_KEYS = [
-  "welcome-1", "welcome-2", "welcome-3",
+  "welcome-1", "welcome-2", "welcome-2-code", "welcome-3", "welcome-3-nocode",
   "cart-1", "cart-2", "cart-3-gift-code", "cart-3-gift", "cart-3-code", "cart-3-plain",
   "checkout-1", "checkout-2", "checkout-3-gift-code", "checkout-3-gift", "checkout-3-code", "checkout-3-plain",
   "browse-1", "post-purchase-1", "post-purchase-2", "replenishment",
@@ -175,9 +175,22 @@ describe("templates: copy", () => {
     }
   });
 
-  it("puts the welcome code only where the welcome upsert guarantees it", () => {
+  it("puts the welcome code only in the split-guaranteed welcome emails", () => {
     const withWelcome = TEMPLATE_KEYS.filter((key) => JSON.stringify(rendered[key]).includes("vl_welcome_code"));
-    expect(withWelcome.sort()).toEqual(["welcome-1", "welcome-3"]);
+    expect(withWelcome.sort()).toEqual(["welcome-2-code", "welcome-3"]);
+    // The first email goes out before a code can exist, so it never carries the card.
+    expect(JSON.stringify(rendered["welcome-1"])).not.toMatch(/vl_welcome|% off|your code/i);
+  });
+
+  it.each([["welcome-2-code", "welcome-2"], ["welcome-3", "welcome-3-nocode"]])("%s minus the code card is %s", (coded, nocode) => {
+    expect(JSON.stringify(rendered[nocode])).not.toMatch(/vl_welcome|% off/);
+    // Same hero and the same links: the coded copy is the nocode copy plus the card.
+    const codedCopy = copy(rendered[coded]);
+    const nocodeCopy = copy(rendered[nocode]);
+    expect(codedCopy.startsWith(nocodeCopy)).toBe(true);
+    expect(codedCopy.slice(nocodeCopy.length)).toMatch(/your code/i);
+    expect(hrefs(rendered[nocode])).toEqual(hrefs(rendered[coded]).filter((href) => !href.includes("utm_content=code")));
+    expect(rendered[nocode].sections).toHaveLength(rendered[coded].sections.length - 2);
   });
 
   it("puts the win-back code only in the split-guaranteed second email", () => {
@@ -239,14 +252,24 @@ describe("SMS catalogue", () => {
       expect(links.length, key).toBe(1);
       expect(links[0], key).toContain(GRANT_LINK);
       expect(links[0], key).toContain("utm_medium=sms");
+      // Message, link, research sentence, STOP: the link sits before the closing sentences.
+      expect(entry.text, key).toMatch(/ Research use only\. Reply STOP to opt out\.$/);
+      expect(entry.text.indexOf(links[0]), key).toBeLessThan(entry.text.indexOf("Research use only."));
       expect(entry.text.replace(link, SHORTENED).length, key).toBeLessThanOrEqual(160);
     }
   });
 
   it("never puts a code in a text, because a text cannot be conditional", () => {
     for (const [key, entry] of Object.entries(SMS)) expect(entry.text, key).not.toMatch(/vl_(welcome|winback|recovery)_code|% off/);
-    expect(SMS.welcome.text).toMatch(/email/i);
-    expect(SMS.winback.text).toMatch(/email/i);
+  });
+
+  it("stands alone and claims nothing a timer cannot know", () => {
+    // A text can reach an SMS-only consent whose email was skipped, so it never says an email was sent.
+    expect(SMS.welcome.text.replace(link, ""), "the grant route path is the only place the word may appear").not.toMatch(/email/i);
+    expect(SMS.welcome.text).toBe("Vanta Labs: thanks for subscribing. Batch reports for every product are in the COA library. https://www.vantalabsresearch.com/api/email/omnisend-link?t=[[contact.custom_properties.vl_link]]&to=%2Fcoa-library&utm_source=omnisend&utm_medium=sms&utm_campaign=welcome Research use only. Reply STOP to opt out.");
+    expect(SMS.checkout.text).not.toMatch(/Finish here/);
+    expect(SMS.winback.text).not.toMatch(/new batch/i);
+    expect(SMS.winback.text).toContain("The current batch report for every product is on its page.");
   });
 
   it("keeps the final-day text to the same honest deadline", () => {
@@ -311,25 +334,29 @@ describe("automations", () => {
           const sms = block.action.sendSms;
           expect(sms.message, key).toMatch(/^Vanta Labs: /);
           expect(sms.message, key).not.toMatch(/vl_(welcome|winback|recovery)_code|% off/);
-          expect(sms.compliance.stopKeywordText, key).toBe(STOP_SENTENCE);
-          expect(sms.compliance.unsubscribeLinkText, key).toContain("[[unsubscribe_link]]");
+          // STOP is appended by Omnisend; the unsubscribe link is off so the 160-character budget is real.
+          expect(sms.compliance, key).toEqual({ isStopKeywordIncluded: true, stopKeywordText: STOP_SENTENCE, isUnsubscribeLinkIncluded: false });
           expect(Object.values(SMS).some((entry) => smsBody(Object.keys(SMS).find((k) => SMS[k] === entry)) === sms.message), key).toBe(true);
         }
       }
     }
   });
 
-  it("welcome: E1, SMS without the code, 2d, E2, 3d, E3, once per contact", async () => {
+  it("welcome: E1 for everyone, SMS without the code, 2d, E2 split on the welcome code, 3d, E3 split the same way, once per contact", async () => {
     await load();
     const flow = AUTOMATIONS.welcome();
     expect(flow.trigger).toEqual({ condition: { event: "subscribed to marketing" } });
-    const [e1, sms, d1, e2, d2, e3] = flow.blocks;
+    expect(flow.blocks).toHaveLength(6);
+    const [e1, sms, d1, s2, d2, s3] = flow.blocks;
     expect(emailOf(e1).templateID).toBe(created["welcome-1"]);
     expect(sms.action.type).toBe("sendSms");
     expect(delay(d1)).toBe("2d");
-    expect(emailOf(e2).templateID).toBe(created["welcome-2"]);
     expect(delay(d2)).toBe("3d");
-    expect(emailOf(e3).templateID).toBe(created["welcome-3"]);
+    for (const [split, coded, nocode] of [[s2, "welcome-2-code", "welcome-2"], [s3, "welcome-3", "welcome-3-nocode"]]) {
+      expect(segSplit(split), coded).toEqual({ type: "contact", field: "segmentID", operator: "eq", value: segments["vl-welcome-ready"] });
+      expect(split.split.trueBlocks.map((b) => emailOf(b).templateID), coded).toEqual([created[coded]]);
+      expect(split.split.falseBlocks.map((b) => emailOf(b).templateID), nocode).toEqual([created[nocode]]);
+    }
     expect(flow.settings.frequencyLimiter).toEqual({ mode: "once" });
   });
 
@@ -370,17 +397,24 @@ describe("automations", () => {
     expect(flow.settings.frequencyLimiter).toEqual({ mode: "interval", duration: { amount: 7, units: "d" } });
   });
 
-  it("post-purchase: 1d, E1, 9d, E2, then the repeat-customer thank-you", async () => {
+  it("post-purchase: 1d, E1, 9d, E2, 3d, then the repeat thank-you and, for VIPs, the milestone", async () => {
     await load();
     const flow = AUTOMATIONS["post-purchase"]();
     expect(flow.trigger).toEqual({ condition: { event: "paid for order", origin: "api" } });
-    const [d1, e1, d2, e2, split] = flow.blocks;
+    expect(flow.blocks).toHaveLength(6);
+    const [d1, e1, d2, e2, d3, split] = flow.blocks;
     expect(delay(d1)).toBe("1d");
     expect(emailOf(e1).templateID).toBe(created["post-purchase-1"]);
     expect(delay(d2)).toBe("9d");
     expect(emailOf(e2).templateID).toBe(created["post-purchase-2"]);
+    expect(delay(d3)).toBe("3d");
     expect(segSplit(split).value).toBe(segments["vl-repeat-customers"]);
-    expect(emailOf(split.split.trueBlocks[0]).templateID).toBe(created["vip-milestone"]);
+    expect(split.split.trueBlocks).toHaveLength(2);
+    const [repeat, vip] = split.split.trueBlocks;
+    expect(emailOf(repeat).templateID).toBe(created["repeat-customer"]);
+    expect(segSplit(vip).value).toBe(segments["vl-vip"]);
+    expect(emailOf(vip.split.trueBlocks[0]).templateID).toBe(created["vip-milestone"]);
+    expect(vip.split.falseBlocks).toEqual([]);
     expect(split.split.falseBlocks).toEqual([]);
   });
 
@@ -394,20 +428,22 @@ describe("automations", () => {
     expect(emailOf(split.split.falseBlocks[0]).templateID).toBe(created["replenishment"]);
   });
 
-  it("win-back: 60d, E1 without a code, 1d, SMS, 30d, then the code split", async () => {
+  it("win-back: enters on lapsed-60, E1 without a code, 1d, SMS, 30d, then the code split; re-enterable after one run", async () => {
     await load();
     const flow = AUTOMATIONS["win-back"]();
-    expect(flow.trigger).toEqual({ condition: { event: "paid for order", origin: "api" } });
-    const [d1, e1, d2, sms, d3, split] = flow.blocks;
-    expect(delay(d1)).toBe("60d");
+    expect(flow.trigger).toEqual({ condition: { event: "entered segment", origin: "omnisend", filterGroups: [{ logicalOperator: "and", filters: [{ field: "segment_id", operator: "eq", value: segments["vl-lapsed-60"] }] }] } });
+    expect(flow.blocks).toHaveLength(5);
+    const [e1, d1, sms, d2, split] = flow.blocks;
     expect(emailOf(e1).templateID).toBe(created["winback-1"]);
-    expect(delay(d2)).toBe("1d");
+    expect(delay(d1)).toBe("1d");
     expect(sms.action.type).toBe("sendSms");
-    expect(delay(d3)).toBe("30d");
+    expect(delay(d2)).toBe("30d");
     expect(segSplit(split).value).toBe(segments["vl-winback-ready"]);
     expect(emailOf(split.split.trueBlocks[0]).templateID).toBe(created["winback-2"]);
     expect(emailOf(split.split.falseBlocks[0]).templateID).toBe(created["winback-2-nocode"]);
     expect(flow.exitConditions).toEqual([{ event: "paid for order", origin: "api" }]);
+    // One run is 31 days; the limiter only has to outlast it, so a buyer who lapses again can be won back again.
+    expect(flow.settings.frequencyLimiter).toEqual({ mode: "interval", duration: { amount: 32, units: "d" } });
   });
 
   it("sunset: one email on entering the unengaged segment, then tag by click", async () => {
@@ -424,8 +460,8 @@ describe("automations", () => {
   });
 });
 
-describe("segments: recovery readiness", () => {
-  it("defines the two split segments the abandonment automations need", async () => {
+describe("segments: readiness splits", () => {
+  it("defines the split segments the welcome and abandonment automations need", async () => {
     const { SEGMENTS, PROPERTY_SEGMENTS } = await import("./segments.mjs");
     const gift = PROPERTY_SEGMENTS["vl-recovery-gift-ready"]();
     const code = PROPERTY_SEGMENTS["vl-recovery-code-ready"]();
@@ -437,6 +473,16 @@ describe("segments: recovery readiness", () => {
     const winback = PROPERTY_SEGMENTS["vl-winback-ready"]();
     expect(winback.name).toBe("VL · Win-back code ready");
     expect(winback.conditionGroups[0].conditions[0].filters[0]).toEqual({ property: "custom", name: "vl_winback_ready", valueType: "text", operator: "anyOf", value: ["yes"] });
+    const welcome = PROPERTY_SEGMENTS["vl-welcome-ready"]();
+    expect(welcome.name).toBe("VL · Welcome code ready");
+    expect(welcome.conditionGroups[0].conditions[0]).toEqual({ entity: "contact", junction: "and", filters: [{ property: "custom", name: "vl_welcome_ready", valueType: "text", operator: "anyOf", value: ["yes"] }] });
+  });
+
+  it("renders every segment with real operators, never a placeholder", async () => {
+    const { SEGMENTS } = await import("./segments.mjs");
+    for (const [key, build] of Object.entries(SEGMENTS)) expect(JSON.stringify(build()), key).not.toContain("__");
+    const unengaged = SEGMENTS["vl-unengaged-120"]();
+    expect(unengaged.conditionGroups[0].conditions[0].filters).toContainEqual({ property: "dateAdded", operator: "notInTheLast", value: 120, unit: "days" });
   });
 });
 
@@ -532,5 +578,15 @@ describe("form", () => {
     expect(copy).toMatch(/research use only/i);
     expect(formBlocks(f).some((b) => b.type === "discount")).toBe(false);
     expect(f.content.successStep.sections[0].rows[0].columns[0].blocks.find((b) => b.button).button.link).toMatch(/^https:\/\/www\.vantalabsresearch\.com\//);
+  });
+
+  it("promises the welcome offer within two days, describes the texts it sends and keeps the TCPA sentence verbatim", async () => {
+    const { form, SMS_CONSENT } = await import("./form.mjs");
+    const copy = strings(form()).join("\n");
+    expect(copy).toMatch(/welcome offer (follows|arrives) by email within two days/);
+    expect(copy).not.toMatch(/inbox now|on its way|arrives with the first/i);
+    expect(copy).toContain("Cart reminders, restocks and subscriber offers by text.");
+    expect(copy).not.toMatch(/times a month/i);
+    expect(SMS_CONSENT).toBe("Yes, I would like to receive recurring automated marketing text messages from Vanta Labs at the number above. Consent is not a condition of purchase. Message frequency varies. Message and data rates may apply. Reply STOP to cancel at any time or HELP for help.");
   });
 });

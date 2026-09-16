@@ -49,7 +49,8 @@ export function email(templateKey) {
  * A send-SMS block from the catalogue. The catalogue text ends with the STOP
  * sentence; Omnisend appends its own opt-out keyword, so the body is the text
  * without that sentence and the sentence is handed over as stopKeywordText.
- * The unsubscribe link is what non-US/CA recipients get instead.
+ * The unsubscribe link is off: STOP is present, the form only takes US and CA
+ * numbers, and the link would eat the 160-character budget the texts are cut to.
  */
 export function sms(key) {
   if (!SMS[key]) throw new Error(`unknown SMS ${key}`);
@@ -60,7 +61,7 @@ export function sms(key) {
       type: "sendSms",
       sendSms: {
         message: smsBody(key),
-        compliance: { isStopKeywordIncluded: true, stopKeywordText: STOP_SENTENCE, isUnsubscribeLinkIncluded: true, unsubscribeLinkText: "Unsubscribe: [[unsubscribe_link]]" },
+        compliance: { isStopKeywordIncluded: true, stopKeywordText: STOP_SENTENCE, isUnsubscribeLinkIncluded: false },
         isLinkShorteningEnabled: true,
       },
     },
@@ -80,6 +81,13 @@ export function splitOnSegment(label, segmentKey, trueBlocks, falseBlocks) {
   const segmentID = created().segments[segmentKey];
   if (!segmentID) throw new Error(`segment ${segmentKey} has not been created yet`);
   return { temporaryID: tid(label), type: "split", split: { filterGroup: { logicalOperator: "and", filters: [{ type: "contact", field: "segmentID", operator: "eq", value: segmentID }] }, trueBlocks, falseBlocks } };
+}
+
+/** Trigger on entering a segment (origin omnisend), the way the sunset and win-back flows start. */
+function enteredSegment(segmentKey) {
+  const segmentID = created().segments[segmentKey];
+  if (!segmentID) throw new Error(`segment ${segmentKey} has not been created yet`);
+  return { condition: { event: "entered segment", origin: "omnisend", filterGroups: [{ logicalOperator: "and", filters: [{ field: "segment_id", operator: "eq", value: segmentID }] }] } };
 }
 
 /** Split on whether a message block above was clicked. */
@@ -110,13 +118,17 @@ export const AUTOMATIONS = {
       name: "VL · Welcome",
       trigger: { condition: { event: "subscribed to marketing" } },
       blocks: [
+        // Informational: the welcome code may not exist yet (form sign-ups get
+        // theirs on the next nightly reconcile) and a checkout opt-in never gets one.
         email("welcome-1"),
         // Skipped by the SMS threshold for anyone without SMS consent.
         sms("welcome"),
         wait("w1", 2, "d"),
-        email("welcome-2"),
+        // vl_welcome_ready is "yes" only once the store has minted the code, so
+        // the card is sent only where it can never be blank.
+        splitOnSegment("code-2", "vl-welcome-ready", [email("welcome-2-code")], [email("welcome-2")]),
         wait("w2", 3, "d"),
-        email("welcome-3"),
+        splitOnSegment("code-3", "vl-welcome-ready", [email("welcome-3")], [email("welcome-3-nocode")]),
       ],
       settings: { sendingThresholds: thresholds, frequencyLimiter: once },
     };
@@ -181,7 +193,12 @@ export const AUTOMATIONS = {
         email("post-purchase-1"),
         wait("w2", 9, "d"),
         email("post-purchase-2"),
-        splitOnSegment("repeat", "vl-repeat-customers", [email("vip-milestone")], []),
+        wait("w3", 3, "d"),
+        // A second order earns the repeat thank-you; the milestone note is for VIPs only.
+        splitOnSegment("repeat", "vl-repeat-customers", [
+          email("repeat-customer"),
+          splitOnSegment("vip", "vl-vip", [email("vip-milestone")], []),
+        ], []),
       ],
       settings: { sendingThresholds: thresholds, frequencyLimiter: every(30, "d") },
     };
@@ -200,32 +217,38 @@ export const AUTOMATIONS = {
     };
   },
 
+  /**
+   * Win-back enters on the lapsed-60 segment, not on the order itself.
+   * Entering on "paid for order" with a 60-day wait and a 180-day limiter
+   * meant a buyer who ordered again (and so exited) could not re-enter for
+   * 180 days from the FIRST order, however lapsed they later became. The
+   * segment already encodes the 60 days since the last order, so the flow
+   * starts with the email, and the limiter only has to outlast one run
+   * (1 d + 30 d, plus a day) for a buyer who lapses again to be won back again.
+   */
   "win-back": () => {
     counter = 0;
     return {
       name: "VL · Win-back",
-      trigger: { condition: api("paid for order") },
+      trigger: enteredSegment("vl-lapsed-60"),
       blocks: [
-        wait("w1", 60, "d"),
         email("winback-1"),
-        wait("w2", 1, "d"),
+        wait("w1", 1, "d"),
         sms("winback"),
-        wait("w3", 30, "d"),
+        wait("w2", 30, "d"),
         splitOnSegment("code-ready", "vl-winback-ready", [email("winback-2")], [email("winback-2-nocode")]),
       ],
       exitConditions: [api("paid for order")],
-      settings: { sendingThresholds: thresholds, frequencyLimiter: every(180, "d") },
+      settings: { sendingThresholds: thresholds, frequencyLimiter: every(32, "d") },
     };
   },
 
   sunset: () => {
     counter = 0;
-    const segmentID = created().segments["vl-unengaged-120"];
-    if (!segmentID) throw new Error("segment vl-unengaged-120 has not been created yet");
     const ask = email("sunset");
     return {
       name: "VL · Sunset",
-      trigger: { condition: { event: "entered segment", origin: "omnisend", filterGroups: [{ logicalOperator: "and", filters: [{ field: "segment_id", operator: "eq", value: segmentID }] }] } },
+      trigger: enteredSegment("vl-unengaged-120"),
       blocks: [
         ask,
         wait("w1", 7, "d"),

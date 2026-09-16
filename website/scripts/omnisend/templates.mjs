@@ -24,8 +24,9 @@ const GIFT_LINK = "[[contact.custom_properties.vl_recovery_gift_link]]";
 /**
  * The code card. Conditional sections are a paid Omnisend feature this account
  * does not have, so the card is unconditional and appears ONLY in templates an
- * automation split (or the minting upsert) guarantees a code for: welcome-1
- * and welcome-3 (minted in the upsert that fires the flow), the *-3-code and
+ * automation split guarantees a code for: welcome-2-code and welcome-3 (split
+ * on vl-welcome-ready; welcome-1 carries no card because the code may not
+ * exist yet, and a checkout opt-in never gets one), the *-3-code and
  * *-3-gift-code abandonment variants (split on vl-recovery-code-ready) and
  * winback-2 (split on vl-winback-ready). The button is secondary so every
  * email keeps one primary action.
@@ -126,40 +127,57 @@ function finalVariants(kind, { kicker, path, label, campaign }) {
   };
 }
 
-export const TEMPLATES = {
-  "welcome-1": () => frame("welcome-1", [
-    hero("welcome-1:hero", {
-      kicker: "Welcome", title: "Precision, in every vial.",
-      lead: `Vanta Labs Research supplies laboratory research materials. ${COA_LINE}`,
-      extra: [`Two things worth knowing before a first order. ${CLAIMS.fulfilment} Every listing shows its current batch number and links to the report.`],
-      cta: { label: "Browse the catalogue", path: "/products" }, secondary: { label: "Read a batch report", path: "/coa-library" },
-      showImage: true, campaign: "welcome",
-    }),
-    spacerSection("welcome-1:gap"),
-    codeCard("welcome-1:code", "welcome", "welcome"),
-  ]),
+/**
+ * The welcome heroes, shared by each email and its coded or code-free twin so
+ * the pair differ only by the code card. The store mints the welcome code for
+ * site sign-ups at once, for Omnisend form sign-ups on the next nightly
+ * reconcile (within a day) and for checkout opt-ins never, and sets
+ * vl_welcome_ready to "yes" only once the code exists. So welcome-1, sent at
+ * once, never carries the card, and the automation splits the second and
+ * third emails on vl-welcome-ready two and five days in.
+ */
+const WELCOME_HERO = {
+  1: {
+    kicker: "Welcome", title: "Precision, in every vial.",
+    lead: `Vanta Labs Research supplies laboratory research materials. ${COA_LINE}`,
+    extra: [`Two things worth knowing before a first order. ${CLAIMS.fulfilment} Every listing shows its current batch number and links to the report.`],
+    cta: { label: "Browse the catalogue", path: "/products" }, secondary: { label: "Read a batch report", path: "/coa-library" },
+    showImage: true, campaign: "welcome",
+  },
+  2: {
+    kicker: "Documentation", title: "Anyone can print a label. We publish the proof.",
+    lead: "Every lot is tested by a third-party laboratory. The report is filed under its batch number in the COA library, where you can read it before you order and again after it arrives.",
+    extra: ["Identity is confirmed by mass spectrometry, so the exact compound and molecular weight of every lot are on the report. The figures live on the certificate, not in this email."],
+    cta: { label: "Open the COA library", path: "/coa-library" }, secondary: { label: "Browse the catalogue", path: "/products" },
+    campaign: "welcome",
+  },
+  3: {
+    kicker: "Ordering", title: "What happens after you order.",
+    lead: CLAIMS.fulfilment,
+    extra: [`${CLAIMS.destinations} ${CLAIMS.tracking}`, "Checkout is encrypted. Card details never touch our servers.", "Recon Water and reconstitution accessories are listed under Solvents & Solutions in the catalogue."],
+    cta: { label: "Browse the catalogue", path: "/products" },
+    campaign: "welcome",
+  },
+};
 
-  "welcome-2": () => frame("welcome-2", [
-    hero("welcome-2:hero", {
-      kicker: "Documentation", title: "Anyone can print a label. We publish the proof.",
-      lead: "Every lot is tested by a third-party laboratory. The report is filed under its batch number in the COA library, where you can read it before you order and again after it arrives.",
-      extra: ["Identity is confirmed by mass spectrometry, so the exact compound and molecular weight of every lot are on the report. The figures live on the certificate, not in this email."],
-      cta: { label: "Open the COA library", path: "/coa-library" }, secondary: { label: "Browse the catalogue", path: "/products" },
-      campaign: "welcome",
-    }),
+export const TEMPLATES = {
+  "welcome-1": () => frame("welcome-1", [hero("welcome-1:hero", WELCOME_HERO[1])]),
+
+  "welcome-2": () => frame("welcome-2", [hero("welcome-2:hero", WELCOME_HERO[2])]),
+
+  "welcome-2-code": () => frame("welcome-2-code", [
+    hero("welcome-2-code:hero", WELCOME_HERO[2]),
+    spacerSection("welcome-2-code:gap"),
+    codeCard("welcome-2-code:code", "welcome", "welcome"),
   ]),
 
   "welcome-3": () => frame("welcome-3", [
-    hero("welcome-3:hero", {
-      kicker: "Ordering", title: "What happens after you order.",
-      lead: CLAIMS.fulfilment,
-      extra: [`${CLAIMS.destinations} ${CLAIMS.tracking}`, "Checkout is encrypted. Card details never touch our servers.", "Recon Water and reconstitution accessories are listed under Solvents & Solutions in the catalogue."],
-      cta: { label: "Browse the catalogue", path: "/products" },
-      campaign: "welcome",
-    }),
+    hero("welcome-3:hero", WELCOME_HERO[3]),
     spacerSection("welcome-3:gap"),
     codeCard("welcome-3:code", "welcome", "welcome"),
   ]),
+
+  "welcome-3-nocode": () => frame("welcome-3-nocode", [hero("welcome-3-nocode:hero", WELCOME_HERO[3])]),
 
   "cart-1": () => frame("cart-1", [
     hero("cart-1:hero", {
@@ -249,7 +267,7 @@ export const TEMPLATES = {
   "winback-1": () => frame("winback-1", [
     hero("winback-1:hero", {
       kicker: "Since your last order", title: "It has been a while.",
-      lead: "New batches have been filed since your last order, each with its report in the COA library. Nothing is waiting in your cart; this is a note that the catalogue has moved on.",
+      lead: "The current batch number and report for every product are on its page in the catalogue. Nothing is waiting in your cart; this is a note that the catalogue and the COA library stay open to you.",
       cta: { label: "Browse the catalogue", path: "/products" }, secondary: { label: "Open the COA library", path: "/coa-library" }, campaign: "win-back",
     }),
     recommended("winback-1", "win-back", { type: "popular", fallbackType: "newest", isOutOfStockIncluded: false }),
@@ -369,7 +387,9 @@ export const TEMPLATES = {
 export const SUBJECTS = {
   "welcome-1": { subject: "Welcome to Vanta Labs", preview: "What we supply, and how every batch is documented." },
   "welcome-2": { subject: "Every batch has a published report", preview: "Search a lot number and read the certificate itself." },
+  "welcome-2-code": { subject: "Every batch has a published report", preview: "Read the certificate itself. Your welcome code is inside." },
   "welcome-3": { subject: "How ordering works", preview: "Dispatch by 2PM ET on business days, tracking after dispatch." },
+  "welcome-3-nocode": { subject: "How ordering works", preview: "Dispatch by 2PM ET on business days, tracking after dispatch." },
   "cart-1": { subject: "Your cart is saved", preview: "Everything is still in it, with batch reports on each product page." },
   "cart-2": { subject: "Before you decide, read the report", preview: "Your cart is still saved. The certificate for each batch is a click away." },
   "cart-3-gift-code": { subject: "A gift and a code for your saved cart", preview: "Both are attached for a short time. Dates inside." },
@@ -386,7 +406,7 @@ export const SUBJECTS = {
   "post-purchase-1": { subject: "Your batch report", preview: "How to find the certificate for what you ordered." },
   "post-purchase-2": { subject: "Support, reports and reordering", preview: "Three things worth keeping after an order." },
   "replenishment": { subject: "When it is time to reorder", preview: "Batches change. The current batch number is on each product page." },
-  "winback-1": { subject: "It has been a while", preview: "New batch reports have been filed since your last order." },
+  "winback-1": { subject: "It has been a while", preview: "The current batch report for every product is on its page." },
   "winback-2": { subject: "One last note from us", preview: "Your code is valid until the date inside." },
   "winback-2-nocode": { subject: "One last note from us", preview: "The catalogue and the COA library stay open to you." },
   "sunset": { subject: "Do you want to keep hearing from us?", preview: "One click keeps you on the list." },

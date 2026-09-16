@@ -2,9 +2,10 @@ import { link } from "./lib.mjs";
 
 /**
  * The SMS catalogue (spec §3.6). Each entry is the text exactly as the
- * recipient reads it: it opens "Vanta Labs:" and closes "Reply STOP to opt
- * out." A text cannot be conditional, so no entry carries a code; the welcome
- * and win-back texts point at the email that does.
+ * recipient reads it: it opens "Vanta Labs:", puts the link straight after
+ * the message, then "Research use only." and closes "Reply STOP to opt out."
+ * A text cannot be conditional, so no entry carries a code, and no text
+ * claims an email was sent: an SMS-only consent may never receive one.
  *
  * Omnisend appends its own STOP keyword when an automation or campaign has
  * `compliance.isStopKeywordIncluded` on. automations.mjs therefore strips the
@@ -21,23 +22,23 @@ export const STOP_SENTENCE = "Reply STOP to opt out.";
 export const RESEARCH_SENTENCE = "Research use only.";
 
 const sms = (path, campaign) => link(path, { campaign, medium: "sms" });
-const text = (body, path, campaign) => `Vanta Labs: ${body} ${RESEARCH_SENTENCE} ${sms(path, campaign)} ${STOP_SENTENCE}`;
+const text = (body, path, campaign) => `Vanta Labs: ${body} ${sms(path, campaign)} ${RESEARCH_SENTENCE} ${STOP_SENTENCE}`;
 
 export const SMS = {
   welcome: {
-    text: text("thanks for subscribing. Your welcome code is in the email we just sent.", "/products", "welcome"),
-    whenUsed: "Welcome automation, straight after the first email, for contacts subscribed to SMS. The code stays in the email because a text cannot be hidden when the property is empty.",
+    text: text("thanks for subscribing. Batch reports for every product are in the COA library.", "/coa-library", "welcome"),
+    whenUsed: "Welcome automation, straight after the first email, for contacts subscribed to SMS. It stands alone: an SMS-only consent may never get the email, so it promises nothing about one, and the code stays in the email because a text cannot be hidden when the property is empty.",
   },
   cart: {
     text: text("your cart is still saved. Batch reports are on each product page.", "/cart", "abandoned-cart"),
     whenUsed: "Abandoned-cart automation, 27 hours after the trigger (after the second email).",
   },
   checkout: {
-    text: text("your checkout is saved and nothing has been charged. Finish here:", "/checkout", "abandoned-checkout"),
+    text: text("your checkout is saved and nothing has been charged.", "/checkout", "abandoned-checkout"),
     whenUsed: "Abandoned-checkout automation, 27 hours after the trigger (after the second email).",
   },
   winback: {
-    text: text("it has been a while. New batch reports are filed and a note is in your email.", "/products", "win-back"),
+    text: text("it has been a while. The current batch report for every product is on its page.", "/products", "win-back"),
     whenUsed: "Win-back automation, one day after the first email. The code is only in the second email, so the text names none.",
   },
   restock: {
