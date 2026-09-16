@@ -16,6 +16,7 @@ import { repairUnredeemedPaidOffers } from "@/lib/offers/customer-offer-repair";
 import { ingestAdSpend } from "@/lib/ads/spend-ingest";
 import { sweepUnsentMetaPurchases } from "@/lib/ads/meta-purchase-sync";
 import { pruneStaleHeartbeats } from "@/lib/admin-live-visitors";
+import { mintOmnisendCartOffers } from "@/lib/marketing/omnisend/cart-offers";
 import { handleCronRequest, type CronJobMap } from "@/lib/cron-runner";
 
 export const dynamic = "force-dynamic";
@@ -158,6 +159,8 @@ const JOBS: CronJobMap = {
   // every 15s per open tab, forever. Idempotent: it only ever deletes rows
   // already past the retention cutoff.
   liveVisitorHeartbeatPrune: { label: "live_visitor_heartbeat_prune", run: pruneStaleHeartbeats },
+  // Mint the 72-hour recovery code and gift for carts Omnisend owns and push them as contact properties; mails nothing, gated on OMNISEND_MARKETING_OWNER, claimed once per cart (marketing/omnisend/cart-offers.ts).
+  omnisendCartOffers: { label: "omnisend_cart_offers", run: () => mintOmnisendCartOffers() },
 };
 
 /**

@@ -24,7 +24,31 @@ export type ChannelConsent = {
   source?: string | null;
 };
 
-export type ContactCode = { code: string; endsAt: string };
+export type ContactCode = {
+  code: string;
+  endsAt: string;
+  /** The percentage the coupon row carries. Absent when the caller did not read it. */
+  percent?: number;
+};
+
+/**
+ * The store-minted gift for Omnisend's abandoned-cart flow (cart-offers.ts).
+ *
+ * Text, link, floor and deadline — everything the 72-hour message needs to
+ * describe and hand over the gift without a code. The link is the claim URL
+ * the in-house recovery email carries, wrapped in the contact's own signed
+ * door so the click lands past the account wall with the offer cookie set.
+ */
+export type RecoveryGiftFacts = {
+  /** "a free GHK-Cu 50mg and a free Recon Water", from catalogue names. */
+  text: string;
+  /** Absolute claim URL. */
+  link: string;
+  /** The smallest order the gift may be spent against, in cents. */
+  minCartCents: number;
+  /** ISO 8601: when the offer row expires. */
+  endsAt: string;
+};
 
 export type ContactFacts = {
   email: string;
@@ -45,6 +69,7 @@ export type ContactFacts = {
   referralCode?: string | null;
   link?: { token: string; endsAt: string } | null;
   codes?: Partial<Record<"welcome" | "winback" | "recovery", ContactCode>>;
+  recoveryGift?: RecoveryGiftFacts | null;
 };
 
 /**
@@ -121,6 +146,28 @@ function readyFlag(code: string | null | undefined): "yes" | "no" {
   return text(code) ? "yes" : "no";
 }
 
+/** A whole percentage, 0 when there is none: the template prints it beside the code. */
+function wholePercent(value: number | null | undefined): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.min(100, Math.round(parsed));
+}
+
+/**
+ * "$100", or "$35.50" when the floor has cents — the same shape the in-house
+ * gift terms sentence prints (gift-terms.ts), so a customer who has seen both
+ * reads one number.
+ */
+export function formatMinCart(cents: number): string {
+  const whole = Math.max(0, Math.round(Number(cents) || 0));
+  return `$${(whole / 100).toFixed(whole % 100 === 0 ? 0 : 2)}`;
+}
+
+/** A gift is ready only when there is something to say and somewhere to send the click. */
+function recoveryGiftReady(gift: RecoveryGiftFacts | null | undefined): gift is RecoveryGiftFacts {
+  return Boolean(gift && text(gift.text) && text(gift.link));
+}
+
 export function buildContactPayload(facts: ContactFacts): Record<string, unknown> {
   // Omnisend email identifiers are case-sensitive; the store's are not. Every
   // address is lowercased here so one person can never become two contacts.
@@ -157,6 +204,7 @@ export function buildContactPayload(facts: ContactFacts): Record<string, unknown
   if (facts.attested) tags.push("attested");
 
   const codes = facts.codes ?? {};
+  const gift = recoveryGiftReady(facts.recoveryGift) ? facts.recoveryGift : null;
   const customProperties = {
     vl_link: text(facts.link?.token),
     vl_link_ends: dateOnly(facts.link?.endsAt),
@@ -179,6 +227,17 @@ export function buildContactPayload(facts: ContactFacts): Record<string, unknown
     vl_welcome_ready: readyFlag(codes.welcome?.code),
     vl_winback_ready: readyFlag(codes.winback?.code),
     vl_recovery_ready: readyFlag(codes.recovery?.code),
+    // The recovery offer for Omnisend's 72-hour message (cart-offers.ts).
+    // The percentage rides beside the code so the template can print "15%
+    // off" from the row that was actually minted; the gift is a separate
+    // block with its own flag, because a band may carry either, both or
+    // neither, and the message shows exactly what the till will honour.
+    vl_recovery_percent: text(codes.recovery?.code) ? wholePercent(codes.recovery?.percent) : 0,
+    vl_recovery_gift: gift ? text(gift.text) : "",
+    vl_recovery_gift_link: gift ? text(gift.link) : "",
+    vl_recovery_gift_min: gift ? formatMinCart(gift.minCartCents) : "",
+    vl_recovery_gift_ends: gift ? dateOnly(gift.endsAt) : "",
+    vl_recovery_gift_ready: gift ? "yes" : "no",
   };
 
   const payload: Record<string, unknown> = { identifiers };

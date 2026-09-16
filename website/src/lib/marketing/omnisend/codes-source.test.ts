@@ -47,8 +47,36 @@ describe("the mint writes the cart-recovery row shape, bound and private", () =>
     expect(mint).toContain("is_private: true,");
     expect(mint).toContain("source: offer.source,");
     expect(mint).toContain('discount_type: "percent",');
-    expect(mint).toContain("discount_value: offer.percent,");
+    expect(mint).toContain("discount_value: percent,");
     expect(mint).toContain("ends_at: endsAt,");
+  });
+
+  // THE BAND'S PERCENTAGE, NOT THE DEFAULT. The cart-offer sweep plans the
+  // 72-hour incentive from the cart's value band (cart-recovery-offers.ts),
+  // and a $150 cart whose band says 10% must not be minted the welcome
+  // default. The default stays what it was for every existing caller, and
+  // the row records the percentage actually minted so the contact property
+  // can never describe a code the till prices differently.
+  it("mints at the caller's percentage when one is given, and at the offer's default otherwise", () => {
+    expect(CODES).toContain("export async function ensureContactCode(kind: ContactCodeKind, email: string, options: { percent?: number } = {})");
+    expect(mint).toContain("const percent = boundedPercent(options.percent, offer.percent);");
+    expect(CODES).toMatch(/function boundedPercent\(value: unknown, fallback: number\): number \{/);
+    // Whole percentages inside 1..100; anything else is the default, not a free order.
+    expect(CODES).toContain("if (!Number.isFinite(parsed)) return fallback;");
+    expect(CODES).toContain("return Math.min(100, Math.max(1, Math.round(parsed)));");
+    expect(mint).toContain("return { code, endsAt, percent };");
+  });
+
+  it("reads the percentage back off the live row, never from memory", () => {
+    const lookup = fn("findLiveContactCode");
+    expect(lookup).toContain('.select("code, ends_at, redemptions_count, max_redemptions, discount_value, discount_type")');
+    expect(lookup).toContain("percent: percentOf(row)");
+    expect(CODES).toMatch(/function percentOf\(row: LiveCodeRow\): number \{/);
+    expect(CODES).toContain('String(row.discount_type ?? "percent") === "percent"');
+  });
+
+  it("offers one lookup for every kind at once, so the hooks read what is real rather than minting", () => {
+    expect(CODES).toContain("export async function findLiveContactCodes(email: string): Promise<Partial<Record<ContactCodeKind, ContactCode>>>");
   });
 
   it("re-offers the live code before minting, so one address never holds two", () => {
@@ -87,7 +115,7 @@ describe("the live-code lookup only returns a code the checkout will still honou
   });
 
   it("checks redemptions_count < max_redemptions in code, because a spent single-use code is still active in the row", () => {
-    expect(lookup).toContain('.select("code, ends_at, redemptions_count, max_redemptions")');
+    expect(lookup).toContain('.select("code, ends_at, redemptions_count, max_redemptions, discount_value, discount_type")');
     expect(lookup).toMatch(/Number\(row\.redemptions_count \?\? 0\) < Number\(row\.max_redemptions\)/);
     expect(lookup).toMatch(/return unspent \? \{ code: [^}]+ \} : null;/);
   });

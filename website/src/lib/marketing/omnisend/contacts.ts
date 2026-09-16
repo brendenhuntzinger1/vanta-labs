@@ -33,6 +33,8 @@ const LOG = "[omnisend/contacts]";
 export type ContactExtras = {
   link?: ContactFacts["link"];
   codes?: ContactFacts["codes"];
+  /** The store-minted gift for Omnisend's abandoned-cart flow (cart-offers.ts). */
+  recoveryGift?: ContactFacts["recoveryGift"];
 };
 
 type SubscriberRow = { email: string; source: string | null; opted_in_at: string | null; unsubscribed_at: string | null };
@@ -291,6 +293,7 @@ export async function collectContactFacts(email: string, extras: ContactExtras =
     referralCode: prefs?.referral_code ?? null,
     link: extras.link ?? null,
     codes: extras.codes ?? {},
+    recoveryGift: extras.recoveryGift ?? null,
   };
 }
 

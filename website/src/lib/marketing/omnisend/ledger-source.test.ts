@@ -41,6 +41,35 @@ describe("the Omnisend ledger claims by inserting and fails open", () => {
     expect(release).toContain('.eq("delivered", false)');
   });
 
+  // The cart hooks report a cart at most once per window rather than exactly
+  // once ever, and the product-view hook the same per six hours. The claim is
+  // still an insert first — the same race-free shape — and only when the row
+  // already exists is it REFRESHED, by a conditional update that can only win
+  // when the previous claim is older than the window. A read-then-update
+  // would let two beacons both see "old" and both send.
+  it("claimSendWithin inserts first, then refreshes a claim older than the window with one conditional update", () => {
+    const within = fn("claimSendWithin");
+    expect(within).toContain("await ledger.claimSend(eventName, eventId)");
+    expect(within).toMatch(/from\("omnisend_events_sent"\)\s*\.update\(\{/);
+    expect(within).toContain("delivered: false");
+    expect(within).toContain("first_sent_at: new Date(now).toISOString()");
+    expect(within).toContain('.eq("entity_id", entityId)');
+    expect(within).toContain('.eq("event_name", eventName)');
+    expect(within).toContain('.lt("first_sent_at", new Date(now - windowMs).toISOString())');
+    expect(within).toContain('.select("entity_id")');
+    // The refresh is decided by whether the update touched a row, never by a
+    // separate read; and a ledger failure fails OPEN like the claim does.
+    expect(within).toMatch(/return Array\.isArray\(data\) && data\.length > 0;/);
+    expect(within).toMatch(/if \(error\) return true;/);
+    expect(within).toMatch(/catch \{\s*return true;/);
+  });
+
+  it("claimSendWithin is the only way to reopen a delivered row, so recordSend and the order hooks are unaffected", () => {
+    const claim = fn("claimSend");
+    expect(claim).not.toContain(".update(");
+    expect(LEDGER.split("claimSendWithin").length - 1).toBeGreaterThanOrEqual(2);
+  });
+
   it("the table is service-role only, keyed on (entity_id, event_name)", () => {
     expect(SQL).toMatch(/create table if not exists public\.omnisend_events_sent/);
     expect(SQL).toMatch(/primary key \(entity_id, event_name\)/);
