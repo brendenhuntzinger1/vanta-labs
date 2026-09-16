@@ -97,7 +97,9 @@ export function buttonPresets() {
   return [
     // The site's primary (.vl-btn-primary): ivory fill, near-black label, pill. One per
     // email, so the single action is the focal point; never a gold fill (brand.md).
-    { id: "primary_button", name: "Primary", styles: { ...base, backgroundColor: PALETTE.buttonText, border: "1px solid rgba(255,255,255,0.84)", color: "#111111", borderRadius: "999px" } },
+    // Omnisend caps borderRadius at 200px (a 999px value is refused with a 400);
+    // 200px is still a full pill on a 48px button.
+    { id: "primary_button", name: "Primary", styles: { ...base, backgroundColor: PALETTE.buttonText, border: "1px solid rgba(255,255,255,0.84)", color: "#111111", borderRadius: "200px" } },
     { id: "secondary_button", name: "Secondary", styles: { ...base, backgroundColor: "transparent", border: `1px solid ${PALETTE.hairlineStrong}`, color: PALETTE.foreground } },
     { id: "tertiary_button", name: "Tertiary", styles: { ...base, backgroundColor: "transparent", border: "0px solid transparent", color: PALETTE.gold, textDecoration: "underline", paddingLeft: "0px", paddingRight: "0px" } },
   ];

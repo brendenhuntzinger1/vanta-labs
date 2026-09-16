@@ -123,6 +123,23 @@ describe("templates: links, images and actions", () => {
     }
   });
 
+  it("keeps every border radius within Omnisend's 200px cap", () => {
+    // put_email_templates_id refuses a preset or block with a larger radius
+    // ("borderRadius must be not bigger than 200 pixels size"), and the API
+    // reports only the first error, so a 999px pill hid every later check.
+    const radii = (node, out = []) => {
+      if (Array.isArray(node)) node.forEach((n) => radii(n, out));
+      else if (node && typeof node === "object") {
+        if (typeof node.borderRadius === "string") out.push(node.borderRadius);
+        Object.values(node).forEach((v) => radii(v, out));
+      }
+      return out;
+    };
+    for (const key of TEMPLATE_KEYS) {
+      for (const radius of radii(rendered[key])) expect(Number.parseInt(radius, 10), `${key}: ${radius}`).toBeLessThanOrEqual(200);
+    }
+  });
+
   it("gives every image alt text", () => {
     for (const key of TEMPLATE_KEYS) {
       for (const block of blocks(rendered[key]).filter((b) => b.type === "image")) expect(block.image.altText, key).toMatch(/\S/);
