@@ -163,6 +163,35 @@ shows.
 Declare nothing from fewer than roughly 200 recipients per arm, and read
 conversion on its own denominator (orders, not clicks).
 
+### 3.1 Flow timings and rationale (hypotheses, not settings)
+
+Every flow is defined in `scripts/omnisend/automations.mjs` and created
+disabled. Every send block carries `sendingThresholds` email `subscribed` and
+SMS `subscribed`, so consent is re-checked per channel at each step and an SMS
+step is simply skipped for a contact without SMS consent. Delays are wall
+clock from the trigger; Omnisend's automation API exposes no recipient-time-zone
+option on a delay (only weekday and fixed-time modes), so none is set, and SMS
+quiet hours are the account setting the owner turns on before SMS is enabled.
+Conversion for every flow is the store's `paid for order` event, attributed by
+Omnisend on its side and by `order_attribution` on ours (§2).
+
+| Flow | Trigger and entry | Steps | Exit | Re-entry cap | Offer | Why these numbers |
+|---|---|---|---|---|---|---|
+| Welcome | `subscribed to marketing` | E1 at once → SMS (SMS-consented only, no code) → 2 d → E2 → 3 d → E3 | none | once per contact | welcome code 10 percent on a first order, minted at opt-in, 14 days | E1 while the sign-up is fresh; E2 at day 2 is the documentation story (COA library) before the code is repeated; E3 at day 5 closes inside the 14-day code. Mirrors the in-house welcome pair with one extra touch |
+| Abandoned cart | `added product to cart` then 1 h inactivity | E1 → 23 h → E2 → 3 h → SMS → 45 h → final (four variants by gift/code readiness) | `placed order`, `started checkout` | 7 days | band code and gift minted by the store 36 to 96 h after last activity, so they exist before the final step | Same shape as the in-house ladder (1 h, 24 h, 72 h) which recovered 18 carts; the SMS at 27 h adds a channel after the second email rather than repeating it; the incentive only at the end, once per address per 30 days, on the in-house cooldown rules |
+| Abandoned checkout | `started checkout` then 1 h inactivity | as above with the checkout templates | `placed order` | 7 days | as above | Checkout starters are the warmest audience; the cart flow exits when checkout starts so nobody is in both |
+| Browse abandonment | `viewed product` (signed-in only) then 4 h inactivity | one email | `added product to cart`, `started checkout`, `placed order` | 7 days | none | The in-house rule (4 to 24 h, one note, no offer, once a week) kept as is; it was switched off in-house and starts off here too |
+| Post-purchase | `paid for order` | 1 d → E1 (thanks, COA, support) → 9 d → E2 (reorder, support) → repeat customers (3+ orders) also get the milestone email | none | 30 days | none | Day 1 lands with the shipping window; day 10 is after delivery for most orders; the milestone is a thank-you, not a discount |
+| Replenishment | `paid for order` | 45 d → skip if bought in the last 30 d, else one email | none | 60 days | none | 45 days is the in-house replenishment delay; the segment check stops a customer inside a reorder cycle being nudged |
+| Win-back | `paid for order` | 60 d → E1 (no code) → 1 d → SMS → 30 d → E2 with the win-back code if one is live, else a plain note | `paid for order` | 180 days | win-back code 15 percent, 14 days, minted by the nightly reconcile for a subscribed buyer 50+ days from the last order and re-minted while still lapsed | Two in-house win-backs (30 and 60 days) collapse to one flow that starts at 60 and offers money only at 90: the 30-day one paid people inside their own cycle |
+| Sunset | entered segment `vl-unengaged-120` | one email → 7 d → clicked: tag `engaged` (drop `sunset`); not clicked: tag `sunset` | none | 180 days | none | List hygiene for deliverability; the tag lets campaigns exclude the sunset group without deleting anyone |
+
+Cross-flow frequency: Omnisend limits re-entry per flow, not sends per day
+across flows. A contact can receive a welcome email and a cart email on the
+same day. The in-house engine's one-marketing-email-per-day rule does not
+carry over (AUDIT.md F-09); if Omnisend's account settings offer a global
+cap on the chosen plan, set it to one marketing email per day.
+
 ## 4. Launch order (controlled transition)
 
 Nothing below happens until the owner authorises it explicitly, step by step.
