@@ -70,7 +70,7 @@ describe("the deferral every lib call site uses", () => {
 
 describe("payment-webhook.ts reports a paid order from both lanes and from nowhere else", () => {
   it("imports the hook and the deferral", () => {
-    expect(WEBHOOK).toMatch(/import \{ onOrderPaid \} from "@\/lib\/marketing\/omnisend\/order-hooks";/);
+    expect(WEBHOOK).toMatch(/import \{ onOrderCancelled, onOrderPaid, onOrderRefunded \} from "@\/lib\/marketing\/omnisend\/order-hooks";/);
     expect(WEBHOOK).toMatch(/import \{ deferOmnisend \} from "@\/lib\/marketing\/omnisend\/defer";/);
   });
 
@@ -137,10 +137,12 @@ describe("payment-webhook.ts reports a paid order from both lanes and from nowhe
       expect(Math.abs(hook - shippo)).toBeLessThan(600);
     });
 
-    it("never fires on a refund, cancel or failed payment", () => {
+    it("never fires on a refund, cancel or failed payment; the reversal branch defers only the cancel and refund hooks", () => {
       const reversal = lane.slice(refundBranch);
       expect(reversal).not.toContain("onOrderPaid(");
-      expect(reversal).not.toContain("deferOmnisend(");
+      expect(count(reversal, "deferOmnisend(")).toBe(2);
+      expect(reversal).toContain("onOrderCancelled(orderId)");
+      expect(reversal).toContain("onOrderRefunded(orderId)");
     });
 
     it("never fires before the paid branch: every ordering guard, the lost-race return and the row upsert come first", () => {

@@ -825,9 +825,20 @@ export type CampaignSweepResult = {
  * the other jobs in the sweep, and a campaign that can't send needs to surface
  * as a message in the admin, not as a rejected promise nobody reads.
  */
-export async function runCampaignSweep(input?: { now?: number; budgetMs?: number }): Promise<CampaignSweepResult> {
+export async function runCampaignSweep(input?: {
+  now?: number;
+  budgetMs?: number;
+  /**
+   * Only campaigns whose audience_kind is "affiliate" (AUDIT F-12). While
+   * Omnisend owns customer marketing the lifecycle cron runs the sweep this
+   * way: affiliate broadcasts are programme communications with merge fields
+   * and an audience Omnisend does not have, so they keep their sender.
+   */
+  affiliateOnly?: boolean;
+}): Promise<CampaignSweepResult> {
   const now = input?.now ?? Date.now();
   const budget = input?.budgetMs ?? CAMPAIGN_SWEEP_BUDGET_MS;
+  const affiliateOnly = input?.affiliateOnly === true;
   const started = Date.now();
   const errors: string[] = [];
   let campaignsStarted = 0;
@@ -835,11 +846,13 @@ export async function runCampaignSweep(input?: { now?: number; budgetMs?: number
   let sent = 0;
   let failed = 0;
 
-  const { data: due } = await supabaseAdmin
+  let dueQuery = supabaseAdmin
     .from("email_campaigns")
     .select("id")
     .eq("status", "scheduled")
     .lte("scheduled_at", new Date(now).toISOString());
+  if (affiliateOnly) dueQuery = dueQuery.eq("audience_kind", "affiliate");
+  const { data: due } = await dueQuery;
 
   for (const row of due ?? []) {
     try {
@@ -850,11 +863,13 @@ export async function runCampaignSweep(input?: { now?: number; budgetMs?: number
     }
   }
 
-  const { data: sending } = await supabaseAdmin
+  let sendingQuery = supabaseAdmin
     .from("email_campaigns")
     .select("id")
     .eq("status", "sending")
     .order("started_at", { ascending: true });
+  if (affiliateOnly) sendingQuery = sendingQuery.eq("audience_kind", "affiliate");
+  const { data: sending } = await sendingQuery;
 
   for (const row of sending ?? []) {
     const elapsed = Date.now() - started;

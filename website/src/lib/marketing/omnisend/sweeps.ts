@@ -110,6 +110,15 @@ export function ordersNeedingOmnisendPaid(
   orders: BackstopOrderRow[],
   ledgerRows: BackstopLedgerRow[],
   now: Date = new Date(),
+  /**
+   * THE FLOOR (AUDIT F-02). Orders paid before the integration went live are
+   * never pushed: the first tick after the key is set must not enrol a week of
+   * old orders into post-purchase, replenishment and win-back at once, and
+   * the in-house post-purchase may already have mailed them. Milliseconds
+   * since the epoch; absent means no floor (tests, and a run before the
+   * record exists).
+   */
+  notBeforeMs?: number,
 ): BackstopOrderRow[] {
   const delivered = new Set(
     ledgerRows.filter((row) => row.event_name === PAID_EVENT && row.delivered).map((row) => row.entity_id),
@@ -122,6 +131,7 @@ export function ordersNeedingOmnisendPaid(
     if (delivered.has(order.order_id)) return false;
     const paidAt = paidAtMs(order);
     if (!Number.isFinite(paidAt) || now.getTime() - paidAt > OMNISEND_BACKSTOP_LOOKBACK_MS) return false;
+    if (typeof notBeforeMs === "number" && Number.isFinite(notBeforeMs) && paidAt < notBeforeMs) return false;
     seen.add(order.order_id);
     return true;
   });
@@ -155,9 +165,21 @@ export async function omnisendOrderBackstop(opts: { now?: Date; limit?: number }
   let scanned = 0;
   let sent = 0;
   try {
+    // THE FLOOR, read before any order is: the first run stamps now and pushes
+    // nothing older; every later run pushes only what was paid after that. A
+    // stamp that cannot be written leaves no floor for THIS run, which would
+    // report the week — so an unwritable stamp means the run does nothing.
+    const record = await readSyncState<BackstopFloorRecord>(ORDER_BACKSTOP_KEY, LOG);
+    let floor = Date.parse(String(record?.since ?? ""));
+    if (!Number.isFinite(floor)) {
+      const stamped = await writeSyncState(ORDER_BACKSTOP_KEY, { since: now.toISOString() }, LOG);
+      if (!stamped) return { scanned, sent, skipped: "backstop floor could not be recorded; nothing pushed" };
+      floor = now.getTime();
+    }
+
     // paid_at is the moment that matters; a row from before the column was
     // stamped falls back to created_at, the same fallback the filter applies.
-    const since = new Date(now.getTime() - OMNISEND_BACKSTOP_LOOKBACK_MS).toISOString();
+    const since = new Date(Math.max(now.getTime() - OMNISEND_BACKSTOP_LOOKBACK_MS, floor)).toISOString();
     const { data: orders, error: ordersError } = await supabaseAdmin
       .from("orders")
       .select("order_id, payment_status, order_type, replacement_of, paid_at, created_at")
@@ -185,7 +207,7 @@ export async function omnisendOrderBackstop(opts: { now?: Date; limit?: number }
     }
     const ledgerRows = (ledger ?? []) as BackstopLedgerRow[];
 
-    const pending = ordersNeedingOmnisendPaid(rows, ledgerRows, now);
+    const pending = ordersNeedingOmnisendPaid(rows, ledgerRows, now, floor);
     scanned = pending.length;
     if (pending.length === 0) return { scanned, sent, skipped: null };
 
@@ -218,6 +240,13 @@ export async function omnisendOrderBackstop(opts: { now?: Date; limit?: number }
 // Cadence
 // ---------------------------------------------------------------------------
 
+/**
+ * omnisend_sync_state row `{ since }`: the instant the backstop first ran with
+ * the integration live. Orders paid before it are the in-house engine's and
+ * are never reported (F-02). Written once; a later run only reads it.
+ */
+const ORDER_BACKSTOP_KEY = "order_backstop";
+type BackstopFloorRecord = { since?: string };
 const CATALOG_SYNC_KEY = "catalog_sync";
 const CONTACTS_RECONCILE_KEY = "contacts_reconcile_cadence";
 const CATALOG_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;

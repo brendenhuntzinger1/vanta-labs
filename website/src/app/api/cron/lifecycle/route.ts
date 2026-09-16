@@ -74,9 +74,16 @@ const JOBS: CronJobMap = {
     run: () => (marketingSendBlockedByOmnisend() ? Promise.resolve({ skipped: MARKETING_OWNED_BY_OMNISEND }) : runAutomationSweep()),
   },
   // Advance any in-flight broadcast by one batch, and start any that is due.
+  // While Omnisend owns customer marketing, only AFFILIATE campaigns advance
+  // (AUDIT F-12): they are programme communications Omnisend has no audience
+  // for. Customer campaigns wait for Omnisend, and the tick says so.
   emailCampaigns: {
     label: "email_campaigns",
-    run: () => (marketingSendBlockedByOmnisend() ? Promise.resolve({ skipped: MARKETING_OWNED_BY_OMNISEND }) : runCampaignSweep()),
+    run: async () => {
+      if (!marketingSendBlockedByOmnisend()) return runCampaignSweep();
+      const result = await runCampaignSweep({ affiliateOnly: true });
+      return { ...result, mode: "affiliate-only", reason: MARKETING_OWNED_BY_OMNISEND };
+    },
   },
   // Event mail the frequency guard held back, once the quiet window passes.
   marketingQueue: { label: "marketing_queue", run: drainMarketingSendQueue },

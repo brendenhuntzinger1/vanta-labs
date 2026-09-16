@@ -62,11 +62,21 @@ describe("the lifecycle schedule stands down exactly the marketing jobs", () => 
     );
   });
 
-  it.each(["emailAutomations", "emailCampaigns"])("%s consults the switch and stands down fully", (name) => {
+  it.each(["emailAutomations"])("%s consults the switch and stands down fully", (name) => {
     const entry = jobEntry(name);
     expect(entry).toContain(CHECK);
     expect(entry).toContain("skipped: MARKETING_OWNED_BY_OMNISEND");
     expect(entry).not.toContain("legacyOnly");
+  });
+
+  // Affiliate broadcasts are programme communications Omnisend has no audience
+  // for (AUDIT F-12): the campaign job keeps advancing those and only those.
+  it("emailCampaigns consults the switch and runs affiliate-only rather than skipping", () => {
+    const entry = jobEntry("emailCampaigns");
+    expect(entry).toContain(CHECK);
+    expect(entry).toContain("runCampaignSweep({ affiliateOnly: true })");
+    expect(entry).toContain('mode: "affiliate-only", reason: MARKETING_OWNED_BY_OMNISEND');
+    expect(entry).not.toContain("skipped: MARKETING_OWNED_BY_OMNISEND");
   });
 
   // ONE OWNER PER CART. Omnisend cannot import a sequence's execution state,

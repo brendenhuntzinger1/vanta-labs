@@ -30,7 +30,7 @@ import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getReferralProgramConfig } from "@/lib/admin-control";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
 import { deferOmnisend } from "@/lib/marketing/omnisend/defer";
-import { onOrderPaid } from "@/lib/marketing/omnisend/order-hooks";
+import { onOrderCancelled, onOrderPaid, onOrderRefunded } from "@/lib/marketing/omnisend/order-hooks";
 import { receiptAdjustmentsFromOrder } from "@/lib/email/order-confirmation-render";
 import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRestock, itemsNotFinalized } from "@/lib/inventory-fulfillment";
 import { finalizeInventoryForOrder, releaseInventoryForOrder } from "@/lib/inventory-reservation";
@@ -3425,6 +3425,15 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     // "partially_refunded" is a paid-derived state (a partial refund was already
     // issued on a paid order), so a later full refund/cancel must still restock.
     const wasPaid = priorPaymentStatus === "paid" || priorPaymentStatus === "partially_refunded";
+
+    // TELL OMNISEND, exactly as the admin cancel and refund actions do (design
+    // spec §4): a processor-initiated cancel or FULL refund of an order that
+    // was paid. Never for a failure that was never paid (nothing to reverse),
+    // never for a partial refund (the order stands; AUDIT F-11). Deferred and
+    // never awaited, so the acknowledgement does not wait on marketing, and
+    // the hooks themselves only report an order Omnisend was told about.
+    if (wasPaid && nextStatus === "canceled") deferOmnisend("orders", () => onOrderCancelled(orderId));
+    if (wasPaid && nextStatus === "refunded" && refundOutcome.isFullRefund) deferOmnisend("orders", () => onOrderRefunded(orderId));
 
     // PAY-08. A decline or a cancel released the STOCK hold (above) but not the
     // store-credit / points hold reserveOrderTender took at checkout, so the

@@ -32,13 +32,24 @@ export async function POST(request: Request, context: { params: Promise<{ campai
     return NextResponse.json({ success: false, error: "Your role does not have permission to send email campaigns." }, { status: 403 });
   }
 
+  const { campaignId } = await context.params;
+
   // ONE OWNER OF MARKETING SENDS (spec §3.1, ownership.ts). While Omnisend
-  // owns marketing, nothing in-house may schedule or start a campaign: the
-  // frequency guard cannot see Omnisend's sends, so a campaign from here could
-  // land on top of one of theirs. Checked once, before any branch, so neither
-  // "schedule" nor "send now" can reach the status write below it. 409 rather
-  // than 400: the request is well-formed, it conflicts with who owns sending.
-  if (marketingSendBlockedByOmnisend()) {
+  // owns marketing, nothing in-house may schedule or start a CUSTOMER
+  // campaign: the frequency guard cannot see Omnisend's sends, so a campaign
+  // from here could land on top of one of theirs. An AFFILIATE campaign is a
+  // programme communication with merge fields and an audience Omnisend does
+  // not have (AUDIT F-12), so it goes through. Checked once, before any
+  // branch, so neither "schedule" nor "send now" can reach the status write
+  // below it. 409 rather than 400: the request is well-formed, it conflicts
+  // with who owns sending.
+  const { data: kindRow } = await supabaseAdmin
+    .from("email_campaigns")
+    .select("audience_kind")
+    .eq("id", campaignId)
+    .maybeSingle();
+  const affiliateCampaign = String(kindRow?.audience_kind ?? "customer") === "affiliate";
+  if (!affiliateCampaign && marketingSendBlockedByOmnisend()) {
     return NextResponse.json(
       {
         success: false,
@@ -47,8 +58,6 @@ export async function POST(request: Request, context: { params: Promise<{ campai
       { status: 409 },
     );
   }
-
-  const { campaignId } = await context.params;
   const body = await request.json().catch(() => null) as { mode?: string; scheduledAt?: string; testEmail?: string } | null;
   const mode = body?.mode ?? "now";
 
