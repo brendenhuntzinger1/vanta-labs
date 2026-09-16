@@ -57,6 +57,8 @@ function step(blocks, padding = pad("36px", "32px", "36px")) {
 export const SMS_CONSENT = "Yes, I would like to receive recurring automated marketing text messages from Vanta Labs at the number above. Consent is not a condition of purchase. Message frequency varies. Message and data rates may apply. Reply STOP to cancel at any time or HELP for help.";
 
 export const PRIVACY_URL = `${SITE}/legal/privacy`;
+export const TERMS_URL = `${SITE}/legal/terms`;
+const legalLink = (href, label) => `<a href="${href}" style="color:${PALETTE.gold};text-decoration:underline;">${label}</a>`;
 
 export function form() {
   const base = { fontFamily: FORM_FONT, fontSize: "13px", fontStyle: "normal", fontWeight: "bold", textDecoration: "none", textAlign: "center", paddingLeft: "24px", paddingRight: "24px", paddingTop: "14px", paddingBottom: "14px", borderRadius: "14px", borderStyle: "solid", borderWidth: "1px" };
@@ -111,11 +113,15 @@ export function form() {
           text("For laboratory research use only. Not for human or veterinary use. Unsubscribe at any time.", "footnote", { padding: pad("12px", "0px", "0px") }),
         ]),
         step([
-          text("TEXT MESSAGES", "footnote"),
+          // The brand name sits on this step too: a carrier reviewer sees the SMS
+          // step alone as consent proof and must find the brand, the agreement,
+          // an unticked box, STOP and HELP, the rates sentence and a policy link.
+          text("VANTA LABS · TEXT MESSAGES", "footnote"),
           text("Restock texts, if you want them.", "heading_medium"),
           text("Optional. Cart reminders, restocks and subscriber offers by text.", "paragraph"),
           { type: "phoneNumberField", phoneNumberField: { label: "", placeholder: "Mobile number", defaultCountryCode: "US", countryCodes: { includes: ["US", "CA"] }, isRequired: false, requiredMessage: "A mobile number is required to receive texts", errorMessage: "That does not look like a mobile number" }, styleProperties: field },
           { type: "legal", legal: { type: "tcpa", label: "I agree to receive text messages from Vanta Labs", description: SMS_CONSENT, link: PRIVACY_URL, requiredMessage: "Tick the box to receive texts" }, styleProperties: { ...pad("4px", "0px", "8px"), fontSize: "11px", color: PALETTE.subtle } },
+          text(`Consent is stored with your number. ${legalLink(PRIVACY_URL, "Privacy Policy")} · ${legalLink(TERMS_URL, "Terms")}`, "footnote", { padding: pad("0px", "0px", "8px") }),
           button("Add texts", "submit"),
           button("Skip this step", "nextStep", "secondary_button"),
         ]),
