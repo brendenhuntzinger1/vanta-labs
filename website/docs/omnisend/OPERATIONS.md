@@ -58,8 +58,10 @@ depend on recipient behaviour; the controls above are the ones that are ours.
 
 ### Unsubscribe and list-hygiene
 
-* Every Omnisend email carries `[[unsubscribe_link]]` in the footer layout and
-  Omnisend adds `List-Unsubscribe` / `List-Unsubscribe-Post` headers itself.
+* Every Omnisend email carries `[[unsubscribe_link]]` in the footer layout.
+  Whether Omnisend adds `List-Unsubscribe` / `List-Unsubscribe-Post` headers
+  is *owner to confirm* on the first seed test (open the message headers);
+  Gmail and Yahoo require them for bulk senders.
 * An Omnisend unsubscribe reaches the store on the next nightly reconcile as an
   `email_suppressions` row with `source: omnisend`; an SMS STOP becomes the
   account's `sms_opted_out_at`. The store never re-subscribes anyone on the
