@@ -40,6 +40,25 @@ function stubFetch(status = 200, body: unknown = { ok: true }) {
   return spy;
 }
 
+/** One response per call, in order; the last one repeats. */
+function stubFetchSequence(statuses: number[], body: unknown = { ok: true }, retryAfter?: string) {
+  let index = 0;
+  const spy = vi.fn(async (...args: unknown[]) => {
+    calls.push(args);
+    const status = statuses[Math.min(index, statuses.length - 1)];
+    index += 1;
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      headers: { get: (name: string) => (name.toLowerCase() === "retry-after" ? retryAfter ?? null : null) },
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    } as unknown as Response;
+  });
+  vi.stubGlobal("fetch", spy);
+  return spy;
+}
+
 beforeEach(() => {
   calls = [];
   vi.resetModules();
@@ -108,14 +127,93 @@ describe("omnisendRequest on a real production deployment", () => {
     expect(result.ok).toBe(false);
     expect(result.status).toBe(400);
     expect(result.error).toContain("omnisend 400");
+    // A 400 is the request's fault; sending it again is not a retry, it is a repeat.
+    expect(calls).toHaveLength(1);
   });
 
   it("reports a network failure without throwing", async () => {
     makeProduction();
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("socket hang up"); }));
     const { omnisendRequest } = await import("@/lib/marketing/omnisend/client");
-    const result = await omnisendRequest({ method: "GET", path: "/contacts" });
+    const result = await omnisendRequest({ method: "GET", path: "/contacts", retryDelayMs: 0 });
     expect(result).toEqual({ ok: false, status: 0, body: null, error: "socket hang up" });
+  });
+
+  /**
+   * Omnisend's API guide: 429, 500, 503 and 524 and socket failures MUST be
+   * retried with backoff; 4xx must not. One bounded retry is what a request
+   * path can afford (the ledger and the backstop sweep carry the rest).
+   */
+  describe("retries exactly the failures Omnisend says to retry", () => {
+    it.each([429, 500, 503, 524])("retries a %i once and returns the second answer", async (status) => {
+      makeProduction();
+      stubFetchSequence([status, 200], { fine: true });
+      const { omnisendRequest } = await import("@/lib/marketing/omnisend/client");
+      const result = await omnisendRequest({ method: "POST", path: "/events", body: {}, retryDelayMs: 0 });
+      expect(calls).toHaveLength(2);
+      expect(result).toEqual({ ok: true, status: 200, body: { fine: true }, error: null });
+    });
+
+    it("gives up after the one retry and reports the last status", async () => {
+      makeProduction();
+      stubFetchSequence([503, 503]);
+      const { omnisendRequest } = await import("@/lib/marketing/omnisend/client");
+      const result = await omnisendRequest({ method: "POST", path: "/events", body: {}, retryDelayMs: 0 });
+      expect(calls).toHaveLength(2);
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe(503);
+    });
+
+    it("retries a socket failure once, then reports it", async () => {
+      makeProduction();
+      let attempt = 0;
+      vi.stubGlobal("fetch", vi.fn(async (...args: unknown[]) => {
+        calls.push(args);
+        attempt += 1;
+        if (attempt === 1) throw new Error("socket hang up");
+        return { ok: true, status: 200, headers: { get: () => null }, text: async () => "{}" } as unknown as Response;
+      }));
+      const { omnisendRequest } = await import("@/lib/marketing/omnisend/client");
+      const result = await omnisendRequest({ method: "GET", path: "/contacts", retryDelayMs: 0 });
+      expect(calls).toHaveLength(2);
+      expect(result.ok).toBe(true);
+    });
+
+    it.each([400, 401, 402, 404, 422])("never retries a %i", async (status) => {
+      makeProduction();
+      stubFetchSequence([status, 200]);
+      const { omnisendRequest } = await import("@/lib/marketing/omnisend/client");
+      const result = await omnisendRequest({ method: "POST", path: "/events", body: {}, retryDelayMs: 0 });
+      expect(calls).toHaveLength(1);
+      expect(result.status).toBe(status);
+    });
+
+    it("honours retries: 0", async () => {
+      makeProduction();
+      stubFetchSequence([429, 200]);
+      const { omnisendRequest } = await import("@/lib/marketing/omnisend/client");
+      const result = await omnisendRequest({ method: "POST", path: "/events", body: {}, retries: 0, retryDelayMs: 0 });
+      expect(calls).toHaveLength(1);
+      expect(result.status).toBe(429);
+    });
+
+    it("waits for Retry-After, capped, before the retry", async () => {
+      makeProduction();
+      // A ten-millisecond Retry-After keeps the test fast; the cap and the
+      // fallbacks are asserted on the pure function.
+      stubFetchSequence([429, 200], { ok: true }, "0.01");
+      const { omnisendRequest, retryDelayFor } = await import("@/lib/marketing/omnisend/client");
+      expect(retryDelayFor("120", 1_000)).toBe(5_000);
+      expect(retryDelayFor("2", 1_000)).toBe(2_000);
+      expect(retryDelayFor(null, 1_000)).toBe(1_000);
+      expect(retryDelayFor("soon", 1_000)).toBe(1_000);
+      expect(retryDelayFor("-3", 1_000)).toBe(1_000);
+      const started = Date.now();
+      const result = await omnisendRequest({ method: "POST", path: "/events", body: {}, retryDelayMs: 0 });
+      expect(result.ok).toBe(true);
+      expect(calls).toHaveLength(2);
+      expect(Date.now() - started).toBeLessThan(1_000);
+    });
   });
 
   it("omnisendActive is true only when the gate passes AND the key is set", async () => {

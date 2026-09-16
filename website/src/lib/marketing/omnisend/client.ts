@@ -23,6 +23,36 @@ import { OMNISEND_API_VERSION, omnisendConfigured } from "@/lib/marketing/omnise
 export const OMNISEND_API_BASE = "https://api.omnisend.com/api";
 const REQUEST_TIMEOUT_MS = 10_000;
 
+/**
+ * WHAT IS RETRIED, AND HOW LITTLE.
+ *
+ * Omnisend's API guide: 429, 500, 503 and 524, socket timeouts and TCP
+ * disconnects MUST be retried with backoff; every other 4xx is the request's
+ * own fault and must not be. The guide's suggested intervals (30 s, 120 s,
+ * 480 s) belong to a queue worker, not to a request path — a checkout's
+ * after() callback and a 60-second cron have no such time — so the transport
+ * retries ONCE, after a short pause, and hands the rest to the parts of the
+ * system that already carry it: the event ledger records the refusal, the
+ * order backstop sweep retries paid orders, the nightly reconcile re-pushes
+ * every contact. A Retry-After header is honoured up to a cap, because a
+ * 429 that asks for two minutes is a 429 this call will not outlive.
+ */
+const RETRYABLE_STATUSES = new Set([429, 500, 503, 524]);
+const DEFAULT_RETRIES = 1;
+const DEFAULT_RETRY_DELAY_MS = 1_000;
+const MAX_RETRY_AFTER_MS = 5_000;
+
+/** How long to wait before the retry: Retry-After (seconds) capped, else the default. Pure. */
+export function retryDelayFor(retryAfter: string | null | undefined, fallbackMs: number): number {
+  const seconds = Number(String(retryAfter ?? "").trim());
+  if (!Number.isFinite(seconds) || seconds <= 0) return fallbackMs;
+  return Math.min(MAX_RETRY_AFTER_MS, Math.round(seconds * 1_000));
+}
+
+function sleep(ms: number): Promise<void> {
+  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
 export type OmnisendMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export type OmnisendResult<T> = {
@@ -52,6 +82,10 @@ export async function omnisendRequest<T = unknown>(input: {
   path: string;
   body?: unknown;
   timeoutMs?: number;
+  /** Retries after a retryable failure. Default 1; 0 for a call that must not repeat. */
+  retries?: number;
+  /** Pause before a retry when Omnisend sends no Retry-After. Default one second. */
+  retryDelayMs?: number;
 }): Promise<OmnisendResult<T>> {
   const environment = serverAdsReportingAllowed();
   if (!environment.allowed) {
@@ -60,6 +94,23 @@ export async function omnisendRequest<T = unknown>(input: {
   const key = String(process.env.OMNISEND_API_KEY ?? "").trim();
   if (!key) return { ok: false, status: 0, body: null, error: "OMNISEND_API_KEY not set" };
 
+  const retries = Math.max(0, Math.trunc(input.retries ?? DEFAULT_RETRIES));
+  const fallbackDelay = Math.max(0, input.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS);
+  let attempt = 0;
+  for (;;) {
+    const result = await attemptOmnisendRequest<T>(key, input);
+    const retryable = result.status === 0 || RETRYABLE_STATUSES.has(result.status);
+    if (result.ok || !retryable || attempt >= retries) return result.result;
+    attempt += 1;
+    await sleep(retryDelayFor(result.retryAfter, fallbackDelay));
+  }
+}
+
+/** One HTTP attempt. Never throws; the transport error is a result with status 0. */
+async function attemptOmnisendRequest<T>(
+  key: string,
+  input: { method: OmnisendMethod; path: string; body?: unknown; timeoutMs?: number },
+): Promise<{ ok: boolean; status: number; retryAfter: string | null; result: OmnisendResult<T> }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? REQUEST_TIMEOUT_MS);
   try {
@@ -83,12 +134,19 @@ export async function omnisendRequest<T = unknown>(input: {
         body = null;
       }
     }
+    const retryAfter = typeof response.headers?.get === "function" ? response.headers.get("retry-after") : null;
     if (!response.ok) {
-      return { ok: false, status: response.status, body, error: `omnisend ${response.status}: ${text.slice(0, 300)}` };
+      return {
+        ok: false,
+        status: response.status,
+        retryAfter,
+        result: { ok: false, status: response.status, body, error: `omnisend ${response.status}: ${text.slice(0, 300)}` },
+      };
     }
-    return { ok: true, status: response.status, body, error: null };
+    return { ok: true, status: response.status, retryAfter, result: { ok: true, status: response.status, body, error: null } };
   } catch (error) {
-    return { ok: false, status: 0, body: null, error: error instanceof Error ? error.message : String(error) };
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, status: 0, retryAfter: null, result: { ok: false, status: 0, body: null, error: message } };
   } finally {
     clearTimeout(timer);
   }
