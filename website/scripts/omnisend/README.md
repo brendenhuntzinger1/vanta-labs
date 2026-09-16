@@ -29,8 +29,8 @@ from the Omnisend dashboard after review.
 ## Id registry (`assets/`)
 
 Each file maps a key from the generator to the id Omnisend returned. They are
-checked in because the automations and campaigns reference templates and
-segments by id, and because updating an object needs its id.
+checked in because the automations reference segments by id and are built
+from templates by id, and because updating an object needs its id.
 
 | File | Shape | Written when |
 |------|-------|--------------|
@@ -39,6 +39,7 @@ segments by id, and because updating an object needs its id.
 | `assets/automations.json` | `{ "<automation key>": "<automationID>" }` | an automation is created |
 | `assets/form.json` | `{ "signup": "<formID>" }` | the form is created |
 | `assets/campaigns.json` | `{ "<campaign name>": "<campaignID>" }` | a campaign draft is created |
+| `assets/automation-content.json` | `{ "<automation key>": [{ "template": "<template key>", "contentID": "<emailContentID>" }] }`, in block order (depth first, `trueBlocks` before `falseBlocks`) | an automation's blocks are created or replaced |
 
 Layout ids are fixed and referenced from `layouts.mjs` (header
 `6aa985ecfa261ac55e04bae3`, footer `6aa985f7c29076c61d3838b1`).
@@ -67,7 +68,7 @@ There is no API key in the repo, so creation goes through the Omnisend MCP
 | Universal layout | `post_email_universal_layouts` | `put_email_universal_layouts_id` | `get_email_universal_layouts_id` |
 | Email template | `post_email_templates` | `put_email_templates_id` (body includes `id`) | `get_email_templates_id`, `post_email_templates_id_render` |
 | Segment | `post_segments` | recreate (segments are cheap; update the registry) | `get_segment_id` |
-| Automation | `post_automations` (created disabled) | `put_automations_id` | `get_automations_id` (`isEnabled` must stay `false` until the owner enables it) |
+| Automation | `post_automations` (created disabled) | `put_automations_id_blocks` for the block tree (see below); `patch_automations_id` for name, trigger, exit conditions and settings | `get_automations_id` (`isEnabled` must stay `false` until the owner enables it) |
 | Form | `post_forms` (created as `draft`) | `patch_form_id` | `get_form_id`, `post_forms_form_id_render` |
 | Campaign | `post_campaigns` (created as `draft`) | `patch_campaigns_id` for settings; the body is a copy (see below) | `get_campaigns_id` |
 
@@ -84,26 +85,37 @@ after upload.
 Automations and campaigns do not reference templates by id: when either is
 created, Omnisend copies the template into its own email-content object and
 references that copy by `contentID`. A template change therefore reaches
-nothing that has already been built from it until the copies are updated too.
+nothing that has already been built from it until the copies are replaced or
+updated too. The link-shape change of 2026-09-16 needed all of the following;
+the automation route below is the one that worked.
 
-- Every `sendEmail` action in `get_automations_id` carries its own
-  `action.sendEmail.contentID`; every campaign draft carries
-  `content.email.contentID` (`get_campaigns_id`). Update each copy with
-  `put_email_content_id`: read it with `get_email_content_id`, send the
-  template's `generalSettings` and `sections` plus the copy's `id`, and keep
-  the trailing `badge` section exactly as read (it is accepted on write).
-  There is no registry of these ids in `assets/`; read them from the
-  automation or campaign each time.
+- **Automations: replace the block tree.** `put_automations_id_blocks` with
+  `{ id, blocks }`, where `blocks` is the rendered automation's `blocks`
+  array exactly as `post_automations` accepted it (`temporaryID`s and
+  `templateID`s). Omnisend treats every `temporaryID` block as new, copies
+  the current template into a fresh email-content object for each
+  `sendEmail`, resolves a `splitOnClick` value from the `temporaryID` to the
+  new block id, and drops the old blocks. Name, trigger, exit conditions,
+  settings and `isEnabled` are untouched. SMS text rides along, because it is
+  stored in the block itself (`action.sendSms.message`). The old content
+  objects are left behind unreferenced, not deleted. Every `contentID`
+  changes, so write the new ones to `assets/automation-content.json` from
+  the response. `patch_automations_id` is not a substitute: it cannot add or
+  remove blocks and its `sendEmail` patch has no `templateID`.
+- **Campaign drafts: update the copy in place.** `get_campaigns_id` gives
+  `content.email.contentID`; call `put_email_content_id` with the template's
+  `generalSettings` and `sections` plus the copy's `id`, keeping the trailing
+  `badge` section exactly as `get_email_content_id` returned it. The same
+  call works on one automation copy from `assets/automation-content.json`
+  when a single email changed and the block ids must survive.
 - The header and footer links live in the universal layouts, not in the
   template, so a change to `link()` also needs `put_email_universal_layouts_id`
   for both layouts, with `{ id, name, content }` from `layouts:header` and
   `layouts:footer`.
-- SMS text is stored inside the automation itself (`action.sendSms.message`),
-  so a link change there needs `put_automations_id`.
 
-`get_email_templates_id` returns `rows: null` for `universal_layout` sections,
-so checking a template body says nothing about the header or footer; read the
-two layouts separately.
+`get_email_templates_id` and `get_email_content_id` return `rows: null` for
+`universal_layout` sections, so checking a body says nothing about the header
+or footer; read the two layouts separately.
 
 ### The abandonment split
 

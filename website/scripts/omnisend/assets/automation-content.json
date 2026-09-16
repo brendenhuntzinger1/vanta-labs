@@ -1,0 +1,42 @@
+{
+  "welcome": [
+    { "template": "welcome-1", "contentID": "6aaabf7b5322cd96de579299" },
+    { "template": "welcome-2", "contentID": "6aaabf7bfe9daa7b181e3978" },
+    { "template": "welcome-3", "contentID": "6aaabf7b5322cd96de57929e" }
+  ],
+  "abandoned-cart": [
+    { "template": "cart-1", "contentID": "6aaabf87ae53f2fc18c8c42d" },
+    { "template": "cart-2", "contentID": "6aaabf87ae53f2fc18c8c432" },
+    { "template": "cart-3-gift-code", "contentID": "6aaabf87fe9daa7b181e398e" },
+    { "template": "cart-3-gift", "contentID": "6aaabf8750c3f856bc52215c" },
+    { "template": "cart-3-code", "contentID": "6aaabf875322cd96de5792b3" },
+    { "template": "cart-3-plain", "contentID": "6aaabf87fe9daa7b181e3993" }
+  ],
+  "abandoned-checkout": [
+    { "template": "checkout-1", "contentID": "6aaabf94072042c2a418cdc0" },
+    { "template": "checkout-2", "contentID": "6aaabf945322cd96de5792d0" },
+    { "template": "checkout-3-gift-code", "contentID": "6aaabf9450c3f856bc522195" },
+    { "template": "checkout-3-gift", "contentID": "6aaabf94072042c2a418cdc5" },
+    { "template": "checkout-3-code", "contentID": "6aaabf9450c3f856bc52219a" },
+    { "template": "checkout-3-plain", "contentID": "6aaabf9450c3f856bc52219f" }
+  ],
+  "browse-abandonment": [
+    { "template": "browse-1", "contentID": "6aaabf41ae53f2fc18c8c3e9" }
+  ],
+  "post-purchase": [
+    { "template": "post-purchase-1", "contentID": "6aaabf9afe9daa7b181e39ac" },
+    { "template": "post-purchase-2", "contentID": "6aaabf9afe9daa7b181e39b1" },
+    { "template": "vip-milestone", "contentID": "6aaabf9a50c3f856bc5221ac" }
+  ],
+  "replenishment": [
+    { "template": "replenishment", "contentID": "6aaabf9dae53f2fc18c8c45b" }
+  ],
+  "win-back": [
+    { "template": "winback-1", "contentID": "6aaabfa55322cd96de5792e5" },
+    { "template": "winback-2", "contentID": "6aaabfa5072042c2a418cddb" },
+    { "template": "winback-2-nocode", "contentID": "6aaabfa55322cd96de5792ea" }
+  ],
+  "sunset": [
+    { "template": "sunset", "contentID": "6aaabfaa072042c2a418cdf0" }
+  ]
+}
