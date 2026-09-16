@@ -173,12 +173,26 @@ export function buildContactPayload(facts: ContactFacts): Record<string, unknown
   // address is lowercased here so one person can never become two contacts.
   const email = facts.email.trim().toLowerCase();
 
+  // The channel block is sent only for a status the store actually holds —
+  // subscribed or unsubscribed. Omnisend's contacts reference defines
+  // nonSubscribed as "Channel's status is unknown (contact hasn't subscribed
+  // or unsubscribed yet)" and says "The system will return the status with
+  // the latest status update date", so posting nonSubscribed with
+  // statusChangedAt = now would overwrite a `subscribed` the person gave
+  // through Omnisend's own form and drop them out of every flow. An
+  // identifier needs only `type` and `id` (post_contacts schema), so the
+  // block is omitted and Omnisend's own status stands.
+  const emailChannel = facts.emailConsent.status === "nonSubscribed"
+    ? {}
+    : {
+      channels: { email: { status: facts.emailConsent.status, statusChangedAt: facts.emailConsent.changedAt } },
+      ...consentBlock(facts.emailConsent),
+    };
   const identifiers: Array<Record<string, unknown>> = [
     {
       type: "email",
       id: email,
-      channels: { email: { status: facts.emailConsent.status, statusChangedAt: facts.emailConsent.changedAt } },
-      ...consentBlock(facts.emailConsent),
+      ...emailChannel,
       // Omnisend's own welcome mail stays off: the welcome flow (spec §6) is
       // the one that sends, and it is created disabled until the owner reviews it.
       sendWelcomeMessage: false,
@@ -204,7 +218,24 @@ export function buildContactPayload(facts: ContactFacts): Record<string, unknown
   if (facts.attested) tags.push("attested");
 
   const codes = facts.codes ?? {};
+  // THE GIFT BLOCK IS MERGE-PRESERVING. Every contact upsert is a POST merge
+  // on the identifier, and only the cart-offer sweep knows the gift; the
+  // nightly reconcile, the consent hooks and the order hook do not. So a
+  // caller that says nothing (undefined) sends none of the five keys and the
+  // gift the sweep set survives; a caller that knows there is none (null, or
+  // a gift with no text or link) sends the cleared values; an object sends
+  // the values. "" removes a property in Omnisend, so undefined and null are
+  // deliberately different things here.
   const gift = recoveryGiftReady(facts.recoveryGift) ? facts.recoveryGift : null;
+  const giftProperties = facts.recoveryGift === undefined
+    ? {}
+    : {
+      vl_recovery_gift: gift ? text(gift.text) : "",
+      vl_recovery_gift_link: gift ? text(gift.link) : "",
+      vl_recovery_gift_min: gift ? formatMinCart(gift.minCartCents) : "",
+      vl_recovery_gift_ends: gift ? dateOnly(gift.endsAt) : "",
+      vl_recovery_gift_ready: gift ? "yes" : "no",
+    };
   const customProperties = {
     vl_link: text(facts.link?.token),
     vl_link_ends: dateOnly(facts.link?.endsAt),
@@ -233,11 +264,7 @@ export function buildContactPayload(facts: ContactFacts): Record<string, unknown
     // block with its own flag, because a band may carry either, both or
     // neither, and the message shows exactly what the till will honour.
     vl_recovery_percent: text(codes.recovery?.code) ? wholePercent(codes.recovery?.percent) : 0,
-    vl_recovery_gift: gift ? text(gift.text) : "",
-    vl_recovery_gift_link: gift ? text(gift.link) : "",
-    vl_recovery_gift_min: gift ? formatMinCart(gift.minCartCents) : "",
-    vl_recovery_gift_ends: gift ? dateOnly(gift.endsAt) : "",
-    vl_recovery_gift_ready: gift ? "yes" : "no",
+    ...giftProperties,
   };
 
   const payload: Record<string, unknown> = { identifiers };
@@ -247,7 +274,11 @@ export function buildContactPayload(facts: ContactFacts): Record<string, unknown
   const lastName = text(facts.lastName);
   if (firstName) payload.firstName = firstName;
   if (lastName) payload.lastName = lastName;
-  payload.countryCode = text(facts.countryCode).toUpperCase() || "US";
+  // The country too: a US default here would overwrite a country Omnisend
+  // already holds. The default lives only in normalizeE164 above, where it
+  // decides how a bare ten-digit number is read.
+  const countryCode = text(facts.countryCode).toUpperCase();
+  if (countryCode) payload.countryCode = countryCode;
   const state = text(facts.state);
   const city = text(facts.city);
   const postalCode = text(facts.postalCode);

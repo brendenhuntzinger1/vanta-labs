@@ -26,26 +26,33 @@ leaves: Omnisend email identifiers are case-sensitive and the store's are not.
 | `marketing_subscribers.unsubscribed_at` is null (active guest opt-in) | `emailConsent.status = subscribed`, `changedAt = opted_in_at`, `source = marketing_subscribers.source` | `channels.email.status`, `.statusChangedAt`, `consent.source`, `consent.createdAt` |
 | `customer_preferences.marketing_emails = true` | `emailConsent.status = subscribed`, `changedAt = customer_preferences.updated_at`, `source = account-settings` | same as above |
 | `marketing_subscribers.unsubscribed_at` set, no account opt-in | `emailConsent.status = unsubscribed`, `changedAt = unsubscribed_at` | `channels.email.status`, `.statusChangedAt` |
-| none of the above (known from an order or account only) | `emailConsent.status = nonSubscribed`, `changedAt = now` | `channels.email.status`, `.statusChangedAt` |
+| none of the above (known from an order or account only) | `emailConsent.status = nonSubscribed`, `changedAt = now` | nothing: the email identifier is sent with NO `channels` block and no `consent`, so a status Omnisend collected itself (its own form) stands. Omnisend keeps the status with the newest `statusChangedAt`, and `nonSubscribed` means "status unknown" in its reference, so sending it stamped `now` would demote a form subscriber out of every flow. |
 | `customer_preferences.phone` | `phone` | `identifiers[type=phone].id`, E.164 (only when an SMS consent record exists, see below) |
 | `customer_preferences.sms_marketing = true` and a phone on file | `smsConsent.status = subscribed`, `changedAt = sms_consent_at`, else `updated_at`, else `now`; `source = account-settings` | `identifiers[phone].channels.sms.status`, `.statusChangedAt`, `consent.source`, `consent.createdAt` |
 | `customer_preferences.sms_opted_out_at` set | `smsConsent.status = unsubscribed`, `changedAt = sms_opted_out_at` | `channels.sms.status`, `.statusChangedAt` (no `consent` block) |
 | `orders.customer_name` of the latest paid product order, else the account's full name | `firstName`, `lastName` (split on the first space) | `firstName`, `lastName` (omitted when blank) |
-| `orders.country`, `.state`, `.city`, `.postal_code` of the latest paid product order | `countryCode`, `state`, `city`, `postalCode` | `countryCode` (default `US`), `state`, `city`, `postalCode` |
+| `orders.country`, `.state`, `.city`, `.postal_code` of the latest paid product order | `countryCode`, `state`, `city`, `postalCode` | `countryCode`, `state`, `city`, `postalCode`, each omitted when blank. There is no `US` default on the contact: it would overwrite a country Omnisend already holds. The `US` default lives only in `normalizeE164`, where it decides how a bare ten-digit phone number is read. |
 | paid product orders for the address (`PAID_ORDER_STATUSES`, `isProductPurchaseOrder`) | `orders`, `totalSpent`, `firstOrderAt`, `lastOrderAt` | tag `customer` when `orders > 0`; `customProperties.vl_orders`, `vl_total_spent`, `vl_first_order_at`, `vl_last_order_at` (dates in the store's display zone) |
 | recipient attestation (`recipientHasAttested`) | `attested` | tag `attested`; `customProperties.vl_attested` |
 | `customer_preferences.referral_code` | `referralCode` | `customProperties.vl_referral_code` |
 | a link token signed at push time (`signOmnisendLink`, 30 days) | `link.token`, `link.endsAt` | `customProperties.vl_link`, `vl_link_ends` |
 | `coupons` rows with `assigned_email` and source `omnisend_welcome`, `omnisend_winback`, `omnisend_recovery`, live and unspent | `codes.welcome`, `codes.winback`, `codes.recovery` | `customProperties.vl_welcome_code`, `vl_welcome_ends`, `vl_welcome_ready`, and the same three for `winback` and `recovery` |
+| `customer_offers` row for `cart_recovery_bac_water` bound to the address, unredeemed, unrevoked, unexpired | `recoveryGift` | the five `vl_recovery_gift*` properties are MERGE-PRESERVING: only the cart-offer sweep sends the values (it holds the claim link's bearer token, which is never stored). The reconcile sends nothing about the gift while a live row exists (the five keys are omitted, so what the sweep set survives) and sends the cleared values (`""` / `no`) when no live row exists, so an expired, redeemed or revoked gift is cleared nightly. The consent and order hooks say nothing about the gift. |
 | always | — | tag `source: website`; `identifiers[email].sendWelcomeMessage = false` |
 
 ### The consent status and timestamp rules, exactly as `contact-payload.ts` and `contacts.ts` implement them
 
 Email, in order of precedence (`emailConsentFrom`):
 
-1. If the suppression store could not be read, the status is `unsubscribed`
-   with `statusChangedAt = now`. Not knowing whether a person unsubscribed is
-   treated as knowing that they did.
+1. If the suppression store could not be read, there are NO facts:
+   `collectContactFacts` returns null, logs under `[omnisend/contacts]`
+   without the address, and every caller skips the address this time (the
+   hooks return, `upsertOmnisendContact` posts nothing, the reconcile counts
+   it in `unresolved` as "address(es) skipped: store record unreadable" and
+   the snapshot counts it as "could not be collected"). It used to be sent
+   as `unsubscribed` stamped `now`, which Omnisend keeps as the newest
+   status: one transient refusal unsubscribed the person for good and the
+   next write-back mirrored it into the store. Fail closed means do not push.
 2. A suppression row wins over everything: `unsubscribed`, `statusChangedAt =
    email_suppressions.created_at` (or `now` if the row has none).
 3. Either consent store makes the address `subscribed`. The guest opt-in is
@@ -56,7 +63,8 @@ Email, in order of precedence (`emailConsentFrom`):
    instant as `statusChangedAt`.
 4. A guest opt-out with no account opt-in is `unsubscribed`, `statusChangedAt =
    marketing_subscribers.unsubscribed_at`.
-5. Otherwise `nonSubscribed`, `statusChangedAt = now`.
+5. Otherwise `nonSubscribed`, which the payload sends as no channel block at
+   all (see the field map): Omnisend's own status for the address stands.
 
 SMS (`smsConsentFrom`): the account box with a number on file is
 `subscribed`, `statusChangedAt = sms_consent_at`, falling back to
@@ -67,8 +75,8 @@ record: a number typed into account settings with the box untouched never
 leaves the store, and a phone number given at checkout is never read.
 
 The `consent { source, createdAt }` block is attached only to a status
-somebody chose, which in practice means `subscribed`. `nonSubscribed` and
-`unsubscribed` carry a status and a timestamp and nothing else.
+somebody chose, which in practice means `subscribed`. `unsubscribed` carries
+a status and a timestamp and nothing else; `nonSubscribed` carries nothing.
 
 ### Deliberately not mapped
 
@@ -97,8 +105,12 @@ names an address.
 
 1. **Snapshot.** `{ "what": "snapshot" }`, or `{ "what": "snapshot", "label":
    "..." }` to name it. The default label is `pre-migration-<UTC date>`. The
-   job records, for every address the push will visit and every address on
-   the suppression list, what the store says at that instant: email status,
+   job records, for every address the push will visit, every address on
+   the suppression list, and every address that withdrew consent without
+   landing there (a guest whose `marketing_subscribers.unsubscribed_at` is
+   set, and an account whose `customer_preferences.marketing_emails` is
+   false, resolved to addresses the way the audience loader resolves the
+   opted-in accounts), what the store says at that instant: email status,
    SMS status, whether a phone is on file, the consent sources, the
    suppression reason, the paid order count and the last order date. Rows are
    written in chunks of 500 to `omnisend_consent_snapshot`, and the label and
@@ -129,7 +141,16 @@ After the cutoff the daily reconcile carries the delta. It has two halves,
 in this order: the write-back pages `GET /contacts?updatedAtFrom=<watermark>`
 and mirrors Omnisend unsubscribes, SMS opt-outs and form sign-ups into the
 store, then the push re-collects every address in the population from the
-store's own records and re-sends it. The watermark is the
+store's own records and re-sends it. Each mirrored row is dated when the
+person acted, not when the reconcile ran: `email_suppressions.created_at`,
+`customer_preferences.sms_opted_out_at` and
+`marketing_subscribers.opted_in_at` take the channel's `statusChangedAt` as
+Omnisend reports it, falling back to the run time when Omnisend gives none
+and never later than the run time (`stampFor`, pure and tested). A form
+sign-up never nulls a non-null `marketing_subscribers.unsubscribed_at`
+unless Omnisend's `statusChangedAt` is later than it: a `subscribed` that
+predates the site's own opt-out is stale, not a re-subscribe, and writes
+nothing. The watermark is the
 `contacts_reconcile` row's `updatedAtFrom`, the newest `updatedAt` among the
 contacts read; it advances only after a pass that read every page and
 applied every write, and is otherwise held so the same contacts are re-read
@@ -188,12 +209,23 @@ close by the next run is in `unresolved`.
   consented audience is pushed first, so what is left is buyers without
   consent. Run again.
 - `omnisend contact count capped at 40 pages` and `omnisend contact count
-  incomplete`: the before and after numbers are floors.
+  incomplete`, each with or without `(after)`: the before or after number is
+  a floor, not a total.
 - `write-back skipped: suppression list unreadable` and `consented audience
   unreadable; nothing pushed`: the store could not be read in full, so
   nothing was written on a guess. Look at the database before running again.
-- `N write-back write(s) refused; watermark held`: a store write failed. The
-  watermark did not move, so the same contacts are re-read next run.
+- `N write-back write(s) refused; watermark held`: a store write failed, a
+  suppression, an SMS opt-out or a form sign-up. The watermark did not move,
+  so the same contacts are re-read next run.
+- `N address(es) skipped: store record unreadable; re-read next run`: the
+  suppression store could not be read for those addresses, so nothing about
+  them was sent (fail closed means do not push). They are in no batch; the
+  next run reads them again.
+- `N batch id(s) not remembered: batches row unreadable; the next run cannot
+  poll them`: the batches went out, but the `batches` row of
+  `omnisend_sync_state` could not be re-read at write time, and writing over
+  an unreadable row would drop every unfinished id from earlier runs. Read
+  `GET /batches/<id>` by hand for the ids in `push.batchIds`.
 
 ## 4. The invariants
 
@@ -203,7 +235,9 @@ smaller (an Omnisend unsubscribe becomes a suppression, an SMS opt-out becomes
 an opt-out stamp) or add a consent the store never heard about (a sign-up
 through Omnisend's own form becomes a guest subscriber row), but it never
 re-opens a consent the store has closed: a suppressed address stays suppressed
-whatever status Omnisend holds, whoever set it there. The push then re-reads
+whatever status Omnisend holds, whoever set it there, and a guest opt-out
+(`unsubscribed_at`) is re-opened only by a form subscribe Omnisend dates after
+it. The push then re-reads
 consent from the store's own records, so an address suppressed in the store
 goes back to Omnisend as `unsubscribed` the same night. A checkout phone
 number is never SMS consent, and SMS consent is only ever granted in account
@@ -222,7 +256,9 @@ applies to event batches, which this migration does not send.
 
 **Every write is idempotent.** A contact pushed twice is the same contact
 (same identifier, `POST` merges on it); a snapshot label taken twice is one
-snapshot; the cutoff is written once; the watermark only advances.
+snapshot; the cutoff is written once; the watermark only advances; the
+`batches` row is merged onto a fresh read at write time, never written over a
+read from the start of the run.
 
 ## 5. Rollback
 

@@ -262,6 +262,28 @@ describe("contact-payload.ts copies consent exactly", () => {
     expect(source).toContain("channels: { email: { status: facts.emailConsent.status, statusChangedAt: facts.emailConsent.changedAt } }");
     expect(source).not.toMatch(/email:\s*\{\s*status:\s*"subscribed"/);
   });
+
+  it("sends no email channel block for nonSubscribed, so a status Omnisend collected itself is not overwritten", () => {
+    // Omnisend keeps the status with the newest statusChangedAt; a
+    // nonSubscribed stamped `now` would beat a form subscribe every night.
+    const guard = source.indexOf('facts.emailConsent.status === "nonSubscribed"');
+    const block = source.indexOf("channels: { email: { status: facts.emailConsent.status");
+    expect(guard).toBeGreaterThan(-1);
+    expect(block).toBeGreaterThan(guard);
+    expect(source.slice(guard, block)).toMatch(/\?\s*\{\}\s*:/);
+  });
+
+  it("sends countryCode only when the store knows it: the US default is normalizeE164's alone", () => {
+    expect(source).not.toMatch(/countryCode[^\n]*\|\|\s*"US"/);
+    expect(source).toContain("if (countryCode) payload.countryCode = countryCode;");
+    expect(source).toContain('defaultCountry = "US"');
+  });
+
+  it("omits the five recovery gift keys unless the caller said something about the gift", () => {
+    expect(source).toContain("facts.recoveryGift === undefined");
+    expect(source).toMatch(/facts\.recoveryGift === undefined\s*\?\s*\{\}\s*:/);
+    expect(source).toContain("...giftProperties,");
+  });
 });
 
 describe("client.ts asks the environment gate before it reads the key", () => {

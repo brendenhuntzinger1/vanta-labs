@@ -25,7 +25,12 @@ import { supabaseAdmin } from "@/lib/supabase-server";
  * refusal degrades ONE fact (logged), and the direction of every degradation
  * is the safe one: an unreadable consent store yields nonSubscribed, never
  * subscribed. The one exception is the suppression read, which on failure is
- * treated as "unknown" rather than "not suppressed" — see readSuppression.
+ * "unknown" rather than "not suppressed", and unknown means NO FACTS AT ALL
+ * (collectContactFacts returns null and every caller skips the address).
+ * It used to mean "unsubscribed, changed now", which was worse than a guess:
+ * Omnisend keeps the status with the newest statusChangedAt, so one
+ * transient refusal unsubscribed the person for good and the next
+ * write-back mirrored it into the store. Fail closed means do not push.
  */
 
 const LOG = "[omnisend/contacts]";
@@ -90,7 +95,7 @@ async function readSubscriber(email: string): Promise<SubscriberRow | null> {
 /**
  * Unknown, not "not suppressed". Every other read failing means a fact is
  * missing; this one failing "clean" would mean a person who unsubscribed is
- * told to Omnisend as subscribed. The caller maps unknown to unsubscribed.
+ * told to Omnisend as subscribed. The caller maps unknown to "no facts".
  */
 async function readSuppression(email: string): Promise<SuppressionRead> {
   try {
@@ -191,16 +196,11 @@ async function readAttested(email: string): Promise<boolean> {
  */
 function emailConsentFrom(input: {
   subscriber: SubscriberRow | null;
-  suppression: SuppressionRead;
+  suppression: Extract<SuppressionRead, { known: true }>;
   prefs: PreferencesRow | null;
   now: string;
 }): ChannelConsent {
   const { subscriber, suppression, prefs, now } = input;
-  if (!suppression.known) {
-    // Cannot tell whether this person unsubscribed. Telling Omnisend
-    // "subscribed" on a guess is the one error this module may never make.
-    return { status: "unsubscribed", changedAt: now };
-  }
   if (suppression.row) {
     return { status: "unsubscribed", changedAt: suppression.row.created_at ?? now };
   }
@@ -261,6 +261,15 @@ export async function collectContactFacts(email: string, extras: ContactExtras =
     readOrders(address),
     readAttested(address),
   ]);
+  if (!suppression.known) {
+    // Cannot tell whether this person unsubscribed. Telling Omnisend
+    // "subscribed" on a guess is the one error this module may never make,
+    // and telling it "unsubscribed" on a guess is permanent (see the header).
+    // So nothing is told: the address is skipped this time and the next
+    // push, hook or sweep reads it again.
+    console.error(LOG, "suppression read unknown; contact skipped", { domain: address.slice(address.indexOf("@") + 1) });
+    return null;
+  }
   const prefs = user ? await readPreferences(user.id) : null;
 
   const timed = orders.map((row) => ({ row, at: orderTime(row) })).filter((entry) => entry.at > 0);

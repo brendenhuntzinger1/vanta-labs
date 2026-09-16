@@ -123,11 +123,27 @@ pattern; `validateCoupon` already refuses a code used by any other address.
 | --- | --- | --- |
 | `vl_welcome_code` / `vl_welcome_ends` | first time a contact becomes email-subscribed | 10% off first order, 14 days |
 | `vl_winback_code` / `vl_winback_ends` | nightly, for buyers with no paid order in 60 days and no live code | 15% off, 14 days |
-| `vl_recovery_code` / `vl_recovery_ends` | when `started checkout` fires and the contact has not bought in 30 days and has no live recovery code | 10% off, 72 hours |
+| `vl_recovery_code` / `vl_recovery_ends` | *amended 2026-09-16, see below* | the cart-value band's percentage, 5 days |
 
 Emails show the code with a `text` block using the personalisation tag, never a
 hard-coded code. If the property is empty the surrounding section is hidden by
 an Omnisend content filter, so nobody sees a blank.
+
+*Amended 2026-09-16.* The recovery row above originally read "when `started
+checkout` fires and the contact has not bought in 30 days and has no live
+recovery code — 10% off, 72 hours". That is not what the code does. The
+recovery code AND the recovery gift are minted by the `omnisend_cart_offers`
+sweep (`cart-offers.ts`), which runs every 30 minutes and plans a cart once,
+36 to 96 hours after the cart's last activity, so the incentive exists just
+before Omnisend's third abandoned-cart message and not earlier. The
+percentage is the cart-value band's, from `planStageOffer` at stage `t72h`
+(`cart-recovery-offers.ts`, the same planner and cooldowns the in-house
+ladder uses), carried into the coupon row; the code lives 5 days
+(`CONTACT_CODE_OFFERS.recovery`). The gift is a `customer_offers` row under
+`cart_recovery_bac_water`, only for what can ship, handed to Omnisend as the
+`vl_recovery_gift*` properties. Only a cart with no in-house stage is planned,
+and the message reaches only a subscribed contact, because every flow's
+sending threshold is `email: subscribed`. `started checkout` mints nothing.
 
 ### 3.5 What Omnisend learns, and from where
 
@@ -135,8 +151,10 @@ an Omnisend content filter, so nobody sees a blank.
   today. The snippet still never receives an email address.
 - **Product views** are sent **server-side** for identified visitors (signed
   in or holding an email grant), from the same place the store already records
-  its own product views, at most once per address, product and hour. This is
-  what browse abandonment triggers on.
+  its own product views, debounced to one event per address and product per
+  six hours (`PRODUCT_VIEW_DEBOUNCE_MS`, through the event ledger's
+  `claimSendWithin`). This is what browse abandonment triggers on. *Amended
+  2026-09-16: this paragraph originally said once per hour.*
 - **Cart, checkout and order events** are server-side only, from the hooks the
   ad platforms already use, so a page that never opens (half of paid orders
   never load the confirmation page) still reports.
