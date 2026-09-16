@@ -666,6 +666,51 @@ export async function getWelcomeOffer(): Promise<WelcomeOffer> {
   }
 }
 
+/**
+ * The spin-to-win win-back wheel.
+ *
+ * `campaignId` is what scopes one spin per customer: it rides inside the signed
+ * link AND inside the offer key, so a customer who span in one campaign is a
+ * fresh spinner in the next and a link from the last campaign cannot be
+ * replayed into this one. Changing it starts a new promotion; it is not a
+ * cosmetic label.
+ */
+export interface SpinWheelConfig {
+  enabled: boolean;
+  campaignId: string;
+}
+
+/**
+ * OFF, AND IT SHIPS OFF.
+ *
+ * `enabled: false` is the default and the fallback on a failed read, so the
+ * wheel cannot be switched on by a control-store outage, a partial deploy, or a
+ * section that was never written. Turning it on is a deliberate admin action
+ * against a reviewed prize table — the route and the page both refuse while it
+ * is false, so an unreviewed wheel cannot mint a prize even if somebody finds
+ * the URL.
+ */
+export const DEFAULT_SPIN_WHEEL: SpinWheelConfig = {
+  enabled: false,
+  campaignId: "winback_2026q4",
+};
+
+export async function getSpinWheelConfig(): Promise<SpinWheelConfig> {
+  try {
+    const snapshot = await getControlSnapshot("spin_wheel");
+    const cfg = snapshot.spin_wheel ?? {};
+    return {
+      // Strictly `=== true`: a missing key, a blank string, or the string
+      // "false" all leave the wheel off. Only an explicit boolean true enables
+      // a promotion that gives away product.
+      enabled: cfg.enabled === true,
+      campaignId: (typeof cfg.campaignId === "string" && cfg.campaignId.trim()) || DEFAULT_SPIN_WHEEL.campaignId,
+    };
+  } catch {
+    return DEFAULT_SPIN_WHEEL;
+  }
+}
+
 // Default sales-tax rate applied when an admin hasn't set one. Editable in the
 // Control Center → Shipping (enter 0 to collect no sales tax).
 // ——— Sales tax (dynamic, address-based) ————————————————————————————————
