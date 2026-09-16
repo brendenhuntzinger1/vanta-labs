@@ -106,7 +106,7 @@ describe("F-06: the admin resend refuses a cart Omnisend owns", () => {
     expect(RESEND).toMatch(/import \{[^}]*marketingSendBlockedByOmnisend[^}]*\} from "@\/lib\/marketing\/omnisend\/ownership";/);
     const cartRead = resend.indexOf('from("abandoned_carts")');
     const check = resend.indexOf(CHECK);
-    const stages = resend.indexOf('from("abandoned_cart_emails")', check);
+    const stages = resend.indexOf("lastStageSentAtFor(cartId)", check);
     const suppressed = resend.indexOf("isMarketingSuppressed(");
     const send = resend.indexOf("sendMarketingEmail(");
     expect(check).toBeGreaterThan(cartRead);

@@ -459,11 +459,10 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
   // Omnisend cannot see. A legacy cart — one the in-house ladder already
   // started — may still be finished by hand, exactly as the sweep finishes it.
   if (marketingSendBlockedByOmnisend()) {
-    const { count } = await supabaseAdmin
-      .from("abandoned_cart_emails")
-      .select("stage", { count: "exact", head: true })
-      .eq("abandoned_cart_id", cartId);
-    if (!count) {
+    // "Has an in-house stage" is "was ever sent a stage": the same read the
+    // gap floor uses below, so the two agree on which carts are legacy.
+    const lastInHouseStageAt = await lastStageSentAtFor(cartId);
+    if (lastInHouseStageAt === null) {
       return {
         success: false,
         omnisendOwned: true,
