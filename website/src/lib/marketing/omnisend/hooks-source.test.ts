@@ -74,13 +74,17 @@ describe("every hook asks the gate first, never throws, and logs under the modul
 describe("onMarketingOptIn", () => {
   const body = fn("onMarketingOptIn");
 
-  it("mints the welcome code only for an address with no paid product order, then upserts the contact with a fresh link and the live codes", () => {
+  it("mints the welcome code only for an address with no paid product order, then the gift only once the code exists, then upserts the contact with a fresh link, the live codes and the gift", () => {
     const facts = body.indexOf("await collectContactFacts(address)");
-    const welcome = body.indexOf('await ensureContactCode("welcome", address)');
-    const upsert = body.indexOf("await upsertOmnisendContact(address, await contactExtras(address))");
+    const welcome = body.indexOf('const code = await ensureContactCode("welcome", address)');
+    const gift = body.indexOf('if (code && WELCOME_GIFT_ENABLED) welcomeGift = (await mintWelcomeGift(address, contactLinkFor(address, "welcome"))) ?? undefined;');
+    const upsert = body.indexOf("await upsertOmnisendContact(address, { ...(await contactExtras(address)), welcomeGift })");
     expect(facts).toBeGreaterThan(-1);
     expect(welcome).toBeGreaterThan(facts);
-    expect(upsert).toBeGreaterThan(welcome);
+    expect(gift).toBeGreaterThan(welcome);
+    expect(upsert).toBeGreaterThan(gift);
+    // Both halves sit behind the same gate: never at a checkout, never for a buyer.
+    expect(body).toContain('if (source !== "checkout" && facts.orders === 0) {');
   });
 
   // THE CHECKOUT OPT-IN IS NOT A FIRST SUBSCRIBE. recordMarketingOptIn runs
@@ -90,12 +94,16 @@ describe("onMarketingOptIn", () => {
   // flow's first email at once. The consent still reaches Omnisend; the
   // code waits for a sign-up or an account opt-in.
   it("mints nothing for the checkout opt-in, whatever the order count, and pushes the contact either way", () => {
-    expect(body).toContain('if (source !== "checkout" && facts.orders === 0) await ensureContactCode("welcome", address);');
-    expect(body).not.toContain("if (facts.orders === 0) await ensureContactCode");
+    expect(body).toContain('if (source !== "checkout" && facts.orders === 0) {');
+    expect(body).not.toContain("if (facts.orders === 0) {");
     // The push is unconditional on the source: the guard returns nothing early.
     const guard = body.indexOf('if (source !== "checkout" && facts.orders === 0)');
-    const upsert = body.indexOf("await upsertOmnisendContact(address, await contactExtras(address))");
+    const upsert = body.indexOf("await upsertOmnisendContact(address, { ...(await contactExtras(address)), welcomeGift })");
     expect(body.slice(guard, upsert)).not.toContain("return");
+    // And a push that minted no gift says nothing about it (undefined), never
+    // null: a link already in an inbox must not be blanked by a second opt-in.
+    expect(body).toContain('let welcomeGift: ContactExtras["welcomeGift"];');
+    expect(body).not.toContain("welcomeGift = null");
   });
 });
 

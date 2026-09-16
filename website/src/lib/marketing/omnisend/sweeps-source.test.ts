@@ -177,6 +177,19 @@ describe("the cadence jobs keep their record in omnisend_sync_state", () => {
     expect(writeState).toContain('onConflict: "key"');
   });
 
+  it("runs the write-back alone on a tick the push is not due, and never stamps the cadence for it", () => {
+    const body = fn(SWEEPS, JOBS[2]);
+    const partial = body.indexOf("await reconcileOmnisendContacts({ push: false })");
+    const full = body.indexOf("await reconcileOmnisendContacts()");
+    const write = body.indexOf("writeSyncState(CONTACTS_RECONCILE_KEY, { lastRunAt");
+    expect(partial).toBeGreaterThan(-1);
+    expect(body.indexOf("if (!decision.due) {")).toBeLessThan(partial);
+    // The write-back-only branch returns before the full run and its stamp.
+    expect(partial).toBeLessThan(full);
+    expect(body.slice(partial, full)).toContain("return {");
+    expect(write).toBeGreaterThan(full);
+  });
+
   it("uses distinct keys from the reconcile's watermark, at six hours and twenty-four hours", () => {
     expect(SWEEPS).toContain('const CATALOG_SYNC_KEY = "catalog_sync";');
     expect(SWEEPS).toContain('const CONTACTS_RECONCILE_KEY = "contacts_reconcile_cadence";');
@@ -185,9 +198,11 @@ describe("the cadence jobs keep their record in omnisend_sync_state", () => {
     expect(SWEEPS).toContain("const CONTACTS_RECONCILE_INTERVAL_MS = 24 * 60 * 60 * 1000;");
   });
 
-  for (const [declaration, key, runner] of [
-    [JOBS[1], "CATALOG_SYNC_KEY", "await syncOmnisendCatalog()"],
-    [JOBS[2], "CONTACTS_RECONCILE_KEY", "await reconcileOmnisendContacts()"],
+  for (const [declaration, key, runner, standDown] of [
+    [JOBS[1], "CATALOG_SYNC_KEY", "await syncOmnisendCatalog()", /if \(!decision\.due\) return \{[^}]*skipped: decision\.skipped/],
+    // The reconcile job never stands down outright: a tick the push is not
+    // due still runs the write-back, and its result carries the push's reason.
+    [JOBS[2], "CONTACTS_RECONCILE_KEY", "await reconcileOmnisendContacts()", /if \(!decision\.due\) \{[\s\S]*?`push \$\{decision\.skipped\}`/],
   ] as const) {
     it(`${declaration.replace("export async function ", "").replace("(", "")} decides with cadenceDecision, runs, then stamps lastRunAt`, () => {
       const body = fn(SWEEPS, declaration);
@@ -199,7 +214,7 @@ describe("the cadence jobs keep their record in omnisend_sync_state", () => {
       expect(decide).toBeGreaterThan(read);
       expect(run).toBeGreaterThan(decide);
       expect(write).toBeGreaterThan(run);
-      expect(body).toMatch(/if \(!decision\.due\) return \{[^}]*skipped: decision\.skipped/);
+      expect(body).toMatch(standDown);
     });
   }
 });

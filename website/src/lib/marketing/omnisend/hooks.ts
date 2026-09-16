@@ -13,6 +13,8 @@ import {
 } from "@/lib/marketing/omnisend/cart-plan";
 import { ensureContactCode, findLiveContactCodes } from "@/lib/marketing/omnisend/codes";
 import { collectContactFacts, upsertOmnisendContact, type ContactExtras } from "@/lib/marketing/omnisend/contacts";
+import { mintWelcomeGift } from "@/lib/marketing/omnisend/welcome-gift";
+import { WELCOME_GIFT_ENABLED } from "@/lib/offers/welcome-offer-terms";
 import {
   buildCartEvent,
   buildViewedProduct,
@@ -105,18 +107,29 @@ async function contactExtras(email: string): Promise<ContactExtras> {
 
 /**
  * Email consent recorded (spec §3.4, "first time a contact becomes
- * email-subscribed"): mint the welcome code for an address that has never
- * bought, then upsert the contact so the consent, the link and every live
- * code reach Omnisend together. A buyer who opts in later gets no welcome
- * code — the offer is for a first order.
+ * email-subscribed"): mint the welcome offer for an address that has never
+ * bought, then upsert the contact so the consent, the link, every live code
+ * and the gift reach Omnisend together. A buyer who opts in later gets no
+ * welcome offer — it is for a first order.
+ *
+ * THE OFFER IS TWO HALVES, MINTED IN ORDER, AND THE SECOND IS DORMANT. The
+ * 15% code first; the free GHK-Cu (welcome-gift.ts) only once the code
+ * exists and only while WELCOME_GIFT_ENABLED says the owner offers it (off
+ * for now: the code alone), so the readiness flag
+ * the welcome-offer flow triggers on (vl_welcome_ready, set by the code) can
+ * never be "yes" with neither half behind it, and the gift card is shown
+ * only where vl_welcome_gift_ready says the vial was minted and can ship.
+ * The gift's link is a bearer token that exists only on this push: a null
+ * from the minter (already live, cannot ship, refused) passes `undefined`
+ * so a link already in Omnisend is left alone rather than blanked.
  *
  * NOT FOR THE CHECKOUT OPT-IN. recordMarketingOptIn runs from create-session
- * with source "checkout", BEFORE payment: a welcome code minted there is a
+ * with source "checkout", BEFORE payment: a welcome offer minted there is a
  * first-order discount handed to someone in the middle of their first order,
- * and the push would carry it into the welcome flow's first email at once.
- * The consent still reaches Omnisend; the code waits for a sign-up or an
- * account opt-in, and the paid hook retires it once a first order lands
- * (order-hooks.ts onOrderPaid).
+ * and the push would carry it into the welcome flow at once. The consent
+ * still reaches Omnisend; the offer waits for a sign-up, an account opt-in
+ * or a form sign-up (reconcile.ts), and the paid hook retires it once a
+ * first order lands (order-hooks.ts onOrderPaid).
  */
 export async function onMarketingOptIn(email: string, source: string): Promise<void> {
   if (!omnisendActive().active) return;
@@ -125,8 +138,12 @@ export async function onMarketingOptIn(email: string, source: string): Promise<v
     if (!address) return;
     const facts = await collectContactFacts(address);
     if (!facts) return;
-    if (source !== "checkout" && facts.orders === 0) await ensureContactCode("welcome", address);
-    const accepted = await upsertOmnisendContact(address, await contactExtras(address));
+    let welcomeGift: ContactExtras["welcomeGift"];
+    if (source !== "checkout" && facts.orders === 0) {
+      const code = await ensureContactCode("welcome", address);
+      if (code && WELCOME_GIFT_ENABLED) welcomeGift = (await mintWelcomeGift(address, contactLinkFor(address, "welcome"))) ?? undefined;
+    }
+    const accepted = await upsertOmnisendContact(address, { ...(await contactExtras(address)), welcomeGift });
     if (!accepted) console.error(LOG, "opt-in contact upsert refused", { source });
   } catch (error) {
     console.error(LOG, "onMarketingOptIn failed", { source }, error);

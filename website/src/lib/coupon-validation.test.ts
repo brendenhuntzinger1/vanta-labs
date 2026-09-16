@@ -141,6 +141,28 @@ describe("an ordinary valid coupon", () => {
   });
 });
 
+describe("the source the row was minted with rides on the result", () => {
+  // quoteOrder needs it to tell a welcome code from any other code: the
+  // welcome gift and a welcome code are alternatives (welcome-offer-terms.ts),
+  // and nothing else on the result says which minter wrote the row.
+  it("carries coupons.source as stored", async () => {
+    state.coupon = coupon({ source: "omnisend_welcome" });
+    const result = await validate("SAVE20");
+    expect(result?.source).toBe("omnisend_welcome");
+  });
+
+  it("is null for a row with no source, never undefined or a guess", async () => {
+    const result = await validate("SAVE20");
+    expect(result?.source).toBeNull();
+  });
+
+  it("names the owner's synthetic first-order code welcome_offer", async () => {
+    state.welcome = { enabled: true, percent: 15, code: "WELCOME15" };
+    const result = await validate("WELCOME15", 200, "new@example.com");
+    expect(result?.source).toBe("welcome_offer");
+  });
+});
+
 describe("a coupon the owner has switched off or timed out", () => {
   it("refuses an inactive coupon", async () => {
     state.coupon = coupon({ active: false });

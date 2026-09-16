@@ -10,6 +10,7 @@ import { calculateShipping, isDomesticCountry, isFreeShippingSitewide, isShippin
 import { resolveSalesTax } from "@/lib/sales-tax";
 import { useApplePayOffered } from "@/components/use-apple-pay-offered";
 import { useOfferQuote } from "@/lib/offer-quote";
+import { SMS_CONSENT_TEXT, SMS_DISCLOSURE_TEXT } from "@/lib/sms-consent-text";
 import { bundleCreditNote, couponHeadline, couponOutcomeAgainstQuote } from "@/lib/discount-resolution";
 import { CHECKOUT_SHORT, COA_SHORT, FULFILMENT_SHORT, TESTING_SHORT, trustPoints } from "@/lib/trust-claims";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
@@ -301,6 +302,12 @@ export default function CheckoutPage() {
   // the cascading re-render an effect caused, with identical behaviour.
   const [marketingChoice, setMarketingChoice] = useState(true);
   const [marketingTouched, setMarketingTouched] = useState(false);
+  // SMS CONSENT IS NEVER PRE-TICKED, FOR ANY COUNTRY. The email box above may
+  // default on for a US destination; a text message may not (TCPA wants an
+  // affirmative tick, and the carriers audit the box). The phone field is
+  // for delivery; this box is the only thing that makes it a number we may
+  // text, and the server records the two separately (create-session).
+  const [smsOptIn, setSmsOptIn] = useState(false);
   // Progressive disclosure: savings tools and legal detail stay out of the way
   // until asked for, so the default path to payment is as short as possible.
   const [savingsOpen, setSavingsOpen] = useState(false);
@@ -765,6 +772,7 @@ export default function CheckoutPage() {
         pointsToRedeem: pointsToRedeem > 0 ? pointsToRedeem : undefined,
         shippingProtection: shippingProtectionEnabled,
         marketingOptIn,
+        smsOptIn,
         expectedTotal: postedTotal,
         paymentMethod: selectedMethodId || undefined,
         complianceAcknowledgements: acknowledgements,
@@ -979,10 +987,16 @@ export default function CheckoutPage() {
     ? Math.max(0, pendingOffer.minSubtotalCents / 100 - shownSubtotal)
     : 0;
   const offerApplied = Boolean(offerQuote?.offer);
+  // The welcome offer is the free vial OR the welcome code (lib/offers/
+  // welcome-offer-terms.ts). The server withdrew the vial because a welcome
+  // code is on this order; that is the shopper's own choice, and the banner
+  // says so instead of blaming the email address.
+  const offerWithdrawnByWelcomeCode = offerQuote?.offerWithdrawnBy === "welcome_code";
   const offerBlockedByEmail = Boolean(pendingOffer)
     && offerShortfall <= 0
     && Boolean(offerQuote)
     && !offerApplied
+    && !offerWithdrawnByWelcomeCode
     && form.email.trim().length > 0;
 
   const offerNotice = pendingOffer ? (
@@ -1000,6 +1014,14 @@ export default function CheckoutPage() {
           {pendingOffer.rewardKind === "free_product"
             ? `free ${pendingOffer.rewardName}`
             : pendingOffer.rewardName.toLowerCase()}.
+        </p>
+      ) : offerWithdrawnByWelcomeCode ? (
+        <p className="text-white/70" data-testid="checkout-offer-withdrawn">
+          Your welcome code is applied, so the{" "}
+          <span className="font-semibold text-[color:var(--accent-gold)]">
+            {pendingOffer.rewardKind === "free_product" ? `free ${pendingOffer.rewardName}` : pendingOffer.rewardName}
+          </span>{" "}
+          is not added: the welcome offer is one or the other. Remove the code to take the {pendingOffer.rewardKind === "free_product" ? pendingOffer.rewardName : "gift"} instead.
         </p>
       ) : offerBlockedByEmail ? (
         <p className="text-white/70">
@@ -1153,6 +1175,23 @@ export default function CheckoutPage() {
               {emailLockedToAccount ? (
                 <p className="mt-2 pl-1 text-[11px] text-white/35">Using your account email.</p>
               ) : null}
+              <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm text-white/60">
+                <input
+                  type="checkbox"
+                  checked={smsOptIn}
+                  onChange={(e) => { haptic(); setSmsOptIn(e.target.checked); }}
+                  className="mt-0.5 h-[1.15rem] w-[1.15rem] flex-shrink-0 accent-[color:var(--accent-gold)]"
+                  data-testid="checkout-sms-opt-in"
+                  aria-describedby="checkout-sms-disclosure"
+                />
+                <span className="text-xs leading-relaxed">{SMS_CONSENT_TEXT} <span className="text-white/30">Optional.</span></span>
+              </label>
+              <p id="checkout-sms-disclosure" className="mt-2 pl-8 text-[11px] leading-relaxed text-white/30">
+                {SMS_DISCLOSURE_TEXT}{" "}
+                <a href="/legal/terms" target="_blank" rel="noopener noreferrer" className="text-white/50 underline underline-offset-2 hover:text-white">Terms</a>{" "}
+                and{" "}
+                <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="text-white/50 underline underline-offset-2 hover:text-white">Privacy Policy</a>.
+              </p>
             </CheckoutSection>
 
             <CheckoutSection step="02" title="Shipping address" subtitle="United States and Canada.">

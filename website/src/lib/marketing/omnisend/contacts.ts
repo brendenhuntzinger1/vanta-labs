@@ -9,6 +9,7 @@ import {
   splitName,
   type ChannelConsent,
   type ContactFacts,
+  type GiftFacts,
   type RecoveryGiftFacts,
 } from "@/lib/marketing/omnisend/contact-payload";
 import { supabaseAdmin } from "@/lib/supabase-server";
@@ -20,7 +21,9 @@ import { supabaseAdmin } from "@/lib/supabase-server";
  * derived from the same three stores the in-house sender consults — the
  * suppression list, the guest opt-in list and the account preference — in the
  * same order of precedence, so a person Omnisend may mail is exactly a person
- * the store may mail. SMS starts from the account box and nothing else.
+ * the store may mail. SMS starts from the account box, then the address's own
+ * consent row (sms_subscribers: the sign-up page or the checkout), and
+ * nothing else.
  *
  * Every read tolerates its own failure. A missing table or a transient
  * refusal degrades ONE fact (logged), and the direction of every degradation
@@ -51,6 +54,13 @@ export type ContactExtras = {
    * show.
    */
   recoveryGift?: RecoveryGiftFacts | null;
+  /**
+   * The sign-up gift (welcome-gift.ts), with the same three meanings. Its
+   * writers are the opt-in hook (a gift), the paid hook (null: a first order
+   * ends the offer) and the reconcile (null once the row is spent or
+   * expired, undefined while it is live); every other push leaves it alone.
+   */
+  welcomeGift?: GiftFacts | null;
 };
 
 type SubscriberRow = { email: string; source: string | null; opted_in_at: string | null; unsubscribed_at: string | null };
@@ -63,6 +73,13 @@ type PreferencesRow = {
   sms_consent_at: string | null;
   sms_opted_out_at: string | null;
   referral_code: string | null;
+};
+/** sms_subscribers (sms-subscribers.sql): consent from the sign-up page or the checkout, guest or not. */
+type SmsSubscriberRow = {
+  phone: string | null;
+  source: string | null;
+  consented_at: string | null;
+  opted_out_at: string | null;
 };
 type OrderRow = {
   customer_name: string | null;
@@ -134,6 +151,27 @@ async function readUser(email: string): Promise<{ id: string; fullName: string |
     return { id: user.id, fullName: typeof fullName === "string" && fullName.trim() ? fullName : null };
   } catch (error) {
     console.error(LOG, "auth user lookup failed", error);
+    return null;
+  }
+}
+
+async function readSmsSubscriber(email: string): Promise<SmsSubscriberRow | null> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("sms_subscribers")
+      .select("phone, source, consented_at, opted_out_at")
+      .eq("email", email)
+      .maybeSingle();
+    if (error) {
+      // A database without the table (an unapplied migration) lands here
+      // and reads as "no consent": the direction that cannot text anyone
+      // who did not ask.
+      console.error(LOG, "sms subscriber read refused", error.message);
+      return null;
+    }
+    return (data as SmsSubscriberRow | null) ?? null;
+  } catch (error) {
+    console.error(LOG, "sms subscriber read failed", error);
     return null;
   }
 }
@@ -227,15 +265,28 @@ function emailConsentFrom(input: {
   return { status: "nonSubscribed", changedAt: now };
 }
 
-/** SMS: the account box with a number is consent; the opt-out stamp is not; nothing else is anything. */
-function smsConsentFrom(prefs: PreferencesRow | null, now: string): ChannelConsent | null {
-  if (!prefs) return null;
-  const phone = String(prefs.phone ?? "").trim();
-  if (prefs.sms_marketing && phone) {
+/**
+ * SMS: the account box with a number is consent; the account's opt-out stamp
+ * is not; failing either, the address's own consent row (sms_subscribers:
+ * the sign-up page or the checkout, guest or not, which sms-consent.ts also
+ * mirrors into the account row when there is one) says the same two things;
+ * nothing else is anything. The account row is asked first because it is
+ * the one the person can see and change on their settings page.
+ */
+function smsConsentFrom(prefs: PreferencesRow | null, guest: SmsSubscriberRow | null, now: string): ChannelConsent | null {
+  const phone = String(prefs?.phone ?? "").trim();
+  if (prefs?.sms_marketing && phone) {
     return { status: "subscribed", changedAt: prefs.sms_consent_at ?? prefs.updated_at ?? now, source: "account-settings" };
   }
-  if (prefs.sms_opted_out_at) {
+  if (prefs?.sms_opted_out_at) {
     return { status: "unsubscribed", changedAt: prefs.sms_opted_out_at };
+  }
+  const guestPhone = String(guest?.phone ?? "").trim();
+  if (guest && !guest.opted_out_at && guestPhone) {
+    return { status: "subscribed", changedAt: guest.consented_at ?? now, source: guest.source ?? "checkout" };
+  }
+  if (guest?.opted_out_at) {
+    return { status: "unsubscribed", changedAt: guest.opted_out_at };
   }
   return null;
 }
@@ -265,12 +316,13 @@ export async function collectContactFacts(email: string, extras: ContactExtras =
   if (!address) return null;
   const now = new Date().toISOString();
 
-  const [subscriber, suppression, user, orders, attested] = await Promise.all([
+  const [subscriber, suppression, user, orders, attested, smsSubscriber] = await Promise.all([
     readSubscriber(address),
     readSuppression(address),
     readUser(address),
     readOrders(address),
     readAttested(address),
+    readSmsSubscriber(address),
   ]);
   if (!suppression.known) {
     // Cannot tell whether this person unsubscribed. Telling Omnisend
@@ -298,13 +350,15 @@ export async function collectContactFacts(email: string, extras: ContactExtras =
     email: address,
     firstName,
     lastName,
-    phone: prefs?.phone ?? null,
+    // The account's number first (it is the one on the settings page), else
+    // the number the person typed beside the box they ticked.
+    phone: prefs?.phone ?? smsSubscriber?.phone ?? null,
     countryCode: countryCodeFrom(latest?.country),
     state: latest?.state ?? null,
     city: latest?.city ?? null,
     postalCode: latest?.postal_code ?? null,
     emailConsent: emailConsentFrom({ subscriber, suppression, prefs, now }),
-    smsConsent: smsConsentFrom(prefs, now),
+    smsConsent: smsConsentFrom(prefs, smsSubscriber, now),
     attested,
     orders: orders.length,
     totalSpent,
@@ -315,6 +369,7 @@ export async function collectContactFacts(email: string, extras: ContactExtras =
     codes: extras.codes ?? {},
     // Untouched: undefined and null mean different things to the payload.
     recoveryGift: extras.recoveryGift,
+    welcomeGift: extras.welcomeGift,
   };
 }
 

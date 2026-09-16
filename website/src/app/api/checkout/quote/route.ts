@@ -189,6 +189,9 @@ export async function POST(request: Request) {
               percentApplied: quote.appliedOffer.percentApplied,
             }
           : null,
+        // Why a held gift is not on the order when that was the shopper's own
+        // doing (a welcome code typed over the welcome vial); null otherwise.
+        offerWithdrawnBy: quote.offerWithdrawnBy,
         // What the discount line should be called: "15% gift" when the gift's
         // percentage won, "Coupon" when a code did, the perk's name otherwise.
         discountLabel: quote.discountLabel,

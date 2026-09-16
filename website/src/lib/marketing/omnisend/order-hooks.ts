@@ -212,7 +212,11 @@ export async function onOrderPaid(orderId: string): Promise<boolean> {
     const link = token ? { token, endsAt: new Date(Date.now() + OMNISEND_LINK_TTL_MS).toISOString() } : null;
     // The upsert is not gated on the event ledger: a customer's order count
     // and tags must reflect the row even when the events were already sent.
-    await upsertOmnisendContact(email, { link, codes });
+    // A first order ends the welcome offer whether or not the vial was
+    // claimed: the paid path has already closed the offer row
+    // (customer_offer_close_cycle), and null clears the five properties so
+    // the welcome-offer flow's card cannot outlive the offer.
+    await upsertOmnisendContact(email, { link, codes, welcomeGift: null });
 
     await deliverOrderEvent(orderId, "placed order", order);
     return await deliverOrderEvent(orderId, "paid for order", order);

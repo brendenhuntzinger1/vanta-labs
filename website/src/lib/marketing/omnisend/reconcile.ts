@@ -14,6 +14,8 @@ import {
 } from "@/lib/marketing/omnisend/codes";
 import { buildContactPayload, type ContactFacts } from "@/lib/marketing/omnisend/contact-payload";
 import { collectContactFacts } from "@/lib/marketing/omnisend/contacts";
+import { onMarketingOptIn } from "@/lib/marketing/omnisend/hooks";
+import { liveWelcomeGift } from "@/lib/marketing/omnisend/welcome-gift";
 import { OMNISEND_LINK_TTL_MS, signOmnisendLink } from "@/lib/marketing/omnisend/link-token";
 import {
   readBatchRecords,
@@ -43,6 +45,7 @@ import {
   type OmnisendContactRead,
   type OmnisendReconcileReport,
 } from "@/lib/marketing/omnisend/reconcile-plan";
+import { recordSmsOptOut } from "@/lib/sms-consent";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -130,6 +133,15 @@ export type OmnisendReconcileOptions = {
   limit?: number;
   /** Wall-clock budget for the push, in milliseconds. */
   budgetMs?: number;
+  /**
+   * `false` runs the write-back alone: the batch poll, the changed-contacts
+   * read and the mirrors (suppressions, form sign-ups with their welcome
+   * offer, SMS opt-outs), and none of the full audience push. The write-back
+   * is incremental by watermark and cheap, so the sweep runs it every tick;
+   * the push walks every consented address and runs on its own daily cadence
+   * (sweeps.ts). Omitted or `true`: both, as before.
+   */
+  push?: boolean;
 };
 
 export type OmnisendReconcileResult = {
@@ -421,17 +433,21 @@ async function applyFormSubscriber(email: string, changedAt: string | null, now:
 }
 
 /**
- * SMS consent lives on the account only, so a guest has nothing to stamp. An
- * account that already carries an opt-out keeps its original timestamp: the
- * stamp is when the person said stop — Omnisend's statusChangedAt when it
- * has one — not when this job last noticed. A refused read or write is
- * "failed", which holds the watermark; "nothing" is not a failure.
+ * SMS consent lives on the address's own row (sms_subscribers, written by the
+ * sign-up page and the checkout) and, for an account holder, on the account.
+ * Both are stamped: a STOP Omnisend reports has to close whichever row a
+ * later sync would otherwise read as consent. A row that already carries an
+ * opt-out keeps its original timestamp: the stamp is when the person said
+ * stop — Omnisend's statusChangedAt when it has one — not when this job last
+ * noticed. A refused read or write on either row is "failed", which holds
+ * the watermark; "nothing" is not a failure.
  */
 async function applySmsOptOut(email: string, changedAt: string | null, now: string): Promise<WriteBackOutcome> {
   try {
     const at = stampFor(changedAt, now);
+    const address = await recordSmsOptOut(email, at);
     const user = await findUserByEmail(email);
-    if (!user?.id) return "nothing";
+    if (!user?.id) return address;
     const { data, error } = await supabaseAdmin
       .from("customer_preferences")
       .select("sms_opted_out_at")
@@ -441,7 +457,7 @@ async function applySmsOptOut(email: string, changedAt: string | null, now: stri
       console.error(LOG, "sms preference read refused", error.message);
       return "failed";
     }
-    if ((data as { sms_opted_out_at?: string | null } | null)?.sms_opted_out_at) return "nothing";
+    if ((data as { sms_opted_out_at?: string | null } | null)?.sms_opted_out_at) return address;
     const { error: writeError } = await supabaseAdmin
       .from("customer_preferences")
       .upsert({ user_id: user.id, sms_marketing: false, sms_opted_out_at: at, updated_at: now }, { onConflict: "user_id" });
@@ -449,7 +465,8 @@ async function applySmsOptOut(email: string, changedAt: string | null, now: stri
       console.error(LOG, "sms opt-out write refused", writeError.message);
       return "failed";
     }
-    return "applied";
+    // The account stamp landed; a refused address stamp still holds the watermark.
+    return address === "failed" ? "failed" : "applied";
   } catch (error) {
     console.error(LOG, "sms opt-out write failed", error);
     return "failed";
@@ -522,8 +539,19 @@ async function runWriteBack(input: { dryRun: boolean; audience: Set<string> | nu
   }
   for (const email of newSubscribers) {
     const form = await applyFormSubscriber(email, stamps.get(email)?.email ?? null, input.now);
-    if (form === "applied") counts.formSubscribers += 1;
-    else if (form === "failed") failures += 1;
+    if (form === "applied") {
+      counts.formSubscribers += 1;
+      // A FORM SIGN-UP IS A FIRST SUBSCRIBE THE SITE NEVER SAW. The site's
+      // own sign-ups mint the welcome offer on the request path
+      // (recordMarketingOptIn → onMarketingOptIn); a pop-up sign-up reaches
+      // the store only here, so the same hook runs here, once, for the
+      // address just mirrored: it mints the code and the gift for a never-
+      // bought address and pushes the contact with both. Never for a buyer,
+      // never twice (a live code is re-offered, a live gift left alone), and
+      // never on a dry run. The full push later this run reads the live
+      // codes and leaves the gift link as this push set it.
+      await onMarketingOptIn(email, "omnisend-form");
+    } else if (form === "failed") failures += 1;
   }
   for (const email of plan.smsOptOut) {
     const sms = await applySmsOptOut(email, stamps.get(email)?.sms ?? null, input.now);
@@ -663,9 +691,9 @@ async function buildContactItem(email: string, dryRun: boolean): Promise<BuiltCo
     const token = await signOmnisendLink(email, nowMs);
     const link = token ? { token, endsAt: new Date(nowMs + OMNISEND_LINK_TTL_MS).toISOString() } : null;
     const { codes, mintedWinback } = await gatherCodes(email, facts, nowMs, dryRun);
-    const recoveryGift = await liveRecoveryGift(email, nowMs);
+    const [recoveryGift, welcomeGift] = await Promise.all([liveRecoveryGift(email, nowMs), liveWelcomeGift(email, nowMs)]);
     return {
-      payload: buildContactPayload({ ...facts, link, codes, recoveryGift }),
+      payload: buildContactPayload({ ...facts, link, codes, recoveryGift, welcomeGift }),
       mintedWinback,
       smsSubscribed: facts.smsConsent?.status === "subscribed" && Boolean(String(facts.phone ?? "").trim()),
     };
@@ -903,6 +931,10 @@ export async function reconcileOmnisendContacts(opts: OmnisendReconcileOptions =
     if (!audience) {
       result.skipped = "consented audience unreadable; nothing pushed";
       report.unresolved.push(result.skipped);
+    } else if (opts.push === false) {
+      // Write-back only (see OmnisendReconcileOptions.push): no cutoff stamp,
+      // no push, no count of the audience after. The daily full run does those.
+      result.skipped = "write-back only; the full push runs on its own cadence";
     } else {
       // The cutoff is the instant the first live push began; written once,
       // by whichever run is first, and never by a dry run.

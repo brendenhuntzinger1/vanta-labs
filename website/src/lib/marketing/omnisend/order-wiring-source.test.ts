@@ -86,7 +86,7 @@ describe("order-hooks.ts retires the welcome code on the paid hook, before the c
     const purchase = paid.indexOf("if (!isProductPurchaseOrder(");
     const retire = paid.indexOf('await retireContactCode("welcome", email);');
     const codes = paid.indexOf("liveCodes(email)");
-    const upsert = paid.indexOf("await upsertOmnisendContact(email, { link, codes });");
+    const upsert = paid.indexOf("await upsertOmnisendContact(email, { link, codes, welcomeGift: null });");
     expect(purchase).toBeGreaterThan(-1);
     expect(retire).toBeGreaterThan(purchase);
     expect(codes).toBeGreaterThan(retire);

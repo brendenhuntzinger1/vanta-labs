@@ -104,3 +104,46 @@ describe("upsertOmnisendContact when the suppression read is not known", () => {
     expect(requests).toHaveLength(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// SMS CONSENT FROM THE ADDRESS'S OWN ROW.
+//
+// sms_subscribers (sms-subscribers.sql) carries the box ticked on the sign-up
+// page or at the checkout, guest or not. With no account row to say otherwise
+// it is the consent; an account row that carries a decision wins over it.
+// ---------------------------------------------------------------------------
+
+type Posted = { body: { identifiers: Array<{ type: string; id: string; channels?: { sms?: { status: string; statusChangedAt: string } } }> } };
+
+describe("collectContactFacts reads sms_subscribers after the account row", () => {
+  beforeEach(() => {
+    reads.email_suppressions = { data: null, error: null };
+  });
+
+  it("a ticked checkout box with a number is SMS consent, dated when it was ticked, from where it was ticked", async () => {
+    reads.sms_subscribers = { data: { phone: "(512) 555-0100", source: "checkout", consented_at: "2026-09-10T15:00:00.000Z", opted_out_at: null }, error: null };
+    const { collectContactFacts, upsertOmnisendContact } = await import("@/lib/marketing/omnisend/contacts");
+    const facts = await collectContactFacts(ADDRESS);
+    expect(facts?.smsConsent).toEqual({ status: "subscribed", changedAt: "2026-09-10T15:00:00.000Z", source: "checkout" });
+    expect(facts?.phone).toBe("(512) 555-0100");
+    await upsertOmnisendContact(ADDRESS);
+    const phone = (requests[0] as Posted).body.identifiers.find((identifier) => identifier.type === "phone");
+    expect(phone?.id).toBe("+15125550100");
+    expect(phone?.channels?.sms).toEqual({ status: "subscribed", statusChangedAt: "2026-09-10T15:00:00.000Z" });
+  });
+
+  it("a stopped row is an opt-out, dated when they said stop", async () => {
+    reads.sms_subscribers = { data: { phone: "(512) 555-0100", source: "signup", consented_at: "2026-09-10T15:00:00.000Z", opted_out_at: "2026-09-12T09:00:00.000Z" }, error: null };
+    const { collectContactFacts } = await import("@/lib/marketing/omnisend/contacts");
+    const facts = await collectContactFacts(ADDRESS);
+    expect(facts?.smsConsent).toEqual({ status: "unsubscribed", changedAt: "2026-09-12T09:00:00.000Z" });
+  });
+
+  it("no row, or a row that cannot be read, is no SMS consent at all", async () => {
+    const { collectContactFacts } = await import("@/lib/marketing/omnisend/contacts");
+    expect((await collectContactFacts(ADDRESS))?.smsConsent).toBeNull();
+    reads.sms_subscribers = { data: null, error: { message: "relation does not exist" } };
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect((await collectContactFacts(ADDRESS))?.smsConsent).toBeNull();
+  });
+});

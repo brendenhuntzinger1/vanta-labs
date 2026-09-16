@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { SMS_CONSENT_TEXT, SMS_DISCLOSURE_TEXT } from "@/lib/sms-consent-text";
 import { supabase } from "@/lib/supabase";
 import type { CustomerPreferences, CustomerAddress } from "@/lib/customer-account";
 import { AccountAddressesClient } from "@/components/account-addresses-client";
@@ -409,12 +410,10 @@ export function AccountSettingsClient({
                 className="mt-0.5 h-5 w-5 shrink-0 accent-cyan-400"
                 aria-describedby="sms-consent-disclosure"
               />
-              <span>
-                Yes, I would like to receive recurring automated marketing text messages from Vanta Labs at the number above. Consent is not a condition of purchase.
-              </span>
+              <span>{SMS_CONSENT_TEXT}</span>
             </label>
             <p id="sms-consent-disclosure" className="text-xs leading-relaxed text-zinc-500">
-              Message frequency varies. Message and data rates may apply. Reply STOP to cancel at any time or HELP for help. Your number is never shared with third parties for their marketing. See our{" "}
+              {SMS_DISCLOSURE_TEXT} See our{" "}
               <Link href="/legal/terms" className="underline hover:text-zinc-300">Terms of Service</Link> and{" "}
               <Link href="/legal/privacy" className="underline hover:text-zinc-300">Privacy Policy</Link>.
             </p>

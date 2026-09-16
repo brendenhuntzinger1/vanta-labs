@@ -45,6 +45,12 @@ export interface OfferQuote {
     shippingApplied?: boolean;
     percentApplied?: boolean;
   } | null;
+  /**
+   * "welcome_code" when the shopper's welcome code displaced the welcome vial
+   * (the sign-up reward is one or the other); null or absent otherwise. The
+   * banner words the gift's absence from this rather than guessing.
+   */
+  offerWithdrawnBy?: "welcome_code" | null;
   /** The resolved discount's label, e.g. "15% gift" or "Coupon". */
   discountLabel?: string;
   /** True when priced for the address the offer was mailed to, because the

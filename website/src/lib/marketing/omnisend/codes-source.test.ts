@@ -29,7 +29,7 @@ describe("codes.ts is server-only", () => {
 
 describe("the three offers", () => {
   it("are the ones the spec names, each with its own coupon source", () => {
-    expect(CODES).toContain('welcome: { percent: 10, ttlHours: 14 * 24, source: "omnisend_welcome", prefix: "VLWELCOME" }');
+    expect(CODES).toContain('welcome: { percent: 15, ttlHours: 14 * 24, source: "omnisend_welcome", prefix: "VLWELCOME" }');
     expect(CODES).toContain('winback: { percent: 15, ttlHours: 14 * 24, source: "omnisend_winback", prefix: "VLBACK" }');
     expect(CODES).toContain('recovery: { percent: 10, ttlHours: 5 * 24, source: "omnisend_recovery", prefix: "VLCART" }');
   });

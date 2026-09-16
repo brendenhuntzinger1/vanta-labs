@@ -34,8 +34,10 @@ import { supabaseAdmin } from "@/lib/supabase-server";
  *     hours. The push is a full replace and cheap, but 48 pushes a day of a
  *     catalogue that changes weekly buys nothing.
  *
- *   * omnisendContactsReconcileJob — the contacts reconcile and write-back,
- *     at most once per twenty-four hours. It walks the whole audience, so it
+ *   * omnisendContactsReconcileJob — the contacts write-back every tick
+ *     (incremental by watermark: suppressions, form sign-ups with their
+ *     welcome offer, SMS opt-outs) and the full contacts push at most once
+ *     per twenty-four hours. The push walks the whole audience, so it
  *     is the one job here that could use the sweep's entire budget.
  *
  * The two cadence jobs keep their "last ran" stamp in omnisend_sync_state,
@@ -399,7 +401,18 @@ export async function omnisendContactsReconcileJob(): Promise<OmnisendReconcileR
     // As above: unreadable is "not recorded", so a hiccup cannot stall the reconcile.
     const record = await readSyncState<CadenceRecord>(CONTACTS_RECONCILE_KEY, LOG);
     const decision = cadenceDecision({ lastRunAt: record.value?.lastRunAt, now: startedAt.getTime(), intervalMs: CONTACTS_RECONCILE_INTERVAL_MS });
-    if (!decision.due) return { ...emptyReconcile(), skipped: decision.skipped };
+    // THE WRITE-BACK RUNS EVERY TICK; THE PUSH RUNS DAILY. A pop-up sign-up
+    // reaches the store only through the write-back (reconcile.ts mirrors
+    // the new subscriber and mints their welcome offer there), and a welcome
+    // offer that arrives a day after the sign-up is not a welcome offer. The
+    // write-back reads only contacts changed since its watermark, so it is a
+    // page or two every half hour; the full push walks every consented
+    // address and stays on its cadence. The stamp is the push's, not the
+    // write-back's, so a write-back-only tick never postpones the push.
+    if (!decision.due) {
+      const partial = await reconcileOmnisendContacts({ push: false });
+      return { ...partial, skipped: [`push ${decision.skipped}`, partial.skipped].filter(Boolean).join("; ") };
+    }
 
     const result = await reconcileOmnisendContacts();
     await writeSyncState(CONTACTS_RECONCILE_KEY, { lastRunAt: startedAt.toISOString() }, LOG);

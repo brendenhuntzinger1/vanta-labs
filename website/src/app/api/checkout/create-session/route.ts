@@ -10,6 +10,7 @@ import { readCampaignCookie } from "@/lib/email/campaign-links";
 import { readCartRecoveryCookie } from "@/lib/email/cart-recovery-links";
 import { createCheckoutSession, sanitizeCustomerInput } from "@/lib/payment-service";
 import { recordMarketingOptIn } from "@/lib/marketing-broadcast";
+import { recordSmsConsent } from "@/lib/sms-consent";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { hasAllAcknowledgements } from "@/lib/express-wallet";
@@ -129,6 +130,15 @@ export async function POST(request: Request) {
 
     // If they opted into offers/coupons at checkout, add them (guest or account)
     // to the marketing list so promo announcements reach them. Fire-and-forget.
+    // The SMS box under the phone field, never pre-ticked. The number is the
+    // delivery number the shopper typed; the box is the consent. Recorded on
+    // the address (and on the account for a signed-in customer) by
+    // sms-consent.ts, which tells Omnisend after the response. Before the
+    // email opt-in below for the reason the sign-up route gives: the email
+    // opt-in's own push then carries the SMS channel too.
+    if (body.smsOptIn === true && customer.email && customer.phone) {
+      void recordSmsConsent({ email: customer.email, phone: customer.phone, source: "checkout", userId: customerUserId ?? null });
+    }
     if (body.marketingOptIn && customer.email) {
       void recordMarketingOptIn(customer.email, "checkout");
     }

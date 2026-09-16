@@ -6,6 +6,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { customerSafeMessage } from "@/lib/safe-error";
 import { CUSTOMER_CHOSEN_SUPPRESSION_REASONS } from "@/lib/email/suppression-reasons";
 import { onPreferencesChanged } from "@/lib/marketing/omnisend/hooks";
+import { recordSmsOptOut } from "@/lib/sms-consent";
 
 function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
@@ -53,6 +54,11 @@ export async function PATCH(request: Request) {
               updated_at: now,
             })
             .eq("user_id", user.id);
+          // THE ADDRESS'S OWN CONSENT ROW SAYS THE SAME (sms-subscribers.sql):
+          // a stop here must stop the row a guest checkout may have written
+          // for this address, or the sync would read the older consent.
+          const address = user.email?.trim().toLowerCase();
+          if (address && !body.smsMarketing) await recordSmsOptOut(address, now);
         }
       } catch {
         // Non-fatal; see note above.

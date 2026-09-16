@@ -23,7 +23,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
  */
 
 export const CONTACT_CODE_OFFERS = {
-  welcome: { percent: 10, ttlHours: 14 * 24, source: "omnisend_welcome", prefix: "VLWELCOME" },
+  welcome: { percent: 15, ttlHours: 14 * 24, source: "omnisend_welcome", prefix: "VLWELCOME" },
   winback: { percent: 15, ttlHours: 14 * 24, source: "omnisend_winback", prefix: "VLBACK" },
   recovery: { percent: 10, ttlHours: 5 * 24, source: "omnisend_recovery", prefix: "VLCART" },
 } as const;

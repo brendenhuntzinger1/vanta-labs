@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { SMS_CONSENT_TEXT, SMS_DISCLOSURE_TEXT, acceptableSmsPhone } from "@/lib/sms-consent-text";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -211,6 +212,12 @@ export function AccountAuthForm() {
   // Ticking it is what puts someone in marketing_subscribers. Not ticking it
   // costs them nothing — entry never depends on it, see canEnter below.
   const [marketingOptIn, setMarketingOptIn] = useState(false);
+  // SMS CONSENT: ITS OWN BOX, OFF, WITH ITS OWN NUMBER. The account's phone
+  // login field is a different thing (and hidden); this number exists only
+  // to be texted, and only once the box beside it is ticked. Sent to the
+  // route separately from the email box: the two consents are independent.
+  const [smsOptIn, setSmsOptIn] = useState(false);
+  const [smsPhone, setSmsPhone] = useState("");
   // OFF BY DEFAULT, LIKE THE BOX ABOVE IT AND FOR THE SAME REASON.
   //
   // This was `useState(true)`, with no comment, directly beneath a marketing
@@ -467,6 +474,13 @@ export function AccountAuthForm() {
       setError("Please agree that the products are intended for research use only.");
       return;
     }
+    // A ticked text box with no textable number is a question, not a refusal:
+    // the route would drop the consent silently, and the person would think
+    // they had signed up for texts.
+    if (smsOptIn && !acceptableSmsPhone(smsPhone)) {
+      setError("Enter a mobile number to receive texts, or untick the text-message box.");
+      return;
+    }
 
     setLoading(true);
     setError(null);
@@ -496,6 +510,8 @@ export function AccountAuthForm() {
           captchaToken: captchaToken ?? "",
           nextPath,
           marketingOptIn,
+          smsOptIn,
+          phone: smsPhone.trim(),
           // SENT, BECAUSE THE ROUTE NOW RECORDS WHAT WAS SENT RATHER THAN A
           // CONSTANT. These two are checked a few lines above before anything
           // is submitted, so they are always true here — but the server writes
@@ -1445,6 +1461,39 @@ export function AccountAuthForm() {
             />
             <span>Email me product news, restocks and offers. <span className="text-white/40">Optional — unsubscribe anytime.</span></span>
           </label>
+          {/* TEXTS, ON THE SAME TERMS AS THE EMAIL BOX: optional, off, and a
+              decision the person makes with the sentence in front of them.
+              The number sits above the box so "at the number above" is true
+              on this screen, as it is on the account page and in the pop-up. */}
+          <label className="block">
+            <span className="mb-2 block text-[0.8125rem] font-medium text-white/70">Mobile number <span className="text-white/40">(optional, for texts)</span></span>
+            <input
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              value={smsPhone}
+              onChange={(event) => setSmsPhone(event.target.value)}
+              placeholder="(555) 123-4567"
+              className="vl-auth-field w-full px-4"
+              data-testid="signup-sms-phone"
+            />
+          </label>
+          <label className="flex cursor-pointer items-start gap-3 rounded-[14px] border border-white/[0.07] bg-white/[0.02] px-4 py-3.5 text-[0.875rem] leading-6 text-white/75 transition-colors duration-200 hover:border-white/[0.12]">
+            <input
+              type="checkbox"
+              checked={smsOptIn}
+              onChange={(event) => setSmsOptIn(event.target.checked)}
+              className="vl-auth-check mt-0.5"
+              data-testid="signup-sms-opt-in"
+              aria-describedby="signup-sms-disclosure"
+            />
+            <span>{SMS_CONSENT_TEXT} <span className="text-white/40">Optional.</span></span>
+          </label>
+          <p id="signup-sms-disclosure" className="px-1 text-[0.75rem] leading-5 text-white/40">
+            {SMS_DISCLOSURE_TEXT}{" "}
+            <a href="/legal/terms" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-white/70">Terms</a> and{" "}
+            <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-white/70">Privacy Policy</a>.
+          </p>
         </div>
       ) : null}
 

@@ -50,6 +50,14 @@ export type RecoveryGiftFacts = {
   endsAt: string;
 };
 
+/**
+ * The same four facts describe every store-minted gift Omnisend shows. The
+ * welcome gift (welcome-gift.ts) is one; it rides under its own five
+ * properties (vl_welcome_gift*) with the same three-way meaning as the
+ * recovery gift: an object writes, null clears, undefined leaves alone.
+ */
+export type GiftFacts = RecoveryGiftFacts;
+
 export type ContactFacts = {
   email: string;
   firstName?: string | null;
@@ -70,6 +78,7 @@ export type ContactFacts = {
   link?: { token: string; endsAt: string } | null;
   codes?: Partial<Record<"welcome" | "winback" | "recovery", ContactCode>>;
   recoveryGift?: RecoveryGiftFacts | null;
+  welcomeGift?: GiftFacts | null;
 };
 
 /**
@@ -168,6 +177,21 @@ function recoveryGiftReady(gift: RecoveryGiftFacts | null | undefined): gift is 
   return Boolean(gift && text(gift.text) && text(gift.link));
 }
 
+/**
+ * The five properties one store-minted gift occupies, under a prefix. The
+ * merge-preserving rule below (undefined sends nothing) is applied by the
+ * caller; this only spells the values for a gift that is present or cleared.
+ */
+function giftPropertySet(prefix: string, gift: GiftFacts | null): Record<string, string> {
+  return {
+    [prefix]: gift ? text(gift.text) : "",
+    [`${prefix}_link`]: gift ? text(gift.link) : "",
+    [`${prefix}_min`]: gift ? formatMinCart(gift.minCartCents) : "",
+    [`${prefix}_ends`]: gift ? dateOnly(gift.endsAt) : "",
+    [`${prefix}_ready`]: gift ? "yes" : "no",
+  };
+}
+
 export function buildContactPayload(facts: ContactFacts): Record<string, unknown> {
   // Omnisend email identifiers are case-sensitive; the store's are not. Every
   // address is lowercased here so one person can never become two contacts.
@@ -227,15 +251,13 @@ export function buildContactPayload(facts: ContactFacts): Record<string, unknown
   // the values. "" removes a property in Omnisend, so undefined and null are
   // deliberately different things here.
   const gift = recoveryGiftReady(facts.recoveryGift) ? facts.recoveryGift : null;
-  const giftProperties = facts.recoveryGift === undefined
-    ? {}
-    : {
-      vl_recovery_gift: gift ? text(gift.text) : "",
-      vl_recovery_gift_link: gift ? text(gift.link) : "",
-      vl_recovery_gift_min: gift ? formatMinCart(gift.minCartCents) : "",
-      vl_recovery_gift_ends: gift ? dateOnly(gift.endsAt) : "",
-      vl_recovery_gift_ready: gift ? "yes" : "no",
-    };
+  const giftProperties = facts.recoveryGift === undefined ? {} : giftPropertySet("vl_recovery_gift", gift);
+  // THE WELCOME GIFT, SAME RULE. Its one writer is the opt-in hook (and the
+  // reconcile, which clears it once the row is spent or expired); the paid
+  // hook clears it explicitly because a first order ends the offer whether
+  // or not the vial was claimed.
+  const welcome = recoveryGiftReady(facts.welcomeGift) ? facts.welcomeGift : null;
+  const welcomeGiftProperties = facts.welcomeGift === undefined ? {} : giftPropertySet("vl_welcome_gift", welcome);
   const customProperties = {
     vl_link: text(facts.link?.token),
     vl_link_ends: dateOnly(facts.link?.endsAt),
@@ -265,6 +287,7 @@ export function buildContactPayload(facts: ContactFacts): Record<string, unknown
     // neither, and the message shows exactly what the till will honour.
     vl_recovery_percent: text(codes.recovery?.code) ? wholePercent(codes.recovery?.percent) : 0,
     ...giftProperties,
+    ...welcomeGiftProperties,
   };
 
   const payload: Record<string, unknown> = { identifiers };

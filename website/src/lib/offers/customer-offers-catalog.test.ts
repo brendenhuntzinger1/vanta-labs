@@ -84,6 +84,9 @@ describe("every product gift points at a canonical slug", () => {
       // rebuilt ladder. A pure product with no percentage, so it lands
       // alongside a live promotion instead of competing with it.
       "cart_recovery_bac_water",
+      // The sign-up reward: a free GHK-Cu with a first order, minted beside
+      // the welcome code and spendable instead of it (welcome-offer-terms.ts).
+      "welcome_free_ghkcu",
     ]);
   });
 

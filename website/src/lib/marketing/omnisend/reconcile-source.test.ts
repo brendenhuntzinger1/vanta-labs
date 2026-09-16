@@ -166,16 +166,27 @@ describe("the write-back writes the store's own shapes, dated when the person ac
     expect(apply).toMatch(/from\("marketing_subscribers"\)\s*\.upsert\(\{ email, source: "omnisend-form", opted_in_at: at, unsubscribed_at: null \}, \{ onConflict: "email" \}\)/);
     expect(apply).toMatch(/if \(writeError\) \{[\s\S]*?return "failed";/);
     const run = fn(reconcile, "runWriteBack");
-    expect(run).toMatch(/if \(form === "applied"\) counts\.formSubscribers \+= 1;\s*else if \(form === "failed"\) failures \+= 1;/);
+    expect(run).toMatch(/if \(form === "applied"\) \{\s*counts\.formSubscribers \+= 1;[\s\S]*?await onMarketingOptIn\(email, "omnisend-form"\);\s*\} else if \(form === "failed"\) failures \+= 1;/);
+    // A pop-up sign-up reaches the store only here, so the welcome offer is
+    // minted here through the same hook a site sign-up uses: the code and the
+    // gift for a never-bought address, and a push carrying both. The hook
+    // itself refuses a buyer and re-offers a live code, so this is once.
+    expect(reconcile).toMatch(/import \{ onMarketingOptIn \} from "@\/lib\/marketing\/omnisend\/hooks";/);
+    expect(run.indexOf("if (input.dryRun) {")).toBeLessThan(run.indexOf('await onMarketingOptIn(email, "omnisend-form")'));
   });
 
-  it("stamps an SMS opt-out on the account, keeping an existing stamp, and counts a refused write as a failure", () => {
+  it("stamps an SMS opt-out on the address's own row and on the account, keeping an existing stamp, and counts a refused write as a failure", () => {
     const apply = fn(reconcile, "applySmsOptOut");
+    // The address row first (sms-consent.ts recordSmsOptOut: the sign-up page's
+    // and the checkout's consent, guest or not), then the account's.
+    expect(apply).toContain("const address = await recordSmsOptOut(email, at);");
+    expect(reconcile).toMatch(/import \{ recordSmsOptOut \} from "@\/lib\/sms-consent";/);
     expect(apply).toContain("await findUserByEmail(email)");
-    expect(apply).toContain('if (!user?.id) return "nothing";');
+    expect(apply).toContain("if (!user?.id) return address;");
     expect(apply).toContain('.select("sms_opted_out_at")');
     expect(apply).toMatch(/if \(error\) \{[\s\S]*?return "failed";/);
-    expect(apply).toContain('?.sms_opted_out_at) return "nothing";');
+    expect(apply).toContain("?.sms_opted_out_at) return address;");
+    expect(apply).toContain('return address === "failed" ? "failed" : "applied";');
     expect(apply).toContain("sms_marketing: false, sms_opted_out_at: at, updated_at: now }, { onConflict: \"user_id\" }");
     expect(apply).toMatch(/if \(writeError\) \{[\s\S]*?return "failed";/);
     expect(apply).toMatch(/\} catch \(error\) \{[\s\S]*?return "failed";/);
@@ -214,7 +225,7 @@ describe("the push is batched, refreshed and never per-contact", () => {
     const build = fn(reconcile, "buildContactItem");
     expect(build).toContain("await signOmnisendLink(email, nowMs)");
     expect(build).toContain("OMNISEND_LINK_TTL_MS");
-    expect(build).toContain("buildContactPayload({ ...facts, link, codes, recoveryGift })");
+    expect(build).toContain("buildContactPayload({ ...facts, link, codes, recoveryGift, welcomeGift })");
   });
 
   it("is honest about the recovery gift: preserved while a live offer row exists, cleared when none is, never cleared on a guess", () => {
@@ -224,7 +235,10 @@ describe("the push is batched, refreshed and never per-contact", () => {
     // expired, redeemed or revoked row clears the five properties (null),
     // and a live row leaves them as the sweep set them (undefined, omitted).
     const build = fn(reconcile, "buildContactItem");
-    expect(build).toContain("const recoveryGift = await liveRecoveryGift(email, nowMs);");
+    // The welcome gift (welcome-gift.ts liveWelcomeGift) answers under the
+    // identical contract, read in the same breath.
+    expect(build).toContain("const [recoveryGift, welcomeGift] = await Promise.all([liveRecoveryGift(email, nowMs), liveWelcomeGift(email, nowMs)]);");
+    expect(reconcile).toMatch(/import \{ liveWelcomeGift \} from "@\/lib\/marketing\/omnisend\/welcome-gift";/);
     const gift = fn(reconcile, "liveRecoveryGift");
     expect(gift).toMatch(
       /from\("customer_offers"\)\s*\.select\("id"\)\s*\.eq\("offer_key", RECOVERY_GIFT_OFFER_KEY\)\s*\.eq\("email", email\)\s*\.is\("revoked_at", null\)\s*\.is\("redeemed_at", null\)\s*\.gt\("expires_at", new Date\(nowMs\)\.toISOString\(\)\)\s*\.limit\(1\)/,

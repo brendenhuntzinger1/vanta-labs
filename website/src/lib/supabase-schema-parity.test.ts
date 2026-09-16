@@ -97,6 +97,9 @@ const PENDING_MIGRATION_TABLES: Array<{ table: string; migration: string }> = [
   { table: "omnisend_events_sent", migration: "omnisend-sync.sql" },
   { table: "omnisend_sync_state", migration: "omnisend-sync.sql" },
   { table: "omnisend_consent_snapshot", migration: "omnisend-sync.sql" },
+  // SMS consent per address (sign-up page and checkout, guest or not); the
+  // Omnisend contact sync reads it and the reconcile stamps STOPs into it.
+  { table: "sms_subscribers", migration: "sms-subscribers.sql" },
 ];
 
 function pendingTableAllowed(table: string): boolean {

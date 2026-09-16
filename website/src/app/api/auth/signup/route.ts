@@ -13,6 +13,8 @@ import { verifyTurnstileToken } from "@/lib/turnstile";
 import { SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-signup-outcome";
 import { looksLikeEmail } from "@/lib/email-shape";
 import { recordMarketingOptIn } from "@/lib/marketing-broadcast";
+import { recordSmsConsent } from "@/lib/sms-consent";
+import { acceptableSmsPhone } from "@/lib/sms-consent-text";
 import { claimAuthEmailSend, recordAuthEmailAttempt } from "@/lib/auth-email-audit";
 import { safeInternalPath } from "@/lib/internal-path";
 
@@ -102,6 +104,14 @@ export async function POST(request: Request) {
     const captchaToken = read("captchaToken");
     const nextPath = read("nextPath") || "/account";
     const marketingOptIn = (body as { marketingOptIn?: unknown })?.marketingOptIn === true;
+    // SMS CONSENT IS ITS OWN BOX, NEVER PRE-TICKED, AND ONLY WITH A NUMBER.
+    // The box's state and the number travel separately; a number typed with
+    // the box unticked is kept nowhere. acceptableSmsPhone is the same test
+    // the account phone route applies (7 to 15 digits), and a number that
+    // fails it means no SMS consent rather than a refused sign-up: the
+    // account is the thing the person came for.
+    const smsPhone = acceptableSmsPhone(read("phone"));
+    const smsOptIn = (body as { smsOptIn?: unknown })?.smsOptIn === true && smsPhone !== null;
     // THE TWO REPRESENTATIONS THIS STORE CANNOT SELL WITHOUT, READ FROM THE
     // REQUEST RATHER THAN ASSUMED.
     //
@@ -187,6 +197,8 @@ export async function POST(request: Request) {
       businessType,
       referredByCode,
       marketingOptIn,
+      smsOptIn,
+      smsPhone,
       redirectTo: confirmationRedirect(nextPath),
       nextPath,
     });
@@ -249,6 +261,9 @@ async function createAccountAndSend(input: {
   businessType: string;
   referredByCode: string;
   marketingOptIn: boolean;
+  /** The SMS box, ticked, with an acceptable number beside it. */
+  smsOptIn: boolean;
+  smsPhone: string | null;
   redirectTo: string;
   /**
    * Where the customer asked to land after confirming, already validated.
@@ -340,6 +355,15 @@ async function createAccountAndSend(input: {
   // writes; marketing_subscribers carries the opt-in TIME, which is what the
   // welcome flows are timed from. Best-effort — a consent write must never
   // stop the confirmation email that follows.
+  // SMS FIRST, so the email opt-in's Omnisend push (deferred by
+  // recordMarketingOptIn) reads a consent row that already exists and
+  // carries the number and the SMS channel in the same upsert. Recorded on
+  // the account (customer_preferences) and on the address (sms_subscribers)
+  // by sms-consent.ts, which also pushes on its own when the email box was
+  // not ticked.
+  if (input.smsOptIn && input.smsPhone) {
+    await recordSmsConsent({ email: input.email, phone: input.smsPhone, source: "signup", userId: data.user?.id ?? null });
+  }
   if (input.marketingOptIn) {
     await recordSignupMarketingConsent(data.user?.id ?? null, input.email);
   }

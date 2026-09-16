@@ -420,3 +420,51 @@ describe("splitName", () => {
     expect(splitName(full as string | null | undefined)).toEqual(expected);
   });
 });
+
+describe("the welcome gift (welcome-gift.ts) rides under vl_welcome_gift*, with the recovery gift's three meanings", () => {
+  const gift = {
+    text: "a free GHK-Cu",
+    link: "https://vantalabsresearch.com/api/email/omnisend-link?t=v1.x.y&to=%2Fapi%2Femail%2Ftrack%2Fclick%3Furl%3D...%26o%3Dtoken",
+    minCartCents: 6_000,
+    endsAt: "2026-09-30T04:00:00.000Z",
+  };
+
+  it("writes the five properties for a gift, the minimum as a dollar figure and the deadline as a display-zone date", () => {
+    const built = buildContactPayload({ ...facts, welcomeGift: gift }) as { customProperties: Record<string, unknown> };
+    expect(built.customProperties).toMatchObject({
+      vl_welcome_gift: "a free GHK-Cu",
+      vl_welcome_gift_link: gift.link,
+      vl_welcome_gift_min: "$60",
+      vl_welcome_gift_ends: "2026-09-30",
+      vl_welcome_gift_ready: "yes",
+    });
+  });
+
+  it("sends none of the five when the caller says nothing, so a push about something else cannot blank a link in an inbox", () => {
+    const silent = buildContactPayload(facts) as { customProperties: Record<string, unknown> };
+    for (const key of ["vl_welcome_gift", "vl_welcome_gift_link", "vl_welcome_gift_min", "vl_welcome_gift_ends", "vl_welcome_gift_ready"]) {
+      expect(silent.customProperties).not.toHaveProperty(key);
+    }
+  });
+
+  it("clears all five on null, and on a gift with no text or no link", () => {
+    for (const welcomeGift of [null, { ...gift, text: "" }, { ...gift, link: "  " }]) {
+      const built = buildContactPayload({ ...facts, welcomeGift }) as { customProperties: Record<string, unknown> };
+      expect(built.customProperties).toMatchObject({
+        vl_welcome_gift: "",
+        vl_welcome_gift_link: "",
+        vl_welcome_gift_min: "",
+        vl_welcome_gift_ends: "",
+        vl_welcome_gift_ready: "no",
+      });
+    }
+  });
+
+  it("is independent of the recovery gift: each set answers only for its own caller", () => {
+    const welcomeOnly = buildContactPayload({ ...facts, welcomeGift: gift }) as { customProperties: Record<string, unknown> };
+    expect(welcomeOnly.customProperties).not.toHaveProperty("vl_recovery_gift_ready");
+    const recoveryCleared = buildContactPayload({ ...facts, welcomeGift: gift, recoveryGift: null }) as { customProperties: Record<string, unknown> };
+    expect(recoveryCleared.customProperties.vl_recovery_gift_ready).toBe("no");
+    expect(recoveryCleared.customProperties.vl_welcome_gift_ready).toBe("yes");
+  });
+});

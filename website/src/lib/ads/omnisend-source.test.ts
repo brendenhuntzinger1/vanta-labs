@@ -262,7 +262,14 @@ describe("Omnisend is ungated by consent, and the policies say so", () => {
     // Twilio and the carriers review the opt-in form against the policy. The
     // program name, frequency line, STOP/HELP and rates sentence must agree,
     // so a change to one without the other fails here.
-    const settings = read(join(SRC, "components", "account-settings-client.tsx"));
+    // The settings page renders the sentence from lib/sms-consent-text.ts (one
+    // definition for the settings page, the sign-up page, the checkout and
+    // the consent row), so the sentence is read from there and the page is
+    // held to importing it.
+    const settingsPage = read(join(SRC, "components", "account-settings-client.tsx"));
+    expect(settingsPage).toMatch(/import \{[^}]*\bSMS_CONSENT_TEXT\b[^}]*\} from "@\/lib\/sms-consent-text";/);
+    expect(settingsPage).toContain("{SMS_CONSENT_TEXT}");
+    const settings = `${settingsPage}\n${read(join(SRC, "lib", "sms-consent-text.ts"))}`;
     const terms = legal.slice(legal.indexOf('title: "Terms of Service"'), cookiesStart);
     const smsPolicy = privacy.slice(privacy.indexOf("## SMS / text messaging"), privacy.indexOf("## Your choices"));
     const smsTerms = terms.slice(terms.indexOf("## SMS terms"), terms.indexOf("## Limitation of liability"));
