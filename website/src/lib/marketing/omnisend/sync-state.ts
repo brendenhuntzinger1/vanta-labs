@@ -2,6 +2,8 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 
+const LOG = "[omnisend/state]";
+
 /**
  * omnisend_sync_state, read and written one key at a time.
  *
@@ -13,41 +15,41 @@ import { supabaseAdmin } from "@/lib/supabase-server";
  * write is logged and swallowed, because the job it belongs to has already
  * done its work.
  *
- * Never throws. The `log` prefix names the caller in the log line, so a
- * refused read is attributed to the job that asked.
+ * Never throws. Every line is logged under [omnisend/state] followed by the
+ * caller's own prefix, so a refused read is attributed to the job that asked.
  */
 
-export async function readSyncState<T extends Record<string, unknown>>(key: string, log: string): Promise<T | null> {
+export async function readSyncState<T extends Record<string, unknown>>(stateKey: string, log: string): Promise<T | null> {
   try {
     const { data, error } = await supabaseAdmin
       .from("omnisend_sync_state")
       .select("value")
-      .eq("key", key)
+      .eq("key", stateKey)
       .maybeSingle();
     if (error) {
-      console.error(log, "sync state read refused", key, error.message);
+      console.error(LOG, log, "sync state read refused", stateKey, error.message);
       return null;
     }
     const value = (data as { value?: unknown } | null)?.value;
     return value && typeof value === "object" && !Array.isArray(value) ? (value as T) : null;
   } catch (error) {
-    console.error(log, "sync state read failed", key, error);
+    console.error(LOG, log, "sync state read failed", stateKey, error);
     return null;
   }
 }
 
-export async function writeSyncState(key: string, value: Record<string, unknown>, log: string): Promise<boolean> {
+export async function writeSyncState(stateKey: string, value: Record<string, unknown>, log: string): Promise<boolean> {
   try {
     const { error } = await supabaseAdmin
       .from("omnisend_sync_state")
-      .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
+      .upsert({ key: stateKey, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
     if (error) {
-      console.error(log, "sync state write refused", key, error.message);
+      console.error(LOG, log, "sync state write refused", stateKey, error.message);
       return false;
     }
     return true;
   } catch (error) {
-    console.error(log, "sync state write failed", key, error);
+    console.error(LOG, log, "sync state write failed", stateKey, error);
     return false;
   }
 }

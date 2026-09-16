@@ -46,37 +46,37 @@ function textOrNull(value: unknown): string | null {
 }
 
 /** The row's value, `{}` when there is no row, null when it could not be read. */
-async function readState(key: string): Promise<Record<string, unknown> | null> {
+async function readState(stateKey: string): Promise<Record<string, unknown> | null> {
   try {
     const { data, error } = await supabaseAdmin
       .from("omnisend_sync_state")
       .select("value")
-      .eq("key", key)
+      .eq("key", stateKey)
       .maybeSingle();
     if (error) {
-      console.error(LOG, "read refused", { key, error: error.message });
+      console.error(LOG, "read refused", { stateKey, error: error.message });
       return null;
     }
     const value = (data as { value?: unknown } | null)?.value;
     return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
   } catch (error) {
-    console.error(LOG, "read failed", { key, error });
+    console.error(LOG, "read failed", { stateKey, error });
     return null;
   }
 }
 
-async function writeState(key: string, value: Record<string, unknown>): Promise<boolean> {
+async function writeState(stateKey: string, value: Record<string, unknown>): Promise<boolean> {
   try {
     const { error } = await supabaseAdmin
       .from("omnisend_sync_state")
-      .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
+      .upsert({ key: stateKey, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
     if (error) {
-      console.error(LOG, "write refused", { key, error: error.message });
+      console.error(LOG, "write refused", { stateKey, error: error.message });
       return false;
     }
     return true;
   } catch (error) {
-    console.error(LOG, "write failed", { key, error });
+    console.error(LOG, "write failed", { stateKey, error });
     return false;
   }
 }

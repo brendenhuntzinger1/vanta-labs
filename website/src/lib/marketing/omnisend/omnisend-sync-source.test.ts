@@ -201,7 +201,11 @@ describe("the gate is asked before the database", () => {
   it.each(GATE_FIRST_MODULES)("%s: every exported async entry point references omnisendActive( before any supabaseAdmin use", (name) => {
     const source = executable(read(name));
     expect(source).toMatch(/import \{[^}]*\bomnisendActive\b[^}]*\} from "@\/lib\/marketing\/omnisend\/client";/);
-    const entries = exportedAsyncFunctions(source);
+    // reconcile.ts also exports its store readers (loadAudience, loadPaidBuyers,
+    // loadSuppressionReasons) and mapWithConcurrency for the consent snapshot.
+    // They read the store and never reach Omnisend, so the gate belongs to the
+    // entry points that call them, which this loop still checks.
+    const entries = exportedAsyncFunctions(source).filter(({ name: fn }) => !/^(load[A-Z]|mapWithConcurrency$)/.test(fn));
     expect(entries.length, `${name} exports no async entry points`).toBeGreaterThan(0);
     for (const { name: fn, body } of entries) {
       const gate = body.indexOf("omnisendActive(");

@@ -6,6 +6,7 @@ import { omnisendActive } from "@/lib/marketing/omnisend/client";
 import { omnisendLedger } from "@/lib/marketing/omnisend/ledger";
 import { onOrderPaid } from "@/lib/marketing/omnisend/order-hooks";
 import { reconcileOmnisendContacts, type OmnisendReconcileResult } from "@/lib/marketing/omnisend/reconcile";
+import { emptyReconcileReport } from "@/lib/marketing/omnisend/reconcile-plan";
 import { readSyncState, writeSyncState } from "@/lib/marketing/omnisend/sync-state";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -267,30 +268,34 @@ export async function omnisendCatalogSyncJob(): Promise<OmnisendCatalogSyncResul
   }
 }
 
-const EMPTY_RECONCILE: Omit<OmnisendReconcileResult, "skipped"> = {
-  pushed: 0,
-  suppressed: 0,
-  smsOptOuts: 0,
-  formSubscribers: 0,
-  winbackCodes: 0,
-  dryRun: false,
-};
+/** A run that did nothing: zero counts and an empty report, built fresh so no caller shares one object. */
+function emptyReconcile(): Omit<OmnisendReconcileResult, "skipped"> {
+  return {
+    pushed: 0,
+    suppressed: 0,
+    smsOptOuts: 0,
+    formSubscribers: 0,
+    winbackCodes: 0,
+    dryRun: false,
+    report: emptyReconcileReport(),
+  };
+}
 
 export async function omnisendContactsReconcileJob(): Promise<OmnisendReconcileResult> {
   const gate = omnisendActive();
-  if (!gate.active) return { ...EMPTY_RECONCILE, skipped: gate.reason };
+  if (!gate.active) return { ...emptyReconcile(), skipped: gate.reason };
 
   try {
     const startedAt = new Date();
     const record = await readSyncState<CadenceRecord>(CONTACTS_RECONCILE_KEY, LOG);
     const decision = cadenceDecision({ lastRunAt: record?.lastRunAt, now: startedAt.getTime(), intervalMs: CONTACTS_RECONCILE_INTERVAL_MS });
-    if (!decision.due) return { ...EMPTY_RECONCILE, skipped: decision.skipped };
+    if (!decision.due) return { ...emptyReconcile(), skipped: decision.skipped };
 
     const result = await reconcileOmnisendContacts();
     await writeSyncState(CONTACTS_RECONCILE_KEY, { lastRunAt: startedAt.toISOString() }, LOG);
     return result;
   } catch (error) {
     console.error(LOG, "contacts reconcile job threw", error);
-    return { ...EMPTY_RECONCILE, skipped: `contacts reconcile job threw: ${error instanceof Error ? error.message : String(error)}` };
+    return { ...emptyReconcile(), skipped: `contacts reconcile job threw: ${error instanceof Error ? error.message : String(error)}` };
   }
 }

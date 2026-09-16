@@ -217,6 +217,9 @@ export async function sendCartEventOnce(input: {
   campaign: string;
   debounceMs: number | null;
 }): Promise<boolean> {
+  // Exported for the cart-offers sweep, so it asks the gate itself rather
+  // than trusting every caller to have asked.
+  if (!omnisendActive().active) return false;
   const email = normalizeEmail(input.cart.email);
   const cartId = String(input.cart.cartId ?? "").trim();
   if (!email || !cartId) return false;

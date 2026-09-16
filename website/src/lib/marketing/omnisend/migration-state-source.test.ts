@@ -50,9 +50,9 @@ describe("migration-state.ts is server-only and keyed as documented", () => {
 
   it("reads and writes omnisend_sync_state one key at a time", () => {
     const read = fn(state, "readState");
-    expect(read).toMatch(/from\("omnisend_sync_state"\)\s*\.select\("value"\)\s*\.eq\("key", key\)/);
+    expect(read).toMatch(/from\("omnisend_sync_state"\)\s*\.select\("value"\)\s*\.eq\("key", stateKey\)/);
     const write = fn(state, "writeState");
-    expect(write).toMatch(/from\("omnisend_sync_state"\)\s*\.upsert\(\{ key, value, updated_at: new Date\(\)\.toISOString\(\) \}, \{ onConflict: "key" \}\)/);
+    expect(write).toMatch(/from\("omnisend_sync_state"\)\s*\.upsert\(\{ key: stateKey, value, updated_at: new Date\(\)\.toISOString\(\) \}, \{ onConflict: "key" \}\)/);
   });
 });
 

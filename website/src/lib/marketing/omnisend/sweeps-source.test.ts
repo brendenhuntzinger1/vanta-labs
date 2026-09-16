@@ -119,9 +119,9 @@ describe("the cadence jobs keep their record in omnisend_sync_state", () => {
     expect(SWEEPS).toMatch(/import \{ readSyncState, writeSyncState \} from "@\/lib\/marketing\/omnisend\/sync-state";/);
     expect(SWEEPS).not.toContain('from("omnisend_sync_state")');
     const readState = fn(SYNC_STATE, "export async function readSyncState");
-    expect(readState).toMatch(/from\("omnisend_sync_state"\)\s*\.select\("value"\)\s*\.eq\("key", key\)/);
+    expect(readState).toMatch(/from\("omnisend_sync_state"\)\s*\.select\("value"\)\s*\.eq\("key", stateKey\)/);
     const writeState = fn(SYNC_STATE, "export async function writeSyncState");
-    expect(writeState).toMatch(/from\("omnisend_sync_state"\)\s*\.upsert\(\{ key, value, updated_at: /);
+    expect(writeState).toMatch(/from\("omnisend_sync_state"\)\s*\.upsert\(\{ key: stateKey, value, updated_at: /);
     expect(writeState).toContain('onConflict: "key"');
   });
 
