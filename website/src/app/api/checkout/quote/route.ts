@@ -204,6 +204,11 @@ export async function POST(request: Request) {
         // Why a held gift is not on the order when that was the shopper's own
         // doing (a welcome code typed over the welcome vial); null otherwise.
         offerWithdrawnBy: quote.offerWithdrawnBy,
+        // How much more must actually be PAID for the gift to survive its
+        // floor. The surfaces used to work this out from the gross basket,
+        // which is a different number whenever the prize is already in the
+        // cart — see QuoteResult.offerShortfallCents.
+        offerShortfallCents: quote.offerShortfallCents,
         // What the discount line should be called: "15% gift" when the gift's
         // percentage won, "Coupon" when a code did, the perk's name otherwise.
         discountLabel: quote.discountLabel,

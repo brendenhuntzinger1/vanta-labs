@@ -242,10 +242,36 @@ export interface QuoteResult {
    * welcome-offer-terms.ts), the shopper typed the code, so the vial was
    * withdrawn. The checkout says so beside the code, because a gift that
    * silently vanishes from the summary is the "it disappeared" experience the
-   * offer banner exists to prevent. Null in every other case, including a
-   * gift under its floor, which the banner already explains from the shortfall.
+   * offer banner exists to prevent.
+   *
+   * "minimum": the basket does not meet the gift's floor. This used to be null
+   * on the theory that "the banner already explains it from the shortfall" —
+   * and the banner could not, because it was measuring a different thing. See
+   * offerShortfallCents.
    */
-  offerWithdrawnBy: "welcome_code" | null;
+  offerWithdrawnBy: "welcome_code" | "minimum" | null;
+  /**
+   * HOW MUCH MORE THE SHOPPER MUST PAY FOR THE GIFT TO SURVIVE, in cents.
+   *
+   * WHY THE QUOTE HAS TO SAY THIS RATHER THAN THE CART WORKING IT OUT. The cart
+   * and the checkout both derived it themselves as
+   * `minSubtotalCents/100 - subtotal` — the floor against the GROSS basket. The
+   * till does not gate on that. It gates on `qualifyingCents`: what the
+   * customer actually pays once the gift's own unit has been taken out of the
+   * paid lines and any winning discount applied.
+   *
+   * The two agree until the shopper already has the prize in their basket, and
+   * then they disagree completely. Two KLOW at $119.99 is $227.98, so the
+   * banner saw $227.98 against a $200 floor and said nothing; the till made one
+   * of them free, saw $119.99 against the same floor, and withdrew the gift.
+   * The cart promised a reward, the total did not contain it, and no surface
+   * said why — the customers most likely to convert, the ones buying the thing
+   * they just won, got the worst of it.
+   *
+   * So the number now comes from the same pass that enforces it. Null when no
+   * gift is in play or the gift applied.
+   */
+  offerShortfallCents: number | null;
   /**
    * A typed code that was NOT applied because a wheel prize already is.
    *
@@ -843,6 +869,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // the quantity or the price.
   let appliedOffer: QuoteResult["appliedOffer"] = null;
   let offerWithdrawnBy: QuoteResult["offerWithdrawnBy"] = null;
+  let offerShortfallCents: QuoteResult["offerShortfallCents"] = null;
   let benefitChoice: QuoteResult["benefitChoice"] = null;
   // Set here, consumed by the shipping calculation below. Declared out here so
   // the two cannot drift apart: the gift is decided in one place, and shipping
@@ -895,7 +922,28 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   //   free_products_percent line(s)         + percent
   // Each grant is decided once, below, from the stored row; the kind only says
   // which of the three to attempt. Nothing applies under the minimum.
-  if (offer && input.offerToken && offerMinimumMet(offer, Math.round(subtotal * 100))) {
+  // THE FLOOR IS JUDGED TWICE, AND BOTH REFUSALS HAVE TO SAY SO.
+  //
+  // This is the first: the basket is under the minimum before anything is
+  // granted, so the whole block below is skipped. The second is further down,
+  // after a gift has absorbed one of the shopper's own units and shrunk the
+  // paid total under the floor.
+  //
+  // Only the second used to report a shortfall, which meant the ordinary case —
+  // "you need $35 more" — left offerShortfallCents null and every surface back
+  // to deriving it themselves. Reporting it here too makes the quote the single
+  // answer to "how much more", whichever way the gift failed.
+  const offerFloorMet = offer && input.offerToken
+    ? offerMinimumMet(offer, Math.round(subtotal * 100))
+    : false;
+  if (offer && input.offerToken && !offerFloorMet) {
+    const floor = Number(offer.min_subtotal_cents ?? 0);
+    offerShortfallCents = Math.max(0, Math.round(floor - subtotal * 100));
+    offerWithdrawnBy = "minimum";
+  }
+  // `input.offerToken` is re-tested rather than implied by offerFloorMet so the
+  // narrowing survives into appliedOffer below, which stores it as a string.
+  if (offerFloorMet && offer && input.offerToken) {
     const kind = String(offer.reward_kind);
     const wantsProduct = kind === "free_product" || kind === "free_product_percent";
     // The multi-product kinds. Separate from `wantsProduct` because they read a
@@ -1492,8 +1540,19 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     // shopper chose the code over the wheel (or has not chosen, and the code is
     // the default), or when the basket does not meet the gift's minimum.
     const codeChosenOverWheel = welcomeCodeBesideSpin && !keepWheelOverCode;
-    if (welcomeCodeTyped || codeChosenOverWheel || !offerMinimumMet(offer, qualifyingCents)) {
-      offerWithdrawnBy = welcomeCodeTyped || codeChosenOverWheel ? "welcome_code" : null;
+    const belowFloor = !offerMinimumMet(offer, qualifyingCents);
+    if (welcomeCodeTyped || codeChosenOverWheel || belowFloor) {
+      const byCode = welcomeCodeTyped || codeChosenOverWheel;
+      offerWithdrawnBy = byCode ? "welcome_code" : "minimum";
+      // MEASURED BEFORE THE UNITS GO BACK, which is the only moment the figure
+      // is true. Restoring the absorbed units below makes the basket look big
+      // enough again — that is exactly the appearance that let the cart promise
+      // a gift the till had already withdrawn. The shortfall the shopper has to
+      // close is the one against what they would PAY with the gift in place.
+      if (belowFloor && !byCode) {
+        const floor = Number(offer.min_subtotal_cents ?? 0);
+        offerShortfallCents = Math.max(0, Math.round(floor - qualifyingCents));
+      }
       for (let i = lineItems.length - 1; i >= 0; i--) {
         if (lineItems[i].gift) lineItems.splice(i, 1);
       }
@@ -1996,6 +2055,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     isBuy3Get1Active: promotionDiscountApplied,
     appliedOffer,
     offerWithdrawnBy,
+    offerShortfallCents,
     benefitChoice,
     discountLabel: customerDiscount.label,
     appliedPromotionId: promotionIdForOrder,
