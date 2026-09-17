@@ -222,29 +222,26 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
                   strokeWidth="0.7"
                 />
               ))}
-              {slices.map((slice, index) => (
-                <text
-                  key={`${slice.id}-label`}
-                  x="201"
-                  y="110"
-                  // Dark ink on the gold wedges, warm white on the dark ones.
-                  fill={slice.premium ? "#17130a" : "#f4f1ea"}
-                  fontSize="7"
-                  fontWeight={slice.premium ? 800 : 700}
-                  dominantBaseline="middle"
-                  textAnchor="end"
-                  /* THE -90 IS NOT COSMETIC. wedgePath draws from twelve
-                     o'clock (`index * wedgeAngle - 90`), while an SVG rotate is
-                     measured from the +x axis at three o'clock. Without the
-                     same offset every label sits a quarter-turn from the wedge
-                     it names — the wheel still looks right and each prize is
-                     captioned with a different prize's name. */
-                  transform={`rotate(${index * wedgeAngle + wedgeAngle / 2 - 90} 110 110)`}
-                  style={{ letterSpacing: "0.04em" }}
-                >
-                  {slice.wedgeLabel}
-                </text>
-              ))}
+              {slices.map((slice, index) => {
+                const label = wedgeLabelGeometry(index, wedgeAngle);
+                return (
+                  <text
+                    key={`${slice.id}-label`}
+                    x={label.x}
+                    y="110"
+                    // Dark ink on the gold wedges, warm white on the dark ones.
+                    fill={slice.premium ? "#17130a" : "#f4f1ea"}
+                    fontSize="7"
+                    fontWeight={slice.premium ? 800 : 700}
+                    dominantBaseline="middle"
+                    textAnchor={label.textAnchor}
+                    transform={`rotate(${label.rotate} 110 110)`}
+                    style={{ letterSpacing: "0.04em" }}
+                  >
+                    {slice.wedgeLabel}
+                  </text>
+                );
+              })}
               <circle cx="110" cy="110" r="96" fill="url(#faceShade)" pointerEvents="none" />
             </g>
 
@@ -462,6 +459,43 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
 function restingRotation(index: number, wedgeAngle: number): number {
   const centre = index * wedgeAngle + wedgeAngle / 2;
   return -centre;
+}
+
+/**
+ * Where one wedge's caption sits, and which way up it reads.
+ *
+ * THE -90 IS NOT COSMETIC. wedgePath draws from twelve o'clock
+ * (`index * wedgeAngle - 90`), while an SVG rotate is measured from the +x axis
+ * at three o'clock. Without the same offset every label sits a quarter-turn
+ * from the wedge it names — the wheel still looks right and each prize is
+ * captioned with a DIFFERENT prize's name.
+ *
+ * AND HALF THE WHEEL READS UPSIDE DOWN WITHOUT THE FLIP. A caption turned into
+ * the left half (90°–270°) has been turned past vertical, so its glyphs hang
+ * inverted; seven of the sixteen shipped that way. Nothing caught it because at
+ * 340px a 7px label is a grey smudge either way — it only became obvious in a
+ * 2400px render made for the invitation email.
+ *
+ * Turning such a label a further 180° stands it back up, and the anchor moves
+ * to the opposite side of the face so the text still begins at the rim and runs
+ * inward. The two land in the same place: the vector (-91, 0) turned by
+ * `angle + 180` is exactly (91, 0) turned by `angle`, so the wedge a caption
+ * names never changes — which is the property wedge-labels.test.ts pins.
+ *
+ * Exported because that test needs it; the component is the only caller.
+ */
+export function wedgeLabelGeometry(index: number, wedgeAngle: number): {
+  x: string;
+  rotate: number;
+  textAnchor: "start" | "end";
+} {
+  const angle = (((index * wedgeAngle + wedgeAngle / 2 - 90) % 360) + 360) % 360;
+  const flipped = angle > 90 && angle < 270;
+  return {
+    x: flipped ? "19" : "201",
+    rotate: flipped ? angle + 180 : angle,
+    textAnchor: flipped ? "start" : "end",
+  };
 }
 
 /** One wedge as an SVG path, drawn clockwise from twelve o'clock. */
