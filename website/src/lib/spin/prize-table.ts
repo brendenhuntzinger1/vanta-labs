@@ -212,10 +212,28 @@ export const SPIN_PRIZES: readonly SpinPrize[] = [
     minSubtotalCents: 12_500,
   },
   {
-    id: "tesamorelin",
-    wedgeLabel: "TESA",
-    label: "Free Tesamorelin 10mg",
-    reward: { kind: "free_product", productSlug: "tesamorelin" },
+    // WAS TESAMORELIN, AND THE REASON IT ISN'T IS STOCK, NOT PRICE.
+    //
+    // Tesamorelin 10mg had FOUR sellable units against 6.5 expected winners on
+    // a 104-person send: P(more winners than vials) = 78.5%. A wedge that is
+    // more likely than not to promise more than the shelf can deliver is not a
+    // prize, whatever the checkout does about it afterwards.
+    //
+    // Kisspeptin 10mg is the like-for-like swap rather than a downgrade: the
+    // SAME $74.99 retail, so the wheel's value distribution and this wedge's
+    // $150 minimum are unchanged and the customer is offered exactly what they
+    // were before. It costs the store LESS ($8.98 a dose against Tesamorelin's
+    // $20.33), and there are 19 sellable — P(more winners than vials) drops to
+    // 0.0006%.
+    //
+    // THE ID CHANGES WITH THE PRIZE, on purpose: ids are not reused for a
+    // different reward (see the type above), and no live offer is stranded by
+    // it — `prizeForOfferRow` matches on the REWARD, not the id, and there are
+    // no live spin offers for this campaign to strand.
+    id: "kisspeptin",
+    wedgeLabel: "KISSPEPTIN",
+    label: "Free Kisspeptin 10mg",
+    reward: { kind: "free_product", productSlug: "kisspeptin" },
     minSubtotalCents: 15_000,
   },
   {

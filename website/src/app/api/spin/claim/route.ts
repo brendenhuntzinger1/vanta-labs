@@ -25,10 +25,26 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
+    // PAUSING THE WHEEL MUST NOT STRAND A PRIZE SOMEBODY ALREADY WON.
+    //
+    // This used to refuse while `enabled` was false, which made the kill switch
+    // do two things at once: stop new spins (intended) and stop a legitimate
+    // winner reaching their own prize from a second device (not). Someone who
+    // span on their phone an hour before the wheel was paused would open their
+    // laptop to nothing, with the prize sitting in customer_offers the whole
+    // time — indistinguishable, to them, from having been taken away.
+    //
+    // ISSUING AND RETRIEVING ARE DIFFERENT ACTS, and only one of them is what
+    // the switch is for. `claimSpinForAccount` cannot mint: it reads an
+    // existing row for this verified address and rotates its bearer token, and
+    // returns null when there is no such row. So a paused wheel still refuses
+    // every new prize — /api/spin and /spin are where that is enforced, and
+    // they keep their gate — while a prize that was already won stays
+    // reachable for the 72 hours it was promised for.
+    //
+    // The config is still read, because `campaignId` is what scopes the claim
+    // to this promotion rather than any spin the address has ever had.
     const config = await getSpinWheelConfig();
-    if (!config.enabled) {
-      return NextResponse.json({ success: true, claimed: false });
-    }
 
     const user = await getAuthenticatedUser();
     const verifiedEmail = String(user?.email ?? "").trim().toLowerCase();

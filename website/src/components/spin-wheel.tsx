@@ -361,6 +361,23 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
           </button>
         )}
 
+        {/* THE ONE TERM THAT CANNOT WAIT FOR THE TERMS.
+            The full list sits under "Before you spin", which is below the fold
+            at 390px — a customer can reach this button without ever scrolling
+            to it. That is fine for odds and expiry, and not fine for this one:
+            the spin is irreversible, 73 of the recipients hold a saved reward
+            already, and priced through the real engine the prize is sometimes
+            worth LESS than what it displaces ($17.09 less on a $237 basket
+            where the free-shipping wedge is worth nothing because shipping was
+            already free). Buried, it is a warning nobody reads before the act
+            it warns about. */}
+        {!result && (
+          <p className="mx-auto mt-4 max-w-sm text-[12px] leading-relaxed text-white/40">
+            One reward applies per order. If you already have a saved reward from us, spinning
+            replaces it — your prize may be worth more or less than the one you hold.
+          </p>
+        )}
+
         {error && (
           <p
             role="alert"
