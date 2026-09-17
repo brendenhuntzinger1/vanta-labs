@@ -101,6 +101,23 @@ describe("what each prize requires", () => {
     }
   });
 
+  it("states the ceiling on a percentage, because the till applies one", () => {
+    // A percentage advertised without its cap is the one number here a customer
+    // could reasonably feel misled by: they only meet it at checkout.
+    for (const prize of SPIN_PRIZES) {
+      if (prize.reward.kind !== "percent" || !prize.maxDiscountCents) continue;
+      expect(describeRedemptionCondition(prize), prize.id)
+        .toContain(`Up to ${formatMoneyFromCents(prize.maxDiscountCents)}`);
+    }
+  });
+
+  it("caps 15% at $30 and 20% at $40", () => {
+    const caps = Object.fromEntries(
+      SPIN_PRIZES.filter((p) => p.reward.kind === "percent").map((p) => [p.id, p.maxDiscountCents]),
+    );
+    expect(caps).toEqual({ percent_15_a: 3_000, percent_20: 4_000, percent_15_b: 3_000 });
+  });
+
   it("tells a percentage winner it replaces their other discounts", () => {
     const percentPrize = SPIN_PRIZES.find((prize) => prize.reward.kind === "percent")!;
     expect(describeRedemptionCondition(percentPrize)).toMatch(/replaces other discounts/i);

@@ -97,7 +97,13 @@ export function describeRedemptionCondition(prize: SpinPrize): string {
     : "on any order";
 
   if (prize.reward.kind === "percent") {
-    return `${minimum}. Replaces other discounts — you keep whichever is worth more.`;
+    // The cap is stated wherever it exists. A percentage advertised without its
+    // ceiling is the one number on this page a customer could reasonably feel
+    // misled by, because they only discover it at the till.
+    const cap = prize.maxDiscountCents
+      ? ` Up to ${formatMoneyFromCents(prize.maxDiscountCents)}.`
+      : "";
+    return `${minimum}.${cap} Replaces other discounts — you keep whichever is worth more.`;
   }
   if (prize.reward.kind === "free_shipping") {
     return `${minimum}, where shipping would otherwise be charged.`;

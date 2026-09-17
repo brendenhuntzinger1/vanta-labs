@@ -1005,7 +1005,26 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     if (wantsShipping) offerGrantsFreeShipping = true;
     // Priced off discountBase, the same base every other percentage uses, so
     // a gift's percentage and a coupon of the same size are worth the same.
-    if (percent > 0) offerPercentDiscount = calculateCouponDiscount(discountBase, "percent", percent);
+    if (percent > 0) {
+      offerPercentDiscount = calculateCouponDiscount(discountBase, "percent", percent);
+
+      // THE CEILING ON A PERCENTAGE GIFT, WHERE THE ROW CARRIES ONE.
+      //
+      // A percentage is the only reward whose cost grows with the basket: a
+      // free vial costs its COGS whatever the order is, while 20% costs
+      // whatever 20% happens to be. On a large order that is the most
+      // expensive thing the store can give away, and it is given away exactly
+      // when the customer was already spending.
+      //
+      // `max_discount_cents` is nullable and is ignored when absent, so every
+      // offer minted before the column existed prices exactly as it did
+      // before — and a gift that does not set one is uncapped by intent
+      // rather than by omission.
+      const capCents = Number((offer as { max_discount_cents?: number | null }).max_discount_cents ?? 0);
+      if (Number.isFinite(capCents) && capCents > 0) {
+        offerPercentDiscount = Math.min(offerPercentDiscount, roundMoney(capCents / 100));
+      }
+    }
 
     // PROVISIONAL. The product line is real from here on — it is in lineItems
     // — but whether the shipping waiver and the percentage change THIS order

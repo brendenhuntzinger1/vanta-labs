@@ -155,6 +155,10 @@ export async function spin(input: {
     reward_kind: reward.kind,
     product_slug: reward.kind === "free_product" ? reward.productSlug : null,
     percent_off: reward.kind === "percent" ? reward.percent : null,
+    // The ceiling on a percentage's cash value. Written onto the row so the
+    // cap a customer was promised is the cap the till applies, even if the
+    // prize table is edited inside the offer's 72 hours.
+    ...(prize.maxDiscountCents ? { max_discount_cents: prize.maxDiscountCents } : {}),
     // Null where there is no product half, so the reward-shape CHECK can say
     // "a count only where there is something to count".
     ...(reward.kind === "free_product" ? { quantity: 1 } : {}),

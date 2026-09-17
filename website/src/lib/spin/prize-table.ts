@@ -58,6 +58,18 @@ export type SpinPrize = {
    * reach is excitement with no redemption behind it.
    */
   minSubtotalCents: number;
+  /**
+   * Ceiling on the cash value of a percentage prize, in cents.
+   *
+   * Only a percentage needs one. A free vial costs its COGS whatever the order
+   * is; a percentage costs whatever the percentage happens to be, and it costs
+   * the most on exactly the orders where the customer was already spending. At
+   * this store's p90 order of $319.68 an uncapped 20% gift is $63.94.
+   *
+   * Undefined means uncapped, which is what every product and shipping wedge
+   * is and what every offer minted before the column existed already does.
+   */
+  maxDiscountCents?: number;
 };
 
 /**
@@ -114,6 +126,7 @@ export const SPIN_PRIZES: readonly SpinPrize[] = [
     label: "15% off your order",
     reward: { kind: "percent", percent: 15 },
     minSubtotalCents: 0,
+    maxDiscountCents: 3_000,
   },
   {
     id: "glp_1",
@@ -153,6 +166,7 @@ export const SPIN_PRIZES: readonly SpinPrize[] = [
     label: "20% off your order",
     reward: { kind: "percent", percent: 20 },
     minSubtotalCents: 0,
+    maxDiscountCents: 4_000,
   },
   {
     id: "semax",
@@ -181,6 +195,7 @@ export const SPIN_PRIZES: readonly SpinPrize[] = [
     label: "15% off your order",
     reward: { kind: "percent", percent: 15 },
     minSubtotalCents: 0,
+    maxDiscountCents: 3_000,
   },
   {
     id: "glp_2",
