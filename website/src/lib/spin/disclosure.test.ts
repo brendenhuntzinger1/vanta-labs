@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { SPIN_PRIZES } from "@/lib/spin/prize-table";
@@ -163,7 +165,7 @@ describe("what each prize requires", () => {
 
   it("tells a percentage winner it replaces their other discounts", () => {
     const percentPrize = SPIN_PRIZES.find((prize) => prize.reward.kind === "percent")!;
-    expect(describeRedemptionCondition(percentPrize)).toMatch(/replaces other discounts/i);
+    expect(describeRedemptionCondition(percentPrize)).toMatch(/replaces a discount code you type in/i);
   });
 
   it("still says a purchase is required in the terms list", () => {
@@ -172,7 +174,7 @@ describe("what each prize requires", () => {
 
   it("tells a product winner it is added on top", () => {
     const productPrize = SPIN_PRIZES.find((prize) => prize.reward.kind === "free_product")!;
-    expect(describeRedemptionCondition(productPrize)).toMatch(/on top of any other discount/i);
+    expect(describeRedemptionCondition(productPrize)).toMatch(/on top of a discount code you type in/i);
   });
 });
 
@@ -205,5 +207,70 @@ describe("the terms do not promise what the till cannot do", () => {
 
   it("tells the customer that spinning replaces a reward they already hold", () => {
     expect(SPIN_TERMS.join(" ")).toMatch(/already have a saved reward/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE PRICE OF SPINNING, FOR SOMEONE WHO ALREADY HOLDS A REWARD.
+//
+// quoteOrder resolves ONE customer_offers row — the one in the cookie — so a
+// recipient holding the uncapped 15% win-back cannot also use their prize, and
+// spinning is what swaps which one the till sees. Priced through the real
+// engine on the harness, that swap is sometimes a LOSS:
+//
+//   $237 basket, capped 15% prize   $5.72 worse than the 15% they held
+//   $237 basket, free shipping      $17.09 worse, and the wedge was worth $0
+//                                   because shipping was already free
+//   $395 basket, capped 15% prize   $12.21 worse
+//
+// None of that is a pricing bug — one reward per order is the design, and every
+// row applied exactly one. It is a DISCLOSURE bug, and it was live: the terms
+// promised "you keep whichever is worth more", which is true against a typed
+// coupon code and false against the reward these 73 already hold.
+//
+// The spin is irreversible and happens before there is a basket to compare, so
+// the pre-spin terms are the only place this can honestly be said.
+// ---------------------------------------------------------------------------
+
+describe("what the terms promise a customer who already holds a reward", () => {
+  it("does not promise the better of two SAVED rewards, which the till cannot do", () => {
+    // The comparison quoteOrder performs is gift-percentage vs typed code. Any
+    // sentence offering "whichever is worth more" must be visibly scoped to a
+    // code the customer types, never to a reward they already hold.
+    // "whichever is worth more" is the PROMISE phrasing. The saved-reward line
+    // says "worth more or less", which is the warning, and must not be caught
+    // by a filter aimed at promises.
+    for (const term of SPIN_TERMS.filter((t) => /whichever is worth more/i.test(t))) {
+      expect(
+        term,
+        `"${term}" offers a comparison; it must name the discount CODE it compares against`,
+      ).toMatch(/discount code/i);
+    }
+  });
+
+  it("warns that the prize may be worth LESS than the reward being replaced", () => {
+    const line = SPIN_TERMS.find((t) => /saved reward/i.test(t));
+    expect(line, "the saved-reward line must exist").toBeTruthy();
+    expect(
+      line,
+      "an even-swap reading is the one the measurement disproved",
+    ).toMatch(/worth more or less/i);
+  });
+
+  it("says only one reward applies, which is the rule underneath all of it", () => {
+    expect(SPIN_TERMS.join(" ")).toMatch(/only one reward applies to an order/i);
+  });
+
+  it("puts the warning where it is read: beside the button, not only in the terms", () => {
+    // "Before you spin" is below the fold at 390px. A customer can spin without
+    // ever reaching it, and the spin cannot be undone.
+    const wheel = readFileSync("src/components/spin-wheel.tsx", "utf8");
+    const button = wheel.indexOf('"Spin the wheel"');
+    const terms = wheel.indexOf('aria-labelledby="spin-terms"');
+    const warning = wheel.indexOf("One reward applies per order");
+    expect(warning, "the pre-spin warning must exist beside the button").toBeGreaterThan(-1);
+    expect(warning).toBeGreaterThan(button);
+    expect(warning, "it must come BEFORE the terms section, not inside it").toBeLessThan(terms);
+    expect(wheel.slice(warning, warning + 260)).toMatch(/worth more or less/i);
   });
 });

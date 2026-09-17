@@ -212,7 +212,7 @@ describe("reading a spin back", () => {
   });
 
   it("ignores a revoked spin, so support can hand someone a fresh one", async () => {
-    await spin({ email: EMAIL, campaignId: CAMPAIGN, now: NOW, randomInt: always("tesamorelin") });
+    await spin({ email: EMAIL, campaignId: CAMPAIGN, now: NOW, randomInt: always("kisspeptin") });
     db.rows[0].revoked_at = new Date(NOW).toISOString();
 
     expect(await readExistingSpin({ email: EMAIL, campaignId: CAMPAIGN })).toBeNull();
