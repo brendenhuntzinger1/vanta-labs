@@ -1003,11 +1003,22 @@ export default function CheckoutPage() {
   // blames their EMAIL ADDRESS for a warehouse problem — the identical
   // misdiagnosis the minimum-shortfall work already had to undo once.
   const offerWithdrawnByStock = offerQuote?.offerWithdrawnBy === "unavailable";
+  // A WELCOME CODE IS ALSO NOT AN ADDRESS PROBLEM. quoteOrder can report
+  // offerWithdrawnBy = "welcome_code" — the reward and the welcome code are one
+  // or the other — and with no branch for it here the banner fell through to
+  // blaming the shopper's email, exactly as the out-of-stock case did.
+  //
+  // Dormant in production today: there are no welcome-source coupons at all
+  // (351 cart_recovery, 42 unsourced, zero welcome) and WELCOME_GIFT_ENABLED is
+  // off, so nothing can currently set it. Handled anyway, because "it cannot
+  // happen yet" is how the last two wrong-message bugs got written.
+  const offerWithdrawnByWelcomeCode = offerQuote?.offerWithdrawnBy === "welcome_code";
   const offerBlockedByEmail = Boolean(pendingOffer)
     && offerShortfall <= 0
     && Boolean(offerQuote)
     && !offerApplied
     && !offerWithdrawnByStock
+    && !offerWithdrawnByWelcomeCode
     && form.email.trim().length > 0;
 
   const offerNotice = pendingOffer ? (
@@ -1025,6 +1036,14 @@ export default function CheckoutPage() {
           {pendingOffer.rewardKind === "free_product"
             ? `free ${pendingOffer.rewardName}`
             : pendingOffer.rewardName.toLowerCase()}.
+        </p>
+      ) : offerWithdrawnByWelcomeCode ? (
+        <p className="text-white/70" data-testid="checkout-offer-withdrawn">
+          Your welcome code is applied, so the{" "}
+          <span className="font-semibold text-[color:var(--accent-gold)]">
+            {pendingOffer.rewardKind === "free_product" ? `free ${pendingOffer.rewardName}` : pendingOffer.rewardName}
+          </span>{" "}
+          is not added: it is one or the other. Remove the code to take the reward instead.
         </p>
       ) : offerWithdrawnByStock ? (
         <p className="text-white/70" data-testid="checkout-offer-unavailable">

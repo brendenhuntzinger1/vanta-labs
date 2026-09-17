@@ -64,6 +64,32 @@ describe("gift floor disclosure", () => {
     expect(CHECKOUT).toContain("&& !offerWithdrawnByStock");
   });
 
+  it("every withdrawal reason has its own message, so none falls through to the email branch", () => {
+    // offerBlockedByEmail is the LAST branch and the most confident-sounding —
+    // it names the shopper's address as the problem. Any reason quoteOrder can
+    // report that has no branch of its own lands there and tells them something
+    // false. That has now happened twice: once for the minimum, once for stock.
+    const reasons = [...QUOTE.matchAll(/offerWithdrawnBy\s*=\s*(?:byCode \?\s*)?"([a-z_]+)"/g)]
+      .map((m) => m[1])
+      .concat([...QUOTE.matchAll(/offerWithdrawnBy\s*=\s*byCode \? "[a-z_]+" : "([a-z_]+)"/g)].map((m) => m[1]));
+
+    const distinct = [...new Set(reasons)];
+    expect(distinct.length).toBeGreaterThan(1);
+
+    for (const reason of distinct) {
+      if (reason === "minimum") {
+        // The minimum has its own branch keyed off the shortfall figure.
+        expect(CHECKOUT).toMatch(/offerShortfall > 0 \?/);
+        continue;
+      }
+      expect(
+        CHECKOUT,
+        `quoteOrder can report offerWithdrawnBy "${reason}" and the checkout has no branch for it, `
+          + "so it falls through to blaming the shopper's email address",
+      ).toContain(`offerQuote?.offerWithdrawnBy === "${reason}"`);
+    }
+  });
+
   it("measures the shortfall BEFORE the absorbed units are handed back", () => {
     // Restoring the units makes the basket look big enough again — which is
     // precisely the appearance that let the banner say nothing. The assignment
