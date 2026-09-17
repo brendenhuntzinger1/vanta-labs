@@ -144,10 +144,14 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
           .catch(() => null);
         if (cancelled || status?.offer) return;
 
+        // rearmOnly: this is a MOUNT, not a press. The server refuses to draw
+        // for it, so the client-side `initialResult` guard above is no longer
+        // the only thing standing between a page load and the customer's one
+        // spin. Belt and braces on purpose — the braces are the ones that hold.
         await fetch("/api/spin", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token }),
+          body: JSON.stringify({ token, rearmOnly: true }),
         });
       } catch {
         // A prize that cannot be armed right now is a missing discount, not a
