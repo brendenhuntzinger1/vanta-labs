@@ -12,6 +12,8 @@ import { getSiteUrl } from "@/lib/env";
 import { normalizeUsState } from "@/lib/sales-tax";
 import { parseOrderItemRef } from "@/lib/inventory-fulfillment";
 import { returnInventoryForCancelledOrder } from "@/lib/order-cancellation-inventory";
+import { deferOmnisend } from "@/lib/marketing/omnisend/defer";
+import { onOrderCancelled, onOrderFulfilled } from "@/lib/marketing/omnisend/order-hooks";
 import {
   FULFILLMENT_STATUS_LABELS,
   applyTransition,
@@ -1750,6 +1752,12 @@ async function notifyCustomer(
   const kind = notificationFor(from, next);
   if (!to || !kind) return false;
 
+  // The same moment the customer is told, Omnisend is told: `order fulfilled`,
+  // once per order (the hook's ledger makes a second notice free), deferred
+  // past the webhook's response so a marketing request never delays the
+  // acknowledgement Shippo is waiting for. Never throws.
+  deferOmnisend("orders", () => onOrderFulfilled(order.order_id));
+
   const displayOrderId = text(order.order_number) ?? order.order_id;
   // One stable key per (order, notice): "shipped" and "delivered" each happen
   // once, so a timeout-after-accept plus the queued retry cannot put two
@@ -2156,6 +2164,22 @@ export async function setOrderFulfillmentStatus(input: {
         console.error("Unable to return inventory for cancelled order", order.order_id, inventoryError);
       }
     }
+  }
+
+  // TELL OMNISEND, HERE, FOR THE SAME REASON THE RESTOCK IS HERE.
+  //
+  // Every admin path that cancels — the Cancel action, the bulk action and
+  // the status dropdown — goes through this writer, so firing `order
+  // canceled` at the chokepoint makes "every cancel is reported" true by
+  // construction rather than by each caller remembering. The hook only fires
+  // for an order Omnisend was told about, so cancelling an unpaid checkout
+  // reports nothing. A hand-marked shipment follows the rule the email
+  // follows (notificationFor): entering the carrier network, or delivered,
+  // is `order fulfilled`, once. Deferred past the response; never throws.
+  if (transition.next === "cancelled") {
+    deferOmnisend("orders", () => onOrderCancelled(order.order_id));
+  } else if (notificationFor(transition.from, transition.next)) {
+    deferOmnisend("orders", () => onOrderFulfilled(order.order_id));
   }
 
   return { ok: true, data: { from: transition.from, to: transition.next } };

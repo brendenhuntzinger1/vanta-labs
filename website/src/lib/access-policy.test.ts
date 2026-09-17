@@ -120,6 +120,7 @@ describe("the exemptions, each of which has to earn its place", () => {
     ["/_next/static/chunk.js", "the page cannot render without its own assets"],
     ["/attest", "gating the screen that collects the attestation behind the wall that requires it is a loop"],
     ["/api/attest", "the endpoint behind that screen; it refuses without an hour-old signed handoff"],
+    ["/api/offers/welcome", "a guest checkout must be able to claim the welcome offer it is shown"],
   ];
 
   it.each(MUST_BE_PUBLIC)("%s is public — %s", (path) => {
@@ -138,7 +139,26 @@ describe("the exemptions, each of which has to earn its place", () => {
     // the endpoint refuses without a handoff this server signed inside the last
     // hour, refuses unless both statements arrive explicitly affirmed, and then
     // mints only the ordinary marketing-link grant.
-    expect(PUBLIC_EXACT.size + PUBLIC_PREFIXES.length).toBeLessThanOrEqual(42);
+    //
+    // RAISED FROM 42 TO 43 on 2026-09-17 for /api/offers/welcome, and this is
+    // the deliberate part. Guest checkout is a real way to buy here and the
+    // welcome offer is shown on that checkout; gated, the claim answered
+    // "Sign in to continue" and the discount was unreachable for exactly the
+    // first-time buyer it exists for. It hands out nothing on its own: it
+    // prefers the session address over anything in the body, tells a guest
+    // nothing about the address it was given, is throttled at ten an hour per
+    // IP, and mints only an address-bound single-use code the till refuses for
+    // anyone else.
+    expect(PUBLIC_EXACT.size + PUBLIC_PREFIXES.length).toBeLessThanOrEqual(43);
+  });
+
+  it("exempts the welcome-offer leaf without opening the rest of /api/offers", () => {
+    // /api/offers also carries the one-time gift machinery, which is bearer-
+    // token business and stays behind the wall.
+    expect(isPublicPath("/api/offers/welcome")).toBe(true);
+    expect(isPublicPath("/api/offers")).toBe(false);
+    expect(isPublicPath("/api/offers/status")).toBe(false);
+    expect(isPublicPath("/api/offers/welcome/claim")).toBe(false);
   });
 
   it("does not let the attestation step become a second front door", () => {

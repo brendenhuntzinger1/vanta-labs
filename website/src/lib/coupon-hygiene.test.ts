@@ -52,7 +52,10 @@ describe("runCouponHygiene", () => {
     const coupon = calls.filter((c) => c.table === "coupons");
     expect(coupon.map((c) => c.op)).toEqual(["update", "in", "eq", "not", "lt", "select"]);
     expect(coupon[0].args).toEqual([{ active: false }]);
-    expect(coupon[1].args).toEqual(["source", ["cart_recovery"]]);
+    // The Omnisend contact codes (marketing/omnisend/codes.ts) are minted the
+    // same way — by the system, with an ends_at, never flipped off — so they
+    // are closed by the same sweep once they are past their end.
+    expect(coupon[1].args).toEqual(["source", ["cart_recovery", "omnisend_recovery", "omnisend_welcome", "omnisend_winback"]]);
     expect(coupon[2].args).toEqual(["active", true]);
     expect(coupon[3].args).toEqual(["ends_at", "is", null]);
     expect(coupon[4].args).toEqual(["ends_at", NOW.toISOString()]);

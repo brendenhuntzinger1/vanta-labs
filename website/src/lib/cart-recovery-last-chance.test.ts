@@ -425,6 +425,30 @@ describe("the 72h last-chance email", () => {
     expect(state.coupons).toHaveLength(1);
   });
 
+  it("counts a code the Omnisend ladder minted for the address inside the cooldown, so one address gets one recovery code per 30 days whichever ladder mints it", async () => {
+    // The Omnisend cart-offer sweep mints its recovery code into the same
+    // coupons table under source "omnisend_recovery" (marketing/omnisend/
+    // codes.ts). The 30-day per-address cooldown is the SAME rule for both
+    // owners of a cart, so a code minted two days ago by that sweep must
+    // withhold this ladder's stage-four code exactly as its own would.
+    const cart = seedCart(73);
+    state.stages.push({ id: "stg-old", abandoned_cart_id: cart.id, stage: "t24h", coupon_id: null, sent_at: new Date(Date.now() - 48 * HOUR_MS).toISOString() });
+    state.coupons.push({
+      id: "cpn-omni", code: "VLCART-ABCDEF", discount_type: "percent", discount_value: 10,
+      ends_at: new Date(Date.now() + 3 * 24 * HOUR_MS).toISOString(),
+      assigned_email: cart.email, active: true, source: "omnisend_recovery",
+      created_at: new Date(Date.now() - 49 * HOUR_MS).toISOString(),
+    });
+
+    const { runAbandonedCartSweep } = await import("@/lib/cart-recovery");
+    await runAbandonedCartSweep();
+
+    const mail = t72()!;
+    expect(mail).toBeTruthy();
+    expect(mail.text).not.toMatch(/SAVE-/);
+    expect(state.coupons).toHaveLength(1);
+  });
+
   it("still sends the stage when no coupon can be resolved, without inventing one", async () => {
     // Degraded path: the t24h row exists but its coupon is gone (deleted, or the
     // row predates coupon_id being recorded). The mail must go without a coupon

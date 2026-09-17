@@ -5078,3 +5078,328 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   /* Never split a product across two pages. */
   .vl-printable tr { page-break-inside: avoid; }
 }
+
+/* --- THE TEXT-LIST SIGN-UP ------------------------------------------------
+   Every surface that asks for a mobile number, dressed as the rest of this
+   store is dressed rather than as a generic form.
+
+   The first pass was flat: hairline boxes, system sans throughout, a left
+   rag, no depth. It read as a plugin bolted onto a premium shop. What makes
+   the offer card two hundred lines above feel expensive is four things, and
+   this block borrows all four rather than inventing a fifth language:
+
+     * the display serif for the promise, sized with clamp so it holds its
+       proportion from 390px to a desktop;
+     * an eyebrow in wide uppercase champagne above it, so the brand speaks
+       before the offer does;
+     * real elevation — a long, soft, downward shadow plus a one-pixel inset
+       highlight along the top edge, which is what separates a card that
+       floats from a div with a border;
+     * champagne used as a LINE and a LABEL, almost never as a fill. The one
+       filled element on screen is the action.
+
+   Type sizes are set here rather than by utility classes because this copy is
+   fixed and shared across five surfaces; a utility stack made each placement
+   a fresh set of judgement calls and they drifted apart within a day.
+   ------------------------------------------------------------------------- */
+
+.vl-sms-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 1.25rem;
+  border: 1px solid var(--hairline);
+  background:
+    radial-gradient(120% 140% at 50% -20%, rgba(199, 174, 94, 0.10), transparent 62%),
+    var(--surface-1);
+  box-shadow:
+    0 36px 80px -32px rgba(0, 0, 0, 0.85),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
+/* The champagne hairline across the top edge. A rule rather than a border on
+   all four sides: it reads as a letterhead, not as a warning box. */
+.vl-sms-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(199, 174, 94, 0.55), transparent);
+}
+
+.vl-sms-eyebrow {
+  margin: 0;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--accent-gold);
+}
+
+.vl-sms-headline {
+  margin: 0.5rem 0 0;
+  font-family: var(--font-fraunces), Georgia, "Times New Roman", serif;
+  font-size: clamp(1.45rem, 6vw, 1.85rem);
+  line-height: 1.14;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: #fff;
+}
+
+.vl-sms-body {
+  margin: 0.6rem 0 0;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+/* The terms. Present, legible, and deliberately not shouting: a shopper has
+   to be able to read them before they press, which is the whole point, but
+   they are not the offer. */
+.vl-sms-terms {
+  margin: 0.75rem 0 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--hairline);
+  font-size: 0.72rem;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.42);
+}
+
+.vl-sms-field {
+  width: 100%;
+  min-height: 3.25rem;
+  border-radius: 0.9rem;
+  border: 1px solid var(--hairline-strong);
+  background: rgba(0, 0, 0, 0.35);
+  padding: 0 1.1rem;
+  font-size: 1rem;
+  color: #fff;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.vl-sms-field::placeholder { color: rgba(255, 255, 255, 0.34); }
+
+.vl-sms-field:focus {
+  outline: none;
+  border-color: rgba(199, 174, 94, 0.55);
+  background: rgba(0, 0, 0, 0.5);
+}
+
+/* THE ONE FILLED ELEMENT. Champagne, black ink, a pill, and a shadow that
+   lifts it off the card — the same treatment the catalogue's Add to Cart
+   gets, because this is the action on this card. */
+.vl-sms-submit {
+  width: 100%;
+  min-height: 3.25rem;
+  border-radius: 999px;
+  border: 0;
+  background: var(--accent-gold);
+  color: #111;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  box-shadow: 0 14px 30px -18px rgba(199, 174, 94, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  transition: background-color 160ms ease, transform 160ms ease;
+}
+
+.vl-sms-submit:hover { background: var(--accent-gold-strong); transform: translateY(-1px); }
+.vl-sms-submit:active { transform: translateY(0); }
+.vl-sms-submit:disabled { opacity: 0.55; transform: none; }
+
+/* The consent block. Quiet by design — it is a legal disclosure, and dressing
+   it up would be the wrong kind of emphasis — but the box itself is a real,
+   comfortable target and the champagne tick makes its state unmistakable. */
+.vl-sms-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-top: 0.95rem;
+  cursor: pointer;
+}
+
+.vl-sms-consent input[type="checkbox"] {
+  margin-top: 0.15rem;
+  width: 1.15rem;
+  height: 1.15rem;
+  flex-shrink: 0;
+  accent-color: var(--accent-gold);
+}
+
+.vl-sms-legal {
+  font-size: 0.7rem;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.38);
+}
+
+.vl-sms-legal a { color: rgba(255, 255, 255, 0.62); text-decoration: underline; text-underline-offset: 2px; }
+.vl-sms-legal a:hover { color: #fff; }
+
+.vl-sms-error {
+  margin-top: 0.6rem;
+  font-size: 0.75rem;
+  color: #f09ca8;
+}
+
+/* The code, once it exists. The pill the offer card uses for its own code, so
+   a shopper who has seen one recognises the other instantly. */
+.vl-sms-code {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0 1.1rem;
+  border-radius: 999px;
+  border: 1px solid rgba(199, 174, 94, 0.45);
+  background: rgba(199, 174, 94, 0.10);
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.95rem;
+  letter-spacing: 0.14em;
+  color: var(--accent-gold);
+}
+
+.vl-sms-ghost {
+  min-height: 2.75rem;
+  padding: 0 1rem;
+  border-radius: 999px;
+  border: 1px solid var(--hairline-strong);
+  background: transparent;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.72);
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+
+.vl-sms-ghost:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.28); }
+
+/* --- THE SLIM BAR --------------------------------------------------------
+   One line above the filters. It has to read as part of the catalogue's
+   furniture, so it borrows the filter bar's radius and surface and adds only
+   a champagne left rule and a pill action. */
+.vl-sms-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  border-radius: 1rem;
+  border: 1px solid var(--hairline);
+  border-left: 2px solid rgba(199, 174, 94, 0.55);
+  background: linear-gradient(90deg, rgba(199, 174, 94, 0.07), transparent 42%), var(--surface-1);
+  padding: 0.85rem 1rem;
+}
+
+.vl-sms-bar-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.vl-sms-bar-terms {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.38);
+}
+
+.vl-sms-pill {
+  flex-shrink: 0;
+  min-height: 2.4rem;
+  padding: 0 1.1rem;
+  border-radius: 999px;
+  border: 1px solid rgba(199, 174, 94, 0.5);
+  background: rgba(199, 174, 94, 0.12);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent-gold);
+  transition: background-color 160ms ease;
+}
+
+.vl-sms-pill:hover { background: rgba(199, 174, 94, 0.2); }
+
+.vl-sms-dismiss {
+  flex-shrink: 0;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 1.1rem;
+  line-height: 1;
+  transition: color 160ms ease, background-color 160ms ease;
+}
+
+.vl-sms-dismiss:hover { color: rgba(255, 255, 255, 0.75); background: rgba(255, 255, 255, 0.06); }
+
+/* --- THE PRODUCT-PAGE LINE ----------------------------------------------- */
+.vl-sms-quiet-link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: rgba(199, 174, 94, 0.85);
+  border-bottom: 1px solid rgba(199, 174, 94, 0.3);
+  padding-bottom: 1px;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+
+.vl-sms-quiet-link:hover { color: var(--accent-gold); border-color: rgba(199, 174, 94, 0.7); }
+
+/* --- THE INVITATION ------------------------------------------------------ */
+.vl-sms-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(1rem + env(safe-area-inset-top, 0px)) 1rem calc(1rem + env(safe-area-inset-bottom, 0px));
+  background: rgba(6, 6, 6, 0.74);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  animation: vl-sms-fade 200ms ease-out both;
+}
+
+.vl-sms-modal {
+  position: relative;
+  width: 100%;
+  max-width: 25rem;
+  padding: 2rem 1.6rem 1.6rem;
+  text-align: center;
+  animation: vl-sms-rise 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.vl-sms-modal .vl-sms-consent { text-align: left; }
+.vl-sms-modal .vl-sms-terms { text-align: center; }
+
+.vl-sms-close {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 1.15rem;
+  line-height: 1;
+  transition: color 160ms ease, background-color 160ms ease;
+}
+
+.vl-sms-close:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+
+@keyframes vl-sms-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes vl-sms-rise {
+  from { opacity: 0; transform: translateY(14px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vl-sms-scrim, .vl-sms-modal { animation: none; }
+  .vl-sms-submit:hover { transform: none; }
+}

@@ -14,6 +14,7 @@ import { businessCalendarDate } from "@/lib/business-day";
 import { getControlSnapshot } from "@/lib/admin-control";
 import { calculateEarnedPoints, dollarsToPoints, pointsToDollars, POINTS_PER_DOLLAR_REDEMPTION } from "@/lib/points-math";
 import { sendMarketingEmail } from "@/lib/email/marketing";
+import { MARKETING_OWNED_BY_OMNISEND, marketingSendBlockedByOmnisend } from "@/lib/marketing/omnisend/ownership";
 import { membershipBirthdayTemplate } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
 
@@ -542,10 +543,10 @@ export async function awardReferralSignupBonus(newUserId: string, referrerUserId
  * unsubscribe footer. Suppression stops the mail, never the points — the bonus
  * is owed either way.
  */
-export async function runBirthdayBonusSweep(): Promise<{ granted: number; emailed: number }> {
+export async function runBirthdayBonusSweep(): Promise<{ granted: number; emailed: number; emailsStoodDown: number }> {
   const settings = await getRewardsBonusSettings();
   if (!settings.birthdayBonusEnabled) {
-    return { granted: 0, emailed: 0 };
+    return { granted: 0, emailed: 0, emailsStoodDown: 0 };
   }
 
   // TODAY in the store's zone; the birthday itself stays on its UTC accessors
@@ -569,11 +570,12 @@ export async function runBirthdayBonusSweep(): Promise<{ granted: number; emaile
 
   if (error) {
     console.error("[rewards] birthday sweep could not read preferences", error);
-    return { granted: 0, emailed: 0 };
+    return { granted: 0, emailed: 0, emailsStoodDown: 0 };
   }
 
   let granted = 0;
   let emailed = 0;
+  let emailsStoodDown = 0;
 
   for (const row of data ?? []) {
     const birthday = new Date(String(row.birthday));
@@ -603,6 +605,16 @@ export async function runBirthdayBonusSweep(): Promise<{ granted: number; emaile
 
     // The points are banked. The email is a courtesy on top and is never
     // allowed to undo them.
+    //
+    // ONE OWNER OF MARKETING SENDS (AUDIT F-04). This is a marketing email,
+    // and the in-house frequency guard cannot see what Omnisend sent the same
+    // day, so while Omnisend owns marketing the points are granted and the
+    // announcement is not mailed. The customer still sees the balance in
+    // their account; a birthday flow in Omnisend can announce it later.
+    if (marketingSendBlockedByOmnisend()) {
+      emailsStoodDown += 1;
+      continue;
+    }
     try {
       const { data: account } = await supabaseAdmin.auth.admin.getUserById(userId);
       const email = account?.user?.email;
@@ -629,7 +641,8 @@ export async function runBirthdayBonusSweep(): Promise<{ granted: number; emaile
     }
   }
 
-  return { granted, emailed };
+  if (emailsStoodDown > 0) console.info("[rewards] birthday emails stood down:", MARKETING_OWNED_BY_OMNISEND, { emailsStoodDown });
+  return { granted, emailed, emailsStoodDown };
 }
 
 export async function checkAndAwardBirthdayBonus(userId: string, birthday: string | null) {

@@ -116,6 +116,19 @@ export function AdminEmailClient({
   const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile">("desktop");
   const [subscriberQuery, setSubscriberQuery] = useState("");
   const [subscriberFilter, setSubscriberFilter] = useState<"all" | SubscriberStatus>("all");
+  // Who sends marketing right now. Asked of the server because the switch is a
+  // server-only environment value (spec §3.1) and this bundle must not import
+  // the Omnisend module. Null until answered, which renders nothing — a banner
+  // that flashes on and off is worse than one that arrives a moment late.
+  const [marketingOwner, setMarketingOwner] = useState<"omnisend" | "native" | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/admin/email/automations")
+      .then((response) => response.json())
+      .then((data) => { if (!cancelled && data?.success) setMarketingOwner(data.marketingOwner === "omnisend" ? "omnisend" : "native"); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   // Filtered client-side: the whole directory is already on the page, and a
   // list this size (thousands at most) is faster to search in memory than
@@ -611,6 +624,12 @@ export function AdminEmailClient({
       {blockedReason ? (
         <section className="rounded-2xl border border-amber-400/30 bg-amber-400/10 p-4">
           <p className="text-sm text-amber-200">{blockedReason}</p>
+        </section>
+      ) : null}
+
+      {marketingOwner === "omnisend" ? (
+        <section className="rounded-2xl border border-sky-400/30 bg-sky-400/10 p-4">
+          <p className="text-sm text-sky-200">Marketing sends are handled by Omnisend. In-house automations, cart recovery and campaigns are standing down.</p>
         </section>
       ) : null}
 

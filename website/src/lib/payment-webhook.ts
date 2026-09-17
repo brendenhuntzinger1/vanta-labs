@@ -29,6 +29,8 @@ import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/li
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getReferralProgramConfig } from "@/lib/admin-control";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
+import { deferOmnisend } from "@/lib/marketing/omnisend/defer";
+import { onOrderCancelled, onOrderPaid, onOrderRefunded } from "@/lib/marketing/omnisend/order-hooks";
 import { receiptAdjustmentsFromOrder } from "@/lib/email/order-confirmation-render";
 import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRestock, itemsNotFinalized } from "@/lib/inventory-fulfillment";
 import { finalizeInventoryForOrder, releaseInventoryForOrder } from "@/lib/inventory-reservation";
@@ -2055,6 +2057,14 @@ export async function finalizeManualPayment(
   // payment returns early and never reaches here.
   await scheduleOrderPushNotification(orderId);
 
+  // Tell Omnisend the order is paid — contact upsert, `placed order` and
+  // `paid for order` — deferred past the response like the push above, and
+  // behind the same single-use claim, so a re-approval never reports twice.
+  // The hook holds its own exactly-once ledger, and the order backstop in the
+  // sweep retries any order this callback did not finish. Never awaited and
+  // never able to throw: a marketing sync cannot fail an approval.
+  deferOmnisend("orders", () => onOrderPaid(orderId));
+
   return { orderId, alreadyPaid: false, status: "paid" };
 }
 
@@ -3343,6 +3353,16 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       // callback dies with the process.
       scheduleShippoSync(orderId);
 
+      // Tell Omnisend the order is paid, on the same terms as the Shippo push:
+      // inside the side-effects claim, so a duplicate delivery cannot report
+      // it twice, and deferred past the response, so an Omnisend request can
+      // never delay the provider's acknowledgement. The hook holds its own
+      // exactly-once ledger and the sweep's order backstop retries whatever a
+      // callback that died with the function left unsent. Only ever reached
+      // on the paid branch — a decline, an expiry, a cancel or a refund goes
+      // down the reversal branch below and produces no success event.
+      deferOmnisend("orders", () => onOrderPaid(orderId));
+
       // Tell the operator an order came in. Inside the side-effects claim, so a
       // duplicate or replayed delivery cannot ring the phone twice; deferred
       // like the Shippo push above, so it cannot add its latency to the
@@ -3405,6 +3425,15 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     // "partially_refunded" is a paid-derived state (a partial refund was already
     // issued on a paid order), so a later full refund/cancel must still restock.
     const wasPaid = priorPaymentStatus === "paid" || priorPaymentStatus === "partially_refunded";
+
+    // TELL OMNISEND, exactly as the admin cancel and refund actions do (design
+    // spec §4): a processor-initiated cancel or FULL refund of an order that
+    // was paid. Never for a failure that was never paid (nothing to reverse),
+    // never for a partial refund (the order stands; AUDIT F-11). Deferred and
+    // never awaited, so the acknowledgement does not wait on marketing, and
+    // the hooks themselves only report an order Omnisend was told about.
+    if (wasPaid && nextStatus === "canceled") deferOmnisend("orders", () => onOrderCancelled(orderId));
+    if (wasPaid && nextStatus === "refunded" && refundOutcome.isFullRefund) deferOmnisend("orders", () => onOrderRefunded(orderId));
 
     // PAY-08. A decline or a cancel released the STOCK hold (above) but not the
     // store-credit / points hold reserveOrderTender took at checkout, so the

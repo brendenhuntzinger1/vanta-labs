@@ -40,6 +40,7 @@ import {
   RECOVERY_GIFT_COOLDOWN_MS,
   RECOVERY_GIFT_OFFER_KEY,
 } from "@/lib/cart-recovery-offers";
+import { omnisendAfter } from "@/lib/marketing/omnisend/after";
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -154,16 +155,49 @@ export async function trackCart(input: TrackCartInput) {
   if (existing) {
     const { error } = await supabaseAdmin.from("abandoned_carts").update(payload).eq("id", existing.id);
     if (error) throw error;
+    reportCartToOmnisend("onCartTracked", { cartId: String(existing.id), sessionId: input.sessionId, email, items: input.items, cartValueCents: payload.cart_value_cents });
     return;
   }
 
-  const { error } = await supabaseAdmin.from("abandoned_carts").insert({
+  const { data: inserted, error } = await supabaseAdmin.from("abandoned_carts").insert({
     ...payload,
     first_seen_at: new Date().toISOString(),
     status: "active",
     created_at: new Date().toISOString(),
-  });
+  }).select("id").maybeSingle();
   if (error) throw error;
+  const cartId = (inserted as { id?: string | null } | null)?.id;
+  if (cartId) {
+    reportCartToOmnisend("onCartTracked", { cartId: String(cartId), sessionId: input.sessionId, email, items: input.items, cartValueCents: payload.cart_value_cents });
+  }
+}
+
+/** What the Omnisend cart hooks are told about a cart: the row, never the beacon's prices. */
+export interface OmnisendCartHookInput {
+  cartId: string;
+  sessionId: string;
+  email: string;
+  items: AbandonedCartItemSnapshot[];
+  cartValueCents: number;
+}
+
+/**
+ * Tell Omnisend about a cart, AFTER the response and never on its path.
+ *
+ * The row is already written when this runs, so the hook reports a fact. It
+ * is scheduled with after() where a request scope exists and fired-and-
+ * forgotten otherwise (omnisendAfter), and the hooks module is loaded on
+ * demand: it imports this file for the restore link, so a static import here
+ * would be a cycle. The hook itself asks the Omnisend gate first, catches
+ * everything and logs under its own prefix, so nothing here can delay or
+ * fail the beacon that called trackCart.
+ */
+function reportCartToOmnisend(hook: "onCartTracked" | "onCheckoutStarted", input: OmnisendCartHookInput): void {
+  if (hook === "onCartTracked") {
+    omnisendAfter(() => import("@/lib/marketing/omnisend/hooks").then((hooks) => hooks.onCartTracked(input)));
+    return;
+  }
+  omnisendAfter(() => import("@/lib/marketing/omnisend/hooks").then((hooks) => hooks.onCheckoutStarted(input)));
 }
 
 /**
@@ -277,6 +311,33 @@ export async function markCheckoutStarted(sessionId: string): Promise<void> {
       .eq("session_id", id)
       .in("status", CART_STATUS_OPEN)
       .is("checkout_started_at", null);
+
+    // OMNISEND HEARS ABOUT EVERY ARRIVAL, NOT ONLY THE FIRST. The stamp above
+    // is first-touch by design; the `started checkout` event is what restarts
+    // Omnisend's abandoned-checkout timer, and a shopper who comes back to
+    // the till a day later has started again. The hook debounces per cart,
+    // so a bounce between cart and checkout is one event, not five. The open
+    // cart is read here, after the stamp, so the hook is told the row and
+    // not the beacon.
+    const { data: open } = await supabaseAdmin
+      .from("abandoned_carts")
+      .select("id, email, items, cart_value_cents")
+      .eq("session_id", id)
+      .in("status", CART_STATUS_OPEN)
+      .order("last_updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const cart = open as { id?: string | null; email?: string | null; items?: unknown; cart_value_cents?: number | null } | null;
+    const email = String(cart?.email ?? "").trim().toLowerCase();
+    if (cart?.id && email && Array.isArray(cart.items) && cart.items.length > 0) {
+      reportCartToOmnisend("onCheckoutStarted", {
+        cartId: String(cart.id),
+        sessionId: id,
+        email,
+        items: cart.items as AbandonedCartItemSnapshot[],
+        cartValueCents: Number(cart.cart_value_cents ?? 0) || 0,
+      });
+    }
   } catch (error) {
     console.error("[cart-recovery] could not stamp a checkout start", id, error);
   }
@@ -509,7 +570,12 @@ function retargetTrackedLink(trackedUrl: string, destination: string): string {
   }
 }
 
-function restoreUrl(cartId: string) {
+/**
+ * The link every recovery message points at: the shopper's own cart,
+ * restored by id. Exported for the Omnisend cart events, whose
+ * abandonedCheckoutURL must land on the same cart the in-house email would.
+ */
+export function restoreUrl(cartId: string) {
   return `${getSiteUrl()}/cart/restore?id=${cartId}`;
 }
 
@@ -783,6 +849,27 @@ export interface AbandonedCartSweepResult {
   unknownStatus: number;
   /** New sequences not started because the address was mailed about another cart recently. */
   heldForCooldown: number;
+  /**
+   * Open carts skipped because Omnisend owns them (legacy-only mode).
+   *
+   * ONE OWNER PER CART. While OMNISEND_MARKETING_OWNER is set, a cart that
+   * has already received an in-house stage finishes in-house — Omnisend
+   * cannot import a sequence's execution state, so handing it over mid-way
+   * would restart the shopper at message one — and a cart that has received
+   * none belongs to Omnisend from the moment it is tracked. This counts the
+   * second kind, so the tick's output says how much of the table the ladder
+   * is no longer responsible for.
+   */
+  omnisendOwned: number;
+}
+
+export interface AbandonedCartSweepOptions {
+  /**
+   * Consider ONLY carts with at least one claimed stage; skip and count every
+   * other open cart. The lifecycle cron runs this mode while Omnisend owns
+   * marketing, so the ladder finishes what it started and starts nothing.
+   */
+  legacyOnly?: boolean;
 }
 
 export const RECOVERY_STAGES = ["t30m", "t12h", "t24h", "t72h"] as const;
@@ -1075,7 +1162,7 @@ async function claimedStagesFor(cartIds: string[]): Promise<Map<string, Map<stri
  * read must not stop a stage. What it may cost is a discount offered one time
  * too many, which is the cheaper mistake.
  */
-type RecoveryContext = {
+export type RecoveryContext = {
   /** Paid orders per address, newest first. */
   paidOrders: Map<string, Array<{ orderId: string; at: number }>>;
   /** Every recovery-stage send per address across ALL carts, within the cooldown plus the last window. */
@@ -1148,7 +1235,13 @@ function mergeRecoveryContext(into: RecoveryContext, from: RecoveryContext): voi
   for (const [email, gifts] of from.recoveryGifts) into.recoveryGifts.set(email, gifts);
 }
 
-async function loadRecoveryContext(emails: string[], now: number): Promise<RecoveryContext> {
+/**
+ * Exported for the Omnisend cart-offer sweep (marketing/omnisend/cart-offers.ts),
+ * which plans the same 72-hour incentive from the same per-address facts —
+ * last paid order, last recovery code, last recovery gift — so the two
+ * owners of a cart can never disagree about what an address has already had.
+ */
+export async function loadRecoveryContext(emails: string[], now: number): Promise<RecoveryContext> {
   const context: RecoveryContext = { paidOrders: new Map(), recoverySends: new Map(), lastRecoveryCouponAt: new Map(), recoveryGifts: new Map(), failedOrders: new Map() };
   if (emails.length === 0) return context;
   if (emails.length > CONTEXT_CHUNK) {
@@ -1227,10 +1320,15 @@ async function loadRecoveryContext(emails: string[], now: number): Promise<Recov
   }
 
   try {
+    // BOTH LADDERS' CODES. The Omnisend cart-offer sweep mints its recovery
+    // code into this table under "omnisend_recovery" (marketing/omnisend/
+    // codes.ts) and plans from this same context, so the 30-day per-address
+    // cooldown has to see both sources: one recovery code per address per
+    // 30 days, whichever owner of the cart minted it.
     const { data } = await supabaseAdmin
       .from("coupons")
       .select("assigned_email, created_at")
-      .eq("source", "cart_recovery")
+      .in("source", ["cart_recovery", "omnisend_recovery"])
       .in("assigned_email", emails)
       .gte("created_at", new Date(now - RECOVERY_DISCOUNT_COOLDOWN_MS).toISOString());
     for (const row of (data ?? []) as Array<Record<string, unknown>>) {
@@ -1275,7 +1373,7 @@ async function loadRecoveryContext(emails: string[], now: number): Promise<Recov
  * A gift issued for this same cart is this sequence's own stage 3, re-minted
  * at stage 4; it is not a second gift and must not block one.
  */
-function lastGiftForOtherCarts(
+export function lastGiftForOtherCarts(
   gifts: ReadonlyArray<{ at: number; cartId: string | null }> | undefined,
   cartId: string,
 ): number | null {
@@ -1621,11 +1719,50 @@ export async function loadRecoveryCatalogue(slugs: string[]): Promise<Map<string
   return entries;
 }
 
-export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult> {
+/**
+ * Which of these gift slugs cannot ship today — catalogue status AND tracked
+ * count, on the dose quoteOrder would pick.
+ *
+ * Shared with the Omnisend cart-offer sweep so that whichever owner plans a
+ * gift, the same test decides what the box will hold. Unknown is treated as
+ * SHIPPABLE and a failed read leaves the set empty, for the reasons stated
+ * at the call site in runAbandonedCartSweep.
+ */
+export async function unshippableGiftSlugsFor(giftSlugs: string[]): Promise<Set<string>> {
+  const unshippable = new Set<string>();
+  if (giftSlugs.length === 0) return unshippable;
+  try {
+    const [giftProducts, giftStock] = await Promise.all([
+      getCatalogProductsBySlugs(giftSlugs),
+      getStockLevelsBySlugs(giftSlugs),
+    ]);
+    for (const slug of giftSlugs) {
+      const product = giftProducts.find((candidate) => candidate.slug === slug);
+      // Absent from the catalogue is unshippable too — a retired or unpublished
+      // slug resolves to nothing at the till and would be promised for ever.
+      if (!product) { unshippable.add(slug); continue; }
+      // The same dose quoteOrder picks for a gift that names no variant, and
+      // the same key order: dose id for a variant, slug for a product.
+      const dose = product.doses?.find((entry) => entry.isDefault) ?? product.doses?.[0];
+      const status = dose?.stockStatus ?? product.stockStatus;
+      const count = dose ? giftStock.get(dose.id) : giftStock.get(slug);
+      if (status === "Out of Stock" || status === "Reserved") unshippable.add(slug);
+      else if (typeof count === "number" && Number.isFinite(count) && count <= 0) unshippable.add(slug);
+    }
+  } catch (error) {
+    // A failed read leaves the set empty, so every gift is attempted and the
+    // till decides. Better than silently mailing a ladder with no gifts.
+    console.error("[cart-recovery] gift stock unreadable; offering every configured gift", error);
+  }
+  return unshippable;
+}
+
+export async function runAbandonedCartSweep(options: AbandonedCartSweepOptions = {}): Promise<AbandonedCartSweepResult> {
   const config = await getCartRecoveryControlConfig();
   const now = Date.now();
+  const legacyOnly = options.legacyOnly === true;
   const result: AbandonedCartSweepResult = {
-    t30mSent: 0, t12hSent: 0, t24hSent: 0, t72hSent: 0, scanned: 0, eligible: 0, recoveredLate: 0, heldForCooldown: 0, unknownStatus: 0,
+    t30mSent: 0, t12hSent: 0, t24hSent: 0, t72hSent: 0, scanned: 0, eligible: 0, recoveredLate: 0, heldForCooldown: 0, unknownStatus: 0, omnisendOwned: 0,
   };
 
   // P0-10. THE GATE EVERY OTHER MARKETING SENDER HAS, AND THIS ONE DID NOT.
@@ -1702,6 +1839,16 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       const email = String(row.email ?? "").trim().toLowerCase();
       if (!email) continue;
       const claimed = claimedByCart.get(String(row.id)) ?? new Map<string, number>();
+
+      // ONE OWNER PER CART (see AbandonedCartSweepResult.omnisendOwned). In
+      // legacy-only mode a cart with no claimed stage is Omnisend's, and the
+      // ladder does not look at it again — not to mail it, not to close it.
+      // Nothing about a legacy cart changes: its windows, cooldowns and gaps
+      // are decided below exactly as they always were.
+      if (legacyOnly && claimed.size === 0) {
+        result.omnisendOwned++;
+        continue;
+      }
 
       // THEY ALREADY BOUGHT — checked before anything else, so a cart the
       // shopper has paid for is closed rather than counted as held or due. The
@@ -1841,32 +1988,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     ...tier.stage3.map((item) => item.slug),
     ...tier.stage4.gifts.map((item) => item.slug),
   ])));
-  const unshippableGiftSlugs = new Set<string>();
-  if (giftSlugs.length > 0) {
-    try {
-      const [giftProducts, giftStock] = await Promise.all([
-        getCatalogProductsBySlugs(giftSlugs),
-        getStockLevelsBySlugs(giftSlugs),
-      ]);
-      for (const slug of giftSlugs) {
-        const product = giftProducts.find((candidate) => candidate.slug === slug);
-        // Absent from the catalogue is unshippable too — a retired or unpublished
-        // slug resolves to nothing at the till and would be promised for ever.
-        if (!product) { unshippableGiftSlugs.add(slug); continue; }
-        // The same dose quoteOrder picks for a gift that names no variant, and
-        // the same key order: dose id for a variant, slug for a product.
-        const dose = product.doses?.find((entry) => entry.isDefault) ?? product.doses?.[0];
-        const status = dose?.stockStatus ?? product.stockStatus;
-        const count = dose ? giftStock.get(dose.id) : giftStock.get(slug);
-        if (status === "Out of Stock" || status === "Reserved") unshippableGiftSlugs.add(slug);
-        else if (typeof count === "number" && Number.isFinite(count) && count <= 0) unshippableGiftSlugs.add(slug);
-      }
-    } catch (error) {
-      // A failed read leaves the set empty, so every gift is attempted and the
-      // till decides. Better than silently mailing a ladder with no gifts.
-      console.error("[cart-recovery] gift stock unreadable; offering every configured gift", error);
-    }
-  }
+  const unshippableGiftSlugs = await unshippableGiftSlugsFor(giftSlugs);
   /** Drop what cannot ship, so the email promises only what the box will hold. */
   const shippableGifts = (gifts: RecoveryGiftItem[]) =>
     gifts.filter((item) => !unshippableGiftSlugs.has(item.slug));
