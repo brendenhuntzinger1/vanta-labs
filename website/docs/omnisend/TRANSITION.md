@@ -27,6 +27,7 @@ lookup made during the audit. Where something is untested, it says so.
 | Automations built | **9 of 9**, all `isEnabled: false` |
 | Automations that can actually fire today | **7 of 9** — §6 |
 | Automations verified by a real send | **none** — §7 |
+| "gift" wording | **fixed** — 4 subject lines and 12 body strings now say "reward" |
 | Live consent sync | **working** — opt-in → Omnisend contact in **2 seconds** |
 | Live event sync | **working** — 2/2 events delivered within seconds |
 | Scheduled sync (cron) | **working** — first tick 18:30 UTC stamped 6 watermarks and repaired every contact |
@@ -457,10 +458,24 @@ Doing nothing is the second option, silently. I would rather you chose it.
    block that will never send. Harmless, worth knowing, not worth surgery before
    launch.
 2. **`VL · Sunset` can never fire on the historical list** — §3, `dateAdded`.
-3. **Four subject lines say "gift" where this project says "reward"** —
-   "A gift for your saved cart", "A gift and a code for your saved cart", and the
-   two checkout equivalents; the bodies carry "YOUR GIFT" and "CLAIM THE GIFT".
-   §10, item 4.
+3. ~~Four subject lines said "gift" where this project says "reward".~~
+   **Fixed during the audit.** The four subject lines were patched through
+   `patch_automations_id`, which matches a block by id and patches
+   `action.sendEmail` field by field — so the two abandonment trees, their
+   splits, delays and exit conditions, are untouched, and each response proves
+   it. The bodies went through `put_email_content_id`, which is a full-document
+   replace with no partial form, so each of the four offer templates was read,
+   changed in three places and written back whole: `YOUR GIFT` → `YOUR REWARD`,
+   `CLAIM THE GIFT` → `CLAIM THE REWARD`, and "a gift is attached" / "a gift
+   added to your order" → "a reward …". Verified by re-rendering
+   `6aab0ceefe9daa7b181e8f22` through `post_email_content_id_render` and reading
+   the HTML: the words are right and the layout, links, product grid and footer
+   are intact.
+
+   The property names behind the copy (`vl_recovery_gift` and its four
+   siblings) are unchanged. They are internal keys the contact push, the
+   cart-offer sweep and the templates all agree on; renaming them is a
+   migration, not a wording fix, and nothing a customer sees carries them.
 
 ### §6a — The two sign-up forms, one of which should not exist
 
@@ -510,8 +525,9 @@ send is a real render through the real template to a real mailbox.
 
 ### §8 — Suppression sync (#27)
 
-Written, tested, and open as
-[PR #208](https://github.com/brendenhuntzinger1/vanta-labs/pull/208).
+Written, tested, and **merged** as
+[PR #208](https://github.com/brendenhuntzinger1/vanta-labs/pull/208) →
+`8a9919c8`. Issue #27 is closed.
 
 Omnisend's contacts API carries a channel status and no bounce field, so the
 write-back can mirror an unsubscribe and nothing else. After cutover that would
@@ -534,6 +550,10 @@ Pulled rather than pushed on purpose: Omnisend's Public API exposes no webhook
 registration, and an unsigned inbound endpoint that could suppress any address is
 the exact hole `webhooks/email/route.ts` was written to close.
 
+It merged after the 18:30 tick, so **its own first scheduled run has not been
+observed yet** — watch for an `omnisend_sync_state` row keyed
+`provider_verdicts`.
+
 ### §9 — Cutover sequence
 
 Order matters, and this order has no gap and no duplicate.
@@ -541,8 +561,10 @@ Order matters, and this order has no gap and no duplicate.
 1. **Clear B1 and B2.** DNS records added and verified inside Omnisend; postal
    address replaced in the footer layout. Neither is reversible by a deploy, so
    both go first.
-2. **Merge PR #208** and let it deploy, so suppression sync is live *before*
-   Omnisend sends anything.
+2. ~~Merge PR #208~~ — **done.** Suppression sync is on `main` and will be live
+   before Omnisend sends anything. Confirm its first scheduled run by looking
+   for an `omnisend_sync_state` row keyed `provider_verdicts`; a `403` in the
+   sweep log instead means the API key is missing the `events.read` scope.
 3. **Decide the welcome-offer question (§6).** If you re-arm the code on the
    email path it must be deployed before step 4, or the first-order offer
    disappears the moment the in-house flows stand down.
@@ -594,8 +616,8 @@ needs design. Both are yours.
 | 1 | Add Omnisend's DNS records from Settings → Sender domains (**B1**) | **you only** |
 | 2 | Replace the footer postal-address placeholder (**B2**) | **you**, or me given the address |
 | 3 | Add a bounded retry so a missed consent push is repaired within 30 minutes rather than 24 hours | me |
-| 4 | Change "gift" to "reward" in 4 subject lines and their bodies | me |
-| 5 | Merge PR #208 | me |
+| ~~4~~ | ~~Change "gift" to "reward" in 4 subject lines and their bodies~~ — **done**, §6 | — |
+| ~~5~~ | ~~Merge PR #208~~ — **done**, merged as `8a9919c8`; issue #27 closed | — |
 | 5a | **Decide the welcome-offer question in §6** — re-arm the code on email, or launch without a first-order offer | **your decision** |
 | 6 | Per-block test sends to a controlled address, all nine flows | me |
 | 7 | Delete the stock "10% off" demo form `6aaa9bef27f565e8b3f4b22f` (§6a) and the 3 duplicate segments (§3). Both are deletions, so say the word and I will, or do it in the UI | **your call** |
