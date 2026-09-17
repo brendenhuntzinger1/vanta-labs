@@ -56,7 +56,7 @@ The configured wheel is **16 wedges: 12 free products, 3 percentage discounts,
 A test pins this to the live prize table, so if the wheel ever becomes
 all-product the copy rule is revisited deliberately rather than drifting.
 
-### End to end, against real infrastructure — 56/56 checks
+### End to end, against real infrastructure — 59/59 checks
 
 `scripts/qa-wheel-campaign.mjs` walks the real path: real Postgres, the real
 cron route, the real captured MIME, the real payment webhook. Not mocked.
@@ -120,7 +120,7 @@ The quote now reports the figure it enforced, at both floor checks. Verified:
 
 ### Full suite
 
-**11,194 passing** on the working branch. One pre-existing test was updated
+**11,201 passing** on the working branch. One pre-existing test was updated
 where it pinned the old silent behaviour; its intent (never blame the code for
 a floor) is still enforced.
 
@@ -198,6 +198,12 @@ won stay redeemable, which is correct.
 - **Tesamorelin has 5 units.** At 1-in-16 odds it is the one prize a campaign
   can exhaust. The admin panel flags it amber. Consider swapping the wedge or
   restocking before a larger send.
+- **The SMS launch has three hard blockers**, confirmed against production and
+  written up in `AUDIT-FINDINGS.md`: every SMS consent write fails silently
+  because `sms_subscribers` has no `email` column; there is no inbound SMS
+  handler at all, so a STOP never reaches the store; and the 15% code can be
+  minted from an email alone with no phone number. **None of these touch the
+  wheel campaign** — but none of them should meet a carrier review either.
 - **Three prize products have no image**: `recon-water`, `glp-3`, `glp-2`. This
   does not affect the wheel email (which uses the wheel image) but does affect
   any template using product photography.
