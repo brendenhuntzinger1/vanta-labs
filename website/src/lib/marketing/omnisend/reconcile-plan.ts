@@ -256,16 +256,42 @@ export function countContactsOnPage(body: unknown): number {
 }
 
 /**
- * The order the push visits addresses in: the consented audience first, so
- * the people Omnisend may actually mail are the ones a capped run is sure to
- * refresh, then every buyer the store has no consent for (pushed as
- * nonSubscribed, for segments and lifetime value only). Sorted so two runs
- * over the same store walk the same list, and never an address twice.
+ * The order the push visits addresses in, most reachable first, so a run that
+ * hits its cap has refreshed the people who can actually be messaged:
+ *
+ *   1. the EMAIL-consented audience,
+ *   2. addresses that consented to TEXTS and nothing else,
+ *   3. every buyer the store has no consent for at all (pushed as
+ *      nonSubscribed, for segments and lifetime value only).
+ *
+ * Sorted within each tier so two runs over the same store walk the same list,
+ * and never an address twice.
+ *
+ * WHY THE SMS TIER EXISTS. Someone who ticks only the SMS box has no
+ * marketing_subscribers row, no customer_preferences.marketing_emails and no
+ * order, so the first and third tiers both miss them. Their contact would
+ * reach Omnisend exactly once — from the fire-and-forget hook on the consent
+ * itself — and never again: a single failed push would be permanent instead of
+ * repaired on the next daily run, and the 30-day `vl_link` token that nothing
+ * refreshes would expire and take every link in every message with it. They
+ * are also the entire audience the 15%-for-texts offer is aimed at.
+ *
+ * They are deliberately NOT added to loadConsentedAudience, which drives the
+ * in-house EMAIL sender: putting them there would mail someone who consented
+ * to texts and not to email. This ordering is the only place they join.
  */
-export function orderPushTargets(audience: Set<string>, buyers: Set<string>): string[] {
+export function orderPushTargets(audience: Set<string>, buyers: Set<string>, smsConsented?: Set<string>): string[] {
   const targets = [...audience].sort();
+  const seen = new Set(audience);
+  for (const email of [...(smsConsented ?? [])].sort()) {
+    if (seen.has(email)) continue;
+    seen.add(email);
+    targets.push(email);
+  }
   for (const email of [...buyers].sort()) {
-    if (!audience.has(email)) targets.push(email);
+    if (seen.has(email)) continue;
+    seen.add(email);
+    targets.push(email);
   }
   return targets;
 }

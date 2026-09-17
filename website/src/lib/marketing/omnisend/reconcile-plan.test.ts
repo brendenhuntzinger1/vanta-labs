@@ -612,6 +612,53 @@ describe("orderPushTargets puts the consented audience first, then buyers withou
   });
 });
 
+// ---------------------------------------------------------------------------
+// THE ADDRESS THAT CONSENTED TO TEXTS AND NOTHING ELSE.
+//
+// The push audience was built from the two EMAIL consent stores plus paid
+// buyers. Someone who ticks only the SMS box is in none of them: no
+// marketing_subscribers row, no customer_preferences.marketing_emails, no
+// order. Their contact reaches Omnisend exactly once, from the fire-and-forget
+// hook on the consent itself, and then never again — so a single failed push
+// is permanent rather than repaired on the next daily run, and the 30-day
+// vl_link token nothing refreshes simply dies, taking every link in every
+// message with it.
+//
+// They are the whole audience the 15%-for-texts offer is aimed at, so the push
+// has to know about them. They are NOT added to the in-house email audience:
+// that would mail someone who never consented to email.
+// ---------------------------------------------------------------------------
+
+describe("orderPushTargets carries the SMS-only subscriber", () => {
+  it("places SMS-consented addresses after the email audience and before buyers", () => {
+    const targets = orderPushTargets(
+      new Set(["email@example.com"]),
+      new Set(["buyer@example.com"]),
+      new Set(["texts@example.com"]),
+    );
+    expect(targets).toEqual(["email@example.com", "texts@example.com", "buyer@example.com"]);
+  });
+
+  it("never lists an address twice, whichever sets it appears in", () => {
+    const both = new Set(["both@example.com"]);
+    expect(orderPushTargets(both, both, both)).toEqual(["both@example.com"]);
+    expect(orderPushTargets(new Set(), new Set(["x@example.com"]), new Set(["x@example.com"])))
+      .toEqual(["x@example.com"]);
+  });
+
+  it("sorts the SMS set, so two runs walk the same list", () => {
+    const targets = orderPushTargets(new Set(), new Set(), new Set(["b@example.com", "a@example.com"]));
+    expect(targets).toEqual(["a@example.com", "b@example.com"]);
+  });
+
+  it("behaves exactly as before when no SMS set is given", () => {
+    // The third argument is optional so every existing caller and test is
+    // unchanged; omitting it must not alter the two-source ordering.
+    expect(orderPushTargets(new Set(["b@example.com"]), new Set(["a@example.com"])))
+      .toEqual(["b@example.com", "a@example.com"]);
+  });
+});
+
 describe("snapshot labels", () => {
   it("defaults to pre-migration-<UTC date>", () => {
     expect(defaultSnapshotLabel(Date.parse("2026-09-16T23:59:59Z"))).toBe("pre-migration-2026-09-16");
