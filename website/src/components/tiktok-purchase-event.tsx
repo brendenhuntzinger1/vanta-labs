@@ -5,6 +5,7 @@ import { browserFiredStore, emitEvent, type TikTokEvent } from "@/lib/ads/tiktok
 import { emitSnapEvent, type SnapEvent } from "@/lib/ads/snap-events";
 import { emitRedditEvent, type RedditEvent } from "@/lib/ads/reddit-events";
 import { emitMetaEvent, type MetaEvent } from "@/lib/ads/meta-events";
+import { emitGoogleAdsConversion, type GoogleAdsConversion } from "@/lib/ads/google-ads-events";
 import { hasAcceptedConsent } from "@/lib/cookie-consent-client";
 
 /**
@@ -109,6 +110,7 @@ export function TikTokPurchaseEvent({
         snapPurchase?: SnapEvent | null;
         redditPurchase?: RedditEvent | null;
         metaPurchase?: MetaEvent | null;
+        googleAdsPurchase?: GoogleAdsConversion | null;
       };
       if (!body?.event) return; // not paid — nothing to report, and that is correct
 
@@ -131,6 +133,33 @@ export function TikTokPurchaseEvent({
         emitMetaEvent(
           body.metaPurchase,
           (name, properties, options) => window.fbq?.("track", name, properties, options),
+          browserFiredStore(),
+        );
+      }
+
+      // Google Ads, ABOVE the consent return on purpose — the same position
+      // Meta holds, for a different reason.
+      //
+      // The Google tag is not held back by the cookie banner (see
+      // google-ads-tag.tsx): it is present on every page with Consent Mode
+      // starting every storage signal DENIED, which is what does the privacy
+      // work instead. So a visitor who declined still has a live tag, and their
+      // conversion goes out as a cookieless ping — no advertising cookie, no
+      // identifier, nothing tying it to them or to any other visit — which
+      // Google counts through modelling.
+      //
+      // Moving this below the return would drop every conversion from a
+      // declining visitor while that same visitor's page views carried on being
+      // reported: the account would optimise against sales it was never told
+      // about. google-ads-purchase-wiring.test.ts fails if it ever moves.
+      //
+      // Optional-chained like every other gtag call in the tree. The tag is not
+      // rendered outside production at all, so this is a no-op on every preview
+      // deployment and local run rather than an error.
+      if (body.googleAdsPurchase) {
+        emitGoogleAdsConversion(
+          body.googleAdsPurchase,
+          (command, name, params) => window.gtag?.(command, name, params),
           browserFiredStore(),
         );
       }
