@@ -1,0 +1,351 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
+
+import { SMS_CONSENT_TEXT, SMS_DISCLOSURE_TEXT } from "@/lib/sms-consent-text";
+import { WELCOME_OFFER_PERCENT } from "@/lib/offers/welcome-offer-copy";
+
+/**
+ * THE ENTRY INVITATION — the email and text sign-up a visitor meets on arrival.
+ *
+ * WHY THIS EXISTS WHEN sms-invite-modal.tsx ALREADY DOES.
+ *
+ * That one opens on the catalogue, which is behind the account wall: an
+ * anonymous request to any storefront path is redirected to this portal. So no
+ * carrier or messaging provider reviewing this store's A2P use case can ever
+ * see it, and "show us your opt-in" has no answer. This modal opens ON the
+ * portal — the one page an anonymous visitor, or a reviewer, can actually
+ * reach — which is also the honest meaning of "when someone enters the site"
+ * for a store whose front door is a sign-in screen.
+ *
+ * It does NOT replace the catalogue invitation. That one asks a signed-in
+ * shopper mid-visit and reads their session for an address; this one asks a
+ * stranger at the door and therefore has to collect the address itself.
+ *
+ * THE TWO TICKS ARE SEPARATE DECISIONS, AND STAY SEPARATE.
+ *
+ *   * the age and research confirmation is REQUIRED — this store may not
+ *     market to anyone who has not made it, and it is the same representation
+ *     the access portal itself collects;
+ *   * the text consent is OPTIONAL and its own box. Someone who wants the
+ *     discount by email and no texts gets exactly that: the number is withheld
+ *     from the request unless the box is ticked, so an untick can never become
+ *     a consent row. Neither box is ever pre-ticked, which is not a nicety —
+ *     a pre-ticked box is not consent under the TCPA.
+ *
+ * THE COPY FOLLOWS THE SERVER, NEVER THE OTHER WAY ROUND. `promptsEnabled` is
+ * the store's kill switch for first-order discounts. While it is off the
+ * server records consent and issues NO code, so this must not promise one:
+ * with the switch off the modal invites you to the list and says nothing about
+ * a discount. Promising 15% and delivering nothing is worse than not asking.
+ */
+
+type OfferShape = {
+  status?: string;
+  mayInterrupt?: boolean;
+  promptsEnabled?: boolean;
+  dismissCooldownDays?: number;
+};
+
+/** Remembered per browser, so a dismissal is not re-asked on the next page. */
+const DISMISSED_KEY = "vl_entry_offer_dismissed_at";
+const JOINED_KEY = "vl_entry_offer_joined";
+
+function dismissedRecently(cooldownDays: number): boolean {
+  try {
+    const raw = window.localStorage.getItem(DISMISSED_KEY);
+    if (!raw) return false;
+    const at = Number(raw);
+    if (!Number.isFinite(at)) return false;
+    return Date.now() - at < Math.max(1, cooldownDays) * 24 * 60 * 60 * 1000;
+  } catch {
+    // Storage blocked (private mode). Treat as "not dismissed" rather than
+    // suppressing an invitation nobody has actually declined.
+    return false;
+  }
+}
+
+function alreadyJoined(): boolean {
+  try {
+    return window.localStorage.getItem(JOINED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function remember(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    /* nothing to do — the modal simply asks again next time */
+  }
+}
+
+export function EntryOfferModal() {
+  const [open, setOpen] = useState(false);
+  const [offer, setOffer] = useState<OfferShape | null>(null);
+
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [smsConsent, setSmsConsent] = useState(false);
+
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [code, setCode] = useState<string | null>(null);
+  const [joined, setJoined] = useState(false);
+
+  // Ask the one public offer endpoint what this visitor may be shown. Every
+  // other offer path is walled, so this is the only question a guest can ask.
+  useEffect(() => {
+    let live = true;
+    if (alreadyJoined()) return;
+    void fetch("/api/offers/welcome", { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: OfferShape | null) => {
+        if (!live || !data) return;
+        setOffer(data);
+        if (dismissedRecently(Number(data.dismissCooldownDays ?? 7))) return;
+        // A beat, so the page is seen before it is asked anything.
+        window.setTimeout(() => { if (live) setOpen(true); }, 1200);
+      })
+      .catch(() => { /* an invitation is never worth an error on screen */ });
+    return () => { live = false; };
+  }, []);
+
+  const close = useCallback(() => {
+    setOpen(false);
+    remember(DISMISSED_KEY, String(Date.now()));
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, close]);
+
+  const offerLive = offer?.promptsEnabled === true;
+
+  const submit = useCallback(async () => {
+    if (saving) return;
+    if (!confirmed) { setError("Please confirm you are 21 or older and buying for research use."); return; }
+    if (!email.trim()) { setError("Enter your email address."); return; }
+    if (smsConsent && !phone.trim()) { setError("Enter a mobile number, or untick the text box."); return; }
+
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/offers/welcome", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        // THE NUMBER ONLY TRAVELS WITH THE TICK. An unticked box means no
+        // phone reaches the server at all, so no consent row can be written
+        // from a number someone merely typed.
+        body: JSON.stringify({
+          email: email.trim(),
+          phone: smsConsent ? phone.trim() : "",
+          placement: "storefront",
+        }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string; code?: string };
+      if (data?.ok) {
+        remember(JOINED_KEY, "1");
+        setJoined(true);
+        setCode(data.code ?? null);
+        return;
+      }
+      setError(data?.error ?? "This did not go through. Please try again.");
+    } catch {
+      setError("This did not go through. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }, [confirmed, email, phone, saving, smsConsent]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[120] flex items-start justify-center overflow-y-auto bg-black/80 px-4 py-6 backdrop-blur-sm sm:items-center"
+      onClick={close}
+      data-testid="entry-offer-backdrop"
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="entry-offer-heading"
+        onClick={(event) => event.stopPropagation()}
+        data-testid="entry-offer-modal"
+        className="relative w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b0b] px-5 py-5 text-white shadow-[0_24px_70px_-20px_rgba(0,0,0,0.9)] sm:px-8 sm:py-7"
+      >
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[color:var(--accent-gold)] to-transparent opacity-70"
+        />
+        <button
+          type="button"
+          onClick={close}
+          aria-label="Close"
+          data-testid="entry-offer-close"
+          className="vl-focus-ring absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full border border-white/10 text-white/50 transition hover:bg-white/5 hover:text-white"
+        >
+          <span aria-hidden="true" className="text-lg leading-none">×</span>
+        </button>
+
+        <div className="text-[0.7rem] font-semibold uppercase tracking-[0.28em] text-[color:var(--accent-gold)]">Vanta Labs</div>
+        <div className="mt-0.5 text-[0.62rem] uppercase tracking-[0.3em] text-white/35">Research Peptides</div>
+
+        {joined ? (
+          <div className="mt-6" data-testid="entry-offer-success">
+            <h2 id="entry-offer-heading" className="font-serif text-2xl leading-tight">
+              {code ? "Here&rsquo;s your code." : "You&rsquo;re on the list."}
+            </h2>
+            {code ? (
+              <>
+                <p className="mt-2 text-sm leading-6 text-white/60">
+                  Use it at checkout on your first order. We&rsquo;ve emailed it to you as well.
+                </p>
+                <p
+                  data-testid="entry-offer-code"
+                  className="mt-4 rounded-xl border border-[color:var(--accent-gold)]/40 bg-[color:var(--accent-gold-soft)] px-4 py-3 text-center font-mono text-lg tracking-[0.2em] text-[color:var(--accent-gold)]"
+                >
+                  {code}
+                </p>
+              </>
+            ) : (
+              <p className="mt-2 text-sm leading-6 text-white/60">
+                Thanks — you&rsquo;ll hear from us with new product launches, restock alerts and subscriber offers.
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="vl-focus-ring mt-6 flex w-full items-center justify-center rounded-xl bg-[color:var(--accent-gold)] px-6 py-3.5 text-sm font-semibold text-[#0b0b0b] transition hover:bg-[color:var(--accent-gold-strong)]"
+            >
+              Continue
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="mt-4 inline-flex rounded-full bg-[color:var(--accent-gold-soft)] px-3 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.22em] text-[color:var(--accent-gold)] sm:mt-5 sm:py-1.5 sm:text-[0.65rem]">
+              Email &amp; text sign-up
+            </div>
+
+            <h2 id="entry-offer-heading" className="mt-3 font-serif text-[1.5rem] leading-[1.12] sm:mt-4 sm:text-[1.75rem] sm:leading-[1.15]">
+              {offerLive ? `Get ${WELCOME_OFFER_PERCENT}% off your first order.` : "Join the Vanta Labs list."}
+            </h2>
+
+            <p className="mt-2.5 text-[0.82rem] leading-[1.35rem] text-white/55 sm:mt-3 sm:text-sm sm:leading-6">
+              {offerLive
+                ? "Get your discount code by email, and opt in to texts for new product launches, restock alerts and exclusive offers from Vanta Labs."
+                : "Be first to hear about new product launches, restock alerts and exclusive offers from Vanta Labs — by email, and by text if you want them."}
+            </p>
+
+            <div className="mt-4 space-y-2 sm:mt-5 sm:space-y-2.5">
+              <input
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="you@lab.com"
+                aria-label="Email address"
+                data-testid="entry-offer-email"
+                className="vl-sms-field vl-focus-ring w-full"
+              />
+              <input
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+                placeholder="+1 (555) 123-4567"
+                aria-label="Mobile number, optional, for texts"
+                data-testid="entry-offer-phone"
+                className="vl-sms-field vl-focus-ring w-full"
+              />
+            </div>
+
+            <label className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2.5 sm:mt-4 sm:gap-3 sm:px-3.5 sm:py-3">
+              <input
+                type="checkbox"
+                checked={confirmed}
+                onChange={(event) => setConfirmed(event.target.checked)}
+                data-testid="entry-offer-confirm"
+                className="mt-0.5 h-4 w-4 flex-shrink-0 accent-[color:var(--accent-gold)]"
+              />
+              <span className="text-[0.76rem] leading-[1.1rem] sm:text-[0.8rem] sm:leading-5">
+                <span className="font-semibold text-white/90">I confirm I am 21 years of age or older.</span>{" "}
+                <span className="text-white/45">These products are for laboratory research use only.</span>
+              </span>
+            </label>
+
+            <label className="mt-2 flex cursor-pointer items-start gap-2.5 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2.5 sm:gap-3 sm:px-3.5 sm:py-3">
+              <input
+                type="checkbox"
+                checked={smsConsent}
+                onChange={(event) => setSmsConsent(event.target.checked)}
+                data-testid="entry-offer-sms-consent"
+                aria-describedby="entry-offer-sms-disclosure"
+                className="mt-0.5 h-4 w-4 flex-shrink-0 accent-[color:var(--accent-gold)]"
+              />
+              <span className="text-[0.73rem] leading-[1.05rem] text-white/45 sm:text-[0.8rem] sm:leading-5">
+                <span className="font-semibold text-white/90">Text me offers &amp; updates from Vanta Labs.</span>{" "}
+                {SMS_CONSENT_TEXT}{" "}
+                <span className="text-white/35">Optional.</span>
+              </span>
+            </label>
+
+            <p id="entry-offer-sms-disclosure" className="mt-2 px-1 text-[0.68rem] leading-[1rem] text-white/35 sm:mt-2.5 sm:text-[0.72rem] sm:leading-5">
+              {SMS_DISCLOSURE_TEXT}{" "}
+              See our{" "}
+              <Link href="/legal/privacy" className="text-white/60 underline decoration-white/25 underline-offset-4 hover:text-white">
+                Privacy Policy
+              </Link>{" "}
+              &amp;{" "}
+              <Link href="/legal/terms" className="text-white/60 underline decoration-white/25 underline-offset-4 hover:text-white">
+                Terms
+              </Link>
+              .
+            </p>
+
+            {error ? (
+              <p data-testid="entry-offer-error" className="mt-3 text-[0.8rem] leading-5 text-red-300">
+                {error}
+              </p>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => { void submit(); }}
+              disabled={saving}
+              data-testid="entry-offer-submit"
+              className="vl-focus-ring mt-3.5 flex w-full items-center justify-center gap-2 rounded-xl bg-[color:var(--accent-gold)] px-6 py-3 text-sm font-semibold tracking-wide text-[#0b0b0b] shadow-[0_8px_24px_-8px_rgba(199,174,94,0.55)] transition hover:bg-[color:var(--accent-gold-strong)] disabled:opacity-60 sm:mt-4 sm:py-3.5"
+            >
+              {saving ? "Sending…" : offerLive ? `Get ${WELCOME_OFFER_PERCENT}% Off` : "Join the list"}
+              {saving ? null : <span aria-hidden="true">→</span>}
+            </button>
+
+            <ul className="mt-4 space-y-1.5 text-[0.75rem] text-white/45 sm:mt-5 sm:text-[0.78rem]">
+              <li className="flex items-center gap-2">
+                <span aria-hidden="true" className="text-[color:var(--accent-gold)]">✓</span>
+                <span><span className="font-semibold text-white/75">≥99%</span> HPLC-verified purity</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <span aria-hidden="true" className="text-[color:var(--accent-gold)]">✓</span>
+                <span><span className="font-semibold text-white/75">Batch-specific</span> COAs</span>
+              </li>
+            </ul>
+
+            <p className="mt-3 border-t border-white/10 pt-2.5 text-[0.65rem] leading-[0.95rem] text-white/30 sm:mt-4 sm:pt-3 sm:text-[0.68rem] sm:leading-5">
+              For Research Use Only. Not for human consumption. Unsubscribe anytime.
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
