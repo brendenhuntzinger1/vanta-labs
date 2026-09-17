@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export type WheelSlice = {
@@ -237,12 +238,13 @@ export default function SpinWheel({ slices, terms, token, initialResult }: Props
             </div>
 
             {!countdown.expired && (
-              <a
-                href="/catalog"
-                className="mt-4 block rounded-lg px-5 py-3 text-center text-sm font-semibold" style={{ background: "#c7ae5e", color: "#0a0a0a" }}
+              <Link
+                href="/products"
+                className="mt-4 block rounded-lg px-5 py-3 text-center text-sm font-semibold"
+                style={{ background: "#c7ae5e", color: "#0a0a0a" }}
               >
                 Start shopping
-              </a>
+              </Link>
             )}
             <p className="mt-3 text-xs" style={{ color: "var(--foreground-muted)" }}>
               Your prize is saved to your account and applies automatically at checkout — on this device or any other.

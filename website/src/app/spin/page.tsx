@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import SpinWheel, { type WheelPrizeResult, type WheelSlice } from "@/components/spin-wheel";
@@ -88,16 +89,17 @@ function LinkProblem() {
   return (
     <div className="mx-auto w-full max-w-md px-4 py-20 text-center">
       <h1 className="text-xl font-semibold">This link is no longer valid</h1>
-      <p className="mt-3 text-sm text-neutral-600 dark:text-neutral-400">
+      <p className="mt-3 text-sm" style={{ color: "var(--foreground-muted)" }}>
         Spin links expire, and each one works only for the campaign it was sent for.
         If you think this one should still work, reply to the email you received and we&apos;ll sort it out.
       </p>
-      <a
-        href="/catalog"
-        className="mt-6 inline-block rounded-lg bg-neutral-900 px-5 py-3 text-sm font-semibold text-white hover:bg-neutral-800 dark:bg-white dark:text-neutral-900"
+      <Link
+        href="/products"
+        className="mt-6 inline-block rounded-lg px-5 py-3 text-sm font-semibold"
+        style={{ background: "#c7ae5e", color: "#0a0a0a" }}
       >
         Browse the catalogue
-      </a>
+      </Link>
     </div>
   );
 }
@@ -106,14 +108,14 @@ function WrongAccount() {
   return (
     <div className="mx-auto w-full max-w-md px-4 py-20 text-center">
       <h1 className="text-xl font-semibold">This link belongs to a different account</h1>
-      <p className="mt-3 text-sm text-neutral-600 dark:text-neutral-400">
+      <p className="mt-3 text-sm" style={{ color: "var(--foreground-muted)" }}>
         You&apos;re signed in as someone else. Sign out and open the link again, or open the
         link that was sent to the address you&apos;re signed in with — a prize has to be
         attached to the account that will check out with it.
       </p>
       <a
         href="/account"
-        className="mt-6 inline-block rounded-lg bg-neutral-900 px-5 py-3 text-sm font-semibold text-white hover:bg-neutral-800 dark:bg-white dark:text-neutral-900"
+        className="mt-6 inline-block rounded-lg px-5 py-3 text-sm font-semibold" style={{ background: "#c7ae5e", color: "#0a0a0a" }}
       >
         Go to my account
       </a>
