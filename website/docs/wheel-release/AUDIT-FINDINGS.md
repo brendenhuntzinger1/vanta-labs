@@ -3,7 +3,7 @@
 Eleven parallel auditors went over consent compliance, who gets 15%, the
 discount handoff, double opt-in, STOP/HELP, failure recovery, marketing
 controls, flow mapping, template design, message overlap and the launch
-handoff. They produced 106 findings, 24 of them at blocker severity.
+handoff. They produced 106 findings, 24 of them at blocker severity. An adversarial pass then tried to refute every serious one: 34 survived, 17 did not.
 
 **I did not take them at face value.** Audit findings routinely confuse "built"
 with "wired up" with "actually enabled", and this system is almost entirely
@@ -163,8 +163,20 @@ as leads, not facts:
   (I did confirm no client sends it, so the choice is dormant — consistent with
   the checkout-choice work being paused.)
 
-The adversarial verification stage was still running when this was written; its
-verdicts are not reflected here.
+### The adversarial pass has now finished
+
+Sixty-two agents in total. Every blocker- and high-severity finding was handed
+to an independent verifier told to refute it: **34 CONFIRMED, 17 REFUTED.**
+
+A third did not survive, which is the whole reason for the split above. Two
+worth naming because they changed what I would otherwise have told you:
+
+- The **"published Privacy Policy contradicts the implementation"** finding was
+  refuted — both halves of the alleged contradiction are branch-only, so nothing
+  is live. Not reported above for that reason.
+- My own **template finding was refuted** and is corrected in §6. The verifier
+  rendered the live templates back from the Omnisend account rather than reading
+  the source, which is how it found what I had missed.
 
 ---
 
