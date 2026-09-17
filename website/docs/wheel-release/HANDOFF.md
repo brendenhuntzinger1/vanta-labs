@@ -12,6 +12,7 @@ production remains dark.
 | `OFFER-INTERACTION.md` | What happens when a customer holds the welcome code *and* a wheel prize — measured at the till. |
 | `FLOWS-AND-OVERLAP.md` | What is already sending today, and whether the wheel collides with it. |
 | `OMNISEND-MAPPING.md` | Every flow mapped to its Omnisend replacement, both sides read live. |
+| `AUDIT-FINDINGS.md` | 106 findings from an eleven-way audit, separated into what I reproduced and what I did not. **Three hard blockers for the SMS launch.** None affect the wheel. |
 | `minimum-wheel-release.patch` | The 36-file release itself. |
 
 ---
