@@ -462,6 +462,35 @@ Doing nothing is the second option, silently. I would rather you chose it.
    two checkout equivalents; the bodies carry "YOUR GIFT" and "CLAIM THE GIFT".
    §10, item 4.
 
+### §6a — The two sign-up forms, one of which should not exist
+
+Both are drafts, so neither is showing on the site. They are not equivalent.
+
+**`6aaab173090e83c9759fd50d` — "VL · Sign-up (email + SMS)". Correct, and right
+to stay a draft.** Step 1 takes an email; step 2 offers the SMS subscription with
+proper TCPA language, real `/legal/privacy` and `/legal/terms` links, US/CA only,
+shown on `/products` and excluded from `/cart` and `/checkout`, and excluded from
+`omnisendCommunication` traffic. It stays a draft for this launch because its
+second step sells a text subscription and SMS is out of scope.
+
+**`6aaa9bef27f565e8b3f4b22f` — "Email & SMS branded Multi-step welcome discount".
+Delete it.** It is stock Omnisend demo content that was never edited, and every
+one of these is wrong for this business:
+
+- headline, button and teaser all say **"GET 10% OFF"**. The welcome offer is
+  **15%**, and nothing in this store mints a 10% code.
+- the success step promises *"you'll find a 10% discount in your inbox"*.
+  Nothing would arrive.
+- the TCPA consent text still contains the literal placeholder
+  **`[your-store-name]`**.
+- its privacy link is `vantalabsresearch.com/policies/privacy-policy` — a
+  Shopify-shaped path that **404s on this site**. The real one is
+  `/legal/privacy`.
+
+It is harmless while it is a draft and a liability the moment anyone publishes
+it by accident. I have not deleted it: deleting is not reversible and you did not
+ask me to remove anything from the account. It is two clicks in Forms.
+
 ### §7 — End-to-end verification
 
 **Not done, and API acceptance is not it.**
@@ -569,7 +598,7 @@ needs design. Both are yours.
 | 5 | Merge PR #208 | me |
 | 5a | **Decide the welcome-offer question in §6** — re-arm the code on email, or launch without a first-order offer | **your decision** |
 | 6 | Per-block test sends to a controlled address, all nine flows | me |
-| 7 | Delete the 3 duplicate segments | me |
+| 7 | Delete the stock "10% off" demo form `6aaa9bef27f565e8b3f4b22f` (§6a) and the 3 duplicate segments (§3). Both are deletions, so say the word and I will, or do it in the UI | **your call** |
 | 8 | Decide whether `VL · Sunset` should key on `vl_last_order_at` rather than `dateAdded` | your decision, my implementation |
 | 9 | Remove the stale `include:mailgun.org` from SPF | **you** |
 | 10 | Decide whether cancelled orders should keep counting toward `vl_orders` / `vl_total_spent` | your decision |
