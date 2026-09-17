@@ -64,11 +64,28 @@ describe("nothing is ever pre-ticked", () => {
     expect(MODAL).toMatch(/if \(!confirmed\)/);
   });
 
-  it("subscribes to texts ONLY when the SMS box is ticked", () => {
-    // The email sign-up and the text sign-up are separate decisions. Sending a
-    // phone number the visitor typed but did not tick for is an unconsented
-    // message, so the number is withheld unless the box is on.
-    expect(MODAL).toMatch(/smsConsent \? /);
+  it("refuses to submit until the text box is ticked", () => {
+    // THE OFFER IS THE TEXT LIST, AND THE SERVER HAS ALWAYS SAID SO.
+    // claimWelcomeOffer refuses without an acceptable mobile number
+    // (reason: "phone"), and recordSmsSignupOnly does too — so there is no
+    // email-only path behind this endpoint at all. A modal that let someone
+    // submit an address alone sent them into "That does not look like a
+    // mobile number", which is a nonsense reply to a person who deliberately
+    // left the box alone. The tick is asked for up front instead.
+    expect(MODAL).toMatch(/if \(!smsConsent\)/);
+  });
+
+  it("asks for the number the offer cannot be issued without", () => {
+    expect(MODAL).toMatch(/if \(!phone\.trim\(\)\)/);
+  });
+
+  it("does not call the text opt-in optional, because the discount depends on it", () => {
+    // "Optional" beside a box the offer requires is the kind of small untruth
+    // an A2P reviewer reads as a dark pattern. Consent still is not a
+    // condition of PURCHASE — the store is open either way — and that
+    // sentence stays in SMS_CONSENT_TEXT untouched.
+    const smsBlock = MODAL.slice(MODAL.indexOf("entry-offer-sms-consent"), MODAL.indexOf("entry-offer-sms-disclosure"));
+    expect(smsBlock).not.toMatch(/Optional/);
   });
 });
 

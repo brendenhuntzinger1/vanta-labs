@@ -132,7 +132,14 @@ export function EntryOfferModal() {
     if (saving) return;
     if (!confirmed) { setError("Please confirm you are 21 or older and buying for research use."); return; }
     if (!email.trim()) { setError("Enter your email address."); return; }
-    if (smsConsent && !phone.trim()) { setError("Enter a mobile number, or untick the text box."); return; }
+    // THE OFFER IS THE TEXT LIST. claimWelcomeOffer refuses without an
+    // acceptable mobile number and recordSmsSignupOnly does too, so there is
+    // no email-only path behind this endpoint — letting someone submit an
+    // address alone only produced "That does not look like a mobile number",
+    // which answers a question they did not ask. Asked for here instead, in
+    // the words of what they are actually agreeing to.
+    if (!smsConsent) { setError("Tick the text box to get your code — that is what the discount is for."); return; }
+    if (!phone.trim()) { setError("Enter your mobile number so we can text your code."); return; }
 
     setSaving(true);
     setError(null);
@@ -141,12 +148,11 @@ export function EntryOfferModal() {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        // THE NUMBER ONLY TRAVELS WITH THE TICK. An unticked box means no
-        // phone reaches the server at all, so no consent row can be written
-        // from a number someone merely typed.
+        // The tick is required above, so a number only ever reaches the
+        // server behind an explicit, unticked-by-default agreement.
         body: JSON.stringify({
           email: email.trim(),
-          phone: smsConsent ? phone.trim() : "",
+          phone: phone.trim(),
           placement: "storefront",
         }),
       });
@@ -240,7 +246,7 @@ export function EntryOfferModal() {
 
             <p className="mt-2.5 text-[0.82rem] leading-[1.35rem] text-white/55 sm:mt-3 sm:text-sm sm:leading-6">
               {offerLive
-                ? "Get your discount code by email, and opt in to texts for new product launches, restock alerts and exclusive offers from Vanta Labs."
+                ? `Opt in to texts and we'll send your ${WELCOME_OFFER_PERCENT}% code — plus new product launches, restock alerts and exclusive offers from Vanta Labs.`
                 : "Be first to hear about new product launches, restock alerts and exclusive offers from Vanta Labs — by email, and by text if you want them."}
             </p>
 
@@ -263,7 +269,7 @@ export function EntryOfferModal() {
                 value={phone}
                 onChange={(event) => setPhone(event.target.value)}
                 placeholder="+1 (555) 123-4567"
-                aria-label="Mobile number, optional, for texts"
+                aria-label="Mobile number"
                 data-testid="entry-offer-phone"
                 className="vl-sms-field vl-focus-ring w-full"
               />
@@ -293,9 +299,8 @@ export function EntryOfferModal() {
                 className="mt-0.5 h-4 w-4 flex-shrink-0 accent-[color:var(--accent-gold)]"
               />
               <span className="text-[0.73rem] leading-[1.05rem] text-white/45 sm:text-[0.8rem] sm:leading-5">
-                <span className="font-semibold text-white/90">Text me offers &amp; updates from Vanta Labs.</span>{" "}
-                {SMS_CONSENT_TEXT}{" "}
-                <span className="text-white/35">Optional.</span>
+                <span className="font-semibold text-white/90">Text me my {WELCOME_OFFER_PERCENT}% code and updates.</span>{" "}
+                {SMS_CONSENT_TEXT}
               </span>
             </label>
 
