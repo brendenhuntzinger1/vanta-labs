@@ -156,6 +156,60 @@ Only after the preview is approved.
       Queue it at the moment you intend to send, not hours ahead, and the
       window is as small as it can be.
 
+## While the campaign is live
+
+Three things behave in ways worth knowing BEFORE they surprise you. All three
+were established by reading the code and confirmed by an adversarial pass; none
+is a bug to fix today.
+
+### Do not change a wedge's REWARD IDENTITY while prizes are live
+
+Safe at any time: relabelling a wedge, reordering the wheel, appending a wedge,
+retuning `minSubtotalCents` or `maxDiscountCents`.
+
+**Not safe:** changing a wedge's `reward.kind`, its `productSlug`, or its
+`percent` — for a wedge somebody has already drawn. `prizeForOfferRow` matches a
+stored offer back to a wedge on exactly those three fields and nothing else. If
+it cannot find a match, `readExistingSpin` returns null, the re-insert hits the
+unique index, and that customer gets a 503 telling them to try again — for as
+long as the mismatch stands. Their prize row is fine; the page just cannot
+describe it any more.
+
+If a slug genuinely has to change mid-campaign, revoke the affected rows first
+(`revoked_at`), which is the documented way support hands somebody a fresh spin.
+
+### A PARTIAL send failure still reads "sent"
+
+`campaign-sender.ts:801` marks a campaign `failed` only when NOTHING was
+delivered and at least one recipient refused. A partial failure deliberately
+stays `sent`, and the reasoning is sound — the people who did receive it really
+did receive it, and "resend" would mail them twice.
+
+The consequence is that per-recipient failures are not visible on the campaign
+row. They are in `email_campaign_recipients`, so look there rather than at the
+status:
+
+```sql
+select status, count(*), min(error) as example_error
+  from public.email_campaign_recipients
+ where campaign_id = '88016d5a-cea5-491b-84d2-bdabe4e7a041'
+ group by status;
+```
+
+### The ~10% who are deferred can buy before they receive it
+
+The 24-hour frequency guard defers anyone who has had a marketing email in the
+last day. On the previous campaign that was 10 of 88; for this one it is about
+14 of 103, measured on the morning of the send.
+
+Deferred is not dropped — they go out over the following day or two. But the
+audience was frozen at queue time and the send path re-checks only
+non-mailability, suppression and the frequency guard, never purchase state. So
+a deferred recipient who places their first order inside that window still
+receives an invitation addressed to someone who has never ordered.
+
+Small, and worth knowing rather than discovering from a reply.
+
 ## Rollback
 
 Set `spin_wheel.enabled = false`. Immediate, no deploy. `/spin` and `/api/spin`
