@@ -19,6 +19,24 @@
  * carts, `${email}:${slug}:${hour}` for views. Omnisend deduplicates on the
  * pair (eventID, eventTime), so a retry of the same action collapses into one.
  *
+ * THOSE STRINGS ARE THE SEED, NOT THE ID. Omnisend requires `eventID` to be a
+ * UUID and answers `400 EventID: failed on the 'uuid' tag` to anything else —
+ * so for as long as this code has existed, EVERY event it built was refused:
+ * every view, every cart, every checkout, every order. Confirmed against the
+ * live API on 2026-09-17, nine order events posted, nine 400s, all the same
+ * field. Nothing reached Omnisend, which is why nothing ever looked broken:
+ * the account had no events to be wrong.
+ *
+ * What that costs is the entire event-driven half of the migration —
+ * abandoned cart, abandoned checkout, browse abandonment, post-purchase,
+ * replenishment, the win-back flow's exit condition, and revenue attribution
+ * all key on events that were never accepted.
+ *
+ * So the descriptive string is now hashed into a UUIDv5 (omnisendEventId
+ * below). That keeps the property the strings were chosen for — the same
+ * action always yields the same id, for ever — while being a shape Omnisend
+ * accepts. The ledger keys on the same value, so its dedup is unchanged.
+ *
  * **Identity is lowercased.** Omnisend's email identifiers are case-sensitive
  * (spec §5.1), so every builder normalises `contact.email` before it leaves.
  *
@@ -32,6 +50,36 @@
 import { createHash } from "node:crypto";
 import { money } from "@/lib/ads/tiktok-events";
 import { buildCarrierTrackingUrl, carrierDisplayName } from "@/lib/tracking-url";
+
+/**
+ * The namespace every Vanta Labs event id is derived under.
+ *
+ * A fixed, arbitrary UUID, as RFC 4122 §4.3 intends: it exists only so that
+ * the same seed cannot collide with a UUIDv5 some other system derives from
+ * the same words. It must never change — changing it re-ids every event and
+ * breaks both Omnisend's dedup and the ledger's.
+ */
+const OMNISEND_EVENT_NAMESPACE = "6f0a1f8e-3d2b-4c7a-9e51-0b3a7c8d1e46";
+
+/**
+ * A stable UUIDv5 for an event, derived from the string that describes it.
+ *
+ * RFC 4122 §4.3: SHA-1 over (namespace bytes ‖ name), first 16 bytes, with the
+ * version nibble set to 5 and the variant bits to 10x. Deterministic by
+ * construction — `paid for order` on order X is the same uuid today and next
+ * year — which is the whole reason the seeds were descriptive in the first
+ * place. SHA-1 is the algorithm the spec names; it is doing no security work
+ * here, only spreading a name over 128 bits.
+ */
+export function omnisendEventId(seed: string): string {
+  const namespace = Buffer.from(OMNISEND_EVENT_NAMESPACE.replace(/-/g, ""), "hex");
+  const digest = createHash("sha1").update(Buffer.concat([namespace, Buffer.from(String(seed), "utf8")])).digest();
+  const bytes = Uint8Array.prototype.slice.call(digest, 0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Buffer.from(bytes).toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
 
 export type OmnisendLineItem = {
   /** The catalogue slug — the same id every other platform receives. */
@@ -207,7 +255,7 @@ export function buildViewedProduct(input: {
     origin: "api",
     eventVersion: EVENT_VERSIONS["viewed product"],
     // One view per contact, product and hour, whichever page load reports it.
-    eventID: `${email}:${input.product.slug}:${new Date(hour).toISOString()}`,
+    eventID: omnisendEventId(`${email}:${input.product.slug}:${new Date(hour).toISOString()}`),
     eventTime: new Date(at).toISOString(),
     contact: { email },
     properties: {
@@ -256,7 +304,7 @@ export function buildCartEvent(input: {
     eventName: input.name,
     origin: "api",
     eventVersion: EVENT_VERSIONS[input.name],
-    eventID: `${input.cartId}:${input.name}:${contents}`,
+    eventID: omnisendEventId(`${input.cartId}:${input.name}:${contents}`),
     eventTime: new Date(at).toISOString(),
     contact: { email },
     properties: {
@@ -329,7 +377,7 @@ export function buildOrderEvent(input: {
     eventName: name,
     origin: "api",
     eventVersion: EVENT_VERSIONS[name],
-    eventID: `${order.orderId}:${name}`,
+    eventID: omnisendEventId(`${order.orderId}:${name}`),
     eventTime,
     contact: compact({ email, firstName, lastName }) as OmnisendEvent["contact"],
     properties: {

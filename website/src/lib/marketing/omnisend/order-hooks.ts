@@ -6,6 +6,7 @@ import { findLiveContactCode, retireContactCode, type ContactCode, type ContactC
 import { upsertOmnisendContact, type ContactExtras } from "@/lib/marketing/omnisend/contacts";
 import {
   buildOrderEvent,
+  omnisendEventId,
   sendOmnisendEvent,
   transientOmnisendRefusal,
   type OmnisendOrder,
@@ -119,7 +120,16 @@ async function knownToOmnisend(orderId: string): Promise<boolean> {
  */
 async function deliverOrderEvent(orderId: string, name: OmnisendOrderEventName, order?: OmnisendOrder | null): Promise<boolean> {
   const ledger = omnisendLedger(orderId);
-  const eventId = `${orderId}:${name}`;
+  // THE CLAIM AND THE RECORD MUST BE THE SAME KEY.
+  //
+  // The claim is taken before the event is built, so it cannot read
+  // `event.eventID` — it rebuilds the id from the same seed instead. That is
+  // fine only while both sides use the same derivation, and this line used to
+  // interpolate the seed directly while recordSend below used `event.eventID`.
+  // They coincided by accident until the id became a uuid; going through
+  // omnisendEventId makes them the same value by construction rather than by
+  // two copies of a template literal agreeing.
+  const eventId = omnisendEventId(`${orderId}:${name}`);
   if (!(await ledger.claimSend(name, eventId))) return false;
 
   try {

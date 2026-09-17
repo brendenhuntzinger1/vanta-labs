@@ -12,6 +12,7 @@ import {
   transientOmnisendRefusal,
   type OmnisendLineItem,
   type OmnisendOrder,
+  omnisendEventId,
 } from "@/lib/marketing/omnisend/events";
 
 // ---------------------------------------------------------------------------
@@ -142,11 +143,11 @@ describe("viewed product", () => {
   });
 
   it("derives the eventID from email, slug and the hour bucket", () => {
-    expect(event.eventID).toBe(`jo@example.com:bpc-157:${HOUR}`);
+    expect(event.eventID).toBe(omnisendEventId(`jo@example.com:bpc-157:${HOUR}`));
     const later = buildViewedProduct({ ...viewInput(), at: AT + 20 * 60 * 1000 });
     expect(later.eventID).toBe(event.eventID);
     const nextHour = buildViewedProduct({ ...viewInput(), at: AT + 60 * 60 * 1000 });
-    expect(nextHour.eventID).toBe("jo@example.com:bpc-157:2026-09-14T13:00:00.000Z");
+    expect(nextHour.eventID).toBe(omnisendEventId("jo@example.com:bpc-157:2026-09-14T13:00:00.000Z"));
   });
 
   it("reports outOfStock, no categories and no imageUrl when it has none", () => {
@@ -239,8 +240,8 @@ describe("cart and checkout", () => {
         ["bacteriostatic-water", "", 1],
       ]),
     ).slice(0, 12);
-    expect(added.eventID).toBe(`cart-abc:added product to cart:${contents}`);
-    expect(checkout.eventID).toBe(`cart-abc:started checkout:${contents}`);
+    expect(added.eventID).toBe(omnisendEventId(`cart-abc:added product to cart:${contents}`));
+    expect(checkout.eventID).toBe(omnisendEventId(`cart-abc:started checkout:${contents}`));
   });
 
   it("is deterministic: same contents, same id; a quantity change, a new id", () => {
@@ -289,11 +290,11 @@ describe("order events", () => {
   });
 
   it("derives the eventID from the order id and the event name", () => {
-    expect(placed.eventID).toBe("order-123:placed order");
-    expect(paid.eventID).toBe("order-123:paid for order");
-    expect(fulfilled.eventID).toBe("order-123:order fulfilled");
-    expect(canceled.eventID).toBe("order-123:order canceled");
-    expect(refunded.eventID).toBe("order-123:order refunded");
+    expect(placed.eventID).toBe(omnisendEventId("order-123:placed order"));
+    expect(paid.eventID).toBe(omnisendEventId("order-123:paid for order"));
+    expect(fulfilled.eventID).toBe(omnisendEventId("order-123:order fulfilled"));
+    expect(canceled.eventID).toBe(omnisendEventId("order-123:order canceled"));
+    expect(refunded.eventID).toBe(omnisendEventId("order-123:order refunded"));
     expect(buildOrderEvent({ name: "placed order", order: order(), at: AT + 1 })!.eventID).toBe(placed.eventID);
   });
 

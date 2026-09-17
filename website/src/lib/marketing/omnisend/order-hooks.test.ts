@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OmnisendOrder } from "@/lib/marketing/omnisend/events";
+import { omnisendEventId, type OmnisendOrder } from "@/lib/marketing/omnisend/events";
 
 /**
  * WHAT A REFUSED ORDER EVENT DOES TO ITS LEDGER CLAIM.
@@ -85,8 +85,8 @@ describe("a delivered order event", () => {
   it("records the claim delivered and keeps it", async () => {
     sendOmnisendEvent.mockResolvedValueOnce({ ok: true, status: 200, error: null });
     await send();
-    expect(claimSend).toHaveBeenCalledWith("order fulfilled", "order-9:order fulfilled");
-    expect(recordSend).toHaveBeenCalledWith("order fulfilled", "order-9:order fulfilled", true, null);
+    expect(claimSend).toHaveBeenCalledWith("order fulfilled", omnisendEventId("order-9:order fulfilled"));
+    expect(recordSend).toHaveBeenCalledWith("order fulfilled", omnisendEventId("order-9:order fulfilled"), true, null);
     expect(releaseSend).not.toHaveBeenCalled();
     expect(errorSpy).not.toHaveBeenCalled();
   });
@@ -116,7 +116,7 @@ describe("a permanently refused order event keeps its claim, recorded undelivere
   it.each([400, 401, 403, 404, 422])("status %i: records delivered=false with the error and does not release", async (status) => {
     sendOmnisendEvent.mockResolvedValueOnce({ ok: false, status, error: `omnisend ${status}` });
     await send();
-    expect(recordSend).toHaveBeenCalledWith("order fulfilled", "order-9:order fulfilled", false, `omnisend ${status}`);
+    expect(recordSend).toHaveBeenCalledWith("order fulfilled", omnisendEventId("order-9:order fulfilled"), false, `omnisend ${status}`);
     expect(releaseSend).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalledWith("[omnisend/orders]", "order fulfilled", "refused", "order-9", expect.objectContaining({ status }));
   });
