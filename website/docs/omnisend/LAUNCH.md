@@ -165,11 +165,56 @@ code sees the plain variant rather than a blank card.
 
 ## 4. Contact reconciliation
 
-Not run. The first run is the owner's call, in this order: `snapshot` →
-`contacts` with `dryRun: true` → read the report → `contacts`. Store totals on
-2026-09-16 that the dry run should reproduce: 106 consented addresses,
-0 SMS consents, 3 suppressions, 12 buyers, 183 accounts. The report's
-`unresolved` list must be empty before flows are enabled.
+The app's own reconcile has still not run — it cannot, because the branch is
+not deployed and `omnisendRequest` refuses outside production by design
+(`lib/ads/ads-environment.ts`, no override). When it does run, the first run is
+the owner's call, in this order: `snapshot` → `contacts` with `dryRun: true` →
+read the report → `contacts`. Store totals on 2026-09-16 that the dry run
+should reproduce: 106 consented addresses, 0 SMS consents, 3 suppressions,
+12 buyers, 183 accounts. The report's `unresolved` list must be empty before
+flows are enabled.
+
+### The seed of 2026-09-17
+
+121 contacts were pushed directly through the Omnisend API, in three batches,
+so the account has its audience and its segments populate before cutover:
+
+| | |
+|---|---|
+| subscribed | 118 |
+| unsubscribed | 1 |
+| nonSubscribed (buyers, no consent on record) | 2 |
+
+Built from the store with the SAME precedence `collectContactFacts` applies —
+suppression first, then either consent store, then a guest opt-out, then
+unknown — so no address went in more permissive than the store holds. Two
+things were filtered out that the naive union contains:
+
+* `bounced@resend.dev` and `complained@resend.dev`, per `isNonMailableAddress`.
+  They are provider sinks: mail to them manufactures a bounce and a spam
+  complaint against this domain, on purpose, every time.
+* 18 addresses that are neither consented nor buyers. The reconcile would
+  never maintain them, so seeding them would have left 18 rows nobody owns.
+
+Two order names were dropped rather than guessed: one is an address fragment
+("apartment abry") and one a privacy marker ("Private"). Both would have
+rendered as `Hi apartment` in a personalised send. `splitName` does not catch
+either, so the nightly push will reintroduce them — worth a look before any
+campaign uses `firstName`.
+
+What the seed does NOT carry, because only the deployed app can mint it:
+`vl_link` and the welcome/win-back/recovery codes. Every automation and SMS
+body interpolates `[[contact.custom_properties.vl_link]]`, so those links are
+BLANK until the branch ships and the nightly reconcile fills them in. That is
+safe only because the automations are disabled; it is the reason the ordering
+below is not negotiable.
+
+**Contacts must be imported BEFORE automations are enabled, never after.**
+Omnisend automations fire on events that occur while they are enabled and do
+not backfill. `VL · Welcome` triggers on `subscribed to marketing`, and
+`VL · Welcome offer` on entering a segment — so enabling those first and then
+importing would enrol all 118 subscribed contacts into the welcome series at
+once, with a blank link in every message.
 
 ## 5. How existing carts and sequences are handed off
 
@@ -202,16 +247,57 @@ behind segment splits; recommender blocks are plain links; partial refunds
 send no event; Omnisend has no cross-flow frequency cap beyond each flow's
 limiter; email opens are unreliable and SMS opens do not exist.
 
+## 6a. What comes BACK from Omnisend, and the one thing that does not
+
+Worth stating plainly because it has been described wrongly: an inbound
+webhook is not needed and was not built. The write-back already exists and is
+stronger than a webhook would be.
+
+`reconcileOmnisendContacts({ push: false })` runs on EVERY sweep tick — every
+thirty minutes, registered as `omnisendContactsReconcile` in
+`/api/cron/sweep` — pages `GET /contacts?updatedAtFrom=<watermark>`, and
+`planWriteBack` turns an Omnisend `unsubscribed` into an `email_suppressions`
+row, an SMS opt-out into the account's opt-out stamp, and a form sign-up into
+a guest subscriber. Only the full contacts PUSH is throttled to daily.
+
+That it pulls rather than receives is the strength, not a gap. It is
+authenticated by our own API key against Omnisend's servers, so there is
+nothing forgeable about it. The Omnisend Public API exposes no webhook
+registration at all (the operation catalogue has none), and an unsigned
+inbound endpoint that can write `email_suppressions` is precisely the
+vulnerability `webhooks/email/route.ts` spent a page of comment closing for
+Resend. Latency is at most one sweep tick.
+
+**THE REAL GAP IS BOUNCES AND SPAM COMPLAINTS.** The contacts API carries only
+three channel statuses — `subscribed`, `unsubscribed`, `nonSubscribed` — and no
+bounce field. So a hard bounce or a spam complaint that Omnisend observes after
+cutover reaches `email_suppressions` only if Omnisend also flips the contact to
+`unsubscribed`, which is not documented and not verified. Today Resend's
+webhook fills that role; after cutover Resend stops seeing marketing mail, and
+the store's own suppression list stops learning about dead and hostile
+addresses — the list that also protects the domain carrying every receipt.
+
+It is closable with a pull, on the same shape as the write-back.
+`POST /api/events/query` returns per-contact events including
+`marked message as spam` and `message delivery failed` (100 contacts per call,
+20 calls a minute — four calls covers this audience). Mapping:
+`marked message as spam` → `complained`, unliftable, unambiguous. A delivery
+failure is NOT a hard bounce: the event name does not say whether it is
+permanent, so it belongs on the existing consecutive-run escalation
+(`CONSECUTIVE_SOFT_BOUNCE_LIMIT`, reason `soft_bounce_run`, customer-
+reversible) unless a property in the payload says permanent. Not built; it
+should be, before `OMNISEND_MARKETING_OWNER` is set.
+
 ## 7. What is live, staged, disabled, awaiting
 
 | Item | State |
 |---|---|
 | Store code on branch | staged, not merged |
-| `OMNISEND_API_KEY` in Vercel | not set (owner) |
+| `OMNISEND_API_KEY` in Vercel | set 2026-09-16, production scope. Inert: the deployed code has no Omnisend integration |
 | `OMNISEND_MARKETING_OWNER` | unset |
 | `omnisend-sync.sql` migration | not applied (owner) |
 | `sms-subscribers.sql` migration | not applied (owner) |
-| Contacts in Omnisend | 0 pushed |
+| Contacts in Omnisend | 121 seeded 2026-09-17 (§4). No `vl_link`, no codes, until the branch ships |
 | Automations | 9, all disabled |
 | Form | draft |
 | Campaigns | 3 drafts |
