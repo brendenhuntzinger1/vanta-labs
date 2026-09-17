@@ -28,7 +28,7 @@ in the "Legal decisions" section.
 - **Research-use-only** disclaimers throughout; "not for human/animal use" messaging.
 - **Pricing transparency**: shipping, handling, tax, discounts, and the card processing fee are all shown at checkout **before** payment; the card fee has an explicit notice.
 - **Membership terms**: non-refundable annual disclosed at signup and cancellation; recurring billing terms shown before purchase.
-- **Business contact info** (`brendenhuntzinger1@vantalabsresearch.com`) on the site, in emails, and on policy pages; editable in Admin → Settings.
+- **Business contact info** (`support@vantalabsresearch.com`) on the site, in emails, and on policy pages; editable in Admin → Settings. This is the live value and the code default (`DEFAULT_BUSINESS_SETTINGS.supportEmail`); it is deliberately NOT the owner's personal mailbox, which `internal-addresses.ts` classifies as internal and excludes from funnel reporting.
 - **SEO/trust**: metadata, Open Graph, robots.txt, sitemap, favicon.
 
 ---
