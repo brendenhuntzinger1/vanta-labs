@@ -285,6 +285,21 @@ export interface QuoteResult {
    */
   offerShortfallCents: number | null;
   /**
+   * How many units of the reward were taken OUT of the paid lines rather than
+   * added on top — "the Recon Water in your cart is on us" instead of "here is
+   * another one".
+   *
+   * EXPOSED BECAUSE THE TILL HAS TO KNOW. If the reward's own unit cannot be
+   * reserved at order creation, a purely ADDITIVE reward can simply be dropped:
+   * the paid lines and the payable total are exactly what the customer agreed
+   * to, and they still get everything they chose. An ABSORBED one cannot, and
+   * this is why: absorption shrank a line the customer was buying, so dropping
+   * the reward would silently ship them less than they ordered while they paid
+   * the reduced price. Zero here is the safe case; anything else has to go back
+   * to the customer for a fresh total.
+   */
+  offerAbsorbedUnits: number;
+  /**
    * A typed code that was NOT applied because a wheel prize already is.
    *
    * Carries what the code WOULD have taken off, so the checkout can show the
@@ -2088,6 +2103,10 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     appliedOffer,
     offerWithdrawnBy,
     offerShortfallCents,
+    // Read here rather than at the moment of absorption: the withdrawal branch
+    // above RESTORES borrowed units and empties absorbedFromCart, so a reward
+    // that was withdrawn correctly reports zero absorbed.
+    offerAbsorbedUnits: absorbedFromCart.reduce((sum, taken) => sum + taken.quantity, 0),
     benefitChoice,
     discountLabel: customerDiscount.label,
     appliedPromotionId: promotionIdForOrder,

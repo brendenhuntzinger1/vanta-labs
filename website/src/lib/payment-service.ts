@@ -44,6 +44,21 @@ export interface PendingOrder {
  cardProcessingFeePercent: number;
  paymentId: string;
  hostedCheckoutUrl: string;
+ /**
+  * The free reward that could not be shipped on this order, or null.
+  *
+  * Present only when the reward's last unit went between the quote and order
+  * creation. The order is real and the paid items are exactly what the customer
+  * agreed to; the reward's entitlement has been released rather than spent, so
+  * it stays claimable until it expires. Surfaced so the customer learns this
+  * from the store rather than from the parcel.
+  *
+  * OPTIONAL rather than required, because the duplicate-submit paths return an
+  * order created by an EARLIER attempt: whether that attempt withheld a reward
+  * was decided then, and this one has no standing to answer. Absent means "not
+  * decided here", which is not the same as "nothing was withheld".
+  */
+ rewardWithheld?: { name: string } | null;
 }
 
 export interface CreateCheckoutPayload {
@@ -589,9 +604,45 @@ export async function createCheckoutSession(
  // never charged for stock we can't fulfil. The hold is finalized (permanently
  // deducted) only on a verified paid webhook, released on failure/cancel, and
  // auto-expired by the sweep. Fails open (never blocks) if the layer is down.
+ // AN UNFULFILLABLE FREE REWARD MUST NOT KILL A PAID ORDER.
+ //
+ // Every line was held in one all-or-nothing call, gift included, so a reward
+ // whose last unit went while the shopper was typing their address cancelled
+ // the whole order — over a $0 line they never chose and cannot remove. They
+ // were told to "adjust your cart"; there was nothing in the cart to adjust.
+ //
+ // The reward is therefore held SEPARATELY, and only when doing so is provably
+ // equivalent: `offerAbsorbedUnits === 0` means the reward added units rather
+ // than taking them out of a paid line, which in turn means no paid line shares
+ // its product (absorption consumes any matching line first). Disjoint products
+ // are the precondition for splitting the call at all — planInventoryAdjustments
+ // MERGES lines with the same slug and variant, so splitting a shared product
+ // would let the second call hit reserve_inventory's idempotency check and hold
+ // nothing. That would under-reserve and oversell, which is worse than the bug
+ // being fixed.
+ //
+ // An ABSORBED reward keeps the old all-or-nothing behaviour, deliberately:
+ // absorption shrank a line the customer is paying for, so dropping the reward
+ // would ship them less than they ordered at the price they already agreed. That
+ // needs a fresh total and their consent, not a silent adjustment.
+ const rewardLineRefs = new Set(
+   lineItems
+     .filter((line) => line.gift)
+     .map((line) => String(line.product.id)),
+ );
+ const splitRewardHold = rewardLineRefs.size > 0 && quote.offerAbsorbedUnits === 0;
+ const paidItems = orderItemsPayload
+   .filter((i) => !splitRewardHold || !rewardLineRefs.has(String(i.product_id)))
+   .map((i) => ({ productId: i.product_id, quantity: i.quantity }));
+ const rewardItems = splitRewardHold
+   ? orderItemsPayload
+     .filter((i) => rewardLineRefs.has(String(i.product_id)))
+     .map((i) => ({ productId: i.product_id, quantity: i.quantity }))
+   : [];
+
  const reservation = await reserveInventoryForOrder(
    orderId,
-   orderItemsPayload.map((i) => ({ productId: i.product_id, quantity: i.quantity })),
+   paidItems,
    { expiresInMinutes: isManual ? MANUAL_RESERVATION_MINUTES : DEFAULT_RESERVATION_MINUTES },
  );
  if (!reservation.ok) {
@@ -614,6 +665,58 @@ export async function createCheckoutSession(
    // shopper still saw the fallback. The class is the documented way to say
    // "this text was written for the person reading it".
    throw new CustomerFacingError(describeUnavailable(reservation.unavailable));
+ }
+
+ // THE REWARD'S OWN UNIT, held after the paid ones and allowed to fail.
+ //
+ // Nothing here can cancel the order. If the unit is not there the customer
+ // keeps everything they chose, at the price they agreed, and the reward TOKEN
+ // IS HANDED BACK rather than spent — releaseCustomerOffer clears the hold, so
+ // the entitlement stays live for its remaining 72 hours and they can claim it
+ // once the vial is restocked.
+ //
+ // The $0 line is removed from the order so the packing list, the receipt and
+ // the admin view all describe the same shipment. `rewardWithheld` carries the
+ // fact out to the caller, which is what puts it in front of the customer.
+ let rewardWithheld: { name: string } | null = null;
+ if (rewardItems.length > 0) {
+   const rewardHold = await reserveInventoryForOrder(
+     orderId,
+     rewardItems,
+     { expiresInMinutes: isManual ? MANUAL_RESERVATION_MINUTES : DEFAULT_RESERVATION_MINUTES },
+   );
+   if (!rewardHold.ok) {
+     const withheldName = rewardHold.unavailable[0]?.name
+       ?? lineItems.find((line) => line.gift)?.product.name
+       ?? "your free reward";
+     rewardWithheld = { name: String(withheldName) };
+
+     // Give the entitlement back BEFORE removing the line, so a failure between
+     // the two leaves the customer holding their reward rather than neither.
+     if (quote.appliedOffer) {
+       await releaseCustomerOffer(orderId).catch((releaseError: unknown) => {
+         console.error("[reward] could not release the offer after a withheld reward", orderId, releaseError);
+       });
+     }
+
+     const rewardProductIds = rewardItems.map((i) => i.productId);
+     const { error: removeError } = await supabaseAdmin
+       .from("order_items")
+       .delete()
+       .eq("order_id", orderId)
+       .in("product_id", rewardProductIds);
+     if (removeError) {
+       // The line is $0, so leaving it cannot overcharge anyone — it would only
+       // promise a vial the shipment does not contain. Loud, not fatal.
+       console.error("[reward] could not remove the withheld reward line", orderId, removeError);
+     }
+
+     console.warn(
+       "[reward] withheld for lack of stock; entitlement released, order continues",
+       orderId,
+       rewardWithheld.name,
+     );
+   }
  }
 
  // Hold the non-cash tender the same way, and for the same reason. The quote
@@ -786,6 +889,11 @@ export async function createCheckoutSession(
  cardProcessingFeePercent: cardFee.amount > 0 ? cardFee.percentage : 0,
  paymentId,
  hostedCheckoutUrl,
+ // Set only when the free reward's last unit went between the quote and this
+ // order. The order stands, the paid items are unchanged, and the entitlement
+ // has been handed back — the caller's job is to say so before the customer
+ // wonders where their vial went.
+ rewardWithheld: rewardWithheld ? { name: rewardWithheld.name } : null,
  };
 }
 
