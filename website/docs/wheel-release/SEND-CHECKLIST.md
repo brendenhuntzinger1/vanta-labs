@@ -17,14 +17,23 @@ disagree, the test wins, because the test is what renders the preview.
 - [ ] **Confirm `orders@vantalabsresearch.com` is a monitored mailbox**, because
       marketing replies land there — no `marketing_reply_to` is configured.
 
-## 1. Deploy
+## 1. Schema — BEFORE the deploy, not after
 
-- [ ] Deploy the minimum wheel release (`minimum-wheel-release.patch`, 36 files).
-      The SMS/Omnisend work stays unmerged.
+**This order is not interchangeable and my first draft had it backwards.**
+`customer-offers.ts:882` names `max_discount_cents` in its select list, and
+PostgREST answers 42703 for a column that is not there. Deploying first would
+break EVERY offer lookup — including the `cart_recovery` and `winback` gifts
+live in production right now. The migration is additive and nullable, so the
+code already running cannot see it.
+
+## 2. Deploy
+
+- [ ] Merge the wheel-only release. **Vercel deploys on every push to `main`**
+      (see `.github/workflows/checks.yml`), so merging *is* deploying.
 - [ ] Confirm `/spin` returns **404** in production. It should: the wheel is
       still off. If it renders, something enabled it early.
 
-## 2. Schema
+## 2b. Schema (reference)
 
 ```sql
 -- src/lib/sql/spin-percent-cap.sql — additive, nullable, safe to re-run.
