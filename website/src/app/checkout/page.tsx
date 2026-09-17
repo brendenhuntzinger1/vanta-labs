@@ -117,6 +117,22 @@ type CreatedManualOrder = {
   amountDue: number;
 };
 
+/**
+ * A free reward that could not be shipped, and the card form that is still
+ * waiting.
+ *
+ * The order EXISTS by the time this is set — paid lines held, totals fixed,
+ * nothing charged. So this is a pause in front of the card form rather than a
+ * failed attempt, and the page must say what changed before the shopper pays
+ * rather than after the parcel arrives.
+ */
+type WithheldReward = {
+  /** The prize as the customer knows it, e.g. "KLOW". */
+  name: string;
+  /** The processor session already created for this order. */
+  payUrl: string;
+};
+
 function validateCheckoutForm(form: CheckoutForm, sameAsShipping: boolean) {
   const errors: Partial<Record<keyof CheckoutForm, string>> = {};
 
@@ -285,6 +301,7 @@ export default function CheckoutPage() {
   // config loads so we never flash a false "closed" state.
   const [checkoutOpen, setCheckoutOpen] = useState(true);
   const [createdOrder, setCreatedOrder] = useState<CreatedManualOrder | null>(null);
+  const [withheldReward, setWithheldReward] = useState<WithheldReward | null>(null);
   const [referralInput, setReferralInput] = useState("");
   const [couponInput, setCouponInput] = useState("");
   const [sameAsShipping, setSameAsShipping] = useState(true);
@@ -841,6 +858,31 @@ export default function CheckoutPage() {
         return;
       }
 
+      // THE REWARD WENT WHILE THEY WERE TYPING. Say so BEFORE the card form.
+      //
+      // The order is real and the paid lines are held; the free line was
+      // dropped because its last unit had gone, and because that line was
+      // priced at $0 the total in front of the shopper did not move by a cent.
+      // Redirecting now would charge exactly the agreed amount and ship one
+      // fewer thing, with the first notice of it being the parcel.
+      //
+      // The latch stays engaged and the idempotency key is spent, exactly as on
+      // the redirect below: the order and its inventory hold already exist, so
+      // this is a pause in front of the card form, not a retryable failure. A
+      // re-enabled button here would mint a SECOND order for one purchase.
+      //
+      // (The manual-payment branch above returns before this point. No manual
+      // method is enabled today — card only — so the live path is this one.)
+      if (result.rewardWithheld && typeof result.rewardWithheld.name === "string") {
+        idempotencyKeyRef.current = null;
+        setWithheldReward({
+          name: String(result.rewardWithheld.name),
+          payUrl: String(result.hostedCheckoutUrl),
+        });
+        if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+        return;
+      }
+
       // The submit latch is deliberately LEFT ENGAGED here: the page unloads on
       // redirect, so re-enabling the button would only open a duplicate-order
       // window while the redirect is still in flight.
@@ -855,6 +897,62 @@ export default function CheckoutPage() {
       submitLatchRef.current = false;
     }
   };
+
+  if (withheldReward) {
+    return (
+      <div className="min-h-screen bg-[#0a0a0a] text-white">
+        <SiteHeaderV2 />
+        <main className="vl-nav-clearance mx-auto max-w-3xl px-5 pb-24 pt-20 sm:px-6 sm:pt-24 lg:px-12">
+          <div className="rounded-2xl border border-amber-400/20 bg-amber-400/[0.04] p-5 sm:p-7">
+            <CheckoutProgress onPayment />
+            <p className="mt-6 text-[10px] uppercase tracking-[0.34em] text-amber-200/60">One change to your order</p>
+            <h1 className="vl2-serif mt-2.5 text-[1.85rem] leading-tight text-white sm:text-4xl">
+              Your free {withheldReward.name} just sold out
+            </h1>
+            {/* Four facts, in the order the shopper will want them: what went,
+                what it costs them, what happens to the prize, and what to do
+                next. Nothing here is conditional — every one of them is true of
+                every withheld reward. */}
+            <ul className="mt-5 space-y-2.5 text-sm leading-relaxed text-white/60">
+              <li>
+                The last one went while you were checking out, so it has been removed from this order.
+              </li>
+              <li>
+                <span className="text-white/80">Your total has not changed.</span> The reward was free, so
+                everything you are paying for is exactly what you saw a moment ago.
+              </li>
+              <li>
+                <span className="text-white/80">You keep the reward.</span> It has not been used up — it is
+                still saved to you and still claimable until it expires.
+              </li>
+              <li>
+                Continue below to pay for the rest of your order, or go back to your cart if you would rather
+                wait for the restock.
+              </li>
+            </ul>
+            <div className="mt-7 flex flex-col gap-3 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => window.location.assign(withheldReward.payUrl)}
+                className="inline-flex flex-1 items-center justify-center rounded-xl bg-white px-6 py-3.5 text-sm font-medium text-black transition hover:bg-white/90"
+              >
+                Continue to secure payment
+              </button>
+              <Link
+                href="/cart"
+                className="inline-flex flex-1 items-center justify-center rounded-xl border border-white/[0.12] px-6 py-3.5 text-sm text-white/70 transition hover:text-white"
+              >
+                Back to cart
+              </Link>
+            </div>
+            <p className="mt-4 text-xs leading-relaxed text-white/35">
+              Nothing has been charged yet. Your card is only charged on the next screen.
+            </p>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   if (createdOrder) {
     return (

@@ -191,6 +191,21 @@ export async function POST(request: Request) {
       total: result.total,
       cardProcessingFee: result.cardProcessingFee,
       cardProcessingFeePercent: result.cardProcessingFeePercent,
+      // THE ONE THING ABOUT THIS ORDER THE SHOPPER CANNOT SEE FROM THE TOTAL.
+      //
+      // A free reward whose last unit went between the quote and the order is
+      // dropped from the order rather than cancelling it (payment-service.ts).
+      // Because the line was priced at $0, dropping it moves no number the
+      // shopper is looking at: the total, the tax and the shipping are all
+      // identical to the ones they just agreed to. Left out of this response
+      // they would pay, wait, and find out from the parcel.
+      //
+      // `undefined` is not `null` here. The duplicate-submit paths resume an
+      // order an EARLIER attempt created and cannot say what that attempt
+      // decided, so they leave it absent; only a run that actually reached the
+      // reward hold answers. `?? null` would flatten "not decided here" into
+      // "nothing was withheld", which is the reassuring one of the two.
+      ...(result.rewardWithheld === undefined ? {} : { rewardWithheld: result.rewardWithheld }),
     });
   } catch (error) {
     const raw = error instanceof Error ? error.message : "Unable to create checkout session";
