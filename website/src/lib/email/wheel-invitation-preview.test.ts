@@ -28,15 +28,24 @@ const NON_PRODUCT_KINDS = new Set(["percent", "free_shipping", "free_shipping_pe
 
 export const WHEEL_CAMPAIGN_COPY = {
   name: "Spin the Wheel — first reward",
-  subject: "Spin the wheel for your reward",
-  previewText: "Spin to reveal your reward. Qualifying purchase required.",
-  headline: "A spin. A reward. Yours to reveal.",
+  // OWNER-APPROVED COPY, 2026-09-17, and the reason it is copied here rather
+  // than only into the campaign row: this constant is the documented source of
+  // truth (qa-wheel-campaign.mjs checks against it), so leaving it stale would
+  // mean the next regeneration silently reverts the owner's wording.
+  //
+  // The previous preview text carried the condition itself — "Qualifying
+  // purchase required". This one does not, by the owner's choice, so the whole
+  // disclosure now rests on the body. The assertion below is what keeps it
+  // there.
+  subject: "A mystery reward is waiting. Spin to reveal yours.",
+  previewText: "Free products and exclusive discounts are on the wheel. What will you land on?",
+  headline: "SPIN THE WHEEL. REVEAL YOUR REWARD.",
   body: [
     "Your first Vanta order could come with something extra. Spin the wheel to reveal your reward, then shop and redeem it with a qualifying order.",
     `Every spin wins. Sixteen wedges, ${distinctPrizeCount()} rewards — free vials, free shipping and a discount or two. One spin per customer, and the result is saved to your account.`,
     `Your reward expires ${SPIN_TTL_DAYS * 24} hours after you spin. Every reward is redeemed against a qualifying order — the exact minimum for the reward you land on is shown before you spin, and again in your cart.`,
   ].join("\n\n"),
-  ctaLabel: "Spin now",
+  ctaLabel: "SPIN NOW",
   ctaPath: "/spin",
   heroImageUrl: "https://www.vantalabsresearch.com/images/spin-wheel-hero.png",
   heroImageAlt:
@@ -97,6 +106,18 @@ describe("wheel invitation email", () => {
     const discountWedges = SPIN_PRIZES.filter((prize) => prize.reward.kind === "percent");
     expect(discountWedges.length).toBeGreaterThan(0);
     expect(WHEEL_CAMPAIGN_COPY.subject.toLowerCase()).not.toMatch(/\bfree\b/);
+  });
+
+  it("keeps the purchase condition in the body, because the preview line no longer carries it", () => {
+    // The owner's preview text sells the pool — "Free products and exclusive
+    // discounts" — and says nothing about a qualifying purchase. That is a fine
+    // teaser and a bad disclosure, so the body is now the ONLY place the
+    // condition appears before the customer clicks. If someone shortens the
+    // body later, this is what should stop them.
+    expect(WHEEL_CAMPAIGN_COPY.previewText.toLowerCase()).not.toMatch(/qualifying/);
+    expect(WHEEL_CAMPAIGN_COPY.body).toMatch(/qualifying order/i);
+    expect(rendered.html).toMatch(/qualifying order/i);
+    expect(rendered.text).toMatch(/qualifying order/i);
   });
 
   it("states the purchase condition and the deadline in the body", () => {
