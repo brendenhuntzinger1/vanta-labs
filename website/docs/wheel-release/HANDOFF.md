@@ -200,6 +200,26 @@ won stay redeemable, which is correct.
 - **Three prize products have no image**: `recon-water`, `glp-3`, `glp-2`. This
   does not affect the wheel email (which uses the wheel image) but does affect
   any template using product photography.
+- **I could not photograph the SMS placements.** They render only for a
+  signed-in customer whose `/api/offers/welcome` status is `eligible`; an
+  anonymous visitor with a browse grant sees none of them. That is correct
+  behaviour and worth knowing — no prompt is ever shown to someone the offer is
+  not open to — but it means the visual walkthrough of those placements still
+  needs a real customer session. The consent wording itself is verified below.
+
+### The SMS consent wording, verbatim
+
+`src/lib/sms-consent-text.ts`, shown beside every opt-in box:
+
+> Yes, I would like to receive recurring automated marketing text messages from
+> Vanta Labs at the number above. Consent is not a condition of purchase.
+> Message frequency varies. Message and data rates may apply. Reply STOP to
+> cancel at any time or HELP for help.
+
+That carries all five elements a carrier review looks for: identified sender,
+recurring/automated disclosed, consent-not-a-condition, frequency and rates,
+and both keywords. The version string (`2026-09-16`) is stored on each consent
+row, so a dispute can be answered with the text that person actually saw.
 
 ---
 
