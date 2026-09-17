@@ -133,3 +133,28 @@ They are the same component as the cart card with a different wrapper and
 their mounting is pinned by test, but they want a look on a preview deployment
 before the offer is enabled. Also not possible here: a real Omnisend push
 (gated outside production) and a text (no A2P approval yet).
+
+### Preview deployment, 2026-09-17 (read-only)
+
+The Vercel preview for `a6cdc3b` was opened read-only through a share link: no
+sign-in, no account creation, no claim, no write of any kind. Nineteen client
+chunks referenced by `/account/login` were downloaded and read, which is where
+the offer copy lives now that the sign-up form carries it.
+
+| Check | Result |
+| --- | --- |
+| 40 | "Subscribe to texts for 15% off your first order." present whole in the deployed bundle |
+| 41 | "Valid for 14 days. Cannot be combined with other offers." present whole |
+| 42 | The folded form "Subscribe to texts for 15Valid" absent |
+
+That is the deployed artifact rather than a local build, which matters for this
+particular bug: the local check used `NODE_ENV=test next build` and Vercel runs
+`next build`, and only reading what was actually served settles that the two
+agree.
+
+`/products`, `/cart` and `/checkout` all answered 307 to the sign-in page for a
+signed-out visitor, as they should, so the catalogue bar and the product-page
+link still could not be seen rendered. Verifying them needs a signed-in session
+on the preview, which means either the owner looking or a test account he
+authorises; creating one here would write to the production database, which
+these sessions do not do.
