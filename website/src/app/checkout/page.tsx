@@ -10,6 +10,7 @@ import { calculateShipping, isDomesticCountry, isFreeShippingSitewide, isShippin
 import { resolveSalesTax } from "@/lib/sales-tax";
 import { useApplePayOffered } from "@/components/use-apple-pay-offered";
 import { useOfferQuote } from "@/lib/offer-quote";
+import { claimSpinPrizeOnce } from "@/lib/spin/claim-client";
 import { bundleCreditNote, couponHeadline, couponOutcomeAgainstQuote } from "@/lib/discount-resolution";
 import { CHECKOUT_SHORT, COA_SHORT, FULFILMENT_SHORT, TESTING_SHORT, trustPoints } from "@/lib/trust-claims";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
@@ -429,7 +430,12 @@ export default function CheckoutPage() {
   const [pendingOffer, setPendingOffer] = useState<{ rewardKind: string; rewardName: string; minSubtotalCents: number } | null>(null);
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/offer/status", { cache: "no-store" })
+    // CLAIM FIRST, THEN READ — same ordering and same reason as /cart. A prize
+    // won on a phone is not in this browser's cookie, so the status read would
+    // report nothing and the till would charge for something the wheel gave
+    // away. See lib/spin/claim-client.ts.
+    claimSpinPrizeOnce()
+      .then(() => fetch("/api/offer/status", { cache: "no-store" }))
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => { if (!cancelled && data?.offer) setPendingOffer(data.offer); })
       .catch(() => {});
@@ -991,10 +997,17 @@ export default function CheckoutPage() {
       ? Math.max(0, pendingOffer.minSubtotalCents / 100 - shownSubtotal)
       : 0;
   const offerApplied = Boolean(offerQuote?.offer);
+  // OUT OF STOCK IS ITS OWN ANSWER, and it has to be subtracted from the email
+  // branch below or the shopper is told the wrong thing with total confidence.
+  // Without this the reward vanishes, `offerApplied` goes false, and the banner
+  // blames their EMAIL ADDRESS for a warehouse problem — the identical
+  // misdiagnosis the minimum-shortfall work already had to undo once.
+  const offerWithdrawnByStock = offerQuote?.offerWithdrawnBy === "unavailable";
   const offerBlockedByEmail = Boolean(pendingOffer)
     && offerShortfall <= 0
     && Boolean(offerQuote)
     && !offerApplied
+    && !offerWithdrawnByStock
     && form.email.trim().length > 0;
 
   const offerNotice = pendingOffer ? (
@@ -1012,6 +1025,15 @@ export default function CheckoutPage() {
           {pendingOffer.rewardKind === "free_product"
             ? `free ${pendingOffer.rewardName}`
             : pendingOffer.rewardName.toLowerCase()}.
+        </p>
+      ) : offerWithdrawnByStock ? (
+        <p className="text-white/70" data-testid="checkout-offer-unavailable">
+          Your{" "}
+          <span className="font-semibold text-[color:var(--accent-gold)]">
+            {pendingOffer.rewardKind === "free_product" ? `free ${pendingOffer.rewardName}` : pendingOffer.rewardName}
+          </span>{" "}
+          is out of stock, so it is not on this order. Your reward is not used up — it will apply
+          once the vial is back, any time before it expires.
         </p>
       ) : offerBlockedByEmail ? (
         <p className="text-white/70">
@@ -1047,13 +1069,13 @@ export default function CheckoutPage() {
   const giftProductLines = giftLines.map((line) => (
     <div key={`gift-${line.name}-${line.variantLabel ?? ""}`} className="flex items-start gap-3" data-testid="checkout-gift-line">
       <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-lg border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.06] text-[10px] uppercase tracking-[0.16em] text-[color:var(--accent-gold)]">
-        Gift
+        Reward
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm text-white">{line.name}</p>
         {line.variantLabel ? <p className="mt-0.5 text-xs text-white/40">{line.variantLabel}</p> : null}
         <p className="mt-1.5 text-xs text-[color:var(--accent-gold)]">
-          Your one-time gift{line.quantity > 1 ? ` × ${line.quantity}` : ""}
+          Your one-time reward{line.quantity > 1 ? ` × ${line.quantity}` : ""}
         </p>
       </div>
       <p className="text-sm font-semibold text-[color:var(--accent-gold)] tabular-nums">Free</p>

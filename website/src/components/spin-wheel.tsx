@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { formatMoneyFromCents as formatCents } from "@/lib/spin/disclosure";
+
 export type WheelSlice = {
   id: string;
   wedgeLabel: string;
@@ -351,17 +353,41 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
                 )}
               </div>
 
+              {/* THE FIGURE BELONGS HERE, AND ONLY HERE.
+                  disclosure.ts keeps the dollar minimum off the wedges on
+                  purpose: before you have won anything it reads as a price of
+                  entry. After you have won, it is the opposite — it is the one
+                  fact that decides whether the prize is ever redeemed, and
+                  withholding it sends someone to the catalogue to build a cart
+                  that silently does not qualify.
+                  Measured in production on 2026-09-17: a won GLOW (a $175
+                  minimum) sent the customer to /products having been told only
+                  "with a qualifying purchase". */}
+              {!countdown.expired && result.minSubtotalCents > 0 && (
+                <p className="mt-4 text-sm" style={{ color: "var(--foreground)" }}>
+                  Spend {formatCents(result.minSubtotalCents)} or more to claim it.
+                </p>
+              )}
+
               {!countdown.expired && (
                 <Link
                   href="/products"
-                  className="mt-4 block rounded-full px-5 py-3.5 text-center text-sm font-semibold uppercase tracking-[0.12em]"
+                  className="mt-3 block rounded-full px-5 py-3.5 text-center text-sm font-semibold uppercase tracking-[0.12em]"
                   style={{ background: `linear-gradient(180deg, #e3cd92 0%, ${GOLD} 45%, ${GOLD_DEEP} 100%)`, color: INK }}
                 >
                   Start shopping
                 </Link>
               )}
+              {/* WHAT THIS CAN HONESTLY PROMISE.
+                  It used to say "on this device or any other" full stop. The
+                  prize travels in an httpOnly cookie, and the endpoint that
+                  puts it on a second device (/api/spin/claim) verifies a
+                  SESSION — so "any other" is true only once you are signed in,
+                  and until the cart started calling that endpoint it was not
+                  true anywhere. Both halves are fixed; this says which is
+                  which rather than over-promising again. */}
               <p className="mt-3 text-xs" style={{ color: "var(--foreground-muted)" }}>
-                Saved to your account — it applies automatically at checkout, on this device or any other.
+                Saved to your account. It applies automatically at checkout here — sign in to use it on another device.
               </p>
             </div>
           </div>
@@ -381,8 +407,12 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
           toll. The condition itself is stated on every line.
           --------------------------------------------------------------- */}
       <section className="mt-12" aria-labelledby="spin-terms">
+        {/* The terms do not change once you have spun, but the heading has to:
+            "Before you spin" sitting under a prize you already hold reads as
+            though the page has not noticed, and it is the section a customer
+            scrolls to precisely when they are working out how to claim. */}
         <h2 id="spin-terms" className="text-[11px] font-semibold uppercase tracking-[0.2em]" style={{ color: GOLD }}>
-          Before you spin
+          {result && revealed ? "How your reward works" : "Before you spin"}
         </h2>
         <ul className="mt-4 space-y-2.5 text-sm" style={{ color: "var(--foreground-muted)" }}>
           {terms.map((term) => (

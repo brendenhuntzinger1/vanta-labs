@@ -47,10 +47,17 @@ export interface OfferQuote {
   } | null;
   /**
    * "welcome_code" when the shopper's welcome code displaced the welcome vial
-   * (the sign-up reward is one or the other); null or absent otherwise. The
-   * banner words the gift's absence from this rather than guessing.
+   * (the sign-up reward is one or the other); "minimum" when the basket is
+   * under the reward's qualifying subtotal; "unavailable" when the product is
+   * out of stock and cannot be shipped; null or absent otherwise.
+   *
+   * The banner words the reward's absence from THIS rather than guessing. Every
+   * value that is missing here becomes a wrong explanation on screen: before
+   * "unavailable" existed, an out-of-stock reward fell through to the
+   * email-address branch and blamed the shopper's address for a warehouse
+   * problem. See quote-order.ts's own note on the field.
    */
-  offerWithdrawnBy?: "welcome_code" | "minimum" | null;
+  offerWithdrawnBy?: "welcome_code" | "minimum" | "unavailable" | null;
   /**
    * How much MORE must actually be paid for the gift to clear its floor, in
    * cents. Absent when no gift is in play or the gift applied.
