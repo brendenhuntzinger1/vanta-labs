@@ -1,3 +1,7 @@
+> **This file is the build log. `TRANSITION.md` is the current state of the
+> transition and the GO/NO-GO — read that first; where the two disagree,
+> `TRANSITION.md` was written later and against live data.**
+
 # Omnisend transition: launch summary
 
 Everything below is staged. **Nothing is enabled in Omnisend, nothing has been
@@ -348,17 +352,18 @@ should be, before `OMNISEND_MARKETING_OWNER` is set.
 | Store code on branch | staged, not merged |
 | `OMNISEND_API_KEY` in Vercel | set 2026-09-16, production scope. Inert: the deployed code has no Omnisend integration |
 | `OMNISEND_MARKETING_OWNER` | unset |
-| `omnisend-sync.sql` migration | not applied (owner) |
+| `omnisend-sync.sql` migration | applied — `omnisend_sync_state`, `omnisend_events_sent` and `omnisend_consent_snapshot` all exist and are being written |
 | `sms-subscribers.sql` migration | not applied (owner) |
-| Contacts in Omnisend | 121 seeded 2026-09-17 (§4). No `vl_link`, no codes, until the branch ships |
+| Contacts in Omnisend | 123 as of 2026-09-17 18:32 — 120 subscribed, 1 unsubscribed, 2 never-consented buyers. `vl_link` and the offer-readiness flags are present on 122 of 123 (the exception is the unsubscribed contact, who needs none) |
 | Catalogue in Omnisend | 9 categories, 34 products, 46 variants, pushed 2026-09-17 |
 | Order history in Omnisend | 17 `paid for order` events, 2026-08-02 onward |
 | Automations | 9, all disabled — enable only AFTER the data is in (§4) |
 | Form | draft |
 | Campaigns | 3 drafts |
-| Sender domain | verified 2026-09-16; automations and campaign drafts send from `support@` on it |
+| Sender domain | **NOT authenticated.** This line said "verified 2026-09-16" and it was wrong. DNS-over-HTTPS on 2026-09-17 found no Omnisend DKIM or CNAME record on `vantalabsresearch.com` at any of a dozen probed selectors, and no Omnisend include in SPF. See `TRANSITION.md` §B1 |
 | SMS | Pro plan with SMS bought and US verification submitted 2026-09-16; awaiting approval (owner) |
-| Postal address in footer | awaiting owner |
+| Postal address in footer | **still a placeholder** — the block renders `POSTAL ADDRESS — owner to replace before the first send`. `TRANSITION.md` §B2 |
+| Scheduled sync | proven working 2026-09-17 18:30 — six watermarks stamped, every contact repaired |
 
 Owner actions, in the order they unblock things (details in `OPERATIONS.md`
 §1 and §4 and `MIGRATION.md`):
