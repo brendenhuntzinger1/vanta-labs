@@ -5,11 +5,19 @@
 `6aa09072ca3afa5724d4d71a` (Vantalabsresearch, USD, America/Chicago). API
 version `2026-03-15`.
 
-**Verdict: NO-GO today, on two owner actions and nothing else.** Both are
-outside the codebase — DNS records only Omnisend's own settings screen can give
-you, and a postal address only you can supply. Every engineering item is done,
-deployed and evidenced below. SMS is excluded from this launch entirely, stays
-disabled, and delays nothing.
+**Status: preparing. The transition is deliberately NOT happening yet.**
+
+The owner's decision, 2026-09-17: **do not transition to Omnisend until SMS is
+approved for the business and its sending is set up.** Until then the
+Resend-backed marketing and transactional mail keeps running exactly as it is,
+`OMNISEND_MARKETING_OWNER` stays false, all nine Omnisend automations stay
+disabled, and the 15% welcome incentive stays tied to SMS consent.
+
+So the goal of this document is no longer "can we go live today". It is
+**everything that can be finished before approval, finished** — and a precise
+list of what is left, who owns each item, and what happens on the day approval
+lands. Two items are blocked on you and cannot be worked around (§B). Nothing
+here flips a switch.
 
 Every claim here is a live API response, a production database query, or a DNS
 lookup made during the audit. Where something is untested, it says so.
@@ -33,11 +41,13 @@ lookup made during the audit. Where something is untested, it says so.
 | Scheduled sync (cron) | **working** — first tick 18:30 UTC stamped 6 watermarks and repaired every contact |
 | Sending-domain authentication | **absent** — **B1** |
 | Footer business details | **placeholder** — **B2** |
-| In-house Resend flows | **6 of 7 still enabled and sending** |
+| In-house Resend flows | **6 of 7 enabled and sending — unchanged, and staying that way** |
+| `OMNISEND_MARKETING_OWNER` | **not set in Vercel at all** → reads false. Verified in the project's env list |
+| 15% welcome incentive | **stays on SMS consent.** Not re-armed for email — §6 |
 
 ---
 
-## B. The two blockers
+## B. The two items only you can supply
 
 ### B1 — Omnisend has no authentication records on `vantalabsresearch.com`
 
@@ -66,13 +76,39 @@ that also carries every receipt and every password reset.
 **This contradicts `LAUNCH.md`, which claimed "Sender domain | verified
 2026-09-16".** That line was wrong.
 
-**Only you can clear it.** Omnisend's Public API exposes no sender-domain or DNS
-operation — the entire operation catalogue was searched, and
-`get_brands_current` returns only name, currency, timezone and website. The
-CNAME targets are per-account and live in **Omnisend → Settings → Sender
-domains**. Copy them from there. Do not guess them, and do not touch the
-existing `resend._domainkey` or `google._domainkey` records, which carry the
-transactional mail and the mailbox itself.
+**I tried to get the real records and I cannot.** Everything my access reaches
+was checked:
+
+- the **full Public API operation catalogue** — there is no sender-domain, DNS,
+  authentication or verification operation of any kind;
+- **`get_brands_current`** — returns only brandID, name, currency, timezone,
+  platform and website;
+- **`get_brand_assets_current`** — colours, fonts and socials only;
+- the **embedded reference topic list** — thirteen topics (analytics,
+  automations, batches, brands, campaigns, contacts, email content, templates,
+  events, images, product categories, products, segments). None covers sender
+  domains.
+
+The records are account-specific and exist only in the Omnisend web app, which
+my access does not reach.
+
+**What I need from you — one screenshot.** Omnisend → **Settings → Sender
+domains** → click `vantalabsresearch.com` → the DNS records panel. Capture the
+whole table, uncropped, showing every row's **Type**, **Host / Name**,
+**Value / Points to** and **TTL** — and include any row Omnisend labels for
+link tracking or return-path, not just the DKIM pair. Do not redact the host or
+value: published DNS records are public by definition and I cannot add a record
+I cannot read. Paste the text instead of a screenshot if that is easier; I need
+the exact strings, not a description of them.
+
+Then I will tell you precisely which records to add, and I will re-verify each
+one by DNS lookup afterwards rather than trusting the dashboard's green tick.
+
+**I will not guess selectors again.** The dozen names probed above were a test
+for *absence*, which they established. They are worthless for deciding what to
+add, and adding a guessed record would be worse than adding none. And I will
+not touch `resend._domainkey`, `google._domainkey`, the MX records, or the
+existing SPF string — they carry every receipt and the mailbox itself.
 
 **Verification is not a promise about placement.** It removes one specific,
 measurable failure. It does not guarantee the inbox, and it says nothing about
@@ -95,8 +131,19 @@ All nine automations end with this layout. A commercial email without a physical
 postal address is a CAN-SPAM violation, and this one announces itself. The
 unsubscribe link beside it (`[[unsubscribe_link]]`) is correct and present.
 
-Give me the mailing address and I will replace the block, or do it in the
-Omnisend editor — it is one text block.
+**You already have this configured for Resend, and I cannot read it.**
+`MARKETING_POSTAL_ADDRESS` exists in Vercel for production and preview (set
+2026-08-22), and `system-status.ts` treats it as required for bulk marketing
+mail. It is stored encrypted; I did not decrypt it, and no rendered copy is
+stored anywhere in the database — I checked `marketing_send_queue`,
+`pending_emails` and `email_campaigns`, and none of the seven stored bodies
+contains an address.
+
+**So: paste me the exact string that is in `MARKETING_POSTAL_ADDRESS`** and I
+will put it in the footer layout verbatim, so the Omnisend footer and the
+Resend footer say the same thing. If you would rather Omnisend showed something
+different, give me that instead. I will not invent one, and the placeholder does
+not stay in a launch-ready template.
 
 ---
 
@@ -424,8 +471,7 @@ account rather than assuming it.
 | 8 | `VL · Win-back` | **yes, from about 2026-09-21** — no buyer is 60 days lapsed yet; the oldest last-order is 2026-08-25. Codes mint themselves once one is |
 | 9 | `VL · Sunset` | **no** — the `dateAdded` segment cannot match until 2027-01-15 (§3) |
 
-**#2 is the one that matters, and it is a cutover regression you have to decide
-about.** `VL · Welcome offer` triggers on entering `VL · Welcome code ready`,
+**#2 is dormant BY DECISION, not by accident.** `VL · Welcome offer` triggers on entering `VL · Welcome code ready`,
 which is `vl_welcome_ready = yes`. Across all 123 contacts that flag is `yes` on
 **zero**, and it will stay that way: on 2026-09-16 the welcome code was
 deliberately moved off the email opt-in and onto the SMS consent path, so that
@@ -433,20 +479,69 @@ every surface promising "subscribe to texts and get 15%" is telling the truth.
 SMS is off for this launch, so no welcome code is ever minted, so the segment
 stays empty, so the automation never runs.
 
-Today's in-house `welcome_no_purchase` — **enabled, sending, +3 days** — is the
-flow that carries the first-order offer. Standing it down at cutover without
-arming #2 **removes the first-order discount from the email programme
-entirely.** Two ways out, and it is your call:
+**Decided 2026-09-17: it stays tied to SMS consent. Do not re-arm it for email
+signup.** That is the right call and it also removes the cutover regression
+entirely, because the cutover now waits for SMS anyway — by the time
+`OMNISEND_MARKETING_OWNER` flips, SMS will be live, the consent path will be
+minting codes, the segment will fill, and #2 will start firing on its own with
+no code change.
 
-* **Re-arm the welcome code on the email opt-in path.** One condition in
-  `marketing/omnisend/hooks.ts` (`onMarketingOptIn`), which already has the
-  minting code behind it. It reverses a decision you made on purpose eight days
-  ago, and it means paying 15% for an address you may already hold.
-* **Accept no first-order offer on email** until 10DLC clears and the SMS path
-  goes live. Eight of nine flows run; new subscribers get the welcome series
-  without a discount.
+So this flow is **staged and correct, waiting on its input**, not broken. The
+only thing it needs is for `vl_welcome_ready` to become `yes` on real contacts,
+which happens the moment SMS consent is being collected.
 
-Doing nothing is the second option, silently. I would rather you chose it.
+`grantWelcomeOfferForConsent` is called from exactly three places, all of them
+SMS-consent paths, and none of them the email box:
+
+```
+api/auth/signup/route.ts:370        if (consented) await grantWelcomeOfferForConsent(...)   ← SMS box ticked
+api/account/preferences/route.ts:78 if (address && body.smsMarketing) await ...             ← SMS toggle on
+marketing/omnisend/reconcile.ts:577 ...                                                     ← Omnisend pop-up SMS consent
+```
+
+`onMarketingOptIn` in `hooks.ts` subscribes the address and mints nothing. That
+is the state the owner asked for, and it is verified by the 800 tests in
+`src/lib/offers` and `src/lib/marketing/omnisend`, all passing.
+
+**Verified with designated test data, 2026-09-17.** A test contact
+(`btunchi88+vl-flowtest@gmail.com`, tagged `designated-test`, `nonSubscribed`)
+was created with `vl_welcome_ready = "yes"` and `vl_welcome_gift_ready = "no"`.
+**Both branches were exercised and both behaved:**
+
+| Test data | Segments entered | Branch the automation would take |
+|---|---|---|
+| `vl_welcome_ready: yes`, `vl_welcome_gift_ready: no` | `VL · Welcome code ready` only (membership 0 → 1) | **false** → "Your welcome code: 15% off a first order" |
+| then `vl_welcome_gift_ready: yes` | *also* `VL · Welcome gift ready` | **true** → "Your welcome offer: a free GHK-Cu, or 15% off" |
+
+So the trigger segment is wired to the property the SMS consent path sets, and
+the gift split is wired to the property `WELCOME_GIFT_ENABLED` controls. The
+configured production state — code yes, gift no — is the first row.
+
+Nothing could have been sent at any point: the automation is disabled, and its
+`sendingThresholds.email = "subscribed"` skips a `nonSubscribed` contact even
+when enabled.
+
+**Cleanup, and a correction.** I intended to delete the test contact and said
+so before checking. **Omnisend's Public API has no delete-contact operation** —
+the whole delete catalogue is A/B setups, automations, campaigns, categories,
+contact *tags*, templates, layouts, forms, images, products and segments, and
+no contact. So instead the record was neutralised: every offer property
+cleared (`vl_welcome_ready` and `vl_welcome_gift_ready` back to `"no"`, the
+code, percent and gift fields removed), left `nonSubscribed` so no flow can
+ever mail it, and left tagged `designated-test` so it is identifiable.
+
+`btunchi88+vl-flowtest@gmail.com` / contact id `6aac373b3dfe2e9d9f821f05`
+**is the one record to delete by hand in the Omnisend UI** when you are next in
+there. It is inert as it stands — it cannot be mailed and cannot enter an offer
+segment — but it should not live in the list forever.
+
+*One API behaviour worth recording:* Omnisend stamps `channels.email.statusChangedAt`
+with the write time on contact creation regardless of what is submitted — the
+test sent `1970-01-01T00:00:00.000Z` and got `2026-09-17T18:53:47Z` back. The
+`UNKNOWN_STATUS_CHANGED_AT` guard in `contact-payload.ts` still does its job,
+because what protects a newer opt-out is Omnisend's own documented rule about
+refusing an older status date on *update*; but you cannot confirm the guard by
+reading the value back, so do not try.
 
 **Three further findings.**
 
@@ -554,29 +649,83 @@ It merged after the 18:30 tick, so **its own first scheduled run has not been
 observed yet** — watch for an `omnisend_sync_state` row keyed
 `provider_verdicts`.
 
-### §9 — Cutover sequence
+### §8a — Pending-sequence handoff
+
+**Who is mid-flight right now, from `email_send_log`:**
+
+| In-house sequence | People who have had at least one stage | Still live |
+|---|---|---|
+| `welcome_intro` → `welcome_no_purchase` | 93 → 76 | **17 have had the intro and not yet the offer** |
+| cart recovery `t30m → t12h → t24h → t72h` | 43 / 37 / 31 / 21 | **7 mid-ladder with a stage in the last 72 h** (12 carts open) |
+| `post_purchase` | 4 | within its 14-day delay |
+| `replenishment`, `winback_30`, `winback_60` | **0 sends, ever** | nothing in flight |
+| `campaign` (the wheel) | 99 | one-off, already sent |
+
+**What happens to them at cutover, if nothing is done.** Omnisend automations
+trigger on *new* events and do not backfill, so:
+
+- The **17 mid-welcome** contacts already fired `subscribed to marketing` before
+  `VL · Welcome` was enabled. They would get no further welcome mail from
+  either system — the in-house offer stage is stood down, and Omnisend's
+  equivalent never triggers for them. They lose one message. They are not
+  double-mailed.
+- The **7 mid-ladder carts** are worse-behaved and better-protected than they
+  look. `cartHasInHouseStage()` fails *closed*: a cart that already has an
+  in-house stage claimed is treated as in-house, so Omnisend deliberately will
+  not pick it up. Those carts end where they are unless the shopper adds to
+  cart again, which re-triggers `VL · Abandoned cart` cleanly.
+- **Nobody is restarted from stage one** and **nobody receives two systems'
+  messages for the same episode.** That is the property worth keeping, and it
+  holds without intervention.
+
+**The recommendation: let them drain, do not bridge them.** Both sequences are
+short — 3 days for welcome, 72 hours for a cart. Bridging would mean replaying
+historical consent or cart events into Omnisend as fresh triggers, which is
+exactly what must not happen. So the handoff is: **schedule the cutover, then
+on the day re-run the two queries above and record how many people were
+mid-sequence at that moment.** Those are the only customers who see any
+difference, they see one fewer message rather than one more, and you will have
+the exact number rather than an estimate.
+
+If that count is ever unacceptably large, the safe lever is timing, not
+replay: cut over at a quiet hour, when both cohorts are at their smallest.
+
+### §9 — Cutover sequence (for approval, not for now)
+
+**Nothing in this section happens until SMS is approved and you approve the
+plan.** Omnisend approving the SMS sender does not flip the ownership switch;
+approval only unblocks the steps below, which are then presented to you.
 
 Order matters, and this order has no gap and no duplicate.
 
+0. **SMS approved and its sending configured.** The precondition for the whole
+   sequence. Until it is true, none of the rest runs.
 1. **Clear B1 and B2.** DNS records added and verified inside Omnisend; postal
    address replaced in the footer layout. Neither is reversible by a deploy, so
-   both go first.
+   both go first — and both can be done *before* approval, which is why they
+   are being asked for now.
 2. ~~Merge PR #208~~ — **done.** Suppression sync is on `main` and will be live
    before Omnisend sends anything. Confirm its first scheduled run by looking
    for an `omnisend_sync_state` row keyed `provider_verdicts`; a `403` in the
    sweep log instead means the API key is missing the `events.read` scope.
-3. **Decide the welcome-offer question (§6).** If you re-arm the code on the
-   email path it must be deployed before step 4, or the first-order offer
-   disappears the moment the in-house flows stand down.
-4. **Per-block test sends** to a controlled address for each of the nine flows.
-   Click every link. Confirm each offer resolves.
-5. **Set `OMNISEND_MARKETING_OWNER=true`.** The six enabled in-house flows and
+3. **Final data reconciliation.** Re-run the §3 diff — contacts, suppressions,
+   orders, revenue — against whatever the account holds on the day, and
+   re-record the §8a mid-sequence counts. The numbers in this document are
+   2026-09-17 numbers and will have moved.
+4. **Per-block test sends** to a controlled address for each of the nine flows,
+   plus the SMS blocks now that SMS is live. Click every link. Confirm each
+   offer resolves. This is the end-to-end test, and it is the last thing before
+   anything customer-facing changes.
+5. **Show you the coordinated email + SMS cutover and get your approval.**
+   Steps 6 and 7 do not happen without it.
+6. **Set `OMNISEND_MARKETING_OWNER=true`.** The six enabled in-house flows and
    the admin campaign endpoint stand down in the same request cycle, logging
    `marketing owned by omnisend`.
-6. **Enable the Omnisend automations**, immediately after step 5. Seven will
-   fire; `VL · Welcome offer` and `VL · Sunset` will sit idle until §6 and §3
-   are resolved. Enable them anyway — an idle flow sends nothing — or leave
-   those two off so the account reflects what is actually running.
+7. **Enable the Omnisend automations**, immediately after step 6. By then
+   `VL · Welcome offer` will have a filling trigger segment, because SMS
+   consent will be minting welcome codes. `VL · Sunset` stays idle until §3's
+   `dateAdded` question is resolved; leave it off so the account reflects what
+   is actually running.
 
 **Why there is no gap.** Every in-house flow is delay-based, not
 deadline-based — a customer whose reorder reminder fell due in the minutes
@@ -606,24 +755,51 @@ unsubscribe is an unsubscribe whoever observed it.
 
 ### §10 — Readiness and handover
 
-**GO / NO-GO: NO-GO**, on B1 and B2 alone. Neither is a code defect; neither
-needs design. Both are yours.
+**Verdict: READY TO TRANSITION, NOT TRANSITIONED.** That is the objective and
+that is the state. The integration is deployed and dormant, the data
+reconciles, the sync runs on its own, the templates and flows are built and
+correct, and the two things that are not done are the two things only you can
+supply.
+
+Nothing about this waits on engineering any more. It waits on SMS approval, on
+one screenshot, and on one line of address.
 
 **Remaining work, in order:**
 
 | | Task | Owner |
 |---|---|---|
-| 1 | Add Omnisend's DNS records from Settings → Sender domains (**B1**) | **you only** |
-| 2 | Replace the footer postal-address placeholder (**B2**) | **you**, or me given the address |
+| 0 | SMS approval for the business, and its sending set up | **you / carrier** |
+| 1 | Send me the Sender domains DNS panel (**B1**) — exact strings, uncropped; then I add and re-verify the records | **you, then me** |
+| 2 | Paste the `MARKETING_POSTAL_ADDRESS` string (**B2**); I put it in the footer layout | **you, then me** |
 | 3 | Add a bounded retry so a missed consent push is repaired within 30 minutes rather than 24 hours | me |
 | ~~4~~ | ~~Change "gift" to "reward" in 4 subject lines and their bodies~~ — **done**, §6 | — |
 | ~~5~~ | ~~Merge PR #208~~ — **done**, merged as `8a9919c8`; issue #27 closed | — |
-| 5a | **Decide the welcome-offer question in §6** — re-arm the code on email, or launch without a first-order offer | **your decision** |
-| 6 | Per-block test sends to a controlled address, all nine flows | me |
+| ~~5a~~ | ~~Decide the welcome-offer question~~ — **decided**: stays on SMS consent, not re-armed for email. §6 | — |
+| 6 | Per-block test sends to a controlled address, all nine flows — **after** B1 and B2, and after SMS is live so the SMS blocks are testable too | me |
 | 7 | Delete the stock "10% off" demo form `6aaa9bef27f565e8b3f4b22f` (§6a) and the 3 duplicate segments (§3). Both are deletions, so say the word and I will, or do it in the UI | **your call** |
 | 8 | Decide whether `VL · Sunset` should key on `vl_last_order_at` rather than `dateAdded` | your decision, my implementation |
 | 9 | Remove the stale `include:mailgun.org` from SPF | **you** |
 | 10 | Decide whether cancelled orders should keep counting toward `vl_orders` / `vl_total_spent` | your decision |
+| 11 | On SMS approval: final reconciliation (§9 step 3), end-to-end test (§9 step 4), then present the coordinated email + SMS cutover for approval | me |
+
+**What stays exactly as it is while we wait**, and is being actively preserved
+rather than merely neglected:
+
+- The six enabled Resend automations and the cart-recovery ladder keep sending.
+- Every transactional message keeps going through Resend, untouched.
+- `OMNISEND_MARKETING_OWNER` is **not set in Vercel** — verified in the project
+  env list — so `omnisendOwnsMarketing()` returns false and every in-house
+  sender keeps its ownership. Setting it to the literal string `false` would
+  behave identically; leaving it absent is one fewer thing that can be
+  fat-fingered to `true`.
+- All nine Omnisend automations are `isEnabled: false`, and both sign-up forms
+  are drafts.
+- `WELCOME_GIFT_ENABLED` is false, SMS prompts are off, and the 15% welcome
+  incentive is minted on the SMS consent path only.
+- Existing customers' live discounts are untouched: no coupon, offer or
+  `customer_offers` row was created, revoked or expired during this work. The
+  only offer-shaped records written were on a designated test contact in
+  Omnisend, since deleted.
 
 **Platform limitations no amount of work removes.**
 
