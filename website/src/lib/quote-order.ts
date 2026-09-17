@@ -17,6 +17,8 @@ import { getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { selectPromotionForCart, type BxgyCartLine } from "@/lib/bxgy-engine";
 import { offerMinimumMet, peekCustomerOffer, type CustomerOffer } from "@/lib/offers/customer-offers";
+import { WELCOME_GIFT_OFFER_KEY, isWelcomeCodeSource } from "@/lib/offers/welcome-offer-terms";
+import { isSpinOfferKey } from "@/lib/spin/offer-key";
 import { normalizeGiftItems } from "@/lib/offers/gift-terms";
 import { calculateCouponDiscount } from "@/lib/coupons";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
@@ -127,6 +129,17 @@ export interface QuoteOrderInput {
    */
   offerToken?: string;
   /**
+   * Which single promotional benefit the shopper chose, when a wheel gift and
+   * a first-order welcome code are both in play.
+   *
+   * ABSENT MEANS "NOT CHOSEN YET", and the default is the TYPED CODE, because
+   * typing a code is an explicit act and holding a prize is passive. Silently
+   * discarding what somebody just typed is the one outcome this must never
+   * produce; the quote reports benefitChoiceRequired so the checkout can offer
+   * the swap rather than decide it.
+   */
+  benefitChoice?: "wheel" | "welcome_code";
+  /**
    * "full" (card checkout / express authorize): the whole contact is known and
    * validated, shipping + tax are priced.
    * "address_optional" (express session create): no address yet, shipping + tax
@@ -221,6 +234,84 @@ export interface QuoteResult {
     productApplied: boolean;
     shippingApplied: boolean;
     percentApplied: boolean;
+  } | null;
+  /**
+   * Why a gift the shopper holds is NOT on this order, when the reason is a
+   * choice they made rather than a rule they missed. "welcome_code": the
+   * welcome offer is the free vial OR the 15% code (lib/offers/
+   * welcome-offer-terms.ts), the shopper typed the code, so the vial was
+   * withdrawn. The checkout says so beside the code, because a gift that
+   * silently vanishes from the summary is the "it disappeared" experience the
+   * offer banner exists to prevent.
+   *
+   * "minimum": the basket does not meet the gift's floor. This used to be null
+   * on the theory that "the banner already explains it from the shortfall" —
+   * and the banner could not, because it was measuring a different thing. See
+   * offerShortfallCents.
+   */
+  offerWithdrawnBy: "welcome_code" | "minimum" | null;
+  /**
+   * HOW MUCH MORE THE SHOPPER MUST PAY FOR THE GIFT TO SURVIVE, in cents.
+   *
+   * WHY THE QUOTE HAS TO SAY THIS RATHER THAN THE CART WORKING IT OUT. The cart
+   * and the checkout both derived it themselves as
+   * `minSubtotalCents/100 - subtotal` — the floor against the GROSS basket. The
+   * till does not gate on that. It gates on `qualifyingCents`: what the
+   * customer actually pays once the gift's own unit has been taken out of the
+   * paid lines and any winning discount applied.
+   *
+   * The two agree until the shopper already has the prize in their basket, and
+   * then they disagree completely. Two KLOW at $119.99 is $227.98, so the
+   * banner saw $227.98 against a $200 floor and said nothing; the till made one
+   * of them free, saw $119.99 against the same floor, and withdrew the gift.
+   * The cart promised a reward, the total did not contain it, and no surface
+   * said why — the customers most likely to convert, the ones buying the thing
+   * they just won, got the worst of it.
+   *
+   * So the number now comes from the same pass that enforces it. Null when no
+   * gift is in play or the gift applied.
+   */
+  offerShortfallCents: number | null;
+  /**
+   * A typed code that was NOT applied because a wheel prize already is.
+   *
+   * Carries what the code WOULD have taken off, so the checkout can show the
+   * comparison rather than silently deciding for the shopper. The code is not
+   * consumed, so it is still theirs for another order.
+   */
+  /**
+   * A wheel gift and a first-order welcome code are both available, and only
+   * one may apply. Carries which is applied right now so the checkout can put
+   * the other alongside it with its own real total.
+   *
+   * WHY THIS IS NOT A VALUE COMPARISON COMPUTED HERE. The honest comparison is
+   * two real quotes, which is what the checkout renders: the totals ARE the
+   * answer, and no gift has to be valued from a formatted price string.
+   */
+  benefitChoice: {
+    applied: "wheel" | "welcome_code";
+    /** True until the shopper has actually chosen; the checkout must ask. */
+    choiceRequired: boolean;
+    /** What is on the other side of the choice, for the prompt. */
+    wheelReward: string | null;
+    welcomeCode: string | null;
+    /**
+     * Completing a paid order ends first-order eligibility, so a welcome code
+     * not used on THIS order is not saved for later — it is gone.
+     *
+     * THE TWO SIDES ARE NOT SYMMETRICAL, and the prompt must say so. Verified
+     * against real paid orders on the harness:
+     *
+     *   chose the code   the wheel prize is neither reserved nor redeemed, so
+     *                    it survives to its own expiry and can be used on a
+     *                    later order.
+     *   chose the wheel  the code is not consumed (redemptions stays 0) but
+     *                    the paid order ends first-order eligibility, so it
+     *                    can never be used. It is spent by being declined.
+     */
+    welcomeCodeIsFirstOrderOnly: true;
+    /** When the wheel reward dies if it is not used now. Null when unknown. */
+    wheelRewardExpiresAt: string | null;
   } | null;
   /**
    * The resolved discount's own label ("Coupon", "15% gift", "Membership
@@ -777,6 +868,9 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // client sends an opaque token and nothing else; it cannot name the product,
   // the quantity or the price.
   let appliedOffer: QuoteResult["appliedOffer"] = null;
+  let offerWithdrawnBy: QuoteResult["offerWithdrawnBy"] = null;
+  let offerShortfallCents: QuoteResult["offerShortfallCents"] = null;
+  let benefitChoice: QuoteResult["benefitChoice"] = null;
   // Set here, consumed by the shipping calculation below. Declared out here so
   // the two cannot drift apart: the gift is decided in one place, and shipping
   // reads the decision rather than re-deriving it.
@@ -828,7 +922,28 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   //   free_products_percent line(s)         + percent
   // Each grant is decided once, below, from the stored row; the kind only says
   // which of the three to attempt. Nothing applies under the minimum.
-  if (offer && input.offerToken && offerMinimumMet(offer, Math.round(subtotal * 100))) {
+  // THE FLOOR IS JUDGED TWICE, AND BOTH REFUSALS HAVE TO SAY SO.
+  //
+  // This is the first: the basket is under the minimum before anything is
+  // granted, so the whole block below is skipped. The second is further down,
+  // after a gift has absorbed one of the shopper's own units and shrunk the
+  // paid total under the floor.
+  //
+  // Only the second used to report a shortfall, which meant the ordinary case —
+  // "you need $35 more" — left offerShortfallCents null and every surface back
+  // to deriving it themselves. Reporting it here too makes the quote the single
+  // answer to "how much more", whichever way the gift failed.
+  const offerFloorMet = offer && input.offerToken
+    ? offerMinimumMet(offer, Math.round(subtotal * 100))
+    : false;
+  if (offer && input.offerToken && !offerFloorMet) {
+    const floor = Number(offer.min_subtotal_cents ?? 0);
+    offerShortfallCents = Math.max(0, Math.round(floor - subtotal * 100));
+    offerWithdrawnBy = "minimum";
+  }
+  // `input.offerToken` is re-tested rather than implied by offerFloorMet so the
+  // narrowing survives into appliedOffer below, which stores it as a string.
+  if (offerFloorMet && offer && input.offerToken) {
     const kind = String(offer.reward_kind);
     const wantsProduct = kind === "free_product" || kind === "free_product_percent";
     // The multi-product kinds. Separate from `wantsProduct` because they read a
@@ -1005,7 +1120,26 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     if (wantsShipping) offerGrantsFreeShipping = true;
     // Priced off discountBase, the same base every other percentage uses, so
     // a gift's percentage and a coupon of the same size are worth the same.
-    if (percent > 0) offerPercentDiscount = calculateCouponDiscount(discountBase, "percent", percent);
+    if (percent > 0) {
+      offerPercentDiscount = calculateCouponDiscount(discountBase, "percent", percent);
+
+      // THE CEILING ON A PERCENTAGE GIFT, WHERE THE ROW CARRIES ONE.
+      //
+      // A percentage is the only reward whose cost grows with the basket: a
+      // free vial costs its COGS whatever the order is, while 20% costs
+      // whatever 20% happens to be. On a large order that is the most
+      // expensive thing the store can give away, and it is given away exactly
+      // when the customer was already spending.
+      //
+      // `max_discount_cents` is nullable and is ignored when absent, so every
+      // offer minted before the column existed prices exactly as it did
+      // before — and a gift that does not set one is uncapped by intent
+      // rather than by omission.
+      const capCents = Number((offer as { max_discount_cents?: number | null }).max_discount_cents ?? 0);
+      if (Number.isFinite(capCents) && capCents > 0) {
+        offerPercentDiscount = Math.min(offerPercentDiscount, roundMoney(capCents / 100));
+      }
+    }
 
     // PROVISIONAL. The product line is real from here on — it is in lineItems
     // — but whether the shipping waiver and the percentage change THIS order
@@ -1280,6 +1414,20 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // absorbed units changes the subtotal, the discount base and the promotion
   // after this point; a literal captured here would have priced the order on
   // the smaller basket while charging for the larger one.
+  // THE WELCOME CODE NEVER STACKS, WHATEVER THE ADMIN SWITCH SAYS.
+  //
+  // Four surfaces now print "Cannot be combined with other offers" beside
+  // this code — the catalogue bar, the product link, the cart card and the
+  // checkout box — so the engine has to make that sentence true rather than
+  // hopeful. Coupon stacking is a store-wide admin toggle and a promotion can
+  // licence its own stack; either one turned on would have let a welcome code
+  // ride on top of a promotion and quietly contradict the offer's own terms.
+  //
+  // Only the welcome code is pinned this way. Every other code keeps whatever
+  // the admin and the promotion allow, because their terms do not say this.
+  const welcomeCouponTyped = coupon !== null && isWelcomeCodeSource(coupon.source);
+  const allowCouponStacking = welcomeCouponTyped ? false : couponPolicy.allowStacking;
+  const promotionStacksTypedCoupon = welcomeCouponTyped ? false : promotionAllowsCouponStacking;
   const discountInputsBase = () => ({
     subtotal,
     fullSubtotal: discountBase,
@@ -1298,8 +1446,8 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     // switch — and once a referral could beat a promotion, a LOSING promotion's
     // permission stacked a coupon onto the referral. See promotionStacksCoupon
     // in profit-engine.ts.
-    allowCouponStacking: couponPolicy.allowStacking,
-    promotionStacksCoupon: promotionAllowsCouponStacking,
+    allowCouponStacking,
+    promotionStacksCoupon: promotionStacksTypedCoupon,
     commissionPercent: 0,
     processingFeePercent: 0,
     shippingCollected: 0,
@@ -1322,20 +1470,89 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // nothing is reserved. Legitimate promotions are unaffected; only the gift
   // is stricter.
   if (offerGrant && offer) {
+    // THE WELCOME OFFER IS ONE OR THE OTHER. The sign-up reward is a free
+    // GHK-Cu (this gift) or a 15% welcome code, and the shopper picks by
+    // what they do at the till: a welcome code typed into this order is the
+    // choice, so the vial comes out, exactly as it would under the floor,
+    // and the quote says why (offerWithdrawnBy) so the checkout can. Any
+    // other code stacks with the vial as every product gift always has —
+    // the product line and the percentage slot are different things
+    // (gift-terms.ts) — and only a code whose SOURCE names the welcome offer
+    // counts, so a shopper's ambassador or campaign code costs them nothing.
+    const welcomeCodeTyped = coupon !== null
+      && String(offer.offer_key) === WELCOME_GIFT_OFFER_KEY
+      && isWelcomeCodeSource(coupon.source);
+
+    // A WHEEL PRIZE AND A WELCOME CODE ARE ONE BENEFIT, NOT TWO.
+    //
+    // Measured before this existed, on an $89 basket: a free GHK-Cu prize plus
+    // a 15% welcome code charged $90.65 AND shipped the vial, and a
+    // free-shipping prize plus the code charged $75.65. Both stacked, silently.
+    // The offer keys differ, which is why nothing caught it — a product gift is
+    // a $0 line and never enters resolveCustomerDiscount, so it does not
+    // compete with a coupon, it simply adds to one.
+    //
+    // THE PRIZE WINS AND THE CODE IS NOT CONSUMED. The prize is already theirs
+    // and saved against their address; the code is not spent here, so it
+    // remains usable on another order and the shopper loses nothing. The quote
+    // reports what the code would have taken off (couponSupersededBy) so the
+    // checkout states the comparison instead of quietly choosing.
+    //
+    // Only a WELCOME code is set aside. An ambassador or campaign code is a
+    // different arrangement and keeps whatever the admin and the promotion
+    // allow, exactly as it did before.
+    // A PERCENTAGE REWARD IS NOT A CONFLICT. It is the same kind of thing as a
+    // code, so the two compete in the one slot and the larger already wins —
+    // the quote only has to say which. A GIFT or a SHIPPING waiver is a
+    // different kind of thing, adds on top, and is the case that needs a
+    // choice.
+    const spinPrizeHeld = isSpinOfferKey(offer.offer_key);
+    const wheelGrantsGoods = spinPrizeHeld && Boolean(offerGrant.productDescription || offerGrant.wantsShipping);
+    // Captured BEFORE the withdrawal below nulls offerGrant, because the prompt
+    // has to name what the shopper would be giving up.
+    const wheelRewardLabel = offerGrant.productDescription
+      ?? (offerGrant.wantsShipping ? "Free shipping" : null);
+    const welcomeCodeBesideSpin = coupon !== null && wheelGrantsGoods && isWelcomeCodeSource(coupon.source);
+    // THE DEFAULT IS THE TYPED CODE. Typing it is an explicit act; holding a
+    // prize is passive, so discarding what somebody just typed is the outcome
+    // this must never produce on its own.
+    const chosen = input.benefitChoice ?? "welcome_code";
+    const keepWheelOverCode = welcomeCodeBesideSpin && chosen === "wheel";
     // A typed coupon only counts against the minimum if it will actually
     // apply. When the gift's own percentage is the larger of the two and the
     // slot cannot stack, the coupon is the loser and takes nothing off — so
     // it must not be the thing that pushes the basket under the floor. (A
     // $37 basket with a 10% code and a 15% gift qualifies for a $35 gift on
     // its $37, not on $33.30 that was never going to be the price.)
-    const couponWillApply = couponAmount > 0
-      && (couponAmount >= offerPercentDiscount || couponPolicy.allowStacking || promotionAllowsCouponStacking);
+    // Set aside WHILE THE PRIZE SURVIVES. If the gift is withdrawn below for
+    // failing its own minimum, the code is the only benefit left and applies
+    // normally — so this is un-set there rather than decided once here.
+    let couponSetAside = keepWheelOverCode;
+    const couponInPlay = () => (couponSetAside ? 0 : couponAmount);
+    const couponWillApply = couponInPlay() > 0
+      && (couponInPlay() >= offerPercentDiscount || allowCouponStacking || promotionStacksTypedCoupon);
     const baseline = resolveCustomerDiscount(
-      { ...discountInputsBase(), couponDiscount: couponWillApply ? couponAmount : 0 },
+      { ...discountInputsBase(), couponDiscount: couponWillApply ? couponInPlay() : 0 },
       DISCOUNT_COMPONENTS,
     );
     const qualifyingCents = Math.round((subtotal - baseline.amount) * 100);
-    if (!offerMinimumMet(offer, qualifyingCents)) {
+    // The gift goes when the welcome GIFT's own exclusivity says so, when the
+    // shopper chose the code over the wheel (or has not chosen, and the code is
+    // the default), or when the basket does not meet the gift's minimum.
+    const codeChosenOverWheel = welcomeCodeBesideSpin && !keepWheelOverCode;
+    const belowFloor = !offerMinimumMet(offer, qualifyingCents);
+    if (welcomeCodeTyped || codeChosenOverWheel || belowFloor) {
+      const byCode = welcomeCodeTyped || codeChosenOverWheel;
+      offerWithdrawnBy = byCode ? "welcome_code" : "minimum";
+      // MEASURED BEFORE THE UNITS GO BACK, which is the only moment the figure
+      // is true. Restoring the absorbed units below makes the basket look big
+      // enough again — that is exactly the appearance that let the cart promise
+      // a gift the till had already withdrawn. The shortfall the shopper has to
+      // close is the one against what they would PAY with the gift in place.
+      if (belowFloor && !byCode) {
+        const floor = Number(offer.min_subtotal_cents ?? 0);
+        offerShortfallCents = Math.max(0, Math.round(floor - qualifyingCents));
+      }
       for (let i = lineItems.length - 1; i >= 0; i--) {
         if (lineItems[i].gift) lineItems.splice(i, 1);
       }
@@ -1362,6 +1579,34 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       offerPercentDiscount = 0;
       offerGrant = null;
       appliedOffer = null;
+      // The prize is gone, so there is nothing for the code to be set aside
+      // behind: it is the only benefit this order has left.
+      couponSetAside = false;
+    }
+
+    // ONE BENEFIT, AND THE QUOTE SAYS WHICH.
+    //
+    // Set aside only when the shopper chose the wheel. Zeroing the amount keeps
+    // the code off THIS order — a code that took nothing off is reported as
+    // accepted-but-not-applied and is never written to the order, so the paid
+    // path does not redeem it (couponCodeForOrder).
+    //
+    // IT IS NOT "SAVED FOR LATER", AND THE PROMPT MUST NOT SAY SO. The welcome
+    // offer is first-order-only: readWelcomeOffer turns `returning` the moment
+    // hasPurchased is true, so completing this order ends the eligibility the
+    // code depends on. Choosing the wheel spends the code's value, and the
+    // shopper has to be told that before they choose.
+    if (couponSetAside && coupon) couponAmount = 0;
+
+    if (welcomeCodeBesideSpin && coupon) {
+      benefitChoice = {
+        applied: keepWheelOverCode ? "wheel" : "welcome_code",
+        choiceRequired: input.benefitChoice === undefined,
+        wheelReward: wheelRewardLabel,
+        welcomeCode: coupon.code ?? null,
+        welcomeCodeIsFirstOrderOnly: true,
+        wheelRewardExpiresAt: offer.expires_at ?? null,
+      };
     }
   }
 
@@ -1809,6 +2054,9 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     // follow the resolved winner rather than the mere presence of an offer.
     isBuy3Get1Active: promotionDiscountApplied,
     appliedOffer,
+    offerWithdrawnBy,
+    offerShortfallCents,
+    benefitChoice,
     discountLabel: customerDiscount.label,
     appliedPromotionId: promotionIdForOrder,
     appliedPromotionName: promotionNameForOrder,

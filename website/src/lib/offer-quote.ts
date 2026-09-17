@@ -45,6 +45,25 @@ export interface OfferQuote {
     shippingApplied?: boolean;
     percentApplied?: boolean;
   } | null;
+  /**
+   * "welcome_code" when the shopper's welcome code displaced the welcome vial
+   * (the sign-up reward is one or the other); null or absent otherwise. The
+   * banner words the gift's absence from this rather than guessing.
+   */
+  offerWithdrawnBy?: "welcome_code" | "minimum" | null;
+  /**
+   * How much MORE must actually be paid for the gift to clear its floor, in
+   * cents. Absent when no gift is in play or the gift applied.
+   *
+   * The banner used to compute this itself as `minSubtotalCents/100 - subtotal`
+   * — the floor against the GROSS basket — while the till gates on what the
+   * shopper pays once the gift's own unit has left the paid lines. Identical
+   * until the prize is already in the cart, then wrong: two KLOW at $119.99
+   * reads as $227.98 against a $200 floor here and $119.99 there, so the banner
+   * said nothing and the gift was withdrawn anyway. The server sends the figure
+   * it enforced.
+   */
+  offerShortfallCents?: number | null;
   /** The resolved discount's label, e.g. "15% gift" or "Coupon". */
   discountLabel?: string;
   /** True when priced for the address the offer was mailed to, because the

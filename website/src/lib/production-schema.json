@@ -562,7 +562,8 @@
     "revoke_reason",
     "closed_by_order_id",
     "quantity",
-    "gift_items"
+    "gift_items",
+    "max_discount_cents"
   ],
   "customer_preferences": [
     "user_id",

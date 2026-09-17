@@ -25,6 +25,15 @@ export interface CouponValidationResult {
    * and it is the one that does not require touching the discount rulebook.
    */
   freeShipping: boolean;
+  /**
+   * `coupons.source` as stored: which minter wrote the row ("omnisend_welcome",
+   * "omnisend_recovery", an admin's null, and so on), or "welcome_offer" for the
+   * owner's synthetic first-order code. Read so quoteOrder can tell a welcome
+   * code from any other code — the welcome gift and a welcome code are
+   * alternatives, and only the source says which a typed code is
+   * (lib/offers/welcome-offer-terms.ts). Never shown to the shopper.
+   */
+  source: string | null;
 }
 
 
@@ -138,6 +147,7 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
         // The welcome offer is synthetic — it has no coupons row to carry a
         // flag — so it is percentage-only, as it has always been.
         freeShipping: false,
+        source: "welcome_offer",
       };
     }
   } catch (e) {
@@ -161,14 +171,14 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
   // (every coupon open to everyone) unchanged.
   let { data, error } = await supabaseAdmin
     .from("coupons")
-    .select("code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count, active, assigned_email, member_scope, free_shipping")
+    .select("code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count, active, assigned_email, member_scope, free_shipping, source")
     .ilike("code", normalizedCode)
     .maybeSingle();
 
   if (error) {
     const fallback = await supabaseAdmin
       .from("coupons")
-      .select("code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count, active, assigned_email, free_shipping")
+      .select("code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count, active, assigned_email, free_shipping, source")
       .ilike("code", normalizedCode)
       .maybeSingle();
     data = fallback.data as typeof data;
@@ -253,6 +263,9 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
     // all 375 of them — an existing code cannot start waiving shipping because
     // this shipped.
     freeShipping: data.free_shipping === true,
+    // As stored, so a welcome code minted for Omnisend's flow is recognisable
+    // at the till (see the interface).
+    source: typeof (data as { source?: unknown }).source === "string" ? String((data as { source?: unknown }).source) : null,
   };
 }
 
