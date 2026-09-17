@@ -200,9 +200,19 @@ describe("any other code beside the welcome vial", () => {
 
   it("is a floor question, not a choice, when the discounted basket falls under the vial's minimum", async () => {
     // $60 of goods, 10% off: $54 qualifying, under the $60 floor. The vial
-    // comes out for the floor, and the quote does NOT call that a choice.
+    // comes out for the floor, and the quote must NOT call that a choice.
     const q = await quote([{ id: "peptide-b", quantity: 1 }, { id: "ghk-cu", quantity: 1 }], { couponCode: "SAVE10" });
-    expect(q.offerWithdrawnBy).toBeNull();
+    // The point of this test is that the shopper is never told their CODE
+    // displaced the vial when the basket was simply too small — blaming the
+    // code for a floor is the same class of mistake as blaming the email
+    // address for one.
+    expect(q.offerWithdrawnBy).not.toBe("welcome_code");
+    // It used to assert null, which said "not a choice" by saying nothing at
+    // all — and nothing at all is also what a quote with no offer on it says,
+    // so no surface could tell the two apart. The floor now names itself, and
+    // carries the figure that closes it.
+    expect(q.offerWithdrawnBy).toBe("minimum");
+    expect(q.offerShortfallCents).toBeGreaterThan(0);
   });
 });
 
