@@ -36,12 +36,33 @@ import { SPIN_PRIZES, SPIN_TTL_DAYS, type SpinPrize } from "@/lib/spin/prize-tab
 
 export type PrizeOdds = {
   prize: SpinPrize;
-  /** 1 in `oneIn`. Every wedge is drawn with equal probability. */
-  oneIn: number;
-  /** The same thing as a percentage, rounded for display. */
+  /** How many wedges grant this same reward. Usually one. */
+  wedges: number;
+  /** Total wedges on the wheel, the denominator of the odds. */
+  outOf: number;
+  /** The real chance of this PRIZE, as a percentage, rounded for display. */
   percent: number;
   minSubtotalCents: number;
 };
+
+/**
+ * Two wedges granting the same thing are ONE prize at twice the odds.
+ *
+ * SIXTEEN WEDGES IS NOT SIXTEEN PRIZES. "15% off" occupies two wedges, so a
+ * list that printed "1 in 16" against each of them told the customer something
+ * false twice over: it understated their real chance of a percentage, and it
+ * implied fifteen-percent-off and twenty-percent-off were equally likely when
+ * one is twice the other.
+ *
+ * Grouping is by what the reward GRANTS, not by wedge id, because that is what
+ * the customer receives and what the till honours.
+ */
+function rewardIdentity(prize: SpinPrize): string {
+  const reward = prize.reward;
+  if (reward.kind === "free_product") return `free_product:${reward.productSlug}`;
+  if (reward.kind === "percent") return `percent:${reward.percent}:${prize.maxDiscountCents ?? 0}`;
+  return reward.kind;
+}
 
 /**
  * The published odds.
@@ -53,12 +74,31 @@ export type PrizeOdds = {
  */
 export function spinOdds(): PrizeOdds[] {
   const total = SPIN_PRIZES.length;
-  return SPIN_PRIZES.map((prize) => ({
-    prize,
-    oneIn: total,
-    percent: Number(((1 / total) * 100).toFixed(2)),
-    minSubtotalCents: prize.minSubtotalCents,
-  }));
+  const byReward = new Map<string, PrizeOdds>();
+
+  for (const prize of SPIN_PRIZES) {
+    const key = rewardIdentity(prize);
+    const seen = byReward.get(key);
+    if (seen) {
+      seen.wedges += 1;
+      seen.percent = Number(((seen.wedges / total) * 100).toFixed(2));
+      continue;
+    }
+    byReward.set(key, {
+      prize,
+      wedges: 1,
+      outOf: total,
+      percent: Number(((1 / total) * 100).toFixed(2)),
+      minSubtotalCents: prize.minSubtotalCents,
+    });
+  }
+
+  return [...byReward.values()];
+}
+
+/** How many DISTINCT prizes the wheel grants. Not the wedge count. */
+export function distinctPrizeCount(): number {
+  return spinOdds().length;
 }
 
 /** Distinct minimum spends on the wheel, ascending — the tiers, derived. */
@@ -76,7 +116,7 @@ export const SPIN_EXPIRY_HOURS = SPIN_TTL_DAYS * 24;
  */
 export const SPIN_TERMS: readonly string[] = [
   "Every spin wins. There are no losing wedges.",
-  `Each prize is equally likely — 1 in ${SPIN_PRIZES.length}.`,
+  `Every wedge is equally likely. The wheel has ${SPIN_PRIZES.length} wedges and ${distinctPrizeCount()} prizes, so a prize on two wedges comes up twice as often.`,
   "One spin per customer for this campaign. The result is saved and final.",
   `Your prize expires ${SPIN_EXPIRY_HOURS} hours after you spin.`,
   "Every prize is claimed with a qualifying purchase — your cart will tell you exactly what's needed.",

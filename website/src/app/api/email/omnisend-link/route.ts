@@ -3,6 +3,7 @@ import { resolveSitePath } from "@/lib/email/cta-path";
 import { withUtm } from "@/lib/email/utm";
 import { emailLinkLanding, setEmailLinkGrantCookie } from "@/lib/email/recipient-attestation";
 import { verifyOmnisendLink } from "@/lib/marketing/omnisend/link-token";
+import { attachSpinLink } from "@/lib/spin/spin-campaign-link";
 import { siteUrl } from "@/lib/site-identity";
 
 export const dynamic = "force-dynamic";
@@ -104,11 +105,27 @@ export async function GET(request: NextRequest) {
     }
     const email = verified.email;
 
+    // A DESTINATION OF /spin BECOMES THIS CONTACT'S OWN WHEEL.
+    //
+    // Minted here, on the address this route has just opened out of a sealed
+    // token, and never at send time — which is what lets one Omnisend campaign
+    // serve both channels without a per-campaign contact property. `vl_link`
+    // identifies the CONTACT; the campaign travels in `to`. A later campaign
+    // therefore cannot overwrite a link already queued inside an earlier one,
+    // which a single mutable `spin_url` property would have done.
+    //
+    // Opening this link still spins nothing: /spin renders, and the draw is a
+    // POST behind a deliberate press. That matters more on SMS than on email —
+    // iMessage, WhatsApp and every link-preview bot fetch a URL the moment it
+    // arrives, and a GET that span the wheel would let a preview thumbnail
+    // spend the customer's one and only spin.
+    const spinAware = await attachSpinLink(destination, email);
+
     // WHERE THIS CLICK CAN ACTUALLY GO. An attested recipient gets the
     // destination and the grant; one who has never made the 21+ and
     // research-use representations is sent to the step that collects them,
     // carrying this destination. See recipient-attestation.ts.
-    const landing = await emailLinkLanding({ email, destination });
+    const landing = await emailLinkLanding({ email, destination: spinAware });
     const response = NextResponse.redirect(landing.destination, { status: 302 });
 
     // THE CAPABILITY TO ACTUALLY REACH THE DESTINATION. Null when the

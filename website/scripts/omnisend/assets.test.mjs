@@ -273,8 +273,8 @@ describe("SMS catalogue", () => {
   const SHORTENED = "https://omni.sn/xxxxxxxx"; // what a shortened link costs on the wire
   const link = /https:\/\/www\.vantalabsresearch\.com\/api\/email\/omnisend-link\?[^\s]+/g;
 
-  it("has the nine texts", () => {
-    expect(Object.keys(SMS).sort()).toEqual(["cart", "checkout", "promotion", "promotion-final-day", "restock", "welcome", "welcome-offer-code", "welcome-offer-gift", "winback"]);
+  it("has the ten texts", () => {
+    expect(Object.keys(SMS).sort()).toEqual(["cart", "checkout", "promotion", "promotion-final-day", "restock", "spin", "welcome", "welcome-offer-code", "welcome-offer-gift", "winback"]);
   });
 
   it("brands, opts out, links through the grant route and stays short", () => {
@@ -291,6 +291,7 @@ describe("SMS catalogue", () => {
       expect(entry.text, key).toMatch(/ Research use only\. Reply STOP to opt out\.$/);
       expect(entry.text.indexOf(links[0]), key).toBeLessThan(entry.text.indexOf("Research use only."));
       expect(entry.text.replace(link, SHORTENED).replace(CODE_TAG, MINTED_CODE).length, key).toBeLessThanOrEqual(160);
+
     }
   });
 
@@ -317,6 +318,21 @@ describe("SMS catalogue", () => {
 
   it("keeps the final-day text to the same honest deadline", () => {
     expect(SMS["promotion-final-day"].text).toContain("ends today at 11:59 PM ET");
+    // THE WHEEL TEXT NAMES NO PRIZE AND NO COUNT. The draw has not happened
+    // when the text is written, so naming a reward would be a promise the
+    // wheel might not keep; and sixteen wedges grant fifteen rewards, so any
+    // count in a text would be the wrong one.
+    expect(SMS.spin.text).toContain("Every spin wins a reward for your next order.");
+    expect(SMS.spin.text, "a text cannot know which wedge came up").not.toMatch(/free |GHK|KLOW|GLOW|vial/i);
+    expect(SMS.spin.text, "16 wedges is not 16 prizes").not.toMatch(/\b16\b|sixteen/i);
+    expect(SMS.spin.text, "the link must open the wheel, not spin it").toContain("to=%2Fspin");
+    // A MARGIN ON THIS ONE, NOT JUST THE 160 CEILING. SHORTENED models a
+    // 24-character link; a real shortener may return more, and a few
+    // characters more would push the text into a second segment and double
+    // what the send costs. Scoped to this entry rather than raised across the
+    // catalogue, because the texts already reviewed and approved are not mine
+    // to rewrite — `welcome` sits at 158 and is reported separately.
+    expect(SMS.spin.text.replace(link, SHORTENED).length, "spin leaves too little room for a longer shortened link").toBeLessThanOrEqual(150);
   });
 });
 

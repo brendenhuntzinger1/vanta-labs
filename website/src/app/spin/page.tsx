@@ -2,10 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import SpinWheel, { type WheelPrizeResult, type WheelSlice } from "@/components/spin-wheel";
+import SpinWheel, { type WheelPrizeOdds, type WheelPrizeResult, type WheelSlice } from "@/components/spin-wheel";
 import { getSpinWheelConfig } from "@/lib/admin-control";
 import { getAuthenticatedUser } from "@/lib/auth-session";
-import { SPIN_TERMS, describeExactCondition, describeRedemptionCondition } from "@/lib/spin/disclosure";
+import { SPIN_TERMS, describeExactCondition, describeRedemptionCondition, spinOdds } from "@/lib/spin/disclosure";
 import { SPIN_PRIZES } from "@/lib/spin/prize-table";
 import { readExistingSpin } from "@/lib/spin/spin-service";
 import { verifySpinToken } from "@/lib/spin/spin-token";
@@ -71,6 +71,8 @@ export default async function SpinPage({
     campaignId: verified.campaignId,
   });
 
+  // THE WHEEL and THE PRIZE LIST are different lengths on purpose: sixteen
+  // wedges, fewer distinct prizes, because one reward sits on two wedges.
   const slices: WheelSlice[] = SPIN_PRIZES.map((prize) => ({
     id: prize.id,
     wedgeLabel: prize.wedgeLabel,
@@ -82,6 +84,18 @@ export default async function SpinPage({
     // The two wedges worth over $100 are filled gold, so the jackpot is
     // visible before anyone reads a label.
     premium: PREMIUM_PRIZE_IDS.has(prize.id),
+  }));
+
+  // One row per PRIZE with its real odds — a reward on two wedges is one row
+  // at "2 in 16", not two rows each claiming "1 in 16".
+  const prizes: WheelPrizeOdds[] = spinOdds().map((entry) => ({
+    id: entry.prize.id,
+    label: entry.prize.label,
+    condition: describeRedemptionCondition(entry.prize),
+    exactCondition: describeExactCondition(entry.prize),
+    wedges: entry.wedges,
+    outOf: entry.outOf,
+    premium: PREMIUM_PRIZE_IDS.has(entry.prize.id),
   }));
 
   const initialResult: WheelPrizeResult | null = existing
@@ -97,7 +111,7 @@ export default async function SpinPage({
       }
     : null;
 
-  return <SpinWheel slices={slices} terms={SPIN_TERMS} token={token} initialResult={initialResult} />;
+  return <SpinWheel slices={slices} prizes={prizes} terms={SPIN_TERMS} token={token} initialResult={initialResult} />;
 }
 
 function LinkProblem() {

@@ -26,8 +26,21 @@ export type WheelPrizeResult = {
   alreadySpun: boolean;
 };
 
+/** One row of the prize list: a REWARD and its real odds, not one wedge. */
+export type WheelPrizeOdds = {
+  id: string;
+  label: string;
+  condition: string;
+  exactCondition: string;
+  /** How many wedges grant this reward. Two means twice the chance. */
+  wedges: number;
+  outOf: number;
+  premium?: boolean;
+};
+
 type Props = {
   slices: WheelSlice[];
+  prizes: WheelPrizeOdds[];
   terms: readonly string[];
   token: string;
   /** A prize this customer already won. Present means the wheel does not spin. */
@@ -78,7 +91,7 @@ function useCountdown(expiresAt: string | null): { text: string; expired: boolea
   };
 }
 
-export default function SpinWheel({ slices, terms, token, initialResult }: Props) {
+export default function SpinWheel({ slices, prizes, terms, token, initialResult }: Props) {
   const count = slices.length;
   const wedgeAngle = 360 / count;
 
@@ -144,13 +157,13 @@ export default function SpinWheel({ slices, terms, token, initialResult }: Props
     <div className="mx-auto w-full max-w-xl px-4 pb-16 pt-8">
       <header className="text-center">
         <p className="text-[11px] font-semibold uppercase tracking-[0.22em]" style={{ color: GOLD }}>
-          One spin · {count} prizes
+          One spin · {prizes.length} prizes
         </p>
         <h1 className="mt-2 text-[32px] font-semibold leading-tight tracking-tight sm:text-4xl">
           Spin to win
         </h1>
         <p className="mx-auto mt-2 max-w-sm text-sm" style={{ color: "var(--foreground-muted)" }}>
-          Every spin wins something. Claim it with your next order.
+          {count} wedges, every spin wins, and your reward is claimed with your next order.
         </p>
       </header>
 
@@ -389,25 +402,28 @@ export default function SpinWheel({ slices, terms, token, initialResult }: Props
           What&apos;s on the wheel
         </h2>
         <ul className="mt-4 space-y-px overflow-hidden rounded-xl" style={{ border: "1px solid var(--border-soft)" }}>
-          {slices.map((slice) => (
+          {prizes.map((prize) => (
             <li
-              key={slice.id}
+              key={prize.id}
               className="flex items-start justify-between gap-4 px-4 py-3"
-              style={{ background: slice.premium ? `${GOLD}0f` : "var(--surface-0)" }}
+              style={{ background: prize.premium ? `${GOLD}0f` : "var(--surface-0)" }}
             >
               <div className="min-w-0">
-                <p className="text-sm font-medium" style={{ color: slice.premium ? GOLD : "var(--foreground)" }}>
-                  {slice.label}
+                <p className="text-sm font-medium" style={{ color: prize.premium ? GOLD : "var(--foreground)" }}>
+                  {prize.label}
                 </p>
                 <p className="mt-0.5 text-xs" style={{ color: "var(--foreground-muted)" }}>
-                  {slice.condition}
+                  {prize.condition}
                 </p>
               </div>
+              {/* THE REAL ODDS. A reward sitting on two wedges is twice as
+                  likely, and printing "1 in 16" beside each of them would
+                  understate it twice over. */}
               <span
                 className="shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] tabular-nums"
                 style={{ background: "rgba(255,255,255,0.05)", color: "var(--foreground-muted)" }}
               >
-                1 in {count}
+                {prize.wedges} in {prize.outOf}
               </span>
             </li>
           ))}
@@ -418,9 +434,9 @@ export default function SpinWheel({ slices, terms, token, initialResult }: Props
             Full terms, including the qualifying order for each prize
           </summary>
           <ul className="mt-3 space-y-2">
-            {slices.map((slice) => (
-              <li key={`${slice.id}-exact`} className="text-xs" style={{ color: "var(--foreground-muted)" }}>
-                <span style={{ color: "var(--foreground)" }}>{slice.label}</span> — {slice.exactCondition}
+            {prizes.map((prize) => (
+              <li key={`${prize.id}-exact`} className="text-xs" style={{ color: "var(--foreground-muted)" }}>
+                <span style={{ color: "var(--foreground)" }}>{prize.label}</span> — {prize.exactCondition}
               </li>
             ))}
           </ul>

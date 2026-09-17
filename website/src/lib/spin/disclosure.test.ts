@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { SPIN_PRIZES } from "@/lib/spin/prize-table";
 import {
   SPIN_EXPIRY_HOURS,
+  distinctPrizeCount,
   SPIN_TERMS,
   describeExactCondition,
   describeRedemptionCondition,
@@ -21,16 +22,29 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("the published odds", () => {
-  it("covers every wedge exactly once", () => {
+  it("lists PRIZES, not wedges — a reward on two wedges is one row", () => {
     const odds = spinOdds();
-    expect(odds).toHaveLength(SPIN_PRIZES.length);
-    expect(odds.map((entry) => entry.prize.id)).toEqual(SPIN_PRIZES.map((prize) => prize.id));
+    // Sixteen wedges, fewer prizes: "15% off" occupies two of them.
+    expect(odds.length).toBeLessThan(SPIN_PRIZES.length);
+    expect(odds.length).toBe(distinctPrizeCount());
+    expect(new Set(odds.map((e) => e.prize.id)).size).toBe(odds.length);
   });
 
-  it("is uniform, because the draw is", () => {
-    for (const entry of spinOdds()) {
-      expect(entry.oneIn).toBe(SPIN_PRIZES.length);
-    }
+  it("gives a doubled-up reward its REAL odds, not 1 in 16 twice", () => {
+    // The bug this replaces: two rows each claiming "1 in 16" understated a
+    // customer's real chance of a percentage, and implied 15% and 20% were
+    // equally likely when one is twice the other.
+    const fifteen = spinOdds().find((e) => e.prize.reward.kind === "percent" && e.prize.reward.percent === 15)!;
+    const twenty = spinOdds().find((e) => e.prize.reward.kind === "percent" && e.prize.reward.percent === 20)!;
+    expect(fifteen.wedges).toBe(2);
+    expect(twenty.wedges).toBe(1);
+    expect(fifteen.percent).toBeCloseTo(12.5, 2);
+    expect(twenty.percent).toBeCloseTo(6.25, 2);
+  });
+
+  it("accounts for every wedge across the grouped rows", () => {
+    expect(spinOdds().reduce((sum, e) => sum + e.wedges, 0)).toBe(SPIN_PRIZES.length);
+    for (const entry of spinOdds()) expect(entry.outOf).toBe(SPIN_PRIZES.length);
   });
 
   it("sums to 100%, so nothing is unaccounted for", () => {
@@ -66,8 +80,11 @@ describe("the terms shown before anyone spins", () => {
     expect(SPIN_TERMS.some((term) => term.includes("72 hours"))).toBe(true);
   });
 
-  it("states the real odds, not a rounded boast", () => {
-    expect(SPIN_TERMS.some((term) => term.includes(`1 in ${SPIN_PRIZES.length}`))).toBe(true);
+  it("says how many WEDGES and how many PRIZES, because they differ", () => {
+    // "16 prizes" would be false: sixteen wedges grant fifteen rewards.
+    expect(SPIN_TERMS.some((term) => term.includes(`${SPIN_PRIZES.length} wedges`))).toBe(true);
+    expect(SPIN_TERMS.some((term) => term.includes(`${distinctPrizeCount()} prizes`))).toBe(true);
+    expect(distinctPrizeCount()).toBeLessThan(SPIN_PRIZES.length);
   });
 
   it("says every spin wins, which is what keeps this out of sweepstakes law", () => {

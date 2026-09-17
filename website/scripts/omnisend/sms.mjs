@@ -58,6 +58,19 @@ export const SMS = {
     text: text("it has been a while. The current batch report for every product is on its page.", "/products", "win-back"),
     whenUsed: "Win-back automation, one day after the first email. The code is only in the second email, so the text names none.",
   },
+  // THE WHEEL. Owner-sent, either channel, and deliberately vague about the
+  // prize because the draw has not happened when the text is written: naming
+  // any reward would be a promise the wheel might not keep. "a reward to claim
+  // with your next order" is the whole truth — every spin wins, and nothing is
+  // unconditional.
+  //
+  // It names no count. Sixteen WEDGES grant fifteen REWARDS (one sits on two
+  // wedges), so "16 prizes" would be false; the page states both numbers and a
+  // text has no room to.
+  spin: {
+    text: text("your spin is ready. Every spin wins a reward for your next order.", "/spin", "spin-wheel"),
+    whenUsed: "Owner-sent spin-wheel campaign, email or SMS or both. The link opens the wheel; it does not spin it, so a link preview cannot spend the recipient's one spin. One spin per contact per campaign, so a reminder text reaches the same saved result rather than a second draw.",
+  },
   restock: {
     text: text("PRODUCT NAME is back in the catalogue with a new batch report filed.", "/products", "campaign-restock"),
     whenUsed: "Owner-sent restock campaign. Replace PRODUCT NAME with the listing's name; state stock only as the live store shows it.",
