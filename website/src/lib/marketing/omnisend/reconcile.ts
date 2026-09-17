@@ -633,6 +633,56 @@ export async function loadPaidBuyers(): Promise<{ buyers: Set<string>; nonMailab
 }
 
 /**
+ * Everyone who consented to TEXTS and is still opted in, keyed by the address
+ * the store files the consent under.
+ *
+ * WHY THIS IS A THIRD SOURCE and not an addition to loadConsentedAudience.
+ * That loader drives the in-house EMAIL sender as well as this push, so an
+ * address added there would be mailed by the site — and someone who ticked the
+ * SMS box and not the email box has not consented to email. They join only
+ * here, only for the push, and they arrive in Omnisend as
+ * email:nonSubscribed + sms:subscribed, which is exactly what they are
+ * (collectContactFacts decides that per contact; nothing is asserted here).
+ *
+ * WHY THEY HAVE TO BE HERE AT ALL. Without this they are in no tier: no
+ * marketing_subscribers row, no marketing_emails preference, and — for the
+ * offer's whole target audience, someone who has not bought yet — no order.
+ * Their contact would reach Omnisend once, from the fire-and-forget hook on
+ * the consent itself (sms-consent.ts pushToOmnisend), and never again. One
+ * dropped push would be permanent rather than repaired within the day, and the
+ * 30-day `vl_link` token would expire with nothing to renew it, breaking every
+ * link in every message the 15%-for-texts offer promised them.
+ *
+ * Read in full or not at all, like the other consent reads: a short list here
+ * would silently stop refreshing the tail of the SMS list.
+ */
+export async function loadSmsConsented(): Promise<Set<string>> {
+  const consented = new Set<string>();
+  try {
+    const { rows, truncated } = await readAllRowsBounded<{ email: string | null }>(
+      (from, to) => supabaseAdmin
+        .from("sms_subscribers")
+        .select("email")
+        .eq("marketing_consent", true)
+        .is("opted_out_at", null)
+        .order("phone_e164", { ascending: true })
+        .range(from, to),
+      { maxRows: MAX_STORE_ROWS, label: "omnisend sms consent read" },
+    );
+    if (truncated) console.warn(LOG, "sms consent read truncated; later subscribers are pushed on a future run");
+    for (const row of rows) {
+      const email = normalizeEmail(row.email);
+      if (email) consented.add(email);
+    }
+  } catch (error) {
+    // A database without the table (an unapplied migration) lands here and
+    // reads as "nobody", which loses a refresh rather than inventing consent.
+    console.error(LOG, "sms consent read failed", error);
+  }
+  return consented;
+}
+
+/**
  * A subscribed buyer whose last paid order is old enough for the win-back
  * flow. Subscribed only: a nonSubscribed contact receives no marketing
  * (the automations' sending thresholds), so a code minted for one is a
@@ -740,6 +790,8 @@ type PushOutcome = {
   submissions: BatchSubmission[];
   /** Contacts walked whose account carries SMS consent with a number. */
   smsConsented: number;
+  /** Addresses pushed only because they consented to texts: no email consent, no order. */
+  smsOnly: number;
   buyersWithoutConsent: number;
   nonMailable: number;
   /** Targets past the push limit, left for the next run. */
@@ -758,6 +810,7 @@ async function runPush(input: { dryRun: boolean; audience: Set<string>; limit: n
     batchIds: [],
     submissions: [],
     smsConsented: 0,
+    smsOnly: 0,
     buyersWithoutConsent: 0,
     nonMailable: 0,
     capped: 0,
@@ -770,8 +823,11 @@ async function runPush(input: { dryRun: boolean; audience: Set<string>; limit: n
   // nonSubscribed, for segments and lifetime value only.
   const { buyers, nonMailable } = await loadPaidBuyers();
   outcome.nonMailable = nonMailable;
-  const targets = orderPushTargets(input.audience, buyers);
-  outcome.buyersWithoutConsent = targets.length - input.audience.size;
+  const smsConsented = await loadSmsConsented();
+  const targets = orderPushTargets(input.audience, buyers, smsConsented);
+  outcome.smsOnly = targets.length - input.audience.size
+    - [...buyers].filter((email) => !input.audience.has(email) && !smsConsented.has(email)).length;
+  outcome.buyersWithoutConsent = targets.length - input.audience.size - outcome.smsOnly;
   if (targets.length > input.limit) {
     outcome.capped = targets.length - input.limit;
     console.warn(LOG, "push capped", { targets: targets.length, limit: input.limit });
