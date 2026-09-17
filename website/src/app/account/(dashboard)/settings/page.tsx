@@ -4,6 +4,7 @@ import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getCustomerPreferences, getCustomerAddresses } from "@/lib/customer-account";
 import { AccountSettingsClient } from "@/components/account-settings-client";
 import { hasPasswordIdentity } from "@/lib/account-identity";
+import { readSmsSubscriptionForAccount } from "@/lib/sms-consent";
 
 export const dynamic = "force-dynamic";
 
@@ -13,10 +14,19 @@ export default async function AccountSettingsPage() {
     redirect("/account/login");
   }
 
-  const [preferences, addresses] = await Promise.all([
+  const [preferences, addresses, smsStanding] = await Promise.all([
     getCustomerPreferences(user.id),
     getCustomerAddresses(user.id).catch(() => []),
+    readSmsSubscriptionForAccount(user.email ?? ""),
   ]);
+
+  // THE PAGE MUST NOT CONTRADICT THE CONSENT LEDGER. `customer_preferences`
+  // only carries a tick taken while signed in; a guest checkout writes the
+  // address's own row instead. Reading both means somebody who subscribed at
+  // the till sees their real subscription here rather than an empty box.
+  const shownPreferences = smsStanding.subscribed && !preferences.smsMarketing
+    ? { ...preferences, smsMarketing: true, phone: preferences.phone || smsStanding.phone }
+    : preferences;
   const fullName = typeof user.user_metadata?.full_name === "string" ? user.user_metadata.full_name : "";
 
   return (
@@ -30,7 +40,7 @@ export default async function AccountSettingsPage() {
       <AccountSettingsClient
         initialFullName={fullName}
         initialEmail={user.email ?? ""}
-        initialPreferences={preferences}
+        initialPreferences={shownPreferences}
         initialAddresses={addresses}
         hasPassword={hasPasswordIdentity(user)}
       />

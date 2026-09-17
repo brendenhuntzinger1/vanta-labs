@@ -74,11 +74,17 @@ type PreferencesRow = {
   sms_opted_out_at: string | null;
   referral_code: string | null;
 };
-/** sms_subscribers (sms-subscribers.sql): consent from the sign-up page or the checkout, guest or not. */
+/**
+ * sms_subscribers, as production actually defines it: keyed on the E.164
+ * number, with marketing consent as its own boolean and timestamp. The reader
+ * below takes the newest live row for the address, which is the number the
+ * store should be pushing.
+ */
 type SmsSubscriberRow = {
-  phone: string | null;
-  source: string | null;
-  consented_at: string | null;
+  phone_e164: string | null;
+  consent_source: string | null;
+  marketing_consent: boolean | null;
+  marketing_consent_at: string | null;
   opted_out_at: string | null;
 };
 type OrderRow = {
@@ -159,9 +165,10 @@ async function readSmsSubscriber(email: string): Promise<SmsSubscriberRow | null
   try {
     const { data, error } = await supabaseAdmin
       .from("sms_subscribers")
-      .select("phone, source, consented_at, opted_out_at")
+      .select("phone_e164, consent_source, marketing_consent, marketing_consent_at, opted_out_at")
       .eq("email", email)
-      .maybeSingle();
+      .order("marketing_consent_at", { ascending: false, nullsFirst: false })
+      .limit(1);
     if (error) {
       // A database without the table (an unapplied migration) lands here
       // and reads as "no consent": the direction that cannot text anyone
@@ -169,7 +176,7 @@ async function readSmsSubscriber(email: string): Promise<SmsSubscriberRow | null
       console.error(LOG, "sms subscriber read refused", error.message);
       return null;
     }
-    return (data as SmsSubscriberRow | null) ?? null;
+    return ((data ?? []) as SmsSubscriberRow[])[0] ?? null;
   } catch (error) {
     console.error(LOG, "sms subscriber read failed", error);
     return null;
@@ -281,9 +288,9 @@ function smsConsentFrom(prefs: PreferencesRow | null, guest: SmsSubscriberRow | 
   if (prefs?.sms_opted_out_at) {
     return { status: "unsubscribed", changedAt: prefs.sms_opted_out_at };
   }
-  const guestPhone = String(guest?.phone ?? "").trim();
-  if (guest && !guest.opted_out_at && guestPhone) {
-    return { status: "subscribed", changedAt: guest.consented_at ?? now, source: guest.source ?? "checkout" };
+  const guestPhone = String(guest?.phone_e164 ?? "").trim();
+  if (guest && !guest.opted_out_at && guest.marketing_consent && guestPhone) {
+    return { status: "subscribed", changedAt: guest.marketing_consent_at ?? now, source: guest.consent_source ?? "checkout" };
   }
   if (guest?.opted_out_at) {
     return { status: "unsubscribed", changedAt: guest.opted_out_at };
@@ -352,7 +359,7 @@ export async function collectContactFacts(email: string, extras: ContactExtras =
     lastName,
     // The account's number first (it is the one on the settings page), else
     // the number the person typed beside the box they ticked.
-    phone: prefs?.phone ?? smsSubscriber?.phone ?? null,
+    phone: prefs?.phone ?? smsSubscriber?.phone_e164 ?? null,
     countryCode: countryCodeFrom(latest?.country),
     state: latest?.state ?? null,
     city: latest?.city ?? null,

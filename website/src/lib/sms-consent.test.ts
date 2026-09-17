@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SMS_CONSENT_TEXT, acceptableSmsPhone } from "@/lib/sms-consent-text";
+import { SMS_DISCLOSURE_VERSION, acceptableSmsPhone } from "@/lib/sms-consent-text";
 
 // ---------------------------------------------------------------------------
 // WHAT A TICKED SMS BOX WRITES, AND WHAT IT NEVER WRITES.
@@ -15,7 +15,10 @@ vi.mock("server-only", () => ({}));
 type Write = { table: string; op: "upsert" | "update"; values: Record<string, unknown>; options?: unknown };
 const db = vi.hoisted(() => ({
   writes: [] as Write[],
+  /** What a single-row read (by phone) finds. */
   row: null as Record<string, unknown> | null,
+  /** What a list read (every row for an address) finds. */
+  rows: [] as Record<string, unknown>[],
   refuse: null as string | null,
 }));
 const deferred = vi.hoisted(() => ({ calls: 0 }));
@@ -27,13 +30,28 @@ vi.mock("@/lib/supabase-server", () => {
       db.writes.push({ table, op: "upsert", values, options });
       return { error: db.refuse ? { message: db.refuse } : null };
     };
-    chain.update = (values: Record<string, unknown>) => ({
-      eq: async () => {
-        db.writes.push({ table, op: "update", values });
-        return { error: db.refuse ? { message: db.refuse } : null };
-      },
-    });
-    chain.select = () => ({ eq: () => ({ maybeSingle: async () => ({ data: db.row, error: db.refuse ? { message: db.refuse } : null }) }) });
+    const writeResult = async () => {
+      db.writes.push({ table, op: "update", values: pendingUpdate });
+      return { error: db.refuse ? { message: db.refuse } : null };
+    };
+    let pendingUpdate: Record<string, unknown> = {};
+    chain.update = (values: Record<string, unknown>) => {
+      pendingUpdate = values;
+      return { eq: writeResult, in: writeResult };
+    };
+    chain.insert = async (values: Record<string, unknown>) => {
+      db.writes.push({ table, op: "upsert", values });
+      return { error: db.refuse ? { message: db.refuse } : null };
+    };
+    // A list read resolves through `then`; a single-row read asks for
+    // maybeSingle. The real client offers both off the same builder.
+    const listResult = () => ({ data: db.rows, error: db.refuse ? { message: db.refuse } : null });
+    const eqChain: Record<string, unknown> = {
+      maybeSingle: async () => ({ data: db.row, error: db.refuse ? { message: db.refuse } : null }),
+      order: () => ({ limit: async () => listResult() }),
+      then: (resolve: (value: unknown) => unknown) => Promise.resolve(listResult()).then(resolve),
+    };
+    chain.select = () => ({ eq: () => eqChain });
     return chain;
   };
   return { supabaseAdmin: { from } };
@@ -46,6 +64,7 @@ vi.mock("@/lib/marketing/omnisend/defer", () => ({
 beforeEach(() => {
   db.writes = [];
   db.row = null;
+  db.rows = [];
   db.refuse = null;
   deferred.calls = 0;
 });
@@ -66,9 +85,19 @@ describe("recordSmsConsent", () => {
     expect(db.writes).toHaveLength(1);
     const [row] = db.writes;
     expect(row.table).toBe("sms_subscribers");
-    expect(row.options).toEqual({ onConflict: "email" });
-    expect(row.values).toMatchObject({ email: "new@example.test", phone: "(512) 555-0100", source: "checkout", opted_out_at: null, consent_text: SMS_CONSENT_TEXT });
-    expect(typeof row.values.consented_at).toBe("string");
+    expect(row.options).toEqual({ onConflict: "phone_e164" });
+    // The columns production's table actually has: the number normalised to
+    // E.164 as the key, marketing consent as its own flag, the screen that
+    // collected it, and WHICH VERSION of the sentence was on screen.
+    expect(row.values).toMatchObject({
+      phone_e164: "+15125550100",
+      email: "new@example.test",
+      marketing_consent: true,
+      consent_source: "checkout",
+      disclosure_version: SMS_DISCLOSURE_VERSION,
+      opted_out_at: null,
+    });
+    expect(typeof row.values.marketing_consent_at).toBe("string");
     expect(deferred.calls).toBe(1);
   });
 
@@ -77,7 +106,7 @@ describe("recordSmsConsent", () => {
     expect(await recordSmsConsent({ email: "new@example.test", phone: "5125550100", source: "signup", userId: "user-1" })).toBe(true);
     const mirror = db.writes.find((write) => write.table === "customer_preferences");
     expect(mirror?.options).toEqual({ onConflict: "user_id" });
-    expect(mirror?.values).toMatchObject({ user_id: "user-1", phone: "5125550100", sms_marketing: true, sms_opted_out_at: null });
+    expect(mirror?.values).toMatchObject({ user_id: "user-1", phone: "+15125550100", sms_marketing: true, sms_opted_out_at: null });
     expect(typeof mirror?.values.sms_consent_at).toBe("string");
   });
 
@@ -100,16 +129,22 @@ describe("recordSmsConsent", () => {
 
 describe("recordSmsOptOut", () => {
   it("stamps an unstopped row with the instant the person said stop", async () => {
-    db.row = { opted_out_at: null };
+    // A stop reaches EVERY live number the address consented from, because a
+    // person who says stop means the person and not the handset.
+    db.rows = [{ phone_e164: "+15125550100", opted_out_at: null }, { phone_e164: "+15125550111", opted_out_at: null }];
     const { recordSmsOptOut } = await import("@/lib/sms-consent");
     expect(await recordSmsOptOut("new@example.test", "2026-09-12T09:00:00.000Z")).toBe("applied");
-    expect(db.writes[0]).toMatchObject({ table: "sms_subscribers", op: "update", values: { opted_out_at: "2026-09-12T09:00:00.000Z" } });
+    expect(db.writes[0]).toMatchObject({
+      table: "sms_subscribers",
+      op: "update",
+      values: { opted_out_at: "2026-09-12T09:00:00.000Z", marketing_consent: false, status: "opted_out", opt_out_keyword: "STOP" },
+    });
   });
 
   it("keeps an existing stamp, and is nothing for an address with no row", async () => {
     const { recordSmsOptOut } = await import("@/lib/sms-consent");
     expect(await recordSmsOptOut("new@example.test", "2026-09-12T09:00:00.000Z")).toBe("nothing");
-    db.row = { opted_out_at: "2026-09-01T00:00:00.000Z" };
+    db.rows = [{ phone_e164: "+15125550100", opted_out_at: "2026-09-01T00:00:00.000Z" }];
     expect(await recordSmsOptOut("new@example.test", "2026-09-12T09:00:00.000Z")).toBe("nothing");
     expect(db.writes).toHaveLength(0);
   });

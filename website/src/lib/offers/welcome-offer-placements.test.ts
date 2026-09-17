@@ -295,3 +295,78 @@ describe("the sentence survives minification", () => {
     expect(bundle.includes(WELCOME_OFFER_TERMS)).toBe(true);
   });
 });
+
+describe("the holdout, so the offer can be priced honestly", () => {
+  it("holds nobody back by default", async () => {
+    const { isHeldOut } = await import("@/lib/offers/welcome-offer-holdout");
+    expect(DEFAULT_SMS_SIGNUP_CONFIG.holdoutPercent).toBe(0);
+    for (const address of ["a@x.test", "b@x.test", "c@x.test"]) {
+      expect(isHeldOut(address, 0)).toBe(false);
+    }
+  });
+
+  it("is stable for an address, so nobody's experience flickers", async () => {
+    const { holdoutBucket } = await import("@/lib/offers/welcome-offer-holdout");
+    const first = holdoutBucket("Someone@Example.test");
+    expect(holdoutBucket("someone@example.test")).toBe(first);
+    expect(holdoutBucket("  someone@example.test  ")).toBe(first);
+  });
+
+  it("splits roughly at the percentage asked for", async () => {
+    const { isHeldOut } = await import("@/lib/offers/welcome-offer-holdout");
+    const people = Array.from({ length: 2000 }, (_, i) => `person${i}@example.test`);
+    const held = people.filter((address) => isHeldOut(address, 10)).length;
+    // 10% of 2000 is 200. A hash is not a shuffle, so this is a sanity band.
+    expect(held).toBeGreaterThan(140);
+    expect(held).toBeLessThan(260);
+  });
+
+  it("suppresses every prompt for a held-back shopper", () => {
+    expect(SERVICE).toContain("if (isHeldOut(address, config.holdoutPercent)) return { status: \"suppressed\", mayInterrupt: false };");
+  });
+
+  // The analysis has to be able to reproduce the split months later, in SQL,
+  // without this code. MD5 is used for exactly that reason.
+  it("documents the SQL that reproduces the same split", async () => {
+    const holdout = read("src/lib/offers/welcome-offer-holdout.ts");
+    expect(holdout).toContain("substr(md5(lower(");
+    expect(read("docs/omnisend/DEPLOY.md")).toContain("substr(md5(lower(customer_email))");
+  });
+});
+
+describe("the consent ledger is the one production actually has", () => {
+  it("writes phone_e164, not an invented email key", async () => {
+    const consent = read("src/lib/sms-consent.ts");
+    expect(consent).toContain("phone_e164: phone");
+    expect(consent).toContain('onConflict: "phone_e164"');
+    expect(consent).toContain("disclosure_version: SMS_DISCLOSURE_VERSION");
+    // Code only: the header explains the old shape by naming the column it
+    // used to write, so the prose must not fail its own lesson.
+    const code = consent.split("\n").filter((line) => !line.trim().startsWith("*") && !line.trim().startsWith("//") && !line.trim().startsWith("/*")).join("\n");
+    expect(code).not.toContain("consent_text");
+  });
+
+  it("stops every live number for an address, not one row", async () => {
+    const consent = read("src/lib/sms-consent.ts");
+    expect(consent).toContain('.in("phone_e164", live.map((row) => row.phone_e164))');
+    expect(consent).toContain('opt_out_keyword: keyword');
+  });
+
+  it("records a resubscribe as a resubscribe", async () => {
+    const consent = read("src/lib/sms-consent.ts");
+    expect(consent).toContain("row.resubscribed_at = now;");
+    expect(consent).toContain("row.resubscribe_count = Number(existing?.resubscribe_count ?? 0) + 1;");
+  });
+
+  it("makes an untick reach the ledger even when the account mirror says nothing", () => {
+    const prefs = read("src/app/api/account/preferences/route.ts");
+    expect(prefs).toContain("if (!body.smsMarketing) {");
+    expect(prefs).toContain("await recordSmsOptOut(stopAddress, now);");
+  });
+
+  it("shows an account holder the subscription the ledger knows about", () => {
+    const page = read("src/app/account/(dashboard)/settings/page.tsx");
+    expect(page).toContain("readSmsSubscriptionForAccount");
+    expect(page).toContain("smsStanding.subscribed && !preferences.smsMarketing");
+  });
+});

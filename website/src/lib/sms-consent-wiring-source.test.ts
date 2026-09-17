@@ -97,16 +97,38 @@ describe("the routes record the tick through sms-consent.ts, SMS before email so
 
   it("account settings: an untick stops the address's own row too", () => {
     expect(PREFERENCES).toMatch(/import \{ recordSmsOptOut \} from "@\/lib\/sms-consent";/);
-    expect(PREFERENCES).toContain("if (address && !body.smsMarketing) await recordSmsOptOut(address, now);");
+    // UNCONDITIONAL, not on a change. Reading the change from the account
+    // mirror meant a missing or unreadable row silently swallowed the stop.
+    expect(PREFERENCES).toContain("if (!body.smsMarketing) {");
+    expect(PREFERENCES).toContain("await recordSmsOptOut(stopAddress, now);");
   });
 });
 
 describe("the consent row is service-role only and part of the harness schema", () => {
-  it("sms-subscribers.sql enables RLS with no policies, and the harness applies it", () => {
+  // THE MIGRATION MUST NOT PRETEND TO CREATE A TABLE THAT ALREADY EXISTS.
+  //
+  // It did, with `create table if not exists`, against a production
+  // sms_subscribers of a completely different shape. Applying it would have
+  // been a silent no-op and every consent write would then have failed on
+  // columns that are not there — while this module catches its own errors, so
+  // nothing would have reported it. The file is now additive only.
+  it("sms-subscribers.sql only adds what is missing, and never creates the table", () => {
     const sql = read("src/lib/sql/sms-subscribers.sql");
-    expect(sql).toContain("create table if not exists public.sms_subscribers (");
-    expect(sql).toContain("alter table public.sms_subscribers enable row level security;");
-    expect(sql).not.toMatch(/create policy/i);
-    expect(read("scripts/setup-local-harness.sh")).toMatch(/omnisend-sync sms-subscribers; do/);
+    expect(sql).toContain("alter table public.sms_subscribers");
+    expect(sql).toContain("add column if not exists email text;");
+    // Statements only: the comment above explains the bug by quoting the
+    // very phrase this forbids, so the check reads the SQL and not the prose.
+    const statements = sql.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+    expect(statements).not.toMatch(/create table/i);
+    expect(statements).not.toMatch(/drop /i);
+    expect(statements).not.toMatch(/create policy/i);
+    expect(read("scripts/setup-local-harness.sh")).toMatch(/omnisend-sync customer-sms-consent sms-subscribers; do/);
+  });
+
+  it("the harness builds the table production actually has, so it cannot pass on a shape nobody holds", () => {
+    const setup = read("scripts/setup-local-harness.sh");
+    for (const column of ["phone_e164 text primary key", "marketing_consent boolean", "disclosure_version text", "resubscribe_count integer", "opt_out_keyword text"]) {
+      expect(setup).toContain(column);
+    }
   });
 });

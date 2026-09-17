@@ -960,11 +960,27 @@ export interface CouponPolicyConfig {
 export type SmsSignupConfig = {
   promptsEnabled: boolean;
   dismissCooldownDays: number;
+  /**
+   * THE HOLDOUT, AND WHY IT IS THE ONLY HONEST WAY TO PRICE THIS OFFER.
+   *
+   * Comparing subscribers against everyone else cannot tell you what the
+   * discount earned: the people who join a text list were already the more
+   * interested ones, so they would have converted better with or without it.
+   * The only comparison that isolates the offer is between eligible shoppers
+   * who were SHOWN it and eligible shoppers who were not.
+   *
+   * This is the percentage held back. 0 by default, so nobody is withheld from
+   * until the owner decides to measure. Set it to 10 for a few weeks and the
+   * difference in first-order rate between the two groups is the offer's real
+   * effect, at the cost of 10% of the prompts.
+   */
+  holdoutPercent: number;
 };
 
 export const DEFAULT_SMS_SIGNUP_CONFIG: SmsSignupConfig = {
   promptsEnabled: false,
   dismissCooldownDays: 7,
+  holdoutPercent: 0,
 };
 
 /** A whole number of days inside 1..90, or the default. Operator-typed configuration. */
@@ -972,6 +988,13 @@ function boundedCooldownDays(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return DEFAULT_SMS_SIGNUP_CONFIG.dismissCooldownDays;
   return Math.min(90, Math.max(1, Math.round(parsed)));
+}
+
+/** 0..50. Holding back more than half the audience is not a measurement, it is an outage. */
+function boundedHoldout(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.min(50, Math.max(0, Math.round(parsed)));
 }
 
 export async function getSmsSignupConfig(): Promise<SmsSignupConfig> {
@@ -982,6 +1005,7 @@ export async function getSmsSignupConfig(): Promise<SmsSignupConfig> {
       // Opt IN explicitly. Anything other than a stored true is off.
       promptsEnabled: config.prompts_enabled === true,
       dismissCooldownDays: boundedCooldownDays(config.dismiss_cooldown_days),
+      holdoutPercent: boundedHoldout(config.holdout_percent),
     };
   } catch {
     return { ...DEFAULT_SMS_SIGNUP_CONFIG };

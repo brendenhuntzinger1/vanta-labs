@@ -163,6 +163,41 @@ echo "==> post-parity migrations"
 # orders.amount_paid, orders.refund_amount and orders.payment_status. Run before
 # harness-prod-parity-columns.sql adds those, the view fails to create, `|| true`
 # swallows it, and the harness comes up missing exactly the view under test.
+# THE REAL sms_subscribers, COPIED FROM PRODUCTION'S SHAPE (2026-09-17).
+#
+# The harness used to build this table from src/lib/sql/sms-subscribers.sql,
+# which described a table production does not have — so the harness passed
+# while the deployed app would have failed every consent write. The harness now
+# creates what production actually holds, and then the migration file beside it
+# adds the one column this application needs, exactly as it will in production.
+$PSQL -q <<'HARNESS_SMS'
+create table if not exists public.sms_subscribers (
+  phone_e164 text primary key,
+  user_id uuid,
+  status text not null default 'pending'
+    check (status in ('pending', 'verified', 'opted_out', 'blocked')),
+  verified_at timestamptz,
+  verify_attempts integer not null default 0,
+  last_verify_at timestamptz,
+  marketing_consent boolean not null default false,
+  marketing_consent_at timestamptz,
+  transactional_consent boolean not null default false,
+  transactional_consent_at timestamptz,
+  double_optin_confirmed_at timestamptz,
+  consent_source text,
+  disclosure_version text,
+  opted_out_at timestamptz,
+  opt_out_keyword text,
+  resubscribed_at timestamptz,
+  resubscribe_count integer not null default 0,
+  line_type text,
+  carrier text,
+  timezone text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+HARNESS_SMS
+
 for f in referral-orders-commission-lifecycle referral-orders-manual-review-status \
          refund-exactly-once-indexes pending-emails-order-link automation-send-once auth-email-debounce \
          affiliate-email-system email-automation-tracking customer-offers coupon-free-shipping \
@@ -177,7 +212,7 @@ for f in referral-orders-commission-lifecycle referral-orders-manual-review-stat
   browse-abandonment \
   campaign-gifts auth-user-attested-by-email customer-offer-gift-items \
   marketing-attribution \
-  omnisend-sync sms-subscribers; do
+  omnisend-sync customer-sms-consent sms-subscribers; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
 done
 

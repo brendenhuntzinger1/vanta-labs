@@ -1,29 +1,40 @@
 import "server-only";
 
 import { deferOmnisend } from "@/lib/marketing/omnisend/defer";
-import { SMS_CONSENT_TEXT, acceptableSmsPhone } from "@/lib/sms-consent-text";
+import { normalizeE164 } from "@/lib/marketing/omnisend/contact-payload";
+import { SMS_DISCLOSURE_VERSION, acceptableSmsPhone } from "@/lib/sms-consent-text";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 /**
- * SMS MARKETING CONSENT, RECORDED WHERE EVERY SENDER LOOKS.
+ * SMS MARKETING CONSENT, WRITTEN TO THE TABLE PRODUCTION ACTUALLY HAS.
  *
- * Three places collect it — the sign-up page, the checkout and the account
- * settings page — and two stores carry it: sms_subscribers (one row per
- * address, everyone: sms-subscribers.sql) and customer_preferences (the
- * account holder's own toggle, customer-sms-consent.sql). This module writes
- * both so the account page shows what the checkout collected and the
- * Omnisend sync (marketing/omnisend/contacts.ts) reads one answer whichever
- * row it finds first.
+ * THIS MODULE WAS WRONG UNTIL 2026-09-17, AND SILENTLY SO. It wrote a table of
+ * its own design — email-keyed, with `consented_at` and `consent_text` —
+ * against a `sms_subscribers` that ALREADY EXISTS in production with a richer
+ * and better schema: keyed on the E.164 number, carrying a status, separate
+ * marketing and transactional consent, a disclosure version, opt-out keyword
+ * and resubscribe counters. The migration file said `create table if not
+ * exists`, so applying it would have been a silent no-op, every insert would
+ * have failed on columns that do not exist, and this module catches its own
+ * errors — so ticking the box would have recorded nothing, minted no code, and
+ * reported nothing wrong. Found by reading production before deploying rather
+ * than after.
  *
- * NEVER WIDENED. A number typed for delivery is not consent; only a ticked,
- * never pre-ticked box is, and the caller passes the box's state, not the
- * number's presence. The sentence the person ticked is stored with the row
- * (TCPA evidence), so a later edit to the site's wording cannot rewrite what
- * they agreed to.
+ * THE NUMBER IS THE SUBSCRIBER, which is why the real table is keyed that way:
+ * a phone can be reached, an email cannot, and one person may consent from a
+ * guest checkout with no account at all. `user_id` ties the row to an account
+ * when there is one; `email` (added by the migration beside this file, the one
+ * outstanding change) ties it to the address the welcome code is bound to,
+ * because the code lives on `coupons.assigned_email`.
  *
- * OMNISEND HEARS OF IT AFTER THE RESPONSE, never on the caller's path, through
- * the same deferral every consent hook uses. The hook re-reads both rows, so
- * it pushes what was actually stored.
+ * WHAT A TICK RECORDS: the normalised number, the account if known, the
+ * address, `marketing_consent` with its timestamp, which screen collected it,
+ * and WHICH VERSION of the sentence was on screen. A later edit to the wording
+ * cannot rewrite what somebody agreed to.
+ *
+ * RESUBSCRIBING IS NOT A SILENT UPDATE. An address that stopped and then ticks
+ * the box again clears the stop, stamps `resubscribed_at` and increments
+ * `resubscribe_count`, so the history of a number says what actually happened.
  *
  * Never throws. A refused write is logged and answered false; no sign-up,
  * checkout or preference save may fail over a marketing record.
@@ -31,12 +42,21 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 
 const LOG = "[sms-consent]";
 
-// Where the box was ticked. Stored on the consent row, so the TCPA record
-// says which screen collected it. "storefront" is the welcome-offer control
-// on the catalogue, a product page and the cart.
+/** Where the box was ticked. Stored on the row as `consent_source`. */
 export type SmsConsentSource = "signup" | "checkout" | "account-settings" | "storefront" | "omnisend-form";
 
-function normalizeEmail(email: string): string | null {
+type SubscriberRow = {
+  phone_e164: string;
+  email?: string | null;
+  user_id?: string | null;
+  status?: string | null;
+  marketing_consent?: boolean | null;
+  marketing_consent_at?: string | null;
+  opted_out_at?: string | null;
+  resubscribe_count?: number | null;
+};
+
+function normalizeEmail(email: string | null | undefined): string | null {
   const value = String(email ?? "").trim().toLowerCase();
   return value && value.includes("@") ? value : null;
 }
@@ -45,30 +65,80 @@ function pushToOmnisend(email: string): void {
   deferOmnisend("sms-consent", () => import("@/lib/marketing/omnisend/hooks").then((hooks) => hooks.onPreferencesChanged(email)));
 }
 
+/** The row for a number, or null. Reads never throw. */
+async function readByPhone(phone: string): Promise<SubscriberRow | null> {
+  const { data, error } = await supabaseAdmin
+    .from("sms_subscribers")
+    .select("phone_e164, email, user_id, status, marketing_consent, marketing_consent_at, opted_out_at, resubscribe_count")
+    .eq("phone_e164", phone)
+    .maybeSingle();
+  if (error) {
+    console.error(LOG, "subscriber read refused", error.message);
+    return null;
+  }
+  return (data as SubscriberRow) ?? null;
+}
+
 /**
  * Record a ticked box. False when the number is not one a person could be
- * texted at (the caller has already validated; this is the last check) or
- * the consent row was refused. The account mirror is best-effort on top.
+ * texted at, or the row was refused.
+ *
+ * `status` is left at the table's own default on a first insert: this store
+ * does not verify a number, so claiming "verified" would be a lie told to the
+ * one table a carrier would ask to see. The boolean that decides whether
+ * marketing may be sent is `marketing_consent`, and that is what is set.
  */
-export async function recordSmsConsent(input: { email: string; phone: string; source: SmsConsentSource; userId?: string | null }): Promise<boolean> {
+export async function recordSmsConsent(input: {
+  email: string;
+  phone: string;
+  source: SmsConsentSource;
+  userId?: string | null;
+}): Promise<boolean> {
   const email = normalizeEmail(input.email);
-  const phone = acceptableSmsPhone(input.phone);
+  const phone = normalizeE164(acceptableSmsPhone(input.phone));
   if (!email || !phone) return false;
   const now = new Date().toISOString();
+
   try {
+    const existing = await readByPhone(phone);
+    const resubscribing = Boolean(existing?.opted_out_at);
+
+    const row: Record<string, unknown> = {
+      phone_e164: phone,
+      email,
+      marketing_consent: true,
+      marketing_consent_at: now,
+      consent_source: input.source,
+      disclosure_version: SMS_DISCLOSURE_VERSION,
+      opted_out_at: null,
+      opt_out_keyword: null,
+      updated_at: now,
+    };
+    if (input.userId) row.user_id = input.userId;
+    if (resubscribing) {
+      // A stop, then a fresh tick. Both facts are kept: the row says it came
+      // back and how many times, which is what an audit of a number asks.
+      row.resubscribed_at = now;
+      row.resubscribe_count = Number(existing?.resubscribe_count ?? 0) + 1;
+      row.status = "pending";
+    }
+
     const { error } = await supabaseAdmin
       .from("sms_subscribers")
-      .upsert({ email, phone, source: input.source, consented_at: now, opted_out_at: null, consent_text: SMS_CONSENT_TEXT, updated_at: now }, { onConflict: "email" });
+      .upsert(row, { onConflict: "phone_e164" });
     if (error) {
       console.error(LOG, "consent row refused", { source: input.source, message: error.message });
       return false;
     }
+
+    // THE ACCOUNT MIRROR, so the settings page shows what the checkout took.
     if (input.userId) {
       const { error: mirrorError } = await supabaseAdmin
         .from("customer_preferences")
         .upsert({ user_id: input.userId, phone, sms_marketing: true, sms_consent_at: now, sms_opted_out_at: null, updated_at: now }, { onConflict: "user_id" });
       if (mirrorError) console.error(LOG, "account mirror refused", { source: input.source, message: mirrorError.message });
     }
+
     pushToOmnisend(email);
     return true;
   } catch (error) {
@@ -79,30 +149,38 @@ export async function recordSmsConsent(input: { email: string; phone: string; so
 
 /**
  * Record a stop: the account box unticked, or Omnisend reporting STOP
- * (reconcile.ts). Stamps opted_out_at on the address's row when there is
- * one and it is not already stamped; the stamp is when the person said stop
- * (`at`), not when the store found out. Answers "applied", "nothing" (no row,
- * or already stopped) or "failed", the reconcile's own vocabulary.
+ * (reconcile.ts). Every row for the ADDRESS is stopped, not just one number,
+ * because a person who says stop means the person and not the handset.
+ *
+ * The stamp is when they said stop (`at`), not when the store found out.
+ * Answers "applied", "nothing" (no row, or already stopped) or "failed".
  */
-export async function recordSmsOptOut(email: string, at: string): Promise<"applied" | "nothing" | "failed"> {
+export async function recordSmsOptOut(email: string, at: string, keyword = "STOP"): Promise<"applied" | "nothing" | "failed"> {
   const address = normalizeEmail(email);
   if (!address) return "nothing";
   try {
     const { data, error } = await supabaseAdmin
       .from("sms_subscribers")
-      .select("opted_out_at")
-      .eq("email", address)
-      .maybeSingle();
+      .select("phone_e164, opted_out_at")
+      .eq("email", address);
     if (error) {
       console.error(LOG, "opt-out read refused", error.message);
       return "failed";
     }
-    if (!data) return "nothing";
-    if ((data as { opted_out_at?: string | null }).opted_out_at) return "nothing";
+    const rows = (data ?? []) as SubscriberRow[];
+    const live = rows.filter((row) => !row.opted_out_at);
+    if (live.length === 0) return "nothing";
+
     const { error: writeError } = await supabaseAdmin
       .from("sms_subscribers")
-      .update({ opted_out_at: at, updated_at: new Date().toISOString() })
-      .eq("email", address);
+      .update({
+        status: "opted_out",
+        marketing_consent: false,
+        opted_out_at: at,
+        opt_out_keyword: keyword,
+        updated_at: new Date().toISOString(),
+      })
+      .in("phone_e164", live.map((row) => row.phone_e164));
     if (writeError) {
       console.error(LOG, "opt-out write refused", writeError.message);
       return "failed";
@@ -118,41 +196,110 @@ export async function recordSmsOptOut(email: string, at: string): Promise<"appli
  * A CONSENT OMNISEND TOOK AND THE STORE HAS NEVER SEEN.
  *
  * The sign-up pop-up collects the number and the tick on Omnisend's side, so
- * the store learns of it on the next write-back (reconcile.ts). This mirrors
- * it into sms_subscribers ONCE, and never again: recordSmsConsent would
- * re-stamp consented_at on every half-hourly tick and quietly rewrite the
- * date the person actually agreed, which is the one field a carrier dispute
- * turns on. So an address that already has a row — consented or stopped — is
- * left exactly as it is, and "nothing" is the honest answer for it.
+ * the store learns of it on the next write-back. This mirrors it ONCE and
+ * never again: recordSmsConsent would re-stamp `marketing_consent_at` on every
+ * half-hourly tick and quietly rewrite the date the person agreed, which is
+ * the one field a carrier dispute turns on. A number that already has a row —
+ * consented or stopped — is left exactly as it is.
  *
  * `at` is when Omnisend recorded the consent, not when this run found it.
  */
 export async function mirrorSmsConsent(input: { email: string; phone: string; source: SmsConsentSource; at: string }): Promise<"applied" | "nothing" | "failed"> {
   const email = normalizeEmail(input.email);
-  const phone = acceptableSmsPhone(input.phone);
+  const phone = normalizeE164(acceptableSmsPhone(input.phone));
   if (!email || !phone) return "nothing";
   try {
-    const { data, error } = await supabaseAdmin
-      .from("sms_subscribers")
-      .select("email")
-      .eq("email", email)
-      .maybeSingle();
-    if (error) {
-      console.error(LOG, "mirror read refused", error.message);
-      return "failed";
-    }
-    if (data) return "nothing";
+    const existing = await readByPhone(phone);
+    if (existing) return "nothing";
     const now = new Date().toISOString();
-    const { error: writeError } = await supabaseAdmin
-      .from("sms_subscribers")
-      .insert({ email, phone, source: input.source, consented_at: input.at, opted_out_at: null, consent_text: SMS_CONSENT_TEXT, updated_at: now });
-    if (writeError) {
-      console.error(LOG, "mirror write refused", writeError.message);
+    const { error } = await supabaseAdmin.from("sms_subscribers").insert({
+      phone_e164: phone,
+      email,
+      marketing_consent: true,
+      marketing_consent_at: input.at,
+      consent_source: input.source,
+      disclosure_version: SMS_DISCLOSURE_VERSION,
+      created_at: now,
+      updated_at: now,
+    });
+    if (error) {
+      console.error(LOG, "mirror write refused", error.message);
       return "failed";
     }
     return "applied";
   } catch (error) {
     console.error(LOG, "mirror could not be written", error);
     return "failed";
+  }
+}
+
+export type SmsStanding = "none" | "subscribed" | "opted_out";
+
+/**
+ * Where an ADDRESS stands with the text list, across every number it has
+ * consented from. A stop on any of them is a stop; otherwise a live marketing
+ * consent on any of them is a subscription.
+ *
+ * A refused read answers "subscribed", the quiet direction: the cost of a
+ * wrong "subscribed" is one missed invitation, and the cost of a wrong "none"
+ * is interrupting somebody who already opted out.
+ */
+export async function readSmsStanding(email: string): Promise<SmsStanding> {
+  const address = normalizeEmail(email);
+  if (!address) return "subscribed";
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("sms_subscribers")
+      .select("marketing_consent, opted_out_at")
+      .eq("email", address);
+    if (error) {
+      console.error(LOG, "standing read refused", error.message);
+      return "subscribed";
+    }
+    const rows = (data ?? []) as SubscriberRow[];
+    if (rows.length === 0) return "none";
+    if (rows.some((row) => row.opted_out_at)) return "opted_out";
+    return rows.some((row) => row.marketing_consent) ? "subscribed" : "none";
+  } catch (error) {
+    console.error(LOG, "standing read failed", error);
+    return "subscribed";
+  }
+}
+
+/**
+ * THE NUMBER AND THE STANDING FOR AN ADDRESS, for a screen that has to show a
+ * person their own subscription.
+ *
+ * The account settings page used to read `customer_preferences` alone, which
+ * only ever carries a consent taken WHILE SIGNED IN. Somebody who ticked the
+ * box at a guest checkout with the same address was subscribed in every way
+ * that mattered — the store had their number, the sync pushed it, a text would
+ * have reached them — and their own settings page showed the box unticked.
+ * That is the store telling a customer something untrue about their own
+ * consent, which is the one subject it cannot be casual about.
+ */
+export async function readSmsSubscriptionForAccount(email: string): Promise<{ phone: string | null; subscribed: boolean }> {
+  const address = normalizeEmail(email);
+  if (!address) return { phone: null, subscribed: false };
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("sms_subscribers")
+      .select("phone_e164, marketing_consent, marketing_consent_at, opted_out_at")
+      .eq("email", address)
+      .order("marketing_consent_at", { ascending: false, nullsFirst: false })
+      .limit(1);
+    if (error) {
+      console.error(LOG, "account subscription read refused", error.message);
+      return { phone: null, subscribed: false };
+    }
+    const row = ((data ?? []) as SubscriberRow[])[0];
+    if (!row) return { phone: null, subscribed: false };
+    return {
+      phone: row.phone_e164 ?? null,
+      subscribed: Boolean(row.marketing_consent) && !row.opted_out_at,
+    };
+  } catch (error) {
+    console.error(LOG, "account subscription read failed", error);
+    return { phone: null, subscribed: false };
   }
 }
