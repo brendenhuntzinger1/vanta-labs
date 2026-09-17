@@ -5,6 +5,7 @@ import { drainMarketingSendQueue } from "@/lib/email/marketing-queue";
 import { retryPendingEmails } from "@/lib/email/retry-queue";
 import { reapStrandedOrderEmails } from "@/lib/email/order-email-reaper";
 import { reapStrandedMarketingSends } from "@/lib/email/marketing-send-reaper";
+import { MARKETING_OWNED_BY_OMNISEND, marketingSendBlockedByOmnisend } from "@/lib/marketing/omnisend/ownership";
 import { handleCronRequest, type CronJobMap } from "@/lib/cron-runner";
 
 export const dynamic = "force-dynamic";
@@ -36,14 +37,54 @@ export const maxDuration = 60;
  * and nothing else. Payments, fulfilment, inventory, commissions and every
  * other job stay in the sweep — this route is deliberately not a second place
  * for "whatever needs running".
+ *
+ * WHY THREE OF THEM ASK OMNISEND FIRST. Recovery, the automations and the
+ * campaign sender are the marketing sends Omnisend's flows replace, and the
+ * 24-hour frequency guard cannot see an Omnisend send — so while
+ * OMNISEND_MARKETING_OWNER is set they stand down rather than race it
+ * (spec §3.1, ownership.ts). They stand down INSIDE the job, not by leaving
+ * the map: the tick still reports each under its own key with the logged
+ * reason, so a skipped job reads as "skipped, and here is why" and not as a
+ * job that quietly stopped being scheduled. The other four are transactional
+ * mail, retries and reapers, which Omnisend does not replace, so they never
+ * ask.
+ *
+ * WHY RECOVERY DOES NOT STAND DOWN FULLY. ONE OWNER PER CART: Omnisend cannot
+ * import a sequence's execution state, so the carts that were mid-ladder on
+ * cutover day (12 open carts on 2026-09-16, each with stages already sent)
+ * would be restarted at Omnisend's message one. While the switch is set the
+ * ladder therefore runs in LEGACY-ONLY mode — it finishes every cart that
+ * already has a stage and touches nothing else — and reports the mode and
+ * the reason beside its counts. Once the last legacy cart ages out the job
+ * does nothing but count, which is the same outcome as skipping.
  */
 const JOBS: CronJobMap = {
   // The recovery ladder. First because it is the one with a closing window.
-  cartRecovery: { label: "cart_recovery", run: runAbandonedCartSweep },
+  cartRecovery: {
+    label: "cart_recovery",
+    run: async () => {
+      if (!marketingSendBlockedByOmnisend()) return runAbandonedCartSweep();
+      const result = await runAbandonedCartSweep({ legacyOnly: true });
+      return { ...result, mode: "legacy", reason: MARKETING_OWNED_BY_OMNISEND };
+    },
+  },
   // Retention sequences: welcome, post-purchase, win-back, reorder.
-  emailAutomations: { label: "email_automations", run: runAutomationSweep },
+  emailAutomations: {
+    label: "email_automations",
+    run: () => (marketingSendBlockedByOmnisend() ? Promise.resolve({ skipped: MARKETING_OWNED_BY_OMNISEND }) : runAutomationSweep()),
+  },
   // Advance any in-flight broadcast by one batch, and start any that is due.
-  emailCampaigns: { label: "email_campaigns", run: runCampaignSweep },
+  // While Omnisend owns customer marketing, only AFFILIATE campaigns advance
+  // (AUDIT F-12): they are programme communications Omnisend has no audience
+  // for. Customer campaigns wait for Omnisend, and the tick says so.
+  emailCampaigns: {
+    label: "email_campaigns",
+    run: async () => {
+      if (!marketingSendBlockedByOmnisend()) return runCampaignSweep();
+      const result = await runCampaignSweep({ affiliateOnly: true });
+      return { ...result, mode: "affiliate-only", reason: MARKETING_OWNED_BY_OMNISEND };
+    },
+  },
   // Event mail the frequency guard held back, once the quiet window passes.
   marketingQueue: { label: "marketing_queue", run: drainMarketingSendQueue },
   // Transactional retries (receipts, shipping) — customer-facing mail, and it

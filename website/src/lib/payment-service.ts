@@ -74,6 +74,8 @@ export interface CreateCheckoutPayload {
   * free product, its quantity or its price. See quoteOrder.
   */
  offerToken?: string;
+  /** Which single benefit the shopper picked when a wheel gift met a welcome code. */
+  benefitChoice?: "wheel" | "welcome_code";
  currency?: string;
  expectedTotal?: number;
  customerUserId?: string;
@@ -145,6 +147,7 @@ export async function createCheckoutSession(
    paymentMethod: payload.paymentMethod,
    expectedTotal: payload.expectedTotal,
    offerToken: payload.offerToken,
+    benefitChoice: payload.benefitChoice,
    mode: "full",
  });
 

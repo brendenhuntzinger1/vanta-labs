@@ -1116,6 +1116,14 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
   // AN EMPTY CART IS SENT TOO, ONCE, so the server can retire the active row.
   // Without that the last non-empty snapshot kept mailing a shopper who had
   // already decided against every item in it.
+  //
+  // ON THE CHECKOUT, THE SNAPSHOT SAYS SO. A guest has no cart row until an
+  // address is typed, so the one-shot arrival beacon below finds nothing to
+  // stamp; this beacon, which follows the typed address, carries
+  // reachedCheckout while the pathname is under /checkout, and the route
+  // tracks the cart first and stamps it after. The pathname is read once
+  // here, for both beacons, and is a dependency of both effects.
+  const pathname = usePathname();
   const trackedEmail = isSignedIn ? "" : knownEmail.trim().toLowerCase();
   const hasTrackableIdentity = isSignedIn || /^\S+@\S+\.\S+$/.test(trackedEmail);
   const wasTrackingRef = useRef(false);
@@ -1152,6 +1160,7 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
             image: item.image,
           })),
           cartValueCents: Math.round(subtotal * 100),
+          ...(pathname?.startsWith("/checkout") ? { reachedCheckout: true } : {}),
         }),
       }).catch(() => {
         // Non-fatal - the cart itself is unaffected either way.
@@ -1159,7 +1168,7 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
     }, 1500);
 
     return () => clearTimeout(timeout);
-  }, [isSignedIn, hasTrackableIdentity, trackedEmail, cartSessionId, items, customerName, subtotal]);
+  }, [isSignedIn, hasTrackableIdentity, trackedEmail, cartSessionId, items, customerName, subtotal, pathname]);
 
   // REACHING THE CHECKOUT IS THE STEP THE FUNNEL COULD NOT SEE.
   //
@@ -1185,8 +1194,8 @@ export function CartProvider({ children, signedIn = false, emailGrant = false }:
   // client-side navigation, so an effect keyed only on the cart never re-ran
   // when the shopper moved from /cart to /checkout — the pathname it read was
   // whatever it had been at mount. Driven in a browser, the stamp silently
-  // never landed. usePathname makes the navigation itself the trigger.
-  const pathname = usePathname();
+  // never landed. usePathname makes the navigation itself the trigger; it is
+  // read once, above the tracking effect, because both beacons need it.
   const checkoutStartSentRef = useRef(false);
   useEffect(() => {
     if (!cartSessionId || items.length === 0) return;

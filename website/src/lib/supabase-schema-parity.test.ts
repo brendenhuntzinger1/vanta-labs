@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import PRODUCTION_SCHEMA from "@/lib/production-schema.json";
@@ -86,6 +86,25 @@ const PENDING_MIGRATION_COLUMNS: Array<{ table: string; column: string; migratio
   // email_suppressions.source lived here until email-lifecycle-2026-09-04.sql
   // was applied to production on 2026-09-04 and the snapshot refreshed.
 ];
+
+/**
+ * Tables the code references ahead of their migration being applied to
+ * production. Same contract as the columns above: the entry names the SQL
+ * file, and the honesty check below fails the moment the snapshot already
+ * carries the table, so an allowance cannot outlive its migration.
+ */
+const PENDING_MIGRATION_TABLES: Array<{ table: string; migration: string }> = [
+  { table: "omnisend_events_sent", migration: "omnisend-sync.sql" },
+  { table: "omnisend_sync_state", migration: "omnisend-sync.sql" },
+  { table: "omnisend_consent_snapshot", migration: "omnisend-sync.sql" },
+  // SMS consent per address (sign-up page and checkout, guest or not); the
+  // Omnisend contact sync reads it and the reconcile stamps STOPs into it.
+  { table: "sms_subscribers", migration: "sms-subscribers.sql" },
+];
+
+function pendingTableAllowed(table: string): boolean {
+  return PENDING_MIGRATION_TABLES.some((entry) => entry.table === table);
+}
 
 function pendingColumnAllowed(table: string, column: string): boolean {
   return PENDING_MIGRATION_COLUMNS.some((entry) => entry.table === table && entry.column === column);
@@ -403,6 +422,13 @@ describe("supabase reads match the production schema", () => {
     expect(missed.find((ref) => ref.table === "order_items")?.columns).toContain("variant_id");
   });
 
+  it("keeps every pending-table allowance honest", () => {
+    for (const entry of PENDING_MIGRATION_TABLES) {
+      expect(schema[entry.table], `production-schema.json already has ${entry.table}; remove it from PENDING_MIGRATION_TABLES`).toBeUndefined();
+      expect(existsSync(join(process.cwd(), "src", "lib", "sql", entry.migration)), `${entry.migration} does not exist`).toBe(true);
+    }
+  });
+
   it("keeps every pending-migration allowance honest", () => {
     for (const entry of PENDING_MIGRATION_COLUMNS) {
       const file = join(process.cwd(), "src", "lib", "sql", entry.migration);
@@ -421,7 +447,7 @@ describe("supabase reads match the production schema", () => {
 
   it("only touches tables the snapshot knows about", () => {
     const unknown = [
-      ...new Set(references.filter((ref) => !schema[ref.table]).map((ref) => ref.table)),
+      ...new Set(references.filter((ref) => !schema[ref.table] && !pendingTableAllowed(ref.table)).map((ref) => ref.table)),
     ];
     expect(
       unknown,

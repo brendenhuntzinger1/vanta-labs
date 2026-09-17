@@ -7,6 +7,7 @@ import { getCatalogProductBySlug, getCatalogProductsByCategory } from "@/lib/cat
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { requestHasEmailLinkGrant } from "@/lib/email/link-grant-server";
 import { recordProductView } from "@/lib/product-views";
+import { onProductViewed } from "@/lib/marketing/omnisend/hooks";
 import { getHomepageControlConfig } from "@/lib/admin-control";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
 import { advertisableBxgyPromotions, isSlugEligible, storefrontDescription } from "@/lib/bxgy-engine";
@@ -157,10 +158,18 @@ export default async function ProductDetailPage({
   // of their own, so nothing is written for them. The write cannot fail the
   // page: recordProductView swallows every error, and after() runs it once
   // the response is on its way. See product-views.ts.
+  //
+  // OMNISEND HEARS THE SAME VIEW, from the same place and under the same
+  // guard (spec §3.5: server-side, identified visitors only, never a guest
+  // on a marketing-link grant). onProductViewed asks the Omnisend gate first,
+  // debounces per address and product, and swallows every error too.
   if (viewer?.email) {
     const viewerEmail = viewer.email;
     const viewerId = viewer.id;
-    after(() => recordProductView({ email: viewerEmail, customerUserId: viewerId, slug: product.slug }));
+    after(async () => {
+      await recordProductView({ email: viewerEmail, customerUserId: viewerId, slug: product.slug });
+      await onProductViewed(viewerEmail, product);
+    });
   }
 
   const relatedProducts = await getCatalogProductsByCategory(product.category, product.slug, 4).catch(() => []);

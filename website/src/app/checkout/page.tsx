@@ -11,6 +11,17 @@ import { resolveSalesTax } from "@/lib/sales-tax";
 import { useApplePayOffered } from "@/components/use-apple-pay-offered";
 import { useOfferQuote } from "@/lib/offer-quote";
 import { claimSpinPrizeOnce } from "@/lib/spin/claim-client";
+import { SMS_CONSENT_TEXT, SMS_DISCLOSURE_TEXT, acceptableSmsPhone } from "@/lib/sms-consent-text";
+import {
+  SMS_CHECKOUT_CHECKBOX,
+  SMS_CHECKOUT_INCENTIVE,
+  SMS_CHECKOUT_NEEDS_PHONE,
+  WELCOME_OFFER_APPLIED,
+  WELCOME_OFFER_HELD_BY_BETTER,
+  WELCOME_OFFER_READY,
+  WELCOME_OFFER_TERMS,
+  welcomeOfferCodeLine,
+} from "@/lib/offers/welcome-offer-copy";
 import { bundleCreditNote, couponHeadline, couponOutcomeAgainstQuote } from "@/lib/discount-resolution";
 import { CHECKOUT_SHORT, COA_SHORT, FULFILMENT_SHORT, TESTING_SHORT, trustPoints } from "@/lib/trust-claims";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
@@ -319,6 +330,48 @@ export default function CheckoutPage() {
   // the cascading re-render an effect caused, with identical behaviour.
   const [marketingChoice, setMarketingChoice] = useState(true);
   const [marketingTouched, setMarketingTouched] = useState(false);
+  // SMS CONSENT IS NEVER PRE-TICKED, FOR ANY COUNTRY. The email box above may
+  // default on for a US destination; a text message may not (TCPA wants an
+  // affirmative tick, and the carriers audit the box). The phone field is
+  // for delivery; this box is the only thing that makes it a number we may
+  // text, and the server records the two separately (create-session).
+  const [smsOptIn, setSmsOptIn] = useState(false);
+  // THE WELCOME OFFER AT THE TILL. The box above earns it: tick it with a
+  // mobile number in the field and the store records the consent, mints (or
+  // re-reads) the code bound to this address and puts it on the order — no
+  // reload, nothing retyped, the card fields untouched. Every failure here is
+  // silent to the payment path: the shopper still pays, just without a
+  // discount. Consent is never a condition of buying.
+  const [welcomeStatus, setWelcomeStatus] = useState<"unknown" | "eligible" | "claimed" | "returning" | "suppressed">("unknown");
+  // The kill switch, read with the offer. Until the carriers approve this
+  // store, the box below stays and the DISCOUNT beside it does not appear.
+  const [welcomePromptsEnabled, setWelcomePromptsEnabled] = useState(false);
+  const [welcomeCode, setWelcomeCode] = useState<string | null>(null);
+  const [welcomeError, setWelcomeError] = useState<string | null>(null);
+  const [welcomeClaiming, setWelcomeClaiming] = useState(false);
+  // One attempt per (number, address) pair, so retyping a digit does not
+  // re-post and a mistyped number can still be corrected and retried.
+  const welcomeTriedRef = useRef<string>("");
+  // IS THE WELCOME CODE THE THING REDUCING THIS TOTAL? Not "was it entered" —
+  // the quote picks one best discount, so a code can be on the order and still
+  // be losing to a promotion or a referral. `controlsPrice` is the quote's own
+  // answer, and it is what decides whether the shopper is told the discount is
+  // applied or told it is being kept for later.
+  const welcomeApplied = Boolean(
+    welcomeCode
+    && (couponDetails?.code ?? couponCode ?? "").trim().toUpperCase() === welcomeCode.trim().toUpperCase()
+    && (couponOutcome?.controlsPrice ?? true),
+  );
+  /**
+   * IS SOMETHING ELSE ACTUALLY TAKING MONEY OFF THIS ORDER?
+   *
+   * Not "is the welcome code un-applied" — those are different, and treating
+   * them as the same put "a larger discount is already on this order" on a
+   * screen with an EMPTY CART and no discount at all. A claimed code that
+   * simply is not pricing anything yet gets a neutral line instead, which is
+   * the true one.
+   */
+  const otherDiscountWins = !welcomeApplied && discountAmount > 0;
   // Progressive disclosure: savings tools and legal detail stay out of the way
   // until asked for, so the default path to payment is as short as possible.
   const [savingsOpen, setSavingsOpen] = useState(false);
@@ -552,6 +605,89 @@ export default function CheckoutPage() {
       }
     })();
   }, []);
+
+  // WHAT THE SIGNED-IN SHOPPER MAY BE SHOWN. Read only: opening the checkout
+  // never mints a code, so nobody's fourteen days start because they looked.
+  // A guest is left at "unknown" and shown the offer anyway — the server
+  // decides when they actually claim, because only then is there an address
+  // to decide about.
+  useEffect(() => {
+    // Read for EVERY shopper, not only signed-in ones. The kill switch and a
+    // guest's "unknown" both come back here, and gating this on a session was
+    // what hid the offer from guest checkout entirely.
+    let live = true;
+    void fetch("/api/offers/welcome", { credentials: "same-origin" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { status?: string; code?: string; promptsEnabled?: boolean } | null) => {
+        if (!live || !data?.status) return;
+        setWelcomePromptsEnabled(data.promptsEnabled === true);
+        if (data.status === "claimed" && data.code) {
+          setWelcomeStatus("claimed");
+          setWelcomeCode(data.code);
+          return;
+        }
+        if (data.status === "eligible" || data.status === "returning" || data.status === "unknown") {
+          setWelcomeStatus(data.status as "eligible" | "returning" | "unknown");
+          return;
+        }
+        setWelcomeStatus("suppressed");
+      })
+      .catch(() => { /* The offer simply does not appear. Never the checkout's problem. */ });
+    return () => { live = false; };
+  }, []);
+
+  // A CODE THIS SHOPPER ALREADY HOLDS GOES ON THE ORDER BY ITSELF — they
+  // subscribed days ago and should not have to remember six characters. It is
+  // applied ONLY into an empty coupon slot: a code the shopper typed
+  // themselves is their choice and is never overwritten to make room for this
+  // one. The quote still picks the single best discount either way.
+  useEffect(() => {
+    if (welcomeStatus !== "claimed" || !welcomeCode) return;
+    if (couponCode) return;
+    applyCouponCode(welcomeCode);
+    // applyCouponCode is recreated every render; `couponCode` becoming set is
+    // what stops this, and it is in the dependency list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [welcomeStatus, welcomeCode, couponCode]);
+
+  // THE TICK THAT EARNS IT. Fires when the box is ticked and the phone field
+  // holds a number someone could actually be texted at; the pair is
+  // remembered so a corrected number can be retried but a re-render cannot
+  // re-post. On success the code lands in the coupon slot and the quote
+  // re-prices — no reload, and every field the shopper has filled stays put.
+  useEffect(() => {
+    if (!smsOptIn || welcomeStatus === "suppressed" || welcomeStatus === "claimed") return;
+    const phone = acceptableSmsPhone(form.phone);
+    const address = form.email.trim().toLowerCase();
+    if (!phone || !address.includes("@")) return;
+    const attempt = `${phone}|${address}`;
+    if (welcomeTriedRef.current === attempt) return;
+    welcomeTriedRef.current = attempt;
+    let live = true;
+    setWelcomeClaiming(true);
+    setWelcomeError(null);
+    void fetch("/api/offers/welcome", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone, email: address, placement: "checkout" }),
+    })
+      .then((res) => res.json())
+      .then((data: { ok?: boolean; code?: string; error?: string }) => {
+        if (!live) return;
+        if (data?.ok && data.code) {
+          setWelcomeStatus("claimed");
+          setWelcomeCode(data.code);
+          if (!couponCode) applyCouponCode(data.code);
+          return;
+        }
+        setWelcomeError(data?.error ?? null);
+      })
+      .catch(() => { if (live) setWelcomeError(null); })
+      .finally(() => { if (live) setWelcomeClaiming(false); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [smsOptIn, form.phone, form.email, welcomeStatus]);
 
   // Fire begin_checkout exactly once, when the cart first has items. Depending
   // on `total`/`subtotal` would re-dispatch every time the shopper edits points,
@@ -788,6 +924,7 @@ export default function CheckoutPage() {
         pointsToRedeem: pointsToRedeem > 0 ? pointsToRedeem : undefined,
         shippingProtection: shippingProtectionEnabled,
         marketingOptIn,
+        smsOptIn,
         expectedTotal: postedTotal,
         paymentMethod: selectedMethodId || undefined,
         complianceAcknowledgements: acknowledgements,
@@ -1088,7 +1225,8 @@ export default function CheckoutPage() {
   // badly — two KLOW at $119.99 reads as $227.98 against a $200 floor here and
   // as $119.99 against it there. This banner therefore said nothing, the gift
   // was withdrawn anyway, and the fall-through below then blamed the EMAIL
-  // ADDRESS for a minimum problem.
+  // ADDRESS for a minimum problem. Trusting the pass that enforces the rule is
+  // the only version of this that cannot drift again.
   const offerShortfall = typeof offerQuote?.offerShortfallCents === "number"
     ? offerQuote.offerShortfallCents / 100
     : pendingOffer
@@ -1303,6 +1441,76 @@ export default function CheckoutPage() {
               </div>
               {emailLockedToAccount ? (
                 <p className="mt-2 pl-1 text-[11px] text-white/35">Using your account email.</p>
+              ) : null}
+              <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm text-white/60">
+                <input
+                  type="checkbox"
+                  checked={smsOptIn}
+                  onChange={(e) => { haptic(); setSmsOptIn(e.target.checked); }}
+                  className="mt-0.5 h-[1.15rem] w-[1.15rem] flex-shrink-0 accent-[color:var(--accent-gold)]"
+                  data-testid="checkout-sms-opt-in"
+                  aria-describedby="checkout-sms-disclosure"
+                />
+                <span className="text-xs leading-relaxed">{SMS_CHECKOUT_CHECKBOX} <span className="text-white/30">Optional.</span></span>
+              </label>
+              {/* THE CONSENT LANGUAGE STAYS BESIDE THE BOX. The label above now
+                  says what the texts are, in the shopper's words; the sentence
+                  they are actually agreeing to is here, first, immediately
+                  under the box that is the affirmative act. Moving it must
+                  never mean losing it. */}
+              <p id="checkout-sms-disclosure" className="mt-2 pl-8 text-[11px] leading-relaxed text-white/30">
+                {SMS_CONSENT_TEXT}{" "}{SMS_DISCLOSURE_TEXT}{" "}
+                <a href="/legal/terms" target="_blank" rel="noopener noreferrer" className="text-white/50 underline underline-offset-2 hover:text-white">Terms</a>{" "}
+                and{" "}
+                <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="text-white/50 underline underline-offset-2 hover:text-white">Privacy Policy</a>.
+              </p>
+
+              {/* THE OFFER, BESIDE THE BOX THAT EARNS IT. Never a popup here —
+                  a dialog over a checkout is how carts get abandoned, and the
+                  owner asked for none. It states the terms with the offer, and
+                  once the code is on the order it stops asking and says so. */}
+              {/* THE INCENTIVE, AND ONLY FOR SOMEONE IT IS OPEN TO.
+                  Hidden entirely while the kill switch is off, hidden for a
+                  returning buyer (a first-order discount advertised to someone
+                  who cannot have it is a trick), and replaced by the applied
+                  message the moment the priced order confirms it. */}
+              {welcomePromptsEnabled && (welcomeStatus === "eligible" || welcomeStatus === "claimed" || welcomeStatus === "unknown") ? (
+                <div
+                  className="mt-3 rounded-xl border border-[color:var(--accent-gold)]/20 bg-[var(--accent-gold-soft)]/40 px-4 py-3"
+                  data-testid="checkout-welcome-offer"
+                >
+                  {welcomeStatus === "claimed" && welcomeApplied ? (
+                    <p className="text-xs leading-relaxed text-[color:var(--accent-gold)]" data-testid="checkout-welcome-applied">
+                      {WELCOME_OFFER_APPLIED}
+                    </p>
+                  ) : welcomeStatus === "claimed" && otherDiscountWins ? (
+                    <p className="text-xs leading-relaxed text-white/55" data-testid="checkout-welcome-held">
+                      {WELCOME_OFFER_HELD_BY_BETTER}
+                    </p>
+                  ) : welcomeStatus === "claimed" ? (
+                    <div data-testid="checkout-welcome-ready">
+                      <p className="text-xs leading-relaxed text-white/70">{WELCOME_OFFER_READY}</p>
+                      <p className="mt-1 text-[11px] leading-relaxed text-white/40">
+                        {welcomeCode ? welcomeOfferCodeLine(welcomeCode) : ""} {WELCOME_OFFER_TERMS}
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-xs leading-relaxed text-white/65">{SMS_CHECKOUT_INCENTIVE}</p>
+                      {smsOptIn && !acceptableSmsPhone(form.phone) ? (
+                        <p className="mt-1.5 text-[11px] leading-relaxed text-white/40" data-testid="checkout-welcome-needs-phone">
+                          {SMS_CHECKOUT_NEEDS_PHONE}
+                        </p>
+                      ) : null}
+                      {welcomeClaiming ? (
+                        <p className="mt-1.5 text-[11px] text-white/40">Applying your discount</p>
+                      ) : null}
+                      {welcomeError ? (
+                        <p className="mt-1.5 text-[11px] text-white/40" data-testid="checkout-welcome-error">{welcomeError}</p>
+                      ) : null}
+                    </>
+                  )}
+                </div>
               ) : null}
             </CheckoutSection>
 

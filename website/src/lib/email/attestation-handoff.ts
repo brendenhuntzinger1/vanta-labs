@@ -31,11 +31,22 @@
  *
  * THE CONSTRUCTION
  *
- *   v1.<expiresAtMs>.<payload base64url>.<hmac-sha256 truncated to 32 hex>
+ *   v2.<expiresAtMs>.<payload>.<hmac-sha256 truncated to 32 hex>
  *
- * signed over `attestation_handoff:v1:<expiresAtMs>:<payload base64url>`, so
- * every field is inside the signature. Changing the address, the destination,
- * the offer or the nonce invalidates it.
+ * where the payload is base64url( iv(12) || AES-256-GCM( JSON ) ) under a key
+ * derived as SHA-256("attestation_handoff:v2:" + secret), and the whole thing
+ * is signed over `attestation_handoff:v2:<expiresAtMs>:<payload>`, so every
+ * field is inside the signature. Changing the address, the destination, the
+ * offer or the nonce invalidates it.
+ *
+ * WHY THE PAYLOAD IS SEALED AND NOT MERELY ENCODED. v1 carried the JSON as
+ * plain base64url, which put the recipient's address into the interstitial's
+ * URL — readable in browser history, in referrers and in any log along the
+ * way, for every unattested recipient of every email, in-house or Omnisend.
+ * Customer data does not travel in URLs, so v2 seals the payload; the URL
+ * carries an opaque string only this server can open. v1 is refused: the
+ * handoff lives an hour, so nothing in flight outlives a deploy by more than
+ * that, and a customer who is mid-interstitial simply clicks the link again.
  *
  * WHY THE ADDRESS IS INSIDE IT, when link-grant.ts deliberately carries no
  * identity. That module is right for a capability that only opens a catalogue.
@@ -54,9 +65,12 @@
 
 export const ATTESTATION_HANDOFF_TTL_MS = 60 * 60 * 1000;
 
-const VERSION = "v1";
-/** Version + expiry + payload + 32 hex. Anything longer is not ours. */
-const MAX_TOKEN_LENGTH = 1024;
+const VERSION = "v2";
+const SEAL_NAMESPACE = `attestation_handoff:${VERSION}:`;
+/** Version + expiry + sealed payload + 32 hex. Anything longer is not ours. */
+const MAX_TOKEN_LENGTH = 1536;
+const IV_BYTES = 12;
+const TAG_BYTES = 16;
 /** A destination is a path on this site, never a URL. */
 const MAX_DEST_LENGTH = 512;
 const MAX_EMAIL_LENGTH = 320;
@@ -88,16 +102,48 @@ function toHex(bytes: ArrayBuffer): string {
   return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function b64urlEncode(value: string): string {
-  return btoa(unescape(encodeURIComponent(value)))
-    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const decoder = new TextDecoder();
+
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function b64urlDecode(value: string): string | null {
+function base64UrlToBytes(value: string): Uint8Array | null {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) return null;
   try {
-    const padded = value.replace(/-/g, "+").replace(/_/g, "/")
-      + "=".repeat((4 - (value.length % 4)) % 4);
-    return decodeURIComponent(escape(atob(padded)));
+    const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (value.length % 4)) % 4);
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+/** The AES key: derived from the secret and this module's namespace, never the raw secret. */
+async function sealingKey(): Promise<CryptoKey> {
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(`${SEAL_NAMESPACE}${signingSecret()}`));
+  return crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+async function seal(value: string): Promise<string> {
+  const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
+  const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await sealingKey(), encoder.encode(value)));
+  const bytes = new Uint8Array(iv.length + sealed.length);
+  bytes.set(iv);
+  bytes.set(sealed, iv.length);
+  return bytesToBase64Url(bytes);
+}
+
+async function open(payload: string): Promise<string | null> {
+  const bytes = base64UrlToBytes(payload);
+  if (!bytes || bytes.length <= IV_BYTES + TAG_BYTES) return null;
+  try {
+    const opened = await crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes.slice(0, IV_BYTES) }, await sealingKey(), bytes.slice(IV_BYTES));
+    return decoder.decode(opened);
   } catch {
     return null;
   }
@@ -176,7 +222,7 @@ export async function signAttestationHandoff(
 
     const nonce = input.nonce ?? crypto.randomUUID();
     const expiresAtMs = now + ATTESTATION_HANDOFF_TTL_MS;
-    const payload = b64urlEncode(JSON.stringify({ e: email, d: destination, o: offerToken, n: nonce }));
+    const payload = await seal(JSON.stringify({ e: email, d: destination, o: offerToken, n: nonce }));
     return `${VERSION}.${expiresAtMs}.${payload}.${await signature(expiresAtMs, payload)}`;
   } catch {
     return null;
@@ -224,7 +270,7 @@ export async function verifyAttestationHandoff(
   }
   if (!constantTimeEqual(mac, expected)) return null;
 
-  const decoded = b64urlDecode(payload);
+  const decoded = await open(payload);
   if (!decoded) return null;
   let parsed: { e?: unknown; d?: unknown; o?: unknown; n?: unknown };
   try {

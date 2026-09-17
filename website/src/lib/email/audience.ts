@@ -145,7 +145,12 @@ const ACCOUNT_ID_CHUNK = 1_000;
 const DIRECTORY_PAGE_SIZE = 1_000;
 const DIRECTORY_MAX_PAGES = 100;
 
-async function resolveAccountEmails(userIds: Set<string>): Promise<Set<string>> {
+/**
+ * Exported for the Omnisend consent snapshot, which resolves the accounts
+ * that UNTICKED the box the same way this file resolves the ones that ticked
+ * it. Throws on a short read, like every audience read here.
+ */
+export async function resolveAccountEmails(userIds: Set<string>): Promise<Set<string>> {
   const emails = new Set<string>();
   if (userIds.size === 0) return emails;
 

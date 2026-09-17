@@ -6,6 +6,7 @@ import { ProductCard } from "@/components/product-card";
 import { useCart } from "@/components/cart-context";
 import type { Product } from "@/lib/catalog-types";
 import { CatalogTrustRail } from "@/components/catalog-trust-rail";
+import { WelcomeOfferSignup } from "@/components/welcome-offer-signup";
 import { hasCoa } from "@/lib/coa-url";
 import { inDefaultCatalogOrder, sortCatalogBy, type CatalogSortKey } from "@/lib/catalog-order";
 
@@ -211,6 +212,16 @@ function ProductsPageContent({ initialProducts }: { initialProducts: Product[] }
             live offer, including this coupon. Keeping this copy as well put the
             same headline and the same code twice in one phone viewport, a few
             hundred pixels apart. One offer, stated once, at the top. */}
+
+        {/* THE WELCOME OFFER, ON THE CATALOGUE ONLY.
+            A slim bar, above the filters, where someone deciding what to buy
+            can see what subscribing is worth. It renders nothing at all for a
+            shopper who has already bought and shows the code rather than the
+            ask once there is one, so it is never a standing advertisement.
+            The home page deliberately has none of this. */}
+        <div className="mt-8">
+          <WelcomeOfferSignup variant="bar" />
+        </div>
 
         {/* ONE BAR.
             This was a search field, a category dropdown, a duplicate row of

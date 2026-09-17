@@ -4,6 +4,7 @@ import crypto from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { redactEmailForLog } from "@/lib/log-redaction";
 import { BAC_WATER_SLUG } from "@/lib/bac-water";
+import { WELCOME_GIFT_PRODUCT_SLUG } from "@/lib/offers/welcome-offer-terms";
 import {
   describeGiftTerms,
   normalizeGiftItems,
@@ -292,6 +293,34 @@ export const OFFER_CATALOG = {
     reward: { kind: "free_product", productSlug: BAC_WATER_SLUG, quantity: 1 } as OfferReward,
     minSubtotalCents: 3500,
     ttlDays: 10,
+  },
+  /**
+   * THE SIGN-UP REWARD: a free GHK-Cu with a first order.
+   *
+   * Minted the moment an address becomes email-subscribed with no paid order
+   * behind it (marketing/omnisend/hooks.ts onMarketingOptIn), beside the 15%
+   * welcome code, and the shopper spends ONE of the two: the checkout withdraws
+   * this gift when a welcome code is typed (quote-order.ts, lib/offers/
+   * welcome-offer-terms.ts). The owner chose the vial over a percentage because
+   * its cost to the store is a fraction of 15% of a median order, and chose to
+   * offer the choice because a large first order is worth more to the shopper
+   * as a percentage.
+   *
+   * $60, the same floor as the win-back vial and for the same reason: with no
+   * minimum the correct play is to redeem on an order containing nothing else.
+   * A first order at this store is usually over it (median subtotal was $97
+   * across the last six months when this was set), so the floor rarely bites.
+   *
+   * FOURTEEN DAYS, matching the welcome code (codes.ts CONTACT_CODE_OFFERS
+   * .welcome.ttlHours), so the two halves of one offer end on the same day
+   * and the email can name one date. A paid order closes whichever half was
+   * not spent (customer_offer_close_cycle; retireContactCode on the paid hook).
+   */
+  welcome_free_ghkcu: {
+    label: "Free GHK-Cu",
+    reward: { kind: "free_product", productSlug: WELCOME_GIFT_PRODUCT_SLUG, quantity: 1 } as OfferReward,
+    minSubtotalCents: 6000,
+    ttlDays: 14,
   },
 } as const;
 
