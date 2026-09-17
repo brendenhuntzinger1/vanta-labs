@@ -4,6 +4,7 @@ import { buildPurchase } from "@/lib/ads/tiktok-events";
 import { buildSnapPurchase } from "@/lib/ads/snap-events";
 import { buildRedditPurchase } from "@/lib/ads/reddit-events";
 import { buildMetaPurchase } from "@/lib/ads/meta-events";
+import { buildGoogleAdsPurchase } from "@/lib/ads/google-ads-events";
 import { describeRedditResult, redditCredentialStatus, sendRedditConversion } from "@/lib/ads/reddit-conversions";
 import { sendMetaPurchaseForOrder } from "@/lib/ads/meta-purchase-sync";
 import { buildAdvancedMatching } from "@/lib/ads/advanced-matching";
@@ -178,6 +179,17 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
     categories: items.map((item) => (item.product_id ? categoryByProductId.get(item.product_id) ?? null : null)),
   });
 
+  // Google Ads, from the SAME paid order. It carries no line items and no
+  // identity — a conversion is the settled value, the currency and the order id
+  // it is deduplicated on, and nothing else.
+  //
+  // No server leg and no ledger row, unlike the four above: reporting to Google
+  // from here means the Google Ads API (OAuth, developer token, a gclid-keyed
+  // ClickConversion upload), which is a separate integration rather than a
+  // fifth call in this block. Claiming a ledger row for a send that never
+  // happens would block the browser's conversion permanently.
+  const googleAdsPurchase = buildGoogleAdsPurchase(paidOrder);
+
   const redditPurchase = isPaid
     ? buildRedditPurchase({
         orderId: paidOrder.orderId,
@@ -340,6 +352,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
         snapPurchase,
         redditPurchase,
         metaPurchase,
+        googleAdsPurchase,
         // The reason an unpaid order reports nothing, stated rather than implied.
         reason: event
           ? null
@@ -482,7 +495,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   }
 
   return NextResponse.json(
-    { found: true, isPaid, event, snapPurchase, redditPurchase, metaPurchase, serverDelivery: [serverDelivery, redditDelivery, metaDelivery].filter(Boolean).join(" | ") || null },
+    { found: true, isPaid, event, snapPurchase, redditPurchase, metaPurchase, googleAdsPurchase, serverDelivery: [serverDelivery, redditDelivery, metaDelivery].filter(Boolean).join(" | ") || null },
     { headers: { "cache-control": "no-store" } },
   );
 }
