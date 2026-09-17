@@ -212,7 +212,7 @@ export function EntryOfferModal() {
             {code ? (
               <>
                 <p className="mt-2 text-sm leading-6 text-white/60">
-                  Use it at checkout on your first order. We&rsquo;ve emailed it to you as well.
+                  Copy it now and use it at checkout on your first order.
                 </p>
                 <p
                   data-testid="entry-offer-code"
@@ -246,7 +246,7 @@ export function EntryOfferModal() {
 
             <p className="mt-2.5 text-[0.82rem] leading-[1.35rem] text-white/55 sm:mt-3 sm:text-sm sm:leading-6">
               {offerLive
-                ? `Opt in to texts and we'll send your ${WELCOME_OFFER_PERCENT}% code — plus new product launches, restock alerts and exclusive offers from Vanta Labs.`
+                ? `Opt in to texts and your ${WELCOME_OFFER_PERCENT}% code appears right here — plus new product launches, restock alerts and exclusive offers from Vanta Labs.`
                 : "Be first to hear about new product launches, restock alerts and exclusive offers from Vanta Labs — by email, and by text if you want them."}
             </p>
 
