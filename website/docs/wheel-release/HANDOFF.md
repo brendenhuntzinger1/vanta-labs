@@ -3,6 +3,16 @@
 Written overnight 2026-09-16/17. Nothing was merged, nothing was sent, and
 production remains dark.
 
+**The other files here, in reading order:**
+
+| file | what it answers |
+|---|---|
+| `SEND-CHECKLIST.md` | Six copy-pasteable steps to get it out. Start here if you just want to send. |
+| `README.md` | Can the wheel ship without the SMS work? (Yes, proven.) |
+| `OFFER-INTERACTION.md` | What happens when a customer holds the welcome code *and* a wheel prize — measured at the till. |
+| `FLOWS-AND-OVERLAP.md` | What is already sending today, and whether the wheel collides with it. |
+| `minimum-wheel-release.patch` | The 36-file release itself. |
+
 ---
 
 ## 1. Read this first: the send date is ambiguous
@@ -197,11 +207,27 @@ won stay redeemable, which is correct.
 - The **handoff switch already exists**: `OMNISEND_MARKETING_OWNER`. Unset means
   the in-house senders own marketing. Set true and the cart-recovery ladder,
   the retention automations and the campaign sender all stand down. One switch,
-  one owner — the old and new systems cannot both send.
+  one owner — the old and new systems cannot both send. The reasoning in the
+  code is right: the two systems cannot coordinate, because the 24-hour
+  frequency guard only knows about sends this site made and cannot see an
+  Omnisend send. So the answer is ownership, not coordination.
 - The whole Omnisend integration (~25 modules) is built and unmerged, as asked.
-- The deeper audit of consent compliance, STOP/HELP, double opt-in, flow
-  mapping, template photography and message overlap was still running when this
-  was written. Findings land in this file's companion when it completes.
+- **What is currently sending, and the overlap with this campaign, is in
+  `FLOWS-AND-OVERLAP.md`.** Short version: six email automations and a
+  four-stage cart ladder are live; `welcome_no_purchase` already gives
+  never-purchased subscribers 15% off on day three, which is the same list the
+  wheel targets; a 24-hour one-marketing-email-per-address guard covers
+  campaigns too, so nothing double-mails; the guard does **not** cover SMS,
+  which must be closed before the SMS launch.
+- **Templates still use one static image.** Every Omnisend template shares a
+  single hero — the GHK-Cu home-page poster — and **no template uses
+  per-product imagery at all**, so a cart email about GLOW shows a GHK-Cu vial.
+  The product images *are* already synced to Omnisend (`catalog-payload.ts`),
+  so the data exists and the templates simply do not reference it. Of 34 active
+  products, 30 have a product image; **GLP-2 and Recon Water have none at any
+  level**, and BPC-157 and GLP-3 have only a dose image to fall back on.
+  I did not change the templates: regenerating them writes to your live
+  Omnisend account, and you asked to see previews before anything is applied.
 
 ## 7. Not built
 
