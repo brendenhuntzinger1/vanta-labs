@@ -11,6 +11,7 @@ production remains dark.
 | `README.md` | Can the wheel ship without the SMS work? (Yes, proven.) |
 | `OFFER-INTERACTION.md` | What happens when a customer holds the welcome code *and* a wheel prize — measured at the till. |
 | `FLOWS-AND-OVERLAP.md` | What is already sending today, and whether the wheel collides with it. |
+| `OMNISEND-MAPPING.md` | Every flow mapped to its Omnisend replacement, both sides read live. |
 | `minimum-wheel-release.patch` | The 36-file release itself. |
 
 ---
@@ -212,6 +213,12 @@ won stay redeemable, which is correct.
   frequency guard only knows about sends this site made and cannot see an
   Omnisend send. So the answer is ownership, not coordination.
 - The whole Omnisend integration (~25 modules) is built and unmerged, as asked.
+  **All nine Omnisend automations are disabled** — nothing there is sending.
+  The flow-by-flow mapping is in `OMNISEND-MAPPING.md`. One thing in it needs
+  fixing before anything is enabled: `VL · Welcome` and `VL · Welcome offer`
+  have **no exit condition**, so a contact who subscribes and then buys would
+  still receive *"Your welcome code: 15% off a first order"* on day three. Every
+  other flow exits on purchase correctly.
 - **What is currently sending, and the overlap with this campaign, is in
   `FLOWS-AND-OVERLAP.md`.** Short version: six email automations and a
   four-stage cart ladder are live; `welcome_no_purchase` already gives
