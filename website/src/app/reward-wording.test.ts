@@ -106,6 +106,32 @@ describe("the reward is never called a gift while a discount wedge exists", () =
   }
 });
 
+describe("labels built in the engine count as customer copy too", () => {
+  // THE GAP THIS CLOSES. The first version of this file scanned JSX only, and
+  // passed — while quote-order.ts was building the string "15% gift" and
+  // handing it to the cart, the drawer, the checkout summary and the receipt.
+  // A percentage off an order the customer still pays for is the single
+  // clearest case of the word being wrong, and it was the one case the guard
+  // could not see, because the text is assembled in a template literal in
+  // pricing code rather than written between tags.
+  it("the discount label for a percentage reward does not say gift", () => {
+    const quote = code(read("src/lib/quote-order.ts"));
+
+    // The label itself, wherever it is built.
+    const labelLines = quote
+      .split("\n")
+      .filter((line) => /couponLabel\s*:/.test(line) || /%\s*gift/.test(line));
+
+    expect(
+      labelLines.filter((line) => /\bgift\b/i.test(line)),
+      `quote-order.ts builds a customer-visible label containing "gift":\n  ${labelLines.join("\n  ")}`,
+    ).toEqual([]);
+
+    // And positively: it says reward.
+    expect(quote).toMatch(/couponLabel:[^\n]*% reward/);
+  });
+});
+
 describe("the journey agrees with itself end to end", () => {
   it("the cart and the checkout use the same word for the same thing", () => {
     const cart = visibleCopy(read("src/app/cart/cart-client.tsx"));
@@ -116,8 +142,27 @@ describe("the journey agrees with itself end to end", () => {
 
   it("the invitation email uses it too", () => {
     // The email's copy lives in its own preview test, which renders through the
-    // real template. Here we only pin that the word survived.
+    // real template. Here we only pin that the WORD survived.
+    //
+    // It used to pin the old subject line verbatim — "Spin the wheel for your
+    // reward" — which made this a test of one sentence rather than of the rule.
+    // The owner rewrote the subject on 2026-09-17 and this failed, correctly
+    // spotting the change and wrongly calling it a regression. The rule is that
+    // the email says "reward" and never "gift", because a quarter of the wheel
+    // pays out a discount; the exact sentence is the owner's to choose.
     const emailCopy = read("src/lib/email/wheel-invitation-preview.test.ts");
-    expect(emailCopy).toContain("Spin the wheel for your reward");
+    const copyBlock = emailCopy.slice(
+      emailCopy.indexOf("export const WHEEL_CAMPAIGN_COPY"),
+      emailCopy.indexOf("describe("),
+    );
+    expect(copyBlock.length).toBeGreaterThan(200);
+    expect(copyBlock, "the invitation must speak of a reward").toMatch(/\breward\b/i);
+    // Comments in that block discuss the word "gift" on purpose, so only the
+    // quoted copy is searched for it.
+    const quoted = copyBlock
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    expect(quoted, "the invitation must not promise a gift").not.toMatch(/\bgifts?\b/i);
   });
 });

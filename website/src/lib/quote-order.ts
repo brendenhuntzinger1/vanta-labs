@@ -285,6 +285,21 @@ export interface QuoteResult {
    */
   offerShortfallCents: number | null;
   /**
+   * How many units of the reward were taken OUT of the paid lines rather than
+   * added on top — "the Recon Water in your cart is on us" instead of "here is
+   * another one".
+   *
+   * EXPOSED BECAUSE THE TILL HAS TO KNOW. If the reward's own unit cannot be
+   * reserved at order creation, a purely ADDITIVE reward can simply be dropped:
+   * the paid lines and the payable total are exactly what the customer agreed
+   * to, and they still get everything they chose. An ABSORBED one cannot, and
+   * this is why: absorption shrank a line the customer was buying, so dropping
+   * the reward would silently ship them less than they ordered while they paid
+   * the reduced price. Zero here is the safe case; anything else has to go back
+   * to the customer for a fresh total.
+   */
+  offerAbsorbedUnits: number;
+  /**
    * A typed code that was NOT applied because a wheel prize already is.
    *
    * Carries what the code WOULD have taken off, so the checkout can show the
@@ -326,7 +341,7 @@ export interface QuoteResult {
     wheelRewardExpiresAt: string | null;
   } | null;
   /**
-   * The resolved discount's own label ("Coupon", "15% gift", "Membership
+   * The resolved discount's own label ("Coupon", "15% reward", "Membership
    * pricing", "Bundle"), so every surface names the winner the same way.
    */
   discountLabel: string;
@@ -1666,13 +1681,21 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   const customerDiscount = resolveCustomerDiscount(
     {
       ...discountInputsBase(),
-      // ONE SLOT, THE BETTER OF THE TWO. A gift's percentage and a typed
+      // ONE SLOT, THE BETTER OF THE TWO. A reward's percentage and a typed
       // coupon are the same kind of thing — a code-shaped percentage off — so
       // they take the same slot and the customer keeps whichever is worth
-      // more. The label follows the value, so a receipt never calls a gift a
+      // more. The label follows the value, so a receipt never calls a reward a
       // "Coupon".
+      //
+      // "reward", NOT "gift". This label reaches the customer on the cart, the
+      // drawer, the checkout summary and the receipt, and for a wheel prize it
+      // read "15% gift" — for a percentage off an order they still pay for.
+      // The wheel itself says "15% off your order"; three of its sixteen
+      // wedges are discounts, so "gift" is the wrong word by the store's own
+      // rule. It is equally right for the non-spin percent offers that share
+      // this slot.
       couponDiscount: Math.max(couponAmount, offerPercentDiscount),
-      couponLabel: giftPercentFillsSlot && offerGrant ? `${offerGrant.percent}% gift` : "Coupon",
+      couponLabel: giftPercentFillsSlot && offerGrant ? `${offerGrant.percent}% reward` : "Coupon",
     },
     DISCOUNT_COMPONENTS,
   );
@@ -2080,6 +2103,10 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     appliedOffer,
     offerWithdrawnBy,
     offerShortfallCents,
+    // Read here rather than at the moment of absorption: the withdrawal branch
+    // above RESTORES borrowed units and empties absorbedFromCart, so a reward
+    // that was withdrawn correctly reports zero absorbed.
+    offerAbsorbedUnits: absorbedFromCart.reduce((sum, taken) => sum + taken.quantity, 0),
     benefitChoice,
     discountLabel: customerDiscount.label,
     appliedPromotionId: promotionIdForOrder,

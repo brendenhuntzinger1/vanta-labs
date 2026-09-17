@@ -54,6 +54,16 @@ export type SpinResult = {
    */
   offerToken: string | null;
   alreadySpun: boolean;
+  /**
+   * Already spent on an order.
+   *
+   * A REDEEMED SPIN IS STILL A SPIN — readExistingSpin deliberately keeps the
+   * row so nobody gets a second go — but the two are not the same thing to the
+   * customer, and the page had no way to tell them apart. It showed a redeemed
+   * prize with a running countdown and a "Start shopping" button, inviting
+   * someone to go and spend a reward that was already on an order they placed.
+   */
+  redeemed: boolean;
 };
 
 const ROW_COLUMNS = "id, offer_key, email, reward_kind, product_slug, percent_off, min_subtotal_cents, expires_at, revoked_at, redeemed_at";
@@ -63,6 +73,7 @@ type OfferRow = {
   product_slug: string | null;
   percent_off: number | null;
   expires_at: string;
+  redeemed_at?: string | null;
 };
 
 function resultFromRow(row: OfferRow): SpinResult | null {
@@ -76,6 +87,7 @@ function resultFromRow(row: OfferRow): SpinResult | null {
     expiresAt: row.expires_at,
     offerToken: null,
     alreadySpun: true,
+    redeemed: Boolean(row.redeemed_at),
   };
 }
 
@@ -177,5 +189,7 @@ export async function spin(input: {
     expiresAt,
     offerToken: token,
     alreadySpun: false,
+    // Just minted, so it cannot have been spent.
+    redeemed: false,
   };
 }

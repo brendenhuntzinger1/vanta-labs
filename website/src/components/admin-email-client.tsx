@@ -1260,6 +1260,27 @@ export function AdminEmailClient({
                       {campaign.cancelled > 0 ? (
                         <span className="block text-[11px] text-zinc-500">{campaign.cancelled} stopped</span>
                       ) : null}
+                      {/* FAILED AND SUPPRESSED WERE TALLIED AND NEVER SHOWN.
+                          admin-email.ts counts all five outcomes, and only
+                          `pending` and `cancelled` reached the screen. That
+                          matters because a PARTIAL failure deliberately leaves
+                          the campaign reading "sent" (campaign-sender.ts:801 —
+                          the people who received it did receive it, and a
+                          resend would mail them twice). So the status column
+                          said "sent" and the recipients who never got it
+                          appeared nowhere: the only way to find them was to
+                          query email_campaign_recipients by hand. */}
+                      {campaign.failed > 0 ? (
+                        <span className="block text-[11px] text-rose-300">{campaign.failed} failed</span>
+                      ) : null}
+                      {campaign.suppressed > 0 ? (
+                        <span
+                          className="block text-[11px] text-zinc-500"
+                          title="Unsubscribed or bounced before this campaign reached them. Not a fault — the list simply shrank."
+                        >
+                          {campaign.suppressed} suppressed
+                        </span>
+                      ) : null}
                     </td>
                     <td className="py-2.5 pr-3">{campaign.sent}</td>
                     <td className="py-2.5 pr-3">{campaign.delivered}</td>

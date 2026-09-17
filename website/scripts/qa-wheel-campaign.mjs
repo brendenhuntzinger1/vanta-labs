@@ -31,6 +31,22 @@
 // ---------------------------------------------------------------------------
 
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
+
+// ---------------------------------------------------------------------------
+// THE SUBJECT IS DECLARED ONCE, because this script seeded it AND asserted it.
+//
+// It seeded "Spin the wheel for a free reward" and then checked for the same
+// string, so it passed while the wording that actually ships had already
+// changed — a test that agrees with itself and with nothing else. Naming it
+// once makes the assertion mean something again.
+//
+// The source of truth is WHEEL_CAMPAIGN_COPY in
+// src/lib/email/wheel-invitation-preview.test.ts, which renders the email
+// through the real template. This is a plain .mjs script run outside vitest,
+// so it cannot import that module; keep the two in step by hand, and the
+// wording guard in src/app/reward-wording.test.ts fails if this drifts back
+// to calling the reward "free".
+const APPROVED_SUBJECT = "Spin the wheel for your reward";
 import { existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import pg from "pg";
@@ -159,7 +175,7 @@ async function main() {
      values ($1,$2,$3,$4,$5,$6,'Spin now','/spin','account_no_order','draft',0,$7,$8,'customer', now(), now())`,
     [
       campaignId, campaignName,
-      "Spin the wheel for a free reward",
+      APPROVED_SUBJECT,
       "Spin to reveal your reward. Qualifying purchase required.",
       "A spin. A reward. Yours to reveal.",
       "Your first Vanta order could come with something extra. Spin the wheel to reveal your reward, then shop and redeem it with a qualifying order.\n\nEvery spin wins. Sixteen wedges, 15 rewards — free vials, free shipping and a discount or two. One spin per customer, and the result is saved to your account.\n\nYour reward expires 72 hours after you spin. Every reward is redeemed against a qualifying order — the exact minimum for the reward you land on is shown before you spin, and again in your cart.",
@@ -207,7 +223,7 @@ async function main() {
     const headers = message.headers ?? {};
     const headerKeys = Object.keys(headers).map((k) => k.toLowerCase());
 
-    check("subject is the approved line", (message.subject ?? "") === "Spin the wheel for a free reward", message.subject);
+    check("subject is the approved line", (message.subject ?? "") === APPROVED_SUBJECT, message.subject);
     check("hero image is the wheel", html.includes("/images/spin-wheel-hero.png"));
     check("the rotating homepage vial is not used", !/hero-vial|home-?poster|vial-rotate/i.test(html));
 

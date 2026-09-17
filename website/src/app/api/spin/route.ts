@@ -7,7 +7,7 @@ import { OFFER_COOKIE, OFFER_COOKIE_MAX_AGE_SECONDS, readOfferCookie, readOfferS
 import { checkRateLimit } from "@/lib/rate-limit";
 import { describeRedemptionCondition } from "@/lib/spin/disclosure";
 import { claimSpinForAccount } from "@/lib/spin/spin-claim";
-import { spin } from "@/lib/spin/spin-service";
+import { readExistingSpin, spin } from "@/lib/spin/spin-service";
 import { verifySpinToken } from "@/lib/spin/spin-token";
 
 export const dynamic = "force-dynamic";
@@ -47,7 +47,28 @@ export async function POST(request: Request) {
       return res;
     }
 
-    const body = (await request.json().catch(() => ({}))) as { token?: string };
+    const body = (await request.json().catch(() => ({}))) as { token?: string; rearmOnly?: boolean };
+
+    // A PAGE LOAD MUST NEVER BE ABLE TO DRAW.
+    //
+    // This endpoint does two jobs: it draws a prize when the customer presses
+    // the button, and it re-arms a device for a prize already won. Only the
+    // first is an irreversible spend of the customer's one spin, and only the
+    // button is allowed to ask for it.
+    //
+    // The wheel's re-arm effect runs on MOUNT — no click, no intent — and it
+    // was telling them apart by a client-side guard alone (`if (!initialResult)
+    // return`). On 2026-09-17 a prize was minted on production at 14:26:28 with
+    // no button press, seconds after a GET /spin, and a controlled re-test
+    // under what looked like identical conditions did not reproduce it. Cause
+    // unexplained; the shape of the hazard is not.
+    //
+    // So the distinction moves to the SERVER, where a client cannot get it
+    // wrong. `rearmOnly` says "I am a page load": it may hand back a prize this
+    // address already holds and may rotate a token for it, and it may not draw.
+    // A guard that depends on the caller having reasoned correctly is not a
+    // guard — this one holds whatever the page does.
+    const rearmOnly = body.rearmOnly === true;
     const verified = await verifySpinToken(String(body.token ?? "").trim());
     if (!verified) {
       // One message for malformed, forged and expired alike — the difference is
@@ -84,7 +105,17 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await spin({ email: verified.email, campaignId: verified.campaignId });
+    // Read first when this is a page load: readExistingSpin cannot mint, so a
+    // re-arm that finds nothing returns nothing rather than drawing.
+    const result = rearmOnly
+      ? await readExistingSpin({ email: verified.email, campaignId: verified.campaignId })
+      : await spin({ email: verified.email, campaignId: verified.campaignId });
+
+    if (rearmOnly && !result) {
+      // Nothing to re-arm, and nothing to report. Deliberately a success: the
+      // page asked whether there was a prize to pick up, and the answer is no.
+      return NextResponse.json({ success: true, alreadySpun: false, rearmed: false });
+    }
 
     if (!result) {
       // A wheel that cannot mint must not look like one that can.

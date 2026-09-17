@@ -120,8 +120,38 @@ export const SPIN_TERMS: readonly string[] = [
   "One spin per customer for this campaign. The result is saved and final.",
   `Your prize expires ${SPIN_EXPIRY_HOURS} hours after you spin.`,
   "Every prize is claimed with a qualifying purchase — your cart will tell you exactly what's needed.",
-  "A free product is added on top of any other discount you already have.",
-  "A percentage prize replaces your other discounts rather than adding to them — you keep whichever is worth more.",
+  // THESE TWO SAY "DISCOUNT CODE", NOT "DISCOUNT", AND THE DIFFERENCE IS REAL.
+  //
+  // They used to promise it against "any other discount you already have" and
+  // "your other discounts". quote-order compares a percentage prize against a
+  // typed COUPON CODE (the Math.max in the coupon slot) — it cannot compare it
+  // against a second saved reward, because a quote resolves exactly one
+  // customer_offers row, the one in the cookie. So for someone already holding
+  // a saved reward the promise was one the till could not keep.
+  //
+  // Measured against the 103-person audience on 2026-09-17: 78 hold a live
+  // saved reward, 71 of them an uncapped 15% win-back. The wheel's own 15% is
+  // capped at $30, so above a $200 basket "you keep whichever is worth more"
+  // would have been false for them.
+  //
+  // The third line is new and is the honest version of what actually happens.
+  "A free product is added on top of a discount code you type in at checkout.",
+  "A percentage prize replaces a discount code you type in — you keep whichever is worth more.",
+  // MEASURED, NOT ASSUMED. This line used to say spinning "replaces it with
+  // your prize" and stop there, which reads as an even swap. Priced through the
+  // real quoteOrder on 2026-09-17 against the uncapped 15% win-back that 73
+  // live rows carry, it is not always one:
+  //
+  //   $79 basket    capped 15% -> identical; free vial -> $12.21 more cash, +$39.99 of goods
+  //   $237 basket   capped 15% -> $5.72 WORSE; free shipping -> $17.09 worse and worth
+  //                 nothing, because shipping was already free at that subtotal
+  //   $395 basket   capped 15% -> $12.21 worse; the cap and the bulk tier both bite
+  //
+  // The spin is irreversible and happens before the basket exists, so this is
+  // the only honest moment to say it. "May be worth more or less" is the point:
+  // the store cannot promise better, and pretending otherwise is a promise the
+  // till would then have to break.
+  "Only one reward applies to an order. If you already have a saved reward from us, spinning replaces it — your prize may be worth more or less than the one you hold.",
   "Free shipping applies only where shipping would otherwise be charged.",
   "Prizes have no cash value and cannot be transferred or exchanged.",
 ];
@@ -158,12 +188,12 @@ export function describeRedemptionCondition(prize: SpinPrize): string {
     const cap = prize.maxDiscountCents
       ? ` Up to ${formatMoneyFromCents(prize.maxDiscountCents)}.`
       : "";
-    return `With a qualifying purchase.${cap} Replaces other discounts — you keep whichever is worth more.`;
+    return `With a qualifying purchase.${cap} Replaces a discount code you type in — you keep whichever is worth more.`;
   }
   if (prize.reward.kind === "free_shipping") {
     return "With a qualifying purchase, where shipping would otherwise be charged.";
   }
-  return "Yours free with a qualifying purchase. Added on top of any other discount.";
+  return "Yours free with a qualifying purchase. Added on top of a discount code you type in.";
 }
 
 /** The same condition WITH the figure, for the full-terms disclosure. */
@@ -179,10 +209,10 @@ export function describeExactCondition(prize: SpinPrize): string {
     const cap = prize.maxDiscountCents
       ? ` Up to ${formatMoneyFromCents(prize.maxDiscountCents)}.`
       : "";
-    return `${minimum}.${cap} Replaces other discounts — you keep whichever is worth more.`;
+    return `${minimum}.${cap} Replaces a discount code you type in — you keep whichever is worth more.`;
   }
   if (prize.reward.kind === "free_shipping") {
     return `${minimum}, where shipping would otherwise be charged.`;
   }
-  return `${minimum}. Added on top of any other discount.`;
+  return `${minimum}. Added on top of a discount code you type in.`;
 }

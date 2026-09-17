@@ -39,7 +39,7 @@ const COST_CENTS_AT_DESIGN_TIME: Record<string, number> = {
   semax: 586,
   "cjc-1295-ipamorelin": 1112,
   "hgh-gh-191": 1200,
-  tesamorelin: 2033,
+  kisspeptin: 898,
   glow: 2154,
   klow: 2507,
 };
@@ -132,7 +132,7 @@ describe("the minimum order on each wedge", () => {
       semax: 9_900,
       cjc_ipamorelin: 12_500,
       hgh: 12_500,
-      tesamorelin: 15_000,
+      kisspeptin: 15_000,
       glow: 17_500,
       klow: 20_000,
     });
