@@ -28,6 +28,7 @@ import {
 import type { PublicCoaDocument } from "@/lib/coa-types";
 import Image from "next/image";
 import { FULFILMENT_DETAIL, FULFILMENT_SENTENCE, FULFILMENT_SHORT, RESEARCH_USE_SENTENCE, TESTING_DETAIL, TESTING_SHORT } from "@/lib/trust-claims";
+import { WelcomeOfferSignup } from "@/components/welcome-offer-signup";
 
 function parseDose(slug: string) {
   const match = slug.match(/(\d+(?:\.\d+)?(?:mg|iu|mcg|g|ml))$/i);
@@ -946,6 +947,13 @@ export function ProductDetailClient({
                   className="vl2-lab-btn-secondary vl-focus-ring inline-flex h-[52px] w-[52px] flex-shrink-0 items-center justify-center"
                 />
               </div>
+
+              {/* ONE LINE, UNDER THE BUTTON. A product page is not a place for a
+                  banner, so the welcome offer is a question a first-time
+                  shopper can ignore: it opens the form in place, never over the
+                  page, and disappears entirely for anyone who has bought
+                  before or already holds a code. */}
+              <WelcomeOfferSignup variant="link" />
 
               <BacWaterAccessoryBlock bacWater={bacWater} host={product} />
 

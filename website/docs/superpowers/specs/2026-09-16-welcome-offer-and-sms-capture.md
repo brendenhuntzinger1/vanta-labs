@@ -151,3 +151,146 @@ nowhere as consent.
 * Decide the SMS incentive's shape (see §1) before any code for it.
 * Enable `VL · Welcome offer` together with `VL · Welcome`, after the contact
   import and the seed sends (OPERATIONS.md §4).
+
+---
+
+# Addendum, 2026-09-17: the offer moves to texts and goes across the store
+
+## 7. Why it moved off email
+
+The owner's brief was "make the 15% first-order email signup offer easy to
+find throughout the store". Halfway through building it he changed the
+channel: *"i dont need that for email this should be for sms. most people are
+already optin into my emails from the age gate."*
+
+Checked against production before rewiring, read-only:
+
+| Accounts | On the email list | `marketing_emails` true | `sms_marketing` true | Addresses that have paid |
+| --- | --- | --- | --- | --- |
+| 193 | 114 | 107 | 0 | 12 |
+
+So the email list was already 59% of the account base and the SMS list was
+empty. Fifteen per cent paid for an address the store already held; the same
+fifteen per cent buys a channel that does not exist yet. (The premise was not
+exactly right — the sign-up box is unticked by default and it is the checkout
+box that defaults on for a US destination — but the conclusion holds on the
+numbers either way.)
+
+The email boxes on the sign-up page and at the checkout are **unchanged**:
+same wording, same defaults, no discount attached. Nothing about email consent
+was touched, because nothing needed to be.
+
+## 8. The five placements
+
+One sentence everywhere, from `src/lib/offers/welcome-offer-copy.ts`:
+
+> Subscribe to texts for 15% off your first order. Valid for 14 days. Cannot
+> be combined with other offers.
+
+| Where | Shape | Notes |
+| --- | --- | --- |
+| Sign-up page | a line beside the SMS box | between the email box and the SMS box, so the offer and the consent are read together |
+| Catalogue | a slim bar above the filters | `WelcomeOfferSignup variant="bar"` |
+| Product page | one discreet link under Add to Cart | opens the form in place |
+| Cart | a card above the order summary | `variant="card"` |
+| Checkout | a panel under the SMS box | claims and applies the code in place |
+| Home page | **nothing** | deliberately |
+
+No dialogs anywhere. The controls are disclosures that push the page down and
+close again; the only overlay on the catalogue remains the Omnisend pop-up,
+now restricted to `/products` so it cannot appear on the home page or over a
+checkout.
+
+## 9. One eligibility, one code
+
+`src/lib/offers/welcome-offer.ts` is the only thing that decides:
+
+* `readWelcomeOffer(email)` → `eligible` | `claimed` (with the live code) |
+  `ineligible`. Reads only: a page render never mints, so nobody's fourteen
+  days start because they looked.
+* `claimWelcomeOffer({email, phone, source, userId})` → records the consent
+  first, then `ensureContactCode("welcome", …)`, which hands back a live code
+  rather than minting a second. Verified on the harness: three claims for one
+  address returned the same code and the same end date, and left one row.
+* `grantWelcomeOfferForConsent(email)` is the half the sign-up route, the
+  account preferences route and the Omnisend write-back call after they
+  record consent their own way.
+* Eligibility is one question: has this address ever paid for a product
+  order? A refused read answers "yes", the safe direction.
+
+Minting moved off the email path entirely: `onMarketingOptIn` no longer calls
+`ensureContactCode`, it only reads a live code for the (dormant) gift. That is
+what makes the sentence above true rather than decorative.
+
+`GET|POST /api/offers/welcome` is the one endpoint. The session's address
+always wins; only a guest may name one, because guest checkout is real here.
+A guest is told "here is your code" or "not available" and never which of the
+refusals it was. Ten claims per IP per hour.
+
+## 10. Cannot be combined, enforced
+
+Coupon stacking is a store-wide admin toggle and a promotion can licence its
+own stack. With either on, a welcome code would have ridden on top of another
+discount and contradicted its own printed terms. `quote-order.ts` now pins
+`allowCouponStacking` and `promotionStacksCoupon` to false whenever the typed
+coupon's source is a welcome source. Every other code keeps whatever the admin
+and the promotion allow.
+
+`welcome-code-never-stacks.test.ts` drives the real `quoteOrder` with stacking
+switched ON and shows an ordinary code still stacking while a welcome code
+does not, and a losing welcome code leaving the price exactly as it was.
+
+At the checkout the shopper is told which of the two happened:
+"Your 15% welcome discount is applied", or that a larger discount is already
+on the order and offers cannot be combined. `couponOutcome.controlsPrice` —
+the quote's own answer — decides, so the message can never outrun the money. A
+code the shopper typed themselves is never overwritten to make room.
+
+## 11. The minifier bug this caught
+
+The sentence was first written as two template literals added together. Vitest
+passed, the dev server rendered it correctly, and the **production bundle
+shipped "Subscribe to texts for 15Valid for 14 days."** The minifier folded
+the pair and dropped the first template's trailing quasi — which happened to
+be "% off your first order. ", the entire offer.
+
+It only bites when every substitution is a compile-time constant, which is
+exactly what a copy module is made of; the two other places in the repo with
+the same shape interpolate runtime values and are unaffected (checked in the
+built chunks). Each half is now a standalone template and the sentence is
+joined from the two identifiers.
+
+Two guards in `welcome-offer-placements.test.ts`: the source may not contain
+the template-pair shape, and the built client bundle must carry both halves
+whole. This is the case for reading the rendered page rather than the source.
+
+## 12. Verified on the harness (2026-09-17)
+
+Local harness, production build, 390x844 and 1280x900.
+
+| Check | Result |
+| --- | --- |
+| Checkout offer copy | the full sentence, after the minifier fix |
+| Tick SMS with a number | code minted, applied, "Your 15% welcome discount is applied" |
+| Totals | promo line −$10.35 on a $69.00 subtotal (15%), order total recalculated |
+| No reload | email, phone and the ticked box all survive; nothing renavigates |
+| Repeat claims | same code, same end date, one coupon row |
+| Past buyer | refused, no code minted, nothing disclosed |
+| Consent row | `sms_subscribers` source "checkout", consent sentence stored |
+| Cart card | renders above the order summary, no horizontal overflow |
+
+**Not browser-verified:** the catalogue bar and the product-page link. Both
+pages require an account and the harness has no GoTrue (runbook §"GoTrue
+auth"), so they cannot be rendered signed-in here. They are the same component
+as the cart card with a different wrapper, and their mounting is pinned by
+test. Worth a look on the Vercel preview before enabling.
+
+## 13. Still the owner's
+
+* Apply `sms-subscribers.sql` with `omnisend-sync.sql`.
+* A2P 10DLC approval before any text is sent. The on-site claim does not wait
+  on it: the code is issued and applied on the page, and the code email is
+  sent by the welcome-offer flow.
+* Re-check the catalogue bar and product link on a preview deployment.
+* The pop-up now names the offer on its SMS step; re-read it in Omnisend
+  before enabling.

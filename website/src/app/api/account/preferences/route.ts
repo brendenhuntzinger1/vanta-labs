@@ -7,6 +7,7 @@ import { customerSafeMessage } from "@/lib/safe-error";
 import { CUSTOMER_CHOSEN_SUPPRESSION_REASONS } from "@/lib/email/suppression-reasons";
 import { onPreferencesChanged } from "@/lib/marketing/omnisend/hooks";
 import { recordSmsOptOut } from "@/lib/sms-consent";
+import { grantWelcomeOfferForConsent } from "@/lib/offers/welcome-offer";
 
 function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
@@ -59,6 +60,11 @@ export async function PATCH(request: Request) {
           // for this address, or the sync would read the older consent.
           const address = user.email?.trim().toLowerCase();
           if (address && !body.smsMarketing) await recordSmsOptOut(address, now);
+          // SUBSCRIBING HERE EARNS THE SAME WELCOME CODE the sign-up page and
+          // the storefront offer hand out: one offer, one code per address,
+          // whichever screen the box was ticked on. Silent and best-effort —
+          // a preferences save never fails over a discount.
+          if (address && body.smsMarketing) await grantWelcomeOfferForConsent(address);
         }
       } catch {
         // Non-fatal; see note above.

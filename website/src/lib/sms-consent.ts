@@ -31,7 +31,10 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 
 const LOG = "[sms-consent]";
 
-export type SmsConsentSource = "signup" | "checkout" | "account-settings";
+// Where the box was ticked. Stored on the consent row, so the TCPA record
+// says which screen collected it. "storefront" is the welcome-offer control
+// on the catalogue, a product page and the cart.
+export type SmsConsentSource = "signup" | "checkout" | "account-settings" | "storefront" | "omnisend-form";
 
 function normalizeEmail(email: string): string | null {
   const value = String(email ?? "").trim().toLowerCase();
@@ -107,6 +110,49 @@ export async function recordSmsOptOut(email: string, at: string): Promise<"appli
     return "applied";
   } catch (error) {
     console.error(LOG, "opt-out could not be recorded", error);
+    return "failed";
+  }
+}
+
+/**
+ * A CONSENT OMNISEND TOOK AND THE STORE HAS NEVER SEEN.
+ *
+ * The sign-up pop-up collects the number and the tick on Omnisend's side, so
+ * the store learns of it on the next write-back (reconcile.ts). This mirrors
+ * it into sms_subscribers ONCE, and never again: recordSmsConsent would
+ * re-stamp consented_at on every half-hourly tick and quietly rewrite the
+ * date the person actually agreed, which is the one field a carrier dispute
+ * turns on. So an address that already has a row — consented or stopped — is
+ * left exactly as it is, and "nothing" is the honest answer for it.
+ *
+ * `at` is when Omnisend recorded the consent, not when this run found it.
+ */
+export async function mirrorSmsConsent(input: { email: string; phone: string; source: SmsConsentSource; at: string }): Promise<"applied" | "nothing" | "failed"> {
+  const email = normalizeEmail(input.email);
+  const phone = acceptableSmsPhone(input.phone);
+  if (!email || !phone) return "nothing";
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("sms_subscribers")
+      .select("email")
+      .eq("email", email)
+      .maybeSingle();
+    if (error) {
+      console.error(LOG, "mirror read refused", error.message);
+      return "failed";
+    }
+    if (data) return "nothing";
+    const now = new Date().toISOString();
+    const { error: writeError } = await supabaseAdmin
+      .from("sms_subscribers")
+      .insert({ email, phone, source: input.source, consented_at: input.at, opted_out_at: null, consent_text: SMS_CONSENT_TEXT, updated_at: now });
+    if (writeError) {
+      console.error(LOG, "mirror write refused", writeError.message);
+      return "failed";
+    }
+    return "applied";
+  } catch (error) {
+    console.error(LOG, "mirror could not be written", error);
     return "failed";
   }
 }

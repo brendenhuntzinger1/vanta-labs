@@ -45,7 +45,8 @@ import {
   type OmnisendContactRead,
   type OmnisendReconcileReport,
 } from "@/lib/marketing/omnisend/reconcile-plan";
-import { recordSmsOptOut } from "@/lib/sms-consent";
+import { grantWelcomeOfferForConsent } from "@/lib/offers/welcome-offer";
+import { mirrorSmsConsent, recordSmsOptOut } from "@/lib/sms-consent";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -148,6 +149,8 @@ export type OmnisendReconcileResult = {
   pushed: number;
   suppressed: number;
   smsOptOuts: number;
+  /** sms_subscribers rows mirrored from a pop-up consent this run. */
+  smsSubscribers: number;
   formSubscribers: number;
   winbackCodes: number;
   dryRun: boolean;
@@ -476,6 +479,8 @@ async function applySmsOptOut(email: string, changedAt: string | null, now: stri
 type WriteBackCounts = {
   suppressed: number;
   smsOptOuts: number;
+  /** sms_subscribers rows mirrored from a pop-up consent this run. */
+  smsSubscribers: number;
   formSubscribers: number;
   /** Rows on the suppression list, or null when it could not be read in full. */
   suppressionRows: number | null;
@@ -484,7 +489,7 @@ type WriteBackCounts = {
 };
 
 async function runWriteBack(input: { dryRun: boolean; audience: Set<string> | null; now: string }): Promise<WriteBackCounts> {
-  const counts: WriteBackCounts = { suppressed: 0, smsOptOuts: 0, formSubscribers: 0, suppressionRows: null, notes: [] };
+  const counts: WriteBackCounts = { suppressed: 0, smsOptOuts: 0, smsSubscribers: 0, formSubscribers: 0, suppressionRows: null, notes: [] };
 
   const suppressed = await loadSuppressed();
   if (!suppressed) {
@@ -517,6 +522,7 @@ async function runWriteBack(input: { dryRun: boolean; audience: Set<string> | nu
     complete,
     suppress: plan.suppress.length,
     smsOptOut: plan.smsOptOut.length,
+    smsSubscribers: plan.smsSubscribers.length,
     newSubscribers: newSubscribers.length,
     dryRun: input.dryRun,
   });
@@ -552,6 +558,24 @@ async function runWriteBack(input: { dryRun: boolean; audience: Set<string> | nu
       // codes and leaves the gift link as this push set it.
       await onMarketingOptIn(email, "omnisend-form");
     } else if (form === "failed") failures += 1;
+  }
+  // A POP-UP SMS CONSENT THE STORE HAS NEVER SEEN. Mirrored once (the mirror
+  // leaves an existing row alone, so consented_at stays the date the person
+  // actually agreed), and a first mirror earns the same welcome code every
+  // other SMS sign-up earns — one offer, one code per address, whichever
+  // screen took the tick. Never for a buyer, never a second code, and never
+  // on a dry run.
+  for (const subscriber of plan.smsSubscribers) {
+    const mirrored = await mirrorSmsConsent({
+      email: subscriber.email,
+      phone: subscriber.phone,
+      source: "omnisend-form",
+      at: subscriber.at ?? input.now,
+    });
+    if (mirrored === "applied") {
+      counts.smsSubscribers += 1;
+      await grantWelcomeOfferForConsent(subscriber.email);
+    } else if (mirrored === "failed") failures += 1;
   }
   for (const email of plan.smsOptOut) {
     const sms = await applySmsOptOut(email, stamps.get(email)?.sms ?? null, input.now);
@@ -880,7 +904,7 @@ export async function reconcileOmnisendContacts(opts: OmnisendReconcileOptions =
   const result: OmnisendReconcileResult = {
     pushed: 0,
     suppressed: 0,
-    smsOptOuts: 0,
+    smsOptOuts: 0, smsSubscribers: 0,
     formSubscribers: 0,
     winbackCodes: 0,
     dryRun,
@@ -923,8 +947,9 @@ export async function reconcileOmnisendContacts(opts: OmnisendReconcileOptions =
     const writeBack = await runWriteBack({ dryRun, audience, now });
     result.suppressed = writeBack.suppressed;
     result.smsOptOuts = writeBack.smsOptOuts;
+    result.smsSubscribers = writeBack.smsSubscribers;
     result.formSubscribers = writeBack.formSubscribers;
-    report.writeBack = { suppressed: writeBack.suppressed, smsOptOuts: writeBack.smsOptOuts, formSubscribers: writeBack.formSubscribers };
+    report.writeBack = { suppressed: writeBack.suppressed, smsOptOuts: writeBack.smsOptOuts, smsSubscribers: writeBack.smsSubscribers, formSubscribers: writeBack.formSubscribers };
     report.store.suppressed = writeBack.suppressionRows ?? 0;
     report.unresolved.push(...writeBack.notes);
 

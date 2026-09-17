@@ -67,6 +67,25 @@ export const PUBLIC_EXACT = new Set([
   // including the sign-in page itself. Chrome then reports "no manifest" and
   // the install prompt is gone.
   "/site.webmanifest",
+  // ---- THE WELCOME OFFER, WHICH A GUEST CHECKOUT HAS TO BE ABLE TO CLAIM.
+  //
+  // Guest checkout is a real way to buy here (a cart-recovery link opens one),
+  // and the offer is shown beside the SMS box on that checkout. Gated, the
+  // claim answered "Sign in to continue" and the discount was unreachable for
+  // exactly the first-time buyer it exists for — found by driving the harness
+  // checkout, not by reading the route.
+  //
+  // It is not a hole. It prefers the session's address whenever there is one
+  // and only reads an address from the body when there is none; it tells a
+  // guest nothing about that address, answering "here is your code" or "not
+  // available" without ever saying which; it is throttled at ten an hour per
+  // IP; and the code it mints is bound to the address, single-use, and refused
+  // at the till for anyone else (coupons.ts validateCoupon). The GET beside it
+  // mints nothing and answers only for a signed-in caller.
+  //
+  // Named exactly, never "/api/offers": that prefix is the one-time gift
+  // machinery, which is bearer-token business and stays behind the wall.
+  "/api/offers/welcome",
   // Reaching a human must not require an account. Someone locked out of their
   // own account is exactly the person who needs the contact form.
   "/contact",

@@ -51,6 +51,13 @@ export type WriteBackPlan = {
   smsOptOut: string[];
   /** Write marketing_subscribers {source: omnisend-form}. */
   newSubscribers: string[];
+  /**
+   * Mirror into sms_subscribers: a pop-up took the number and the tick, and
+   * the store has no row for it. Carries the number and the moment Omnisend
+   * recorded the consent, because the mirror stores when the person agreed
+   * rather than when this run noticed.
+   */
+  smsSubscribers: { email: string; phone: string; at: string | null }[];
 };
 
 function normalizeEmail(value: unknown): string | null {
@@ -62,6 +69,7 @@ export function planWriteBack(contacts: OmnisendContactRead[], known: KnownConse
   const suppress = new Set<string>();
   const smsOptOut = new Set<string>();
   const newSubscribers = new Set<string>();
+  const smsSubscribers = new Map<string, { email: string; phone: string; at: string | null }>();
 
   for (const contact of contacts) {
     const email = normalizeEmail(contact.email);
@@ -83,6 +91,12 @@ export function planWriteBack(contacts: OmnisendContactRead[], known: KnownConse
 
     if (contact.smsStatus === "unsubscribed" && !known.smsOptedOut.has(email)) {
       smsOptOut.add(email);
+    } else if (contact.smsStatus === "subscribed" && contact.phone) {
+      // Planned broadly and applied once: the mirror refuses an address that
+      // already has a row, so a contact planned on every tick is written on
+      // exactly one of them. Only a contact carrying a number is planned —
+      // there is nothing to record without one.
+      smsSubscribers.set(email, { email, phone: String(contact.phone), at: contact.smsStatusChangedAt ?? null });
     }
   }
 
@@ -90,6 +104,7 @@ export function planWriteBack(contacts: OmnisendContactRead[], known: KnownConse
     suppress: [...suppress],
     smsOptOut: [...smsOptOut],
     newSubscribers: [...newSubscribers],
+    smsSubscribers: [...smsSubscribers.values()],
   };
 }
 
@@ -477,7 +492,7 @@ export type OmnisendReconcileReport = {
   /** What went out (or, in a dry run, what would have). */
   push: { submitted: number; batches: number; batchIds: string[]; failedBatches: number };
   /** What Omnisend changed in the store. */
-  writeBack: { suppressed: number; smsOptOuts: number; formSubscribers: number };
+  writeBack: { suppressed: number; smsOptOuts: number; smsSubscribers: number; formSubscribers: number };
   /** Everything the run could not settle, one line each, counts and ids only. */
   unresolved: string[];
 };
@@ -487,7 +502,7 @@ export function emptyReconcileReport(): OmnisendReconcileReport {
     store: { consented: 0, buyersWithoutConsent: 0, suppressed: 0, smsConsented: 0, nonMailable: 0 },
     omnisend: { contactsBefore: 0, contactsAfter: 0, capped: false },
     push: { submitted: 0, batches: 0, batchIds: [], failedBatches: 0 },
-    writeBack: { suppressed: 0, smsOptOuts: 0, formSubscribers: 0 },
+    writeBack: { suppressed: 0, smsOptOuts: 0, smsSubscribers: 0, formSubscribers: 0 },
     unresolved: [],
   };
 }

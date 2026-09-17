@@ -1293,6 +1293,20 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // absorbed units changes the subtotal, the discount base and the promotion
   // after this point; a literal captured here would have priced the order on
   // the smaller basket while charging for the larger one.
+  // THE WELCOME CODE NEVER STACKS, WHATEVER THE ADMIN SWITCH SAYS.
+  //
+  // Four surfaces now print "Cannot be combined with other offers" beside
+  // this code — the catalogue bar, the product link, the cart card and the
+  // checkout box — so the engine has to make that sentence true rather than
+  // hopeful. Coupon stacking is a store-wide admin toggle and a promotion can
+  // licence its own stack; either one turned on would have let a welcome code
+  // ride on top of a promotion and quietly contradict the offer's own terms.
+  //
+  // Only the welcome code is pinned this way. Every other code keeps whatever
+  // the admin and the promotion allow, because their terms do not say this.
+  const welcomeCouponTyped = coupon !== null && isWelcomeCodeSource(coupon.source);
+  const allowCouponStacking = welcomeCouponTyped ? false : couponPolicy.allowStacking;
+  const promotionStacksTypedCoupon = welcomeCouponTyped ? false : promotionAllowsCouponStacking;
   const discountInputsBase = () => ({
     subtotal,
     fullSubtotal: discountBase,
@@ -1311,8 +1325,8 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     // switch — and once a referral could beat a promotion, a LOSING promotion's
     // permission stacked a coupon onto the referral. See promotionStacksCoupon
     // in profit-engine.ts.
-    allowCouponStacking: couponPolicy.allowStacking,
-    promotionStacksCoupon: promotionAllowsCouponStacking,
+    allowCouponStacking,
+    promotionStacksCoupon: promotionStacksTypedCoupon,
     commissionPercent: 0,
     processingFeePercent: 0,
     shippingCollected: 0,
@@ -1354,7 +1368,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     // $37 basket with a 10% code and a 15% gift qualifies for a $35 gift on
     // its $37, not on $33.30 that was never going to be the price.)
     const couponWillApply = couponAmount > 0
-      && (couponAmount >= offerPercentDiscount || couponPolicy.allowStacking || promotionAllowsCouponStacking);
+      && (couponAmount >= offerPercentDiscount || allowCouponStacking || promotionStacksTypedCoupon);
     const baseline = resolveCustomerDiscount(
       { ...discountInputsBase(), couponDiscount: couponWillApply ? couponAmount : 0 },
       DISCOUNT_COMPONENTS,

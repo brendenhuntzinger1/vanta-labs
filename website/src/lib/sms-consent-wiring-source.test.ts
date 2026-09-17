@@ -46,8 +46,19 @@ describe("never pre-ticked", () => {
   it("the sign-up form and the checkout start the box off", () => {
     expect(SIGNUP_FORM).toContain("const [smsOptIn, setSmsOptIn] = useState(false);");
     expect(CHECKOUT).toContain("const [smsOptIn, setSmsOptIn] = useState(false);");
-    // Unlike the email box, which may default on for a US destination.
-    expect(CHECKOUT).not.toMatch(/smsOptIn[^;]*isUnitedStates/);
+    // Unlike the email box, which may default on for a US destination. Pinned
+    // on the declaration itself rather than on the distance between the two
+    // names in the file: the welcome-offer block added in September puts
+    // `smsOptIn` in the JSX a few hundred characters above the email box's
+    // country default, which a proximity match reads as a pre-tick.
+    const declaration = CHECKOUT.slice(
+      CHECKOUT.indexOf("const [smsOptIn, setSmsOptIn]"),
+      CHECKOUT.indexOf(";", CHECKOUT.indexOf("const [smsOptIn, setSmsOptIn]")),
+    );
+    expect(declaration).toContain("useState(false)");
+    expect(declaration).not.toContain("isUnitedStates");
+    // And nothing anywhere sets it from the country.
+    expect(CHECKOUT).not.toMatch(/setSmsOptIn\([^)]*isUnitedStates/);
   });
 
   it("the sign-up form asks for a number beside the box and refuses a tick without one", () => {

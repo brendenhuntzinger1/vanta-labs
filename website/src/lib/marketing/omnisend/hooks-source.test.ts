@@ -74,17 +74,31 @@ describe("every hook asks the gate first, never throws, and logs under the modul
 describe("onMarketingOptIn", () => {
   const body = fn("onMarketingOptIn");
 
-  it("mints the welcome code only for an address with no paid product order, then the gift only once the code exists, then upserts the contact with a fresh link, the live codes and the gift", () => {
+  // AN EMAIL OPT-IN NO LONGER MINTS THE WELCOME CODE.
+  //
+  // It did until 2026-09-16, when the owner moved the offer to text
+  // subscribers: 114 of 193 accounts were already on the email list and the
+  // SMS list was empty, so the discount was buying an address the store
+  // already had. Minting now lives on the SMS consent path only
+  // (offers/welcome-offer.ts grantWelcomeOfferForConsent, called from the
+  // sign-up route, the account preferences route and the storefront claim),
+  // which is what makes "subscribe to texts for 15% off" true on every
+  // surface that prints it. This test is the guard: if ensureContactCode
+  // ever comes back to this function, an email subscriber earns a discount
+  // the store advertises for texts, and four surfaces start lying.
+  it("mints no code for an email opt-in, reading the live one instead, and upserts the contact either way", () => {
     const facts = body.indexOf("await collectContactFacts(address)");
-    const welcome = body.indexOf('const code = await ensureContactCode("welcome", address)');
-    const gift = body.indexOf('if (code && WELCOME_GIFT_ENABLED) welcomeGift = (await mintWelcomeGift(address, contactLinkFor(address, "welcome"))) ?? undefined;');
+    const read = body.indexOf('const code = await findLiveContactCode("welcome", address)');
+    const gift = body.indexOf("if (code) welcomeGift = (await mintWelcomeGift(address, contactLinkFor(address, \"welcome\"))) ?? undefined;");
     const upsert = body.indexOf("await upsertOmnisendContact(address, { ...(await contactExtras(address)), welcomeGift })");
     expect(facts).toBeGreaterThan(-1);
-    expect(welcome).toBeGreaterThan(facts);
-    expect(gift).toBeGreaterThan(welcome);
+    expect(read).toBeGreaterThan(facts);
+    expect(gift).toBeGreaterThan(read);
     expect(upsert).toBeGreaterThan(gift);
-    // Both halves sit behind the same gate: never at a checkout, never for a buyer.
-    expect(body).toContain('if (source !== "checkout" && facts.orders === 0) {');
+    expect(body).not.toContain("ensureContactCode");
+    // The gift half keeps its own gate and its own flag: never at a checkout,
+    // never for a buyer, and only when the vial is switched on at all.
+    expect(body).toContain('if (source !== "checkout" && facts.orders === 0 && WELCOME_GIFT_ENABLED) {');
   });
 
   // THE CHECKOUT OPT-IN IS NOT A FIRST SUBSCRIBE. recordMarketingOptIn runs
@@ -94,7 +108,7 @@ describe("onMarketingOptIn", () => {
   // flow's first email at once. The consent still reaches Omnisend; the
   // code waits for a sign-up or an account opt-in.
   it("mints nothing for the checkout opt-in, whatever the order count, and pushes the contact either way", () => {
-    expect(body).toContain('if (source !== "checkout" && facts.orders === 0) {');
+    expect(body).toContain('if (source !== "checkout" && facts.orders === 0 && WELCOME_GIFT_ENABLED) {');
     expect(body).not.toContain("if (facts.orders === 0) {");
     // The push is unconditional on the source: the guard returns nothing early.
     const guard = body.indexOf('if (source !== "checkout" && facts.orders === 0)');

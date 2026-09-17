@@ -98,3 +98,38 @@ production), a text. The pop-up, the two new templates and the new
 automation were pushed to the account through the generator and read back
 (`isEnabled` false, form status draft).
 
+
+## Harness session 4, 2026-09-17 (the welcome offer moves to texts, and across the store)
+
+Rebuilt on the head that attaches the 15% welcome offer to SMS consent and
+puts it on five surfaces. Two production reads were taken first, read-only and
+counts only, to check the owner's premise that the email list is already
+covered: 193 accounts, 114 on the email list, 107 carrying `marketing_emails`,
+0 carrying `sms_marketing`, 12 addresses that have paid. That is what moved
+the discount onto texts.
+
+Addresses used, all invented for the test and all local:
+`welcome.tester@example.test`, `desktop.tester@example.test`,
+`repeat.buyer@example.test`. The cart, the paid order and the coupon rows were
+inserted by the test into the harness database only.
+
+| # | Check | Result |
+| --- | --- | --- |
+| 30 | Checkout shows the offer beside the SMS box, both viewports | pass, after row 31 |
+| 31 | The sentence survives minification | **failed first.** The production bundle read "Subscribe to texts for 15Valid for 14 days." — the minifier folded two concatenated template literals and dropped "% off your first order. ". Fixed by joining two standalone constants; two regression guards added, one of them reading the built bundle |
+| 32 | Tick SMS with a mobile number | code minted, applied to the order, "Your 15% welcome discount is applied" |
+| 33 | Totals update | promo line −$10.35 against a $69.00 subtotal (15%), order total recomputed, no reload |
+| 34 | Nothing is lost | email, phone and the ticked box all survive the claim; no renavigation |
+| 35 | Claim twice more | same code, same end date, one coupon row: no duplicate, no restarted expiry |
+| 36 | A past buyer claims | refused, no code minted, and the refusal names nothing about the address |
+| 37 | Consent record | `sms_subscribers` row, source "checkout", with the sentence that was ticked |
+| 38 | Cart card | renders above the order summary at 390x844 and 1280x900, no horizontal overflow |
+| 39 | Guest reachability | `/api/offers/welcome` answered "Sign in to continue" until it was added to the public exact list; the guest checkout could not claim the offer it was being shown |
+
+Not possible on the harness, and therefore NOT VERIFIED: the catalogue bar and
+the product-page link. Both pages require an account, the harness has no
+GoTrue, and the offer control only renders for a caller the server recognises.
+They are the same component as the cart card with a different wrapper and
+their mounting is pinned by test, but they want a look on a preview deployment
+before the offer is enabled. Also not possible here: a real Omnisend push
+(gated outside production) and a text (no A2P approval yet).

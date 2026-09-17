@@ -651,6 +651,11 @@ describe("form", () => {
     // (WELCOME_GIFT_ENABLED false), so the pop-up must not promise it.
     expect(copy).toContain("15% off your first order.");
     expect(copy).toContain("valid 14 days");
+    // AND IT IS THE SMS STEP THAT CARRIES IT. The store mints the welcome
+    // code on the SMS consent path only (2026-09-16), so an email step that
+    // named the discount would promise something the first step no longer
+    // earns. The offer sentence is the store's own, verbatim.
+    expect(copy).toContain("Subscribe to texts for 15% off your first order. Valid for 14 days. Cannot be combined with other offers.");
     expect(copy).not.toMatch(/GHK-Cu/);
     expect(copy).not.toMatch(/\d+% off (everything|sitewide|all)/i);
     // The purity sentence is the checkable one: about the published reports, not about every product.
@@ -667,7 +672,7 @@ describe("form", () => {
     // The store mints the offer within the half-hourly write-back and the
     // welcome-offer flow sends it on entry, so "shortly" is honest; a prior
     // buyer gets none, so the promise is conditioned on a first order.
-    expect(copy).toMatch(/If this is your first order with us, your welcome code arrives by email shortly/);
+    expect(copy).toMatch(/If you subscribed to texts and this is your first order with us, your welcome code arrives by email shortly/);
     expect(copy).not.toMatch(/inbox now|on its way|arrives with the first|within two days/i);
     expect(copy).toContain("Your welcome code, restock alerts, cart reminders and subscriber offers by text.");
     expect(copy).not.toMatch(/times a month/i);

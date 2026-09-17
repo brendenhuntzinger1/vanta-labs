@@ -5,12 +5,22 @@ import { PALETTE, SITE } from "./lib.mjs";
  * with the store's own TCPA sentence, and a success screen pointing at the
  * catalogue. Restyled from Omnisend's email-and-SMS two-step template to the
  * site palette. post_forms creates it in DRAFT; the owner enables it after
- * review. The headline names the welcome offer (15% off a first order)
- * because the store mints the code for every never-bought address that
- * signs up here: at once for a site sign-up, on the next half-hourly
- * write-back for a pop-up sign-up (reconcile.ts), and the welcome-offer
- * automation sends the email the moment the code exists. The free GHK-Cu
- * half is built and dormant (WELCOME_GIFT_ENABLED).
+ * review.
+ *
+ * THE 15% IS ON THE SMS STEP, NOT THE EMAIL ONE. It led the first step until
+ * 2026-09-16, when the owner moved the offer to text subscribers: 114 of 193
+ * accounts were already on the email list and the SMS list was empty, so the
+ * discount was paying for an address the store already had. The store now
+ * mints the code on the SMS consent path only, so this is where the pop-up
+ * may name it — and step one has to earn its email on the reports and the
+ * restocks, which is what it actually sends. A pop-up SMS consent reaches the
+ * store on the next half-hourly write-back, which mirrors the consent and
+ * mints the code (reconcile.ts); the welcome-offer automation then sends it.
+ * The free GHK-Cu half is built and dormant (WELCOME_GIFT_ENABLED).
+ *
+ * IT IS SHOWN ON THE CATALOGUE, NOT THE HOME PAGE. The owner keeps the home
+ * page free of promotions, and the store's own offer bar covers the catalogue
+ * in-page, so the two never stack on top of one another.
  * The purity sentence is checkable against the COA library as published
  * (every published report reads above 99%) and must be re-read whenever a
  * report is published; compliance.md forbids a figure with no report behind it.
@@ -80,6 +90,12 @@ export function form() {
       // the offer is the first thing a new visitor is told (the owner's ask).
       display: { afterSeconds: 4, isExitIntentEnabled: true },
       frequency: { type: "day", value: 7 },
+      // The catalogue and product pages only. The home page stays free of
+      // promotions (the owner's rule) and the checkout never gets a dialog.
+      url: {
+        includes: [{ type: "contains", value: "/products" }],
+        excludes: [{ type: "contains", value: "/checkout" }, { type: "contains", value: "/cart" }],
+      },
       source: { excludes: ["omnisendCommunication"] },
       location: { includes: [{ code: "US", name: "United States" }, { code: "CA", name: "Canada" }] },
     },
@@ -114,34 +130,38 @@ export function form() {
       steps: [
         step([
           text("VANTA LABS", "footnote"),
-          // THE REASON TO SUBSCRIBE, FIRST. The store mints the code for every
-          // never-bought address that signs up here (site sign-ups at once,
-          // pop-up sign-ups on the half-hourly write-back, reconcile.ts), so
-          // the pop-up may name it. The free vial is built and dormant
-          // (WELCOME_GIFT_ENABLED in lib/offers/welcome-offer-terms.ts).
-          text("15% off your first order.", "heading_medium"),
-          text("Subscribe and we email you a code for 15% off a first order. Every batch report we publish shows above 99% purity; read them in the COA library.", "paragraph"),
+          // NO DISCOUNT ON THIS STEP. The email list is most of the account
+          // base already; what it is worth to a new subscriber is the reports
+          // and the restocks, so that is what this asks for. The offer waits
+          // for the step that earns it.
+          text("Batch reports and restocks.", "heading_medium"),
+          text("Every new batch report as we publish it, and a note when something is back. Every batch report we publish shows above 99% purity; read them in the COA library.", "paragraph"),
           { type: "emailField", emailField: { label: "", placeholder: "Email address", isRequired: true, requiredMessage: "An email address is required", errorMessage: "That does not look like an email address" }, styleProperties: field },
-          button("Claim the offer", "submit"),
-          text("One welcome code per address, for a first order, valid 14 days. For laboratory research use only. Not for human or veterinary use. Unsubscribe at any time.", "footnote", { padding: pad("12px", "0px", "0px") }),
+          button("Subscribe", "submit"),
+          text("For laboratory research use only. Not for human or veterinary use. Unsubscribe at any time.", "footnote", { padding: pad("12px", "0px", "0px") }),
         ]),
         step([
           // The brand name sits on this step too: a carrier reviewer sees the SMS
           // step alone as consent proof and must find the brand, the agreement,
           // an unticked box, STOP and HELP, the rates sentence and a policy link.
           text("VANTA LABS: TEXT MESSAGES", "footnote"),
-          text("Texts, if you want them.", "heading_medium"),
+          // THE OFFER, IN THE STORE'S ONE WORDING. The same sentence the
+          // catalogue bar, the product link, the cart card and the checkout
+          // box carry (src/lib/offers/welcome-offer-copy.ts). Optional, never
+          // pre-ticked, and never a condition of anything.
+          text("15% off your first order.", "heading_medium"),
+          text("Subscribe to texts for 15% off your first order. Valid for 14 days. Cannot be combined with other offers.", "paragraph"),
           text("Optional. Your welcome code, restock alerts, cart reminders and subscriber offers by text.", "paragraph"),
           { type: "phoneNumberField", phoneNumberField: { label: "", placeholder: "Mobile number", defaultCountryCode: "US", countryCodes: { includes: ["US", "CA"] }, isRequired: false, requiredMessage: "A mobile number is required to receive texts", errorMessage: "That does not look like a mobile number" }, styleProperties: field },
           { type: "legal", legal: { type: "tcpa", label: "I agree to receive text messages from Vanta Labs", description: SMS_CONSENT, link: PRIVACY_URL, requiredMessage: "Tick the box to receive texts" }, styleProperties: { ...pad("4px", "0px", "8px"), fontSize: "11px", color: PALETTE.subtle } },
           text(`Consent is stored with your number. ${legalLink(PRIVACY_URL, "Privacy Policy")} and ${legalLink(TERMS_URL, "Terms")}`, "footnote", { padding: pad("0px", "0px", "8px") }),
-          button("Add texts", "submit"),
+          button("Get the code", "submit"),
           button("Skip this step", "nextStep", "secondary_button"),
         ]),
       ],
       successStep: step([
         text("You are on the list.", "heading_medium"),
-        text("If this is your first order with us, your welcome code arrives by email shortly: 15% off. The catalogue and the COA library are open to account holders.", "paragraph"),
+        text("If you subscribed to texts and this is your first order with us, your welcome code arrives by email shortly: 15% off, valid 14 days. The catalogue and the COA library are open to account holders.", "paragraph"),
         button("Browse the catalogue", "link", "primary_button", { link: `${SITE}/products?utm_source=omnisend&utm_medium=form&utm_campaign=signup` }),
       ]),
       subscribedStep: step([

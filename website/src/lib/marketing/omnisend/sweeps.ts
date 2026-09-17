@@ -385,6 +385,7 @@ function emptyReconcile(): Omit<OmnisendReconcileResult, "skipped"> {
     pushed: 0,
     suppressed: 0,
     smsOptOuts: 0,
+    smsSubscribers: 0,
     formSubscribers: 0,
     winbackCodes: 0,
     dryRun: false,

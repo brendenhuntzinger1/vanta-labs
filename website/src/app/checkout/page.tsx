@@ -10,7 +10,13 @@ import { calculateShipping, isDomesticCountry, isFreeShippingSitewide, isShippin
 import { resolveSalesTax } from "@/lib/sales-tax";
 import { useApplePayOffered } from "@/components/use-apple-pay-offered";
 import { useOfferQuote } from "@/lib/offer-quote";
-import { SMS_CONSENT_TEXT, SMS_DISCLOSURE_TEXT } from "@/lib/sms-consent-text";
+import { SMS_CONSENT_TEXT, SMS_DISCLOSURE_TEXT, acceptableSmsPhone } from "@/lib/sms-consent-text";
+import {
+  WELCOME_OFFER_APPLIED,
+  WELCOME_OFFER_CHECKOUT_PROMPT,
+  WELCOME_OFFER_HELD_BY_BETTER,
+  WELCOME_OFFER_SENTENCE,
+} from "@/lib/offers/welcome-offer-copy";
 import { bundleCreditNote, couponHeadline, couponOutcomeAgainstQuote } from "@/lib/discount-resolution";
 import { CHECKOUT_SHORT, COA_SHORT, FULFILMENT_SHORT, TESTING_SHORT, trustPoints } from "@/lib/trust-claims";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
@@ -308,6 +314,29 @@ export default function CheckoutPage() {
   // for delivery; this box is the only thing that makes it a number we may
   // text, and the server records the two separately (create-session).
   const [smsOptIn, setSmsOptIn] = useState(false);
+  // THE WELCOME OFFER AT THE TILL. The box above earns it: tick it with a
+  // mobile number in the field and the store records the consent, mints (or
+  // re-reads) the code bound to this address and puts it on the order — no
+  // reload, nothing retyped, the card fields untouched. Every failure here is
+  // silent to the payment path: the shopper still pays, just without a
+  // discount. Consent is never a condition of buying.
+  const [welcomeStatus, setWelcomeStatus] = useState<"unknown" | "eligible" | "claimed" | "ineligible">("unknown");
+  const [welcomeCode, setWelcomeCode] = useState<string | null>(null);
+  const [welcomeError, setWelcomeError] = useState<string | null>(null);
+  const [welcomeClaiming, setWelcomeClaiming] = useState(false);
+  // One attempt per (number, address) pair, so retyping a digit does not
+  // re-post and a mistyped number can still be corrected and retried.
+  const welcomeTriedRef = useRef<string>("");
+  // IS THE WELCOME CODE THE THING REDUCING THIS TOTAL? Not "was it entered" —
+  // the quote picks one best discount, so a code can be on the order and still
+  // be losing to a promotion or a referral. `controlsPrice` is the quote's own
+  // answer, and it is what decides whether the shopper is told the discount is
+  // applied or told it is being kept for later.
+  const welcomeApplied = Boolean(
+    welcomeCode
+    && (couponDetails?.code ?? couponCode ?? "").trim().toUpperCase() === welcomeCode.trim().toUpperCase()
+    && (couponOutcome?.controlsPrice ?? true),
+  );
   // Progressive disclosure: savings tools and legal detail stay out of the way
   // until asked for, so the default path to payment is as short as possible.
   const [savingsOpen, setSavingsOpen] = useState(false);
@@ -536,6 +565,82 @@ export default function CheckoutPage() {
       }
     })();
   }, []);
+
+  // WHAT THE SIGNED-IN SHOPPER MAY BE SHOWN. Read only: opening the checkout
+  // never mints a code, so nobody's fourteen days start because they looked.
+  // A guest is left at "unknown" and shown the offer anyway — the server
+  // decides when they actually claim, because only then is there an address
+  // to decide about.
+  useEffect(() => {
+    if (!isSignedIn) return;
+    let live = true;
+    void fetch("/api/offers/welcome", { credentials: "same-origin" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { status?: string; code?: string } | null) => {
+        if (!live || !data?.status) return;
+        if (data.status === "claimed" && data.code) {
+          setWelcomeStatus("claimed");
+          setWelcomeCode(data.code);
+          return;
+        }
+        setWelcomeStatus(data.status === "eligible" ? "eligible" : "ineligible");
+      })
+      .catch(() => { /* The offer simply does not appear. Never the checkout's problem. */ });
+    return () => { live = false; };
+  }, [isSignedIn]);
+
+  // A CODE THIS SHOPPER ALREADY HOLDS GOES ON THE ORDER BY ITSELF — they
+  // subscribed days ago and should not have to remember six characters. It is
+  // applied ONLY into an empty coupon slot: a code the shopper typed
+  // themselves is their choice and is never overwritten to make room for this
+  // one. The quote still picks the single best discount either way.
+  useEffect(() => {
+    if (welcomeStatus !== "claimed" || !welcomeCode) return;
+    if (couponCode) return;
+    applyCouponCode(welcomeCode);
+    // applyCouponCode is recreated every render; `couponCode` becoming set is
+    // what stops this, and it is in the dependency list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [welcomeStatus, welcomeCode, couponCode]);
+
+  // THE TICK THAT EARNS IT. Fires when the box is ticked and the phone field
+  // holds a number someone could actually be texted at; the pair is
+  // remembered so a corrected number can be retried but a re-render cannot
+  // re-post. On success the code lands in the coupon slot and the quote
+  // re-prices — no reload, and every field the shopper has filled stays put.
+  useEffect(() => {
+    if (!smsOptIn || welcomeStatus === "ineligible" || welcomeStatus === "claimed") return;
+    const phone = acceptableSmsPhone(form.phone);
+    const address = form.email.trim().toLowerCase();
+    if (!phone || !address.includes("@")) return;
+    const attempt = `${phone}|${address}`;
+    if (welcomeTriedRef.current === attempt) return;
+    welcomeTriedRef.current = attempt;
+    let live = true;
+    setWelcomeClaiming(true);
+    setWelcomeError(null);
+    void fetch("/api/offers/welcome", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone, email: address, placement: "checkout" }),
+    })
+      .then((res) => res.json())
+      .then((data: { ok?: boolean; code?: string; error?: string }) => {
+        if (!live) return;
+        if (data?.ok && data.code) {
+          setWelcomeStatus("claimed");
+          setWelcomeCode(data.code);
+          if (!couponCode) applyCouponCode(data.code);
+          return;
+        }
+        setWelcomeError(data?.error ?? null);
+      })
+      .catch(() => { if (live) setWelcomeError(null); })
+      .finally(() => { if (live) setWelcomeClaiming(false); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [smsOptIn, form.phone, form.email, welcomeStatus]);
 
   // Fire begin_checkout exactly once, when the cart first has items. Depending
   // on `total`/`subtotal` would re-dispatch every time the shopper edits points,
@@ -1192,6 +1297,42 @@ export default function CheckoutPage() {
                 and{" "}
                 <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="text-white/50 underline underline-offset-2 hover:text-white">Privacy Policy</a>.
               </p>
+
+              {/* THE OFFER, BESIDE THE BOX THAT EARNS IT. Never a popup here —
+                  a dialog over a checkout is how carts get abandoned, and the
+                  owner asked for none. It states the terms with the offer, and
+                  once the code is on the order it stops asking and says so. */}
+              {welcomeStatus !== "ineligible" ? (
+                <div
+                  className="mt-3 rounded-xl border border-[color:var(--accent-gold)]/20 bg-[var(--accent-gold-soft)]/40 px-4 py-3"
+                  data-testid="checkout-welcome-offer"
+                >
+                  {welcomeStatus === "claimed" && welcomeApplied ? (
+                    <p className="text-xs leading-relaxed text-[color:var(--accent-gold)]" data-testid="checkout-welcome-applied">
+                      {WELCOME_OFFER_APPLIED}
+                    </p>
+                  ) : welcomeStatus === "claimed" ? (
+                    <p className="text-xs leading-relaxed text-white/55" data-testid="checkout-welcome-held">
+                      {WELCOME_OFFER_HELD_BY_BETTER}
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-xs leading-relaxed text-white/65">{WELCOME_OFFER_SENTENCE}</p>
+                      {smsOptIn && !acceptableSmsPhone(form.phone) ? (
+                        <p className="mt-1.5 text-[11px] leading-relaxed text-white/40" data-testid="checkout-welcome-needs-phone">
+                          {WELCOME_OFFER_CHECKOUT_PROMPT}
+                        </p>
+                      ) : null}
+                      {welcomeClaiming ? (
+                        <p className="mt-1.5 text-[11px] text-white/40">Applying your discount</p>
+                      ) : null}
+                      {welcomeError ? (
+                        <p className="mt-1.5 text-[11px] text-white/40" data-testid="checkout-welcome-error">{welcomeError}</p>
+                      ) : null}
+                    </>
+                  )}
+                </div>
+              ) : null}
             </CheckoutSection>
 
             <CheckoutSection step="02" title="Shipping address" subtitle="United States and Canada.">

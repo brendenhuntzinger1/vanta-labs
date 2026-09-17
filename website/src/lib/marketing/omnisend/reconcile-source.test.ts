@@ -180,7 +180,7 @@ describe("the write-back writes the store's own shapes, dated when the person ac
     // The address row first (sms-consent.ts recordSmsOptOut: the sign-up page's
     // and the checkout's consent, guest or not), then the account's.
     expect(apply).toContain("const address = await recordSmsOptOut(email, at);");
-    expect(reconcile).toMatch(/import \{ recordSmsOptOut \} from "@\/lib\/sms-consent";/);
+    expect(reconcile).toMatch(/import \{ mirrorSmsConsent, recordSmsOptOut \} from "@\/lib\/sms-consent";/);
     expect(apply).toContain("await findUserByEmail(email)");
     expect(apply).toContain("if (!user?.id) return address;");
     expect(apply).toContain('.select("sms_opted_out_at")');

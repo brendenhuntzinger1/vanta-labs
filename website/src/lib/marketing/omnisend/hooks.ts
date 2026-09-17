@@ -11,7 +11,7 @@ import {
   priceCartLines,
   priceToCents,
 } from "@/lib/marketing/omnisend/cart-plan";
-import { ensureContactCode, findLiveContactCodes } from "@/lib/marketing/omnisend/codes";
+import { findLiveContactCode, findLiveContactCodes } from "@/lib/marketing/omnisend/codes";
 import { collectContactFacts, upsertOmnisendContact, type ContactExtras } from "@/lib/marketing/omnisend/contacts";
 import { mintWelcomeGift } from "@/lib/marketing/omnisend/welcome-gift";
 import { WELCOME_GIFT_ENABLED } from "@/lib/offers/welcome-offer-terms";
@@ -138,10 +138,24 @@ export async function onMarketingOptIn(email: string, source: string): Promise<v
     if (!address) return;
     const facts = await collectContactFacts(address);
     if (!facts) return;
+    // AN EMAIL SUBSCRIPTION NO LONGER MINTS THE WELCOME CODE.
+    //
+    // It did until 2026-09-16, when the owner moved the offer to texts. The
+    // numbers were the argument: 114 of 193 accounts were already on the
+    // email list and the SMS list was empty, so fifteen per cent bought an
+    // address the store already held. The code is now minted on the SMS
+    // consent path only — the sign-up box, the account settings toggle, and
+    // the storefront and checkout controls (offers/welcome-offer.ts) — which
+    // is what lets every surface promise it for subscribing to texts and be
+    // telling the truth. Ticking the email box here still subscribes the
+    // address; it simply no longer carries a discount.
+    //
+    // The gift half stays wired to the same condition it always had, behind
+    // WELCOME_GIFT_ENABLED, so flipping that flag re-arms it on the SMS path.
     let welcomeGift: ContactExtras["welcomeGift"];
-    if (source !== "checkout" && facts.orders === 0) {
-      const code = await ensureContactCode("welcome", address);
-      if (code && WELCOME_GIFT_ENABLED) welcomeGift = (await mintWelcomeGift(address, contactLinkFor(address, "welcome"))) ?? undefined;
+    if (source !== "checkout" && facts.orders === 0 && WELCOME_GIFT_ENABLED) {
+      const code = await findLiveContactCode("welcome", address);
+      if (code) welcomeGift = (await mintWelcomeGift(address, contactLinkFor(address, "welcome"))) ?? undefined;
     }
     const accepted = await upsertOmnisendContact(address, { ...(await contactExtras(address)), welcomeGift });
     if (!accepted) console.error(LOG, "opt-in contact upsert refused", { source });

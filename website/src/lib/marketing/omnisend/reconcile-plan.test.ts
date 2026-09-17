@@ -47,12 +47,12 @@ function known() {
 describe("planWriteBack: unsubscribes become suppressions", () => {
   it("suppresses an Omnisend unsubscribe the store does not know about", () => {
     const plan = planWriteBack([contact({ email: "left@example.com", emailStatus: "unsubscribed" })], known());
-    expect(plan).toEqual({ suppress: ["left@example.com"], smsOptOut: [], newSubscribers: [] });
+    expect(plan).toEqual({ suppress: ["left@example.com"], smsOptOut: [], newSubscribers: [], smsSubscribers: [] });
   });
 
   it("does nothing for an unsubscribe already on the suppression list", () => {
     const plan = planWriteBack([contact({ email: "gone@example.com", emailStatus: "unsubscribed" })], known());
-    expect(plan).toEqual({ suppress: [], smsOptOut: [], newSubscribers: [] });
+    expect(plan).toEqual({ suppress: [], smsOptOut: [], newSubscribers: [], smsSubscribers: [] });
   });
 
   it("suppresses a subscriber the store still holds as active, because the person said stop", () => {
@@ -64,7 +64,7 @@ describe("planWriteBack: unsubscribes become suppressions", () => {
 describe("planWriteBack: form sign-ups become subscribers, never widening", () => {
   it("records a subscribed contact absent from both consent stores as a new subscriber", () => {
     const plan = planWriteBack([contact({ email: "form@example.com", emailStatus: "subscribed" })], known());
-    expect(plan).toEqual({ suppress: [], smsOptOut: [], newSubscribers: ["form@example.com"] });
+    expect(plan).toEqual({ suppress: [], smsOptOut: [], newSubscribers: ["form@example.com"], smsSubscribers: [] });
   });
 
   it("does not re-record a subscriber the store already has", () => {
@@ -74,7 +74,7 @@ describe("planWriteBack: form sign-ups become subscribers, never widening", () =
 
   it("never re-subscribes a suppressed address on the strength of an Omnisend status", () => {
     const plan = planWriteBack([contact({ email: "gone@example.com", emailStatus: "subscribed" })], known());
-    expect(plan).toEqual({ suppress: [], smsOptOut: [], newSubscribers: [] });
+    expect(plan).toEqual({ suppress: [], smsOptOut: [], newSubscribers: [], smsSubscribers: [] });
   });
 
   it("plans nothing for nonSubscribed or unknown email statuses", () => {
@@ -85,7 +85,7 @@ describe("planWriteBack: form sign-ups become subscribers, never widening", () =
       ],
       known(),
     );
-    expect(plan).toEqual({ suppress: [], smsOptOut: [], newSubscribers: [] });
+    expect(plan).toEqual({ suppress: [], smsOptOut: [], newSubscribers: [], smsSubscribers: [] });
   });
 });
 
@@ -95,7 +95,7 @@ describe("planWriteBack: SMS opt-outs", () => {
       [contact({ email: "texts@example.com", phone: "+13125550142", emailStatus: "subscribed", smsStatus: "unsubscribed" })],
       { ...known(), subscribers: new Set(["texts@example.com"]) },
     );
-    expect(plan).toEqual({ suppress: [], smsOptOut: ["texts@example.com"], newSubscribers: [] });
+    expect(plan).toEqual({ suppress: [], smsOptOut: ["texts@example.com"], newSubscribers: [], smsSubscribers: [] });
   });
 
   it("does nothing for an opt-out the account already carries", () => {
@@ -103,9 +103,29 @@ describe("planWriteBack: SMS opt-outs", () => {
     expect(plan.smsOptOut).toEqual([]);
   });
 
-  it("plans nothing for an SMS subscribe: SMS consent is only ever granted in account settings", () => {
-    const plan = planWriteBack([contact({ email: "texts@example.com", phone: "+13125550142", smsStatus: "subscribed" })], known());
-    expect(plan).toEqual({ suppress: [], smsOptOut: [], newSubscribers: [] });
+  // THIS USED TO PLAN NOTHING. SMS consent could only be granted on the
+  // account page, so a pop-up subscriber's tick never reached the store. It
+  // has to now: the welcome discount is earned by subscribing to texts
+  // (2026-09-16), so a pop-up consent that the store never mirrors is a
+  // person who agreed to texts and got nothing for it. The mirror itself
+  // refuses an address that already has a row, which is why planning it on
+  // every tick is safe (reconcile.ts, sms-consent.ts mirrorSmsConsent).
+  it("plans a pop-up SMS consent for mirroring, carrying the number and the moment Omnisend recorded it", () => {
+    const plan = planWriteBack(
+      [contact({ email: "texts@example.com", phone: "+13125550142", smsStatus: "subscribed", smsStatusChangedAt: "2026-09-16T10:00:00.000Z" })],
+      known(),
+    );
+    expect(plan).toEqual({
+      suppress: [],
+      smsOptOut: [],
+      newSubscribers: [],
+      smsSubscribers: [{ email: "texts@example.com", phone: "+13125550142", at: "2026-09-16T10:00:00.000Z" }],
+    });
+  });
+
+  it("plans no mirror for a subscribed contact with no number: there is nothing to record", () => {
+    const plan = planWriteBack([contact({ email: "texts@example.com", phone: null, smsStatus: "subscribed" })], known());
+    expect(plan.smsSubscribers).toEqual([]);
   });
 
   it("can plan an email suppression and an SMS opt-out for the same contact", () => {
@@ -113,12 +133,12 @@ describe("planWriteBack: SMS opt-outs", () => {
       [contact({ email: "both@example.com", phone: "+13125550142", emailStatus: "unsubscribed", smsStatus: "unsubscribed" })],
       known(),
     );
-    expect(plan).toEqual({ suppress: ["both@example.com"], smsOptOut: ["both@example.com"], newSubscribers: [] });
+    expect(plan).toEqual({ suppress: ["both@example.com"], smsOptOut: ["both@example.com"], newSubscribers: [], smsSubscribers: [] });
   });
 
   it("skips a phone-only contact: there is no address to key a store record on", () => {
     const plan = planWriteBack([contact({ phone: "+13125550142", smsStatus: "unsubscribed" })], known());
-    expect(plan).toEqual({ suppress: [], smsOptOut: [], newSubscribers: [] });
+    expect(plan).toEqual({ suppress: [], smsOptOut: [], newSubscribers: [], smsSubscribers: [] });
   });
 });
 
@@ -153,11 +173,11 @@ describe("planWriteBack: hygiene", () => {
       ],
       known(),
     );
-    expect(plan).toEqual({ suppress: [], smsOptOut: [], newSubscribers: [] });
+    expect(plan).toEqual({ suppress: [], smsOptOut: [], newSubscribers: [], smsSubscribers: [] });
   });
 
   it("returns an empty plan for no contacts", () => {
-    expect(planWriteBack([], known())).toEqual({ suppress: [], smsOptOut: [], newSubscribers: [] });
+    expect(planWriteBack([], known())).toEqual({ suppress: [], smsOptOut: [], newSubscribers: [], smsSubscribers: [] });
   });
 });
 
@@ -614,7 +634,7 @@ describe("emptyReconcileReport is every counter at zero and nothing unresolved",
       store: { consented: 0, buyersWithoutConsent: 0, suppressed: 0, smsConsented: 0, nonMailable: 0 },
       omnisend: { contactsBefore: 0, contactsAfter: 0, capped: false },
       push: { submitted: 0, batches: 0, batchIds: [], failedBatches: 0 },
-      writeBack: { suppressed: 0, smsOptOuts: 0, formSubscribers: 0 },
+      writeBack: { suppressed: 0, smsOptOuts: 0, smsSubscribers: 0, formSubscribers: 0 },
       unresolved: [],
     });
   });

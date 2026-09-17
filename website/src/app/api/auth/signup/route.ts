@@ -14,6 +14,7 @@ import { SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-signup-outcome";
 import { looksLikeEmail } from "@/lib/email-shape";
 import { recordMarketingOptIn } from "@/lib/marketing-broadcast";
 import { recordSmsConsent } from "@/lib/sms-consent";
+import { grantWelcomeOfferForConsent } from "@/lib/offers/welcome-offer";
 import { acceptableSmsPhone } from "@/lib/sms-consent-text";
 import { claimAuthEmailSend, recordAuthEmailAttempt } from "@/lib/auth-email-audit";
 import { safeInternalPath } from "@/lib/internal-path";
@@ -362,7 +363,11 @@ async function createAccountAndSend(input: {
   // by sms-consent.ts, which also pushes on its own when the email box was
   // not ticked.
   if (input.smsOptIn && input.smsPhone) {
-    await recordSmsConsent({ email: input.email, phone: input.smsPhone, source: "signup", userId: data.user?.id ?? null });
+    const consented = await recordSmsConsent({ email: input.email, phone: input.smsPhone, source: "signup", userId: data.user?.id ?? null });
+    // THE WELCOME CODE IS EARNED HERE, BY THE TEXT SUBSCRIPTION — the form
+    // states the offer beside this box. Only once the consent is genuinely on
+    // record, and silently: a sign-up never fails over a discount code.
+    if (consented) await grantWelcomeOfferForConsent(input.email);
   }
   if (input.marketingOptIn) {
     await recordSignupMarketingConsent(data.user?.id ?? null, input.email);
