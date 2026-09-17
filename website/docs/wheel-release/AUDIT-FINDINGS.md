@@ -94,13 +94,48 @@ ledger fails **open**, so the duplicate-send and cart-event debounce protections
 would not exist if `OMNISEND_API_KEY` were set before the migration ran. Inert
 today because no key is set.
 
-### 6. The templates use the homepage vial, and no product photography
+### 6. The hero is the homepage vial — but the product slots are real, and empty
 
-Every image-bearing Omnisend template uses one hero — the GHK-Cu home-page
-poster, the exact graphic you said not to use. **No template uses per-product
-imagery at all**, so a cart email about GLOW shows a GHK-Cu vial. The product
-images are already synced by `catalog-payload.ts`; the templates simply never
-reference them.
+**I got this partly wrong in my first pass and the adversarial verifier caught
+it.** Correcting rather than quietly fixing:
+
+What is true: the one *authored* hero image is the GHK-Cu home-page poster —
+verified byte-identical to `public/images/hero-vial-poster.jpg` at 960×960 and
+37,579 bytes. That is the graphic the brief said not to use, and it is used.
+
+What I said and got wrong: *"no template uses per-product imagery at all."*
+That is false. **20 of 34 templates carry three role-tagged `product_image`
+blocks each — 60 authored product slots** (`scripts/omnisend/lib.mjs:209`,
+built by `productSection()`), which Omnisend fills with a real catalogue
+photograph per recipient at send time. Only 12 of 34 templates carry no image
+block. My grep missed them because the mechanism lives in the `productSection`
+helper, not as a hardcoded `imageUrl` in `templates.mjs`.
+
+The real problem is different, and worse in a quieter way: **the Omnisend
+product catalogue has never been synced.** A live read returns
+`get_products → []` and `get_product_categories → []`, and rendering the live
+`welcome-1` template back from the account returns, three times over:
+
+```
+<img alt="Product" src="https://preview.soundestlink.com/images/empty_image.png">
+<p>Product</p>   $0.00   [VIEW]
+```
+
+So the seven product-recommender templates preview as **"Product / $0.00"**
+against a grey placeholder. Not unfillable — unfilled. `syncOmnisendCatalog()`
+exists, is registered on an admin route and on the sweep, and has 46 active
+products to map. It has simply never been run.
+
+Two smaller things worth carrying into the redesign:
+
+- `isProductImagesFitted: true` (`lib.mjs:229`) **is silently dropped by
+  Omnisend** — it is not in the current product-section schema. Reading the live
+  templates back proves it: the sibling key `isOutOfStockHidden` survives and
+  this one does not. The flag is inert.
+- The catalogue photographs are **928×1152 portrait on a light-grey seamless**
+  (measured border luminance ≈195/255) and the email background is `#0a0a0a`.
+  Light product shots on a near-black field is a real composition problem for
+  the redesign, not a bug.
 
 ### 7. Two Omnisend welcome flows never stop on purchase
 
@@ -122,8 +157,6 @@ as leads, not facts:
 - **The SMS kill switch has no admin UI.** Readable and honoured in code, but
   changeable only by a direct database write.
 - **Failed Omnisend syncs surface on no admin screen** — only in Vercel logs.
-- **The Omnisend product catalogue is empty in production**, so any recommender
-  grid would render "Product / $0.00".
 - **No interlock between the three switches.** Enabling the Omnisend flows while
   `OMNISEND_MARKETING_OWNER` is unset means both systems send at once.
 - **`benefitChoice` is returned by the quote API and rendered by nothing.**
