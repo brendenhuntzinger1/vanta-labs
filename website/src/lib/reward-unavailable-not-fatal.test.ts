@@ -38,6 +38,8 @@ import { describe, expect, it } from "vitest";
 
 const SERVICE = readFileSync("src/lib/payment-service.ts", "utf8");
 const QUOTE = readFileSync("src/lib/quote-order.ts", "utf8");
+const ROUTE = readFileSync("src/app/api/checkout/create-session/route.ts", "utf8");
+const CHECKOUT = readFileSync("src/app/checkout/page.tsx", "utf8");
 
 describe("the quote reports whether the reward took units from the paid lines", () => {
   it("exposes offerAbsorbedUnits, because the till cannot infer it", () => {
@@ -97,5 +99,75 @@ describe("the entitlement survives a reward that could not be shipped", () => {
   it("tells the caller, so the customer hears it from the store", () => {
     expect(SERVICE).toMatch(/rewardWithheld\?:\s*\{ name: string \} \| null/);
     expect(SERVICE).toContain("rewardWithheld: rewardWithheld ? { name: rewardWithheld.name } : null");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A FACT NOBODY IS TOLD IS NOT A FIX.
+//
+// payment-service computed `rewardWithheld` and handed it back on PendingOrder,
+// and the trail stopped there: the route's response literal did not carry it,
+// so it could not be serialised, so the browser could not render it. The order
+// shipped one item lighter for the same money and the first notice of it was
+// the parcel.
+//
+// The place to say it is BEFORE the card form. The order and its holds exist by
+// then, but nothing is charged until the processor page — so the shopper can
+// still decide, which is the difference between an explanation and an apology.
+// ---------------------------------------------------------------------------
+
+describe("the withheld reward reaches the customer", () => {
+  it("is serialised by the checkout route", () => {
+    expect(ROUTE, "create-session must return rewardWithheld").toMatch(/rewardWithheld/);
+  });
+
+  it("keeps `undefined` distinct from `null` across the wire", () => {
+    // The duplicate-submit paths resume an order an earlier attempt created and
+    // leave the field absent, because they have no standing to answer. `?? null`
+    // would turn "not decided here" into "nothing was withheld" — the
+    // reassuring one of the two, and the wrong one.
+    expect(ROUTE).not.toMatch(/rewardWithheld:\s*result\.rewardWithheld\s*\?\?\s*null/);
+    expect(ROUTE).toMatch(/result\.rewardWithheld === undefined \? \{\} : \{ rewardWithheld: result\.rewardWithheld \}/);
+  });
+
+  it("stops the shopper in front of the card form rather than after it", () => {
+    const guard = CHECKOUT.indexOf("if (result.rewardWithheld");
+    const redirect = CHECKOUT.indexOf("window.location.assign(result.hostedCheckoutUrl)");
+    expect(guard).toBeGreaterThan(-1);
+    expect(redirect).toBeGreaterThan(-1);
+    expect(guard, "the notice must come before the redirect to the processor").toBeLessThan(redirect);
+  });
+
+  it("does not re-arm the submit button, which would mint a second order", () => {
+    // The order and its inventory hold already exist. Re-enabling the button
+    // here with a fresh idempotency key is a second order for one purchase —
+    // the same failure the redirect path's engaged latch exists to prevent.
+    const block = CHECKOUT.slice(
+      CHECKOUT.indexOf("if (result.rewardWithheld"),
+      CHECKOUT.indexOf("// The submit latch is deliberately LEFT ENGAGED here"),
+    );
+    expect(block.length).toBeGreaterThan(100);
+    expect(block).toContain("idempotencyKeyRef.current = null");
+    expect(block, "the latch must stay engaged").not.toMatch(/submitLatchRef\.current = false/);
+    expect(block, "the button must not be re-enabled").not.toMatch(/setIsSubmitting\(false\)/);
+  });
+
+  it("tells the customer the three things they would otherwise get wrong", () => {
+    const panel = CHECKOUT.slice(CHECKOUT.indexOf("if (withheldReward) {"));
+    // What went.
+    expect(panel).toMatch(/just sold out/);
+    // What it costs them — nothing, because the line was $0.
+    expect(panel).toMatch(/total has not changed/i);
+    // That the prize survives. This is the one a shopper cannot deduce, and the
+    // one payment-service went to the trouble of releasing rather than spending.
+    expect(panel).toMatch(/You keep the reward/i);
+    // And that no money has moved yet.
+    expect(panel).toMatch(/Nothing has been charged yet/i);
+  });
+
+  it("offers both doors, because continuing is the customer's call", () => {
+    const panel = CHECKOUT.slice(CHECKOUT.indexOf("if (withheldReward) {"));
+    expect(panel).toContain("withheldReward.payUrl");
+    expect(panel).toMatch(/href="\/cart"/);
   });
 });
