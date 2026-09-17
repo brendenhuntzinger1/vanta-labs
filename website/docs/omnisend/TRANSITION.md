@@ -532,8 +532,38 @@ ever mail it, and left tagged `designated-test` so it is identifiable.
 
 `btunchi88+vl-flowtest@gmail.com` / contact id `6aac373b3dfe2e9d9f821f05`
 **is the one record to delete by hand in the Omnisend UI** when you are next in
-there. It is inert as it stands — it cannot be mailed and cannot enter an offer
-segment — but it should not live in the list forever.
+there.
+
+**Until then it is quarantined, and here is the proof rather than the promise.**
+Read back at 19:11 UTC:
+
+```json
+"status": "nonSubscribed", "consents": [], "optIns": [], "tags": ["designated-test"],
+"customProperties": { "vl_designated_test": "yes", "vl_attested": false,
+                      "vl_welcome_ready": "no", "vl_welcome_gift_ready": "no",
+                      "vl_winback_ready": "no", "vl_recovery_ready": "no",
+                      "vl_orders": 0, "vl_total_spent": 0 },
+"segments": ["6aa090749ca7eb31e5d9e3de"]   ← Omnisend's own all-contacts segment, and nothing else
+```
+
+- **Excluded from `VL · Campaign audience`** (`6aa9891856e90f08f163f5ad`), which
+  requires `subscriptionStatus = subscribed`. That segment reads **120**, the
+  120 subscribed contacts, and does not include it.
+- **Excluded from every offer and trigger segment** — it dropped out of
+  `VL · Welcome code ready` and `VL · Welcome gift ready` on the evaluation
+  after its properties were cleared, and both are back to their true counts.
+- **Excluded from the two `VL · Attested account holders` segments** as of
+  19:11, by setting `vl_attested: false`, which is also simply true: it never
+  attested.
+- **Excluded from reconciliation counts.** It is not in the store's audience,
+  so no push targets it; it is `nonSubscribed` with no form tag, so the
+  write-back plans nothing for it. Every count in §3 and §A is stated against
+  real contacts; where a total includes it, it says so. `vl_designated_test`
+  and the `designated-test` tag are both there so any future query can exclude
+  it by either.
+
+It cannot be mailed by any flow, cannot enter any audience, and carries no
+offer.
 
 *One API behaviour worth recording:* Omnisend stamps `channels.email.statusChangedAt`
 with the write time on contact creation regardless of what is submitted — the
@@ -601,22 +631,104 @@ It is harmless while it is a draft and a liability the moment anyone publishes
 it by accident. I have not deleted it: deleting is not reversible and you did not
 ask me to remove anything from the account. It is two clicks in Forms.
 
-### §7 — End-to-end verification
+### §7 — End-to-end verification, and what it must actually cover
 
-**Not done, and API acceptance is not it.**
+**The segment test in §6 proves ELIGIBILITY ONLY.** It showed that a contact
+carrying `vl_welcome_ready = yes` enters the trigger segment and that the gift
+split routes on the property that is supposed to route it. That is the last
+link in the chain and nothing before it. It says nothing about whether a real
+person signing up for texts ends with a working code in their hand.
 
-What *is* verified: every payload is accepted by the live API; every automation's
-structure, trigger, consent threshold, delays, splits, re-entry limit and exit
-conditions were read back from the account; the templates carry the right sender,
-footer and unsubscribe link; and every contact now holds a real `vl_link`, so a
-test send would exercise a real link rather than an empty token.
+Final testing has to walk the whole journey, and this is the script. None of it
+runs until SMS is approved, because five of the seven steps have no meaning
+without a live SMS channel.
 
-What is **not** verified: that a real recipient receives a real message with a
-working link and a working offer. That needs Omnisend's per-block test send
-(`post_automations_id_blocks_block_id_test_email`) to a controlled address —
-which is now unblocked, since C1 is fixed. Enabling a customer-facing flow merely
-to prove it works is the thing the brief forbids, and is not required: the test
-send is a real render through the real template to a real mailbox.
+| # | Step | What is verified | How it is proved |
+|---|---|---|---|
+| 1 | Real SMS signup on production, designated number | `sms_subscribers` row written with `marketing_consent`, `consent_source`, `disclosure_version`, and `customer_preferences` mirrored | read both rows |
+| 2 | Consent sync | the contact reaches Omnisend with `channels.sms.status = subscribed` and the **phone identifier**, within seconds | read the contact back |
+| 3 | Unique welcome code | `vl_welcome_code` on the contact is a real, live, single-use row in the store, unique to that address and not shared with any other test contact | compare the property against `customer_offers` / the coupon row |
+| 4 | Correct channel | the **SMS** arrives on the designated handset with the code and a working short link | receipt on the device |
+| 5 | Link resolution | `/api/email/omnisend-link?t=…` resolves that contact's `vl_link` to the right destination and identifies the right person | follow it |
+| 6 | Checkout redemption | the code applies at checkout, discounts correctly, and is single-use — a second attempt is refused | drive checkout to the point of discount, **without completing a real payment** |
+| 7 | Suppression | replying STOP produces an `sms_subscribers.opted_out_at` stamp through the write-back, and no further SMS | reply and re-check |
+
+**The case that matters most: the SMS-only subscriber with no email consent.**
+Run the whole script a second time with a recipient who ticks **only** the SMS
+box — no email opt-in, no order. Two things must be true and only observation
+can establish them:
+
+- **The email block is skipped, not fatal.** In `VL · Welcome offer` the SMS
+  block sits *after* the email block, behind a 20-minute delay. The email block
+  carries `isSkipAllowed: true`, and Omnisend's own schema defines that as
+  "the contact bypasses this block and continues to the next block in the
+  workflow" — as against `false`, which cancels the workflow for that contact.
+  So the design says an email-`nonSubscribed` contact skips the email, waits
+  20 minutes, and receives the SMS. **Confirm it happens.** If the workflow
+  cancels instead, the entire text-subscriber offer is undeliverable to the
+  people it was written for, and that is a launch blocker.
+- **`sendingThresholds` does not block the SMS.** It is
+  `{email: "subscribed", sms: "subscribed"}` on all nine flows. The SMS-only
+  contact is subscribed on SMS, so the SMS block is eligible; the email block
+  is not, which is the skip above. Confirm the SMS lands and no email does.
+
+**One defect on this path was found and fixed while preparing** — see §7a. It
+would have made step 2 permanent rather than repairable, and step 5 fail after
+thirty days.
+
+*Everything already verified, which final testing does not need to repeat:*
+every payload accepted by the live API; every automation's structure, trigger,
+consent threshold, delays, splits, re-entry limit and exit conditions read back
+from the account; sender, footer and unsubscribe correct in the rendered HTML;
+and `vl_link` present on 122 of 123 contacts so a test send exercises a real
+token.
+
+### §7a — The SMS-only subscriber was in no push audience. Fixed.
+
+Found while working through §7's second case, before any SMS exists to be
+affected (`sms_subscribers` is empty today, so nobody was harmed and nothing
+customer-facing changed).
+
+**What was wrong.** The daily full push walks
+`orderPushTargets(audience, buyers)`, where `audience` is
+`loadConsentedAudience()` — built from `customer_preferences.marketing_emails`
+and `marketing_subscribers`, both **email** consent stores — and `buyers` is
+paid product orders. Someone who ticks only the SMS box is in neither: no
+subscriber row, no email preference, and (for the offer's whole target
+audience, someone who has not bought yet) no order.
+
+Their contact reached Omnisend exactly once, from the fire-and-forget hook on
+the consent itself (`sms-consent.ts` → `pushToOmnisend` → `onPreferencesChanged`),
+and then never again. Two consequences, both silent:
+
+1. **A single dropped push would have been permanent.** That is exactly the
+   failure that stranded a live subscriber earlier today (§C2), and for an
+   email subscriber the daily push repairs it within 24 hours. For an SMS-only
+   subscriber there was no repair path at all — they would sit outside
+   Omnisend, and the 15% text they were promised would never send, with nothing
+   reporting it.
+2. **Their `vl_link` would have expired and never been renewed.** The token has
+   a 30-day TTL and is re-minted on every full push. Never being in a full
+   push, an SMS-only contact's link dies at day 30 and every link in every
+   message to them dies with it.
+
+**The fix.** A third tier in the push, `loadSmsConsented()`, reading
+`sms_subscribers` where `marketing_consent` is true and `opted_out_at` is null,
+unioned into `orderPushTargets` between the email audience and the buyers.
+
+**What the fix deliberately does *not* do:** it does not add these addresses to
+`loadConsentedAudience()`. That loader also drives the in-house **email**
+sender, and widening it would email someone who consented to texts and not to
+email. The two are joined only in the push, and a source test now asserts that
+`loadAudience` never mentions `sms_subscribers`.
+
+These contacts arrive in Omnisend as `email: nonSubscribed` + `sms: subscribed`,
+decided per contact by `collectContactFacts` — which is exactly what they are,
+and is what makes the email block skip in §7's second case.
+
+Nine tests added across `reconcile-plan.test.ts` and `reconcile-source.test.ts`.
+Full suite after the change: **752 files, 11,301 tests, 0 failures**, `tsc`
+clean.
 
 ### §8 — Suppression sync (#27)
 
@@ -651,44 +763,101 @@ observed yet** — watch for an `omnisend_sync_state` row keyed
 
 ### §8a — Pending-sequence handoff
 
-**Who is mid-flight right now, from `email_send_log`:**
+**"End where they are" and "let them drain" are two different plans and the
+previous draft used both phrases for one idea. They are separated here, and
+one of them is recommended.** Counts refreshed **2026-09-17 19:04 UTC**; they
+move, and step 3 of §9 re-runs them on the day.
 
-| In-house sequence | People who have had at least one stage | Still live |
+**Who is mid-flight, exactly:**
+
+| Cohort | People | What the in-house flow still owes them |
 |---|---|---|
-| `welcome_intro` → `welcome_no_purchase` | 93 → 76 | **17 have had the intro and not yet the offer** |
-| cart recovery `t30m → t12h → t24h → t72h` | 43 / 37 / 31 / 21 | **7 mid-ladder with a stage in the last 72 h** (12 carts open) |
-| `post_purchase` | 4 | within its 14-day delay |
-| `replenishment`, `winback_30`, `winback_60` | **0 sends, ever** | nothing in flight |
-| `campaign` (the wheel) | 99 | one-off, already sent |
+| Welcome: had `welcome_intro`, not yet `welcome_no_purchase` | **17** | 1 message each — the first-order offer |
+| Cart ladder: had `t24h`, owed `t72h` | **3** *(of 10 total; 7 are older than 72 h and already dead)* | 1 message each |
+| Cart ladder: had `t12h`, owed `t24h` + `t72h` | **4** *(of 7 total)* | 2 messages each |
+| Cart ladder: had `t30m` only | 4 total, **0 live** | nothing — all older than 72 h |
+| `post_purchase` | 4 | within its 14-day delay, one message |
+| `replenishment`, `winback_30`, `winback_60` | **0 sends ever** | nothing in flight |
 
-**What happens to them at cutover, if nothing is done.** Omnisend automations
-trigger on *new* events and do not backfill, so:
+---
 
-- The **17 mid-welcome** contacts already fired `subscribed to marketing` before
-  `VL · Welcome` was enabled. They would get no further welcome mail from
-  either system — the in-house offer stage is stood down, and Omnisend's
-  equivalent never triggers for them. They lose one message. They are not
-  double-mailed.
-- The **7 mid-ladder carts** are worse-behaved and better-protected than they
-  look. `cartHasInHouseStage()` fails *closed*: a cart that already has an
-  in-house stage claimed is treated as in-house, so Omnisend deliberately will
-  not pick it up. Those carts end where they are unless the shopper adds to
-  cart again, which re-triggers `VL · Abandoned cart` cleanly.
-- **Nobody is restarted from stage one** and **nobody receives two systems'
-  messages for the same episode.** That is the property worth keeping, and it
-  holds without intervention.
+#### Option A — hard stop. *Recommended.*
 
-**The recommendation: let them drain, do not bridge them.** Both sequences are
-short — 3 days for welcome, 72 hours for a cart. Bridging would mean replaying
-historical consent or cart events into Omnisend as fresh triggers, which is
-exactly what must not happen. So the handoff is: **schedule the cutover, then
-on the day re-run the two queries above and record how many people were
-mid-sequence at that moment.** Those are the only customers who see any
-difference, they see one fewer message rather than one more, and you will have
-the exact number rather than an estimate.
+Flip `OMNISEND_MARKETING_OWNER`, every in-house marketing sender stands down in
+the same request cycle, in-flight episodes get nothing further.
 
-If that count is ever unacceptably large, the safe lever is timing, not
-replay: cut over at a quiet hour, when both cohorts are at their smallest.
+**Messages intentionally omitted, at this instant, stated plainly:**
+
+| Who | Message they do not get |
+|---|---|
+| 17 welcome contacts | `welcome_no_purchase` — "Welcome · first-order offer" |
+| 3 cart contacts | `cart_recovery_t72h` |
+| 4 cart contacts | `cart_recovery_t24h` **and** `cart_recovery_t72h` |
+| up to 4 post-purchase contacts | the first-order follow-up, if cutover lands inside their 14-day delay |
+
+**Total: 28 messages to 24 people**, at 19:04 UTC on 2026-09-17. Re-count on
+the day; the shape will be similar because both ladders are short.
+
+Nobody receives two messages for one episode. Nobody restarts at stage one.
+Omnisend does not backfill — it triggers on new events, and `subscribed to
+marketing` already fired for those 17 while the flow was disabled — and
+`cartHasInHouseStage()` fails closed, so Omnisend refuses a cart the in-house
+ladder has already claimed even after the switch. **Both halves of the
+"no double-message" property already exist and need no new code.**
+
+The cost is 28 messages. The benefit is that there is no window in which two
+systems both believe they own an episode.
+
+---
+
+#### Option B — drain, with per-customer ownership.
+
+Keep the in-house flows serving **only** episodes already claimed, while
+Omnisend owns everything new, until the in-flight cohorts empty.
+
+**This is not supported today and needs code.** `marketingSendBlockedByOmnisend()`
+is a single global switch: on, and every in-house marketing sender stops,
+in-flight or not. There is no per-episode ownership on the in-house side. To do
+this properly, all of the following must hold — and the user's condition, that
+both platforms can never message the same episode, is what each one serves:
+
+1. **Per-customer ownership marker, in-house side.** The lifecycle cron must
+   distinguish "this episode was already claimed by us" from "this is new".
+   The markers exist as data: `abandoned_cart_emails` holds a per-cart stage
+   claim, and for welcome, an `email_send_log` row with
+   `campaign_type = 'automation:welcome_intro'` and no
+   `automation:welcome_no_purchase` row for that address is the equivalent. The
+   *conditional* does not exist and would be new code in the cron.
+2. **Complementary suppression, Omnisend side.** For carts this is already
+   there and correct — `cartHasInHouseStage()` fails closed, so Omnisend will
+   not touch a claimed cart. For welcome it is free by accident: `VL · Welcome`
+   triggers on `subscribed to marketing`, which already fired for those 17
+   while the flow was disabled, so Omnisend will not enrol them.
+3. **A hard deadline.** A drain with no end is a permanent dual-ownership
+   window. It would need an explicit cutoff — 7 days is the natural one, longer
+   than both ladders — after which the in-house side stops unconditionally
+   whatever its markers say.
+4. **Evidence that the markers are right before relying on them.** A drain is
+   only safe if ownership is correct for every in-flight episode. That is a
+   claim about 24 specific people, and it would have to be checked per person
+   rather than asserted.
+
+**Why I recommend against it.** It converts a known, bounded, listable cost —
+28 messages, named above — into an unbounded one: a dual-ownership window is
+the single condition most likely to produce the thing you most want to avoid,
+and it would be created deliberately, for a week, to save 28 messages. Under
+Option A the "no double-send" property holds by construction and needs nothing
+to be true. Under Option B it holds only if new code is right.
+
+If you want Option B anyway, say so and I will build it with the four
+properties above and test each one — but it should be a deliberate purchase,
+not a default.
+
+---
+
+**Either way, one thing is not optional:** the counts get re-run at cutover
+(§9 step 3) and the omission list is produced from live data at that moment,
+not from this table.
 
 ### §9 — Cutover sequence (for approval, not for now)
 
@@ -755,7 +924,20 @@ unsubscribe is an unsubscribe whoever observed it.
 
 ### §10 — Readiness and handover
 
-**Verdict: READY TO TRANSITION, NOT TRANSITIONED.** That is the objective and
+**Two sign-offs, reported separately, and only the first is in reach.**
+
+| Sign-off | What it asserts | State |
+|---|---|---|
+| **Preparation complete** | everything buildable without SMS is built, tested and evidenced; the two owner inputs are in; controlled template tests have run | **not yet** — waiting on the DNS records, the postal address, and the template tests that follow them |
+| **Launch verified** | the full §7 journey has been walked on live SMS, including the SMS-only case, and the §9 cutover plan has been approved | **not yet** — requires SMS approval, and is a separate report |
+
+I will report *preparation complete* as its own statement, with its own
+evidence, and will not use it to imply anything about launch. **Launch
+verified** comes later and separately, and neither one flips a switch: the
+ownership switch and the first customer send both wait on your explicit
+approval after *launch verified* is reported.
+
+**Verdict on the transition itself: READY TO TRANSITION, NOT TRANSITIONED.** That is the objective and
 that is the state. The integration is deployed and dormant, the data
 reconciles, the sync runs on its own, the templates and flows are built and
 correct, and the two things that are not done are the two things only you can
@@ -775,12 +957,15 @@ one screenshot, and on one line of address.
 | ~~4~~ | ~~Change "gift" to "reward" in 4 subject lines and their bodies~~ — **done**, §6 | — |
 | ~~5~~ | ~~Merge PR #208~~ — **done**, merged as `8a9919c8`; issue #27 closed | — |
 | ~~5a~~ | ~~Decide the welcome-offer question~~ — **decided**: stays on SMS consent, not re-armed for email. §6 | — |
-| 6 | Per-block test sends to a controlled address, all nine flows — **after** B1 and B2, and after SMS is live so the SMS blocks are testable too | me |
+| 6 | Controlled template tests: per-block test sends to a controlled address, all nine flows — **after** B1 and B2. This is the last item in *preparation complete* | me |
+| 6a | The full §7 journey on live SMS, including the SMS-only subscriber — part of *launch verified*, not preparation | me, after approval |
 | 7 | Delete the stock "10% off" demo form `6aaa9bef27f565e8b3f4b22f` (§6a) and the 3 duplicate segments (§3). Both are deletions, so say the word and I will, or do it in the UI | **your call** |
 | 8 | Decide whether `VL · Sunset` should key on `vl_last_order_at` rather than `dateAdded` | your decision, my implementation |
 | 9 | Remove the stale `include:mailgun.org` from SPF | **you** |
 | 10 | Decide whether cancelled orders should keep counting toward `vl_orders` / `vl_total_spent` | your decision |
 | 11 | On SMS approval: final reconciliation (§9 step 3), end-to-end test (§9 step 4), then present the coordinated email + SMS cutover for approval | me |
+| 12 | Choose §8a Option A (hard stop, 28 messages omitted, listed) or Option B (drain, needs new per-episode ownership code) | **your decision** |
+| 13 | Delete the quarantined test contact `6aac373b3dfe2e9d9f821f05` in the Omnisend UI — no API can | **you** |
 
 **What stays exactly as it is while we wait**, and is being actively preserved
 rather than merely neglected:

@@ -276,7 +276,24 @@ describe("the push is batched, refreshed and never per-contact", () => {
     expect(buyers).toContain("if (!isProductPurchaseOrder(row)) continue;");
     expect(buyers).toContain("isNonMailableAddress(email)");
     const push = fn(reconcile, "runPush");
-    expect(push).toContain("orderPushTargets(input.audience, buyers)");
+    expect(push).toContain("orderPushTargets(input.audience, buyers, smsConsented)");
+  });
+
+  it("pushes the address that consented to texts and nothing else", () => {
+    // No marketing_subscribers row, no marketing_emails preference, no order:
+    // without its own tier this person is refreshed exactly once, by the hook
+    // on their consent, and never again — so a dropped push is permanent and
+    // the 30-day vl_link token expires with nothing to renew it.
+    const sms = fn(reconcile, "loadSmsConsented");
+    expect(sms).toContain('.from("sms_subscribers")');
+    expect(sms).toContain('.eq("marketing_consent", true)');
+    expect(sms).toContain('.is("opted_out_at", null)');
+    const push = fn(reconcile, "runPush");
+    expect(push).toContain("const smsConsented = await loadSmsConsented();");
+    // ...and NOT by widening the email audience, which also feeds the in-house
+    // email sender: that would mail someone who consented only to texts.
+    const audience = fn(reconcile, "loadAudience");
+    expect(audience).not.toContain("sms_subscribers");
   });
 
   it("is bounded: a push limit and a time budget", () => {
@@ -288,9 +305,10 @@ describe("the push is batched, refreshed and never per-contact", () => {
 
   it("orders its targets through the pure planner, and exports its loaders for the snapshot", () => {
     const push = fn(reconcile, "runPush");
-    expect(push).toContain("orderPushTargets(input.audience, buyers)");
+    expect(push).toContain("orderPushTargets(input.audience, buyers, smsConsented)");
     expect(reconcile).toContain("export async function loadAudience(");
     expect(reconcile).toContain("export async function loadPaidBuyers(");
+    expect(reconcile).toContain("export async function loadSmsConsented(");
     expect(reconcile).toContain("export async function loadSuppressionReasons(");
     expect(reconcile).toContain("export async function loadWithdrawnConsent(");
     expect(reconcile).toContain("export async function mapWithConcurrency<");
