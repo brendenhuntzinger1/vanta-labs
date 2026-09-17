@@ -47,8 +47,27 @@ export async function generateMetadata({
   // in middleware.ts) and this function never runs. It is written to be correct
   // on its own regardless, because the day the matcher changes is the day that
   // assumption stops being true.
-  const viewer = await getAuthenticatedUser().catch(() => null);
-  if (!viewer) {
+  //
+  // THAT DAY WAS THE DAY THE MARKETING GRANT SHIPPED, and this function was not
+  // told. The body below admits a grant holder (see the guard in the page
+  // component); this head asked only about a SESSION, so a recipient who
+  // clicked a campaign link read the product perfectly well under a browser tab
+  // titled "Sign in", with a canonical pointing at /account/login. Verified in
+  // production on 2026-09-17 against /products/klow with a live grant: the
+  // sidebar rendered KLOW at $119.99 with a working Add to Cart, and the
+  // document title was "Sign in | Vanta Labs".
+  //
+  // THE HEAD MUST MIRROR THE BODY'S OWN ACCESS DECISION, so the two are asked
+  // the same question here. This publishes nothing: a crawler carries neither a
+  // session nor a grant, so it still gets the refusal below, and the grant is
+  // minted only for an attested recipient following a signed link to their own
+  // address. The one thing that changes is that the page now describes itself
+  // to the people it was already showing itself to.
+  const [viewer, grantHolder] = await Promise.all([
+    getAuthenticatedUser().catch(() => null),
+    requestHasEmailLinkGrant(),
+  ]);
+  if (!viewer && !grantHolder) {
     return {
       title: "Sign in",
       description: "The Vanta Labs catalog is available to account holders.",

@@ -21,6 +21,7 @@ import {
   WELCOME_OFFER_TERMS,
   welcomeOfferCodeLine,
 } from "@/lib/offers/welcome-offer-copy";
+import { claimSpinPrizeOnce } from "@/lib/spin/claim-client";
 import { bundleCreditNote, couponHeadline, couponOutcomeAgainstQuote } from "@/lib/discount-resolution";
 import { CHECKOUT_SHORT, COA_SHORT, FULFILMENT_SHORT, TESTING_SHORT, trustPoints } from "@/lib/trust-claims";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
@@ -482,7 +483,12 @@ export default function CheckoutPage() {
   const [pendingOffer, setPendingOffer] = useState<{ rewardKind: string; rewardName: string; minSubtotalCents: number } | null>(null);
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/offer/status", { cache: "no-store" })
+    // CLAIM FIRST, THEN READ — same ordering and same reason as /cart. A prize
+    // won on a phone is not in this browser's cookie, so the status read would
+    // report nothing and the till would charge for something the wheel gave
+    // away. See lib/spin/claim-client.ts.
+    claimSpinPrizeOnce()
+      .then(() => fetch("/api/offer/status", { cache: "no-store" }))
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => { if (!cancelled && data?.offer) setPendingOffer(data.offer); })
       .catch(() => {});
@@ -1112,19 +1118,45 @@ export default function CheckoutPage() {
   // receipt is precisely the "it disappeared" experience this work removes.
   // The server has already answered whether the gift applies to the address
   // currently typed; this only says so.
-  const offerShortfall = pendingOffer
-    ? Math.max(0, pendingOffer.minSubtotalCents / 100 - shownSubtotal)
-    : 0;
+  // THE SERVER'S FIGURE WINS WHENEVER IT HAS ONE.
+  //
+  // The local arithmetic below measures the floor against the GROSS basket. The
+  // till does not: it gates on what the shopper actually pays once the gift's
+  // own unit has been lifted out of the paid lines. The two agree until the
+  // shopper already has the prize in their basket, and then they disagree
+  // badly — two KLOW at $119.99 reads as $227.98 against a $200 floor here and
+  // as $119.99 against it there. This banner therefore said nothing, the gift
+  // was withdrawn anyway, and the fall-through below then blamed the EMAIL
+  // ADDRESS for a minimum problem.
+  const offerShortfall = typeof offerQuote?.offerShortfallCents === "number"
+    ? offerQuote.offerShortfallCents / 100
+    : pendingOffer
+      ? Math.max(0, pendingOffer.minSubtotalCents / 100 - shownSubtotal)
+      : 0;
   const offerApplied = Boolean(offerQuote?.offer);
-  // The welcome offer is the free vial OR the welcome code (lib/offers/
-  // welcome-offer-terms.ts). The server withdrew the vial because a welcome
-  // code is on this order; that is the shopper's own choice, and the banner
-  // says so instead of blaming the email address.
+  // OUT OF STOCK IS ITS OWN ANSWER, and it has to be subtracted from the email
+  // branch below or the shopper is told the wrong thing with total confidence.
+  // Without this the reward vanishes, `offerApplied` goes false, and the banner
+  // blames their EMAIL ADDRESS for a warehouse problem — the identical
+  // misdiagnosis the minimum-shortfall work already had to undo once.
+  const offerWithdrawnByStock = offerQuote?.offerWithdrawnBy === "unavailable";
+  // A WELCOME CODE IS ALSO NOT AN ADDRESS PROBLEM. quoteOrder can report
+  // offerWithdrawnBy = "welcome_code" — the reward and the welcome code are one
+  // or the other — and with no branch for it here the banner fell through to
+  // blaming the shopper's email, exactly as the out-of-stock case did.
+  //
+  // This WAS dormant when the branch that wrote this note went in — no
+  // welcome-source coupons existed at all and WELCOME_GIFT_ENABLED was off, so
+  // nothing could set it. The SMS work on this branch mints welcome-source
+  // codes from the text-list sign-up, so it is a live path now rather than a
+  // defensive one. The branch was already here, which is the argument for
+  // writing them before "it cannot happen yet" expires.
   const offerWithdrawnByWelcomeCode = offerQuote?.offerWithdrawnBy === "welcome_code";
   const offerBlockedByEmail = Boolean(pendingOffer)
     && offerShortfall <= 0
     && Boolean(offerQuote)
     && !offerApplied
+    && !offerWithdrawnByStock
     && !offerWithdrawnByWelcomeCode
     && form.email.trim().length > 0;
 
@@ -1150,7 +1182,16 @@ export default function CheckoutPage() {
           <span className="font-semibold text-[color:var(--accent-gold)]">
             {pendingOffer.rewardKind === "free_product" ? `free ${pendingOffer.rewardName}` : pendingOffer.rewardName}
           </span>{" "}
-          is not added: the welcome offer is one or the other. Remove the code to take the {pendingOffer.rewardKind === "free_product" ? pendingOffer.rewardName : "gift"} instead.
+          is not added: it is one or the other. Remove the code to take the reward instead.
+        </p>
+      ) : offerWithdrawnByStock ? (
+        <p className="text-white/70" data-testid="checkout-offer-unavailable">
+          Your{" "}
+          <span className="font-semibold text-[color:var(--accent-gold)]">
+            {pendingOffer.rewardKind === "free_product" ? `free ${pendingOffer.rewardName}` : pendingOffer.rewardName}
+          </span>{" "}
+          is out of stock, so it is not on this order. Your reward is not used up — it will apply
+          once the vial is back, any time before it expires.
         </p>
       ) : offerBlockedByEmail ? (
         <p className="text-white/70">
@@ -1186,13 +1227,13 @@ export default function CheckoutPage() {
   const giftProductLines = giftLines.map((line) => (
     <div key={`gift-${line.name}-${line.variantLabel ?? ""}`} className="flex items-start gap-3" data-testid="checkout-gift-line">
       <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-lg border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.06] text-[10px] uppercase tracking-[0.16em] text-[color:var(--accent-gold)]">
-        Gift
+        Reward
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm text-white">{line.name}</p>
         {line.variantLabel ? <p className="mt-0.5 text-xs text-white/40">{line.variantLabel}</p> : null}
         <p className="mt-1.5 text-xs text-[color:var(--accent-gold)]">
-          Your one-time gift{line.quantity > 1 ? ` × ${line.quantity}` : ""}
+          Your one-time reward{line.quantity > 1 ? ` × ${line.quantity}` : ""}
         </p>
       </div>
       <p className="text-sm font-semibold text-[color:var(--accent-gold)] tabular-nums">Free</p>

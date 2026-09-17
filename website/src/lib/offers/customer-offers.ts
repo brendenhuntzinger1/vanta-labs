@@ -351,6 +351,11 @@ export type CustomerOffer = {
   quantity: number | null;
   /** Set only for free_shipping_percent. */
   percent_off: number | null;
+  /**
+   * Ceiling on the cash value of the percentage half, in cents. Null means
+   * uncapped, which is how every row minted before the column existed behaves.
+   */
+  max_discount_cents?: number | null;
   variant_id: string | null;
   min_subtotal_cents: number;
   expires_at: string;
@@ -874,7 +879,7 @@ export async function peekCustomerOffer(input: {
   try {
     const { data, error } = await supabaseAdmin
       .from("customer_offers")
-      .select("id, offer_key, email, reward_kind, product_slug, gift_items, percent_off, quantity, variant_id, min_subtotal_cents, expires_at, reserved_order_id, redeemed_at, revoked_at")
+      .select("id, offer_key, email, reward_kind, product_slug, gift_items, percent_off, max_discount_cents, quantity, variant_id, min_subtotal_cents, expires_at, reserved_order_id, redeemed_at, revoked_at")
       .eq("token_hash", hashOfferToken(token))
       .maybeSingle();
     if (error || !data) return null;

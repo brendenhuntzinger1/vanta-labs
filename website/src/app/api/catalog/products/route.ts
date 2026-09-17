@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getStorefrontCatalog } from "@/lib/storefront-catalog";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { requestHasEmailLinkGrant } from "@/lib/email/link-grant-server";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { customerSafeMessage } from "@/lib/safe-error";
 
@@ -24,8 +25,30 @@ export async function GET() {
   //
   // 401 rather than a redirect: the caller is fetch(), which would follow a 307
   // and try to parse a login page as JSON.
-  const viewer = await getAuthenticatedUser().catch(() => null);
-  if (!viewer) {
+  //
+  // A MARKETING-LINK GRANT COUNTS HERE TOO, for the same reason it counts at
+  // /products and /products/[slug] — and this route is on the grant's own
+  // allowlist (link-grant.ts), so the wall already lets it through and only
+  // this second layer was still refusing.
+  //
+  // WHAT THAT COST IS SMALL AND EXACTLY ONE THING. The catalogue is painted on
+  // the server now, so the normal page load never calls this. products-client
+  // calls it only when the server handed down nothing — the retry after a
+  // failed catalogue read. So a grant holder who hit a bad minute got the dead
+  // end instead of the recovery, which is the one moment the retry exists for.
+  // Verified in production on 2026-09-17: with a live grant, /products rendered
+  // 34 products server-side while fetch('/api/catalog/products') returned
+  // 401 "Sign in to view the catalog".
+  //
+  // It opens nothing new: the grant is minted only for an attested recipient
+  // following a signed link to their own address, it expires, and the catalogue
+  // is what the campaign sent them to read. An anonymous request still gets the
+  // 401 that closed the 104 KB leak above.
+  const [viewer, grantHolder] = await Promise.all([
+    getAuthenticatedUser().catch(() => null),
+    requestHasEmailLinkGrant(),
+  ]);
+  if (!viewer && !grantHolder) {
     return NextResponse.json(
       { success: false, error: "Sign in to view the catalog" },
       { status: 401 },

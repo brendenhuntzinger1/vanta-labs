@@ -1,3 +1,4 @@
+import { attachSpinLink } from "@/lib/spin/spin-campaign-link";
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import {
@@ -150,9 +151,17 @@ export async function GET(request: NextRequest) {
   // 21+ and research-use representations is sent to the step that collects
   // them, carrying this destination and this gift, rather than to a sign-in
   // page for an account they may not have. See recipient-attestation.ts.
+  // A CAMPAIGN WHOSE CTA IS /spin BECOMES THAT RECIPIENT'S OWN WHEEL.
+  //
+  // Minted here rather than at send time, on the address this route has just
+  // VERIFIED via verifyCampaignRecipient, so the email body never carries a
+  // per-recipient credential and a forwarded copy grants nothing by itself.
+  // Every other destination passes through untouched.
+  const spinAware = await attachSpinLink(utmForCampaign(destination, campaignId).toString(), email);
+
   const landing = await emailLinkLanding({
     email,
-    destination: utmForCampaign(destination, campaignId).toString(),
+    destination: spinAware,
     offerToken: carriedOffer,
   });
 

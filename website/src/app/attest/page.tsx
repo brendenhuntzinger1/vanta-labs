@@ -63,7 +63,7 @@ export default async function AttestPage({
             </p>
             {handoff.offerToken ? (
               <p className="mt-4 max-w-prose rounded-lg border border-[color:var(--accent-gold)]/25 bg-[var(--accent-gold-soft)] px-4 py-3 text-[0.875rem] leading-6 text-[color:var(--accent-gold)]">
-                Your gift is saved and will be waiting in your cart — confirming below does not use it up.
+                Your reward is saved and will be waiting in your cart — confirming below does not use it up.
               </p>
             ) : null}
             <AttestationForm handoff={raw ?? ""} />

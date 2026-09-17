@@ -16,6 +16,7 @@ import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { isFreeShippingSitewide } from "@/lib/shipping";
 import { useOfferQuote } from "@/lib/offer-quote";
 import { WelcomeOfferSignup } from "@/components/welcome-offer-signup";
+import { claimSpinPrizeOnce } from "@/lib/spin/claim-client";
 
 /**
  * The body of the empty-cart panel.
@@ -90,7 +91,13 @@ export function CartPageClient() {
   const [pendingOffer, setPendingOffer] = useState<{ rewardKind: string; rewardName: string; minSubtotalCents: number } | null>(null);
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/offer/status", { cache: "no-store" })
+    // CLAIM FIRST, THEN READ. A spin prize won on another device is not in this
+    // browser's cookie, so /api/offer/status would report nothing and the cart
+    // would price an order without the prize the wheel promised. The claim is a
+    // no-op when this browser already holds an offer, and for anyone not signed
+    // in; it never rejects. See lib/spin/claim-client.ts.
+    claimSpinPrizeOnce()
+      .then(() => fetch("/api/offer/status", { cache: "no-store" }))
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => { if (!cancelled && data?.offer) setPendingOffer(data.offer); })
       .catch(() => {});
@@ -365,7 +372,7 @@ export function CartPageClient() {
               <div key={`gift-${line.name}-${line.variantLabel ?? ""}`} className="border border-emerald-400/30 bg-emerald-400/5 p-4 sm:p-6" data-testid="cart-gift-line">
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <p className="text-[10px] uppercase tracking-[0.2em] text-emerald-300">Your gift</p>
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-emerald-300">Your reward</p>
                     <h2 className="mt-1 text-lg text-white sm:text-xl">{line.name}</h2>
                     <p className="mt-2 text-sm text-white/50">{line.variantLabel ? `${line.variantLabel} · ` : ""}× {line.quantity} · added at checkout</p>
                   </div>

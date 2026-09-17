@@ -47,11 +47,31 @@ export interface OfferQuote {
   } | null;
   /**
    * "welcome_code" when the shopper's welcome code displaced the welcome vial
-   * (the sign-up reward is one or the other); null or absent otherwise. The
-   * banner words the gift's absence from this rather than guessing.
+   * (the sign-up reward is one or the other); "minimum" when the basket is
+   * under the reward's qualifying subtotal; "unavailable" when the product is
+   * out of stock and cannot be shipped; null or absent otherwise.
+   *
+   * The banner words the reward's absence from THIS rather than guessing. Every
+   * value that is missing here becomes a wrong explanation on screen: before
+   * "unavailable" existed, an out-of-stock reward fell through to the
+   * email-address branch and blamed the shopper's address for a warehouse
+   * problem. See quote-order.ts's own note on the field.
    */
-  offerWithdrawnBy?: "welcome_code" | null;
-  /** The resolved discount's label, e.g. "15% gift" or "Coupon". */
+  offerWithdrawnBy?: "welcome_code" | "minimum" | "unavailable" | null;
+  /**
+   * How much MORE must actually be paid for the gift to clear its floor, in
+   * cents. Absent when no gift is in play or the gift applied.
+   *
+   * The banner used to compute this itself as `minSubtotalCents/100 - subtotal`
+   * — the floor against the GROSS basket — while the till gates on what the
+   * shopper pays once the gift's own unit has left the paid lines. Identical
+   * until the prize is already in the cart, then wrong: two KLOW at $119.99
+   * reads as $227.98 against a $200 floor here and $119.99 there, so the banner
+   * said nothing and the gift was withdrawn anyway. The server sends the figure
+   * it enforced.
+   */
+  offerShortfallCents?: number | null;
+  /** The resolved discount's label, e.g. "15% reward" or "Coupon". */
   discountLabel?: string;
   /** True when priced for the address the offer was mailed to, because the
    *  shopper has not typed one yet. The caller words the banner accordingly. */

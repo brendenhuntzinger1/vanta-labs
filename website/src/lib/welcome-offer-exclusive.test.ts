@@ -199,10 +199,23 @@ describe("any other code beside the welcome vial", () => {
   });
 
   it("is a floor question, not a choice, when the discounted basket falls under the vial's minimum", async () => {
-    // $60 of goods, 10% off: $54 qualifying, under the $60 floor. The vial
-    // comes out for the floor, and the quote does NOT call that a choice.
+    // The vial absorbs the one GHK-Cu in the basket, so the paid goods are the
+    // $40 Peptide B; 10% off leaves $36 qualifying against the $60 floor, and
+    // the vial comes out for the floor rather than for anything the shopper
+    // chose.
+    //
+    // THIS USED TO ASSERT null, AND null WAS THE WRONG ANSWER. The field then
+    // meant only "was this a choice", so a floor withdrawal was indistinguishable
+    // from no withdrawal at all — and the checkout, finding no reason, fell
+    // through to blaming the shopper's email address for a basket-size problem.
+    // The field now names the reason, so what this test is really guarding is
+    // that the reason is the FLOOR and never "welcome_code".
     const q = await quote([{ id: "peptide-b", quantity: 1 }, { id: "ghk-cu", quantity: 1 }], { couponCode: "SAVE10" });
-    expect(q.offerWithdrawnBy).toBeNull();
+    expect(q.offerWithdrawnBy).toBe("minimum");
+    expect(q.offerWithdrawnBy).not.toBe("welcome_code");
+    // Reported from the same pass that enforced it, so no surface has to
+    // re-derive it from the gross basket and get a different number.
+    expect(q.offerShortfallCents).toBe(2400);
   });
 });
 
