@@ -40,14 +40,32 @@ alter table public.customer_offers
 
 Control store, section `spin_wheel`. Admin → Control Centre, or:
 
+**Prefer the admin screen.** If you write SQL instead, the `action` must be
+exactly `admin_control_upsert`. The `admin_control_current` view filters on it:
+
+```sql
+select ... from admin_audit_logs where action = 'admin_control_upsert' ...
+```
+
+Any other action value inserts a row the view ignores, so the setting silently
+does not take — which here means the wheel stays off and every recipient lands
+on a 404. I made this exact mistake while testing, which is why it is called out.
+
 ```sql
 -- Pick a NEW campaign id. Reusing an old one lets everyone who already span
 -- under it spin again.
 insert into public.admin_audit_logs (action, target_table, target_id, metadata, created_at)
-values ('control.update', 'spin_wheel', 'campaignId',
+values ('admin_control_upsert', 'spin_wheel', 'campaignId',
         jsonb_build_object('value', 'winback_2026q4'), now()),
-       ('control.update', 'spin_wheel', 'enabled',
+       ('admin_control_upsert', 'spin_wheel', 'enabled',
         jsonb_build_object('value', true), now());
+
+-- Then PROVE it took, rather than assuming:
+select target_id, metadata->>'value'
+  from admin_control_current
+ where target_table = 'spin_wheel';
+-- must return campaignId and enabled=true. If it returns nothing, the action
+-- value was wrong and nothing has changed.
 ```
 
 - [ ] Set. **This is the step that must not be forgotten** — with the wheel off,
