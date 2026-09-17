@@ -263,14 +263,32 @@ describe("contact-payload.ts copies consent exactly", () => {
     expect(source).not.toMatch(/email:\s*\{\s*status:\s*"subscribed"/);
   });
 
-  it("sends no email channel block for nonSubscribed, so a status Omnisend collected itself is not overwritten", () => {
-    // Omnisend keeps the status with the newest statusChangedAt; a
-    // nonSubscribed stamped `now` would beat a form subscribe every night.
+  it("dates a nonSubscribed email status at the epoch rather than omitting the block", () => {
+    // TWO CONSTRAINTS, AND THIS TEST USED TO ENFORCE ONLY ONE OF THEM.
+    //
+    // It asserted `? {} :` — send no channel block at all for nonSubscribed —
+    // because Omnisend keeps the status with the newest statusChangedAt, and
+    // one stamped `now` would beat a form subscribe every night. That half is
+    // still true. But Omnisend REFUSES an email identifier with no channel
+    // block: the first real contacts batch answered 400 "Provide email channel
+    // for email identifier" for the one item that omitted it. So the shape this
+    // test demanded was the shape the API rejects, and it passed while the
+    // nightly push silently dropped every buyer with no consent on record.
+    //
+    // The epoch satisfies both: the block is present, and it loses every date
+    // comparison, so it can never displace a real consent.
     const guard = source.indexOf('facts.emailConsent.status === "nonSubscribed"');
     const block = source.indexOf("channels: { email: { status: facts.emailConsent.status");
     expect(guard).toBeGreaterThan(-1);
     expect(block).toBeGreaterThan(guard);
-    expect(source.slice(guard, block)).toMatch(/\?\s*\{\}\s*:/);
+    const unknownBranch = source.slice(guard, block);
+    expect(unknownBranch, "the unknown status must still carry a channel block").toContain(
+      'channels: { email: { status: "nonSubscribed", statusChangedAt: UNKNOWN_STATUS_CHANGED_AT } }',
+    );
+    // The date is a constant, not the facts' own changedAt — which is `now`
+    // for this branch and would beat everything.
+    expect(unknownBranch).not.toContain("facts.emailConsent.changedAt");
+    expect(source).toContain('const UNKNOWN_STATUS_CHANGED_AT = "1970-01-01T00:00:00.000Z";');
   });
 
   it("sends countryCode only when the store knows it: the US default is normalizeE164's alone", () => {

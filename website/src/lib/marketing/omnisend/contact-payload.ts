@@ -145,6 +145,15 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+/**
+ * The date an UNKNOWN email status is stamped with.
+ *
+ * The epoch, on purpose: Omnisend keeps whichever status carries the later
+ * date, so a status dated here can never displace one a person actually gave.
+ * See buildContactPayload's email channel for the whole argument.
+ */
+const UNKNOWN_STATUS_CHANGED_AT = "1970-01-01T00:00:00.000Z";
+
 /** `consent` is only meaningful for a status somebody chose, so it needs a source. */
 function consentBlock(consent: ChannelConsent): { consent: { source: string; createdAt: string } } | Record<string, never> {
   const source = text(consent.source);
@@ -197,17 +206,38 @@ export function buildContactPayload(facts: ContactFacts): Record<string, unknown
   // address is lowercased here so one person can never become two contacts.
   const email = facts.email.trim().toLowerCase();
 
-  // The channel block is sent only for a status the store actually holds —
-  // subscribed or unsubscribed. Omnisend's contacts reference defines
-  // nonSubscribed as "Channel's status is unknown (contact hasn't subscribed
-  // or unsubscribed yet)" and says "The system will return the status with
-  // the latest status update date", so posting nonSubscribed with
-  // statusChangedAt = now would overwrite a `subscribed` the person gave
-  // through Omnisend's own form and drop them out of every flow. An
-  // identifier needs only `type` and `id` (post_contacts schema), so the
-  // block is omitted and Omnisend's own status stands.
+  // EVERY EMAIL IDENTIFIER CARRIES A CHANNEL BLOCK, INCLUDING THE UNKNOWN ONE.
+  //
+  // This used to omit `channels` entirely for nonSubscribed. The reasoning was
+  // right and the code was not. Omnisend's contacts reference defines
+  // nonSubscribed as "Channel's status is unknown (contact hasn't subscribed or
+  // unsubscribed yet)" and says "The system will return the status with the
+  // latest status update date" — so posting nonSubscribed stamped `now` would
+  // overwrite a `subscribed` the person gave through Omnisend's own form and
+  // drop them out of every flow. Omitting the block looked like the way to
+  // avoid that, and the post_contacts schema appears to allow it.
+  //
+  // THE API REFUSES IT. The first real contacts batch, on 2026-09-17, answered
+  // 400 "Provide email channel for email identifier" for exactly one item of
+  // forty-one — the one buyer with no consent on record — and created the rest.
+  // So the nightly push would have silently failed for every address the store
+  // knows but has no consent for, which is the entire reason buyers without
+  // consent are pushed at all. A 400 per item inside a background batch is not
+  // visible anywhere a person looks; it is `errorsCount` on a batch record.
+  //
+  // So the block goes, and the overwrite is prevented the way Omnisend
+  // documents rather than by omission. Same reference, "Channel status date":
+  // "If you submit a status date earlier than the one already stored, the
+  // status and its date will not be updated." An unknown status is therefore
+  // dated at the epoch — earlier than any real consent Omnisend can hold — and
+  // loses every race by construction, while still creating a contact Omnisend
+  // has never seen as nonSubscribed, which is the truth about them.
+  //
+  // The store's own `changedAt` is deliberately NOT used here: for this branch
+  // collectContactFacts sets it to `now` (it has no record to date it with),
+  // and `now` beats everything.
   const emailChannel = facts.emailConsent.status === "nonSubscribed"
-    ? {}
+    ? { channels: { email: { status: "nonSubscribed", statusChangedAt: UNKNOWN_STATUS_CHANGED_AT } } }
     : {
       channels: { email: { status: facts.emailConsent.status, statusChangedAt: facts.emailConsent.changedAt } },
       ...consentBlock(facts.emailConsent),

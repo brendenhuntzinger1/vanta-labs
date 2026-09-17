@@ -81,25 +81,48 @@ describe("the contact envelope matches Omnisend's contacts reference", () => {
     });
   });
 
-  it("omits the email channel block AND the consent block for nonSubscribed, so a status Omnisend collected itself stands", () => {
-    // Omnisend's contacts reference: nonSubscribed means "channel's status is
-    // unknown", and "the system will return the status with the latest status
-    // update date". Sending nonSubscribed with statusChangedAt = now would
-    // therefore overwrite a `subscribed` the contact gave through Omnisend's
-    // own form and demote them out of every flow. The identifier still goes,
-    // so the profile, tags and properties are refreshed.
+  it("dates a nonSubscribed status at the epoch, so a status Omnisend collected itself stands", () => {
+    // TWO RULES MEET HERE, AND THE FIRST ONE IS NOT NEGOTIABLE.
+    //
+    //   1. Omnisend REFUSES an email identifier with no channel block. The
+    //      first real contacts batch answered 400 "Provide email channel for
+    //      email identifier" for the single item that omitted it.
+    //   2. nonSubscribed means "we do not know", and Omnisend keeps whichever
+    //      status carries the later date. Stamping ours `now` would overwrite
+    //      a `subscribed` the contact gave through Omnisend's own form.
+    //
+    // The epoch satisfies both: the block is present, and it loses every date
+    // comparison against a real consent. THIS TEST USED TO ASSERT THE
+    // OMISSION, which is why the defect shipped green.
     const known = buildContactPayload({
       ...facts,
+      // `now`, as collectContactFacts supplies it for an unknown status. It
+      // must NOT reach the payload: it would beat everything.
       emailConsent: { status: "nonSubscribed", changedAt: "2026-09-03T00:00:00.000Z" },
       smsConsent: null,
     }) as { identifiers: Identifier[] };
     expect(known.identifiers[0]).toEqual({
       type: "email",
       id: "jane.doe@example.com",
+      channels: { email: { status: "nonSubscribed", statusChangedAt: "1970-01-01T00:00:00.000Z" } },
       sendWelcomeMessage: false,
     });
-    expect(known.identifiers[0]).not.toHaveProperty("channels");
+    // No consent is claimed for a status nobody gave.
     expect(known.identifiers[0]).not.toHaveProperty("consent");
+  });
+
+  it("gives every email identifier a channel block, whatever the status", () => {
+    // The rule the 400 above states, asserted directly rather than as a
+    // side effect of one status's test: a payload Omnisend refuses is a
+    // contact that silently never arrives.
+    for (const status of ["subscribed", "unsubscribed", "nonSubscribed"] as const) {
+      const built = buildContactPayload({
+        ...facts,
+        emailConsent: { status, changedAt: "2026-09-03T00:00:00.000Z", source: "checkout" },
+        smsConsent: null,
+      }) as { identifiers: Identifier[] };
+      expect(built.identifiers[0], `${status} must carry a channel block`).toHaveProperty("channels");
+    }
   });
 
   it("omits the consent block for unsubscribed, which has no source, but keeps the channel status", () => {
