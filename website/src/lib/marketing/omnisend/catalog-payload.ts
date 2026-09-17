@@ -54,6 +54,33 @@ const MAX_TITLE_LENGTH = 255;
 const MAX_TYPE_LENGTH = 100;
 const MAX_DESCRIPTION_LENGTH = 1000;
 
+/**
+ * THE SEPARATOR BETWEEN A PRODUCT AND ITS VARIANT, AND WHY IT IS NOT "#".
+ *
+ * Omnisend validates a variant id against `[A-Za-z0-9_-]` and answers
+ * 400 `Variants[0].ID: must contain only letters, numbers, underscores and
+ * dashes` for anything else. This was `#`, so EVERY product in a catalogue
+ * push was refused — 34 of 34 on the first real run, 2026-09-17 — and a
+ * refused catalogue means the abandoned-cart, abandoned-checkout and browse
+ * abandonment flows have no product to render.
+ *
+ * A double underscore is legal, and it cannot be mistaken for part of either
+ * side: slugs are single-dash-separated and dose ids are UUIDs.
+ *
+ * THREE CALLERS MUST AGREE. The catalogue's variant id, the fallback variant
+ * id, and the `productVariantID` that hooks.ts puts on a cart line are the
+ * same identifier seen from different places — if they drift, a cart line
+ * names a variant Omnisend's catalogue does not have and the product block
+ * renders empty. Hence one exported builder rather than three template
+ * literals.
+ */
+export const OMNISEND_VARIANT_SEPARATOR = "__";
+
+/** `<slug>__<suffix>`, trimmed to Omnisend's id ceiling. */
+export function omnisendVariantId(slug: string, suffix: string): string {
+  return `${slug}${OMNISEND_VARIANT_SEPARATOR}${suffix}`.slice(0, MAX_ID_LENGTH);
+}
+
 /** Lowercase, every run of non-alphanumerics to one dash, no leading or trailing dash. */
 export function slugifyCategory(category: string): string {
   return String(category ?? "")
@@ -144,7 +171,7 @@ export function buildOmnisendProduct(
     const price = parseMoney(dose.salePrice) ?? parseMoney(dose.price);
     if (price === null) continue;
     variants.push({
-      id: `${slug}#${dose.id}`.slice(0, MAX_ID_LENGTH),
+      id: omnisendVariantId(slug, dose.id),
       title: String(dose.label || title).trim().slice(0, MAX_TITLE_LENGTH),
       sku: dose.sku || undefined,
       price,
@@ -185,7 +212,7 @@ function defaultVariant(
   product: Product,
   ctx: { slug: string; title: string; url: string; status: OmnisendProductStatus; cover: string; hadDoses: boolean },
 ): OmnisendProductVariant {
-  const base = { id: `${ctx.slug}#default`.slice(0, MAX_ID_LENGTH), title: ctx.title, url: ctx.url, defaultImageUrl: ctx.cover };
+  const base = { id: omnisendVariantId(ctx.slug, "default"), title: ctx.title, url: ctx.url, defaultImageUrl: ctx.cover };
   const price = ctx.hadDoses ? null : (parseMoney(product.salePrice) ?? parseMoney(product.price));
   if (price === null) return { ...base, price: 0, status: "notAvailable" };
   return { ...base, price, strikeThroughPrice: strikeThroughPrice(product.compareAtPrice, price), status: ctx.status };

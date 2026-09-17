@@ -4,6 +4,7 @@ import type { Product, ProductDose } from "@/lib/catalog-types";
 import {
   buildOmnisendCategories,
   buildOmnisendProduct,
+  omnisendVariantId,
   parseMoney,
   slugifyCategory,
 } from "@/lib/marketing/omnisend/catalog-payload";
@@ -171,7 +172,7 @@ describe("buildOmnisendProduct variants from doses", () => {
     );
     expect(built.variants).toEqual([
       {
-        id: "bpc-157#d-5mg",
+        id: "bpc-157__d-5mg",
         title: "5mg",
         sku: "BPC-5",
         price: 42.99,
@@ -181,7 +182,7 @@ describe("buildOmnisendProduct variants from doses", () => {
         defaultImageUrl: "https://www.example.com/images/cover.png",
       },
       {
-        id: "bpc-157#d-10mg",
+        id: "bpc-157__d-10mg",
         title: "10mg",
         sku: "BPC-10",
         price: 69,
@@ -218,14 +219,14 @@ describe("buildOmnisendProduct variants from doses", () => {
       product({ doses: [dose({ id: "d-a", price: "" }), dose({ id: "d-b", price: "$10.00" })] }),
       ORIGIN,
     );
-    expect(built.variants.map((variant) => variant.id)).toEqual(["bpc-157#d-b"]);
+    expect(built.variants.map((variant) => variant.id)).toEqual(["bpc-157__d-b"]);
     for (const variant of built.variants) expect(typeof variant.price).toBe("number");
   });
 
   it("falls back to an unpriced notAvailable default variant when every dose was unreadable", () => {
     const built = buildOmnisendProduct(product({ price: "$42.99", doses: [dose({ price: "" })] }), ORIGIN);
     expect(built.variants).toHaveLength(1);
-    expect(built.variants[0]).toMatchObject({ id: "bpc-157#default", price: 0, status: "notAvailable" });
+    expect(built.variants[0]).toMatchObject({ id: "bpc-157__default", price: 0, status: "notAvailable" });
   });
 });
 
@@ -237,7 +238,7 @@ describe("buildOmnisendProduct without doses", () => {
     );
     expect(built.variants).toEqual([
       {
-        id: "bpc-157#default",
+        id: "bpc-157__default",
         title: "BPC-157",
         price: 42.99,
         strikeThroughPrice: 55,
@@ -255,13 +256,13 @@ describe("buildOmnisendProduct without doses", () => {
 
   it("treats an empty dose list the same as no doses", () => {
     const built = buildOmnisendProduct(product({ doses: [] }), ORIGIN);
-    expect(built.variants[0]).toMatchObject({ id: "bpc-157#default", price: 42.99, status: "inStock" });
+    expect(built.variants[0]).toMatchObject({ id: "bpc-157__default", price: 42.99, status: "inStock" });
   });
 
   it("goes across at 0 and notAvailable when the product price itself is unreadable", () => {
     const built = buildOmnisendProduct(product({ price: "" }), ORIGIN);
     expect(built.variants).toEqual([
-      expect.objectContaining({ id: "bpc-157#default", price: 0, status: "notAvailable" }),
+      expect.objectContaining({ id: "bpc-157__default", price: 0, status: "notAvailable" }),
     ]);
   });
 });
@@ -300,5 +301,50 @@ describe("categories", () => {
       { categoryID: "research-peptides", title: "Research Peptides" },
       { categoryID: "recon-water", title: "Recon Water" },
     ]);
+  });
+});
+
+describe("a variant id Omnisend will actually accept", () => {
+  // THE CHARSET, AS A TEST RATHER THAN AS A SURPRISE IN A BATCH RECORD.
+  //
+  // Omnisend validates a variant id against letters, numbers, underscores and
+  // dashes. The separator here was "#", which is none of those, so the first
+  // real catalogue push was refused for EVERY product — 34 of 34 on
+  // 2026-09-17, each with `Variants[0].ID: must contain only letters, numbers,
+  // underscores and dashes`. Nothing in the suite looked at the characters;
+  // the tests asserted the exact strings the builder happened to produce, so
+  // they agreed with the bug.
+  //
+  // A refused catalogue is not a cosmetic failure: abandoned cart, abandoned
+  // checkout and browse abandonment all render product blocks, and a product
+  // Omnisend does not hold renders nothing.
+  const LEGAL = /^[A-Za-z0-9_-]+$/;
+
+  it("uses only characters Omnisend allows", () => {
+    expect(omnisendVariantId("bpc-157", "3dc8c066-b862-4057-9d47-66e6b9e5d0ce")).toMatch(LEGAL);
+    expect(omnisendVariantId("bpc-157", "default")).toMatch(LEGAL);
+  });
+
+  it("every variant a real product emits passes, doses or not", () => {
+    const withDoses = buildOmnisendProduct(
+      product({ doses: [dose({ id: "d-5mg", label: "5mg" }), dose({ id: "d-10mg", label: "10mg" })] }),
+      ORIGIN,
+    );
+    const withoutDoses = buildOmnisendProduct(product({ doses: [] }), ORIGIN);
+
+    for (const built of [withDoses, withoutDoses]) {
+      expect(built.variants.length).toBeGreaterThan(0);
+      for (const variant of built.variants) {
+        expect(variant.id, `${variant.id} is not a legal Omnisend variant id`).toMatch(LEGAL);
+        expect(variant.id.length).toBeLessThanOrEqual(100);
+      }
+    }
+  });
+
+  it("keeps the product and its variant distinguishable", () => {
+    // The separator has to survive round-tripping by eye: a cart line names
+    // the variant, the catalogue holds it, and an operator reading a batch
+    // error needs to see which product it belongs to.
+    expect(omnisendVariantId("glp-1", "abc")).toBe("glp-1__abc");
   });
 });

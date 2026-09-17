@@ -11,6 +11,7 @@ import {
   priceCartLines,
   priceToCents,
 } from "@/lib/marketing/omnisend/cart-plan";
+import { omnisendVariantId } from "@/lib/marketing/omnisend/catalog-payload";
 import { findLiveContactCode, findLiveContactCodes } from "@/lib/marketing/omnisend/codes";
 import { collectContactFacts, upsertOmnisendContact, type ContactExtras } from "@/lib/marketing/omnisend/contacts";
 import { mintWelcomeGift } from "@/lib/marketing/omnisend/welcome-gift";
@@ -276,7 +277,7 @@ export async function sendCartEventOnce(input: {
   for (const line of lines) {
     lineItems.push({
       productID: line.slug,
-      productVariantID: line.variantId ? `${line.slug}#${line.variantId}` : undefined,
+      productVariantID: line.variantId ? omnisendVariantId(line.slug, line.variantId) : undefined,
       productTitle: line.title,
       productVariantTitle: line.variantTitle,
       productPrice: line.priceCents / 100,
