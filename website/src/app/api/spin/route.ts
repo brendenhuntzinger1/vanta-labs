@@ -3,9 +3,10 @@ import { NextResponse } from "next/server";
 import { getRequestIpAddress } from "@/lib/admin-auth";
 import { getSpinWheelConfig } from "@/lib/admin-control";
 import { getAuthenticatedUser } from "@/lib/auth-session";
-import { OFFER_COOKIE, OFFER_COOKIE_MAX_AGE_SECONDS } from "@/lib/offers/customer-offers";
+import { OFFER_COOKIE, OFFER_COOKIE_MAX_AGE_SECONDS, readOfferCookie, readOfferStatus } from "@/lib/offers/customer-offers";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { describeRedemptionCondition } from "@/lib/spin/disclosure";
+import { claimSpinForAccount } from "@/lib/spin/spin-claim";
 import { spin } from "@/lib/spin/spin-service";
 import { verifySpinToken } from "@/lib/spin/spin-token";
 
@@ -84,9 +85,42 @@ export async function POST(request: Request) {
     }
 
     const result = await spin({ email: verified.email, campaignId: verified.campaignId });
+
     if (!result) {
       // A wheel that cannot mint must not look like one that can.
       return NextResponse.json({ success: false, error: "We couldn't save your prize. Please try again." }, { status: 503 });
+    }
+
+    // RE-OPENING THE EMAIL ON A SECOND DEVICE HAS TO ARM THAT DEVICE.
+    //
+    // spin() reports an already-won prize with offerToken: null — the token is
+    // handed out ONLY on the call that minted it (spin-service.ts). So the
+    // phone that span got the cookie and the laptop got a page showing a prize
+    // it could not use. Under the email-link journey the visitor is anonymous,
+    // so /api/spin/claim (session-only, by design) could not rescue them
+    // either: the prize was simply unusable on every device but the first.
+    //
+    // THE TOKEN IS A GOOD ENOUGH IDENTITY FOR THIS, and the mint path a few
+    // lines above already says why: "The address in the token is trustworthy —
+    // this server signed it". Re-arming for the address this server signed is
+    // exactly as safe as minting for it, which already happens here.
+    //
+    // ONLY WHEN THIS DEVICE HOLDS NOTHING. claimSpinForAccount rotates the
+    // bearer token, which retires the copy on whatever device had it. Rotating
+    // for a browser that is already armed would be pure harm — it would
+    // invalidate the cookie this visitor is about to check out with — so a
+    // device that already has a live offer is left completely alone, the same
+    // guard /api/spin/claim applies.
+    let rearmedToken: string | null = null;
+    if (result.alreadySpun && !result.offerToken) {
+      const heldHere = await readOfferStatus(readOfferCookie(request));
+      if (!heldHere) {
+        const reclaimed = await claimSpinForAccount({
+          verifiedEmail: verified.email,
+          campaignId: verified.campaignId,
+        });
+        rearmedToken = reclaimed?.offerToken ?? null;
+      }
     }
 
     const response = NextResponse.json({
@@ -109,10 +143,13 @@ export async function POST(request: Request) {
     // The bearer secret goes into an httpOnly cookie and is never returned in
     // the body — no script on the page can read it, and it cannot leak through
     // a Referer header or a shared screenshot.
-    if (result.offerToken) {
+    // Either the token just minted, or the one re-issued above for a device
+    // that opened the link second and was holding nothing.
+    const cookieToken = result.offerToken ?? rearmedToken;
+    if (cookieToken) {
       response.cookies.set({
         name: OFFER_COOKIE,
-        value: result.offerToken,
+        value: cookieToken,
         httpOnly: true,
         // Lax, not Strict: the visitor arrives from their mail client, which is
         // a cross-site top-level navigation, and Strict drops the cookie on

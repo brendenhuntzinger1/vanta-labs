@@ -131,9 +131,30 @@ Only after the preview is approved.
 - [ ] Set `status = 'scheduled'` and `scheduled_at` to the confirmed instant:
       `2026-09-17T16:00:00Z` (Thu 17 Sep, 12:00 ET) **or**
       `2026-09-18T16:00:00Z` (Fri 18 Sep, 12:00 ET).
-- [ ] Re-check exclusions immediately before: anyone who has since purchased or
-      unsubscribed must drop out. The sender already re-resolves the audience at
-      send time, and a purchaser was verified to drop out on re-check.
+- [ ] Re-check exclusions immediately before. **This matters more than an
+      earlier draft of this document said, and the correction is the point.**
+
+      That draft claimed "the sender already re-resolves the audience at send
+      time". It does not. `queueCampaign` resolves the audience **once**, when
+      the campaign is queued, and never re-derives it — the comment on it says
+      so plainly, and explains why (recomputing per batch would move people in
+      and out of a segment mid-send).
+
+      So the two exclusions behave differently, and only one of them is
+      self-healing:
+
+      | exclusion | when it is enforced | safe to rely on? |
+      |---|---|---|
+      | unsubscribed / suppressed | **every send**, and it fails closed (`sendMarketingEmail`, marketing.ts:215) | yes |
+      | already purchased | **only at queue time** | no — re-check by hand |
+
+      The send tail is real: the previous campaign delivered 78 in its first
+      hour and 10 more over the following 32 hours. Anyone who buys inside that
+      window still receives the invitation, because the list was fixed when the
+      campaign was queued.
+
+      Queue it at the moment you intend to send, not hours ahead, and the
+      window is as small as it can be.
 
 ## Rollback
 

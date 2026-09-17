@@ -249,7 +249,19 @@ export interface QuoteResult {
    * and the banner could not, because it was measuring a different thing. See
    * offerShortfallCents.
    */
-  offerWithdrawnBy: "welcome_code" | "minimum" | null;
+  /**
+   * Why a reward the customer holds is not on this order.
+   *
+   *   "welcome_code"  they typed a welcome code and the two are exclusive
+   *   "minimum"       the basket is under the reward's qualifying subtotal
+   *   "unavailable"   the product is out of stock, so it cannot be shipped
+   *
+   * "unavailable" exists because the alternative is the failure this field was
+   * created to end: the reward line simply disappearing, the customer paying
+   * full price, and nothing anywhere saying why. Their token is untouched and
+   * stays spendable once stock returns.
+   */
+  offerWithdrawnBy: "welcome_code" | "minimum" | "unavailable" | null;
   /**
    * HOW MUCH MORE THE SHOPPER MUST PAY FOR THE GIFT TO SURVIVE, in cents.
    *
@@ -1018,7 +1030,19 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
         && offerStockStatus !== "Reserved"
         && !(typeof offerStock === "number" && Number.isFinite(offerStock) && offerStock <= 0);
 
-      if (!offerProduct || !shippable) return null;
+      if (!offerProduct || !shippable) {
+        // SAY SO. Dropping the line silently is what made the floor bug above
+        // so expensive to diagnose: the price was right, the account of it was
+        // missing, and the customer was left to infer that their reward had
+        // never been real. A reward withheld for stock is withheld for a
+        // reason the store knows and can state.
+        //
+        // Not overwritten if something already claimed the field — a welcome
+        // code or an unmet minimum was decided first and is the more useful
+        // thing to tell them.
+        if (offerWithdrawnBy === null) offerWithdrawnBy = "unavailable";
+        return null;
+      }
 
       const wanted = grant.quantity;
 

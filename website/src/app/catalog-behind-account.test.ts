@@ -232,6 +232,32 @@ describe("a gated product URL cannot be used to enumerate the catalog", () => {
     expect(guardAt).toBeLessThan(lookupAt);
     expect(meta).toContain('title: "Sign in"');
   });
+
+  it("generateMetadata admits exactly who the body admits, grant included", () => {
+    // THE HEAD AND THE BODY MUST ANSWER THE SAME QUESTION.
+    //
+    // They did not. The body admitted a marketing-link grant holder; the head
+    // asked only about a session. Measured in production on 2026-09-17 with a
+    // live grant, /products/klow rendered the product in full under the title
+    // "Sign in | Vanta Labs", with the canonical pointing at /account/login —
+    // so every recipient who opened a product from the campaign got a tab, and
+    // a share preview, that contradicted the page they were reading.
+    //
+    // This does NOT widen the gate: a crawler carries neither credential and
+    // still gets the refusal, which is what the sibling tests above pin.
+    const meta = productPage.slice(
+      productPage.indexOf("export async function generateMetadata"),
+      productPage.indexOf("export default async function ProductDetailPage"),
+    );
+    const body = productPage.slice(productPage.indexOf("export default async function ProductDetailPage"));
+
+    // Whatever credentials the body accepts, the head accepts too.
+    expect(code(body)).toContain("requestHasEmailLinkGrant()");
+    expect(code(meta)).toContain("requestHasEmailLinkGrant()");
+
+    // And the refusal is still gated on BOTH being absent, not just the session.
+    expect(code(meta)).toMatch(/if\s*\(!viewer\s*&&\s*!grantHolder\)/);
+  });
 });
 
 describe("the site stops advertising what it will not serve", () => {
