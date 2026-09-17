@@ -22,6 +22,7 @@ import {
   omnisendContactsReconcileJob,
   omnisendOrderBackstop,
 } from "@/lib/marketing/omnisend/sweeps";
+import { omnisendProviderVerdictsSweep } from "@/lib/marketing/omnisend/provider-verdicts";
 import { handleCronRequest, type CronJobMap } from "@/lib/cron-runner";
 
 export const dynamic = "force-dynamic";
@@ -170,6 +171,13 @@ const JOBS: CronJobMap = {
   omnisendOrderBackstop: { label: "omnisend_order_backstop", run: omnisendOrderBackstop },
   omnisendCatalogSync: { label: "omnisend_catalog_sync", run: omnisendCatalogSyncJob },
   omnisendContactsReconcile: { label: "omnisend_contacts_reconcile", run: omnisendContactsReconcileJob },
+  // The mailbox verdicts the contacts API cannot carry. The write-back above
+  // mirrors an Omnisend unsubscribe because that is a channel status; a hard
+  // bounce and a spam complaint are neither, and they are the two facts that
+  // wreck a sending domain. Reads them from the per-contact events feed and
+  // writes email_suppressions (marketing/omnisend/provider-verdicts.ts). Asks
+  // the gate first, never throws, and holds its watermark on any failure.
+  omnisendProviderVerdicts: { label: "omnisend_provider_verdicts", run: omnisendProviderVerdictsSweep },
 };
 
 /**
