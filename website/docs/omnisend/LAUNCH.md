@@ -1,8 +1,15 @@
 # Omnisend transition: launch summary
 
-Everything below is staged. Nothing is enabled in Omnisend, nothing has been
-sent, no contact has been pushed, and nothing has merged to `main`. This is
-the document to read before authorising any step in `OPERATIONS.md` §4.
+Everything below is staged. **Nothing is enabled in Omnisend, nothing has been
+sent to a customer, and nothing has merged to `main`.** This is the document to
+read before authorising any step in `OPERATIONS.md` §4.
+
+What HAS changed, on 2026-09-17: the account now holds data. 121 contacts,
+9 categories, 34 products and 17 order events were pushed directly through the
+API so the segments populate and the flows have something to render before
+cutover rather than after it — see §4. Every automation stayed disabled
+throughout, which is what made the push safe and is the reason the order below
+puts data first and flows last.
 
 ## 1. What was implemented
 
@@ -216,6 +223,52 @@ not backfill. `VL · Welcome` triggers on `subscribed to marketing`, and
 importing would enrol all 118 subscribed contacts into the welcome series at
 once, with a blank link in every message.
 
+### The catalogue and the order history, same day
+
+Pushed directly through the API, so the account holds what the flows need
+before cutover rather than after it:
+
+| | |
+|---|---|
+| categories | 9 |
+| products | 34, carrying 46 dose variants |
+| `paid for order` events | 17, covering every paid product order since 2026-08-02 |
+
+The catalogue matters because abandoned cart, abandoned checkout and browse
+abandonment all render product blocks, and a product Omnisend does not hold
+renders nothing. The order events matter because `VL · Repeat customers` —
+which `VL · Post-purchase` branches on — is defined on `paid for order` and
+was empty. It now resolves to the one buyer with more than one paid order.
+
+NOT pushed, and why: cart and product-view history. `added product to cart`
+is the abandoned-cart trigger, so replaying stale carts would be wrong; live
+carts are handed over by the cart-offer sweep at cutover (§5). Views are not
+stored anywhere to replay. `VL · Browsed, no order (30 days)` therefore stays
+empty until the branch is live — that is expected, not a fault.
+
+### Three defects the pushes found
+
+Every one of them was invisible from inside the code, because a per-item 4xx
+inside a background batch is a number on a batch record and nothing else, and
+in each case the suite asserted the builder's output rather than the rule the
+API enforces — so the tests agreed with the bug.
+
+1. **Contacts.** The payload omitted the email channel block for a
+   `nonSubscribed` contact; Omnisend refuses an email identifier without one.
+   One in forty-one refused — the single buyer with no consent on record, which
+   is exactly the population that block exists to carry.
+2. **Catalogue.** Variant ids were `slug#doseId`. Omnisend allows only letters,
+   numbers, underscores and dashes, so all 34 products were refused, every run.
+3. **Events.** `eventID` was a descriptive string; Omnisend requires a UUID.
+   Every event of every kind was refused — views, carts, checkouts, orders —
+   which is the whole event-driven half of this migration. Separately, order
+   line items looked products up by a column that never matched, so each line
+   named an unknown product with no category, no image and no link.
+
+All three are fixed on the branch, each with a test that asserts the API's rule
+rather than the builder's output, and each verified by a push that the live API
+accepted.
+
 ## 5. How existing carts and sequences are handed off
 
 * 12 open carts were mid-sequence on 2026-09-16 ($2,306.85). Each has at
@@ -298,7 +351,9 @@ should be, before `OMNISEND_MARKETING_OWNER` is set.
 | `omnisend-sync.sql` migration | not applied (owner) |
 | `sms-subscribers.sql` migration | not applied (owner) |
 | Contacts in Omnisend | 121 seeded 2026-09-17 (§4). No `vl_link`, no codes, until the branch ships |
-| Automations | 9, all disabled |
+| Catalogue in Omnisend | 9 categories, 34 products, 46 variants, pushed 2026-09-17 |
+| Order history in Omnisend | 17 `paid for order` events, 2026-08-02 onward |
+| Automations | 9, all disabled — enable only AFTER the data is in (§4) |
 | Form | draft |
 | Campaigns | 3 drafts |
 | Sender domain | verified 2026-09-16; automations and campaign drafts send from `support@` on it |
