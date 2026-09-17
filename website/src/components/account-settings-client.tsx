@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { SMS_CONSENT_TEXT, SMS_DISCLOSURE_TEXT } from "@/lib/sms-consent-text";
+import { SMS_COPIED_LABEL, SMS_COPY_BUTTON, WELCOME_OFFER_READY, WELCOME_OFFER_TERMS } from "@/lib/offers/welcome-offer-copy";
 import { supabase } from "@/lib/supabase";
 import type { CustomerPreferences, CustomerAddress } from "@/lib/customer-account";
 import { AccountAddressesClient } from "@/components/account-addresses-client";
@@ -44,6 +45,20 @@ export function AccountSettingsClient({
   const [fullName, setFullName] = useState(initialFullName);
   const [email, setEmail] = useState(initialEmail);
   const [phone, setPhone] = useState(initialPreferences.phone ?? "");
+  // The welcome code this account holds, if any. Read once, never minted, so
+  // opening this page cannot start anyone's fourteen days.
+  const [welcomeCode, setWelcomeCode] = useState<string | null>(null);
+  const [codeCopied, setCodeCopied] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void fetch("/api/offers/welcome", { credentials: "same-origin" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { status?: string; code?: string } | null) => {
+        if (live && data?.status === "claimed" && data.code) setWelcomeCode(data.code);
+      })
+      .catch(() => { /* the block simply does not appear */ });
+    return () => { live = false; };
+  }, []);
   const [emailChangePassword, setEmailChangePassword] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -417,6 +432,25 @@ export function AccountSettingsClient({
               <Link href="/legal/terms" className="underline hover:text-zinc-300">Terms of Service</Link> and{" "}
               <Link href="/legal/privacy" className="underline hover:text-zinc-300">Privacy Policy</Link>.
             </p>
+            {/* THE CODE, WHERE A SUBSCRIBER WILL LOOK FOR IT. Someone who
+                joined the list days ago and has since closed the text should
+                not have to hunt for it. Absent entirely for anyone without one. */}
+            {welcomeCode ? (
+              <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4" data-testid="account-welcome-code">
+                <p className="text-sm text-zinc-200">{WELCOME_OFFER_READY}</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <code className="rounded-lg border border-white/15 bg-black/30 px-3 py-2 font-mono text-sm tracking-widest text-zinc-100">{welcomeCode}</code>
+                  <button
+                    type="button"
+                    onClick={() => { void navigator.clipboard?.writeText(welcomeCode).then(() => setCodeCopied(true)).catch(() => setCodeCopied(false)); }}
+                    className="vl-focus-ring rounded-lg border border-white/15 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-zinc-300 hover:bg-white/[0.06]"
+                  >
+                    {codeCopied ? SMS_COPIED_LABEL : SMS_COPY_BUTTON}
+                  </button>
+                </div>
+                <p className="mt-2 text-xs leading-relaxed text-zinc-500">{WELCOME_OFFER_TERMS}</p>
+              </div>
+            ) : null}
           </div>
           {preferencesMessage ? <p className="mt-3 text-sm text-zinc-300">{preferencesMessage}</p> : null}
           <button type="button" onClick={handleSavePreferences} disabled={savingPreferences} className="vl-btn-primary vl-focus-ring mt-4 px-5 py-2.5 text-sm disabled:opacity-60">

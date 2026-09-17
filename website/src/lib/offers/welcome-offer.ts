@@ -38,13 +38,41 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 
 const LOG = "[welcome-offer]";
 
-export type WelcomeOffer =
-  /** Never bought, holds no live code: the offer is open to them. */
-  | { status: "eligible" }
-  /** Holds a live code — shown, never re-minted, never re-dated. */
-  | { status: "claimed"; code: string; endsAt: string; percent: number }
-  /** Has already bought, or the address is unusable: show nothing. */
-  | { status: "ineligible" };
+/**
+ * WHAT THIS PERSON MAY BE SHOWN, AND WHETHER THEY MAY BE INTERRUPTED.
+ *
+ * Five surfaces ask this one question, so the answer carries both halves:
+ * what to render, and whether the main invitation is allowed to open over the
+ * page. They are different questions and conflating them is how a shopper who
+ * already said no gets asked again.
+ *
+ *   eligible   never bought, holds no code, never subscribed or opted out.
+ *              The 15% invitation, and the modal may interrupt.
+ *   claimed    holds a live code. Show the code, never another sign-up ask.
+ *   returning  has paid for a product order. NEVER a first-order discount;
+ *              a plain invitation to the text list is still fair.
+ *   suppressed subscribed already with no offer to give, or nothing to say.
+ *              No acquisition prompt of any kind.
+ *
+ * An address that once opted out and never bought is `eligible` but is NOT
+ * interruptible: the quiet placements may still ask (an unticked box is fresh
+ * explicit consent, which is what a resubscribe needs), while a modal over the
+ * page of someone who already said stop is not something this store does.
+ */
+export type WelcomeOfferStatus = "eligible" | "claimed" | "returning" | "suppressed";
+
+export type WelcomeOffer = {
+  status: WelcomeOfferStatus;
+  /** Present only on `claimed`. */
+  code?: string;
+  endsAt?: string;
+  percent?: number;
+  /** May the main invitation open over the page for this person? */
+  mayInterrupt: boolean;
+};
+
+/** What the store knows about this address and the text list. */
+type SmsState = "none" | "subscribed" | "opted_out";
 
 export type WelcomeClaimFailure = "phone" | "ineligible" | "consent" | "code";
 
@@ -86,31 +114,85 @@ export async function hasPurchased(email: string): Promise<boolean> {
 }
 
 /**
- * What this address may be shown right now. Reads only: a page render never
- * mints, so merely opening the catalogue cannot start someone's fourteen days
- * ticking. The code appears here only once they have actually asked for it.
+ * Where this address stands with the text list. A refused read answers
+ * "subscribed", the quiet direction: the cost of a wrong "subscribed" is one
+ * missed invitation, and the cost of a wrong "none" is interrupting someone
+ * who already opted out.
  */
-export async function readWelcomeOffer(email: string | null | undefined): Promise<WelcomeOffer> {
-  const address = normalizeEmail(email);
-  if (!address) return { status: "ineligible" };
-  const live = await findLiveContactCode("welcome", address);
-  if (live) return { status: "claimed", code: live.code, endsAt: live.endsAt, percent: live.percent };
-  return (await hasPurchased(address)) ? { status: "ineligible" } : { status: "eligible" };
+async function readSmsState(email: string): Promise<SmsState> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("sms_subscribers")
+      .select("consented_at, opted_out_at")
+      .eq("email", email)
+      .maybeSingle();
+    if (error) {
+      console.error(LOG, "sms state read refused", error.message);
+      return "subscribed";
+    }
+    if (!data) return "none";
+    const row = data as { consented_at?: string | null; opted_out_at?: string | null };
+    if (row.opted_out_at) return "opted_out";
+    return row.consented_at ? "subscribed" : "none";
+  } catch (error) {
+    console.error(LOG, "sms state read failed", error);
+    return "subscribed";
+  }
 }
 
 /**
- * Subscribe this address to texts and hand back its welcome code.
+ * What this address may be shown right now. Reads only: a page render never
+ * mints, so merely opening the catalogue cannot start someone's fourteen days
+ * ticking. The code appears here only once they have actually asked for it.
+ *
+ * Order matters. A live code wins over everything, including a purchase,
+ * because a code held while an order is being paid for is still theirs until
+ * the order retires it. Then a purchase, which permanently ends the
+ * first-order discount. Then the text list.
+ */
+export async function readWelcomeOffer(email: string | null | undefined): Promise<WelcomeOffer> {
+  const address = normalizeEmail(email);
+  if (!address) return { status: "suppressed", mayInterrupt: false };
+
+  const live = await findLiveContactCode("welcome", address);
+  if (live) {
+    return { status: "claimed", code: live.code, endsAt: live.endsAt, percent: live.percent, mayInterrupt: false };
+  }
+
+  const [bought, sms] = await Promise.all([hasPurchased(address), readSmsState(address)]);
+  if (bought) {
+    // Never a discount. An invitation with nothing attached is still fair, and
+    // only for someone who is not already on the list.
+    return { status: sms === "subscribed" ? "suppressed" : "returning", mayInterrupt: false };
+  }
+  if (sms === "subscribed") {
+    // On the list, never bought, and no live code: the offer has already been
+    // spent or has expired. Nothing left to acquire.
+    return { status: "suppressed", mayInterrupt: false };
+  }
+  // Never bought and not on the list. The offer is open. Someone who opted out
+  // before may be asked quietly, never interrupted.
+  return { status: "eligible", mayInterrupt: sms === "none" };
+}
+
+/**
+ * SUBSCRIBING ALWAYS WORKS. THE DISCOUNT IS THE CONDITIONAL PART.
+ *
+ * The consent is recorded before eligibility is even considered, and a
+ * returning buyer who ticks the box is subscribed like anyone else — they
+ * simply get `ineligible` back for the offer. Refusing the subscription
+ * because the discount does not apply would throw away the customer to
+ * protect the coupon, which is backwards.
  *
  * IDEMPOTENT BY CONSTRUCTION. Someone who already holds a live code gets that
  * same code back with its original end date, whether they tick the box again
  * at the checkout or claimed it from the catalogue a week ago. That is the
- * owner's "existing subscribers use their existing code without signing up
- * again", and it falls out of ensureContactCode rather than being bolted on.
+ * owner's "no duplicate codes, no restarted expiration", and it falls out of
+ * ensureContactCode rather than being bolted on.
  *
- * CONSENT FIRST, CODE SECOND, and the code is refused if the consent row was.
- * A discount handed out for a subscription that was never recorded is a
- * discount with no subscriber behind it, and the TCPA record is the thing
- * that has to be true.
+ * A code is refused if the consent row was refused: a discount handed out for
+ * a subscription that was never recorded is a discount with no subscriber
+ * behind it, and the consent record is the thing that has to be true.
  */
 export async function claimWelcomeOffer(input: {
   email: string;
@@ -120,22 +202,44 @@ export async function claimWelcomeOffer(input: {
 }): Promise<WelcomeClaim> {
   const address = normalizeEmail(input.email);
   const phone = acceptableSmsPhone(input.phone);
-  if (!address) return { ok: false, reason: "phone" };
-  if (!phone) return { ok: false, reason: "phone" };
-
-  // The live code is checked BEFORE eligibility on purpose: an address that
-  // holds a code and then buys something keeps that code until the order
-  // retires it (order-hooks.ts), and the checkout must still be able to hand
-  // it back while the order is being paid for.
-  const live = await findLiveContactCode("welcome", address);
-  if (!live && (await hasPurchased(address))) return { ok: false, reason: "ineligible" };
+  if (!address || !phone) return { ok: false, reason: "phone" };
 
   const consented = await recordSmsConsent({ email: address, phone, source: input.source, userId: input.userId ?? null });
   if (!consented) return { ok: false, reason: "consent" };
 
-  const code = live ?? (await ensureContactCode("welcome", address));
+  // The live code is checked BEFORE eligibility on purpose: an address that
+  // holds a code and then buys something keeps that code until the order
+  // retires it, and the checkout must still be able to hand it back while the
+  // order is being paid for.
+  const live = await findLiveContactCode("welcome", address);
+  if (live) return { ok: true, code: live.code, endsAt: live.endsAt, percent: live.percent };
+
+  if (await hasPurchased(address)) return { ok: false, reason: "ineligible" };
+
+  const code = await ensureContactCode("welcome", address);
   if (!code) return { ok: false, reason: "code" };
   return { ok: true, code: code.code, endsAt: code.endsAt, percent: code.percent };
+}
+
+/**
+ * CONSENT WITHOUT A DISCOUNT, for the period before the carriers approve this
+ * store's use case.
+ *
+ * The kill switch (admin-control.ts getSmsSignupConfig) hides every incentive
+ * prompt, but the plain subscribe boxes stay, and a tick on one of them has to
+ * land somewhere. This is that path: the same consent row, the same Omnisend
+ * push, and no coupon minted for an offer nobody is being shown.
+ */
+export async function recordSmsSignupOnly(input: {
+  email: string;
+  phone: string;
+  source: SmsConsentSource;
+  userId?: string | null;
+}): Promise<boolean> {
+  const address = normalizeEmail(input.email);
+  const phone = acceptableSmsPhone(input.phone);
+  if (!address || !phone) return false;
+  return recordSmsConsent({ email: address, phone, source: input.source, userId: input.userId ?? null });
 }
 
 /**

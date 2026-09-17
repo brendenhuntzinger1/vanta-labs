@@ -294,3 +294,81 @@ test. Worth a look on the Vercel preview before enabling.
 * Re-check the catalogue bar and product link on a preview deployment.
 * The pop-up now names the offer on its SMS step; re-read it in Omnisend
   before enabling.
+
+---
+
+# Addendum, 2026-09-17 (later): the polished SMS sign-up experience
+
+The owner's second brief kept the direction (SMS is the priority, the 15% is
+its incentive, the sign-in gate is not redesigned around email) and added five
+things the first pass did not have.
+
+## 14. What changed
+
+| Area | Before | Now |
+| --- | --- | --- |
+| Main invitation | none; the Omnisend pop-up, email-first | the store's own modal, one field, the owner's copy, on the catalogue only |
+| Customer states | eligible / claimed / ineligible | eligible / claimed / **returning** / suppressed, plus `mayInterrupt` |
+| Reward | code shown as text | code, copy control, continue shopping, and the same card on the account page |
+| Launch control | none | an admin kill switch over every incentive prompt, OFF by default |
+| "Held" copy | promised a future order | states the real choice and that this order ends the offer |
+
+## 15. The invitation
+
+One card, on `/products` and its product pages, six seconds in, once per
+session, then silent for a configurable cooldown (seven days). It yields to
+anything already on screen by reading the DOM for a live dialog rather than
+through a coordinator both components must remember to call. It never opens for
+someone who has bought, is already on the list, holds a code, or once opted
+out; the server answers `mayInterrupt` and the component never decides for
+itself.
+
+It asks for a mobile number and nothing else. Every visitor on these pages is
+signed in (the catalogue requires an account), so the store already knows the
+address, and a one-field form is the whole reason to own this rather than use
+Omnisend's two-step pop-up. The Omnisend form stays as a draft and is no longer
+the plan.
+
+## 16. The kill switch
+
+`getSmsSignupConfig()` carries `promptsEnabled` (false by default; only a
+stored `true` turns it on) and `dismissCooldownDays`. It is honoured in the
+endpoint as well as the UI: with prompts off a ticked box still records the
+consent and mints nothing, because a discount for texts nobody can send yet is
+a promise the store cannot keep. The plain consent boxes at the gate, the
+checkout and the account page are unaffected, which is how the list is built
+before approval.
+
+## 17. Three bugs the browser found
+
+1. **The false promise.** "Your welcome code is saved for a future order" was
+   said to someone about to become a buyer, whose code is retired at first
+   payment. Replaced with the real choice and the real consequence.
+2. **Guest checkout lost the offer.** Reading the offer only for signed-in
+   shoppers meant a guest never saw the incentive and never got the kill
+   switch. A guest is now `unknown` rather than `suppressed`: the checkout may
+   still offer, the signed-in-only storefront prompts stay silent.
+3. **"A larger discount is already on this order" on an empty cart.** "Not
+   applied" was being read as "something better won". They are different
+   states, and the shopper is now told the true one.
+
+## 18. Verified on the harness (2026-09-17)
+
+Production build, 390x844 and 1280x900. Real end to end, guest checkout: the
+code minted, applied, the promo line read −$10.35 on a $69.00 subtotal, and the
+email, phone and ticked box all survived with no renavigation. Both error
+states captured. The invitation, the bar, the product link, the cart card, the
+gate line, the code card and the returning-buyer variant all captured.
+
+The storefront surfaces are signed-in only and the harness has no GoTrue, so
+those were rendered with the offer read stubbed to the shape the server really
+returns, carrying a code the database had actually minted. The checkout path,
+the minting, the consent row and the discount arithmetic were all real.
+
+## 19. Still the owner's
+
+* Carrier approval for this store's actual use case, which the copy now
+  commits to: giveaways and free product offers are promised, so the
+  registered campaign must match and those sends must actually happen.
+* Apply the two SQL files, redeploy with the Omnisend key.
+* Flip `sms_signup.prompts_enabled` only once a subscriber can be texted.
