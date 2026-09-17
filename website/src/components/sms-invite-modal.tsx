@@ -131,45 +131,40 @@ export function SmsInviteModal() {
   const titleId = "vl-sms-invite-title";
 
   return (
-    <div
-      className="fixed inset-0 z-[80] flex items-center justify-center px-4"
-      data-vl-overlay="sms-invite"
-      data-testid="sms-invite-modal"
-    >
+    <div className="vl-sms-scrim" data-vl-overlay="sms-invite" data-testid="sms-invite-modal">
+      {/* The backdrop is a button, not a div with a handler: tapping outside to
+          dismiss is a real affordance and should be announced like one. It sits
+          behind the card so the card's own controls take focus first. */}
       <button
         type="button"
         aria-label="Close"
         onClick={close}
-        className="absolute inset-0 h-full w-full bg-black/70 backdrop-blur-sm"
+        className="absolute inset-0 h-full w-full"
+        style={{ background: "transparent", border: 0, padding: 0, cursor: "pointer" }}
       />
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="relative w-full max-w-[420px] rounded-2xl border border-[color:var(--accent-gold)]/25 bg-[#141414] p-6 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.9)]"
+        className="vl-sms-card vl-sms-modal"
       >
         <button
           type="button"
           onClick={close}
           aria-label="Close"
           data-testid="sms-invite-close"
-          className="vl-focus-ring absolute right-3 top-3 rounded-full px-2 py-1 text-lg leading-none text-white/40 transition hover:bg-white/[0.06] hover:text-white"
+          className="vl-sms-close vl-focus-ring"
         >
           <span aria-hidden="true">×</span>
         </button>
 
-        <p className="text-[10px] uppercase tracking-[0.3em] text-[color:var(--accent-gold)]/75">Vanta Labs</p>
-
         {claimed ? (
-          <div className="mt-4">
-            <WelcomeCodeCard offer={offer as OfferState} onContinue={close} />
-          </div>
+          <WelcomeCodeCard offer={offer as OfferState} onContinue={close} />
         ) : (
           <>
-            <h2 id={titleId} className="vl2-serif mt-3 text-[1.6rem] leading-tight text-white">
-              {SMS_INVITE_HEADLINE}
-            </h2>
-            <p className="mt-2 text-[13px] leading-relaxed text-white/60">{SMS_INVITE_BODY}</p>
+            <p className="vl-sms-eyebrow">Vanta Labs</p>
+            <h2 id={titleId} className="vl-sms-headline">{SMS_INVITE_HEADLINE}</h2>
+            <p className="vl-sms-body">{SMS_INVITE_BODY}</p>
             <SmsSignupForm
               offerAvailable
               autoFocus

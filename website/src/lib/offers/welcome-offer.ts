@@ -2,7 +2,9 @@ import "server-only";
 
 import { PAID_ORDER_STATUSES, isProductPurchaseOrder } from "@/lib/ledger";
 import { ensureContactCode, findLiveContactCode } from "@/lib/marketing/omnisend/codes";
-import { recordSmsConsent, type SmsConsentSource } from "@/lib/sms-consent";
+import { getSmsSignupConfig } from "@/lib/admin-control";
+import { isHeldOut } from "@/lib/offers/welcome-offer-holdout";
+import { readSmsStanding, recordSmsConsent, type SmsConsentSource } from "@/lib/sms-consent";
 import { acceptableSmsPhone } from "@/lib/sms-consent-text";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -71,8 +73,6 @@ export type WelcomeOffer = {
   mayInterrupt: boolean;
 };
 
-/** What the store knows about this address and the text list. */
-type SmsState = "none" | "subscribed" | "opted_out";
 
 export type WelcomeClaimFailure = "phone" | "ineligible" | "consent" | "code";
 
@@ -114,33 +114,6 @@ export async function hasPurchased(email: string): Promise<boolean> {
 }
 
 /**
- * Where this address stands with the text list. A refused read answers
- * "subscribed", the quiet direction: the cost of a wrong "subscribed" is one
- * missed invitation, and the cost of a wrong "none" is interrupting someone
- * who already opted out.
- */
-async function readSmsState(email: string): Promise<SmsState> {
-  try {
-    const { data, error } = await supabaseAdmin
-      .from("sms_subscribers")
-      .select("consented_at, opted_out_at")
-      .eq("email", email)
-      .maybeSingle();
-    if (error) {
-      console.error(LOG, "sms state read refused", error.message);
-      return "subscribed";
-    }
-    if (!data) return "none";
-    const row = data as { consented_at?: string | null; opted_out_at?: string | null };
-    if (row.opted_out_at) return "opted_out";
-    return row.consented_at ? "subscribed" : "none";
-  } catch (error) {
-    console.error(LOG, "sms state read failed", error);
-    return "subscribed";
-  }
-}
-
-/**
  * What this address may be shown right now. Reads only: a page render never
  * mints, so merely opening the catalogue cannot start someone's fourteen days
  * ticking. The code appears here only once they have actually asked for it.
@@ -159,7 +132,16 @@ export async function readWelcomeOffer(email: string | null | undefined): Promis
     return { status: "claimed", code: live.code, endsAt: live.endsAt, percent: live.percent, mayInterrupt: false };
   }
 
-  const [bought, sms] = await Promise.all([hasPurchased(address), readSmsState(address)]);
+  const [bought, sms, config] = await Promise.all([
+    hasPurchased(address),
+    readSmsStanding(address),
+    getSmsSignupConfig(),
+  ]);
+
+  // THE HOLDOUT, when one is running. Held-back shoppers see no prompt
+  // anywhere, which is what makes the comparison against everyone else mean
+  // something. Nobody is held back at the default of 0.
+  if (isHeldOut(address, config.holdoutPercent)) return { status: "suppressed", mayInterrupt: false };
   if (bought) {
     // Never a discount. An invitation with nothing attached is still fair, and
     // only for someone who is not already on the list.

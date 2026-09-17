@@ -121,11 +121,11 @@ describe("collectContactFacts reads sms_subscribers after the account row", () =
   });
 
   it("a ticked checkout box with a number is SMS consent, dated when it was ticked, from where it was ticked", async () => {
-    reads.sms_subscribers = { data: { phone: "(512) 555-0100", source: "checkout", consented_at: "2026-09-10T15:00:00.000Z", opted_out_at: null }, error: null };
+    reads.sms_subscribers = { data: [{ phone_e164: "+15125550100", consent_source: "checkout", marketing_consent: true, marketing_consent_at: "2026-09-10T15:00:00.000Z", opted_out_at: null }], error: null };
     const { collectContactFacts, upsertOmnisendContact } = await import("@/lib/marketing/omnisend/contacts");
     const facts = await collectContactFacts(ADDRESS);
     expect(facts?.smsConsent).toEqual({ status: "subscribed", changedAt: "2026-09-10T15:00:00.000Z", source: "checkout" });
-    expect(facts?.phone).toBe("(512) 555-0100");
+    expect(facts?.phone).toBe("+15125550100");
     await upsertOmnisendContact(ADDRESS);
     const phone = (requests[0] as Posted).body.identifiers.find((identifier) => identifier.type === "phone");
     expect(phone?.id).toBe("+15125550100");
@@ -133,7 +133,7 @@ describe("collectContactFacts reads sms_subscribers after the account row", () =
   });
 
   it("a stopped row is an opt-out, dated when they said stop", async () => {
-    reads.sms_subscribers = { data: { phone: "(512) 555-0100", source: "signup", consented_at: "2026-09-10T15:00:00.000Z", opted_out_at: "2026-09-12T09:00:00.000Z" }, error: null };
+    reads.sms_subscribers = { data: [{ phone_e164: "+15125550100", consent_source: "signup", marketing_consent: true, marketing_consent_at: "2026-09-10T15:00:00.000Z", opted_out_at: "2026-09-12T09:00:00.000Z" }], error: null };
     const { collectContactFacts } = await import("@/lib/marketing/omnisend/contacts");
     const facts = await collectContactFacts(ADDRESS);
     expect(facts?.smsConsent).toEqual({ status: "unsubscribed", changedAt: "2026-09-12T09:00:00.000Z" });

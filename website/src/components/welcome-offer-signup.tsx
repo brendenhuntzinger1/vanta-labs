@@ -4,13 +4,13 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   SMS_BAR_TEXT,
-  SMS_CART_TEXT,
   SMS_CONTINUE_BUTTON,
   SMS_COPIED_LABEL,
   SMS_COPY_BUTTON,
   SMS_INVITE_BODY,
   SMS_INVITE_BUTTON,
   SMS_INVITE_FIELD_LABEL,
+  SMS_INVITE_HEADLINE,
   SMS_PRODUCT_LINK,
   SMS_RETURNING_INVITE,
   SMS_SUCCESS_BODY,
@@ -136,11 +136,9 @@ export function SmsSignupForm({
   }, [consent, onSubscribed, phone, saving]);
 
   return (
-    <div className="mt-3 space-y-3" data-testid="welcome-offer-form">
-      {offerAvailable ? (
-        <p className="text-[11px] leading-relaxed text-white/45" data-testid="welcome-offer-terms">{WELCOME_OFFER_TERMS}</p>
-      ) : null}
-      <div className="flex flex-col gap-2 sm:flex-row">
+    <div className="mt-4" data-testid="welcome-offer-form">
+      {offerAvailable ? <p className="vl-sms-terms" data-testid="welcome-offer-terms">{WELCOME_OFFER_TERMS}</p> : null}
+      <div className="mt-3 space-y-2.5">
         <input
           ref={phoneRef}
           type="tel"
@@ -151,35 +149,34 @@ export function SmsSignupForm({
           placeholder={SMS_INVITE_FIELD_LABEL}
           aria-label={SMS_INVITE_FIELD_LABEL}
           data-testid="welcome-offer-phone"
-          className="vl-focus-ring min-w-0 flex-1 rounded-xl border border-white/[0.16] bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/30"
+          className="vl-sms-field vl-focus-ring"
         />
         <button
           type="button"
           onClick={() => { void submit(); }}
           disabled={saving}
           data-testid="welcome-offer-submit"
-          className="vl-focus-ring flex-shrink-0 rounded-xl border border-[color:var(--accent-gold)]/40 bg-[var(--accent-gold-soft)] px-5 py-3 text-xs font-semibold uppercase tracking-wide text-[color:var(--accent-gold)] transition hover:bg-[var(--accent-gold-soft)]/70 disabled:opacity-50"
+          className="vl-sms-submit vl-focus-ring"
         >
           {saving ? "Sending" : offerAvailable ? SMS_INVITE_BUTTON : "Join the list"}
         </button>
       </div>
-      <label className="flex cursor-pointer items-start gap-3 text-white/55">
+      <label className="vl-sms-consent">
         <input
           type="checkbox"
           checked={consent}
           onChange={(e) => setConsent(e.target.checked)}
           data-testid="welcome-offer-consent"
-          className="mt-0.5 h-[1.15rem] w-[1.15rem] flex-shrink-0 accent-[color:var(--accent-gold)]"
         />
-        <span className="text-[11px] leading-relaxed">{SMS_CONSENT_TEXT}</span>
+        <span className="vl-sms-legal">{SMS_CONSENT_TEXT}</span>
       </label>
-      <p className="text-[11px] leading-relaxed text-white/30">
+      <p className="vl-sms-legal mt-2">
         {SMS_DISCLOSURE_TEXT}{" "}
-        <Link href="/legal/terms" className="text-white/50 underline underline-offset-2 hover:text-white">Terms</Link>
+        <Link href="/legal/terms">Terms</Link>
         {" and "}
-        <Link href="/legal/privacy" className="text-white/50 underline underline-offset-2 hover:text-white">Privacy Policy</Link>
+        <Link href="/legal/privacy">Privacy Policy</Link>
       </p>
-      {error ? <p className="text-[11px] text-[#f09ca8]" data-testid="welcome-offer-error">{error}</p> : null}
+      {error ? <p className="vl-sms-error" data-testid="welcome-offer-error">{error}</p> : null}
     </div>
   );
 }
@@ -208,34 +205,20 @@ export function WelcomeCodeCard({ offer, onContinue }: { offer: OfferState; onCo
   const ends = formatEnds(offer.endsAt);
   return (
     <div data-testid="welcome-offer-claimed">
-      <p className="text-sm text-white">{SMS_SUCCESS_HEADLINE}</p>
-      <p className="mt-1 text-[12px] leading-relaxed text-white/50">{SMS_SUCCESS_BODY}</p>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <code data-testid="welcome-offer-code" className="rounded-lg border border-[color:var(--accent-gold)]/35 bg-black/40 px-3 py-2 font-mono text-sm tracking-widest text-[color:var(--accent-gold)]">
-          {code}
-        </code>
-        <button
-          type="button"
-          onClick={() => { void copy(); }}
-          data-testid="welcome-offer-copy"
-          className="vl-focus-ring rounded-lg border border-white/[0.16] px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-white/70 hover:bg-white/[0.06]"
-        >
+      <p className="vl-sms-eyebrow">{SMS_SUCCESS_HEADLINE}</p>
+      <p className="vl-sms-body">{SMS_SUCCESS_BODY}</p>
+      <div className="mt-3.5 flex flex-wrap items-center justify-center gap-2">
+        <code className="vl-sms-code" data-testid="welcome-offer-code">{code}</code>
+        <button type="button" onClick={() => { void copy(); }} data-testid="welcome-offer-copy" className="vl-sms-ghost vl-focus-ring">
           {copied ? SMS_COPIED_LABEL : SMS_COPY_BUTTON}
         </button>
         {onContinue ? (
-          <button
-            type="button"
-            onClick={onContinue}
-            data-testid="welcome-offer-continue"
-            className="vl-focus-ring rounded-lg px-2 py-2 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--accent-gold)] underline underline-offset-4"
-          >
+          <button type="button" onClick={onContinue} data-testid="welcome-offer-continue" className="vl-sms-ghost vl-focus-ring">
             {SMS_CONTINUE_BUTTON}
           </button>
         ) : null}
       </div>
-      <p className="mt-2 text-[11px] leading-relaxed text-white/35">
-        {ends ? `Valid until ${ends}. ` : ""}{WELCOME_OFFER_TERMS}
-      </p>
+      <p className="vl-sms-terms">{ends ? `Valid until ${ends}. ` : ""}{WELCOME_OFFER_TERMS}</p>
     </div>
   );
 }
@@ -280,21 +263,22 @@ export function WelcomeOfferSignup({ variant }: { variant: "bar" | "link" | "car
 
   if (variant === "link") {
     return (
-      <div className="mt-4" data-testid="welcome-offer-link">
-        {claimedBody ?? (
+      <div className="mt-5" data-testid="welcome-offer-link">
+        {claimedBody ? <div className="vl-sms-card p-5 text-center">{claimedBody}</div> : (
           <>
             <button
               type="button"
               onClick={() => setOpen((v) => !v)}
               aria-expanded={open}
               data-testid="welcome-offer-open"
-              className="vl-focus-ring text-left text-[12px] leading-relaxed text-[color:var(--accent-gold)]/85 underline underline-offset-4 hover:text-[color:var(--accent-gold)]"
+              className="vl-sms-quiet-link vl-focus-ring"
             >
               {returning ? SMS_RETURNING_INVITE : SMS_PRODUCT_LINK}
             </button>
             {open ? (
-              <div className="mt-2 rounded-xl border border-white/[0.08] bg-white/[0.02] p-4">
-                <p className="text-[12px] leading-relaxed text-white/55">{invitation}</p>
+              <div className="vl-sms-card mt-3 p-5">
+                <p className="vl-sms-eyebrow">Vanta Labs</p>
+                <p className="vl-sms-body">{invitation}</p>
                 {form}
               </div>
             ) : null}
@@ -304,42 +288,80 @@ export function WelcomeOfferSignup({ variant }: { variant: "bar" | "link" | "car
     );
   }
 
-  const shell = variant === "bar"
-    ? "rounded-xl border border-[color:var(--accent-gold)]/20 bg-[var(--accent-gold-soft)]/40 px-4 py-3"
-    : "rounded-2xl border border-white/[0.08] bg-white/[0.02] p-5";
-  const headline = returning ? SMS_RETURNING_INVITE : variant === "bar" ? SMS_BAR_TEXT : SMS_CART_TEXT;
-
-  return (
-    <div className={shell} data-testid={variant === "bar" ? "welcome-offer-bar" : "welcome-offer-card"}>
-      {claimedBody ?? (
-        <>
-          <div className="flex items-start justify-between gap-4">
-            <p className="min-w-0 text-[13px] leading-relaxed text-white/75">
-              <span className="text-white">{headline}</span>
-              {offerAvailable ? <span className="text-white/45">{` ${WELCOME_OFFER_TERMS}`}</span> : null}
-            </p>
-            <div className="flex flex-shrink-0 items-center gap-3">
-              <button
-                type="button"
-                onClick={() => setOpen((v) => !v)}
-                aria-expanded={open}
-                data-testid="welcome-offer-open"
-                className="vl-focus-ring whitespace-nowrap text-[12px] font-semibold uppercase tracking-wide text-[color:var(--accent-gold)] underline underline-offset-4"
-              >
-                {open ? "Close" : "Join"}
-              </button>
-              <button
-                type="button"
-                onClick={() => { setDismissed(true); writeDismissed(); }}
-                aria-label="Dismiss"
-                data-testid="welcome-offer-dismiss"
-                className="vl-focus-ring text-white/30 transition hover:text-white/60"
-              >
-                <span aria-hidden="true">×</span>
-              </button>
-            </div>
+  // THE BAR. One line of furniture at the top of the catalogue, not a banner.
+  if (variant === "bar") {
+    if (claimed) {
+      return (
+        <div className="vl-sms-card p-5 text-center" data-testid="welcome-offer-bar">{claimedBody}</div>
+      );
+    }
+    return (
+      <div data-testid="welcome-offer-bar">
+        <div className="vl-sms-bar">
+          <p className="vl-sms-bar-text">
+            {returning ? SMS_RETURNING_INVITE : SMS_BAR_TEXT}
+            {offerAvailable ? <span className="vl-sms-bar-terms">{WELCOME_OFFER_TERMS}</span> : null}
+          </p>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            data-testid="welcome-offer-open"
+            className="vl-sms-pill vl-focus-ring"
+          >
+            {open ? "Close" : "Join"}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setDismissed(true); writeDismissed(); }}
+            aria-label="Dismiss"
+            data-testid="welcome-offer-dismiss"
+            className="vl-sms-dismiss vl-focus-ring"
+          >
+            <span aria-hidden="true">×</span>
+          </button>
+        </div>
+        {open ? (
+          <div className="vl-sms-card mt-2 p-5">
+            <p className="vl-sms-body mt-0">{invitation}</p>
+            {form}
           </div>
-          {open ? form : null}
+        ) : null}
+      </div>
+    );
+  }
+
+  // THE CART CARD. Beside the money, so it carries the full promise: eyebrow,
+  // the serif headline, the reason, the terms.
+  return (
+    <div className="vl-sms-card p-6" data-testid="welcome-offer-card">
+      {claimedBody ? <div className="text-center">{claimedBody}</div> : (
+        <>
+          <div className="flex items-start justify-between gap-3">
+            <p className="vl-sms-eyebrow">Vanta Labs</p>
+            <button
+              type="button"
+              onClick={() => { setDismissed(true); writeDismissed(); }}
+              aria-label="Dismiss"
+              data-testid="welcome-offer-dismiss"
+              className="vl-sms-dismiss vl-focus-ring -mt-1"
+            >
+              <span aria-hidden="true">×</span>
+            </button>
+          </div>
+          <p className="vl-sms-headline">{returning ? SMS_RETURNING_INVITE : SMS_INVITE_HEADLINE}</p>
+          <p className="vl-sms-body">{returning ? "" : SMS_INVITE_BODY}</p>
+          {open ? form : (
+            <button
+              type="button"
+              onClick={() => setOpen(true)}
+              data-testid="welcome-offer-open"
+              className="vl-sms-submit vl-focus-ring mt-4"
+            >
+              {offerAvailable ? SMS_INVITE_BUTTON : "Join the list"}
+            </button>
+          )}
+          {!open && offerAvailable ? <p className="vl-sms-terms">{WELCOME_OFFER_TERMS}</p> : null}
         </>
       )}
     </div>

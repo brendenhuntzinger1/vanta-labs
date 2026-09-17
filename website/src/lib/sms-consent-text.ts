@@ -14,6 +14,15 @@ export const SMS_CONSENT_TEXT =
   + "Reply STOP to cancel at any time or HELP for help.";
 
 /** The line under the box: what the texts are, and that the number stays ours. */
+/**
+ * THE VERSION OF THE WORDING ABOVE, stored with every consent row
+ * (sms_subscribers.disclosure_version). A carrier dispute asks what the person
+ * was shown, not what the site says today, so the row records which text it
+ * was. BUMP THIS whenever SMS_CONSENT_TEXT changes, by one line, and never
+ * edit the sentence without bumping it.
+ */
+export const SMS_DISCLOSURE_VERSION = "2026-09-16";
+
 export const SMS_DISCLOSURE_TEXT =
   "Restock alerts, cart reminders and subscriber offers by text. Your number is never shared with third parties for their marketing.";
 

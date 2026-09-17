@@ -1,31 +1,41 @@
--- SMS marketing consent, recorded per address, whoever gave it and wherever.
+-- ---------------------------------------------------------------------------
+-- sms_subscribers: THE ONE COLUMN THIS STORE'S FLOWS NEED, AND NOTHING ELSE.
 --
--- customer_preferences carries SMS consent for ACCOUNT holders (keyed by
--- user_id, customer-sms-consent.sql). A guest who ticks the SMS box at the
--- checkout, or a shopper who ticks it on the sign-up page before their account
--- is confirmed, has no row there to carry it. This table is the consent
--- record for everyone: one row per lowercase email address, the number the
--- person typed, where they ticked the box, the sentence they ticked, when, and
--- when they said stop. src/lib/sms-consent.ts writes it (and mirrors an
--- account holder's decision into customer_preferences); the Omnisend contact
--- sync reads it after the account row (src/lib/marketing/omnisend/contacts.ts),
--- and the reconcile stamps opted_out_at here when Omnisend reports a STOP.
+-- THIS FILE USED TO CREATE THE TABLE. That was wrong and would have failed
+-- silently. Production already has `public.sms_subscribers`, and a better one
+-- than the file described: primary key on `phone_e164`, a status with a CHECK,
+-- marketing and transactional consent kept apart, `disclosure_version`,
+-- `opt_out_keyword`, `resubscribed_at`, `resubscribe_count`, verification and
+-- carrier columns. The old file said `create table if not exists`, so applying
+-- it would have done nothing at all, every insert this app makes would have
+-- failed on columns that do not exist, and the consent writer catches its own
+-- errors — so a customer could tick the box, be told they were subscribed, and
+-- have nothing recorded anywhere. Checked against production on 2026-09-17
+-- before deploying, which is the only reason it was found.
 --
--- TCPA / A2P 10DLC: the timestamp and the wording are the consent evidence a
--- carrier audit asks for, so consent_text is stored with the row rather than
--- assumed from whatever the site says today.
+-- WHY AN EMAIL COLUMN. The number is the subscriber and the primary key, which
+-- is right. But the welcome code is bound to an address (coupons.assigned_email),
+-- the Omnisend contact is identified by address, and a guest checkout consents
+-- with an address and no account. One nullable, indexed column joins the two
+-- without touching anything that already works.
 --
--- Service-role only: RLS on, no policies. Safe to run more than once.
+-- SAFE TO RUN MORE THAN ONCE. Every statement is guarded, nothing is dropped,
+-- no existing column is altered, and no row is written. Production held 0 rows
+-- when this was written, so there is nothing to backfill.
+-- ---------------------------------------------------------------------------
 
-create table if not exists public.sms_subscribers (
-  email text primary key,
-  phone text not null,
-  -- "signup", "checkout", "account-settings"
-  source text,
-  consented_at timestamptz not null default now(),
-  opted_out_at timestamptz,
-  consent_text text,
-  updated_at timestamptz not null default now()
-);
+alter table public.sms_subscribers
+  add column if not exists email text;
 
-alter table public.sms_subscribers enable row level security;
+-- The lookup every flow makes: "where does this address stand with texts?"
+create index if not exists sms_subscribers_email_idx
+  on public.sms_subscribers (email)
+  where email is not null;
+
+comment on column public.sms_subscribers.email is
+  'The address this consent is tied to: the account''s, or the one typed at a guest checkout. The welcome code is bound to it (coupons.assigned_email) and the Omnisend contact is identified by it. Nullable: a number may exist here without one.';
+
+-- RLS is already enabled on this table in production and no policy is added
+-- here. Every read and write in this application goes through the service
+-- role (lib/sms-consent.ts), and a consent ledger is not something a customer
+-- session should be able to select.

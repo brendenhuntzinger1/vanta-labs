@@ -46,6 +46,18 @@ export async function PATCH(request: Request) {
           .eq("user_id", user.id)
           .maybeSingle();
         const was = Boolean(current?.sms_marketing);
+        // A STOP IS UNCONDITIONAL. This used to fire only on a CHANGE, read
+        // from customer_preferences — so if that row was missing or its column
+        // unreadable, `was` came back false, "false !== false" was false, and
+        // unticking the box recorded nothing in the consent ledger at all.
+        // The ledger is the table a carrier would ask to see, and it is the
+        // one that decides whether a text may be sent, so an untick now always
+        // reaches it. recordSmsOptOut is idempotent and answers "nothing" when
+        // there was nothing to stop.
+        if (!body.smsMarketing) {
+          const stopAddress = user.email?.trim().toLowerCase();
+          if (stopAddress) await recordSmsOptOut(stopAddress, now);
+        }
         if (was !== body.smsMarketing) {
           await supabaseAdmin
             .from("customer_preferences")
@@ -59,7 +71,6 @@ export async function PATCH(request: Request) {
           // a stop here must stop the row a guest checkout may have written
           // for this address, or the sync would read the older consent.
           const address = user.email?.trim().toLowerCase();
-          if (address && !body.smsMarketing) await recordSmsOptOut(address, now);
           // SUBSCRIBING HERE EARNS THE SAME WELCOME CODE the sign-up page and
           // the storefront offer hand out: one offer, one code per address,
           // whichever screen the box was ticked on. Silent and best-effort —
