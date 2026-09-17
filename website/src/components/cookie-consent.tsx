@@ -193,7 +193,7 @@ export function CookieConsent({ initiallyOpen = false }: { initiallyOpen?: boole
     <div className="vl-consent-bar" role="region" aria-label="Cookie consent">
       <div className="vl-consent-inner">
         <p className="vl-consent-copy">
-          Essential cookies run the store. Analytics and our advertising pixels (TikTok, Snapchat and Reddit) load only if you accept. Our Google Ads tag loads either way, but stores nothing and identifies no one unless you accept. Our Meta Pixel loads either way and is not controlled by this choice; so does our Omnisend marketing script.{" "}
+          Essential cookies run the store. Analytics and our advertising pixels (TikTok, Snapchat and Reddit) load only if you accept. Our Google Ads tag loads either way, but stores nothing and identifies no one unless you accept; it reports completed orders at any setting. Our Meta Pixel loads either way and is not controlled by this choice; so does our Omnisend marketing script.{" "}
           {/* py-1.5 -my-1.5 gives the link a comfortably-over-24px tap box
               (WCAG 2.2 AA 2.5.8) without changing the line box it sits in.
               py-1 landed on exactly 24px, which rounds under the threshold. */}

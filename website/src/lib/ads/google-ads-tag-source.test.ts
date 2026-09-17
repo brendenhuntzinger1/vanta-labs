@@ -339,12 +339,43 @@ describe("the disclosure names Google", () => {
     expect(legal).toMatch(/cookieless/i);
   });
 
-  it("does not claim Google receives shopping actions it is never sent", () => {
-    // No conversion action is wired: `config` records the page view and the
-    // remarketing hit and that is all. If a purchase conversion is added later,
-    // this policy sentence has to change in the same edit.
-    expect(legal).toMatch(/does not report shopping actions at all/);
-    expect(legal).toMatch(/never told about shopping actions/);
+  it("discloses the purchase conversion, now that one is wired", () => {
+    // THE SENTENCE THAT EXPIRED.
+    //
+    // Both policies said Google was told nothing about shopping actions. That
+    // was true while `config` was the whole integration, and became false the
+    // moment a purchase conversion shipped — a published policy contradicted by
+    // the code, which is the one failure this describe block exists to catch.
+    //
+    // Asserted as "the old claim is gone AND the new one is made", not merely
+    // as the absence of the old: a policy that quietly drops the subject has
+    // stopped lying without starting to disclose.
+    expect(legal, "the policy still claims Google is told nothing about shopping").not.toMatch(
+      /does not report shopping actions at all/,
+    );
+    expect(legal).not.toMatch(/never told about shopping actions/);
+    expect(legal).not.toMatch(/it receives no product identifier, quantity, order value or currency/);
+
+    // What it IS told, named in both documents.
+    expect(legal).toMatch(/when an order is paid/);
+    expect(legal).toMatch(/order value/);
+  });
+
+  it("still denies the funnel events the tag is genuinely never sent", () => {
+    // Only Purchase is wired. Google is not told which product pages are
+    // viewed, when an item is added to the cart, or when checkout begins —
+    // which the other four platforms all report — and overstating what is
+    // shared is as wrong as understating it.
+    expect(legal).toMatch(/which product pages you view/);
+    expect(legal).toMatch(/no product identifier/);
+  });
+
+  it("keeps the Enhanced Conversions promise, which a conversion action makes reachable", () => {
+    // Enhanced Conversions attaches to a CONVERSION, so this promise had
+    // nothing to bite on until now. The policy says a plain address and a hash
+    // of one are both withheld; google-ads-events.ts is what keeps that true.
+    expect(legal).toMatch(/Enhanced Conversions/);
+    expect(legal).toMatch(/neither a plain address nor a hash of one/);
   });
 
   it("tells the visitor on the banner that Google is not held back", () => {
