@@ -67,6 +67,14 @@ cron route, the real captured MIME, the real payment webhook. Not mocked.
 - Unsubscribe: a GET changes nothing, the one-click POST suppresses, and the
   next campaign cannot reach them.
 
+### It survives images being blocked
+
+Most clients block images by default, so the email was rendered with every
+image request aborted, at 800px and at 390px. The headline, all three
+paragraphs and the **Spin now** button still render and remain clickable, the
+hero's alt text shows in its place, and there is no horizontal overflow at
+either width. The message works as text.
+
 ### Two defects found and fixed
 
 **Eight of the sixteen wheel labels were upside down.** Labels are rotated to
