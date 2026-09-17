@@ -223,7 +223,11 @@ describe("a 15% gift against the other discounts", () => {
     expect(q.appliedOffer?.description).toBe("15% off");
     expect(q.appliedOffer?.percentApplied).toBe(true);
     expect(q.couponCode).toBeNull();
-    expect(q.discountLabel).toBe("15% gift");
+    // "reward", not "gift". This label reaches the cart, the drawer, the
+    // checkout summary and the receipt — and a percentage off an order the
+    // customer still pays for is not a gift. Three of the wheel's sixteen
+    // wedges are discounts, so the word was wrong by the store's own rule.
+    expect(q.discountLabel).toBe("15% reward");
   });
 
   it("a shipping-waiving coupon that lost the percentage is still recorded, because it still waived shipping", async () => {
@@ -314,7 +318,7 @@ describe("10% off + a free Recon water", () => {
     expect(q.discountAmount).toBe(8);
     expect(q.appliedOffer?.description).toBe("Recon Water + 10% off");
     expect(q.appliedOffer?.percentApplied).toBe(true);
-    expect(q.discountLabel).toBe("10% gift");
+    expect(q.discountLabel).toBe("10% reward");
   });
 });
 

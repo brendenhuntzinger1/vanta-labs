@@ -71,7 +71,7 @@ export interface OfferQuote {
    * it enforced.
    */
   offerShortfallCents?: number | null;
-  /** The resolved discount's label, e.g. "15% gift" or "Coupon". */
+  /** The resolved discount's label, e.g. "15% reward" or "Coupon". */
   discountLabel?: string;
   /** True when priced for the address the offer was mailed to, because the
    *  shopper has not typed one yet. The caller words the banner accordingly. */

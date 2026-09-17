@@ -106,6 +106,32 @@ describe("the reward is never called a gift while a discount wedge exists", () =
   }
 });
 
+describe("labels built in the engine count as customer copy too", () => {
+  // THE GAP THIS CLOSES. The first version of this file scanned JSX only, and
+  // passed — while quote-order.ts was building the string "15% gift" and
+  // handing it to the cart, the drawer, the checkout summary and the receipt.
+  // A percentage off an order the customer still pays for is the single
+  // clearest case of the word being wrong, and it was the one case the guard
+  // could not see, because the text is assembled in a template literal in
+  // pricing code rather than written between tags.
+  it("the discount label for a percentage reward does not say gift", () => {
+    const quote = code(read("src/lib/quote-order.ts"));
+
+    // The label itself, wherever it is built.
+    const labelLines = quote
+      .split("\n")
+      .filter((line) => /couponLabel\s*:/.test(line) || /%\s*gift/.test(line));
+
+    expect(
+      labelLines.filter((line) => /\bgift\b/i.test(line)),
+      `quote-order.ts builds a customer-visible label containing "gift":\n  ${labelLines.join("\n  ")}`,
+    ).toEqual([]);
+
+    // And positively: it says reward.
+    expect(quote).toMatch(/couponLabel:[^\n]*% reward/);
+  });
+});
+
 describe("the journey agrees with itself end to end", () => {
   it("the cart and the checkout use the same word for the same thing", () => {
     const cart = visibleCopy(read("src/app/cart/cart-client.tsx"));

@@ -26,6 +26,8 @@ export type WheelPrizeResult = {
   /** The SAVED instant the prize dies. Never a duration. */
   expiresAt: string;
   alreadySpun: boolean;
+  /** Already spent on an order — shown as history, not as something to claim. */
+  redeemed?: boolean;
 };
 
 /** One row of the prize list: a REWARD and its real odds, not one wedge. */
@@ -109,6 +111,54 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
   const countdown = useCountdown(result?.expiresAt ?? null);
   /** Guards the double-click: a second press while one is in flight does nothing. */
   const inFlight = useRef(false);
+
+  // ARM THE DEVICE THAT DID NOT DO THE SPINNING.
+  //
+  // The prize rides an httpOnly cookie set by POST /api/spin, so the phone that
+  // span is armed and the laptop is not. That POST re-arms a second device now
+  // — but nothing here ever sent it, because a visitor who has already spun is
+  // rendered the prize panel and NEVER the button. The fix was unreachable from
+  // the one journey it was written for, which is the same shape of mistake as
+  // /api/spin/claim having no caller at all.
+  //
+  // So: when the server hands down a prize this visitor already holds, ask
+  // whether THIS browser can actually spend it, and only if it cannot, send the
+  // idempotent POST that arms it. The request returns the same prize and draws
+  // nothing new — the wheel is already spent, and the server says so.
+  //
+  // ASKED FIRST, DELIBERATELY. /api/spin/claim rotates the bearer token, which
+  // retires the copy on whatever device held it, so firing this on a browser
+  // that is already armed would cost that browser its cookie for nothing. The
+  // cookie is httpOnly and cannot be read here, so /api/offer/status is how the
+  // question gets answered.
+  const rearmed = useRef(false);
+  useEffect(() => {
+    if (!initialResult || rearmed.current) return;
+    rearmed.current = true;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const status = await fetch("/api/offer/status", { cache: "no-store" })
+          .then((response) => (response.ok ? response.json() : null))
+          .catch(() => null);
+        if (cancelled || status?.offer) return;
+
+        await fetch("/api/spin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token }),
+        });
+      } catch {
+        // A prize that cannot be armed right now is a missing discount, not a
+        // broken page. The customer still sees what they won.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialResult, token]);
 
   const spin = useCallback(async () => {
     if (inFlight.current || spinning || result) return;
@@ -328,7 +378,7 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
           >
             <div className="px-5 py-4" style={{ background: `linear-gradient(180deg, ${GOLD}1f, transparent)` }}>
               <p className="text-[11px] font-semibold uppercase tracking-[0.2em]" style={{ color: GOLD }}>
-                {result.alreadySpun ? "Your prize" : "You won"}
+                {result.redeemed ? "Claimed" : result.alreadySpun ? "Your prize" : "You won"}
               </p>
               <p className="mt-1 text-2xl font-semibold leading-tight" style={{ color: "var(--foreground)" }}>
                 {result.label}
@@ -339,6 +389,20 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
             </div>
 
             <div className="px-5 pb-5">
+              {/* A REWARD THAT IS ALREADY SPENT IS HISTORY, NOT AN OFFER.
+                  readExistingSpin deliberately keeps a redeemed row so nobody
+                  gets a second spin — but the panel could not tell the two
+                  apart, so someone who had already used their prize was shown
+                  a running countdown and invited to go and spend it again. */}
+              {result.redeemed ? (
+                <div
+                  className="rounded-xl px-4 py-3 text-sm"
+                  style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--border-soft)", color: "var(--foreground-muted)" }}
+                >
+                  You&apos;ve already claimed this reward on an order. One spin per customer, so
+                  this is the end of the wheel for you — thank you.
+                </div>
+              ) : (
               <div
                 className="flex items-center justify-between rounded-xl px-4 py-3"
                 style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--border-soft)" }}
@@ -352,6 +416,7 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
                   </span>
                 )}
               </div>
+              )}
 
               {/* THE FIGURE BELONGS HERE, AND ONLY HERE.
                   disclosure.ts keeps the dollar minimum off the wedges on
@@ -363,13 +428,13 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
                   Measured in production on 2026-09-17: a won GLOW (a $175
                   minimum) sent the customer to /products having been told only
                   "with a qualifying purchase". */}
-              {!countdown.expired && result.minSubtotalCents > 0 && (
+              {!result.redeemed && !countdown.expired && result.minSubtotalCents > 0 && (
                 <p className="mt-4 text-sm" style={{ color: "var(--foreground)" }}>
                   Spend {formatCents(result.minSubtotalCents)} or more to claim it.
                 </p>
               )}
 
-              {!countdown.expired && (
+              {!result.redeemed && !countdown.expired && (
                 <Link
                   href="/products"
                   className="mt-3 block rounded-full px-5 py-3.5 text-center text-sm font-semibold uppercase tracking-[0.12em]"
@@ -386,9 +451,11 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
                   and until the cart started calling that endpoint it was not
                   true anywhere. Both halves are fixed; this says which is
                   which rather than over-promising again. */}
-              <p className="mt-3 text-xs" style={{ color: "var(--foreground-muted)" }}>
-                Saved to your account. It applies automatically at checkout here — sign in to use it on another device.
-              </p>
+              {!result.redeemed && (
+                <p className="mt-3 text-xs" style={{ color: "var(--foreground-muted)" }}>
+                  Saved to your account. It applies automatically at checkout here — sign in to use it on another device.
+                </p>
+              )}
             </div>
           </div>
         )}

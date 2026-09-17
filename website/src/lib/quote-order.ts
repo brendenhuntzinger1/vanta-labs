@@ -326,7 +326,7 @@ export interface QuoteResult {
     wheelRewardExpiresAt: string | null;
   } | null;
   /**
-   * The resolved discount's own label ("Coupon", "15% gift", "Membership
+   * The resolved discount's own label ("Coupon", "15% reward", "Membership
    * pricing", "Bundle"), so every surface names the winner the same way.
    */
   discountLabel: string;
@@ -1666,13 +1666,21 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   const customerDiscount = resolveCustomerDiscount(
     {
       ...discountInputsBase(),
-      // ONE SLOT, THE BETTER OF THE TWO. A gift's percentage and a typed
+      // ONE SLOT, THE BETTER OF THE TWO. A reward's percentage and a typed
       // coupon are the same kind of thing — a code-shaped percentage off — so
       // they take the same slot and the customer keeps whichever is worth
-      // more. The label follows the value, so a receipt never calls a gift a
+      // more. The label follows the value, so a receipt never calls a reward a
       // "Coupon".
+      //
+      // "reward", NOT "gift". This label reaches the customer on the cart, the
+      // drawer, the checkout summary and the receipt, and for a wheel prize it
+      // read "15% gift" — for a percentage off an order they still pay for.
+      // The wheel itself says "15% off your order"; three of its sixteen
+      // wedges are discounts, so "gift" is the wrong word by the store's own
+      // rule. It is equally right for the non-spin percent offers that share
+      // this slot.
       couponDiscount: Math.max(couponAmount, offerPercentDiscount),
-      couponLabel: giftPercentFillsSlot && offerGrant ? `${offerGrant.percent}% gift` : "Coupon",
+      couponLabel: giftPercentFillsSlot && offerGrant ? `${offerGrant.percent}% reward` : "Coupon",
     },
     DISCOUNT_COMPONENTS,
   );

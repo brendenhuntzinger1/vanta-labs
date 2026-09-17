@@ -108,6 +108,9 @@ export default async function SpinPage({
         // rather than restarting at 72 hours on every visit.
         expiresAt: existing.expiresAt,
         alreadySpun: true,
+        // Already spent on an order. The panel says so instead of offering a
+        // countdown and a "Start shopping" button for a reward that is gone.
+        redeemed: existing.redeemed,
       }
     : null;
 
