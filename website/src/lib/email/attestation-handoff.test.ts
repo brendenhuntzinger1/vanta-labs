@@ -87,7 +87,7 @@ describe("a handoff that must fail safely", () => {
   });
 
   it("refuses a wrong version, a malformed shape, and an empty token", async () => {
-    expect(await verifyAttestationHandoff(`v2.${token.split(".").slice(1).join(".")}`, { allows, now: NOW + 1 })).toBeNull();
+    expect(await verifyAttestationHandoff(`v1.${token.split(".").slice(1).join(".")}`, { allows, now: NOW + 1 })).toBeNull();
     expect(await verifyAttestationHandoff("nonsense", { allows, now: NOW + 1 })).toBeNull();
     expect(await verifyAttestationHandoff("", { allows, now: NOW + 1 })).toBeNull();
     expect(await verifyAttestationHandoff(null, { allows, now: NOW + 1 })).toBeNull();
@@ -113,6 +113,24 @@ describe("a handoff that must fail safely", () => {
     // when it is used — the allowlist can change between the two.
     const narrower = (pathname: string) => pathname === "/cart";
     expect(await verifyAttestationHandoff(token, { allows: narrower, now: NOW + 1 })).toBeNull();
+  });
+
+  it("seals the payload: the address is not readable from the token", async () => {
+    // v1 carried the JSON as plain base64url, which put the address in the
+    // interstitial's URL. The payload is now opaque without the secret.
+    const [, , payload] = token.split(".");
+    expect(token).not.toMatch(/@/);
+    expect(payload).not.toContain(btoa(JSON.stringify({ e: "guest@example.test" })).slice(0, 12));
+    expect(atob(payload.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (payload.length % 4)) % 4))).not.toContain("guest@example.test");
+  });
+
+  it("refuses a flipped payload byte even with the signature recomputed against it", async () => {
+    // The seal is authenticated on its own: a payload the HMAC would accept
+    // (because an attacker who held the secret could sign anything) still
+    // has to open, and a flipped byte does not.
+    const [v, exp, payload, mac] = token.split(".");
+    const flipped = `${payload.slice(0, 20)}${payload[20] === "A" ? "B" : "A"}${payload.slice(21)}`;
+    expect(await verifyAttestationHandoff(`${v}.${exp}.${flipped}.${mac}`, { allows, now: NOW + 1 })).toBeNull();
   });
 
   it("refuses an address-shaped nothing", async () => {

@@ -57,14 +57,21 @@ export async function POST(request: Request) {
   // the same reason the exit path below does not — the session id is the proof,
   // and it can only ever stamp a row that session already owns.
   //
-  // Fired before the identity checks so it works for a guest who has not yet
-  // typed an address, which is precisely the shopper this metric exists to
-  // count. First touch only, so it cannot be inflated by re-firing.
-  if (body.reachedCheckout === true) {
+  // The ARRIVAL beacon (items: []) is handled before the identity checks so it
+  // works for a guest who has not yet typed an address, which is precisely
+  // the shopper this metric exists to count. First touch only, so it cannot
+  // be inflated by re-firing.
+  //
+  // WITH ITEMS, THE STAMP COMES AFTER THE CART IS TRACKED. A guest has no
+  // cart row until an address is typed, so the arrival stamp finds nothing
+  // to stamp; the debounced items beacon that follows the typed address says
+  // reachedCheckout too (cart-context.tsx), and for that one trackCart runs
+  // first so the row exists to stamp and the checkout hook has a row to
+  // report. The identity checks and the guest rate limits apply to it exactly
+  // as to any other items beacon.
+  if (body.reachedCheckout === true && body.items.length === 0) {
     await markCheckoutStarted(sessionId);
-    if (!Array.isArray(body.items) || body.items.length === 0) {
-      return NextResponse.json({ success: true, tracked: false, checkoutStarted: true });
-    }
+    return NextResponse.json({ success: true, tracked: false, checkoutStarted: true });
   }
 
   // The exit path needs no identity: the session id is the proof.
@@ -108,7 +115,8 @@ export async function POST(request: Request) {
       items: body.items.slice(0, 50),
       cartValueCents: Number(body.cartValueCents ?? 0) || 0,
     });
-    return NextResponse.json({ success: true, tracked: true });
+    if (body.reachedCheckout === true) await markCheckoutStarted(sessionId);
+    return NextResponse.json({ success: true, tracked: true, checkoutStarted: body.reachedCheckout === true });
   } catch {
     return NextResponse.json({ success: false }, { status: 500 });
   }

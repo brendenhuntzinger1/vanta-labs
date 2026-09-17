@@ -15,6 +15,7 @@ import type { CardProcessingFeeConfig } from "@/lib/payment-methods";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { isFreeShippingSitewide } from "@/lib/shipping";
 import { useOfferQuote } from "@/lib/offer-quote";
+import { WelcomeOfferSignup } from "@/components/welcome-offer-signup";
 
 /**
  * The body of the empty-cart panel.
@@ -442,6 +443,15 @@ export function CartPageClient() {
                 <span className="whitespace-nowrap text-white/80">+{formatCartCurrency(calculateShippingProtectionFee(subtotal, shippingProtectionPercent))}</span>
               </label>
             ) : null}
+
+            {/* THE WELCOME OFFER, BESIDE THE MONEY. This is where a first-time
+                shopper is looking at a total and deciding, so it is the one
+                place in the cart worth stating what subscribing is worth. It
+                renders nothing for a repeat customer and shows the code, not
+                the ask, once one exists. */}
+            <div className="mt-6">
+              <WelcomeOfferSignup variant="card" />
+            </div>
 
             <div className="mt-6 space-y-3 text-sm text-white/70">
               <div className="flex justify-between">

@@ -17,6 +17,7 @@ import { getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { selectPromotionForCart, type BxgyCartLine } from "@/lib/bxgy-engine";
 import { offerMinimumMet, peekCustomerOffer, type CustomerOffer } from "@/lib/offers/customer-offers";
+import { WELCOME_GIFT_OFFER_KEY, isWelcomeCodeSource } from "@/lib/offers/welcome-offer-terms";
 import { normalizeGiftItems } from "@/lib/offers/gift-terms";
 import { calculateCouponDiscount } from "@/lib/coupons";
 import { getApplicableBxgyPromotions } from "@/lib/bxgy-promotions";
@@ -222,6 +223,17 @@ export interface QuoteResult {
     shippingApplied: boolean;
     percentApplied: boolean;
   } | null;
+  /**
+   * Why a gift the shopper holds is NOT on this order, when the reason is a
+   * choice they made rather than a rule they missed. "welcome_code": the
+   * welcome offer is the free vial OR the 15% code (lib/offers/
+   * welcome-offer-terms.ts), the shopper typed the code, so the vial was
+   * withdrawn. The checkout says so beside the code, because a gift that
+   * silently vanishes from the summary is the "it disappeared" experience the
+   * offer banner exists to prevent. Null in every other case, including a
+   * gift under its floor, which the banner already explains from the shortfall.
+   */
+  offerWithdrawnBy: "welcome_code" | null;
   /**
    * The resolved discount's own label ("Coupon", "15% gift", "Membership
    * pricing", "Bundle"), so every surface names the winner the same way.
@@ -777,6 +789,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // client sends an opaque token and nothing else; it cannot name the product,
   // the quantity or the price.
   let appliedOffer: QuoteResult["appliedOffer"] = null;
+  let offerWithdrawnBy: QuoteResult["offerWithdrawnBy"] = null;
   // Set here, consumed by the shipping calculation below. Declared out here so
   // the two cannot drift apart: the gift is decided in one place, and shipping
   // reads the decision rather than re-deriving it.
@@ -1299,6 +1312,20 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // absorbed units changes the subtotal, the discount base and the promotion
   // after this point; a literal captured here would have priced the order on
   // the smaller basket while charging for the larger one.
+  // THE WELCOME CODE NEVER STACKS, WHATEVER THE ADMIN SWITCH SAYS.
+  //
+  // Four surfaces now print "Cannot be combined with other offers" beside
+  // this code — the catalogue bar, the product link, the cart card and the
+  // checkout box — so the engine has to make that sentence true rather than
+  // hopeful. Coupon stacking is a store-wide admin toggle and a promotion can
+  // licence its own stack; either one turned on would have let a welcome code
+  // ride on top of a promotion and quietly contradict the offer's own terms.
+  //
+  // Only the welcome code is pinned this way. Every other code keeps whatever
+  // the admin and the promotion allow, because their terms do not say this.
+  const welcomeCouponTyped = coupon !== null && isWelcomeCodeSource(coupon.source);
+  const allowCouponStacking = welcomeCouponTyped ? false : couponPolicy.allowStacking;
+  const promotionStacksTypedCoupon = welcomeCouponTyped ? false : promotionAllowsCouponStacking;
   const discountInputsBase = () => ({
     subtotal,
     fullSubtotal: discountBase,
@@ -1317,8 +1344,8 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     // switch — and once a referral could beat a promotion, a LOSING promotion's
     // permission stacked a coupon onto the referral. See promotionStacksCoupon
     // in profit-engine.ts.
-    allowCouponStacking: couponPolicy.allowStacking,
-    promotionStacksCoupon: promotionAllowsCouponStacking,
+    allowCouponStacking,
+    promotionStacksCoupon: promotionStacksTypedCoupon,
     commissionPercent: 0,
     processingFeePercent: 0,
     shippingCollected: 0,
@@ -1341,6 +1368,18 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // nothing is reserved. Legitimate promotions are unaffected; only the gift
   // is stricter.
   if (offerGrant && offer) {
+    // THE WELCOME OFFER IS ONE OR THE OTHER. The sign-up reward is a free
+    // GHK-Cu (this gift) or a 15% welcome code, and the shopper picks by
+    // what they do at the till: a welcome code typed into this order is the
+    // choice, so the vial comes out, exactly as it would under the floor,
+    // and the quote says why (offerWithdrawnBy) so the checkout can. Any
+    // other code stacks with the vial as every product gift always has —
+    // the product line and the percentage slot are different things
+    // (gift-terms.ts) — and only a code whose SOURCE names the welcome offer
+    // counts, so a shopper's ambassador or campaign code costs them nothing.
+    const welcomeCodeTyped = coupon !== null
+      && String(offer.offer_key) === WELCOME_GIFT_OFFER_KEY
+      && isWelcomeCodeSource(coupon.source);
     // A typed coupon only counts against the minimum if it will actually
     // apply. When the gift's own percentage is the larger of the two and the
     // slot cannot stack, the coupon is the loser and takes nothing off — so
@@ -1348,13 +1387,14 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     // $37 basket with a 10% code and a 15% gift qualifies for a $35 gift on
     // its $37, not on $33.30 that was never going to be the price.)
     const couponWillApply = couponAmount > 0
-      && (couponAmount >= offerPercentDiscount || couponPolicy.allowStacking || promotionAllowsCouponStacking);
+      && (couponAmount >= offerPercentDiscount || allowCouponStacking || promotionStacksTypedCoupon);
     const baseline = resolveCustomerDiscount(
       { ...discountInputsBase(), couponDiscount: couponWillApply ? couponAmount : 0 },
       DISCOUNT_COMPONENTS,
     );
     const qualifyingCents = Math.round((subtotal - baseline.amount) * 100);
-    if (!offerMinimumMet(offer, qualifyingCents)) {
+    if (welcomeCodeTyped || !offerMinimumMet(offer, qualifyingCents)) {
+      offerWithdrawnBy = welcomeCodeTyped ? "welcome_code" : null;
       for (let i = lineItems.length - 1; i >= 0; i--) {
         if (lineItems[i].gift) lineItems.splice(i, 1);
       }
@@ -1828,6 +1868,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     // follow the resolved winner rather than the mere presence of an offer.
     isBuy3Get1Active: promotionDiscountApplied,
     appliedOffer,
+    offerWithdrawnBy,
     discountLabel: customerDiscount.label,
     appliedPromotionId: promotionIdForOrder,
     appliedPromotionName: promotionNameForOrder,

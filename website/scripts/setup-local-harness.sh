@@ -176,7 +176,8 @@ for f in referral-orders-commission-lifecycle referral-orders-manual-review-stat
   abandoned-cart-checkout-started cart-recovery-stage-overrides cart-recovery-measurement lifecycle-measurement \
   browse-abandonment \
   campaign-gifts auth-user-attested-by-email customer-offer-gift-items \
-  marketing-attribution; do
+  marketing-attribution \
+  omnisend-sync sms-subscribers; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
 done
 

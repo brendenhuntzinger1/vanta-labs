@@ -11,6 +11,7 @@ import {
   cartRecoveryT72hTemplate,
 } from "@/lib/email/templates";
 import { isMarketingSuppressed, sendMarketingEmail } from "@/lib/email/marketing";
+import { marketingSendBlockedByOmnisend } from "@/lib/marketing/omnisend/ownership";
 import { claimMarketingSend } from "@/lib/email/frequency";
 import { internalAddressConfig, isInternalAddress } from "@/lib/email/internal-addresses";
 import {
@@ -451,6 +452,24 @@ export async function resendCartRecoveryEmail(cartId: string, stage: "t30m" | "t
 
   if (error) throw error;
   if (!cart) throw new Error("Cart not found");
+
+  // ONE OWNER PER CART (AUDIT F-06). While Omnisend owns marketing, a cart
+  // with no in-house stage is Omnisend's: a manual resend would open a second
+  // recovery conversation, mint a second incentive and take a frequency claim
+  // Omnisend cannot see. A legacy cart — one the in-house ladder already
+  // started — may still be finished by hand, exactly as the sweep finishes it.
+  if (marketingSendBlockedByOmnisend()) {
+    // "Has an in-house stage" is "was ever sent a stage": the same read the
+    // gap floor uses below, so the two agree on which carts are legacy.
+    const lastInHouseStageAt = await lastStageSentAtFor(cartId);
+    if (lastInHouseStageAt === null) {
+      return {
+        success: false,
+        omnisendOwned: true,
+        error: "This cart belongs to Omnisend while OMNISEND_MARKETING_OWNER is set: it has no in-house stage to continue, so its recovery runs in Omnisend. Nothing was sent and no code was minted.",
+      };
+    }
+  }
 
   // SUPPRESSED MEANS NOTHING HAPPENS. sendMarketingEmail would refuse this
   // address anyway, but by then the t72h branch below had already minted a
