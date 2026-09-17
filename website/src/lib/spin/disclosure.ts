@@ -120,8 +120,24 @@ export const SPIN_TERMS: readonly string[] = [
   "One spin per customer for this campaign. The result is saved and final.",
   `Your prize expires ${SPIN_EXPIRY_HOURS} hours after you spin.`,
   "Every prize is claimed with a qualifying purchase — your cart will tell you exactly what's needed.",
-  "A free product is added on top of any other discount you already have.",
-  "A percentage prize replaces your other discounts rather than adding to them — you keep whichever is worth more.",
+  // THESE TWO SAY "DISCOUNT CODE", NOT "DISCOUNT", AND THE DIFFERENCE IS REAL.
+  //
+  // They used to promise it against "any other discount you already have" and
+  // "your other discounts". quote-order compares a percentage prize against a
+  // typed COUPON CODE (the Math.max in the coupon slot) — it cannot compare it
+  // against a second saved reward, because a quote resolves exactly one
+  // customer_offers row, the one in the cookie. So for someone already holding
+  // a saved reward the promise was one the till could not keep.
+  //
+  // Measured against the 103-person audience on 2026-09-17: 78 hold a live
+  // saved reward, 71 of them an uncapped 15% win-back. The wheel's own 15% is
+  // capped at $30, so above a $200 basket "you keep whichever is worth more"
+  // would have been false for them.
+  //
+  // The third line is new and is the honest version of what actually happens.
+  "A free product is added on top of any discount code you already have.",
+  "A percentage prize replaces a discount code rather than adding to it — you keep whichever is worth more.",
+  "If you already have a saved reward from us, spinning replaces it with your prize. The prize is yours from the moment the wheel stops.",
   "Free shipping applies only where shipping would otherwise be charged.",
   "Prizes have no cash value and cannot be transferred or exchanged.",
 ];

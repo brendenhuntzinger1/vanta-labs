@@ -249,7 +249,19 @@ export interface QuoteResult {
    * and the banner could not, because it was measuring a different thing. See
    * offerShortfallCents.
    */
-  offerWithdrawnBy: "welcome_code" | "minimum" | null;
+  /**
+   * Why a reward the customer holds is not on this order.
+   *
+   *   "welcome_code"  they typed a welcome code and the two are exclusive
+   *   "minimum"       the basket is under the reward's qualifying subtotal
+   *   "unavailable"   the product is out of stock, so it cannot be shipped
+   *
+   * "unavailable" exists because the alternative is the failure this field was
+   * created to end: the reward line simply disappearing, the customer paying
+   * full price, and nothing anywhere saying why. Their token is untouched and
+   * stays spendable once stock returns.
+   */
+  offerWithdrawnBy: "welcome_code" | "minimum" | "unavailable" | null;
   /**
    * HOW MUCH MORE THE SHOPPER MUST PAY FOR THE GIFT TO SURVIVE, in cents.
    *
@@ -314,7 +326,7 @@ export interface QuoteResult {
     wheelRewardExpiresAt: string | null;
   } | null;
   /**
-   * The resolved discount's own label ("Coupon", "15% gift", "Membership
+   * The resolved discount's own label ("Coupon", "15% reward", "Membership
    * pricing", "Bundle"), so every surface names the winner the same way.
    */
   discountLabel: string;
@@ -1018,7 +1030,19 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
         && offerStockStatus !== "Reserved"
         && !(typeof offerStock === "number" && Number.isFinite(offerStock) && offerStock <= 0);
 
-      if (!offerProduct || !shippable) return null;
+      if (!offerProduct || !shippable) {
+        // SAY SO. Dropping the line silently is what made the floor bug above
+        // so expensive to diagnose: the price was right, the account of it was
+        // missing, and the customer was left to infer that their reward had
+        // never been real. A reward withheld for stock is withheld for a
+        // reason the store knows and can state.
+        //
+        // Not overwritten if something already claimed the field — a welcome
+        // code or an unmet minimum was decided first and is the more useful
+        // thing to tell them.
+        if (offerWithdrawnBy === null) offerWithdrawnBy = "unavailable";
+        return null;
+      }
 
       const wanted = grant.quantity;
 
@@ -1642,13 +1666,21 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   const customerDiscount = resolveCustomerDiscount(
     {
       ...discountInputsBase(),
-      // ONE SLOT, THE BETTER OF THE TWO. A gift's percentage and a typed
+      // ONE SLOT, THE BETTER OF THE TWO. A reward's percentage and a typed
       // coupon are the same kind of thing — a code-shaped percentage off — so
       // they take the same slot and the customer keeps whichever is worth
-      // more. The label follows the value, so a receipt never calls a gift a
+      // more. The label follows the value, so a receipt never calls a reward a
       // "Coupon".
+      //
+      // "reward", NOT "gift". This label reaches the customer on the cart, the
+      // drawer, the checkout summary and the receipt, and for a wheel prize it
+      // read "15% gift" — for a percentage off an order they still pay for.
+      // The wheel itself says "15% off your order"; three of its sixteen
+      // wedges are discounts, so "gift" is the wrong word by the store's own
+      // rule. It is equally right for the non-spin percent offers that share
+      // this slot.
       couponDiscount: Math.max(couponAmount, offerPercentDiscount),
-      couponLabel: giftPercentFillsSlot && offerGrant ? `${offerGrant.percent}% gift` : "Coupon",
+      couponLabel: giftPercentFillsSlot && offerGrant ? `${offerGrant.percent}% reward` : "Coupon",
     },
     DISCOUNT_COMPONENTS,
   );

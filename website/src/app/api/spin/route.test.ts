@@ -16,6 +16,11 @@ const state = vi.hoisted(() => ({
   sessionEmail: null as string | null,
   spun: [] as Array<{ email: string; campaignId: string }>,
   spinResult: null as unknown,
+  /** What /api/offer/status would say: does THIS browser already hold an offer? */
+  heldOffer: null as unknown,
+  /** What claimSpinForAccount returns when the route re-arms a second device. */
+  reclaimed: null as unknown,
+  reclaimCalls: [] as Array<{ verifiedEmail: string; campaignId: string }>,
 }));
 
 vi.mock("server-only", () => ({}));
@@ -32,6 +37,19 @@ vi.mock("@/lib/rate-limit", () => ({
 
 vi.mock("@/lib/auth-session", () => ({
   getAuthenticatedUser: async () => (state.sessionEmail ? { id: "user-1", email: state.sessionEmail } : null),
+}));
+
+vi.mock("@/lib/offers/customer-offers", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  readOfferCookie: () => null,
+  readOfferStatus: async () => state.heldOffer,
+}));
+
+vi.mock("@/lib/spin/spin-claim", () => ({
+  claimSpinForAccount: async (input: { verifiedEmail: string; campaignId: string }) => {
+    state.reclaimCalls.push(input);
+    return state.reclaimed;
+  },
 }));
 
 vi.mock("@/lib/spin/spin-service", () => ({
@@ -72,6 +90,9 @@ beforeEach(() => {
   state.sessionEmail = null;
   state.spun = [];
   state.spinResult = prizeResult();
+  state.heldOffer = null;
+  state.reclaimed = null;
+  state.reclaimCalls = [];
 });
 
 describe("while the promotion is switched off", () => {
@@ -179,8 +200,49 @@ describe("what comes back", () => {
     expect(cookie?.sameSite).toBe("lax");
   });
 
-  it("sets no cookie on a repeat spin, because there is no second token", async () => {
+  // -------------------------------------------------------------------------
+  // RE-OPENING THE LINK ON A SECOND DEVICE.
+  //
+  // This used to assert "a repeat spin sets no cookie, because there is no
+  // second token", which was true and was the bug: the phone that span held the
+  // prize and the laptop could not spend it. spin() still returns no token on a
+  // repeat — that part is unchanged — so the route asks whether THIS browser
+  // holds anything and, only if it does not, re-issues.
+  // -------------------------------------------------------------------------
+
+  it("re-arms a repeat visitor whose browser is holding nothing", async () => {
     state.spinResult = prizeResult({ offerToken: null, alreadySpun: true });
+    state.heldOffer = null;
+    state.reclaimed = { prize: {}, sliceIndex: 1, expiresAt: "2026-09-19T12:00:00.000Z", offerToken: "re-issued-secret" };
+
+    const response = await post(await signSpinToken(EMAIL, "winback_2026q4"));
+
+    expect((await response.json()).alreadySpun).toBe(true);
+    expect(state.reclaimCalls).toEqual([{ verifiedEmail: EMAIL, campaignId: "winback_2026q4" }]);
+    const cookie = response.cookies.get("vl_offer");
+    expect(cookie?.value).toBe("re-issued-secret");
+    expect(cookie?.httpOnly).toBe(true);
+  });
+
+  it("leaves a browser that is ALREADY armed completely alone", async () => {
+    // Re-issuing rotates the bearer token, which retires the copy this browser
+    // is about to check out with. A device that can already spend the prize
+    // must not be touched.
+    state.spinResult = prizeResult({ offerToken: null, alreadySpun: true });
+    state.heldOffer = { rewardKind: "free_product", rewardName: "GHK-Cu 50mg", minSubtotalCents: 7_500 };
+
+    const response = await post(await signSpinToken(EMAIL, "winback_2026q4"));
+
+    expect((await response.json()).alreadySpun).toBe(true);
+    expect(state.reclaimCalls).toEqual([]);
+    expect(response.cookies.get("vl_offer")).toBeUndefined();
+  });
+
+  it("still sets no cookie when there is genuinely nothing to re-issue", async () => {
+    state.spinResult = prizeResult({ offerToken: null, alreadySpun: true });
+    state.heldOffer = null;
+    state.reclaimed = null;
+
     const response = await post(await signSpinToken(EMAIL, "winback_2026q4"));
 
     expect((await response.json()).alreadySpun).toBe(true);

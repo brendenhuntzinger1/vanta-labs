@@ -44,7 +44,50 @@ describe("gift floor disclosure", () => {
     // left the floor case as null, so no surface could tell "withdrawn for a
     // reason" apart from "no offer here at all".
     expect(QUOTE).toContain('offerWithdrawnBy = byCode ? "welcome_code" : "minimum"');
-    expect(QUOTE).toMatch(/offerWithdrawnBy:\s*"welcome_code"\s*\|\s*"minimum"\s*\|\s*null/);
+    // The union is asserted by MEMBER rather than by exact shape: the point is
+    // that "minimum" is a reportable reason beside "welcome_code", not that
+    // those two are the only reasons there will ever be. Pinning the literal
+    // union made this test fail the moment "unavailable" was added for an
+    // out-of-stock reward — a change in the same spirit as this one.
+    expect(QUOTE).toMatch(/offerWithdrawnBy:\s*(?:"[a-z_]+"\s*\|\s*)*"minimum"\s*(?:\|\s*"[a-z_]+"\s*)*\|\s*null/);
+    expect(QUOTE).toMatch(/offerWithdrawnBy:[^;]*"welcome_code"/);
+  });
+
+  it("an out-of-stock reward is reported too, rather than silently dropped", () => {
+    // Same failure shape as the floor bug: the reward line returned null, the
+    // price was correct, and the customer was told their EMAIL ADDRESS was the
+    // problem. Tesamorelin had 5 units against ~6.4 expected winners on the
+    // 103-recipient send, so this was reachable on day one.
+    expect(QUOTE).toContain('if (offerWithdrawnBy === null) offerWithdrawnBy = "unavailable"');
+    expect(CHECKOUT).toContain('offerQuote?.offerWithdrawnBy === "unavailable"');
+    // And it must be subtracted from the email branch, or the wrong message wins.
+    expect(CHECKOUT).toContain("&& !offerWithdrawnByStock");
+  });
+
+  it("every withdrawal reason has its own message, so none falls through to the email branch", () => {
+    // offerBlockedByEmail is the LAST branch and the most confident-sounding —
+    // it names the shopper's address as the problem. Any reason quoteOrder can
+    // report that has no branch of its own lands there and tells them something
+    // false. That has now happened twice: once for the minimum, once for stock.
+    const reasons = [...QUOTE.matchAll(/offerWithdrawnBy\s*=\s*(?:byCode \?\s*)?"([a-z_]+)"/g)]
+      .map((m) => m[1])
+      .concat([...QUOTE.matchAll(/offerWithdrawnBy\s*=\s*byCode \? "[a-z_]+" : "([a-z_]+)"/g)].map((m) => m[1]));
+
+    const distinct = [...new Set(reasons)];
+    expect(distinct.length).toBeGreaterThan(1);
+
+    for (const reason of distinct) {
+      if (reason === "minimum") {
+        // The minimum has its own branch keyed off the shortfall figure.
+        expect(CHECKOUT).toMatch(/offerShortfall > 0 \?/);
+        continue;
+      }
+      expect(
+        CHECKOUT,
+        `quoteOrder can report offerWithdrawnBy "${reason}" and the checkout has no branch for it, `
+          + "so it falls through to blaming the shopper's email address",
+      ).toContain(`offerQuote?.offerWithdrawnBy === "${reason}"`);
+    }
   });
 
   it("measures the shortfall BEFORE the absorbed units are handed back", () => {

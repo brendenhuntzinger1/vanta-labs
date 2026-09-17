@@ -184,3 +184,26 @@ describe("money formatting", () => {
     expect(formatMoneyFromCents(4_999)).toBe("$49.99");
   });
 });
+
+describe("the terms do not promise what the till cannot do", () => {
+  it("scopes the stacking promises to discount CODES, not saved rewards", () => {
+    // quoteOrder resolves exactly ONE customer_offers row — the one in the
+    // cookie — and its "keep whichever is worth more" comparison is against a
+    // typed coupon code. Promising it against "any other discount" was a
+    // promise the engine could not keep for the 78 of 103 recipients who were
+    // already holding a saved reward when this campaign went out.
+    const stacking = SPIN_TERMS.filter((term) => /adds? to|added on top|replaces/i.test(term));
+    expect(stacking.length).toBeGreaterThan(0);
+
+    for (const term of stacking) {
+      expect(
+        term,
+        `"${term}" promises against a bare "discount"; it must say "discount code"`,
+      ).not.toMatch(/\b(any other discount|your other discounts)\b/i);
+    }
+  });
+
+  it("tells the customer that spinning replaces a reward they already hold", () => {
+    expect(SPIN_TERMS.join(" ")).toMatch(/already have a saved reward/i);
+  });
+});
