@@ -137,7 +137,7 @@ export default function SpinWheel({ slices, terms, token, initialResult }: Props
     <div className="mx-auto w-full max-w-xl px-4 py-8">
       <header className="text-center">
         <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Spin to win</h1>
-        <p className="mt-2 text-sm text-neutral-500">
+        <p className="mt-2 text-sm" style={{ color: "var(--foreground-muted)" }}>
           One spin, {count} prizes, and every spin wins.
         </p>
       </header>
@@ -169,16 +169,28 @@ export default function SpinWheel({ slices, terms, token, initialResult }: Props
               <path d={wedgePath(index, wedgeAngle)} fill={WEDGE_FILLS[index % WEDGE_FILLS.length]} stroke="#0a0a0a" strokeWidth="0.6" />
               {/* RADIAL TEXT. Sixteen wedges is 22.5 degrees each, which at
                   390px is far too narrow for horizontal words — the labels run
-                  outward from the hub instead, the way a real prize wheel does. */}
+                  outward from the hub instead, the way a real prize wheel does.
+
+                  THE -90 IS NOT COSMETIC. wedgePath draws from twelve o'clock
+                  (`index * wedgeAngle - 90`), while an SVG rotate is measured
+                  from the +x axis at three o'clock. Without the same offset
+                  here every label sits a quarter-turn away from the wedge it
+                  names — the wheel still looks right, and each prize is
+                  captioned with a different prize's name. Caught in the browser
+                  at 390px; nothing in the unit tests could have seen it.
+
+                  Anchored at the end and started past the rim so the text hugs
+                  the outer edge and runs inward, rather than piling up on the
+                  hub. */}
               <text
-                x="62"
+                x="192"
                 y="100"
                 fill="#ffffff"
-                fontSize="6.4"
+                fontSize="6.2"
                 fontWeight="700"
                 dominantBaseline="middle"
-                textAnchor="middle"
-                transform={`rotate(${index * wedgeAngle + wedgeAngle / 2} 100 100)`}
+                textAnchor="end"
+                transform={`rotate(${index * wedgeAngle + wedgeAngle / 2 - 90} 100 100)`}
                 style={{ letterSpacing: "0.02em" }}
               >
                 {slice.wedgeLabel}
@@ -202,37 +214,37 @@ export default function SpinWheel({ slices, terms, token, initialResult }: Props
         )}
 
         {error && (
-          <p role="alert" className="mt-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
+          <p role="alert" className="mt-4 rounded-md px-4 py-3 text-sm" style={{ background: "rgba(220,38,38,0.12)", color: "#fca5a5", border: "1px solid rgba(220,38,38,0.3)" }}>
             {error}
           </p>
         )}
 
         {result && revealed && (
-          <div className="mt-2 rounded-xl border border-neutral-200 bg-white p-5 text-left shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-            <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+          <div className="mt-2 rounded-xl p-5 text-left" style={{ background: "var(--surface-1)", border: "1px solid var(--border-soft)" }}>
+            <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--foreground-muted)" }}>
               {result.alreadySpun ? "You already span — here's your prize" : "You won"}
             </p>
-            <p className="mt-1 text-xl font-semibold">{result.label}</p>
-            <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">{result.condition}</p>
+            <p className="mt-1 text-xl font-semibold" style={{ color: "var(--foreground)" }}>{result.label}</p>
+            <p className="mt-2 text-sm" style={{ color: "var(--foreground-muted)" }}>{result.condition}</p>
 
-            <div className="mt-4 flex items-baseline justify-between border-t border-neutral-200 pt-4 dark:border-neutral-800">
-              <span className="text-sm text-neutral-500">
+            <div className="mt-4 flex items-baseline justify-between pt-4" style={{ borderTop: "1px solid var(--border-soft)" }}>
+              <span className="text-sm" style={{ color: "var(--foreground-muted)" }}>
                 {countdown.expired ? "This prize has expired" : "Expires in"}
               </span>
               {!countdown.expired && (
-                <span className="font-mono text-lg font-semibold tabular-nums">{countdown.text}</span>
+                <span className="font-mono text-lg font-semibold tabular-nums" style={{ color: "var(--foreground)" }}>{countdown.text}</span>
               )}
             </div>
 
             {!countdown.expired && (
               <a
                 href="/catalog"
-                className="mt-4 block rounded-lg bg-neutral-900 px-5 py-3 text-center text-sm font-semibold text-white hover:bg-neutral-800 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200"
+                className="mt-4 block rounded-lg px-5 py-3 text-center text-sm font-semibold" style={{ background: "#c7ae5e", color: "#0a0a0a" }}
               >
                 Start shopping
               </a>
             )}
-            <p className="mt-3 text-xs text-neutral-500">
+            <p className="mt-3 text-xs" style={{ color: "var(--foreground-muted)" }}>
               Your prize is saved to your account and applies automatically at checkout — on this device or any other.
             </p>
           </div>
@@ -247,13 +259,13 @@ export default function SpinWheel({ slices, terms, token, initialResult }: Props
           on the page at the moment the decision is made.
           --------------------------------------------------------------- */}
       <section className="mt-10" aria-labelledby="spin-terms">
-        <h2 id="spin-terms" className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
+        <h2 id="spin-terms" className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--foreground-muted)" }}>
           Before you spin
         </h2>
-        <ul className="mt-3 space-y-2 text-sm text-neutral-600 dark:text-neutral-400">
+        <ul className="mt-3 space-y-2 text-sm" style={{ color: "var(--foreground-muted)" }}>
           {terms.map((term) => (
             <li key={term} className="flex gap-2">
-              <span aria-hidden className="text-neutral-400">•</span>
+              <span aria-hidden style={{ color: "var(--foreground-subtle)" }}>•</span>
               <span>{term}</span>
             </li>
           ))}
@@ -261,29 +273,29 @@ export default function SpinWheel({ slices, terms, token, initialResult }: Props
       </section>
 
       <section className="mt-8" aria-labelledby="spin-prizes">
-        <h2 id="spin-prizes" className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
+        <h2 id="spin-prizes" className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--foreground-muted)" }}>
           Every prize and its odds
         </h2>
-        <div className="mt-3 overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-800">
+        <div className="mt-3 overflow-hidden rounded-lg" style={{ border: "1px solid var(--border-soft)" }}>
           <table className="w-full text-left text-sm">
-            <thead className="bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500 dark:bg-neutral-900">
+            <thead className="text-xs uppercase tracking-wide" style={{ background: "var(--surface-0)", color: "var(--foreground-muted)" }}>
               <tr>
                 <th scope="col" className="px-3 py-2 font-medium">Prize</th>
                 <th scope="col" className="px-3 py-2 font-medium">Odds</th>
                 <th scope="col" className="px-3 py-2 font-medium">Minimum order</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
+            <tbody>
               {slices.map((slice) => (
-                <tr key={slice.id}>
+                <tr key={slice.id} style={{ borderTop: "1px solid var(--border-soft)" }}>
                   <td className="px-3 py-2">
-                    <span className="font-medium">{slice.label}</span>
-                    <span className="mt-0.5 block text-xs text-neutral-500">{slice.condition}</span>
+                    <span className="font-medium" style={{ color: "var(--foreground)" }}>{slice.label}</span>
+                    <span className="mt-0.5 block text-xs" style={{ color: "var(--foreground-muted)" }}>{slice.condition}</span>
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 tabular-nums text-neutral-600 dark:text-neutral-400">
+                  <td className="whitespace-nowrap px-3 py-2 tabular-nums" style={{ color: "var(--foreground-muted)" }}>
                     1 in {count}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 tabular-nums text-neutral-600 dark:text-neutral-400">
+                  <td className="whitespace-nowrap px-3 py-2 tabular-nums" style={{ color: "var(--foreground-muted)" }}>
                     {slice.minSubtotalCents === 0 ? "None" : money(slice.minSubtotalCents)}
                   </td>
                 </tr>
@@ -291,7 +303,7 @@ export default function SpinWheel({ slices, terms, token, initialResult }: Props
             </tbody>
           </table>
         </div>
-        <p className="mt-3 text-xs text-neutral-500">
+        <p className="mt-3 text-xs" style={{ color: "var(--foreground-muted)" }}>
           Research use only. Not for human or veterinary consumption. Prizes are redeemed through
           normal checkout and are subject to the same age and research-use requirements as any order.
         </p>
