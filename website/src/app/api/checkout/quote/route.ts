@@ -47,6 +47,7 @@ type QuoteBody = {
   country?: unknown;
   state?: unknown;
   couponCode?: unknown;
+  benefitChoice?: unknown;
   referralCode?: unknown;
   shippingProtection?: unknown;
   pointsToRedeem?: unknown;
@@ -133,6 +134,12 @@ export async function POST(request: Request) {
         shippingProtection: Boolean(body.shippingProtection),
         paymentMethod: text(body.paymentMethod, 60) || "card",
         offerToken: token,
+        // The shopper's pick when a wheel gift and a first-order welcome code
+        // are both in play. Absent means "not chosen yet", and quoteOrder
+        // defaults to the TYPED CODE rather than discarding it silently.
+        benefitChoice: body.benefitChoice === "wheel" || body.benefitChoice === "welcome_code"
+          ? body.benefitChoice
+          : undefined,
         mode: "preview",
       });
     } catch (error) {
@@ -176,6 +183,11 @@ export async function POST(request: Request) {
         cardFeePercent: quote.cardFee.percentage,
         finalTotal: quote.finalTotal,
         couponCode: quote.couponCode,
+        // ONE BENEFIT, AND WHICH. Present only when a wheel gift and a
+        // first-order welcome code are both available; the checkout renders
+        // the other option beside this total by quoting again with the other
+        // choice, so the comparison is two real totals rather than a valuation.
+        benefitChoice: quote.benefitChoice,
         giftLines,
         // Described, never granted: the kind and the wording, no token. Only
         // the halves that actually changed this order are named — a gift

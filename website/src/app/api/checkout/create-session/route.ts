@@ -108,6 +108,14 @@ export async function POST(request: Request) {
       // It is looked up against customer_offers server-side and grants nothing
       // on its own — see quoteOrder.
       offerToken: readOfferCookie(request) ?? undefined,
+      // THE CHOICE HAS TO SURVIVE INTO THE ORDER, not just the preview. A
+      // shopper who picked their wheel reward in the cart and then had the
+      // typed code applied at the till would have been shown one total and
+      // charged another — and the profit guard's "altered total" tripwire
+      // would fire on the store's own inconsistency.
+      benefitChoice: body.benefitChoice === "wheel" || body.benefitChoice === "welcome_code"
+        ? body.benefitChoice
+        : undefined,
       // Hard-pin to USD. All amounts are computed in USD; honoring a
       // client-supplied currency code (e.g. "mxn") while sending the USD
       // numeric amount would let a crafted request massively underpay.

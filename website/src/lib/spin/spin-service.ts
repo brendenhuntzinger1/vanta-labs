@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { hashOfferToken } from "@/lib/offers/customer-offers";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { SPIN_PRIZES, SPIN_TTL_DAYS, drawSpinPrize, prizeForOfferRow, type SpinPrize } from "@/lib/spin/prize-table";
+import { spinOfferKey } from "@/lib/spin/offer-key";
 
 // ---------------------------------------------------------------------------
 // ONE SPIN PER ADDRESS PER CAMPAIGN, AND WHY THIS DOES ITS OWN INSERT.
@@ -35,21 +36,9 @@ import { SPIN_PRIZES, SPIN_TTL_DAYS, drawSpinPrize, prizeForOfferRow, type SpinP
 /** Bearer-secret length, matching customer-offers.ts. */
 const TOKEN_BYTES = 32;
 
-/**
- * The offer key one campaign's spins file under.
- *
- * Namespaced so it can never collide with an OFFER_CATALOG key or with
- * `campaign:` gifts, and carrying the campaign id so the index gives one spin
- * per campaign rather than one ever — this promotion is meant to be re-run, and
- * a customer who span in Q4 is a fresh spinner in Q1.
- *
- * Every consumer outside customer-offers.ts treats offer_key as an opaque
- * string (quoteOrder types it `string`), so a key outside the catalogue costs
- * nothing downstream.
- */
-export function spinOfferKey(campaignId: string): string {
-  return `spin:${String(campaignId ?? "").trim()}`;
-}
+// The key's shape lives in offer-key.ts, a pure module quoteOrder can import
+// without dragging this file's supabase client and `server-only` with it.
+export { spinOfferKey, isSpinOfferKey } from "@/lib/spin/offer-key";
 
 export type SpinResult = {
   prize: SpinPrize;
