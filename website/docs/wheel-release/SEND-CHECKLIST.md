@@ -91,7 +91,7 @@ however often the sweep runs — verified.
 | field | value |
 |---|---|
 | Name | `Spin the Wheel — first reward` |
-| Subject | `Spin the wheel for a free reward` |
+| Subject | `Spin the wheel for your reward` |
 | Preview text | `Spin to reveal your reward. Qualifying purchase required.` |
 | Headline | `A spin. A reward. Yours to reveal.` |
 | CTA label | `Spin now` |
