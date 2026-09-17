@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import SpinWheel, { type WheelPrizeOdds, type WheelPrizeResult, type WheelSlice } from "@/components/spin-wheel";
+import { SpinWrongAccount } from "@/components/spin-wrong-account";
 import { getSpinWheelConfig } from "@/lib/admin-control";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { SPIN_TERMS, describeExactCondition, describeRedemptionCondition, spinOdds } from "@/lib/spin/disclosure";
@@ -63,7 +64,9 @@ export default async function SpinPage({
   const user = await getAuthenticatedUser();
   const sessionEmail = String(user?.email ?? "").trim().toLowerCase();
   if (sessionEmail && sessionEmail !== verified.email) {
-    return <WrongAccount />;
+    // The token, so the button can come straight back here once the session is
+    // gone — see spin-wrong-account.tsx.
+    return <SpinWrongAccount spinHref={`/spin?t=${encodeURIComponent(token)}`} />;
   }
 
   const existing = await readExistingSpin({
@@ -136,21 +139,3 @@ function LinkProblem() {
   );
 }
 
-function WrongAccount() {
-  return (
-    <div className="mx-auto w-full max-w-md px-4 py-20 text-center">
-      <h1 className="text-xl font-semibold">This link belongs to a different account</h1>
-      <p className="mt-3 text-sm" style={{ color: "var(--foreground-muted)" }}>
-        You&apos;re signed in as someone else. Sign out and open the link again, or open the
-        link that was sent to the address you&apos;re signed in with — a prize has to be
-        attached to the account that will check out with it.
-      </p>
-      <a
-        href="/account"
-        className="mt-6 inline-block rounded-lg px-5 py-3 text-sm font-semibold" style={{ background: "#c7ae5e", color: "#0a0a0a" }}
-      >
-        Go to my account
-      </a>
-    </div>
-  );
-}
