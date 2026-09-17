@@ -975,9 +975,21 @@ export default function CheckoutPage() {
   // receipt is precisely the "it disappeared" experience this work removes.
   // The server has already answered whether the gift applies to the address
   // currently typed; this only says so.
-  const offerShortfall = pendingOffer
-    ? Math.max(0, pendingOffer.minSubtotalCents / 100 - shownSubtotal)
-    : 0;
+  // THE SERVER'S FIGURE WINS WHENEVER IT HAS ONE.
+  //
+  // The local arithmetic below measures the floor against the GROSS basket. The
+  // till does not: it gates on what the shopper actually pays once the gift's
+  // own unit has been lifted out of the paid lines. The two agree until the
+  // shopper already has the prize in their basket, and then they disagree
+  // badly — two KLOW at $119.99 reads as $227.98 against a $200 floor here and
+  // as $119.99 against it there. This banner therefore said nothing, the gift
+  // was withdrawn anyway, and the fall-through below then blamed the EMAIL
+  // ADDRESS for a minimum problem.
+  const offerShortfall = typeof offerQuote?.offerShortfallCents === "number"
+    ? offerQuote.offerShortfallCents / 100
+    : pendingOffer
+      ? Math.max(0, pendingOffer.minSubtotalCents / 100 - shownSubtotal)
+      : 0;
   const offerApplied = Boolean(offerQuote?.offer);
   const offerBlockedByEmail = Boolean(pendingOffer)
     && offerShortfall <= 0

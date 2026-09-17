@@ -262,6 +262,26 @@ export const EMAIL_GRANT_BROWSE_EXACT = new Set<string>([
   // brand asks to be judged on. The grant is still minted only for an attested
   // recipient, so it opens no door the wall was protecting.
   "/coa-library",
+  // THE SPIN-TO-WIN WHEEL, which is a win-back destination and nothing else.
+  //
+  // Without this the whole feature is unreachable by the people it is for. A
+  // lapsed recipient clicks "spin", meets /account/login?next=%2Fspin, and the
+  // campaign records a click and never a spin — the identical defect this list
+  // already documents for /coa-library and the campaign destinations.
+  //
+  // It opens no door the wall was protecting. The page itself grants nothing:
+  // it renders a wheel and refuses outright without a separately HMAC-signed
+  // spin link naming the recipient (spin-token.ts), and the prize is minted
+  // only by the POST below. So reaching it with a grant and no spin link shows
+  // exactly what an anonymous visitor would see — "this link is no longer
+  // valid".
+  "/spin",
+  // The draw itself, and the cross-device claim. Both verify their own
+  // credential — the POST requires a valid signed spin link, and the claim
+  // requires a verified SESSION and ignores the grant entirely — so listing
+  // them here removes the wall, not their own guards.
+  "/api/spin",
+  "/api/spin/claim",
   // What the catalogue pages fetch. Anything missing here renders as an empty
   // shelf rather than an error, which is the failure mode that looks like a
   // working site and sells nothing.
