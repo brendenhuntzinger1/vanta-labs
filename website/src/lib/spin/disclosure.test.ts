@@ -4,6 +4,7 @@ import { SPIN_PRIZES } from "@/lib/spin/prize-table";
 import {
   SPIN_EXPIRY_HOURS,
   SPIN_TERMS,
+  describeExactCondition,
   describeRedemptionCondition,
   formatMoneyFromCents,
   spinMinimumTiers,
@@ -90,9 +91,24 @@ describe("the terms shown before anyone spins", () => {
 });
 
 describe("what each prize requires", () => {
-  it("names the real minimum for every wedge", () => {
+  it("NEVER names the minimum in the copy shown beside the wheel", () => {
+    // A dollar minimum against every wedge reads as a price of entry before
+    // anyone has won anything. The figure lives in the full terms and in the
+    // cart; what the wheel states is that a purchase is required.
     for (const prize of SPIN_PRIZES) {
       const sentence = describeRedemptionCondition(prize);
+      expect(sentence, prize.id).toMatch(/qualifying purchase/i);
+      if (prize.minSubtotalCents > 0) {
+        expect(sentence, prize.id).not.toContain(formatMoneyFromCents(prize.minSubtotalCents));
+      }
+    }
+  });
+
+  it("names the real minimum in the full terms, so nothing is actually hidden", () => {
+    // The disclosure is softened, not removed. A minimum a customer only meets
+    // at the till is what produces "bait and switch" complaints.
+    for (const prize of SPIN_PRIZES) {
+      const sentence = describeExactCondition(prize);
       if (prize.minSubtotalCents === 0) {
         expect(sentence, prize.id).toContain("any order");
       } else {
@@ -101,12 +117,22 @@ describe("what each prize requires", () => {
     }
   });
 
+  it("keeps the percentage CEILING in the visible copy, unlike the minimum", () => {
+    // A cap limits what they receive rather than what they must spend, so
+    // discovering it at the till is exactly the surprise to avoid.
+    for (const prize of SPIN_PRIZES) {
+      if (prize.reward.kind !== "percent" || !prize.maxDiscountCents) continue;
+      expect(describeRedemptionCondition(prize), prize.id)
+        .toContain(`Up to ${formatMoneyFromCents(prize.maxDiscountCents)}`);
+    }
+  });
+
   it("states the ceiling on a percentage, because the till applies one", () => {
     // A percentage advertised without its cap is the one number here a customer
     // could reasonably feel misled by: they only meet it at checkout.
     for (const prize of SPIN_PRIZES) {
       if (prize.reward.kind !== "percent" || !prize.maxDiscountCents) continue;
-      expect(describeRedemptionCondition(prize), prize.id)
+      expect(describeExactCondition(prize), prize.id)
         .toContain(`Up to ${formatMoneyFromCents(prize.maxDiscountCents)}`);
     }
   });
@@ -121,6 +147,10 @@ describe("what each prize requires", () => {
   it("tells a percentage winner it replaces their other discounts", () => {
     const percentPrize = SPIN_PRIZES.find((prize) => prize.reward.kind === "percent")!;
     expect(describeRedemptionCondition(percentPrize)).toMatch(/replaces other discounts/i);
+  });
+
+  it("still says a purchase is required in the terms list", () => {
+    expect(SPIN_TERMS.some((term) => /qualifying purchase/i.test(term))).toBe(true);
   });
 
   it("tells a product winner it is added on top", () => {

@@ -8,7 +8,12 @@ export type WheelSlice = {
   wedgeLabel: string;
   label: string;
   minSubtotalCents: number;
+  /** The soft condition — no figure. Shown beside every prize. */
   condition: string;
+  /** The same condition WITH the figure, for the collapsed full terms. */
+  exactCondition: string;
+  /** Premium wedges are filled gold so the jackpot reads at a glance. */
+  premium?: boolean;
 };
 
 export type WheelPrizeResult = {
@@ -29,12 +34,17 @@ type Props = {
   initialResult: WheelPrizeResult | null;
 };
 
-const WEDGE_FILLS = [
-  "#1e3a5f", "#c2410c", "#0f766e", "#7c2d12",
-  "#1e40af", "#b45309", "#115e59", "#9a3412",
-  "#1d4ed8", "#ea580c", "#0d9488", "#a16207",
-  "#2563eb", "#d97706", "#14b8a6", "#854d0e",
-];
+// THE PALETTE IS THE STORE'S, NOT A PIE CHART'S.
+//
+// The first version used sixteen unrelated blues, oranges and teals, which read
+// as a spreadsheet chart dropped onto a black page. This is deep jewel tones
+// rotating against charcoal, with GOLD RESERVED for the two best prizes — so
+// the jackpot is visible before anyone reads a word, and the wheel belongs to
+// the same brand as the rest of the store.
+const INK = "#0b0b0c";
+const GOLD = "#c7ae5e";
+const GOLD_DEEP = "#8f7734";
+const WEDGE_TONES = ["#16233d", "#1a1a1c", "#123630", "#221118", "#1a1a1c", "#13203a"];
 
 /**
  * THE COUNTDOWN READS THE SAVED EXPIRY AND NOTHING ELSE.
@@ -66,10 +76,6 @@ function useCountdown(expiresAt: string | null): { text: string; expired: boolea
     text: `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`,
     expired: false,
   };
-}
-
-function money(cents: number): string {
-  return `$${(cents / 100).toFixed(cents % 100 === 0 ? 0 : 2)}`;
 }
 
 export default function SpinWheel({ slices, terms, token, initialResult }: Props) {
@@ -120,13 +126,13 @@ export default function SpinWheel({ slices, terms, token, initialResult }: Props
       };
       setResult(won);
 
-      // Five full turns then settle on the winning wedge. The server decided
+      // Six full turns then settle on the winning wedge. The server decided
       // which wedge before this request returned; the animation only reports it.
-      setRotation(360 * 5 + restingRotation(won.sliceIndex, wedgeAngle));
+      setRotation(360 * 6 + restingRotation(won.sliceIndex, wedgeAngle));
       window.setTimeout(() => {
         setRevealed(true);
         setSpinning(false);
-      }, 4_200);
+      }, 4_600);
     } catch {
       setError("We couldn't reach the server. Please try again.");
       setSpinning(false);
@@ -135,177 +141,295 @@ export default function SpinWheel({ slices, terms, token, initialResult }: Props
   }, [spinning, result, token, wedgeAngle]);
 
   return (
-    <div className="mx-auto w-full max-w-xl px-4 py-8">
+    <div className="mx-auto w-full max-w-xl px-4 pb-16 pt-8">
       <header className="text-center">
-        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Spin to win</h1>
-        <p className="mt-2 text-sm" style={{ color: "var(--foreground-muted)" }}>
-          One spin, {count} prizes, and every spin wins.
+        <p className="text-[11px] font-semibold uppercase tracking-[0.22em]" style={{ color: GOLD }}>
+          One spin · {count} prizes
+        </p>
+        <h1 className="mt-2 text-[32px] font-semibold leading-tight tracking-tight sm:text-4xl">
+          Spin to win
+        </h1>
+        <p className="mx-auto mt-2 max-w-sm text-sm" style={{ color: "var(--foreground-muted)" }}>
+          Every spin wins something. Claim it with your next order.
         </p>
       </header>
 
-      <div className="relative mx-auto mt-8 aspect-square w-full max-w-[340px]">
-        {/* The pointer. Sits at twelve o'clock; the wheel turns under it. */}
+      <div className="relative mx-auto mt-8 w-full max-w-[340px]">
+        {/* A soft gold bloom behind the wheel, so it sits on the page as a lit
+            object rather than a flat disc pasted onto black. */}
         <div
           aria-hidden
-          className="absolute left-1/2 top-[-6px] z-10 h-0 w-0 -translate-x-1/2"
-          style={{
-            borderLeft: "12px solid transparent",
-            borderRight: "12px solid transparent",
-            borderTop: "22px solid #dc2626",
-          }}
+          className="pointer-events-none absolute inset-0 -z-10 blur-2xl"
+          style={{ background: `radial-gradient(circle at 50% 45%, ${GOLD}22, transparent 62%)` }}
         />
-        <svg
-          viewBox="0 0 200 200"
-          className="h-full w-full drop-shadow"
-          style={{
-            transform: `rotate(${rotation}deg)`,
-            // Long, heavily eased, so it reads as a wheel slowing down rather
-            // than a number changing.
-            transition: spinning ? "transform 4s cubic-bezier(0.17, 0.67, 0.12, 0.99)" : "none",
-          }}
-        >
-          <circle cx="100" cy="100" r="99" fill="#0a0a0a" />
-          {slices.map((slice, index) => (
-            <g key={slice.id}>
-              <path d={wedgePath(index, wedgeAngle)} fill={WEDGE_FILLS[index % WEDGE_FILLS.length]} stroke="#0a0a0a" strokeWidth="0.6" />
-              {/* RADIAL TEXT. Sixteen wedges is 22.5 degrees each, which at
-                  390px is far too narrow for horizontal words — the labels run
-                  outward from the hub instead, the way a real prize wheel does.
 
-                  THE -90 IS NOT COSMETIC. wedgePath draws from twelve o'clock
-                  (`index * wedgeAngle - 90`), while an SVG rotate is measured
-                  from the +x axis at three o'clock. Without the same offset
-                  here every label sits a quarter-turn away from the wedge it
-                  names — the wheel still looks right, and each prize is
-                  captioned with a different prize's name. Caught in the browser
-                  at 390px; nothing in the unit tests could have seen it.
+        <div className="relative aspect-square w-full">
+          <svg viewBox="0 0 220 220" className="h-full w-full">
+            <defs>
+              <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#e6d29a" />
+                <stop offset="38%" stopColor={GOLD} />
+                <stop offset="62%" stopColor={GOLD_DEEP} />
+                <stop offset="100%" stopColor="#e2cd93" />
+              </linearGradient>
+              <linearGradient id="goldWedge" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor="#e3cd92" />
+                <stop offset="100%" stopColor={GOLD_DEEP} />
+              </linearGradient>
+              <radialGradient id="hub" cx="38%" cy="32%" r="78%">
+                <stop offset="0%" stopColor="#3a3a3e" />
+                <stop offset="100%" stopColor="#101012" />
+              </radialGradient>
+              {/* Depth across the face: lit at the top, falling away at the
+                  bottom. One overlay for the whole wheel rather than per-wedge
+                  shading, so it stays still while the wheel turns under it. */}
+              <radialGradient id="faceShade" cx="50%" cy="34%" r="72%">
+                <stop offset="0%" stopColor="#ffffff" stopOpacity="0.1" />
+                <stop offset="58%" stopColor="#000000" stopOpacity="0" />
+                <stop offset="100%" stopColor="#000000" stopOpacity="0.42" />
+              </radialGradient>
+            </defs>
 
-                  Anchored at the end and started past the rim so the text hugs
-                  the outer edge and runs inward, rather than piling up on the
-                  hub. */}
-              <text
-                x="192"
-                y="100"
-                fill="#ffffff"
-                fontSize="6.2"
-                fontWeight="700"
-                dominantBaseline="middle"
-                textAnchor="end"
-                transform={`rotate(${index * wedgeAngle + wedgeAngle / 2 - 90} 100 100)`}
-                style={{ letterSpacing: "0.02em" }}
-              >
-                {slice.wedgeLabel}
-              </text>
+            {/* The turning part. Everything that must stay put — rim, pegs,
+                hub, pointer — lives outside this group. */}
+            <g
+              style={{
+                transform: `rotate(${rotation}deg)`,
+                transformOrigin: "110px 110px",
+                transition: spinning ? "transform 4.4s cubic-bezier(0.16, 0.72, 0.1, 1)" : "none",
+              }}
+            >
+              <circle cx="110" cy="110" r="96" fill={INK} />
+              {slices.map((slice, index) => (
+                <path
+                  key={slice.id}
+                  d={wedgePath(index, wedgeAngle)}
+                  fill={slice.premium ? "url(#goldWedge)" : WEDGE_TONES[index % WEDGE_TONES.length]}
+                  stroke={INK}
+                  strokeWidth="0.7"
+                />
+              ))}
+              {slices.map((slice, index) => (
+                <text
+                  key={`${slice.id}-label`}
+                  x="201"
+                  y="110"
+                  // Dark ink on the gold wedges, warm white on the dark ones.
+                  fill={slice.premium ? "#17130a" : "#f4f1ea"}
+                  fontSize="7"
+                  fontWeight={slice.premium ? 800 : 700}
+                  dominantBaseline="middle"
+                  textAnchor="end"
+                  /* THE -90 IS NOT COSMETIC. wedgePath draws from twelve
+                     o'clock (`index * wedgeAngle - 90`), while an SVG rotate is
+                     measured from the +x axis at three o'clock. Without the
+                     same offset every label sits a quarter-turn from the wedge
+                     it names — the wheel still looks right and each prize is
+                     captioned with a different prize's name. */
+                  transform={`rotate(${index * wedgeAngle + wedgeAngle / 2 - 90} 110 110)`}
+                  style={{ letterSpacing: "0.04em" }}
+                >
+                  {slice.wedgeLabel}
+                </text>
+              ))}
+              <circle cx="110" cy="110" r="96" fill="url(#faceShade)" pointerEvents="none" />
             </g>
-          ))}
-          <circle cx="100" cy="100" r="17" fill="#111827" stroke="#374151" strokeWidth="1.5" />
-        </svg>
+
+            {/* Rim and pegs: fixed, so the lights do not smear while it turns. */}
+            <circle cx="110" cy="110" r="99.5" fill="none" stroke="url(#rim)" strokeWidth="6" />
+            <circle cx="110" cy="110" r="95.5" fill="none" stroke="#000000" strokeOpacity="0.55" strokeWidth="1.2" />
+            {slices.map((slice, index) => {
+              const angle = ((index * wedgeAngle - 90) * Math.PI) / 180;
+              return (
+                <circle
+                  key={`peg-${slice.id}`}
+                  cx={110 + 99.5 * Math.cos(angle)}
+                  cy={110 + 99.5 * Math.sin(angle)}
+                  r="2.4"
+                  fill="#f6ecc9"
+                  stroke={GOLD_DEEP}
+                  strokeWidth="0.5"
+                />
+              );
+            })}
+
+            {/* Hub */}
+            <circle cx="110" cy="110" r="21" fill="url(#hub)" stroke="url(#rim)" strokeWidth="2.2" />
+            <circle cx="110" cy="110" r="5.2" fill={GOLD} />
+          </svg>
+
+          {/* The pointer, over the rim at twelve o'clock. */}
+          {/* THE POINTER HAS TO READ AGAINST THE RIM IT SITS ON. Gold on gold
+              vanished; this is a dark collar with a gold face and a drop
+              shadow, so the eye finds the stopping point immediately. */}
+          <div
+            aria-hidden
+            className="absolute left-1/2 top-[-16px] -translate-x-1/2"
+            style={{ filter: "drop-shadow(0 4px 6px rgba(0,0,0,0.75))" }}
+          >
+            <svg width="38" height="48" viewBox="0 0 38 48">
+              <linearGradient id="ptr" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#f3e3b4" />
+                <stop offset="52%" stopColor={GOLD} />
+                <stop offset="100%" stopColor="#6d5a26" />
+              </linearGradient>
+              <path d="M19 47 L4 14 A16 16 0 1 1 34 14 Z" fill={INK} />
+              <path d="M19 43.5 L6.4 15 A13.4 13.4 0 1 1 31.6 15 Z" fill="url(#ptr)" />
+              <circle cx="19" cy="15" r="5.4" fill={INK} />
+              <circle cx="19" cy="15" r="2.1" fill={GOLD} />
+            </svg>
+          </div>
+        </div>
       </div>
 
-      <div className="mt-6 text-center">
+      <div className="mt-7 text-center">
         {!result && (
           <button
             type="button"
             onClick={spin}
             disabled={spinning}
-            className="w-full rounded-lg bg-red-600 px-6 py-4 text-base font-semibold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:px-12"
+            className="w-full rounded-full px-10 py-4 text-base font-semibold uppercase tracking-[0.14em] transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+            style={{
+              background: `linear-gradient(180deg, #e3cd92 0%, ${GOLD} 45%, ${GOLD_DEEP} 100%)`,
+              color: INK,
+              boxShadow: `0 10px 30px -10px ${GOLD}88`,
+            }}
           >
             {spinning ? "Spinning…" : "Spin the wheel"}
           </button>
         )}
 
         {error && (
-          <p role="alert" className="mt-4 rounded-md px-4 py-3 text-sm" style={{ background: "rgba(220,38,38,0.12)", color: "#fca5a5", border: "1px solid rgba(220,38,38,0.3)" }}>
+          <p
+            role="alert"
+            className="mt-4 rounded-lg px-4 py-3 text-sm"
+            style={{ background: "rgba(220,38,38,0.12)", color: "#fca5a5", border: "1px solid rgba(220,38,38,0.3)" }}
+          >
             {error}
           </p>
         )}
 
         {result && revealed && (
-          <div className="mt-2 rounded-xl p-5 text-left" style={{ background: "var(--surface-1)", border: "1px solid var(--border-soft)" }}>
-            <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--foreground-muted)" }}>
-              {result.alreadySpun ? "You already span — here's your prize" : "You won"}
-            </p>
-            <p className="mt-1 text-xl font-semibold" style={{ color: "var(--foreground)" }}>{result.label}</p>
-            <p className="mt-2 text-sm" style={{ color: "var(--foreground-muted)" }}>{result.condition}</p>
-
-            <div className="mt-4 flex items-baseline justify-between pt-4" style={{ borderTop: "1px solid var(--border-soft)" }}>
-              <span className="text-sm" style={{ color: "var(--foreground-muted)" }}>
-                {countdown.expired ? "This prize has expired" : "Expires in"}
-              </span>
-              {!countdown.expired && (
-                <span className="font-mono text-lg font-semibold tabular-nums" style={{ color: "var(--foreground)" }}>{countdown.text}</span>
-              )}
+          <div
+            className="mt-2 overflow-hidden rounded-2xl text-left"
+            style={{ background: "var(--surface-1)", border: `1px solid ${GOLD}55` }}
+          >
+            <div className="px-5 py-4" style={{ background: `linear-gradient(180deg, ${GOLD}1f, transparent)` }}>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em]" style={{ color: GOLD }}>
+                {result.alreadySpun ? "Your prize" : "You won"}
+              </p>
+              <p className="mt-1 text-2xl font-semibold leading-tight" style={{ color: "var(--foreground)" }}>
+                {result.label}
+              </p>
+              <p className="mt-2 text-sm" style={{ color: "var(--foreground-muted)" }}>
+                {result.condition}
+              </p>
             </div>
 
-            {!countdown.expired && (
-              <Link
-                href="/products"
-                className="mt-4 block rounded-lg px-5 py-3 text-center text-sm font-semibold"
-                style={{ background: "#c7ae5e", color: "#0a0a0a" }}
+            <div className="px-5 pb-5">
+              <div
+                className="flex items-center justify-between rounded-xl px-4 py-3"
+                style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--border-soft)" }}
               >
-                Start shopping
-              </Link>
-            )}
-            <p className="mt-3 text-xs" style={{ color: "var(--foreground-muted)" }}>
-              Your prize is saved to your account and applies automatically at checkout — on this device or any other.
-            </p>
+                <span className="text-xs uppercase tracking-wider" style={{ color: "var(--foreground-muted)" }}>
+                  {countdown.expired ? "Expired" : "Expires in"}
+                </span>
+                {!countdown.expired && (
+                  <span className="font-mono text-xl font-semibold tabular-nums" style={{ color: GOLD }}>
+                    {countdown.text}
+                  </span>
+                )}
+              </div>
+
+              {!countdown.expired && (
+                <Link
+                  href="/products"
+                  className="mt-4 block rounded-full px-5 py-3.5 text-center text-sm font-semibold uppercase tracking-[0.12em]"
+                  style={{ background: `linear-gradient(180deg, #e3cd92 0%, ${GOLD} 45%, ${GOLD_DEEP} 100%)`, color: INK }}
+                >
+                  Start shopping
+                </Link>
+              )}
+              <p className="mt-3 text-xs" style={{ color: "var(--foreground-muted)" }}>
+                Saved to your account — it applies automatically at checkout, on this device or any other.
+              </p>
+            </div>
           </div>
         )}
       </div>
 
       {/* ---------------------------------------------------------------
-          THE TERMS ARE ABOVE THE FOLD OF THE PRIZE LIST AND RENDER BEFORE
-          ANYONE SPINS. They are not a footer link and not a modal behind
-          the button: the odds, the minimums and the expiry are what make
-          this an honest promotion rather than a slot machine, so they are
-          on the page at the moment the decision is made.
+          THE TERMS RENDER BEFORE ANYONE SPINS, and they are not a footer
+          link or a modal behind the button: the odds, the expiry and the
+          stacking rules are what make this an honest promotion rather
+          than a slot machine, so they are on the page at the moment the
+          decision is made.
+
+          WHAT IS NOT HERE IS THE DOLLAR MINIMUM. See disclosure.ts — the
+          figure moved into "Full terms" below and into the cart, which
+          asks for it at the moment it is an achievable step rather than a
+          toll. The condition itself is stated on every line.
           --------------------------------------------------------------- */}
-      <section className="mt-10" aria-labelledby="spin-terms">
-        <h2 id="spin-terms" className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--foreground-muted)" }}>
+      <section className="mt-12" aria-labelledby="spin-terms">
+        <h2 id="spin-terms" className="text-[11px] font-semibold uppercase tracking-[0.2em]" style={{ color: GOLD }}>
           Before you spin
         </h2>
-        <ul className="mt-3 space-y-2 text-sm" style={{ color: "var(--foreground-muted)" }}>
+        <ul className="mt-4 space-y-2.5 text-sm" style={{ color: "var(--foreground-muted)" }}>
           {terms.map((term) => (
-            <li key={term} className="flex gap-2">
-              <span aria-hidden style={{ color: "var(--foreground-subtle)" }}>•</span>
+            <li key={term} className="flex gap-2.5">
+              <span aria-hidden style={{ color: GOLD }}>·</span>
               <span>{term}</span>
             </li>
           ))}
         </ul>
       </section>
 
-      <section className="mt-8" aria-labelledby="spin-prizes">
-        <h2 id="spin-prizes" className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--foreground-muted)" }}>
-          Every prize and its odds
+      <section className="mt-9" aria-labelledby="spin-prizes">
+        <h2 id="spin-prizes" className="text-[11px] font-semibold uppercase tracking-[0.2em]" style={{ color: GOLD }}>
+          What&apos;s on the wheel
         </h2>
-        <div className="mt-3 overflow-hidden rounded-lg" style={{ border: "1px solid var(--border-soft)" }}>
-          <table className="w-full text-left text-sm">
-            <thead className="text-xs uppercase tracking-wide" style={{ background: "var(--surface-0)", color: "var(--foreground-muted)" }}>
-              <tr>
-                <th scope="col" className="px-3 py-2 font-medium">Prize</th>
-                <th scope="col" className="px-3 py-2 font-medium">Odds</th>
-                <th scope="col" className="px-3 py-2 font-medium">Minimum order</th>
-              </tr>
-            </thead>
-            <tbody>
-              {slices.map((slice) => (
-                <tr key={slice.id} style={{ borderTop: "1px solid var(--border-soft)" }}>
-                  <td className="px-3 py-2">
-                    <span className="font-medium" style={{ color: "var(--foreground)" }}>{slice.label}</span>
-                    <span className="mt-0.5 block text-xs" style={{ color: "var(--foreground-muted)" }}>{slice.condition}</span>
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 tabular-nums" style={{ color: "var(--foreground-muted)" }}>
-                    1 in {count}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 tabular-nums" style={{ color: "var(--foreground-muted)" }}>
-                    {slice.minSubtotalCents === 0 ? "None" : money(slice.minSubtotalCents)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <p className="mt-3 text-xs" style={{ color: "var(--foreground-muted)" }}>
+        <ul className="mt-4 space-y-px overflow-hidden rounded-xl" style={{ border: "1px solid var(--border-soft)" }}>
+          {slices.map((slice) => (
+            <li
+              key={slice.id}
+              className="flex items-start justify-between gap-4 px-4 py-3"
+              style={{ background: slice.premium ? `${GOLD}0f` : "var(--surface-0)" }}
+            >
+              <div className="min-w-0">
+                <p className="text-sm font-medium" style={{ color: slice.premium ? GOLD : "var(--foreground)" }}>
+                  {slice.label}
+                </p>
+                <p className="mt-0.5 text-xs" style={{ color: "var(--foreground-muted)" }}>
+                  {slice.condition}
+                </p>
+              </div>
+              <span
+                className="shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] tabular-nums"
+                style={{ background: "rgba(255,255,255,0.05)", color: "var(--foreground-muted)" }}
+              >
+                1 in {count}
+              </span>
+            </li>
+          ))}
+        </ul>
+
+        <details className="mt-4 rounded-xl px-4 py-3" style={{ border: "1px solid var(--border-soft)" }}>
+          <summary className="cursor-pointer text-xs font-medium" style={{ color: "var(--foreground-muted)" }}>
+            Full terms, including the qualifying order for each prize
+          </summary>
+          <ul className="mt-3 space-y-2">
+            {slices.map((slice) => (
+              <li key={`${slice.id}-exact`} className="text-xs" style={{ color: "var(--foreground-muted)" }}>
+                <span style={{ color: "var(--foreground)" }}>{slice.label}</span> — {slice.exactCondition}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 text-xs" style={{ color: "var(--foreground-subtle)" }}>
+            Your cart will show exactly how much more is needed to claim your prize.
+          </p>
+        </details>
+
+        <p className="mt-4 text-xs" style={{ color: "var(--foreground-subtle)" }}>
           Research use only. Not for human or veterinary consumption. Prizes are redeemed through
           normal checkout and are subject to the same age and research-use requirements as any order.
         </p>
@@ -328,10 +452,10 @@ function restingRotation(index: number, wedgeAngle: number): number {
 function wedgePath(index: number, wedgeAngle: number): string {
   const start = index * wedgeAngle - 90;
   const end = start + wedgeAngle;
-  const radius = 99;
+  const radius = 96;
   const toPoint = (degrees: number) => {
     const radians = (degrees * Math.PI) / 180;
-    return `${(100 + radius * Math.cos(radians)).toFixed(3)} ${(100 + radius * Math.sin(radians)).toFixed(3)}`;
+    return `${(110 + radius * Math.cos(radians)).toFixed(3)} ${(110 + radius * Math.sin(radians)).toFixed(3)}`;
   };
-  return `M 100 100 L ${toPoint(start)} A ${radius} ${radius} 0 0 1 ${toPoint(end)} Z`;
+  return `M 110 110 L ${toPoint(start)} A ${radius} ${radius} 0 0 1 ${toPoint(end)} Z`;
 }

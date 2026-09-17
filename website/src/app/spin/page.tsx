@@ -5,12 +5,22 @@ import { notFound } from "next/navigation";
 import SpinWheel, { type WheelPrizeResult, type WheelSlice } from "@/components/spin-wheel";
 import { getSpinWheelConfig } from "@/lib/admin-control";
 import { getAuthenticatedUser } from "@/lib/auth-session";
-import { SPIN_TERMS, describeRedemptionCondition } from "@/lib/spin/disclosure";
+import { SPIN_TERMS, describeExactCondition, describeRedemptionCondition } from "@/lib/spin/disclosure";
 import { SPIN_PRIZES } from "@/lib/spin/prize-table";
 import { readExistingSpin } from "@/lib/spin/spin-service";
 import { verifySpinToken } from "@/lib/spin/spin-token";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * The wedges drawn in gold.
+ *
+ * Purely visual, and kept here rather than in the prize table because it is a
+ * statement about the LOOK of the wheel, not about what the till honours — the
+ * two must never be confused, and a "premium" flag inside SPIN_PRIZES would
+ * eventually be read as one.
+ */
+const PREMIUM_PRIZE_IDS = new Set(["klow", "glow"]);
 
 export const metadata: Metadata = {
   title: "Spin to win — Vanta Labs",
@@ -67,6 +77,11 @@ export default async function SpinPage({
     label: prize.label,
     minSubtotalCents: prize.minSubtotalCents,
     condition: describeRedemptionCondition(prize),
+    // The figure, kept on the page under "Full terms" rather than removed.
+    exactCondition: describeExactCondition(prize),
+    // The two wedges worth over $100 are filled gold, so the jackpot is
+    // visible before anyone reads a label.
+    premium: PREMIUM_PRIZE_IDS.has(prize.id),
   }));
 
   const initialResult: WheelPrizeResult | null = existing

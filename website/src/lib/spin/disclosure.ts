@@ -79,7 +79,7 @@ export const SPIN_TERMS: readonly string[] = [
   `Each prize is equally likely — 1 in ${SPIN_PRIZES.length}.`,
   "One spin per customer for this campaign. The result is saved and final.",
   `Your prize expires ${SPIN_EXPIRY_HOURS} hours after you spin.`,
-  "Every prize needs a qualifying order — the minimum is shown on each prize below.",
+  "Every prize is claimed with a qualifying purchase — your cart will tell you exactly what's needed.",
   "A free product is added on top of any other discount you already have.",
   "A percentage prize replaces your other discounts rather than adding to them — you keep whichever is worth more.",
   "Free shipping applies only where shipping would otherwise be charged.",
@@ -90,8 +90,44 @@ export function formatMoneyFromCents(cents: number): string {
   return `$${(cents / 100).toFixed(cents % 100 === 0 ? 0 : 2)}`;
 }
 
-/** What one prize requires, as a sentence for the reveal card and the list. */
+/**
+ * What one prize requires, WITHOUT naming the figure.
+ *
+ * THE NUMBER IS DELIBERATELY NOT HERE, and that is a product decision worth
+ * writing down rather than discovering later. A dollar minimum shown beside
+ * every wedge reads as a price of entry before anyone has won anything, and it
+ * turns people away at the moment the promotion is trying to attract them.
+ *
+ * What is NOT hidden is the condition itself: every line below says a
+ * qualifying purchase is required, and `describeExactCondition` puts the real
+ * figures on the same page under "Full terms". A minimum a customer only
+ * discovers at the till is the thing that produces "bait and switch"
+ * complaints and chargebacks — so it is disclosed, just not shouted.
+ *
+ * The cart, the drawer and the checkout summary then do the specific ask
+ * ("Add $34 more to unlock your free KLOW"), which they already did for every
+ * other offer this store mints — see cart-client.tsx, cart-drawer.tsx and
+ * checkout/page.tsx. That is the right moment for a number: the customer has
+ * a basket, so it is an achievable step rather than a toll.
+ */
 export function describeRedemptionCondition(prize: SpinPrize): string {
+  if (prize.reward.kind === "percent") {
+    // The CAP stays, because it is a limit on what they receive rather than a
+    // condition of entry. A benefit ceiling discovered at the till is exactly
+    // the surprise this whole note is trying to avoid.
+    const cap = prize.maxDiscountCents
+      ? ` Up to ${formatMoneyFromCents(prize.maxDiscountCents)}.`
+      : "";
+    return `With a qualifying purchase.${cap} Replaces other discounts — you keep whichever is worth more.`;
+  }
+  if (prize.reward.kind === "free_shipping") {
+    return "With a qualifying purchase, where shipping would otherwise be charged.";
+  }
+  return "Yours free with a qualifying purchase. Added on top of any other discount.";
+}
+
+/** The same condition WITH the figure, for the full-terms disclosure. */
+export function describeExactCondition(prize: SpinPrize): string {
   const minimum = prize.minSubtotalCents > 0
     ? `on orders of ${formatMoneyFromCents(prize.minSubtotalCents)} or more`
     : "on any order";

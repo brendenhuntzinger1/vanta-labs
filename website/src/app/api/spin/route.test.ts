@@ -162,7 +162,10 @@ describe("what comes back", () => {
       expiresAt: "2026-09-19T12:00:00.000Z",
     });
     expect(body.prize).toMatchObject({ id: "ghk_cu", minSubtotalCents: 7_500 });
-    expect(body.prize.condition).toContain("$75");
+    // The figure is deliberately NOT here: the wheel says a qualifying
+    // purchase is needed and the cart asks for the number. See disclosure.ts.
+    expect(body.prize.condition).toContain("qualifying purchase");
+    expect(body.prize.condition).not.toContain("$75");
   });
 
   it("puts the bearer token in an httpOnly cookie and never in the body", async () => {
