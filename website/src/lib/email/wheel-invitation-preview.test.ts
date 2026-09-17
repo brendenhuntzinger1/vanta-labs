@@ -28,7 +28,7 @@ const NON_PRODUCT_KINDS = new Set(["percent", "free_shipping", "free_shipping_pe
 
 export const WHEEL_CAMPAIGN_COPY = {
   name: "Spin the Wheel — first reward",
-  subject: "Spin the wheel for a free reward",
+  subject: "Spin the wheel for your reward",
   previewText: "Spin to reveal your reward. Qualifying purchase required.",
   headline: "A spin. A reward. Yours to reveal.",
   body: [
@@ -86,6 +86,17 @@ describe("wheel invitation email", () => {
       WHEEL_CAMPAIGN_COPY.heroImageAlt,
     ].join(" ").toLowerCase();
     expect(copy).not.toMatch(/\bgifts?\b/);
+  });
+
+  it("does not call the reward free in the subject, because three wedges are discounts", () => {
+    // The subject is the only line most recipients read, and it cannot carry
+    // the body's qualifications. 12 of the 16 wedges are a free vial and one
+    // is free shipping, but the other three are a percentage off an order the
+    // customer still pays for — "a free reward" over-claims for those, and the
+    // word lands hardest in a subject that also says "wheel".
+    const discountWedges = SPIN_PRIZES.filter((prize) => prize.reward.kind === "percent");
+    expect(discountWedges.length).toBeGreaterThan(0);
+    expect(WHEEL_CAMPAIGN_COPY.subject.toLowerCase()).not.toMatch(/\bfree\b/);
   });
 
   it("states the purchase condition and the deadline in the body", () => {
