@@ -4,18 +4,21 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { SMS_CONSENT_TEXT, SMS_DISCLOSURE_TEXT } from "@/lib/sms-consent-text";
-import { WELCOME_OFFER_PERCENT } from "@/lib/offers/welcome-offer-copy";
 
 /**
- * The entry invitation — the first thing a visitor meets, and the ONE opt-in a
- * carrier's A2P review can actually reach.
+ * The store invitation, which now invites people to the wheel.
  *
- * Every other sign-up surface in this store sits behind the account wall, so
- * none of them can be shown to a reviewer: the storefront redirects an
- * anonymous request to /account/login. This modal opens ON that portal, which
- * is why its compliance wording is asserted here rather than left to a visual
- * check. A regression on any line below is not a cosmetic bug — it is a
- * consent record that cannot be defended, and a number that must not be texted.
+ * WHAT IT IS NOT. Its header used to claim this was "the ONE opt-in a carrier's
+ * A2P review can actually reach". That was never true and the component itself
+ * says so: it opens on the catalogue, behind the account wall, where an
+ * anonymous reviewer cannot go. The publicly reachable opt-in is the
+ * create-account form at /account/login, and that surface is frozen.
+ *
+ * WHAT IT IS. The one interruption in the shopping flow, and the only place a
+ * shopper who never received a win-back email learns that the wheel exists. The
+ * compliance wording is asserted here rather than left to a visual check,
+ * because a regression on any line below is a consent record that cannot be
+ * defended.
  *
  * Asserted against the source because the suite runs in node with no DOM: the
  * behaviour a browser would show is covered by the QA script that drives it.
@@ -24,6 +27,26 @@ import { WELCOME_OFFER_PERCENT } from "@/lib/offers/welcome-offer-copy";
 const SRC = join(process.cwd(), "src");
 const MODAL = readFileSync(join(SRC, "components", "entry-offer-modal.tsx"), "utf8");
 const PORTAL = readFileSync(join(SRC, "app", "account", "login", "page.tsx"), "utf8");
+
+/**
+ * The file with its prose removed.
+ *
+ * SOME OF THESE RULES ARE ABOUT WHAT THE CARD NO LONGER SAYS, and the comments
+ * explain the change by naming the very thing that went — "it used to sell 15%
+ * off", "the retired card stored vl_entry_offer_joined". Asserted against the
+ * raw text, the explanation fails its own lesson. sms-consent.ts's own test
+ * already had to learn this; same trick, same reason.
+ */
+const codeOnly = (source: string) =>
+  source
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      return !trimmed.startsWith("//") && !trimmed.startsWith("*") && !trimmed.startsWith("/*");
+    })
+    .join("\n");
+
+const MODAL_CODE = codeOnly(MODAL);
 
 describe("the consent wording is the store's one sentence, not a retyped copy", () => {
   it("renders the shared TCPA sentence rather than its own", () => {
@@ -60,81 +83,80 @@ describe("nothing is ever pre-ticked", () => {
     expect(MODAL).toMatch(/const \[confirmed, setConfirmed\] = useState\(false\)/);
   });
 
-  it("refuses to submit without the age confirmation", () => {
-    expect(MODAL).toMatch(/if \(!confirmed\)/);
-  });
-
-  it("refuses to submit until the text box is ticked", () => {
-    // THE OFFER IS THE TEXT LIST, AND THE SERVER HAS ALWAYS SAID SO.
-    // claimWelcomeOffer refuses without an acceptable mobile number
-    // (reason: "phone"), and recordSmsSignupOnly does too — so there is no
-    // email-only path behind this endpoint at all. A modal that let someone
-    // submit an address alone sent them into "That does not look like a
-    // mobile number", which is a nonsense reply to a person who deliberately
-    // left the box alone. The tick is asked for up front instead.
-    expect(MODAL).toMatch(/if \(!smsConsent\)/);
-  });
-
-  it("asks for the number the offer cannot be issued without", () => {
-    expect(MODAL).toMatch(/if \(!phone\.trim\(\)\)/);
-  });
-
-  it("does not call the text opt-in optional, because the discount depends on it", () => {
-    // "Optional" beside a box the offer requires is the kind of small untruth
-    // an A2P reviewer reads as a dark pattern. Consent still is not a
-    // condition of PURCHASE — the store is open either way — and that
-    // sentence stays in SMS_CONSENT_TEXT untouched.
-    const smsBlock = MODAL.slice(MODAL.indexOf("entry-offer-sms-consent"), MODAL.indexOf("entry-offer-sms-disclosure"));
-    expect(smsBlock).not.toMatch(/Optional/);
+  it("will not record a consent without the age confirmation and a number", () => {
+    // Both are required for the SIGN-UP, and only for the sign-up. This store
+    // may not market to anyone who has not made the attestation.
+    const branch = MODAL.slice(MODAL.indexOf("if (smsConsent) {"), MODAL.indexOf("trackFunnelEvent(\"spin_invite_accepted\""));
+    expect(branch).toMatch(/if \(!confirmed\)/);
+    expect(branch).toMatch(/if \(!phone\.trim\(\)\)/);
+    expect(branch).toContain('"/api/offers/welcome"');
+    expect(branch).toMatch(/placement: "storefront"/);
   });
 });
 
-describe("what it asks for", () => {
-  it("shows the account's own address rather than a field that is quietly ignored", () => {
-    // THE FIELD WAS DEAD INPUT AND NOBODY COULD TELL.
-    //
-    // /api/offers/welcome reads "sessionEmail || typedEmail" — the session
-    // wins whenever there is one. This card now only opens INSIDE the store,
-    // which is behind the account wall, so every visitor who sees it has a
-    // session and everything typed here was discarded. Someone entering a
-    // different address got their code at their account address and no hint
-    // that it had happened; the first they would know is a code that never
-    // arrived where they asked for it.
-    //
-    // Checkout already solved this ("Using your account email."), so this
-    // follows that, not a new idea.
-    expect(MODAL).toMatch(/type="email"/);
-    expect(MODAL).toContain("entry-offer-email");
-    expect(MODAL).toMatch(/readOnly/);
-    expect(MODAL).toContain("Using your account email");
+describe("the spin is not bought with a tick", () => {
+  it("never makes the text list a condition of spinning", () => {
+    // WHILE THE DISCOUNT EXISTED THE OFFER WAS THE TEXT LIST: the server
+    // issued no code without a mobile number, so the tick was the price and
+    // "optional" beside it would have been untrue. Nothing is bought with a
+    // tick now, so the consent has to be genuinely severable — a shopper who
+    // ignores the whole section reaches the wheel with one press.
+    const spin = MODAL.slice(MODAL.indexOf("const spin = useCallback"));
+    const guard = spin.slice(0, spin.indexOf("if (smsConsent) {"));
+    expect(guard).not.toMatch(/if \(!smsConsent\)/);
+    expect(guard).not.toMatch(/if \(!confirmed\)/);
+    expect(spin).toMatch(/router\.push\("\/spin"\)/);
   });
 
-  it("is told that address by the server rather than guessing at it", () => {
+  it("calls the box optional, because it now is", () => {
+    // The inverse of the rule this file used to carry, and for the stated
+    // reason: the word was forbidden while the discount depended on the tick.
+    // It is now the truthful word, and it is how /account/login — the surface
+    // a carrier review actually loads — has always put it.
+    const smsBlock = MODAL.slice(
+      MODAL.indexOf('data-testid="entry-offer-sms-consent"'),
+      MODAL.indexOf('id="entry-offer-sms-disclosure"'),
+    );
+    expect(smsBlock).toMatch(/Optional/);
+  });
+
+  it("does not ask for a number from somebody already on the list", () => {
+    expect(MODAL).toMatch(/const askForTexts = invite\?\.askForTexts === true;/);
+    expect(MODAL).toMatch(/\{askForTexts \? \(/);
+  });
+});
+
+describe("what it offers", () => {
+  it("offers the wheel, and names no retired discount", () => {
+    expect(MODAL).toContain("Spin the wheel");
+    expect(MODAL).not.toContain("WELCOME_OFFER_PERCENT");
+    expect(MODAL_CODE, "the retired first-order discount is back on the card").not.toMatch(/15%/);
+  });
+
+  it("states the minimum spend rather than implying the reward is unconditional", () => {
+    expect(MODAL).toMatch(/minimum spend/i);
+  });
+
+  it("asks the one endpoint whether this person may be interrupted", () => {
+    expect(MODAL).toContain('"/api/spin/invite"');
+    expect(MODAL).toMatch(/if \(!data\.mayInvite\) return;/);
+  });
+
+  it("shows which address a consent would be recorded against", () => {
+    // The endpoint reads `sessionEmail || typedEmail` and there is always a
+    // session here, so an editable address field would be collecting something
+    // the server discards. The address is shown instead of asked for.
     expect(MODAL).toMatch(/accountEmail/);
-  });
-
-  it("collects a mobile number for the text list", () => {
-    expect(MODAL).toMatch(/type="tel"/);
-    expect(MODAL).toContain("entry-offer-phone");
-  });
-
-  it("posts to the one public offer endpoint", () => {
-    // /api/offers/welcome is named explicitly on the public list; every other
-    // offer path is walled. A guest cannot reach anything else.
-    expect(MODAL).toContain('"/api/offers/welcome"');
-    expect(MODAL).toMatch(/placement: "storefront"/);
-  });
-
-  it("offers the store's own percentage rather than a number typed here", () => {
-    expect(MODAL).toContain("WELCOME_OFFER_PERCENT");
-    expect(WELCOME_OFFER_PERCENT).toBe(15);
+    expect(MODAL).not.toMatch(/type="email"/);
   });
 });
 
 describe("it can be dismissed, and it stays dismissed", () => {
-  it("closes on the control, the backdrop and escape", () => {
+  it("closes on the control, the backdrop, escape and a plain No thanks", () => {
     expect(MODAL).toMatch(/aria-label="Close"/);
     expect(MODAL).toMatch(/Escape/);
+    expect(MODAL).toContain('data-testid="entry-offer-skip"');
+    expect(MODAL).toContain("No thanks");
   });
 
   it("is a labelled dialog", () => {
@@ -142,8 +164,12 @@ describe("it can be dismissed, and it stays dismissed", () => {
     expect(MODAL).toMatch(/aria-modal="true"/);
   });
 
-  it("remembers a dismissal rather than asking again on the next page", () => {
-    expect(MODAL).toMatch(/localStorage/);
+  it("remembers a dismissal under a key of its own", () => {
+    // NOT the retired card's key. `vl_entry_offer_joined` marked somebody who
+    // had taken the old 15%, and reading it here would silence the wheel for
+    // exactly the shoppers most worth inviting.
+    expect(MODAL).toMatch(/const DISMISSED_KEY = "vl_spin_invite_dismissed_at"/);
+    expect(MODAL_CODE).not.toContain("vl_entry_offer_joined");
   });
 });
 
@@ -152,8 +178,8 @@ describe("it opens once a visitor is INSIDE the store, never on the gate", () =>
 
   it("is not on the access portal", () => {
     // THE GATE ASKS ONE THING. A visitor standing at a sign-in screen has not
-    // chosen this store yet, and interrupting that decision with a discount is
-    // the owner's call and the answer is no.
+    // chosen this store yet, and interrupting that decision is the owner's
+    // call and the answer is no.
     expect(PORTAL).not.toContain("EntryOfferModal");
   });
 
@@ -161,35 +187,34 @@ describe("it opens once a visitor is INSIDE the store, never on the gate", () =>
     expect(LAYOUT).toContain("<EntryOfferModal />");
   });
 
-  it("replaces the older invitation rather than joining it", () => {
-    // Two cards asking the same question is worse than one. The older
-    // catalogue invitation is stood down; this is the one the owner approved.
-    expect(LAYOUT).not.toContain("<SmsInviteModal />");
-  });
-
   it("opens on the catalogue and product pages, and NOT on the front page", () => {
-    // THE OFFER NEEDS SOMETHING TO ATTACH TO. The front page is brand-only,
-    // and someone who has just signed in has not seen a product or a price
-    // yet — "15% off your first order" there is an advert. Beside a $59 vial
-    // it is a number. It is also never checkout or an account screen.
     expect(MODAL).toMatch(/function isStoreRoute/);
     expect(MODAL).toMatch(/\/products/);
     expect(MODAL, "the front page is back in the route list").not.toMatch(/pathname === "\/"/);
   });
 
   it("waits ten seconds, long enough to have read the page", () => {
-    // Everyone who sees this is already signed in — they made an account and
-    // made the 21+/research attestations to get in — so the intent is not in
-    // doubt and a long warm-up buys nothing. A minute is worse than useless:
-    // most product-page visits are decided before then, so the ask would
-    // arrive after the decision.
     expect(MODAL).toMatch(/OPEN_AFTER_MS = 10000/);
   });
+});
 
-  it("does not interrupt someone the offer is not open to", () => {
-    // Bought already, subscribed already, holding a code, or once said stop:
-    // the server decides all of it and answers mayInterrupt. This never works
-    // it out for itself.
-    expect(MODAL).toMatch(/mayInterrupt/);
+describe("the funnel can be measured at its widest point", () => {
+  it("records the invitation being shown, skipped and accepted", () => {
+    // An invitation nobody takes leaves no trace on the server, so without
+    // these three the only measurable point is the spin itself — a conversion
+    // rate with no denominator.
+    for (const event of ["spin_invite_shown", "spin_invite_skipped", "spin_invite_accepted"]) {
+      expect(MODAL).toContain(event);
+    }
+    const route = readFileSync(join(SRC, "app", "api", "analytics", "track", "route.ts"), "utf8");
+    for (const event of ["spin_invite_shown", "spin_invite_skipped", "spin_invite_accepted"]) {
+      expect(route, "the relay's allow-list is the real boundary").toContain(`"${event}"`);
+    }
+  });
+
+  it("counts every way of saying no as the same answer", () => {
+    // The backdrop, the ×, escape and "No thanks" all route through close().
+    const closeFn = MODAL.slice(MODAL.indexOf("const close = useCallback"), MODAL.indexOf("useEffect(() => {\n    if (!open) return;"));
+    expect(closeFn).toContain("spin_invite_skipped");
   });
 });
