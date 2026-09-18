@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { AccountAuthForm } from "@/components/account-auth-form";
+import { EntryOfferModal } from "@/components/entry-offer-modal";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { safeInternalPath } from "@/lib/internal-path";
@@ -38,6 +39,13 @@ export default async function AccountLoginPage({
 
   return (
     <div className="vl-auth-shell relative min-h-screen overflow-hidden text-white">
+      {/* THE ENTRY INVITATION. This portal is the store's front door — the
+          catalogue is behind it — so it is both where a visitor actually
+          enters and the only opt-in surface an anonymous reviewer can reach.
+          It decides for itself whether to open (see entry-offer-modal.tsx):
+          not for someone who already joined, not again inside the dismissal
+          cooldown, and never before the page has been seen. */}
+      <EntryOfferModal />
       {/* NO SITE HEADER HERE, DELIBERATELY.
           This page is the front door now — with the catalog behind an account,
           it is the first screen of almost every visit. The full header put a
