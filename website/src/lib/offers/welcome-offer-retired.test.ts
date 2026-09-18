@@ -60,7 +60,7 @@ describe("retiring the welcome discount", () => {
 
   it("still records the consent — the subscriber is the point, not the coupon", async () => {
     const result = await claimWelcomeOffer({
-      email: "New@Example.test", phone: "+1 555 123 4567", source: "storefront",
+      email: "New@Example.test", phone: "+1 512 555 0100", source: "storefront",
     });
 
     expect(consent.recorded, "they are on the text list").toEqual(["new@example.test"]);
@@ -68,7 +68,7 @@ describe("retiring the welcome discount", () => {
   });
 
   it("mints NO welcome code for a new subscriber", async () => {
-    await claimWelcomeOffer({ email: "new@example.test", phone: "+15551234567", source: "storefront" });
+    await claimWelcomeOffer({ email: "new@example.test", phone: "+15125550100", source: "storefront" });
     expect(minted.calls, "nothing was minted").toEqual([]);
   });
 
@@ -85,7 +85,7 @@ describe("retiring the welcome discount", () => {
     live.code = { code: "VLWELCOME-OLD", endsAt: "2026-10-01T00:00:00.000Z", percent: 15 };
 
     const result = await claimWelcomeOffer({
-      email: "holder@example.test", phone: "+15551234567", source: "storefront",
+      email: "holder@example.test", phone: "+15125550100", source: "storefront",
     });
 
     expect(result).toEqual({ ok: true, code: "VLWELCOME-OLD", endsAt: "2026-10-01T00:00:00.000Z", percent: 15 });
@@ -100,7 +100,7 @@ describe("retiring the welcome discount", () => {
 
   it("reports a refused consent as a failure, not as a silent subscribe", async () => {
     consent.accept = false;
-    const result = await claimWelcomeOffer({ email: "new@example.test", phone: "+15551234567", source: "storefront" });
+    const result = await claimWelcomeOffer({ email: "new@example.test", phone: "+15125550100", source: "storefront" });
     expect(result).toEqual({ ok: false, reason: "consent" });
   });
 });
