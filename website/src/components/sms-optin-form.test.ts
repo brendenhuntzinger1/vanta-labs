@@ -208,14 +208,35 @@ describe("the endpoint records consent and nothing else", () => {
 });
 
 describe("the phone validator the page relies on", () => {
+  // FIXTURES FOLLOW sms-consent-phone.test.ts, AND THAT IS NOT COSMETIC.
+  //
+  // This block first used "(555) 555-5555", which passed locally and failed in
+  // CI. The cause was neither flake nor environment: #215 landed on main while
+  // this branch was open and taught acceptableSmsPhone the numbering plan's own
+  // rules, under which 555 is not an assignable AREA code — so 5555555555 is
+  // not a typo, it is a number that cannot exist, and rejecting it is correct.
+  //
+  // The valid shape is an assignable NPA with the 555 EXCHANGE, which is the
+  // range reserved for fiction and the one this repository uses everywhere so
+  // that no suite can dial a real person.
   it("accepts numbers people actually type", () => {
-    expect(acceptableSmsPhone("(555) 555-5555")).toBeTruthy();
-    expect(acceptableSmsPhone("+1 555 555 5555")).toBeTruthy();
+    expect(acceptableSmsPhone("(415) 555-1234")).toBeTruthy();
+    expect(acceptableSmsPhone("+1 415 555 1234")).toBeTruthy();
+    expect(acceptableSmsPhone("512-555-0100")).toBeTruthy();
   });
 
   it("rejects what cannot be texted", () => {
     expect(acceptableSmsPhone("")).toBeNull();
     expect(acceptableSmsPhone("not a number")).toBeNull();
     expect(acceptableSmsPhone("12345")).toBeNull();
+  });
+
+  it("rejects the impossible numbers the opt-in page would otherwise collect", () => {
+    // The public page takes numbers from strangers with no account, so it is
+    // the surface most likely to be handed a placeholder. These are refused by
+    // structure rather than by guessing at ownership.
+    expect(acceptableSmsPhone("(555) 555-5555")).toBeNull();
+    expect(acceptableSmsPhone("1234567890")).toBeNull();
+    expect(acceptableSmsPhone("0000000000")).toBeNull();
   });
 });
