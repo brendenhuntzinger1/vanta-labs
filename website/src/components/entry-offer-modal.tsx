@@ -60,17 +60,31 @@ type OfferShape = {
 };
 
 /**
- * Where shopping happens, and therefore the only place this may open. Checkout
- * and the account screens are deliberately absent: a card over a task someone
+ * Where shopping happens, and therefore the only place this may open.
+ *
+ * THE FRONT PAGE IS NOT ON THIS LIST, and that is the point. It is brand-only,
+ * and a visitor who has just come through the gate has not seen a product or a
+ * price yet — "15% off your first order" there is an advert with nothing to
+ * attach to. Beside a $59 vial it is a number. Checkout and the account
+ * screens are absent for a different reason: a card thrown over a task someone
  * is mid-way through costs an order.
  */
 function isStoreRoute(pathname: string | null): boolean {
   if (!pathname) return false;
-  return pathname === "/" || pathname === "/products" || pathname.startsWith("/products/");
+  return pathname === "/products" || pathname.startsWith("/products/");
 }
 
-/** The house interval, carried over from the invitation this replaced. */
-const OPEN_AFTER_MS = 6000;
+/**
+ * Ten seconds: long enough to have read the page, short enough to arrive
+ * before the decision.
+ *
+ * Everyone who sees this is already signed in — they made an account and made
+ * the 21+ and research attestations to get through the door — so intent is not
+ * in doubt and a long warm-up buys nothing. A minute would be worse than
+ * useless: most product-page visits are settled before then, and the ask would
+ * land after the answer.
+ */
+const OPEN_AFTER_MS = 10000;
 
 /** Remembered per browser, so a dismissal is not re-asked on the next page. */
 const DISMISSED_KEY = "vl_entry_offer_dismissed_at";
