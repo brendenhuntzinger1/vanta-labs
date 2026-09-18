@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getSmsSignupConfig, getSpinWheelConfig } from "@/lib/admin-control";
 import { getAuthenticatedUser } from "@/lib/auth-session";
-import { readSmsStanding } from "@/lib/sms-consent";
+import { readPhoneOnFile, readSmsStanding } from "@/lib/sms-consent";
 import { readExistingSpin } from "@/lib/spin/spin-service";
 
 export const dynamic = "force-dynamic";
@@ -27,9 +27,15 @@ export const dynamic = "force-dynamic";
 // ever hand back the prize they already hold — but inviting somebody to do a
 // thing they have already done is an advert for a dead end.
 //
-// THE TEXT ASK IS A SEPARATE QUESTION AND A SEPARATE ANSWER. It rides along
-// inside the card; it is never a condition of spinning, and it is not asked of
-// somebody already on the list or somebody who once said stop.
+// THE NUMBER AND THE PERMISSION ARE TWO QUESTIONS WITH TWO ANSWERS.
+//
+// `needPhone` is whether the store has to ask for a number at all — it does
+// not, if it already holds one. `askForTexts` is whether there is a text-list
+// consent left to offer, which there is not for somebody already on the list
+// or somebody who once said stop.
+//
+// Neither is ever a condition of the other. The wheel collects a number; the
+// tick beside it is its own decision and buys nothing.
 //
 // NOTHING HERE MINTS, and there is no token in the reply. The page signs its
 // own, for the session's own address — see app/spin/page.tsx. A credential in a
@@ -49,6 +55,7 @@ export async function GET() {
     mayInvite: false,
     alreadySpun: false,
     askForTexts: false,
+    needPhone: false,
     accountEmail: null as string | null,
     dismissCooldownDays: 7,
   };
@@ -61,19 +68,26 @@ export async function GET() {
       return NextResponse.json({ ...silent, dismissCooldownDays: sms.dismissCooldownDays });
     }
 
-    const [existing, standing] = await Promise.all([
+    const [existing, standing, phoneOnFile] = await Promise.all([
       readExistingSpin({ email, campaignId: wheel.campaignId }),
       // A refused read answers "subscribed" (sms-consent.ts), which is the safe
       // direction here too: the cost of a wrong "subscribed" is one card
       // without a text box, and the cost of a wrong "none" is asking somebody
       // who already said stop.
       readSmsStanding(email),
+      // A refused read answers "we have one", so a blip costs a number the
+      // store could have collected rather than a field asked of somebody who
+      // has already given it twice.
+      readPhoneOnFile(email),
     ]);
 
     return NextResponse.json({
       mayInvite: !existing,
       alreadySpun: Boolean(existing),
       askForTexts: standing === "none",
+      // Asked for only when there is nothing on file. The number already
+      // stored is the one a later tick would subscribe.
+      needPhone: !phoneOnFile,
       // Their own address, returned to their own authenticated session, so the
       // card can show which one the consent would be recorded against rather
       // than collecting one it is going to discard.

@@ -4,7 +4,7 @@ import { PAID_ORDER_STATUSES, isProductPurchaseOrder } from "@/lib/ledger";
 import { ensureContactCode, findLiveContactCode } from "@/lib/marketing/omnisend/codes";
 import { getSmsSignupConfig } from "@/lib/admin-control";
 import { isHeldOut } from "@/lib/offers/welcome-offer-holdout";
-import { readSmsStanding, recordSmsConsent, type SmsConsentSource } from "@/lib/sms-consent";
+import { readSmsStanding, recordPhoneOnFile, recordSmsConsent, type SmsConsentSource } from "@/lib/sms-consent";
 import { acceptableSmsPhone } from "@/lib/sms-consent-text";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -260,6 +260,25 @@ export async function recordSmsSignupOnly(input: {
   const phone = acceptableSmsPhone(input.phone);
   if (!address || !phone) return false;
   return recordSmsConsent({ email: address, phone, source: input.source, userId: input.userId ?? null });
+}
+
+/**
+ * THE NUMBER, WITHOUT THE PERMISSION.
+ *
+ * Same shape as recordSmsSignupOnly and deliberately beside it, so the two
+ * halves of "we have your number" and "you agreed to be texted" read as the
+ * pair they are. This one subscribes nobody — see recordPhoneOnFile.
+ */
+export async function recordPhoneWithoutConsent(input: {
+  email: string;
+  phone: string;
+  source: SmsConsentSource;
+  userId?: string | null;
+}): Promise<boolean> {
+  const address = normalizeEmail(input.email);
+  const phone = acceptableSmsPhone(input.phone);
+  if (!address || !phone) return false;
+  return recordPhoneOnFile({ email: address, phone, source: input.source, userId: input.userId ?? null });
 }
 
 /**

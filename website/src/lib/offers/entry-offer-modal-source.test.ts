@@ -83,14 +83,32 @@ describe("nothing is ever pre-ticked", () => {
     expect(MODAL).toMatch(/const \[confirmed, setConfirmed\] = useState\(false\)/);
   });
 
-  it("will not record a consent without the age confirmation and a number", () => {
-    // Both are required for the SIGN-UP, and only for the sign-up. This store
-    // may not market to anyone who has not made the attestation.
-    const branch = MODAL.slice(MODAL.indexOf("if (smsConsent) {"), MODAL.indexOf("trackFunnelEvent(\"spin_invite_accepted\""));
-    expect(branch).toMatch(/if \(!confirmed\)/);
-    expect(branch).toMatch(/if \(!phone\.trim\(\)\)/);
-    expect(branch).toContain('"/api/offers/welcome"');
-    expect(branch).toMatch(/placement: "storefront"/);
+  it("will not record a consent without the age confirmation", () => {
+    // The attestation gates MARKETING, and only marketing: this store may not
+    // text anyone who has not made it. Keeping a number is not marketing, so
+    // the spin never waits on it.
+    const submit = MODAL.slice(MODAL.indexOf("const spin = useCallback"));
+    expect(submit).toMatch(/if \(smsConsent && !confirmed\)/);
+  });
+
+  it("asks for a number and will not spin without one", () => {
+    const submit = MODAL.slice(MODAL.indexOf("const spin = useCallback"));
+    expect(submit).toMatch(/if \(needPhone && !phone\.trim\(\)\)/);
+    expect(submit).toContain('"/api/offers/welcome"');
+    expect(submit).toMatch(/placement: "storefront"/);
+  });
+
+  it("sends the number whether or not the box was ticked, and says which", () => {
+    // THE WHOLE POINT OF THE SPLIT. The number is posted from everybody; the
+    // tick travels beside it as its own field, so entering a number can never
+    // become a consent by accident.
+    const submit = MODAL.slice(MODAL.indexOf("const spin = useCallback"));
+    expect(submit).toMatch(/if \(needPhone && phone\.trim\(\)\)/);
+    expect(submit).toContain("smsConsent }");
+  });
+
+  it("does not make somebody retype a number the store already holds", () => {
+    expect(MODAL).toMatch(/const needPhone = invite\?\.needPhone === true;/);
   });
 });
 

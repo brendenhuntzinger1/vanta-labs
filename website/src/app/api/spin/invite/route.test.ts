@@ -17,6 +17,7 @@ const state = vi.hoisted(() => ({
   sessionEmail: null as string | null,
   existingSpin: null as unknown,
   standing: "none" as "none" | "subscribed" | "opted_out",
+  phoneOnFile: false,
   throwOnRead: false,
 }));
 
@@ -31,7 +32,10 @@ vi.mock("@/lib/auth-session", () => ({
   getAuthenticatedUser: async () => (state.sessionEmail ? { id: "u1", email: state.sessionEmail } : null),
 }));
 
-vi.mock("@/lib/sms-consent", () => ({ readSmsStanding: async () => state.standing }));
+vi.mock("@/lib/sms-consent", () => ({
+  readSmsStanding: async () => state.standing,
+  readPhoneOnFile: async () => state.phoneOnFile,
+}));
 
 vi.mock("@/lib/spin/spin-service", () => ({
   readExistingSpin: async () => {
@@ -50,6 +54,7 @@ beforeEach(() => {
   state.sessionEmail = "shopper@example.test";
   state.existingSpin = null;
   state.standing = "none";
+  state.phoneOnFile = false;
   state.throwOnRead = false;
 });
 
@@ -113,6 +118,36 @@ describe("the text list is a separate question", () => {
     const body = await ask();
     expect(body.askForTexts).toBe(false);
     expect(body.mayInvite).toBe(true);
+  });
+});
+
+describe("the number and the permission are separate answers", () => {
+  it("asks for a number when the store holds none", async () => {
+    expect((await ask()).needPhone).toBe(true);
+  });
+
+  it("does not ask again once one is on file", async () => {
+    // The number already stored is the one a later tick would subscribe, so
+    // making somebody retype it buys nothing.
+    state.phoneOnFile = true;
+    expect((await ask()).needPhone).toBe(false);
+  });
+
+  it("asks for a number even from somebody already on the text list", async () => {
+    // Being subscribed at one number is not the same as the store having it
+    // against this account; the two questions do not imply one another.
+    state.standing = "subscribed";
+    const body = await ask();
+    expect(body.needPhone).toBe(true);
+    expect(body.askForTexts).toBe(false);
+  });
+
+  it("offers the tick to somebody whose number is already on file", async () => {
+    state.phoneOnFile = true;
+    state.standing = "none";
+    const body = await ask();
+    expect(body.needPhone).toBe(false);
+    expect(body.askForTexts, "a held number is not a consent").toBe(true);
   });
 });
 

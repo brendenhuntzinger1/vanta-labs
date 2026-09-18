@@ -279,6 +279,22 @@ function emailConsentFrom(input: {
  * mirrors into the account row when there is one) says the same two things;
  * nothing else is anything. The account row is asked first because it is
  * the one the person can see and change on their settings page.
+ *
+ * A NUMBER WE HOLD WITH NO PERMISSION IS ITS OWN ANSWER, and it used to be
+ * indistinguishable from having no number at all. Both returned null, which
+ * made buildContactPayload leave the phone identifier off the contact — so a
+ * number the store had collected simply never reached Omnisend, and the day an
+ * explicit tick arrived it had to be sent as a brand-new identifier.
+ *
+ * `nonSubscribed` is the honest third answer and it is the one Omnisend has:
+ * the contact carries the number, the SMS channel says plainly that it may not
+ * be marketed to, and a later tick changes the STATUS of an identifier that is
+ * already there. That is what makes the consent box able to activate SMS
+ * without anything upstream being redesigned.
+ *
+ * It promotes nobody. Status follows the store's own record, so a stored
+ * number stays nonSubscribed until recordSmsConsent writes a consent, and
+ * that is only ever called by an explicit tick.
  */
 function smsConsentFrom(prefs: PreferencesRow | null, guest: SmsSubscriberRow | null, now: string): ChannelConsent | null {
   const phone = String(prefs?.phone ?? "").trim();
@@ -294,6 +310,11 @@ function smsConsentFrom(prefs: PreferencesRow | null, guest: SmsSubscriberRow | 
   }
   if (guest?.opted_out_at) {
     return { status: "unsubscribed", changedAt: guest.opted_out_at };
+  }
+  // Held, unconsented. No `source`: consentBlock is for a consent, and there
+  // is none to describe.
+  if (guestPhone || phone) {
+    return { status: "nonSubscribed", changedAt: guest?.marketing_consent_at ?? prefs?.updated_at ?? now };
   }
   return null;
 }

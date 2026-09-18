@@ -670,7 +670,11 @@ export default function CheckoutPage() {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone, email: address, placement: "checkout" }),
+      // SAID, NOT INFERRED. This effect only runs behind `smsOptIn`, so the
+      // tick is what is being reported — but the endpoint no longer reads the
+      // presence of a number as agreement, because the wheel sends one from
+      // everybody.
+      body: JSON.stringify({ phone, email: address, placement: "checkout", smsConsent: true }),
     }).catch(() => {
       // A subscription that did not land is not worth a message over a cart.
       // The box stays ticked, and correcting the number retries it.

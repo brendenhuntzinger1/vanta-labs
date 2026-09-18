@@ -31,18 +31,29 @@ import { SMS_CONSENT_TEXT, SMS_DISCLOSURE_TEXT } from "@/lib/sms-consent-text";
  * checkout, an account screen or a payment page, where a card over the task is
  * a lost order rather than a captured shopper.
  *
- * THE SPIN IS NEVER GATED ON THE TEXT LIST, and that is a deliberate reversal.
- * While the discount existed the offer WAS the text list: the server issued no
- * code without a mobile number, so the tick was the price of the offer and
- * saying "optional" beside it would have been untrue. Nothing is bought with a
- * tick any more. The wheel is open to anyone signed in, the number is asked for
- * beside it as its own question, and the box says Optional because it now is —
- * which is also exactly how the create-account form at /account/login, the
- * surface a carrier review actually loads, has always put it.
+ * IT ASKS FOR TWO THINGS AND THEY ARE NOT THE SAME THING.
+ *
+ * THE NUMBER IS COLLECTED FROM EVERYBODY, alongside the account's address, and
+ * the wheel will not spin without one. Holding a customer's phone is ordinary
+ * contact data — it is how an order problem gets solved — and the store kept
+ * none, because until now the only path that stored a number also claimed
+ * permission to market to it.
+ *
+ * THE PERMISSION IS A SEPARATE, OPTIONAL TICK that buys nothing. Nobody is
+ * subscribed by entering a number: the request says `smsConsent` explicitly,
+ * the server stores the number with marketing_consent false, and every
+ * standing check reads that as "not subscribed". The box says Optional because
+ * it is, which is also exactly how the create-account form at /account/login —
+ * the surface a carrier review actually loads — has always put it.
+ *
+ * SO THE TICK CAN BE SWITCHED ON LATER WITHOUT TOUCHING THIS CARD. When
+ * Omnisend SMS is approved, the number is already on the contact as a
+ * nonSubscribed phone identifier; a tick flips that identifier's status. No
+ * number is collected twice, and nothing here has to change.
  *
  * THE AGE AND RESEARCH CONFIRMATION STAYS, AND STAYS REQUIRED, for the text
- * sign-up alone. This store may not market to anyone who has not made it.
- * Someone who only wants to spin never touches it.
+ * sign-up alone — it gates MARKETING, and keeping a number is not marketing.
+ * Someone who gives their number and leaves the tick alone never touches it.
  *
  * THE SERVER DECIDES WHO MAY BE INTERRUPTED. /api/spin/invite answers it —
  * wheel switched off, already spun, already on the list — and this component
@@ -60,6 +71,8 @@ type InviteShape = {
   alreadySpun?: boolean;
   /** Is there a text list left to ask this person about? */
   askForTexts?: boolean;
+  /** Does the store still need a number, or does it already hold one? */
+  needPhone?: boolean;
   /** The address the consent would be recorded against — the session's, never what is typed. */
   accountEmail?: string | null;
   dismissCooldownDays?: number;
@@ -210,6 +223,7 @@ export function EntryOfferModal() {
   }, [open, close]);
 
   const askForTexts = invite?.askForTexts === true;
+  const needPhone = invite?.needPhone === true;
 
   /**
    * Take the shopper to the wheel, recording the consent first if they gave it.
@@ -228,10 +242,22 @@ export function EntryOfferModal() {
   const spin = useCallback(async () => {
     if (saving) return;
 
-    if (smsConsent) {
-      if (!confirmed) { setError("Please confirm you are 21 or older and buying for research use."); return; }
-      if (!phone.trim()) { setError("Enter your mobile number to join the text list."); return; }
+    // THE NUMBER IS THE ONE THING THE WHEEL ASKS FOR. Not asked at all when
+    // the store already holds one — that number is what a later tick would
+    // subscribe, so making somebody retype it buys nothing.
+    if (needPhone && !phone.trim()) {
+      setError("Enter your mobile number to spin.");
+      return;
+    }
+    // THE TICK IS ITS OWN DECISION, and the attestation gates that decision
+    // rather than the spin: this store may not MARKET to anyone who has not
+    // made it, and keeping a number is not marketing.
+    if (smsConsent && !confirmed) {
+      setError("Please confirm you are 21 or older and buying for research use.");
+      return;
+    }
 
+    if (needPhone && phone.trim()) {
       setSaving(true);
       setError(null);
       try {
@@ -239,23 +265,25 @@ export function EntryOfferModal() {
           method: "POST",
           credentials: "same-origin",
           headers: { "Content-Type": "application/json" },
-          // The tick is what puts a number on this request at all, so one only
-          // ever reaches the server behind an explicit, unticked-by-default
-          // agreement. The address is the session's: the endpoint reads
-          // `sessionEmail || typedEmail` and there is always a session here.
-          body: JSON.stringify({ phone: phone.trim(), placement: "storefront" }),
+          // SAID, NOT INFERRED. The endpoint keeps the number either way and
+          // subscribes only on an explicit true, so an untouched box cannot
+          // become a consent by accident. The address is the session's: the
+          // endpoint reads `sessionEmail || typedEmail` and there is always a
+          // session here.
+          body: JSON.stringify({ phone: phone.trim(), placement: "storefront", smsConsent }),
         });
         const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
-        if (data?.ok === false && data.error) {
-          // A number the carrier cannot text is worth stopping for: it is the
-          // one failure the shopper can actually fix, and it is in front of
-          // them.
-          setError(data.error);
+        if (data?.ok === false) {
+          // A number nobody could be texted at is worth stopping for: it is
+          // the one failure the shopper can fix, and it is in front of them.
+          setError(data.error ?? "That does not look like a mobile number.");
           setSaving(false);
           return;
         }
       } catch {
-        /* the subscription is a side errand; the wheel is what they pressed */
+        // Offline, or the request was cut off. The wheel is what they pressed
+        // and the prize is not conditional on the store filing their number,
+        // so they go through; the number is asked for again next time.
       }
       setSaving(false);
     }
@@ -263,7 +291,7 @@ export function EntryOfferModal() {
     trackFunnelEvent("spin_invite_accepted", { placement: "storefront", joinedTexts: smsConsent });
     setOpen(false);
     router.push("/spin");
-  }, [confirmed, phone, router, saving, smsConsent]);
+  }, [confirmed, needPhone, phone, router, saving, smsConsent]);
 
   if (!open) return null;
 
@@ -312,68 +340,79 @@ export function EntryOfferModal() {
           your cart for 72 hours.
         </p>
 
-        {askForTexts ? (
+        {needPhone || askForTexts ? (
           <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-3 sm:mt-5 sm:px-3.5">
-            <p className="text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-white/40">
-              While you are here
-            </p>
-            <input
-              type="tel"
-              inputMode="tel"
-              autoComplete="tel"
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-              placeholder="+1 (555) 123-4567"
-              aria-label="Mobile number"
-              data-testid="entry-offer-phone"
-              className="vl-sms-field vl-focus-ring mt-2 w-full"
-            />
-            {invite?.accountEmail ? (
-              <p className="mt-1.5 pl-1 text-[0.7rem] leading-4 text-white/35">
-                Recorded against {invite.accountEmail}.
-              </p>
+            {needPhone ? (
+              <>
+                <p className="text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-white/40">
+                  Your details
+                </p>
+                <input
+                  type="tel"
+                  inputMode="tel"
+                  autoComplete="tel"
+                  value={phone}
+                  onChange={(event) => setPhone(event.target.value)}
+                  placeholder="+1 (555) 123-4567"
+                  aria-label="Mobile number"
+                  data-testid="entry-offer-phone"
+                  className="vl-sms-field vl-focus-ring mt-2 w-full"
+                />
+                {/* WHAT THE NUMBER IS FOR, said before it is given. It is
+                    contact detail for this account; it is not a subscription,
+                    and the box below is where that decision is made. */}
+                <p className="mt-1.5 pl-1 text-[0.7rem] leading-4 text-white/35">
+                  {invite?.accountEmail
+                    ? `Kept with ${invite.accountEmail} for your order. We do not text you unless you ask below.`
+                    : "Kept with your account for your order. We do not text you unless you ask below."}
+                </p>
+              </>
             ) : null}
 
-            <label className="mt-2.5 flex cursor-pointer items-start gap-2.5 sm:gap-3">
-              <input
-                type="checkbox"
-                checked={confirmed}
-                onChange={(event) => setConfirmed(event.target.checked)}
-                data-testid="entry-offer-confirm"
-                className="mt-0.5 h-4 w-4 flex-shrink-0 accent-[color:var(--accent-gold)]"
-              />
-              <span className="text-[0.76rem] leading-[1.1rem] sm:text-[0.8rem] sm:leading-5">
-                <span className="font-semibold text-white/90">I confirm I am 21 years of age or older.</span>{" "}
-                <span className="text-white/45">These products are for laboratory research use only.</span>
-              </span>
-            </label>
+            {askForTexts ? (
+              <>
+                <label className={`flex cursor-pointer items-start gap-2.5 sm:gap-3 ${needPhone ? "mt-3" : "mt-0"}`}>
+                  <input
+                    type="checkbox"
+                    checked={confirmed}
+                    onChange={(event) => setConfirmed(event.target.checked)}
+                    data-testid="entry-offer-confirm"
+                    className="mt-0.5 h-4 w-4 flex-shrink-0 accent-[color:var(--accent-gold)]"
+                  />
+                  <span className="text-[0.76rem] leading-[1.1rem] sm:text-[0.8rem] sm:leading-5">
+                    <span className="font-semibold text-white/90">I confirm I am 21 years of age or older.</span>{" "}
+                    <span className="text-white/45">These products are for laboratory research use only.</span>
+                  </span>
+                </label>
 
-            <label className="mt-2 flex cursor-pointer items-start gap-2.5 sm:gap-3">
-              <input
-                type="checkbox"
-                checked={smsConsent}
-                onChange={(event) => setSmsConsent(event.target.checked)}
-                data-testid="entry-offer-sms-consent"
-                aria-describedby="entry-offer-sms-disclosure"
-                className="mt-0.5 h-4 w-4 flex-shrink-0 accent-[color:var(--accent-gold)]"
-              />
-              <span className="text-[0.73rem] leading-[1.05rem] text-white/45 sm:text-[0.8rem] sm:leading-5">
-                {SMS_CONSENT_TEXT} <span className="text-white/40">Optional.</span>
-              </span>
-            </label>
+                <label className="mt-2 flex cursor-pointer items-start gap-2.5 sm:gap-3">
+                  <input
+                    type="checkbox"
+                    checked={smsConsent}
+                    onChange={(event) => setSmsConsent(event.target.checked)}
+                    data-testid="entry-offer-sms-consent"
+                    aria-describedby="entry-offer-sms-disclosure"
+                    className="mt-0.5 h-4 w-4 flex-shrink-0 accent-[color:var(--accent-gold)]"
+                  />
+                  <span className="text-[0.73rem] leading-[1.05rem] text-white/45 sm:text-[0.8rem] sm:leading-5">
+                    {SMS_CONSENT_TEXT} <span className="text-white/40">Optional.</span>
+                  </span>
+                </label>
 
-            <p id="entry-offer-sms-disclosure" className="mt-2 px-1 text-[0.68rem] leading-[1rem] text-white/35 sm:mt-2.5 sm:text-[0.72rem] sm:leading-5">
-              {SMS_DISCLOSURE_TEXT}{" "}
-              See our{" "}
-              <Link href="/legal/privacy" className="text-white/60 underline decoration-white/25 underline-offset-4 hover:text-white">
-                Privacy Policy
-              </Link>{" "}
-              &amp;{" "}
-              <Link href="/legal/terms" className="text-white/60 underline decoration-white/25 underline-offset-4 hover:text-white">
-                Terms
-              </Link>
-              .
-            </p>
+                <p id="entry-offer-sms-disclosure" className="mt-2 px-1 text-[0.68rem] leading-[1rem] text-white/35 sm:mt-2.5 sm:text-[0.72rem] sm:leading-5">
+                  {SMS_DISCLOSURE_TEXT}{" "}
+                  See our{" "}
+                  <Link href="/legal/privacy" className="text-white/60 underline decoration-white/25 underline-offset-4 hover:text-white">
+                    Privacy Policy
+                  </Link>{" "}
+                  &amp;{" "}
+                  <Link href="/legal/terms" className="text-white/60 underline decoration-white/25 underline-offset-4 hover:text-white">
+                    Terms
+                  </Link>
+                  .
+                </p>
+              </>
+            ) : null}
           </div>
         ) : null}
 

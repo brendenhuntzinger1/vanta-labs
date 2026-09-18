@@ -120,7 +120,10 @@ export function SmsSignupForm({
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone, placement: "storefront" }),
+        // The submit above refuses without the tick, so this path is always a
+        // consent — stated explicitly because the endpoint no longer infers it
+        // from a number being present.
+        body: JSON.stringify({ phone, placement: "storefront", smsConsent: true }),
       });
       const data = (await res.json()) as { ok?: boolean; error?: string; code?: string; endsAt?: string; percent?: number };
       if (data?.ok && data.code) {
