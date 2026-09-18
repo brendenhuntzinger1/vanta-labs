@@ -12,7 +12,6 @@ import {
   SMS_INVITE_FIELD_LABEL,
   SMS_INVITE_HEADLINE,
   SMS_PRODUCT_LINK,
-  SMS_RETURNING_INVITE,
   SMS_SUCCESS_BODY,
   SMS_SUCCESS_HEADLINE,
   WELCOME_OFFER_TERMS,
@@ -23,20 +22,27 @@ import { SMS_CONSENT_TEXT, SMS_DISCLOSURE_TEXT } from "@/lib/sms-consent-text";
  * THE TEXT-LIST SIGN-UP, WHEREVER THE SHOPPER ALREADY IS.
  *
  * Three quiet shapes of one thing: a slim bar above the catalogue, a single
- * line on a product page, a card beside the cart's order summary. The
- * invitation modal (sms-invite-modal.tsx) and the checkout panel reuse the
- * same state and the same form; the checkout has its own treatment because
- * there the code has to land on the order rather than be read.
+ * line on a product page, a card beside the cart's order summary.
+ *
+ * IT ASKS FOR NOTHING IN RETURN FOR A DISCOUNT ANY MORE, because there is no
+ * longer one to give: the welcome code was retired on 2026-09-18 and the wheel
+ * took its place as the store's acquisition offer. So these say what the texts
+ * are and nothing else, and every shopper sees the same sentence — the ask no
+ * longer has an eligible and an ineligible version of itself, which is what
+ * `offerAvailable` and the separate returning-buyer wording existed to
+ * separate. Two constants saying the same thing is exactly the drift this
+ * module was written to stop.
  *
  * NO POPUP HERE, EVER. These open in place, pushing the page down, and close
- * again. The one modal in this store's shopping flow is the invitation, and it
- * coordinates so that it and the promotions modal are never both on screen.
+ * again. The one modal in this store's shopping flow is the wheel invitation,
+ * and it coordinates so that it and the promotions modal are never both on
+ * screen.
  *
- * IT DISAPPEARS WHEN IT SHOULD. Someone who has bought never sees a
- * first-order discount; someone already on the list with nothing to give sees
- * nothing at all; someone holding a code sees the code instead of an ask; and
- * with the kill switch off, none of it renders. The server decides all of
- * that, so no surface can reach its own conclusion.
+ * IT DISAPPEARS WHEN IT SHOULD. Someone already on the list with nothing to
+ * give sees nothing at all; someone still holding a code from before the
+ * retirement sees the code instead of an ask; and with the kill switch off,
+ * none of it renders. The server decides all of that, so no surface can reach
+ * its own conclusion.
  */
 
 export type OfferState = {
@@ -83,17 +89,16 @@ export function useWelcomeOffer(): [OfferState, (next: OfferState) => void] {
 /**
  * THE FORM ITSELF: a number, the consent box, the button.
  *
- * The consent box is separate from the field and never pre-ticked, the full
- * disclosure sits under it with both policy links, and the offer's terms are
- * on screen BEFORE the button rather than revealed afterwards. A returning
- * buyer sees the same form with no discount attached to it.
+ * The consent box is separate from the field and never pre-ticked, and the full
+ * disclosure sits under it with both policy links. There are no offer terms
+ * above the button any more because there is no offer: the terms block stated
+ * the retired welcome code's three restrictions, and printing them over a form
+ * that mints nothing would describe a deal the shopper is not being given.
  */
 export function SmsSignupForm({
-  offerAvailable,
   onSubscribed,
   autoFocus = false,
 }: {
-  offerAvailable: boolean;
   onSubscribed: (next: OfferState) => void;
   autoFocus?: boolean;
 }) {
@@ -115,7 +120,10 @@ export function SmsSignupForm({
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone, placement: "storefront" }),
+        // The submit above refuses without the tick, so this path is always a
+        // consent — stated explicitly because the endpoint no longer infers it
+        // from a number being present.
+        body: JSON.stringify({ phone, placement: "storefront", smsConsent: true }),
       });
       const data = (await res.json()) as { ok?: boolean; error?: string; code?: string; endsAt?: string; percent?: number };
       if (data?.ok && data.code) {
@@ -137,7 +145,6 @@ export function SmsSignupForm({
 
   return (
     <div className="mt-4" data-testid="welcome-offer-form">
-      {offerAvailable ? <p className="vl-sms-terms" data-testid="welcome-offer-terms">{WELCOME_OFFER_TERMS}</p> : null}
       <div className="mt-3 space-y-2.5">
         <input
           ref={phoneRef}
@@ -158,7 +165,7 @@ export function SmsSignupForm({
           data-testid="welcome-offer-submit"
           className="vl-sms-submit vl-focus-ring"
         >
-          {saving ? "Sending" : offerAvailable ? SMS_INVITE_BUTTON : "Join the list"}
+          {saving ? "Sending" : SMS_INVITE_BUTTON}
         </button>
       </div>
       <label className="vl-sms-consent">
@@ -253,12 +260,13 @@ export function WelcomeOfferSignup({ variant }: { variant: "bar" | "link" | "car
   if (offer.promptsEnabled === false) return null;
 
   const claimed = offer.status === "claimed";
-  const returning = offer.status === "returning";
-  const offerAvailable = offer.status === "eligible";
   if (!claimed && dismissed) return null;
 
-  const invitation = returning ? SMS_RETURNING_INVITE : SMS_INVITE_BODY;
-  const form = <SmsSignupForm offerAvailable={offerAvailable} onSubscribed={(next) => { setOffer(next); setOpen(false); }} autoFocus={open} />;
+  // ONE SENTENCE FOR EVERYONE. A first-time shopper and a returning buyer are
+  // offered the same thing now — the list — so telling them apart here would
+  // only produce two ways of saying it.
+  const invitation = SMS_INVITE_BODY;
+  const form = <SmsSignupForm onSubscribed={(next) => { setOffer(next); setOpen(false); }} autoFocus={open} />;
   const claimedBody = claimed ? <WelcomeCodeCard offer={offer} /> : null;
 
   if (variant === "link") {
@@ -273,7 +281,7 @@ export function WelcomeOfferSignup({ variant }: { variant: "bar" | "link" | "car
               data-testid="welcome-offer-open"
               className="vl-sms-quiet-link vl-focus-ring"
             >
-              {returning ? SMS_RETURNING_INVITE : SMS_PRODUCT_LINK}
+              {SMS_PRODUCT_LINK}
             </button>
             {open ? (
               <div className="vl-sms-card mt-3 p-5">
@@ -298,10 +306,7 @@ export function WelcomeOfferSignup({ variant }: { variant: "bar" | "link" | "car
     return (
       <div data-testid="welcome-offer-bar">
         <div className="vl-sms-bar">
-          <p className="vl-sms-bar-text">
-            {returning ? SMS_RETURNING_INVITE : SMS_BAR_TEXT}
-            {offerAvailable ? <span className="vl-sms-bar-terms">{WELCOME_OFFER_TERMS}</span> : null}
-          </p>
+          <p className="vl-sms-bar-text">{SMS_BAR_TEXT}</p>
           <button
             type="button"
             onClick={() => setOpen((v) => !v)}
@@ -349,8 +354,8 @@ export function WelcomeOfferSignup({ variant }: { variant: "bar" | "link" | "car
               <span aria-hidden="true">×</span>
             </button>
           </div>
-          <p className="vl-sms-headline">{returning ? SMS_RETURNING_INVITE : SMS_INVITE_HEADLINE}</p>
-          <p className="vl-sms-body">{returning ? "" : SMS_INVITE_BODY}</p>
+          <p className="vl-sms-headline">{SMS_INVITE_HEADLINE}</p>
+          <p className="vl-sms-body">{SMS_INVITE_BODY}</p>
           {open ? form : (
             <button
               type="button"
@@ -358,10 +363,9 @@ export function WelcomeOfferSignup({ variant }: { variant: "bar" | "link" | "car
               data-testid="welcome-offer-open"
               className="vl-sms-submit vl-focus-ring mt-4"
             >
-              {offerAvailable ? SMS_INVITE_BUTTON : "Join the list"}
+              {SMS_INVITE_BUTTON}
             </button>
           )}
-          {!open && offerAvailable ? <p className="vl-sms-terms">{WELCOME_OFFER_TERMS}</p> : null}
         </>
       )}
     </div>

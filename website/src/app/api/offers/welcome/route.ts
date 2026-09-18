@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSmsSignupConfig } from "@/lib/admin-control";
 import { getAuthenticatedUser } from "@/lib/auth-session";
-import { claimWelcomeOffer, readWelcomeOffer, recordSmsSignupOnly } from "@/lib/offers/welcome-offer";
+import { claimWelcomeOffer, readWelcomeOffer, recordPhoneWithoutConsent, recordSmsSignupOnly } from "@/lib/offers/welcome-offer";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { rateLimitKeyForRequest } from "@/lib/request-ip";
 
@@ -37,6 +37,21 @@ export const dynamic = "force-dynamic";
  * NEVER A CONDITION OF ANYTHING. A failure is answered 200 with `ok: false`
  * and leaves the checkout exactly as it was: the shopper still pays, their
  * consent is still recorded, they simply get no discount.
+ *
+ * CONSENT IS SAID, NOT INFERRED FROM A NUMBER BEING PRESENT.
+ *
+ * It used to be inferred, and that was safe only while the sole reason to send
+ * a phone number here was a ticked box. The wheel broke that: it collects a
+ * number from everybody, because having somebody's number and being allowed to
+ * text it are different facts and the store wants the first without claiming
+ * the second.
+ *
+ * So the body now carries `smsConsent`, and ONLY an explicit `true` records a
+ * consent. Anything else — false, absent, a string, a number — stores the
+ * phone against the customer and subscribes nobody. That direction is
+ * deliberate: a caller that forgets the field under-claims, and the failure
+ * mode of under-claiming is a subscriber the store has to ask again, while the
+ * failure mode of over-claiming is a text message to somebody who never agreed.
  */
 
 export async function GET() {
@@ -76,12 +91,15 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: { phone?: unknown; email?: unknown; placement?: unknown };
+  let body: { phone?: unknown; email?: unknown; placement?: unknown; smsConsent?: unknown };
   try {
-    body = (await request.json()) as { phone?: unknown; email?: unknown; placement?: unknown };
+    body = (await request.json()) as { phone?: unknown; email?: unknown; placement?: unknown; smsConsent?: unknown };
   } catch {
     return NextResponse.json({ ok: false, error: "Enter a mobile number." }, { status: 400 });
   }
+  // Strictly `true`. Every other value, including the field being missing,
+  // means the number is kept and nobody is subscribed.
+  const smsConsent = body.smsConsent === true;
 
   const user = await getAuthenticatedUser();
   const sessionEmail = user?.email?.trim().toLowerCase() ?? "";
@@ -106,6 +124,20 @@ export async function POST(request: Request) {
   const config = await getSmsSignupConfig();
 
   try {
+    // NO TICK: KEEP THE NUMBER, SUBSCRIBE NOBODY.
+    //
+    // This is the wheel's path and it is the common one. The number lands on
+    // the consent ledger and the account profile with marketing_consent false,
+    // reads as "none" to every standing check, and reaches Omnisend as a
+    // nonSubscribed phone identifier — so the day an explicit tick arrives, it
+    // is the same number changing status rather than a new one being
+    // collected.
+    if (!smsConsent) {
+      const stored = await recordPhoneWithoutConsent({ email, phone, source, userId: sessionEmail ? user?.id ?? null : null });
+      if (stored) return NextResponse.json({ ok: true, subscribed: false, phoneStored: true });
+      return NextResponse.json({ ok: false, error: "That does not look like a mobile number." }, { status: 400 });
+    }
+
     if (!config.promptsEnabled) {
       // Consent only. Subscribed, no discount, and the caller is told so
       // rather than being left to wonder where the code went.
@@ -121,6 +153,14 @@ export async function POST(request: Request) {
       userId: sessionEmail ? user?.id ?? null : null,
     });
     if (claim.ok) {
+      // NO CODE IS THE NORMAL ANSWER NOW. The welcome discount is retired, so a
+      // successful sign-up subscribes and returns nothing to redeem. The `code`
+      // keys stay in the shape only for a customer who still holds a live one
+      // from before the retirement — dropping them would strand that code where
+      // the caller expects to print it.
+      if ("subscribedOnly" in claim) {
+        return NextResponse.json({ ok: true, subscribed: true });
+      }
       return NextResponse.json({ ok: true, subscribed: true, code: claim.code, endsAt: claim.endsAt, percent: claim.percent });
     }
     if (claim.reason === "phone") {

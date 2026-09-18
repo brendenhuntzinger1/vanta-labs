@@ -14,6 +14,7 @@ import { RecoveryLinkCatcher } from "@/components/recovery-link-catcher";
 import { StorefrontOffersBar } from "@/components/storefront-offers-bar";
 import { StorefrontOfferModal } from "@/components/storefront-offer-modal";
 import { EntryOfferModal } from "@/components/entry-offer-modal";
+import { SpinPrizeBar } from "@/components/spin-prize-bar";
 import { cookies } from "next/headers";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { EMAIL_GRANT_COOKIE } from "@/lib/email/link-grant";
@@ -339,6 +340,18 @@ export default async function RootLayout({
               truth. welcome-offer.tsx and its endpoint are left untouched and
               simply no longer mounted. */}
           <StorefrontOffersBar offers={offers} />
+          {/* A REWARD ALREADY WON, WHICH IS NOT A PROMOTION.
+              The band above carries what the STORE is running; this carries
+              what this SHOPPER holds, and it is beneath it because a prize you
+              already own outranks an offer you have yet to take only in
+              importance, not in reading order — the promotion is what the page
+              is otherwise about.
+
+              It renders for almost nobody: only a browser actually holding a
+              live reward, and never on the home page, the cart, the wheel or
+              anywhere near a payment. Everyone else gets exactly the layout
+              they had. */}
+          <SpinPrizeBar />
           {/* THE SAME ARRAY, NOT A SECOND LOOKUP OF THE SAME IDEA.
               The card announces the promotion once, centred, when a shopper
               first reaches the catalogue; the band above carries it from then

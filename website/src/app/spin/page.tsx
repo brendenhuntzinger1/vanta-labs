@@ -10,7 +10,7 @@ import { SPIN_TERMS, describeExactCondition, describeRedemptionCondition, spinOd
 import { SPIN_PRIZES } from "@/lib/spin/prize-table";
 import { availableDoseRungs } from "@/lib/spin/spin-dose";
 import { readExistingSpin } from "@/lib/spin/spin-service";
-import { verifySpinToken } from "@/lib/spin/spin-token";
+import { signSpinToken, verifySpinToken } from "@/lib/spin/spin-token";
 
 export const dynamic = "force-dynamic";
 
@@ -53,26 +53,53 @@ export default async function SpinPage({
   if (!config.enabled) notFound();
 
   const { t } = await searchParams;
-  const token = String(t ?? "").trim();
-  const verified = token ? await verifySpinToken(token) : null;
+  const supplied = String(t ?? "").trim();
+  const verified = supplied ? await verifySpinToken(supplied) : null;
+  // A token for a PREVIOUS campaign is genuine and useless: the campaign is
+  // inside the signature, so it cannot be forged, but honouring it would let
+  // somebody spin a promotion they were never mailed.
+  const mailed = verified && verified.campaignId === config.campaignId ? verified : null;
 
-  if (!verified || verified.campaignId !== config.campaignId) {
-    return <LinkProblem />;
-  }
-
-  // A DIFFERENT ACCOUNT SIGNED IN IS A FORWARDED LINK. Say so here rather than
-  // letting them press a button that will only refuse them.
   const user = await getAuthenticatedUser();
   const sessionEmail = String(user?.email ?? "").trim().toLowerCase();
-  if (sessionEmail && sessionEmail !== verified.email) {
+
+  // A DIFFERENT ACCOUNT SIGNED IN IS A FORWARDED LINK. Say so here rather than
+  // letting them press a button that will only refuse them. Only a link that
+  // is otherwise good raises this: a stale or forged one grants nothing, so
+  // there is nothing for the two identities to disagree about.
+  if (mailed && sessionEmail && sessionEmail !== mailed.email) {
     // The token, so the button can come straight back here once the session is
     // gone — see spin-wrong-account.tsx.
-    return <SpinWrongAccount spinHref={`/spin?t=${encodeURIComponent(token)}`} />;
+    return <SpinWrongAccount spinHref={`/spin?t=${encodeURIComponent(supplied)}`} />;
   }
 
+  // THE STOREFRONT'S OWN WAY IN.
+  //
+  // The wheel began as the thing a win-back email linked to, so the only way
+  // to reach it was a token minted at click time for a VERIFIED recipient. It
+  // is now the store's acquisition offer as well, and the invitation that
+  // carries it opens on a product page rather than in an inbox — where there
+  // is no email click to verify anybody.
+  //
+  // A SESSION IS THE SAME CALIBRE OF PROOF, and the route already says so: the
+  // wrong-account refusal above treats a signed-in address as the STRONGER
+  // claim and refuses the token when the two disagree. Signing the session's
+  // own address is therefore not a new trust, it is the one already in use —
+  // and it is the only address this branch will ever sign, so nobody can mint
+  // a spin for anyone but themselves.
+  //
+  // Nothing downstream changes shape. One spin per address per campaign still
+  // comes from the offer row's unique index, not from how the visitor arrived,
+  // so a shopper who spins from the storefront and then opens their email
+  // finds the prize they already hold rather than a second draw.
+  const token = mailed ? supplied : sessionEmail ? await signSpinToken(sessionEmail, config.campaignId) : null;
+  const email = mailed ? mailed.email : sessionEmail;
+  // No usable link and no session, or a secret this deploy cannot sign with.
+  if (!token || !email) return <LinkProblem />;
+
   const existing = await readExistingSpin({
-    email: verified.email,
-    campaignId: verified.campaignId,
+    email,
+    campaignId: config.campaignId,
   });
 
   // THE WHEEL and THE PRIZE LIST are different lengths on purpose: sixteen

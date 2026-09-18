@@ -53,6 +53,23 @@ const ALLOWED_EVENTS = new Set([
   // getCurrentOnlineVisitorCount's event_type list on purpose (that reader
   // still means "a real navigation happened", not "a tab is still open").
   "heartbeat",
+  // ---- THE TOP OF THE WHEEL FUNNEL.
+  //
+  // The wheel is the store's acquisition offer, so how many people are shown
+  // the invitation and how many take it is the number that decides whether the
+  // funnel works at all. None of it is reachable any other way: an invitation
+  // that is never accepted leaves no trace on the server, so without these
+  // three the only measurable point is the spin itself — a conversion rate with
+  // no denominator.
+  //
+  // On the same footing as page_view, and for the same reason: no revenue, no
+  // order, nothing a report treats as money. Everything BELOW the invitation —
+  // who span, what they won, which dose they chose, whether they redeemed — is
+  // already a row in customer_offers, written server-side, and is read from
+  // there rather than believed from a browser.
+  "spin_invite_shown",
+  "spin_invite_skipped",
+  "spin_invite_accepted",
 ]);
 
 function normalizePath(path: unknown) {
