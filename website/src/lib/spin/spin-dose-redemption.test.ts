@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { defaultBxgyPromotions } from "@/lib/bxgy-config";
 import type { BxgyPromotion } from "@/lib/bxgy-engine";
 
 // ---------------------------------------------------------------------------
@@ -157,33 +156,6 @@ const CUSTOMER = {
   country: "US",
   phone: "5125550100",
 };
-
-function promotion(id: string): BxgyPromotion {
-  const found = defaultBxgyPromotions().find((entry) => entry.id === id);
-  if (!found) throw new Error(`no built-in promotion ${id}`);
-  return { ...found, enabled: true };
-}
-
-/** A stored customer_offers row granting `quantity` free Recon Water. */
-function bacWaterOffer(quantity: number | null | undefined, overrides: Record<string, unknown> = {}) {
-  const row: Record<string, unknown> = {
-    id: "offer-1",
-    offer_key: "labor_day_bac_water_2",
-    email: CUSTOMER.email,
-    reward_kind: "free_product",
-    product_slug: "bac-water",
-    percent_off: null,
-    variant_id: null,
-    min_subtotal_cents: 3500,
-    expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-    reserved_order_id: null,
-    redeemed_at: null,
-    ...overrides,
-  };
-  // `undefined` models a row read from a database that predates the column.
-  if (quantity !== undefined) row.quantity = quantity;
-  return row;
-}
 
 async function quote(items: Array<{ id: string; quantity: number }>, offerToken?: string) {
   const { quoteOrder } = await import("@/lib/quote-order");

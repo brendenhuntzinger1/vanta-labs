@@ -162,7 +162,9 @@ export async function POST(request: Request) {
         id: result.prize.id,
         label: result.prize.label,
         wedgeLabel: result.prize.wedgeLabel,
-        minSubtotalCents: result.prize.minSubtotalCents,
+        // From the offer row, not the prize table — a laddered prize carries
+        // the rung this customer chose, which the table cannot know.
+        minSubtotalCents: result.minSubtotalCents,
         condition: describeRedemptionCondition(result.prize),
       },
       // THE SAVED EXPIRY, not a duration for the client to start counting from.

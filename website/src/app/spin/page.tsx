@@ -106,7 +106,12 @@ export default async function SpinPage({
         sliceIndex: existing.sliceIndex,
         label: existing.prize.label,
         condition: describeRedemptionCondition(existing.prize),
-        minSubtotalCents: existing.prize.minSubtotalCents,
+        // THE ROW, NOT THE TABLE. `slices` above may say $90 because that is
+        // the entry rung every visitor sees before spinning; this winner may
+        // have chosen the 30mg and owe $170. The till enforces the row, so the
+        // panel must quote the row or the wheel advertises a condition
+        // checkout will refuse.
+        minSubtotalCents: existing.minSubtotalCents,
         // The stored instant, so the countdown resumes where it really is
         // rather than restarting at 72 hours on every visit.
         expiresAt: existing.expiresAt,

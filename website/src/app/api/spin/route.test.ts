@@ -78,6 +78,12 @@ function prizeResult(overrides: Record<string, unknown> = {}) {
     expiresAt: "2026-09-19T12:00:00.000Z",
     offerToken: "a-bearer-secret",
     alreadySpun: false,
+    // SpinResult carries the OFFER ROW's minimum, which for a laddered prize is
+    // the rung this customer chose rather than anything the table can state.
+    // Seeded to the same figure as the prize here because GHK-Cu has one dose,
+    // so the two agree — which is exactly the case that used to hide the bug.
+    minSubtotalCents: 7_500,
+    variantId: null,
     ...overrides,
   };
 }
