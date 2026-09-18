@@ -42,6 +42,7 @@ vi.mock("@/lib/supabase-server", () => {
   const from = (table: string) => {
     if (table !== "customer_offers") throw new Error(`unexpected table ${table}`);
     const filters: Array<(row: Row) => boolean> = [];
+    let limitTo: number | null = null;
     const chain: Record<string, unknown> = {
       insert(values: Record<string, unknown>) {
         db.inserts += 1;
@@ -74,11 +75,34 @@ vi.mock("@/lib/supabase-server", () => {
       select: () => chain,
       eq(column: keyof Row, value: unknown) { filters.push((r) => r[column] === value); return chain; },
       is(column: keyof Row, value: null) { filters.push((r) => r[column] === value); return chain; },
+      /**
+       * PostgREST's `or`, to the extent this service uses it: a comma-separated
+       * list of `column.op.value`, ORed together and ANDed with everything else.
+       * Only `is.null` and `eq.<value>` appear here; anything else throws rather
+       * than silently matching, so a future filter cannot pass by being ignored.
+       */
+      or(expression: string) {
+        const clauses = expression.split(",").map((clause) => {
+          const [column, op, ...rest] = clause.split(".");
+          const value = rest.join(".");
+          if (op === "is" && value === "null") return (r: Row) => r[column as keyof Row] === null;
+          if (op === "eq") return (r: Row) => String(r[column as keyof Row] ?? "") === value;
+          throw new Error(`mock does not implement or(${clause})`);
+        });
+        filters.push((r) => clauses.some((match) => match(r)));
+        return chain;
+      },
       order() { return chain; },
-      limit() { return chain; },
+      limit(count: number) { limitTo = count; return chain; },
       async maybeSingle() {
         const hit = db.rows.filter((r) => filters.every((f) => f(r)));
         return { data: hit[0] ?? null, error: null };
+      },
+      // A bare await on the builder resolves to the matching ROWS, which is how
+      // a `.limit(n)` read without `.maybeSingle()` behaves.
+      then(resolve: (value: unknown) => void) {
+        const hit = db.rows.filter((r) => filters.every((f) => f(r)));
+        resolve({ data: limitTo === null ? hit : hit.slice(0, limitTo), error: null });
       },
     };
     return chain;
@@ -209,6 +233,50 @@ describe("reading a spin back", () => {
     expect(seen?.prize.id).toBe("cjc_ipamorelin");
     expect(seen?.sliceIndex).toBe(SPIN_PRIZES.findIndex((p) => p.id === "cjc_ipamorelin"));
     expect(seen?.offerToken).toBeNull();
+  });
+
+  it("STILL COUNTS a cycle-closed spin, so a paid order cannot buy a re-roll", async () => {
+    // close_cycle no longer touches spin rows, but a row it caught before that
+    // fix must not become a free draw. The index would allow the insert — it is
+    // partial on `revoked_at is null and redeemed_at is null` — so this read is
+    // the only thing standing between a revoked prize and a second one.
+    db.rows.push({
+      id: "row-old", offer_key: spinOfferKey(CAMPAIGN), email: EMAIL,
+      token_hash: "h", reward_kind: "free_product", product_slug: "klow",
+      percent_off: null, quantity: 1, min_subtotal_cents: 20_000,
+      expires_at: new Date(NOW + 48 * 3_600_000).toISOString(),
+      reserved_order_id: null,
+      revoked_at: new Date(NOW - 3_600_000).toISOString(),
+      redeemed_at: null,
+      revoke_reason: "cycle_closed",
+    } as never);
+
+    const again = await spin({ email: EMAIL, campaignId: CAMPAIGN, now: NOW, randomInt: always("glow") });
+    expect(again?.alreadySpun, "they already span").toBe(true);
+    expect(again?.prize.id, "and it is the prize they won, not a fresh draw").toBe("klow");
+    expect(db.inserts, "nothing was minted").toBe(0);
+  });
+
+  it("prefers a live prize over a cycle-closed one, so a support re-spin wins", async () => {
+    db.rows.push({
+      id: "row-old", offer_key: spinOfferKey(CAMPAIGN), email: EMAIL,
+      token_hash: "h", reward_kind: "free_product", product_slug: "klow",
+      percent_off: null, quantity: 1, min_subtotal_cents: 20_000,
+      expires_at: new Date(NOW + 48 * 3_600_000).toISOString(),
+      reserved_order_id: null, revoked_at: new Date(NOW - 3_600_000).toISOString(),
+      redeemed_at: null, revoke_reason: "cycle_closed",
+    } as never);
+    db.rows.push({
+      id: "row-new", offer_key: spinOfferKey(CAMPAIGN), email: EMAIL,
+      token_hash: "h2", reward_kind: "free_product", product_slug: "semax",
+      percent_off: null, quantity: 1, min_subtotal_cents: 9_900,
+      expires_at: new Date(NOW + 48 * 3_600_000).toISOString(),
+      reserved_order_id: null, revoked_at: null, redeemed_at: null, revoke_reason: null,
+    } as never);
+
+    const seen = await readExistingSpin({ email: EMAIL, campaignId: CAMPAIGN });
+    expect(seen?.prize.id, "the live row, not the swept one").toBe("semax");
+    expect(seen?.cycleClosed).toBeFalsy();
   });
 
   it("ignores a revoked spin, so support can hand someone a fresh one", async () => {

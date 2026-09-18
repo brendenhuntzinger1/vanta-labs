@@ -135,41 +135,41 @@ export async function readExistingSpin(input: {
   const offerKey = spinOfferKey(input.campaignId);
   if (!email || !offerKey) return null;
 
+  // ONE ROUND TRIP, NOT TWO. This runs for every visitor who has not spun —
+  // the commonest case on the page — so the cycle-closed check rides along in
+  // the same query rather than costing a second lookup that almost always
+  // finds nothing.
   const { data, error } = await supabaseAdmin
     .from("customer_offers")
     .select(ROW_COLUMNS)
     .eq("offer_key", offerKey)
     .eq("email", email)
-    .is("revoked_at", null)
-    .maybeSingle();
-
-  if (!error && data) return resultFromRow(data as OfferRow);
-
-  // A CYCLE-CLOSED PRIZE STILL COUNTS AS A SPIN.
-  //
-  // close_cycle used to revoke spin rows along with the retention ladder (it no
-  // longer does — see customer-offers.sql). Any row it caught before that fix
-  // is invisible to the read above, which would let the wheel draw again: the
-  // one-live-offer index is partial on `revoked_at is null and redeemed_at is
-  // null`, so the replacement insert would succeed and the customer would hold
-  // a second, freshly drawn prize.
-  //
-  // Narrow on purpose. An OPERATOR revocation still grants a fresh spin — that
-  // is how support fixes a genuine problem, and spin-one-spin.db.test.ts pins
-  // it. Only the automatic reason is disqualifying, because the customer never
-  // asked for it.
-  const { data: closed } = await supabaseAdmin
-    .from("customer_offers")
-    .select(ROW_COLUMNS)
-    .eq("offer_key", offerKey)
-    .eq("email", email)
-    .eq("revoke_reason", "cycle_closed")
+    // A CYCLE-CLOSED PRIZE STILL COUNTS AS A SPIN.
+    //
+    // close_cycle used to revoke spin rows along with the retention ladder (it
+    // no longer does — see customer-offers.sql). A row it caught before that
+    // fix would be invisible to a plain `revoked_at is null` read, and the
+    // wheel would draw again: the one-live-offer index is partial on
+    // `revoked_at is null and redeemed_at is null`, so the replacement insert
+    // would succeed and the customer would hold a second, freshly drawn prize.
+    //
+    // Narrow on purpose. An OPERATOR revocation still grants a fresh spin —
+    // that is how support fixes a genuine problem, and spin-one-spin.db.test.ts
+    // pins it. Only the automatic reason disqualifies, because the customer
+    // never asked for it.
+    .or("revoked_at.is.null,revoke_reason.eq.cycle_closed")
     .order("issued_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(2);
 
-  if (!closed) return null;
-  const result = resultFromRow(closed as OfferRow);
+  if (error || !data?.length) return null;
+
+  // A live row always wins over a cycle-closed one: the customer may have been
+  // handed a fresh spin by support after the old prize was swept.
+  const rows = data as Array<OfferRow & { revoked_at?: string | null }>;
+  const live = rows.find((row) => !row.revoked_at);
+  if (live) return resultFromRow(live);
+
+  const result = resultFromRow(rows[0]);
   return result ? { ...result, cycleClosed: true } : null;
 }
 
