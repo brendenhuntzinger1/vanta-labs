@@ -152,3 +152,51 @@ Single-dose wedges and the three percentage wedges skip this step entirely.
    row for that slug — closing the silent-drift bug where a label is a hardcoded
    string with nothing tying it to the catalogue.
 4. A single-dose wedge still mints exactly as it does today.
+
+---
+
+## Verification record (2026-09-18)
+
+### Automated
+
+| Check | Result |
+|---|---|
+| Full vitest suite | 11,647 passed · 11 skipped · 756 files |
+| `tsc --noEmit` | clean |
+| eslint (changed paths) | clean |
+| `next build` | succeeds |
+| Real-Postgres spin DB tests | 15/15 (4 new re-spin regressions) |
+| Dose tamper matrix | 18/18 |
+| Dose redemption via real `quoteOrder` | 7/7 |
+
+### The harness E2E, and why its failures are not ours
+
+`scripts/qa-wheel-campaign.mjs` scores **28/36** on this branch. Rather than
+assume the 8 failures were pre-existing, `origin/main` (6e4793a6) was built in a
+worktree and run against the same Postgres, the same seeded catalogue and the
+same payment stub:
+
+    this branch   28/36 — 8 FAILED
+    origin/main   28/36 — 8 FAILED   (same steps, same `no_offer` at step 10)
+
+Identical. The same run also printed `min=$99.00` for GLP-1 on main against
+`$90.00` here, confirming the ladder is live and nothing else moved.
+
+The 8 are a harness gap, not a regression: `readOfferStatus` returns null for
+the harness's offer cookie, so the till never attaches the prize and the
+redemption leg cannot complete locally. **The redemption leg is therefore
+UNVERIFIED by the harness E2E** and is covered instead by
+`spin-dose-redemption.test.ts`, which drives the real `quoteOrder`, and by the
+real-Postgres DB tests.
+
+The harness also needed seeding before the script could run at all: it ships six
+synthetic products, none of which are wheel prizes. The nine prize products and
+their 17 doses were added locally; that seed is harness-only and touches no
+production data.
+
+### Production
+
+The cycle-close fix was applied to production as
+`customer_offer_close_cycle_spares_spin_prizes` and verified by reading the
+deployed body back: spin excluded, reserve guard intact, advisory lock intact.
+Six spin rows, unchanged — 0 cycle-closed, 2 live, 0 redeemed.
