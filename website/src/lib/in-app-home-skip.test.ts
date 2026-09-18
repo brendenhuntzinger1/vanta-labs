@@ -123,51 +123,63 @@ async function redirectTarget(shape: RequestShape): Promise<string | null> {
 describe("an in-app browser now keeps the home page, like everyone else", () => {
   for (const [app, ua] of Object.entries(IN_APP_AGENTS)) {
     it(`answers ${app} exactly as it answers desktop Chrome`, async () => {
-      // "/" requires an account now, so everyone is sent to sign in. What must
-      // stay true — and is the only thing worth testing here — is that the
-      // answer does not depend on WHO is asking. A wall that varied by browser
-      // would be a cloak.
+      // THE HOME PAGE IS SERVED AGAIN, TO EVERYONE, AS OF 2026-09-18.
+      //
+      // This asserted a sign-in redirect while "/" was gated. It is public now
+      // — gating it made the business unverifiable to every carrier and ad
+      // reviewer who cannot sign in, which is what refused this store's
+      // toll-free SMS registration. The page fetches no catalogue without a
+      // session, so what a stranger receives is brand, trust copy and FAQ.
+      //
+      // WHAT IS UNCHANGED, AND IS THE ONLY THING THIS FILE EVER REALLY GUARDED:
+      // the answer does not depend on WHO is asking. It was uniform when it was
+      // a redirect and it is uniform now that it is a page. A rule that varied
+      // by browser would be a cloak either way.
       const inApp = await redirectTarget({ path: "/", ua });
       const desktop = await redirectTarget({ path: "/", ua: REAL_BROWSER_AGENTS["chrome desktop"] });
-      expect(inApp).toContain("/account/login");
+      expect(inApp, "the home page is served, not redirected").toBeNull();
       expect(inApp).toBe(desktop);
     });
   }
 
-  it("never routes an in-app visitor through the catalog to get to sign-in", async () => {
-    // The regression this guards is a DOUBLE hop. A redirect to /products would
-    // immediately be re-redirected to /account/login, costing a second round
-    // trip on the slowest connections there are. One hop, straight to the door.
+  it("never routes an in-app visitor anywhere at all", async () => {
+    // The regression this guarded was a DOUBLE hop, when "/" redirected to the
+    // catalogue and the catalogue redirected to sign-in. There is no hop left
+    // to double: the home page is served where it was asked for. Pinned as
+    // "nowhere" rather than deleted, because a future in-app special case
+    // would reintroduce exactly the browser-dependent routing this file exists
+    // to forbid.
     for (const ua of Object.values(IN_APP_AGENTS)) {
       const target = await redirectTarget({ path: "/", ua });
-      expect(target).toContain("/account/login");
-      expect(target, "must not detour via the catalog").not.toContain("/products");
+      expect(target, "an in-app browser is not routed off the home page").toBeNull();
     }
   });
 
-  it("carries the campaign query through the hop, so paid attribution survives", async () => {
-    // There IS a hop now, and this is the expensive one to get wrong: every
-    // click the store pays for arrives with a ttclid, and losing it on the way
-    // to the sign-in page means the conversion is never attributed to the ad
-    // that bought it. The whole original URL rides in ?next=.
+  it("does not bounce a paid click, so attribution cannot be lost on a hop", async () => {
+    // The expensive one to get wrong. Every click this store pays for arrives
+    // with a ttclid, and while "/" was gated that click was bounced to the
+    // sign-in page, with the original URL carried in ?next= and the signed-out
+    // pageview dropped — the campaign was billed for an arrival the store
+    // never recorded.
+    //
+    // Now the ad lands on the page it bought, with its query string intact and
+    // nothing to survive, because nothing moves it. The strongest form of
+    // "attribution survives the hop" is that there is no hop.
     const target = await redirectTarget({
       path: "/?ttclid=ABC123&utm_source=tiktok",
       ua: IN_APP_AGENTS.tiktok,
     });
-    expect(target).toContain("/account/login");
-    const next = new URLSearchParams(target!.split("?")[1]).get("next");
-    expect(next, "the visitor's original URL must survive the redirect").toBe(
-      "/?ttclid=ABC123&utm_source=tiktok",
-    );
+    expect(target, "a paid click must land where it was pointed").toBeNull();
   });
 
   it("treats an RSC navigation the same as a page load", async () => {
     // A client-side navigation fetches the flight payload rather than a
     // document. If that shape were answered differently, the payload for a
-    // protected page would be served to someone the document is withheld from.
+    // page would be served to someone the document is withheld from — or, now,
+    // withheld from someone the document is served to.
     const asDocument = await redirectTarget({ path: "/", ua: IN_APP_AGENTS.tiktok });
     const asPayload = await redirectTarget({ path: "/", ua: IN_APP_AGENTS.tiktok, document: false });
-    expect(asPayload).toContain("/account/login");
+    expect(asPayload).toBeNull();
     expect(asPayload).toBe(asDocument);
   });
 
@@ -179,8 +191,8 @@ describe("an in-app browser now keeps the home page, like everyone else", () => 
 
 describe("every browser that can play the vial keeps it", () => {
   for (const [name, ua] of Object.entries(REAL_BROWSER_AGENTS)) {
-    it(`answers ${name} with the same sign-in redirect as every other browser`, async () => {
-      expect(await redirectTarget({ path: "/", ua })).toContain("/account/login");
+    it(`serves ${name} the home page, like every other browser`, async () => {
+      expect(await redirectTarget({ path: "/", ua })).toBeNull();
     });
 
     it(`answers ${name} the same way from a paid social link`, async () => {
@@ -188,18 +200,30 @@ describe("every browser that can play the vial keeps it", () => {
       // render, and it is attacker-supplied. It must not move the answer.
       const plain = await redirectTarget({ path: "/", ua });
       const paid = await redirectTarget({ path: "/?ttclid=ABC123", ua });
-      expect(paid).toContain("/account/login");
-      // Same destination; only the carried ?next= differs, by the path asked for.
-      expect(paid?.split("?next=")[0]).toBe(plain?.split("?next=")[0]);
+      expect(paid, "a tracking parameter must not change what is served").toBeNull();
+      expect(paid).toBe(plain);
     });
   }
 
   it("answers a request with no user-agent identically", async () => {
-    // A crawler, a curl, a scanner. Unknown gets the same wall as everyone.
+    // A crawler, a curl, a scanner. Unknown gets the same answer as everyone,
+    // and that answer is now the page rather than the wall. This is the
+    // assertion that matters most to the SMS work: a carrier's checker often
+    // sends no recognisable user-agent at all, and it must not be a special
+    // case in either direction.
     const anonymous = await redirectTarget({ path: "/" });
     const desktop = await redirectTarget({ path: "/", ua: REAL_BROWSER_AGENTS["chrome desktop"] });
-    expect(anonymous).toContain("/account/login");
+    expect(anonymous).toBeNull();
     expect(anonymous).toBe(desktop);
+  });
+
+  it("serves the SMS opt-in page to every browser alike", async () => {
+    // The page a carrier opens. Same uniformity rule: no user-agent may change
+    // whether the consent form is reachable.
+    for (const ua of [...Object.values(REAL_BROWSER_AGENTS), ...Object.values(IN_APP_AGENTS)]) {
+      expect(await redirectTarget({ path: "/sms", ua })).toBeNull();
+    }
+    expect(await redirectTarget({ path: "/sms" })).toBeNull();
   });
 });
 

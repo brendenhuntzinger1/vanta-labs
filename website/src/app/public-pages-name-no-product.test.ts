@@ -69,6 +69,25 @@ describe("no public page renders product names from the catalogue", () => {
   /** Every page.tsx under src/app, as a route path. */
   function routes(dir: string, prefix = ""): string[] {
     const found: string[] = [];
+    // THE ROOT ROUTE, WHICH THIS WALKER USED TO MISS ENTIRELY.
+    //
+    // It only ever descended into DIRECTORIES and looked for a page.tsx inside
+    // each one, so src/app/page.tsx — the home page, the one file directly in
+    // this folder — was never a candidate and "/" was never scanned. That was
+    // invisible while the home page required an account: it was not a public
+    // page, so its absence from a public-page scan cost nothing.
+    //
+    // Opening the front door for SMS verification changed that, and a guard
+    // with a hole in it exactly where the new public page lives is worse than
+    // no guard, because it reads as coverage.
+    if (prefix === "") {
+      try {
+        statSync(join(dir, "page.tsx"));
+        found.push("/");
+      } catch {
+        /* no root page */
+      }
+    }
     for (const entry of readdirSync(dir)) {
       const full = join(dir, entry);
       if (!statSync(full).isDirectory()) continue;
@@ -160,14 +179,73 @@ describe("no public page renders product names from the catalogue", () => {
     expect(CATALOGUE_NAMES.length).toBeGreaterThan(2);
   });
 
+  /**
+   * THE ONE PAGE THAT IMPORTS A PRODUCT RENDERER AND IS STILL SAFE.
+   *
+   * The home page composes the signed-IN experience from ProductCard, which of
+   * course renders {product.name} — that is what a product card is for. The
+   * static scan cannot see that the card is unreachable for the anonymous
+   * reader it is protecting, because the thing that makes it unreachable is a
+   * runtime condition: page.tsx never fetches the catalogue without a session,
+   * so `featuredForHome` is empty and no card is ever constructed.
+   *
+   * Exempting it costs coverage, so the exemption is paid for immediately
+   * below by "the home page's catalogue read is gated on the session", which
+   * asserts the runtime property directly and is the stronger check of the
+   * two: it fails if anyone removes the gate, which is the regression this
+   * file actually exists to catch. The literal-name scan still runs against
+   * the home page unchanged.
+   *
+   * Narrow on purpose — one route, one component. Any OTHER public page that
+   * imports ProductCard is a real leak and still fails.
+   */
+  const RENDERER_EXEMPT = new Set(["/ (product-card.tsx)"]);
+
   it.each(PUBLIC_PAGES)("%s does not render a catalogue product's name", (route) => {
     for (const { label, text } of sourcesFor(route)) {
+      if (RENDERER_EXEMPT.has(label)) continue;
       // Reading the catalogue for PHOTOGRAPHY is fine — the URLs are opaque.
       // What must never appear on a public page is a product's name.
       expect(text, `${label} renders product.name`).not.toMatch(/\{\s*product\.name\s*\}/);
       expect(text, `${label} renders p.name`).not.toMatch(/\{\s*p\.name\s*\}/);
       expect(text, `${label} passes a product name as alt`).not.toMatch(/alt=\{[^}]*\.name[^}]*\}/);
     }
+  });
+
+  /**
+   * WHAT THE EXEMPTION ABOVE IS PAYING FOR.
+   *
+   * "Not fetched" rather than "fetched and hidden" is the only version of
+   * withheld that survives RSC: a server component that reads the catalogue
+   * and then declines to render it still serialises every row into the flight
+   * payload embedded in the HTML. So the property worth pinning is not "no
+   * card is rendered" — it is "no read happens at all without a session".
+   */
+  describe("the home page's catalogue read is gated on the session", () => {
+    const home = readFileSync(join(APP, "page.tsx"), "utf8");
+    const homeCode = code(home);
+
+    it("derives visibility from the viewer's session, not from anything else", () => {
+      expect(homeCode).toMatch(/getAuthenticatedUser\(\)/);
+      expect(homeCode).toMatch(/const\s+catalogVisible\s*=\s*Boolean\(\s*viewer\s*\)/);
+    });
+
+    it("fetches the catalogue only inside that condition", () => {
+      // Exactly one call site, and it is the guarded one. A second call
+      // anywhere in this file — or this one losing its guard — means the
+      // anonymous render reads the catalogue again.
+      const calls = [...homeCode.matchAll(/getCatalogProducts\s*\(/g)];
+      expect(calls.length, "getCatalogProducts must be called exactly once").toBe(1);
+      expect(homeCode).toMatch(/catalogVisible\s*\?\s*await\s+getCatalogProducts\(\)/);
+    });
+
+    it("never decides what to serve from who is asking", () => {
+      // The uniform-wall invariant, restated where the exemption lives: a
+      // user-agent or crawler test here would serve a reviewer something a
+      // customer does not get, which is cloaking.
+      expect(homeCode).not.toMatch(/user-?agent/i);
+      expect(homeCode).not.toMatch(/googlebot|bingbot|crawler/i);
+    });
   });
 
   it.each(PUBLIC_PAGES)("%s does not spell one out as a literal either", (route) => {

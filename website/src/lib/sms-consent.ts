@@ -42,8 +42,29 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 
 const LOG = "[sms-consent]";
 
-/** Where the box was ticked. Stored on the row as `consent_source`. */
-export type SmsConsentSource = "signup" | "checkout" | "account-settings" | "storefront" | "omnisend-form";
+/**
+ * Where the box was ticked. Stored on the row as `consent_source`.
+ *
+ * "sms-page" is the standalone public opt-in at /sms — the one surface a
+ * carrier reviewing this store's toll-free number can open without an account.
+ * It is its own source rather than being folded into "storefront" precisely
+ * because a verification dispute asks WHERE a number came from, and "the
+ * public opt-in page" is a different and better answer than "somewhere in the
+ * shop".
+ *
+ * Checked against production before adding: `consent_source` is plain nullable
+ * text with no CHECK constraint (only `status` is constrained, to pending /
+ * verified / opted_out / blocked), so a new value here cannot be silently
+ * refused by the database. That mattered — this module swallows its own write
+ * errors, so a rejected value would have looked exactly like success.
+ */
+export type SmsConsentSource =
+  | "signup"
+  | "checkout"
+  | "account-settings"
+  | "storefront"
+  | "omnisend-form"
+  | "sms-page";
 
 type SubscriberRow = {
   phone_e164: string;
