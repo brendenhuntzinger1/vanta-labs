@@ -121,6 +121,14 @@ export async function POST(request: Request) {
       userId: sessionEmail ? user?.id ?? null : null,
     });
     if (claim.ok) {
+      // NO CODE IS THE NORMAL ANSWER NOW. The welcome discount is retired, so a
+      // successful sign-up subscribes and returns nothing to redeem. The `code`
+      // keys stay in the shape only for a customer who still holds a live one
+      // from before the retirement — dropping them would strand that code where
+      // the caller expects to print it.
+      if ("subscribedOnly" in claim) {
+        return NextResponse.json({ ok: true, subscribed: true });
+      }
       return NextResponse.json({ ok: true, subscribed: true, code: claim.code, endsAt: claim.endsAt, percent: claim.percent });
     }
     if (claim.reason === "phone") {
