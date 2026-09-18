@@ -66,7 +66,18 @@ describe("the published odds", () => {
 
 describe("the minimum-spend tiers", () => {
   it("derives them from the wheel rather than restating them", () => {
-    expect(spinMinimumTiers()).toEqual([0, 3_500, 7_500, 9_900, 12_500, 15_000, 17_500, 20_000]);
+    // THESE ARE ENTRY RUNGS, AND THAT IS THE HONEST SET TO PUBLISH.
+    //
+    // A laddered prize has several minimums, but this copy is shown BEFORE the
+    // spin, when nobody has chosen a dose. The entry rung is always available,
+    // so it is the minimum that can actually be required of the customer;
+    // listing the upper rungs here would overstate the condition for a dose
+    // they may never pick. The rungs above are disclosed on the picker, at the
+    // moment the customer is choosing between them.
+    //
+    // $90 and $100 joined the set when the GLP ladders moved their entry rungs
+    // off the flat $99; $99 stays because Semax still sits there.
+    expect(spinMinimumTiers()).toEqual([0, 3_500, 7_500, 9_000, 9_900, 10_000, 12_500, 15_000, 17_500, 20_000]);
   });
 
   it("lists each tier once, ascending", () => {
