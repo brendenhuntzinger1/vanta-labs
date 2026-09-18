@@ -8,6 +8,7 @@ import { getSpinWheelConfig } from "@/lib/admin-control";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { SPIN_TERMS, describeExactCondition, describeRedemptionCondition, spinOdds } from "@/lib/spin/disclosure";
 import { SPIN_PRIZES } from "@/lib/spin/prize-table";
+import { availableDoseRungs } from "@/lib/spin/spin-dose";
 import { readExistingSpin } from "@/lib/spin/spin-service";
 import { verifySpinToken } from "@/lib/spin/spin-token";
 
@@ -101,6 +102,15 @@ export default async function SpinPage({
     premium: PREMIUM_PRIZE_IDS.has(entry.prize.id),
   }));
 
+  // THE SIZES THIS WINNER CAN STILL TAKE, resolved against the live catalogue
+  // rather than the prize table. A rung whose strength has been retired is not
+  // offered at all: showing it greyed out would be advertising something the
+  // till is going to refuse.
+  const doseRungs = existing ? await availableDoseRungs(existing.prize) : [];
+  const chosenDose = existing?.variantId
+    ? doseRungs.find((rung) => rung.variantId === existing.variantId)?.label ?? null
+    : null;
+
   const initialResult: WheelPrizeResult | null = existing
     ? {
         sliceIndex: existing.sliceIndex,
@@ -119,6 +129,8 @@ export default async function SpinPage({
         // Already spent on an order. The panel says so instead of offering a
         // countdown and a "Start shopping" button for a reward that is gone.
         redeemed: existing.redeemed,
+        doses: doseRungs.map((rung) => ({ label: rung.label, minSubtotalCents: rung.minSubtotalCents })),
+        chosenDose,
       }
     : null;
 
