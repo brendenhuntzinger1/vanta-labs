@@ -52,6 +52,8 @@ import { WELCOME_OFFER_PERCENT } from "@/lib/offers/welcome-offer-copy";
 
 type OfferShape = {
   status?: string;
+  /** The address the code will go to — the session's, never what is typed. */
+  accountEmail?: string;
   mayInterrupt?: boolean;
   promptsEnabled?: boolean;
   dismissCooldownDays?: number;
@@ -130,6 +132,8 @@ export function EntryOfferModal() {
       .then((data: OfferShape | null) => {
         if (!live || !data) return;
         setOffer(data);
+        // Shown, not asked for: the POST discards anything typed here.
+        if (data.accountEmail) setEmail(data.accountEmail);
         // THE SERVER DECIDES WHO MAY BE INTERRUPTED. Someone who has bought,
         // who already subscribed, who holds a code, or who once said stop is
         // not asked again — and this component never works that out for
@@ -226,7 +230,7 @@ export function EntryOfferModal() {
         aria-labelledby="entry-offer-heading"
         onClick={(event) => event.stopPropagation()}
         data-testid="entry-offer-modal"
-        className="relative w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b0b] px-5 py-5 text-white shadow-[0_24px_70px_-20px_rgba(0,0,0,0.9)] sm:px-8 sm:py-7"
+        className="relative w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b0b] px-5 py-5 text-white shadow-[0_24px_70px_-20px_rgba(0,0,0,0.9)] [@media(max-height:780px)]:py-4 sm:px-8 sm:py-7"
       >
         <div
           aria-hidden="true"
@@ -281,28 +285,37 @@ export function EntryOfferModal() {
               Email &amp; text sign-up
             </div>
 
-            <h2 id="entry-offer-heading" className="mt-3 font-serif text-[1.5rem] leading-[1.12] sm:mt-4 sm:text-[1.75rem] sm:leading-[1.15]">
+            <h2 id="entry-offer-heading" className="mt-3 font-serif text-[1.5rem] leading-[1.12] [@media(max-height:780px)]:mt-2 [@media(max-height:780px)]:text-[1.35rem] sm:mt-4 sm:text-[1.75rem] sm:leading-[1.15]">
               {offerLive ? `Get ${WELCOME_OFFER_PERCENT}% off your first order.` : "Join the Vanta Labs list."}
             </h2>
 
-            <p className="mt-2.5 text-[0.82rem] leading-[1.35rem] text-white/55 sm:mt-3 sm:text-sm sm:leading-6">
+            <p className="mt-2.5 text-[0.82rem] leading-[1.35rem] text-white/55 [@media(max-height:780px)]:hidden sm:mt-3 sm:text-sm sm:leading-6 sm:[@media(max-height:780px)]:block">
               {offerLive
                 ? `Opt in to texts and your ${WELCOME_OFFER_PERCENT}% code appears right here — plus new product launches, restock alerts and exclusive offers from Vanta Labs.`
                 : "Be first to hear about new product launches, restock alerts and exclusive offers from Vanta Labs — by email, and by text if you want them."}
             </p>
 
-            <div className="mt-4 space-y-2 sm:mt-5 sm:space-y-2.5">
+            <div className="mt-4 space-y-2 [@media(max-height:780px)]:mt-3 sm:mt-5 sm:space-y-2.5">
+              {/* READ-ONLY WHEN THE SERVER NAMED AN ADDRESS. The POST reads
+                  the session's address and discards this one, so an editable
+                  field here is a promise the server does not keep. Checkout
+                  says "Using your account email." for the same reason; this
+                  says it the same way. */}
               <input
                 type="email"
                 inputMode="email"
                 autoComplete="email"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
+                readOnly={Boolean(offer?.accountEmail)}
                 placeholder="you@lab.com"
                 aria-label="Email address"
                 data-testid="entry-offer-email"
-                className="vl-sms-field vl-focus-ring w-full"
+                className={`vl-sms-field vl-focus-ring w-full${offer?.accountEmail ? " cursor-default opacity-70" : ""}`}
               />
+              {offer?.accountEmail ? (
+                <p className="pl-1 text-[0.7rem] leading-4 text-white/35">Using your account email.</p>
+              ) : null}
               <input
                 type="tel"
                 inputMode="tel"
@@ -375,7 +388,7 @@ export function EntryOfferModal() {
               {saving ? null : <span aria-hidden="true">→</span>}
             </button>
 
-            <ul className="mt-4 space-y-1.5 text-[0.75rem] text-white/45 sm:mt-5 sm:text-[0.78rem]">
+            <ul className="mt-4 space-y-1.5 text-[0.75rem] text-white/45 [@media(max-height:780px)]:mt-3 sm:mt-5 sm:text-[0.78rem]">
               <li className="flex items-center gap-2">
                 <span aria-hidden="true" className="text-[color:var(--accent-gold)]">✓</span>
                 <span><span className="font-semibold text-white/75">≥99%</span> HPLC-verified purity</span>
