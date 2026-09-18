@@ -1040,7 +1040,26 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       // count can satisfy, so a tracked-but-empty gift whose catalogue status
       // had not caught up was added anyway — and reserve_inventory then refused
       // the whole order over a unit the shopper never asked for.
+      // A DOSE THAT NO LONGER EXISTS IS A REFUSAL, NOT A FALLBACK — the gift
+      // half of the rule the paid-line path states a few hundred lines above.
+      //
+      // getCatalogProducts filters doses on is_enabled, so an admin retiring a
+      // strength removes it from `doses`. Without this, `offerDose` came back
+      // undefined and the code walked on: the stock lookup fell to the PARENT
+      // row, which is untracked for a dosed product, so the ceiling became
+      // Infinity; the pushed line carried the bare slug and no variant; and
+      // order_items recorded a product id with no dose — the exact oversell
+      // the paid path was fixed to prevent, arriving through the free one.
+      //
+      // Silently granting the default dose instead would be worse than the
+      // oversell: the customer chose 30mg, cleared a $170 minimum for it, and
+      // would be shipped the 5mg. Withholding says so, keeps the token
+      // spendable, and is the same "unavailable" branch an out-of-stock gift
+      // already takes.
+      const doseWentAway = Boolean(grant.variantId) && !offerDose;
+
       const shippable = Boolean(offerProduct)
+        && !doseWentAway
         && offerStockStatus !== "Out of Stock"
         && offerStockStatus !== "Reserved"
         && !(typeof offerStock === "number" && Number.isFinite(offerStock) && offerStock <= 0);

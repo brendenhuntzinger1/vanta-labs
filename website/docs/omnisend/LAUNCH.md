@@ -360,7 +360,7 @@ should be, before `OMNISEND_MARKETING_OWNER` is set.
 | Automations | 9, all disabled — enable only AFTER the data is in (§4) |
 | Form | draft |
 | Campaigns | 3 drafts |
-| Sender domain | **NOT authenticated.** This line said "verified 2026-09-16" and it was wrong. DNS-over-HTTPS on 2026-09-17 found no Omnisend DKIM or CNAME record on `vantalabsresearch.com` at any of a dozen probed selectors, and no Omnisend include in SPF. See `TRANSITION.md` §B1 |
+| Sender domain | **AUTHENTICATED**, and verified by observation on 2026-09-18: a delivered Omnisend message shows `dkim=pass` for `d=vantalabsresearch.com` (selector `krs`), `spf=pass` via the Mailgun include, and `dmarc=pass` aligned on the root. The 2026-09-16 entry was right; a later note calling it unauthenticated was my error, from probing guessed selectors and reading absence into a negative result |
 | SMS | Pro plan with SMS bought and US verification submitted 2026-09-16; awaiting approval (owner) |
 | Postal address in footer | **still a placeholder** — the block renders `POSTAL ADDRESS — owner to replace before the first send`. `TRANSITION.md` §B2 |
 | Scheduled sync | proven working 2026-09-17 18:30 — six watermarks stamped, every contact repaired |

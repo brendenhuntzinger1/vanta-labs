@@ -28,9 +28,107 @@ export type WheelPrizeResult = {
   alreadySpun: boolean;
   /** Already spent on an order — shown as history, not as something to claim. */
   redeemed?: boolean;
+  /**
+   * The sizes this prize can be taken in, when it comes in more than one.
+   *
+   * Empty for the twelve prizes that have one size, and empty is the signal to
+   * show no picker at all — a choice between one option is a step that teaches
+   * the customer nothing and costs them a tap.
+   *
+   * Each rung carries its OWN minimum, because that is the whole bargain: the
+   * bigger vial asks for a bigger order, and the customer can see both numbers
+   * before they choose.
+   */
+  doses?: Array<{ label: string; minSubtotalCents: number }>;
+  /** Which size they have chosen, or null while they have not. */
+  chosenDose?: string | null;
 };
 
 /** One row of the prize list: a REWARD and its real odds, not one wedge. */
+// ---------------------------------------------------------------------------
+// CHOOSING A SIZE, FOR THE FOUR PRIZES THAT COME IN MORE THAN ONE.
+//
+// The bargain has to be visible or it does not work. Each row shows the size
+// AND the order it needs, and every row above the first also shows the trade:
+// "+$15 for $20 more". That line is the entire reason the ladder exists — a
+// customer who cannot see that stepping up is good value will always take the
+// smallest vial, which is the behaviour this feature was built to change.
+//
+// The twelve single-size prizes never reach here. A picker with one option is a
+// tap that teaches nothing.
+// ---------------------------------------------------------------------------
+function DosePicker({
+  doses,
+  chosen,
+  onChoose,
+  saving,
+  error,
+}: {
+  doses: Array<{ label: string; minSubtotalCents: number }>;
+  chosen: string | null;
+  onChoose: (label: string) => void;
+  saving: string | null;
+  error: string | null;
+}) {
+  return (
+    <div className="mt-5">
+      <p className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>
+        Choose your size
+      </p>
+      <p className="mt-1 text-xs" style={{ color: "var(--foreground-muted)" }}>
+        A bigger vial needs a bigger order. You can change this until the prize expires.
+      </p>
+
+      <ul className="mt-3 space-y-2" role="radiogroup" aria-label="Choose your size">
+        {doses.map((dose, index) => {
+          const selected = chosen?.toLowerCase() === dose.label.toLowerCase();
+          const busy = saving?.toLowerCase() === dose.label.toLowerCase();
+          const step = index > 0 ? dose.minSubtotalCents - doses[index - 1].minSubtotalCents : 0;
+          return (
+            <li key={dose.label}>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                disabled={Boolean(saving)}
+                onClick={() => onChoose(dose.label)}
+                className="flex w-full items-center justify-between gap-3 rounded-2xl px-4 py-3 text-left transition-colors disabled:opacity-60"
+                style={{
+                  border: `1px solid ${selected ? GOLD : "var(--hairline)"}`,
+                  background: selected ? "rgba(199,174,94,0.10)" : "var(--surface)",
+                  // 48px of height even before padding: this is the one control
+                  // on the page a customer taps on a phone with one thumb.
+                  minHeight: 48,
+                }}
+              >
+                <span className="flex flex-col">
+                  <span className="text-base font-semibold" style={{ color: "var(--foreground)" }}>
+                    {dose.label}
+                  </span>
+                  {step > 0 && (
+                    <span className="text-xs" style={{ color: "var(--foreground-muted)" }}>
+                      {formatCents(step)} more than the size above
+                    </span>
+                  )}
+                </span>
+                <span className="shrink-0 text-sm tabular-nums" style={{ color: selected ? GOLD : "var(--foreground-muted)" }}>
+                  {busy ? "Saving…" : `Spend ${formatCents(dose.minSubtotalCents)}`}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+
+      {error && (
+        <p className="mt-2 text-sm" role="alert" style={{ color: "#e88" }}>
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export type WheelPrizeOdds = {
   id: string;
   label: string;
@@ -100,6 +198,45 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
   const wedgeAngle = 360 / count;
 
   const [result, setResult] = useState<WheelPrizeResult | null>(initialResult);
+  /** Which size is being written right now, so the row can say "Saving…". */
+  const [savingDose, setSavingDose] = useState<string | null>(null);
+  const [doseError, setDoseError] = useState<string | null>(null);
+  // RECORDING THE SIZE IS A SERVER DECISION, not a local one.
+  //
+  // The optimistic update is deliberately NOT applied first: the minimum on
+  // screen decides whether someone builds a qualifying cart, so showing $170
+  // before the server has agreed would be a promise we might not keep. The row
+  // updates only once the write has come back.
+  const chooseDose = useCallback(async (label: string) => {
+    setSavingDose(label);
+    setDoseError(null);
+    try {
+      const response = await fetch("/api/spin/dose", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label }),
+      });
+      const body = (await response.json().catch(() => null)) as
+        | { success?: boolean; error?: string; dose?: { label: string; minSubtotalCents: number } }
+        | null;
+
+      if (!response.ok || !body?.success || !body.dose) {
+        setDoseError(body?.error ?? "We couldn't save that just now. Please try again.");
+        return;
+      }
+
+      setResult((current) => (current
+        ? { ...current, chosenDose: body.dose!.label, minSubtotalCents: body.dose!.minSubtotalCents }
+        : current));
+    } catch {
+      // Offline, or the request was cut off. Say so plainly; the prize is
+      // untouched either way, so trying again is always safe.
+      setDoseError("We couldn't reach the server. Please check your connection and try again.");
+    } finally {
+      setSavingDose(null);
+    }
+  }, []);
+
   const [spinning, setSpinning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** Revealed only after the animation settles, so the prize is not spoiled. */
@@ -192,6 +329,15 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
         minSubtotalCents: Number(body.prize.minSubtotalCents),
         expiresAt: String(body.expiresAt),
         alreadySpun: Boolean(body.alreadySpun),
+        // Empty unless this prize comes in several sizes, in which case the
+        // picker appears with the reveal rather than after a reload.
+        doses: Array.isArray(body.doses)
+          ? body.doses.map((dose: { label: unknown; minSubtotalCents: unknown }) => ({
+              label: String(dose.label),
+              minSubtotalCents: Number(dose.minSubtotalCents),
+            }))
+          : [],
+        chosenDose: typeof body.chosenDose === "string" ? body.chosenDose : null,
       };
       setResult(won);
 
@@ -449,6 +595,16 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
                   Measured in production on 2026-09-17: a won GLOW (a $175
                   minimum) sent the customer to /products having been told only
                   "with a qualifying purchase". */}
+              {!result.redeemed && !countdown.expired && (result.doses?.length ?? 0) > 1 && (
+                <DosePicker
+                  doses={result.doses!}
+                  chosen={result.chosenDose ?? null}
+                  onChoose={chooseDose}
+                  saving={savingDose}
+                  error={doseError}
+                />
+              )}
+
               {!result.redeemed && !countdown.expired && result.minSubtotalCents > 0 && (
                 <p className="mt-4 text-sm" style={{ color: "var(--foreground)" }}>
                   Spend {formatCents(result.minSubtotalCents)} or more to claim it.

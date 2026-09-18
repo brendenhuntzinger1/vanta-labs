@@ -5,6 +5,7 @@ import { getSpinWheelConfig } from "@/lib/admin-control";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { OFFER_COOKIE, OFFER_COOKIE_MAX_AGE_SECONDS, readOfferCookie, readOfferStatus } from "@/lib/offers/customer-offers";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { availableDoseRungs } from "@/lib/spin/spin-dose";
 import { describeRedemptionCondition } from "@/lib/spin/disclosure";
 import { claimSpinForAccount } from "@/lib/spin/spin-claim";
 import { readExistingSpin, spin } from "@/lib/spin/spin-service";
@@ -154,15 +155,26 @@ export async function POST(request: Request) {
       }
     }
 
+    // The sizes a laddered prize can be taken in, so the picker is on screen
+    // the instant the wheel stops rather than after a reload. Empty for the
+    // twelve single-size prizes, which never show a picker at all.
+    const doseRungs = await availableDoseRungs(result.prize);
+
     const response = NextResponse.json({
       success: true,
       alreadySpun: result.alreadySpun,
+      doses: doseRungs.map((rung) => ({ label: rung.label, minSubtotalCents: rung.minSubtotalCents })),
+      chosenDose: result.variantId
+        ? doseRungs.find((rung) => rung.variantId === result.variantId)?.label ?? null
+        : null,
       sliceIndex: result.sliceIndex,
       prize: {
         id: result.prize.id,
         label: result.prize.label,
         wedgeLabel: result.prize.wedgeLabel,
-        minSubtotalCents: result.prize.minSubtotalCents,
+        // From the offer row, not the prize table — a laddered prize carries
+        // the rung this customer chose, which the table cannot know.
+        minSubtotalCents: result.minSubtotalCents,
         condition: describeRedemptionCondition(result.prize),
       },
       // THE SAVED EXPIRY, not a duration for the client to start counting from.

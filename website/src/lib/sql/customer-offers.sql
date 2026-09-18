@@ -473,6 +473,28 @@ begin
       and revoked_at is null
       -- The gift this order is spending is redeem's to mark, not ours to kill.
       and (reserved_order_id is null or reserved_order_id <> v_order)
+      -- A WHEEL PRIZE IS NOT A LADDER GIFT, so the cycle does not close it.
+      --
+      -- This clause is the whole difference between "you won something" and
+      -- "you won something until you buy anything else". The ladder reasoning
+      -- above does not transfer: there is only ever one spin prize, it carries
+      -- its own 72-hour clock, and the customer earned it rather than being
+      -- sent it. Sweeping it up meant a winner who ordered without spending it
+      -- lost it silently.
+      --
+      -- The second harm was worse. readExistingSpin filters on `revoked_at is
+      -- null` (spin-service.ts), and the one-live-offer index is partial on
+      -- `revoked_at is null and redeemed_at is null` — so a revoked prize made
+      -- the wheel read as unspun AND let the replacement insert through. That
+      -- is the re-roll spin-service.ts:19-23 was written to prevent: "Anyone
+      -- who can press a button twice spins until they like the answer, and the
+      -- jackpot is a $119.99 vial." It arrived by a route that file cannot see.
+      --
+      -- Matched on the key rather than the reward, because spinOfferKey() is
+      -- what makes a row a spin row; the reward kinds are shared with the
+      -- ladder. See spin-one-spin.db.test.ts for the proof against real
+      -- Postgres, including that an ordinary ladder gift is still swept.
+      and offer_key not like 'spin:%'
     returning 1
   )
   select count(*) into v_closed from closed;

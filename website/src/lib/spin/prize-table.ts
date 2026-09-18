@@ -28,6 +28,39 @@ import type { GiftConfig, OfferReward } from "@/lib/offers/gift-terms";
 // already buying; the other thirteen carry the value.
 // ---------------------------------------------------------------------------
 
+/**
+ * ONE RUNG OF A MULTI-DOSE PRIZE'S LADDER.
+ *
+ * THE LABEL, NOT AN ID. A dose id is a `product_doses.id` UUID, and hardcoding
+ * one here would be the same bug this ladder exists to close, one level down:
+ * the table would assert a dose the catalogue might have replaced, and nothing
+ * would notice. The label is what the catalogue itself prints, so the server
+ * resolves it against the live enabled doses at claim time and persists the id
+ * it actually found. A label that no longer resolves is a refusal, never a
+ * fallback — see resolveDoseRung.
+ *
+ * That also makes two whole classes of tampering impossible rather than merely
+ * checked: a rung is only ever resolved inside the product the customer won, so
+ * a variant id belonging to another product, or to nothing at all, has no route
+ * in.
+ */
+export type SpinDoseRung = {
+  /** The dose as the catalogue spells it — "5mg", "24iu". Must resolve live. */
+  label: string;
+  /** The order this rung requires, in cents. Rises with the dose. */
+  minSubtotalCents: number;
+  /**
+   * Retail and COGS as they stood when the ladder was set, in cents.
+   *
+   * Guard-test input ONLY — no runtime path reads either. They exist so the
+   * economic tests can check every rung independently; the per-slug snapshot
+   * they replaced could only ever check the entry dose, which meant the
+   * expensive rungs went unguarded while the suite stayed green.
+   */
+  retailCentsAtDesignTime: number;
+  costCentsAtDesignTime: number;
+};
+
 export type SpinPrize = {
   /**
    * Stable identifier. Not persisted — the offer row records the REWARD, not
@@ -70,6 +103,17 @@ export type SpinPrize = {
    * is and what every offer minted before the column existed already does.
    */
   maxDiscountCents?: number;
+  /**
+   * The doses this prize can be taken in, cheapest first. Absent on a
+   * single-dose prize, and absent is the normal case — only four products in
+   * the catalogue sell in more than one size.
+   *
+   * `minSubtotalCents` above stays the ENTRY rung's minimum, so every surface
+   * that knew only the scalar keeps showing the lowest, most reachable number
+   * rather than silently over-promising. The rung the customer actually picks
+   * is written to the offer row, and the row is what checkout enforces.
+   */
+  doses?: readonly SpinDoseRung[];
 };
 
 /**
@@ -133,7 +177,13 @@ export const SPIN_PRIZES: readonly SpinPrize[] = [
     wedgeLabel: "GLP-1",
     label: "Free GLP-1 5mg",
     reward: { kind: "free_product", productSlug: "glp-1" },
-    minSubtotalCents: 9_900,
+    minSubtotalCents: 9_000,
+    doses: [
+      { label: "5mg", minSubtotalCents: 9_000, retailCentsAtDesignTime: 4499, costCentsAtDesignTime: 383 },
+      { label: "10mg", minSubtotalCents: 10_500, retailCentsAtDesignTime: 6499, costCentsAtDesignTime: 484 },
+      { label: "20mg", minSubtotalCents: 14_500, retailCentsAtDesignTime: 11499, costCentsAtDesignTime: 724 },
+      { label: "30mg", minSubtotalCents: 17_000, retailCentsAtDesignTime: 14499, costCentsAtDesignTime: 880 },
+    ],
   },
   {
     id: "free_shipping",
@@ -202,7 +252,13 @@ export const SPIN_PRIZES: readonly SpinPrize[] = [
     wedgeLabel: "GLP-2",
     label: "Free GLP-2 5mg",
     reward: { kind: "free_product", productSlug: "glp-2" },
-    minSubtotalCents: 9_900,
+    minSubtotalCents: 10_000,
+    doses: [
+      { label: "5mg", minSubtotalCents: 10_000, retailCentsAtDesignTime: 4999, costCentsAtDesignTime: 438 },
+      { label: "10mg", minSubtotalCents: 11_500, retailCentsAtDesignTime: 6999, costCentsAtDesignTime: 613 },
+      { label: "20mg", minSubtotalCents: 15_500, retailCentsAtDesignTime: 11999, costCentsAtDesignTime: 963 },
+      { label: "30mg", minSubtotalCents: 17_500, retailCentsAtDesignTime: 14499, costCentsAtDesignTime: 1280 },
+    ],
   },
   {
     id: "cjc_ipamorelin",
@@ -241,7 +297,13 @@ export const SPIN_PRIZES: readonly SpinPrize[] = [
     wedgeLabel: "GLP-3",
     label: "Free GLP-3 5mg",
     reward: { kind: "free_product", productSlug: "glp-3" },
-    minSubtotalCents: 9_900,
+    minSubtotalCents: 10_000,
+    doses: [
+      { label: "5mg", minSubtotalCents: 10_000, retailCentsAtDesignTime: 4999, costCentsAtDesignTime: 632 },
+      { label: "10mg", minSubtotalCents: 11_500, retailCentsAtDesignTime: 6999, costCentsAtDesignTime: 1047 },
+      { label: "20mg", minSubtotalCents: 15_500, retailCentsAtDesignTime: 11999, costCentsAtDesignTime: 1521 },
+      { label: "30mg", minSubtotalCents: 19_500, retailCentsAtDesignTime: 16999, costCentsAtDesignTime: 1875 },
+    ],
   },
   {
     id: "hgh",
@@ -249,6 +311,10 @@ export const SPIN_PRIZES: readonly SpinPrize[] = [
     label: "Free HGH GH-191 24iu",
     reward: { kind: "free_product", productSlug: "hgh-gh-191" },
     minSubtotalCents: 12_500,
+    doses: [
+      { label: "24iu", minSubtotalCents: 12_500, retailCentsAtDesignTime: 6499, costCentsAtDesignTime: 1200 },
+      { label: "36iu", minSubtotalCents: 14_000, retailCentsAtDesignTime: 8499, costCentsAtDesignTime: 1634 },
+    ],
   },
 ];
 
@@ -314,4 +380,30 @@ function cryptoRandomInt(boundExclusive: number): number {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { randomInt } = require("node:crypto") as typeof import("node:crypto");
   return randomInt(boundExclusive);
+}
+
+/**
+ * The rung a customer asked for, or null if they asked for something that is
+ * not on this prize's ladder.
+ *
+ * Deliberately total and deliberately dumb: it does not touch the catalogue and
+ * it does not guess. A caller that gets null must refuse rather than fall back
+ * to the entry rung — falling back is how a customer ends up billed against one
+ * minimum and shipped another dose.
+ */
+export function doseRungFor(prize: SpinPrize, label: string | null | undefined): SpinDoseRung | null {
+  if (!prize.doses?.length) return null;
+  const wanted = String(label ?? "").trim().toLowerCase();
+  if (!wanted) return null;
+  return prize.doses.find((rung) => rung.label.toLowerCase() === wanted) ?? null;
+}
+
+/** The rung a prize falls back to when the customer never chose: the cheapest. */
+export function entryDoseRung(prize: SpinPrize): SpinDoseRung | null {
+  return prize.doses?.length ? prize.doses[0] : null;
+}
+
+/** True when this prize asks the customer to choose a dose. */
+export function prizeNeedsDoseChoice(prize: SpinPrize): boolean {
+  return (prize.doses?.length ?? 0) > 1;
 }

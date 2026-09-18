@@ -76,7 +76,9 @@ export async function POST(request: Request) {
       prize: {
         id: claimed.prize.id,
         label: claimed.prize.label,
-        minSubtotalCents: claimed.prize.minSubtotalCents,
+        // The row's rung, so a customer who chose the 30mg on their phone is
+        // quoted $170 on their laptop rather than the table's entry $90.
+        minSubtotalCents: claimed.minSubtotalCents,
         condition: describeRedemptionCondition(claimed.prize),
       },
       // The stored instant, so a countdown on this device resumes where the

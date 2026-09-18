@@ -64,14 +64,37 @@ export type SpinResult = {
    * someone to go and spend a reward that was already on an order they placed.
    */
   redeemed: boolean;
+  /**
+   * THE MINIMUM THIS CUSTOMER MUST ACTUALLY CLEAR, from the offer row.
+   *
+   * Not `prize.minSubtotalCents`. Once a prize has a ladder the table can only
+   * state the entry rung, while the till enforces `offer.min_subtotal_cents` —
+   * so reading the table here would let the wheel advertise $90 at a checkout
+   * demanding $170. Every surface that shows a number to a customer who has
+   * already spun must use this one.
+   */
+  minSubtotalCents: number;
+  /** The dose the customer chose, when this prize has a ladder. */
+  variantId: string | null;
+  /**
+   * The prize was retired by a cycle close and can no longer be redeemed.
+   *
+   * Only ever true for a row minted before close-cycle learned to spare spin
+   * prizes. It is surfaced rather than hidden because the alternative — showing
+   * a dead prize with a live countdown — sends someone to a checkout that will
+   * refuse them with no explanation.
+   */
+  cycleClosed?: boolean;
 };
 
-const ROW_COLUMNS = "id, offer_key, email, reward_kind, product_slug, percent_off, min_subtotal_cents, expires_at, revoked_at, redeemed_at";
+const ROW_COLUMNS = "id, offer_key, email, reward_kind, product_slug, variant_id, percent_off, min_subtotal_cents, expires_at, revoked_at, revoke_reason, redeemed_at";
 
 type OfferRow = {
   reward_kind: string;
   product_slug: string | null;
+  variant_id?: string | null;
   percent_off: number | null;
+  min_subtotal_cents?: number | null;
   expires_at: string;
   redeemed_at?: string | null;
 };
@@ -88,6 +111,12 @@ function resultFromRow(row: OfferRow): SpinResult | null {
     offerToken: null,
     alreadySpun: true,
     redeemed: Boolean(row.redeemed_at),
+    // THE ROW WINS. Falling back to the table is only for a row minted before
+    // the column carried a value; a laddered prize always writes its own.
+    minSubtotalCents: typeof row.min_subtotal_cents === "number"
+      ? row.min_subtotal_cents
+      : prize.minSubtotalCents,
+    variantId: row.variant_id ?? null,
   };
 }
 
@@ -106,16 +135,42 @@ export async function readExistingSpin(input: {
   const offerKey = spinOfferKey(input.campaignId);
   if (!email || !offerKey) return null;
 
+  // ONE ROUND TRIP, NOT TWO. This runs for every visitor who has not spun —
+  // the commonest case on the page — so the cycle-closed check rides along in
+  // the same query rather than costing a second lookup that almost always
+  // finds nothing.
   const { data, error } = await supabaseAdmin
     .from("customer_offers")
     .select(ROW_COLUMNS)
     .eq("offer_key", offerKey)
     .eq("email", email)
-    .is("revoked_at", null)
-    .maybeSingle();
+    // A CYCLE-CLOSED PRIZE STILL COUNTS AS A SPIN.
+    //
+    // close_cycle used to revoke spin rows along with the retention ladder (it
+    // no longer does — see customer-offers.sql). A row it caught before that
+    // fix would be invisible to a plain `revoked_at is null` read, and the
+    // wheel would draw again: the one-live-offer index is partial on
+    // `revoked_at is null and redeemed_at is null`, so the replacement insert
+    // would succeed and the customer would hold a second, freshly drawn prize.
+    //
+    // Narrow on purpose. An OPERATOR revocation still grants a fresh spin —
+    // that is how support fixes a genuine problem, and spin-one-spin.db.test.ts
+    // pins it. Only the automatic reason disqualifies, because the customer
+    // never asked for it.
+    .or("revoked_at.is.null,revoke_reason.eq.cycle_closed")
+    .order("issued_at", { ascending: false })
+    .limit(2);
 
-  if (error || !data) return null;
-  return resultFromRow(data as OfferRow);
+  if (error || !data?.length) return null;
+
+  // A live row always wins over a cycle-closed one: the customer may have been
+  // handed a fresh spin by support after the old prize was swept.
+  const rows = data as Array<OfferRow & { revoked_at?: string | null }>;
+  const live = rows.find((row) => !row.revoked_at);
+  if (live) return resultFromRow(live);
+
+  const result = resultFromRow(rows[0]);
+  return result ? { ...result, cycleClosed: true } : null;
 }
 
 /**
@@ -188,6 +243,19 @@ export async function spin(input: {
     sliceIndex: SPIN_PRIZES.indexOf(prize),
     expiresAt,
     offerToken: token,
+    // A LADDERED PRIZE IS MINTED UNCHOSEN, AT ITS ENTRY RUNG.
+    //
+    // `variant_id` stays null until the customer picks, and null is exactly
+    // what quoteOrder already resolves to the catalogue's default dose — which
+    // is the entry dose on all four ladders. So an abandoned picker still
+    // leaves a prize that redeems, at the minimum it was minted with, with no
+    // catalogue read in the mint path and no new way for a spin to fail.
+    //
+    // The invariant that keeps those two in step — entry rung == default dose —
+    // is enforced in prize-table.test.ts against the live catalogue, so it
+    // breaks the build rather than a customer's order.
+    variantId: null,
+    minSubtotalCents: prize.minSubtotalCents,
     alreadySpun: false,
     // Just minted, so it cannot have been spent.
     redeemed: false,

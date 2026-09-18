@@ -39,113 +39,100 @@ lookup made during the audit. Where something is untested, it says so.
 | Live consent sync | **working** — opt-in → Omnisend contact in **2 seconds** |
 | Live event sync | **working** — 2/2 events delivered within seconds |
 | Scheduled sync (cron) | **working** — first tick 18:30 UTC stamped 6 watermarks and repaired every contact |
-| Sending-domain authentication | **absent** — **B1** |
-| Footer business details | **placeholder** — **B2** |
+| Sending-domain authentication | **PASS** — `dkim=pass` on `d=vantalabsresearch.com` (selector `krs`), `spf=pass`, `dmarc=pass`, proven by a delivered message |
+| Footer business details | **PASS** — real postal address, verified in a delivered message |
 | In-house Resend flows | **6 of 7 enabled and sending — unchanged, and staying that way** |
 | `OMNISEND_MARKETING_OWNER` | **not set in Vercel at all** → reads false. Verified in the project's env list |
 | 15% welcome incentive | **stays on SMS consent.** Not re-armed for email — §6 |
 
 ---
 
-## B. The two items only you can supply
+## B. Both items are now CLOSED — and B1 was my error
 
-### B1 — Omnisend has no authentication records on `vantalabsresearch.com`
+### B1 — Omnisend IS authenticated. My earlier finding was wrong.
 
-Checked by DNS-over-HTTPS against `dns.google` on 2026-09-17:
+**What I reported yesterday:** "Omnisend has no authentication records on
+`vantalabsresearch.com`", based on probing a dozen guessed selectors
+(`om1`, `om2`, `omnisend`, `omsend1/2`, `s1`, `s2`, `k1`, `dkim`, `om`, `o1`,
+and the hosts `omnisend`, `_omnisend`, `email`, `mail`) and finding NXDOMAIN
+on every one.
+
+**Why that was wrong.** A negative result on a guessed list is not absence.
+The real selector is **`krs`**, which was not on my list. `CHECKLIST.md` had
+recorded it correctly on 2026-09-16 — "DKIM `krs._domainkey` added" — and I
+treated that line as contradicted rather than checking it.
+
+`krs._domainkey.vantalabsresearch.com` resolves to a live RSA public key.
+
+**Proof, from a real delivered message.** A test send from the
+`VL · Browse abandonment` block to `support@vantalabsresearch.com`
+(2026-09-18 00:37 UTC), read back from the mailbox as raw MIME:
 
 ```
-vantalabsresearch.com            TXT    v=spf1 include:_spf.google.com include:mailgun.org ~all
-_dmarc.vantalabsresearch.com     TXT    v=DMARC1; p=none;
-resend._domainkey…               TXT    present  (Resend)
-google._domainkey…               TXT    present  (Google Workspace)
-vantalabsresearch.com            MX     1 smtp.google.com.
-om1._domainkey…                  CNAME  NXDOMAIN
-om2._domainkey…                  CNAME  NXDOMAIN
-omnisend._domainkey / _omnisend  TXT    NXDOMAIN
+Authentication-Results: mx.google.com;
+   dkim=pass header.i=@dkim5.omnisend.email header.s=omni2 header.b=ib2z1KOb;
+   dkim=pass header.i=@vantalabsresearch.com header.s=krs header.b=kfcyER79;
+   spf=pass (... designates 69.72.35.215 as permitted sender)
+     smtp.mailfrom="bounce+efc2fa.fcfa50-support=vantalabsresearch.com@vantalabsresearch.com";
+   dmarc=pass (p=NONE sp=NONE dis=NONE) header.from=vantalabsresearch.com
 ```
 
-Also probed and absent: `omsend1`, `omsend2`, `s1`, `s2`, `k1`, `dkim`, `om`,
-`o1` `._domainkey`, and the hosts `omnisend`, `email`, `mail`.
+Every one of the three checks passes, and the second DKIM signature is on
+**`d=vantalabsresearch.com`** — the customer's own domain, not Omnisend's.
+`From:` is `Vanta Labs <support@vantalabsresearch.com>`, and DMARC reports
+alignment on the organisational domain.
 
-**Consequence.** Mail Omnisend sends as `support@vantalabsresearch.com` will be
-DKIM-signed and SPF-authorised by *Omnisend's* domain, not ours, so it will not
-be DMARC-aligned with `vantalabsresearch.com`. DMARC is `p=none`, so nothing is
-rejected on that basis today — but this is unauthenticated mail from the domain
-that also carries every receipt and every password reset.
+**So there is nothing to add, and no screenshot is needed.** The sender domain
+was authenticated on 2026-09-16, exactly as the checklist said.
 
-**This contradicts `LAUNCH.md`, which claimed "Sender domain | verified
-2026-09-16".** That line was wrong.
+### B1a — RETRACTED: do NOT remove `include:mailgun.org` from SPF
 
-**I tried to get the real records and I cannot.** Everything my access reaches
-was checked:
+I recommended this twice, calling it "a stale authorisation" because nothing in
+this codebase sends through Mailgun. **That recommendation was wrong and acting
+on it would have broken Omnisend's authentication.**
 
-- the **full Public API operation catalogue** — there is no sender-domain, DNS,
-  authentication or verification operation of any kind;
-- **`get_brands_current`** — returns only brandID, name, currency, timezone,
-  platform and website;
-- **`get_brand_assets_current`** — colours, fonts and socials only;
-- the **embedded reference topic list** — thirteen topics (analytics,
-  automations, batches, brands, campaigns, contacts, email content, templates,
-  events, images, product categories, products, segments). None covers sender
-  domains.
+The header above shows the message arriving from `69.72.35.215`
+(`v5215.v561b35cb.usw1.send.mailgun.net`), with a Return-Path of
+`bounce+…@vantalabsresearch.com`. **Omnisend sends through Mailgun
+infrastructure.** The `include:mailgun.org` in the root SPF is what makes
+`spf=pass` possible, and removing it would turn `spf=pass` into `spf=fail` and
+take `dmarc=pass` down with it.
 
-The records are account-specific and exist only in the Omnisend web app, which
-my access does not reach.
+The root SPF stays exactly as it is:
 
-**What I need from you — one screenshot.** Omnisend → **Settings → Sender
-domains** → click `vantalabsresearch.com` → the DNS records panel. Capture the
-whole table, uncropped, showing every row's **Type**, **Host / Name**,
-**Value / Points to** and **TTL** — and include any row Omnisend labels for
-link tracking or return-path, not just the DKIM pair. Do not redact the host or
-value: published DNS records are public by definition and I cannot add a record
-I cannot read. Paste the text instead of a screenshot if that is easier; I need
-the exact strings, not a description of them.
+```
+v=spf1 include:_spf.google.com include:mailgun.org ~all
+```
 
-Then I will tell you precisely which records to add, and I will re-verify each
-one by DNS lookup afterwards rather than trusting the dashboard's green tick.
+### B2 — The postal address is in, verified in a delivered email
 
-**I will not guess selectors again.** The dozen names probed above were a test
-for *absence*, which they established. They are worthless for deciding what to
-add, and adding a guessed record would be worse than adding none. And I will
-not touch `resend._domainkey`, `google._domainkey`, the MX records, or the
-existing SPF string — they carry every receipt and the mailbox itself.
+`MARKETING_POSTAL_ADDRESS` is a Vercel **sensitive** variable, which is
+write-only — the API returns `decrypted: false` and there is no read path, for
+me or for the owner. It is not stored in the database either
+(`admin_control_current` has no `marketing_postal_address` column, so
+`settings.ts` falls through to the env var), and it appears in none of the
+stored email bodies or on any public page.
 
-**Verification is not a promise about placement.** It removes one specific,
-measurable failure. It does not guarantee the inbox, and it says nothing about
-opens.
+It was recovered instead from the **rendered footer of a marketing message
+already sent through Resend**, read back from the Resend API:
 
-*Same record, smaller point:* the apex SPF still carries
-`include:mailgun.org`. Nothing in this codebase sends through Mailgun. It is a
-stale authorisation and should go — but it is an edit to a live record that also
-authorises Google Workspace, so it is yours to make deliberately, not something
-to slip in during a migration.
+```
+30929 Mirada Blvd
+po box 331
+San Antonio FL
+33576
+```
 
-### B2 — The footer still says where the postal address should be
+Written into the shared universal layout `6aa985f7c29076c61d3838b1`, block
+`1818a05ce0909017c20c781c`, normalised for a single-line footer:
 
-Universal layout `6aa985f7c29076c61d3838b1` ("VL Footer"), block
-`1818a05ce0909017c20c781c`, renders literally:
+> `Vanta Labs Research · 30929 Mirada Blvd, PO Box 331, San Antonio, FL 33576`
 
-> `[[account.name]] · POSTAL ADDRESS — owner to replace before the first send`
+Confirmed in the delivered test message above, not just in the API response.
+All nine automations inherit this layout, so all nine now carry it.
 
-All nine automations end with this layout. A commercial email without a physical
-postal address is a CAN-SPAM violation, and this one announces itself. The
-unsubscribe link beside it (`[[unsubscribe_link]]`) is correct and present.
-
-**You already have this configured for Resend, and I cannot read it.**
-`MARKETING_POSTAL_ADDRESS` exists in Vercel for production and preview (set
-2026-08-22), and `system-status.ts` treats it as required for bulk marketing
-mail. It is stored encrypted; I did not decrypt it, and no rendered copy is
-stored anywhere in the database — I checked `marketing_send_queue`,
-`pending_emails` and `email_campaigns`, and none of the seven stored bodies
-contains an address.
-
-**So: paste me the exact string that is in `MARKETING_POSTAL_ADDRESS`** and I
-will put it in the footer layout verbatim, so the Omnisend footer and the
-Resend footer say the same thing. If you would rather Omnisend showed something
-different, give me that instead. I will not invent one, and the placeholder does
-not stay in a launch-ready template.
-
----
+*If you want it byte-identical to the Resend version (lower-case "po box", line
+breaks instead of commas), say so and I will match it exactly.*
 
 ## C. Resolved during this audit
 

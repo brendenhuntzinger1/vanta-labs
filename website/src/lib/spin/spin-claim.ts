@@ -43,13 +43,19 @@ export type ClaimedSpin = {
   expiresAt: string;
   /** A freshly minted bearer token for this device's cookie. */
   offerToken: string;
+  /** The minimum from the OFFER ROW — the rung this customer actually holds. */
+  minSubtotalCents: number;
+  /** The dose they chose, when the prize has a ladder. */
+  variantId: string | null;
 };
 
 type Row = {
   id: string;
   reward_kind: string;
   product_slug: string | null;
+  variant_id: string | null;
   percent_off: number | null;
+  min_subtotal_cents: number | null;
   expires_at: string;
   reserved_order_id: string | null;
   reserved_at: string | null;
@@ -87,7 +93,7 @@ export async function claimSpinForAccount(input: {
 
   const { data, error } = await supabaseAdmin
     .from("customer_offers")
-    .select("id, reward_kind, product_slug, percent_off, expires_at, reserved_order_id, reserved_at")
+    .select("id, reward_kind, product_slug, variant_id, percent_off, min_subtotal_cents, expires_at, reserved_order_id, reserved_at")
     .eq("offer_key", spinOfferKey(campaignId))
     .eq("email", email)
     .is("revoked_at", null)
@@ -136,6 +142,11 @@ export async function claimSpinForAccount(input: {
     sliceIndex: SPIN_PRIZES.indexOf(prize),
     expiresAt: row.expires_at,
     offerToken: token,
+    // THE ROW'S MINIMUM TRAVELS WITH THE PRIZE to the second device. Without
+    // it the laptop would quote the prize table's entry rung while the till
+    // enforced whichever rung this customer chose on their phone.
+    minSubtotalCents: typeof row.min_subtotal_cents === "number" ? row.min_subtotal_cents : prize.minSubtotalCents,
+    variantId: row.variant_id ?? null,
   };
 }
 
