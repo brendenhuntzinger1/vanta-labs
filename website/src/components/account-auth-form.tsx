@@ -798,7 +798,12 @@ export function AccountAuthForm() {
       // then chose "Already have an account?" would have been subscribed from a
       // screen that could not show them the state, could not let them undo it,
       // and whose only sentence about marketing promised it would not happen.
-      const marketingBoxOnScreen = mode === "portal" || mode === "signup";
+      // The portal no longer carries a marketing box at all (the owner took
+      // it off the gate), so "signup" is the only screen that can collect
+      // this tick. Leaving "portal" here would let component state that
+      // survives a mode switch subscribe someone from a screen that never
+      // asked them.
+      const marketingBoxOnScreen = mode === "signup";
       const marketingConsent = marketingBoxOnScreen && marketingOptIn;
 
       // A WRITE THAT DID NOT LAND IS NOT AN ATTESTATION, BUT IT IS NOT A DEAD
@@ -1050,20 +1055,6 @@ export function AccountAuthForm() {
               turns it on, and says so in a tag small enough to stay out of the
               way and legible enough to be read. canEnter never looks at it —
               see the comment above it. */}
-          <label className="vl-portal-row vl-portal-row-optional">
-            <input
-              type="checkbox"
-              checked={marketingOptIn}
-              onChange={(event) => setMarketingOptIn(event.target.checked)}
-              className="vl-auth-check mt-0.5"
-            />
-            <span>
-              I agree to receive Vanta Labs emails, product updates and offers
-              <span className="ml-1.5 align-[0.09em] text-[0.625rem] font-medium uppercase tracking-[0.14em] text-white/50">
-                optional
-              </span>
-            </span>
-          </label>
         </div>
 
         {error ? (

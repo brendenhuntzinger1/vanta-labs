@@ -204,7 +204,7 @@ describe("consent only counts from a screen that shows the box", () => {
     // ticked it at the portal and then chose "Already have an account? Sign in"
     // would have been subscribed from a screen with no box to untick, whose only
     // sentence about marketing promised it would not happen.
-    expect(form).toContain('const marketingBoxOnScreen = mode === "portal" || mode === "signup"');
+    expect(form).toContain('const marketingBoxOnScreen = mode === "signup"');
     expect(form).toContain("const marketingConsent = marketingBoxOnScreen && marketingOptIn");
     expect(form).toContain('setItem("vl-oauth-marketing", marketingConsent ? "true" : "false")');
   });

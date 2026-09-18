@@ -115,8 +115,8 @@ describe("every placement the owner asked for, and no others", () => {
   });
 
   it("mounts exactly one invitation modal, beside the promotions card", () => {
-    expect(LAYOUT).toContain("<SmsInviteModal />");
-    expect(LAYOUT.indexOf("<SmsInviteModal />")).toBeGreaterThan(LAYOUT.indexOf("<StorefrontOfferModal"));
+    expect(LAYOUT).toContain("<EntryOfferModal />");
+    expect(LAYOUT.indexOf("<EntryOfferModal />")).toBeGreaterThan(LAYOUT.indexOf("<StorefrontOfferModal"));
   });
 
   it("explains the offer beside the sign-up page's SMS box, never the email one", () => {
@@ -127,7 +127,7 @@ describe("every placement the owner asked for, and no others", () => {
   it("leaves the home page alone", () => {
     const home = read("src/app/page.tsx");
     expect(home).not.toContain("WelcomeOfferSignup");
-    expect(home).not.toContain("SmsInviteModal");
+    expect(home).not.toContain("EntryOfferModal");
   });
 
   it("never puts a dialog on the quiet placements or the checkout", () => {
