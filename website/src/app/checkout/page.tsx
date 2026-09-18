@@ -14,8 +14,6 @@ import { claimSpinPrizeOnce } from "@/lib/spin/claim-client";
 import { SMS_CONSENT_TEXT, SMS_DISCLOSURE_TEXT, acceptableSmsPhone } from "@/lib/sms-consent-text";
 import {
   SMS_CHECKOUT_CHECKBOX,
-  SMS_CHECKOUT_INCENTIVE,
-  SMS_CHECKOUT_NEEDS_PHONE,
   WELCOME_OFFER_APPLIED,
   WELCOME_OFFER_HELD_BY_BETTER,
   WELCOME_OFFER_READY,
@@ -343,12 +341,7 @@ export default function CheckoutPage() {
   // silent to the payment path: the shopper still pays, just without a
   // discount. Consent is never a condition of buying.
   const [welcomeStatus, setWelcomeStatus] = useState<"unknown" | "eligible" | "claimed" | "returning" | "suppressed">("unknown");
-  // The kill switch, read with the offer. Until the carriers approve this
-  // store, the box below stays and the DISCOUNT beside it does not appear.
-  const [welcomePromptsEnabled, setWelcomePromptsEnabled] = useState(false);
   const [welcomeCode, setWelcomeCode] = useState<string | null>(null);
-  const [welcomeError, setWelcomeError] = useState<string | null>(null);
-  const [welcomeClaiming, setWelcomeClaiming] = useState(false);
   // One attempt per (number, address) pair, so retyping a digit does not
   // re-post and a mistyped number can still be corrected and retried.
   const welcomeTriedRef = useRef<string>("");
@@ -618,9 +611,11 @@ export default function CheckoutPage() {
     let live = true;
     void fetch("/api/offers/welcome", { credentials: "same-origin" })
       .then((res) => (res.ok ? res.json() : null))
-      .then((data: { status?: string; code?: string; promptsEnabled?: boolean } | null) => {
+      .then((data: { status?: string; code?: string } | null) => {
         if (!live || !data?.status) return;
-        setWelcomePromptsEnabled(data.promptsEnabled === true);
+        // promptsEnabled is no longer read: it gated a discount that no longer
+        // exists. `claimed` still matters, because a customer may hold a live
+        // code minted before the retirement.
         if (data.status === "claimed" && data.code) {
           setWelcomeStatus("claimed");
           setWelcomeCode(data.code);
@@ -650,43 +645,36 @@ export default function CheckoutPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [welcomeStatus, welcomeCode, couponCode]);
 
-  // THE TICK THAT EARNS IT. Fires when the box is ticked and the phone field
-  // holds a number someone could actually be texted at; the pair is
-  // remembered so a corrected number can be retried but a re-render cannot
-  // re-post. On success the code lands in the coupon slot and the quote
-  // re-prices — no reload, and every field the shopper has filled stays put.
+  // THE TICK, WHICH NOW EARNS NOTHING BUT THE SUBSCRIPTION.
+  //
+  // It used to mint the welcome code and drop it into the coupon slot. The
+  // welcome discount is retired — the spin wheel is the acquisition offer — so
+  // this records consent and stops. The endpoint still answers `ok` and simply
+  // returns no code, which is why nothing here reads one.
+  //
+  // The POST stays because the CONSENT still matters: this is one of the
+  // surfaces that writes an sms_subscribers row with its disclosure version,
+  // and removing it would silently drop a subscriber the customer asked to be.
+  // Fires when the box is ticked and the phone field holds a number someone
+  // could actually be texted at; the pair is remembered so a corrected number
+  // can be retried but a re-render cannot re-post.
   useEffect(() => {
-    if (!smsOptIn || welcomeStatus === "suppressed" || welcomeStatus === "claimed") return;
+    if (!smsOptIn || welcomeStatus === "suppressed") return;
     const phone = acceptableSmsPhone(form.phone);
     const address = form.email.trim().toLowerCase();
     if (!phone || !address.includes("@")) return;
     const attempt = `${phone}|${address}`;
     if (welcomeTriedRef.current === attempt) return;
     welcomeTriedRef.current = attempt;
-    let live = true;
-    setWelcomeClaiming(true);
-    setWelcomeError(null);
     void fetch("/api/offers/welcome", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ phone, email: address, placement: "checkout" }),
-    })
-      .then((res) => res.json())
-      .then((data: { ok?: boolean; code?: string; error?: string }) => {
-        if (!live) return;
-        if (data?.ok && data.code) {
-          setWelcomeStatus("claimed");
-          setWelcomeCode(data.code);
-          if (!couponCode) applyCouponCode(data.code);
-          return;
-        }
-        setWelcomeError(data?.error ?? null);
-      })
-      .catch(() => { if (live) setWelcomeError(null); })
-      .finally(() => { if (live) setWelcomeClaiming(false); });
-    return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }).catch(() => {
+      // A subscription that did not land is not worth a message over a cart.
+      // The box stays ticked, and correcting the number retries it.
+    });
   }, [smsOptIn, form.phone, form.email, welcomeStatus]);
 
   // Fire begin_checkout exactly once, when the cart first has items. Depending
@@ -1469,46 +1457,38 @@ export default function CheckoutPage() {
                   a dialog over a checkout is how carts get abandoned, and the
                   owner asked for none. It states the terms with the offer, and
                   once the code is on the order it stops asking and says so. */}
-              {/* THE INCENTIVE, AND ONLY FOR SOMEONE IT IS OPEN TO.
-                  Hidden entirely while the kill switch is off, hidden for a
-                  returning buyer (a first-order discount advertised to someone
-                  who cannot have it is a trick), and replaced by the applied
-                  message the moment the priced order confirms it. */}
-              {welcomePromptsEnabled && (welcomeStatus === "eligible" || welcomeStatus === "claimed" || welcomeStatus === "unknown") ? (
+              {/* ONLY FOR SOMEONE WHO ALREADY HOLDS A CODE.
+                  The welcome discount is retired — the spin wheel is the
+                  acquisition offer now — so this panel no longer OFFERS
+                  anything. What it still does is tell a customer holding a
+                  live code from before the retirement where they stand, which
+                  is the difference between retiring an incentive and
+                  confiscating what it already bought.
+
+                  The eligible/unknown branch that used to read "Subscribe to
+                  get 15% off this order" is gone. Ticking the SMS box beside
+                  this records consent and mints nothing, which is exactly what
+                  the box now says it does. */}
+              {welcomeStatus === "claimed" ? (
                 <div
                   className="mt-3 rounded-xl border border-[color:var(--accent-gold)]/20 bg-[var(--accent-gold-soft)]/40 px-4 py-3"
                   data-testid="checkout-welcome-offer"
                 >
-                  {welcomeStatus === "claimed" && welcomeApplied ? (
+                  {welcomeApplied ? (
                     <p className="text-xs leading-relaxed text-[color:var(--accent-gold)]" data-testid="checkout-welcome-applied">
                       {WELCOME_OFFER_APPLIED}
                     </p>
-                  ) : welcomeStatus === "claimed" && otherDiscountWins ? (
+                  ) : otherDiscountWins ? (
                     <p className="text-xs leading-relaxed text-white/55" data-testid="checkout-welcome-held">
                       {WELCOME_OFFER_HELD_BY_BETTER}
                     </p>
-                  ) : welcomeStatus === "claimed" ? (
+                  ) : (
                     <div data-testid="checkout-welcome-ready">
                       <p className="text-xs leading-relaxed text-white/70">{WELCOME_OFFER_READY}</p>
                       <p className="mt-1 text-[11px] leading-relaxed text-white/40">
                         {welcomeCode ? welcomeOfferCodeLine(welcomeCode) : ""} {WELCOME_OFFER_TERMS}
                       </p>
                     </div>
-                  ) : (
-                    <>
-                      <p className="text-xs leading-relaxed text-white/65">{SMS_CHECKOUT_INCENTIVE}</p>
-                      {smsOptIn && !acceptableSmsPhone(form.phone) ? (
-                        <p className="mt-1.5 text-[11px] leading-relaxed text-white/40" data-testid="checkout-welcome-needs-phone">
-                          {SMS_CHECKOUT_NEEDS_PHONE}
-                        </p>
-                      ) : null}
-                      {welcomeClaiming ? (
-                        <p className="mt-1.5 text-[11px] text-white/40">Applying your discount</p>
-                      ) : null}
-                      {welcomeError ? (
-                        <p className="mt-1.5 text-[11px] text-white/40" data-testid="checkout-welcome-error">{welcomeError}</p>
-                      ) : null}
-                    </>
                   )}
                 </div>
               ) : null}

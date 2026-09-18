@@ -69,13 +69,16 @@ describe("one wording, matching the code the store actually mints", () => {
     expect(WELCOME_OFFER_DAYS * 24).toBe(CONTACT_CODE_OFFERS.welcome.ttlHours);
   });
 
-  it("uses the checkout wording the owner specified", () => {
+  it("keeps the checkout's consent wording and drops the discount beside it", () => {
+    // The box survives the retirement unchanged — it is a consent control, and
+    // the words in it never named a discount. What goes is the line that sat
+    // next to it selling one.
     expect(SMS_CHECKOUT_CHECKBOX).toBe(
       "Text me about free product offers, exclusive sales, giveaways, and restock alerts.",
     );
-    expect(SMS_CHECKOUT_INCENTIVE).toBe("Subscribe to get 15% off this order. Cannot be combined with other offers.");
     expect(CHECKOUT).toContain("{SMS_CHECKOUT_CHECKBOX}");
-    expect(CHECKOUT).toContain("{SMS_CHECKOUT_INCENTIVE}");
+    expect(CHECKOUT, "no discount is offered for ticking the box").not.toContain("SMS_CHECKOUT_INCENTIVE");
+    expect(CHECKOUT).not.toContain("SMS_CHECKOUT_NEEDS_PHONE");
   });
 
   // THE PROMISE THE STORE WAS ABOUT TO BREAK.
@@ -182,7 +185,10 @@ describe("the kill switch", () => {
   it("hides every acquisition prompt while it is off", () => {
     expect(COMPONENT).toContain("if (offer.promptsEnabled === false) return null;");
     expect(MODAL).toContain("if (offer.promptsEnabled === false) return;");
-    expect(CHECKOUT).toContain('welcomePromptsEnabled && (welcomeStatus === "eligible"');
+    // The checkout no longer consults the switch at all: it gated a discount
+    // that no longer exists, and the panel that remains is for a customer who
+    // already holds a code rather than an offer to anybody.
+    expect(CHECKOUT).not.toContain("welcomePromptsEnabled");
   });
 });
 
@@ -196,9 +202,13 @@ describe("the customer's state decides what appears", () => {
     expect(SERVICE).toContain('return { status: sms === "subscribed" ? "suppressed" : "returning", mayInterrupt: false };');
     // An ALLOW-LIST at the checkout, which is stronger than excluding
     // "returning" by name: a state added later is silent until it is named.
-    const panel = CHECKOUT.slice(CHECKOUT.indexOf("THE INCENTIVE, AND ONLY FOR SOMEONE IT IS OPEN TO"));
-    expect(panel).toContain('welcomeStatus === "eligible" || welcomeStatus === "claimed" || welcomeStatus === "unknown"');
-    expect(panel.slice(0, 400)).not.toContain('"returning"');
+    // NARROWER THAN AN ALLOW-LIST NOW. The panel renders for exactly one
+    // state — a customer who holds a code — so a buyer, a returning shopper
+    // and an unknown guest are all silent without needing to be named.
+    const panel = CHECKOUT.slice(CHECKOUT.indexOf("ONLY FOR SOMEONE WHO ALREADY HOLDS A CODE"));
+    expect(panel).toContain('welcomeStatus === "claimed" ?');
+    expect(panel.slice(0, 900)).not.toContain('"returning"');
+    expect(panel.slice(0, 900)).not.toContain('"eligible"');
   });
 
   it("never interrupts someone who once opted out, but may still ask quietly", () => {
@@ -241,12 +251,23 @@ describe("the reward is immediate, not synced", () => {
     expect(COMPONENT).toContain('data-testid="welcome-offer-continue"');
   });
 
-  it("applies at the checkout without a reload and without overwriting a typed code", () => {
-    expect(CHECKOUT).toContain("if (!couponCode) applyCouponCode(data.code);");
+  it("still auto-applies a code the customer already holds, without overwriting a typed one", () => {
+    // Nothing new is minted, but a holder's code is still dropped into an
+    // EMPTY coupon slot so they do not have to remember six characters.
     expect(CHECKOUT).toContain("if (couponCode) return;");
-    const claim = CHECKOUT.slice(CHECKOUT.indexOf("THE TICK THAT EARNS IT"), CHECKOUT.indexOf("Fire begin_checkout"));
-    expect(claim).not.toContain("location.reload");
-    expect(claim).not.toContain("router.push");
+    expect(CHECKOUT).toContain("applyCouponCode(welcomeCode);");
+  });
+
+  it("records the consent at the checkout without minting anything", () => {
+    const tick = CHECKOUT.slice(
+      CHECKOUT.indexOf("THE TICK, WHICH NOW EARNS NOTHING BUT THE SUBSCRIPTION"),
+      CHECKOUT.indexOf("Fire begin_checkout"),
+    );
+    expect(tick, "the consent still reaches the ledger").toContain('"/api/offers/welcome"');
+    expect(tick, "and nothing reads a code back").not.toContain("data.code");
+    expect(tick).not.toContain("applyCouponCode");
+    expect(tick).not.toContain("location.reload");
+    expect(tick).not.toContain("router.push");
   });
 
   it("says applied only once the priced order confirms it", () => {
@@ -261,14 +282,14 @@ describe("the reward is immediate, not synced", () => {
   // shopper is told the true one.
   it("claims a larger discount won only when one is actually taking money off", () => {
     expect(CHECKOUT).toContain("const otherDiscountWins = !welcomeApplied && discountAmount > 0;");
-    expect(CHECKOUT).toContain('welcomeStatus === "claimed" && otherDiscountWins ?');
+    expect(CHECKOUT).toContain("otherDiscountWins ?");
     expect(CHECKOUT).toContain('data-testid="checkout-welcome-ready"');
   });
 
-  it("offers a guest at the checkout, who has no session to judge by", () => {
+  it("still answers for a guest at the checkout, who has no session to judge by", () => {
     expect(ROUTE).toContain('if (!email) return NextResponse.json({ status: "unknown"');
-    expect(CHECKOUT).toContain('welcomeStatus === "unknown"');
-    // The storefront prompts are signed-in only and must stay silent for them.
+    // The checkout no longer shows a guest anything — there is no offer to
+    // make them — but the endpoint must still answer rather than error.
     expect(COMPONENT).toContain('offer.status === "unknown"');
   });
 });
