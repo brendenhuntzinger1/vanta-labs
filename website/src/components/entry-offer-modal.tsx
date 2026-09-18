@@ -80,6 +80,30 @@ function isStoreRoute(pathname: string | null): boolean {
 }
 
 /**
+ * IS ANYTHING ELSE ON SCREEN? Read from the DOM rather than from shared state,
+ * deliberately: the promotions card, the mobile filter sheet and anything else
+ * that opens over the page already mark themselves, and a coordinator both
+ * components have to remember to call is a coordinator that will eventually be
+ * forgotten. The question "is something covering the page right now" has one
+ * honest answer and the DOM is holding it.
+ *
+ * THE LAYOUT HAS CLAIMED THIS FOR A FORTNIGHT AND NOTHING IMPLEMENTED IT. The
+ * mount comment says this card "yields to the card above rather than stacking
+ * on it"; the yield lived in the older invitation that this one replaced, and
+ * did not come across with it. Seen on the harness at 390x844: the promotions
+ * card open on the catalogue with the invitation timer still running, which is
+ * two interruptions stacked on a phone — the exact outcome the two components
+ * were arranged to prevent.
+ */
+function anotherOverlayIsOpen(): boolean {
+  try {
+    return Boolean(document.querySelector('[data-offer-modal], [role="dialog"], [data-vl-overlay]'));
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Ten seconds: long enough to have read the page, short enough to arrive
  * before the decision.
  *
@@ -154,7 +178,14 @@ export function EntryOfferModal() {
         if (dismissedRecently(Number(data.dismissCooldownDays ?? 7))) return;
         window.setTimeout(() => {
           if (!live) return;
+          // Re-checked at the moment of opening rather than only when the
+          // timer was set: the promotions card may have opened in between,
+          // which is the commonest way the two collide.
+          if (anotherOverlayIsOpen()) return;
           setOpen(true);
+          // Counted only once it is actually on screen. An invitation that
+          // yielded was never shown, and counting it would put a denominator
+          // under an event that did not happen.
           trackFunnelEvent("spin_invite_shown", { placement: "storefront" });
         }, OPEN_AFTER_MS);
       })

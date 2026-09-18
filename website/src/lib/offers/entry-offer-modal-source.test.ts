@@ -196,6 +196,26 @@ describe("it opens once a visitor is INSIDE the store, never on the gate", () =>
   it("waits ten seconds, long enough to have read the page", () => {
     expect(MODAL).toMatch(/OPEN_AFTER_MS = 10000/);
   });
+
+  it("yields to anything already covering the page, checked as it opens", () => {
+    // The layout has claimed this for a fortnight and nothing implemented it:
+    // the yield lived in the older invitation this one replaced and did not
+    // come across. Seen on the harness at 390x844 — the promotions card open
+    // on the catalogue with the invitation timer still running, which is two
+    // interruptions stacked on a phone.
+    expect(MODAL).toContain("document.querySelector('[data-offer-modal], [role=\"dialog\"], [data-vl-overlay]')");
+    const timer = MODAL.slice(MODAL.indexOf("window.setTimeout"), MODAL.indexOf("OPEN_AFTER_MS);"));
+    expect(timer).toContain("if (anotherOverlayIsOpen()) return;");
+    // Counted only once it is actually on screen: an invitation that yielded
+    // was never shown, and counting it puts a denominator under a
+    // non-event.
+    expect(timer.indexOf("anotherOverlayIsOpen()")).toBeLessThan(timer.indexOf("spin_invite_shown"));
+  });
+
+  it("lets the promotions card mark itself, rather than coordinating by hand", () => {
+    const promo = readFileSync(join(SRC, "components", "storefront-offer-modal.tsx"), "utf8");
+    expect(promo).toContain('data-offer-modal="true"');
+  });
 });
 
 describe("the funnel can be measured at its widest point", () => {
