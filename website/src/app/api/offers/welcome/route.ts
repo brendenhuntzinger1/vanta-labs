@@ -54,7 +54,12 @@ export async function GET() {
   if (!email) return NextResponse.json({ status: "unknown", mayInterrupt: false, ...shell });
   try {
     const offer = await readWelcomeOffer(email);
-    return NextResponse.json({ ...offer, ...shell });
+    // THE ADDRESS THE CODE WILL ACTUALLY GO TO. POST reads
+    // `sessionEmail || typedEmail`, so for anyone with a session the field on
+    // the card is discarded. Returning it lets the card show that plainly
+    // instead of collecting an address it is going to ignore. It is the
+    // caller's own address, returned to their own authenticated session.
+    return NextResponse.json({ ...offer, ...shell, accountEmail: email });
   } catch {
     return NextResponse.json({ status: "unknown", mayInterrupt: false, ...shell });
   }

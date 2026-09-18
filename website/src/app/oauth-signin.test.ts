@@ -280,23 +280,26 @@ describe("the portal gates on the attestations, never on the marketing box", () 
     expect(code(form)).toContain("const [marketingOptIn, setMarketingOptIn] = useState(false);");
   });
 
-  it("labels the marketing box as optional, in the label itself", () => {
-    // The marker used to read "(optional)" in parentheses at the label's own
-    // size. It is now a small uppercase tag, which is a presentation change and
-    // nothing else: what this test exists to hold is that the word is IN the
-    // label a visitor reads, not only in a class name or a heading somewhere
-    // else on the card. That matters most now the box sits directly beneath the
-    // two that genuinely gate entry.
-    const marketingAt = code(portal).indexOf("I agree to receive Vanta Labs emails");
-    expect(marketingAt).toBeGreaterThan(-1);
-    expect(code(portal).slice(marketingAt, marketingAt + 400).toLowerCase()).toContain("optional");
-    expect(portal).toContain("vl-portal-row-optional");
+  it("carries no marketing box at all, so nothing optional sits on the gate", () => {
+    // THE OWNER TOOK THIS OFF THE GATE.
+    //
+    // It used to sit third, beneath the two attestations, marked optional. The
+    // reasoning for its wording is preserved in git; what matters now is that
+    // the gate asks for the two statements that actually gate entry and
+    // nothing else. The marketing tick still exists — on the create-account
+    // form, where somebody is choosing to sign up rather than trying to get in.
+    expect(code(portal)).not.toContain("I agree to receive Vanta Labs emails");
+    // The optional-row style itself stays — "Keep me signed in on this device"
+    // is still optional and still uses it. What is gone is the marketing row,
+    // so exactly one optional row is left (asserted by count further down).
   });
 
-  it("carries all three of the owner's statements verbatim", () => {
+  it("carries both of the owner's gating statements verbatim", () => {
+    // Two now, not three: the marketing line came off the gate. These two are
+    // the ones entry is actually conditional on.
     expect(portal).toContain("I confirm I am 21 years of age or older");
     expect(portal).toContain("I understand products are offered exclusively for research use");
-    expect(portal).toContain("I agree to receive Vanta Labs emails, product updates and offers");
+    expect(portal).not.toContain("I agree to receive Vanta Labs emails, product updates and offers");
   });
 
   // ASSERTED AGAINST THE STRIPPED SLICE, NOT THE RAW ONE.
@@ -377,7 +380,8 @@ describe("the portal gates on the attestations, never on the marketing box", () 
     // provider door never saw it — and the callback sent `rememberMe: true`
     // regardless. A control the fastest door cannot reach is not a control.
     const rows = portal.match(/className="vl-portal-row/g) ?? [];
-    expect(rows.length).toBe(4);
+    // Three rows now: two attestations and 'keep me signed in'.
+    expect(rows.length).toBe(3);
     const css = read("src/app/globals.css");
     expect(css).toContain(".vl-portal-row {");
     expect(css).toMatch(/\.vl-portal-row \{[^}]*min-height: 56px/);
@@ -390,7 +394,8 @@ describe("the portal gates on the attestations, never on the marketing box", () 
     // asked, and someone on a shared bench is harmed by not being.
     expect(portal).toContain("Keep me signed in on this device");
     const optional = portal.match(/vl-portal-row vl-portal-row-optional/g) ?? [];
-    expect(optional.length).toBe(2);
+    // One optional row left on the gate: 'keep me signed in'.
+    expect(optional.length).toBe(1);
 
     const form = read("src/components/account-auth-form.tsx");
     expect(form).toContain("const [rememberMe, setRememberMe] = useState(false)");
@@ -482,29 +487,12 @@ describe("the portal makes the fastest path the obvious one", () => {
   // gate ignores it, it looks different from the boxes that do gate, and it
   // says so in words.
   // ---------------------------------------------------------------------
-  it("keeps the marketing box distinguishable from the two that gate entry", () => {
-    const marketing = at("I agree to receive Vanta Labs emails, product updates and offers");
-    const rowStart = rendered.lastIndexOf("<label", marketing);
-    const rowClass = rendered.slice(rowStart, marketing);
-
-    // Dashed and quieter — the difference is legible before the label is read.
-    expect(rowClass, "the marketing row is styled as a required one").toContain(
-      "vl-portal-row vl-portal-row-optional",
-    );
-
-    // The two that DO gate carry the plain row class and no modifier.
-    for (const required of [
-      "I confirm I am 21 years of age or older",
-      "I understand products are offered exclusively for research use",
-    ]) {
-      const at2 = at(required);
-      const cls = rendered.slice(rendered.lastIndexOf("<label", at2), at2);
-      expect(cls, `${required} should not be styled optional`).not.toContain("vl-portal-row-optional");
-    }
-
-    // And it is marked in words, close enough to the label to belong to it.
-    const tag = rendered.slice(marketing, marketing + 400);
-    expect(tag.toLowerCase(), "the marketing row carries no optional marker").toContain("optional");
+  it("leaves only rows that gate entry, plus the device choice", () => {
+    // The marketing row was styled apart so it could not be mistaken for a
+    // requirement. With it gone there is nothing left to mistake: what remains
+    // either gates entry or is about this device.
+    expect(rendered).not.toContain("I agree to receive Vanta Labs emails");
+    expect(rendered).toContain("Keep me signed in on this device");
   });
 
   it("never lets the marketing box become a condition of entry", () => {
@@ -633,7 +621,7 @@ describe("the portal makes the fastest path the obvious one", () => {
     // headings, and they are the smallest type on the card — 10px — so they are
     // exactly where an unreadable marker would hide. Same floor applies.
     const tags = [...rendered.matchAll(/text-\[0\.625rem\][^"]*text-white\/(\d+)"[^>]*>\s*optional/g)];
-    expect(tags.length, "expected an inline optional tag on each optional row").toBe(2);
+    expect(tags.length, "expected an inline optional tag on each optional row").toBe(1);
     for (const m of tags) {
       expect(Number(m[1]), "an optional tag is below the contrast floor").toBeGreaterThanOrEqual(50);
     }

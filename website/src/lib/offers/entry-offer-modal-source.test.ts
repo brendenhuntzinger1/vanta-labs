@@ -90,9 +90,27 @@ describe("nothing is ever pre-ticked", () => {
 });
 
 describe("what it asks for", () => {
-  it("collects an email, because a signed-out visitor has no session to read one from", () => {
+  it("shows the account's own address rather than a field that is quietly ignored", () => {
+    // THE FIELD WAS DEAD INPUT AND NOBODY COULD TELL.
+    //
+    // /api/offers/welcome reads "sessionEmail || typedEmail" — the session
+    // wins whenever there is one. This card now only opens INSIDE the store,
+    // which is behind the account wall, so every visitor who sees it has a
+    // session and everything typed here was discarded. Someone entering a
+    // different address got their code at their account address and no hint
+    // that it had happened; the first they would know is a code that never
+    // arrived where they asked for it.
+    //
+    // Checkout already solved this ("Using your account email."), so this
+    // follows that, not a new idea.
     expect(MODAL).toMatch(/type="email"/);
     expect(MODAL).toContain("entry-offer-email");
+    expect(MODAL).toMatch(/readOnly/);
+    expect(MODAL).toContain("Using your account email");
+  });
+
+  it("is told that address by the server rather than guessing at it", () => {
+    expect(MODAL).toMatch(/accountEmail/);
   });
 
   it("collects a mobile number for the text list", () => {
@@ -129,10 +147,42 @@ describe("it can be dismissed, and it stays dismissed", () => {
   });
 });
 
-describe("it opens where a visitor enters the site", () => {
-  it("is mounted on the access portal", () => {
-    // The portal is the entrance for this store and the only page an
-    // anonymous visitor — or a reviewer — can reach.
-    expect(PORTAL).toContain("EntryOfferModal");
+describe("it opens once a visitor is INSIDE the store, never on the gate", () => {
+  const LAYOUT = readFileSync(join(SRC, "app", "layout.tsx"), "utf8");
+
+  it("is not on the access portal", () => {
+    // THE GATE ASKS ONE THING. A visitor standing at a sign-in screen has not
+    // chosen this store yet, and interrupting that decision with a discount is
+    // the owner's call and the answer is no.
+    expect(PORTAL).not.toContain("EntryOfferModal");
+  });
+
+  it("is mounted globally, so it can open on the pages behind the gate", () => {
+    expect(LAYOUT).toContain("<EntryOfferModal />");
+  });
+
+  it("replaces the older invitation rather than joining it", () => {
+    // Two cards asking the same question is worse than one. The older
+    // catalogue invitation is stood down; this is the one the owner approved.
+    expect(LAYOUT).not.toContain("<SmsInviteModal />");
+  });
+
+  it("opens only on the storefront pages, never checkout or an account screen", () => {
+    expect(MODAL).toMatch(/function isStoreRoute/);
+    expect(MODAL).toMatch(/pathname === "\/"/);
+    expect(MODAL).toMatch(/\/products/);
+  });
+
+  it("waits the house interval rather than pouncing on arrival", () => {
+    // 6s is what sms-invite-modal.tsx already used. A card that lands the
+    // instant a page paints reads as an ad; one that waits reads as an offer.
+    expect(MODAL).toMatch(/OPEN_AFTER_MS = 6000/);
+  });
+
+  it("does not interrupt someone the offer is not open to", () => {
+    // Bought already, subscribed already, holding a code, or once said stop:
+    // the server decides all of it and answers mayInterrupt. This never works
+    // it out for itself.
+    expect(MODAL).toMatch(/mayInterrupt/);
   });
 });

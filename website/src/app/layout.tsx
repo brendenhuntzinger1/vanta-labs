@@ -13,7 +13,7 @@ import { EntryDiagnostics } from "@/components/entry-diagnostics";
 import { RecoveryLinkCatcher } from "@/components/recovery-link-catcher";
 import { StorefrontOffersBar } from "@/components/storefront-offers-bar";
 import { StorefrontOfferModal } from "@/components/storefront-offer-modal";
-import { SmsInviteModal } from "@/components/sms-invite-modal";
+import { EntryOfferModal } from "@/components/entry-offer-modal";
 import { cookies } from "next/headers";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { EMAIL_GRANT_COOKIE } from "@/lib/email/link-grant";
@@ -357,7 +357,7 @@ export default async function RootLayout({
               where it is obvious that they are. It yields to the card above
               rather than stacking on it, opens only on the catalogue, and
               renders nothing at all while the kill switch is off. */}
-          <SmsInviteModal />
+          <EntryOfferModal />
           {children}
           <SiteFooterSlot />
           {/* vl-bottom-bar lifts this out of the consent banner's way while
