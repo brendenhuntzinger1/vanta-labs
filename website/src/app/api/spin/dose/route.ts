@@ -3,15 +3,34 @@ import { NextResponse } from "next/server";
 import { getSpinWheelConfig } from "@/lib/admin-control";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { chooseSpinDose } from "@/lib/spin/spin-dose";
+import { verifySpinToken } from "@/lib/spin/spin-token";
 
 export const dynamic = "force-dynamic";
 
 // ---------------------------------------------------------------------------
 // "I WON GLP-1 — I'LL TAKE THE 30mg."
 //
-// IDENTITY COMES FROM THE SESSION, exactly as the claim route does. There is no
-// email in the body: the prize being changed is found by the verified address,
-// so nobody can move somebody else's dose by typing their address.
+// IDENTITY COMES FROM THE SESSION, OR FROM THE SIGNED LINK. There is no email
+// in the body: the prize being changed is found by an address this server
+// established, so nobody can move somebody else's dose by typing their address.
+//
+// THE LINK IS HERE BECAUSE THE LIVE JOURNEY IS ANONYMOUS. The wheel was mailed
+// to 104 people and is reachable on an email-link grant, which is deliberately
+// a bare capability carrying no address (email/link-grant.ts). Four of the
+// sixteen wedges are laddered and the picker renders from the PRIZE, so a
+// quarter of anonymous winners were shown a size chooser whose every press
+// answered 401 — and with the wall answering first, the words they got were
+// "Sign in to continue", on a page reached from a link that had just proved
+// who they were.
+//
+// Accepting the token is not a new trust. POST /api/spin already mints the
+// prize on it, for the reason stated there: "The address in the token is
+// trustworthy — this server signed it". Choosing a size moves nothing but that
+// same address's own row, so this is strictly the smaller act.
+//
+// A SESSION THAT DISAGREES WITH THE LINK IS A FORWARDED LINK, and is refused
+// rather than guessed at — the same 409 the mint path answers, for the same
+// reason: neither identity authorises moving the other one's prize.
 //
 // THE BODY CARRIES ONE FIELD, and it is a label. Not a variant id, not a
 // minimum, not a product, not a prize id. Everything else is derived server
@@ -36,20 +55,39 @@ const MESSAGES: Record<string, string> = {
 export async function POST(request: Request) {
   try {
     const user = await getAuthenticatedUser();
-    const verifiedEmail = String(user?.email ?? "").trim().toLowerCase();
-    if (!verifiedEmail) {
-      return NextResponse.json({ success: false, error: "Please sign in to choose your size." }, { status: 401 });
-    }
+    const sessionEmail = String(user?.email ?? "").trim().toLowerCase();
 
     let label = "";
+    let token = "";
     try {
-      const body = (await request.json()) as { label?: unknown };
+      const body = (await request.json()) as { label?: unknown; token?: unknown };
       label = typeof body?.label === "string" ? body.label : "";
+      token = typeof body?.token === "string" ? body.token.trim() : "";
     } catch {
       label = "";
     }
 
     const config = await getSpinWheelConfig();
+
+    // A link for a PREVIOUS campaign is genuine and useless — the campaign is
+    // inside the signature, so it cannot be forged, but honouring it would move
+    // a prize in a promotion this holder was never mailed.
+    const verified = token ? await verifySpinToken(token) : null;
+    const linkEmail = verified && verified.campaignId === config.campaignId ? verified.email : "";
+
+    if (sessionEmail && linkEmail && sessionEmail !== linkEmail) {
+      return NextResponse.json(
+        { success: false, error: "This link belongs to a different account. Sign out, or open the link sent to this address." },
+        { status: 409 },
+      );
+    }
+
+    // The session is the stronger claim and wins whenever there is one.
+    const verifiedEmail = sessionEmail || linkEmail;
+    if (!verifiedEmail) {
+      return NextResponse.json({ success: false, error: "Please sign in to choose your size." }, { status: 401 });
+    }
+
     const outcome = await chooseSpinDose({ verifiedEmail, campaignId: config.campaignId, label });
 
     if (!outcome.ok) {
