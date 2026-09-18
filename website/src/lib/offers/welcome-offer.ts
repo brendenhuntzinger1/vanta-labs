@@ -4,9 +4,35 @@ import { PAID_ORDER_STATUSES, isProductPurchaseOrder } from "@/lib/ledger";
 import { ensureContactCode, findLiveContactCode } from "@/lib/marketing/omnisend/codes";
 import { getSmsSignupConfig } from "@/lib/admin-control";
 import { isHeldOut } from "@/lib/offers/welcome-offer-holdout";
-import { readSmsStanding, recordSmsConsent, type SmsConsentSource } from "@/lib/sms-consent";
+import { readSmsStanding, recordPhoneOnFile, recordSmsConsent, type SmsConsentSource } from "@/lib/sms-consent";
 import { acceptableSmsPhone } from "@/lib/sms-consent-text";
 import { supabaseAdmin } from "@/lib/supabase-server";
+
+// ---------------------------------------------------------------------------
+// THE WELCOME DISCOUNT IS RETIRED. THE SPIN WHEEL IS THE ACQUISITION OFFER.
+//
+// NARROW ON PURPOSE. The kind is what identifies it — CONTACT_CODE_OFFERS has
+// three, and two of them must carry on untouched:
+//
+//   welcome  15%  <- retired here, and here only
+//   winback  15%  <- a different offer that happens to share the number
+//   recovery 10%  <- cart recovery
+//
+// So this flag gates the two calls that MINT a welcome code and nothing else.
+// findLiveContactCode("welcome", …) is deliberately left alone: a code already
+// in a customer's hands keeps working to its own expiry, at the checkout, on
+// the terms they were given. Retiring an incentive is not the same as
+// confiscating what it already bought, and a customer holding a live code has
+// done nothing wrong.
+//
+// A CONSTANT RATHER THAN A CONFIG TOGGLE. sms_signup.prompts_enabled already
+// exists and already suppresses the prompts, but it is an operator switch that
+// can be flipped back — which would quietly resume minting an offer the store
+// no longer advertises anywhere. This is a product decision, so it lives in
+// the code where reversing it is a reviewed change.
+// ---------------------------------------------------------------------------
+export const WELCOME_OFFER_RETIRED = true;
+
 
 /**
  * THE ONE PLACE THE WELCOME OFFER IS DECIDED.
@@ -78,6 +104,14 @@ export type WelcomeClaimFailure = "phone" | "ineligible" | "consent" | "code";
 
 export type WelcomeClaim =
   | { ok: true; code: string; endsAt: string; percent: number }
+  /**
+   * Consent recorded, no discount — the shape every new sign-up takes now that
+   * the welcome code is retired. Distinct from the failure branch because
+   * nothing went wrong: the subscriber is on the list, there is simply no
+   * coupon to hand back. Callers that used to print a code must read this and
+   * say so rather than reporting an error the customer did not cause.
+   */
+  | { ok: true; subscribedOnly: true }
   | { ok: false; reason: WelcomeClaimFailure };
 
 function normalizeEmail(email: string | null | undefined): string | null {
@@ -196,6 +230,10 @@ export async function claimWelcomeOffer(input: {
   const live = await findLiveContactCode("welcome", address);
   if (live) return { ok: true, code: live.code, endsAt: live.endsAt, percent: live.percent };
 
+  // THE WELCOME DISCOUNT IS RETIRED. Consent above still lands; no new code is
+  // minted below it. See WELCOME_OFFER_RETIRED.
+  if (WELCOME_OFFER_RETIRED) return { ok: true, subscribedOnly: true };
+
   if (await hasPurchased(address)) return { ok: false, reason: "ineligible" };
 
   const code = await ensureContactCode("welcome", address);
@@ -225,6 +263,25 @@ export async function recordSmsSignupOnly(input: {
 }
 
 /**
+ * THE NUMBER, WITHOUT THE PERMISSION.
+ *
+ * Same shape as recordSmsSignupOnly and deliberately beside it, so the two
+ * halves of "we have your number" and "you agreed to be texted" read as the
+ * pair they are. This one subscribes nobody — see recordPhoneOnFile.
+ */
+export async function recordPhoneWithoutConsent(input: {
+  email: string;
+  phone: string;
+  source: SmsConsentSource;
+  userId?: string | null;
+}): Promise<boolean> {
+  const address = normalizeEmail(input.email);
+  const phone = acceptableSmsPhone(input.phone);
+  if (!address || !phone) return false;
+  return recordPhoneOnFile({ email: address, phone, source: input.source, userId: input.userId ?? null });
+}
+
+/**
  * A NEW TEXT SUBSCRIBER'S CODE, MINTED WHERE THE CONSENT WAS TAKEN.
  *
  * The sign-up page and the account settings page record SMS consent through
@@ -238,6 +295,7 @@ export async function recordSmsSignupOnly(input: {
  * subscription no longer produces a welcome code (hooks.ts onMarketingOptIn).
  */
 export async function grantWelcomeOfferForConsent(email: string): Promise<void> {
+  if (WELCOME_OFFER_RETIRED) return;
   const address = normalizeEmail(email);
   if (!address) return;
   try {

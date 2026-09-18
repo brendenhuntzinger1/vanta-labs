@@ -1,61 +1,80 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
+import { trackFunnelEvent } from "@/lib/analytics-funnel-client";
 import { SMS_CONSENT_TEXT, SMS_DISCLOSURE_TEXT } from "@/lib/sms-consent-text";
-import { WELCOME_OFFER_PERCENT } from "@/lib/offers/welcome-offer-copy";
 
 /**
- * THE STORE INVITATION — the email and text sign-up a shopper meets once they
- * are inside.
+ * THE STORE INVITATION — and what it invites people to is the wheel.
+ *
+ * IT USED TO SELL 15% OFF A FIRST ORDER. That discount is retired: nothing
+ * mints it any more, at any call site. The wheel replaced it as the store's
+ * acquisition offer, and this card is how a shopper who never got a win-back
+ * email finds out the wheel exists. An invitation still advertising the old
+ * number would be advertising something the till cannot honour.
+ *
+ * WHY THE WHEEL IS THE BETTER OFFER TO PUT HERE. Fifteen per cent off a $60
+ * vial is $9 and reads as a coupon. Every wedge on the wheel is a real reward
+ * and four of them are a free vial worth up to $119.99 — and every one of them
+ * carries a minimum spend, so the store is paid before it pays out. The
+ * arithmetic is in the dose-ladder spec; the point here is that this card is
+ * offering something worth crossing a room for, and the old one was not.
  *
  * WHERE IT OPENS, AND WHY NOT AT THE DOOR. It used to mount on the access
  * portal. The owner's call is that the gate asks one thing: a visitor standing
  * at a sign-in screen has not chosen this store yet, and interrupting that
- * decision with a discount is the wrong first impression. So it opens on the
- * storefront pages behind the gate — the home page and the catalogue — and
- * never on checkout, an account screen or a payment page, where a card over
- * the task is a lost order rather than a captured address.
+ * decision is the wrong first impression. So it opens on the storefront pages
+ * behind the gate — the catalogue and its product pages — and never on
+ * checkout, an account screen or a payment page, where a card over the task is
+ * a lost order rather than a captured shopper.
  *
- * SIX SECONDS, which is what sms-invite-modal.tsx already used before this
- * replaced it. A card that lands the instant a page paints reads as an ad; one
- * that waits until someone has looked at something reads as an offer. It is
- * also long enough that a shopper who arrived to do one specific thing can do
- * it first.
+ * IT ASKS FOR TWO THINGS AND THEY ARE NOT THE SAME THING.
  *
- * IT REPLACES THAT OLDER INVITATION RATHER THAN JOINING IT. Two cards asking
- * the same question is worse than one, and this is the design the owner
- * approved. What carried over from it is the gating, which is the part that
- * matters: the server decides who may be interrupted and this never works it
- * out for itself.
+ * THE NUMBER IS COLLECTED FROM EVERYBODY, alongside the account's address, and
+ * the wheel will not spin without one. Holding a customer's phone is ordinary
+ * contact data — it is how an order problem gets solved — and the store kept
+ * none, because until now the only path that stored a number also claimed
+ * permission to market to it.
  *
- * THE TWO TICKS ARE SEPARATE DECISIONS, AND STAY SEPARATE.
+ * THE PERMISSION IS A SEPARATE, OPTIONAL TICK that buys nothing. Nobody is
+ * subscribed by entering a number: the request says `smsConsent` explicitly,
+ * the server stores the number with marketing_consent false, and every
+ * standing check reads that as "not subscribed". The box says Optional because
+ * it is, which is also exactly how the create-account form at /account/login —
+ * the surface a carrier review actually loads — has always put it.
  *
- *   * the age and research confirmation is REQUIRED — this store may not
- *     market to anyone who has not made it;
- *   * the text consent is its own box and the offer rides on it, because the
- *     server issues no code without a mobile number. Neither box is ever
- *     pre-ticked, which is not a nicety — a pre-ticked box is not consent
- *     under the TCPA.
+ * SO THE TICK CAN BE SWITCHED ON LATER WITHOUT TOUCHING THIS CARD. When
+ * Omnisend SMS is approved, the number is already on the contact as a
+ * nonSubscribed phone identifier; a tick flips that identifier's status. No
+ * number is collected twice, and nothing here has to change.
  *
- * THE COPY FOLLOWS THE SERVER, NEVER THE OTHER WAY ROUND. `promptsEnabled` is
- * the store's kill switch for first-order discounts. While it is off the
- * server records consent and issues NO code, so this must not promise one.
+ * THE AGE AND RESEARCH CONFIRMATION STAYS, AND STAYS REQUIRED, for the text
+ * sign-up alone — it gates MARKETING, and keeping a number is not marketing.
+ * Someone who gives their number and leaves the tick alone never touches it.
  *
- * NOT REACHABLE BY AN A2P REVIEWER, DELIBERATELY. Everything here is behind
- * the account wall. The publicly reachable opt-in, which is what a carrier
- * review can actually load, is the create-account form at /account/login: same
- * consent sentence, same unticked box, same two legal links.
+ * THE SERVER DECIDES WHO MAY BE INTERRUPTED. /api/spin/invite answers it —
+ * wheel switched off, already spun, already on the list — and this component
+ * never works any of it out for itself.
+ *
+ * NOT REACHABLE BY AN A2P REVIEWER, DELIBERATELY. Everything here is behind the
+ * account wall. The publicly reachable opt-in, which is what a carrier review
+ * can actually load, is the create-account form at /account/login: same consent
+ * sentence, same unticked box, same two legal links.
  */
 
-type OfferShape = {
-  status?: string;
-  /** The address the code will go to — the session's, never what is typed. */
-  accountEmail?: string;
-  mayInterrupt?: boolean;
-  promptsEnabled?: boolean;
+type InviteShape = {
+  /** May this card open at all? Every reason to stay silent is decided server-side. */
+  mayInvite?: boolean;
+  alreadySpun?: boolean;
+  /** Is there a text list left to ask this person about? */
+  askForTexts?: boolean;
+  /** Does the store still need a number, or does it already hold one? */
+  needPhone?: boolean;
+  /** The address the consent would be recorded against — the session's, never what is typed. */
+  accountEmail?: string | null;
   dismissCooldownDays?: number;
 };
 
@@ -64,14 +83,37 @@ type OfferShape = {
  *
  * THE FRONT PAGE IS NOT ON THIS LIST, and that is the point. It is brand-only,
  * and a visitor who has just come through the gate has not seen a product or a
- * price yet — "15% off your first order" there is an advert with nothing to
- * attach to. Beside a $59 vial it is a number. Checkout and the account
+ * price yet — an offer needs something to attach to. Checkout and the account
  * screens are absent for a different reason: a card thrown over a task someone
  * is mid-way through costs an order.
  */
 function isStoreRoute(pathname: string | null): boolean {
   if (!pathname) return false;
   return pathname === "/products" || pathname.startsWith("/products/");
+}
+
+/**
+ * IS ANYTHING ELSE ON SCREEN? Read from the DOM rather than from shared state,
+ * deliberately: the promotions card, the mobile filter sheet and anything else
+ * that opens over the page already mark themselves, and a coordinator both
+ * components have to remember to call is a coordinator that will eventually be
+ * forgotten. The question "is something covering the page right now" has one
+ * honest answer and the DOM is holding it.
+ *
+ * THE LAYOUT HAS CLAIMED THIS FOR A FORTNIGHT AND NOTHING IMPLEMENTED IT. The
+ * mount comment says this card "yields to the card above rather than stacking
+ * on it"; the yield lived in the older invitation that this one replaced, and
+ * did not come across with it. Seen on the harness at 390x844: the promotions
+ * card open on the catalogue with the invitation timer still running, which is
+ * two interruptions stacked on a phone — the exact outcome the two components
+ * were arranged to prevent.
+ */
+function anotherOverlayIsOpen(): boolean {
+  try {
+    return Boolean(document.querySelector('[data-offer-modal], [role="dialog"], [data-vl-overlay]'));
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -86,9 +128,17 @@ function isStoreRoute(pathname: string | null): boolean {
  */
 const OPEN_AFTER_MS = 10000;
 
-/** Remembered per browser, so a dismissal is not re-asked on the next page. */
-const DISMISSED_KEY = "vl_entry_offer_dismissed_at";
-const JOINED_KEY = "vl_entry_offer_joined";
+/**
+ * Remembered per browser, so a dismissal is not re-asked on the next page.
+ *
+ * A NEW KEY, NOT THE OLD ONE. The retired invitation stored
+ * `vl_entry_offer_joined` for somebody who had joined the text list, and
+ * reading it here would silence the wheel for every shopper who ever took the
+ * old 15% — the people most worth inviting. "Already spun" is the real
+ * don't-ask-again and it is the server's answer, which is also the only version
+ * of it that survives a second device.
+ */
+const DISMISSED_KEY = "vl_spin_invite_dismissed_at";
 
 function dismissedRecently(cooldownDays: number): boolean {
   try {
@@ -104,14 +154,6 @@ function dismissedRecently(cooldownDays: number): boolean {
   }
 }
 
-function alreadyJoined(): boolean {
-  try {
-    return window.localStorage.getItem(JOINED_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
 function remember(key: string, value: string) {
   try {
     window.localStorage.setItem(key, value);
@@ -122,47 +164,55 @@ function remember(key: string, value: string) {
 
 export function EntryOfferModal() {
   const pathname = usePathname();
+  const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [offer, setOffer] = useState<OfferShape | null>(null);
+  const [invite, setInvite] = useState<InviteShape | null>(null);
 
-  const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [smsConsent, setSmsConsent] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [code, setCode] = useState<string | null>(null);
-  const [joined, setJoined] = useState(false);
 
-  // Ask the one public offer endpoint what this visitor may be shown. Every
-  // other offer path is walled, so this is the only question a guest can ask.
+  // Ask the one endpoint what this visitor may be shown.
   useEffect(() => {
     let live = true;
-    if (alreadyJoined()) return;
     if (!isStoreRoute(pathname)) return;
-    void fetch("/api/offers/welcome", { credentials: "same-origin" })
+    void fetch("/api/spin/invite", { credentials: "same-origin" })
       .then((r) => (r.ok ? r.json() : null))
-      .then((data: OfferShape | null) => {
+      .then((data: InviteShape | null) => {
         if (!live || !data) return;
-        setOffer(data);
-        // Shown, not asked for: the POST discards anything typed here.
-        if (data.accountEmail) setEmail(data.accountEmail);
-        // THE SERVER DECIDES WHO MAY BE INTERRUPTED. Someone who has bought,
-        // who already subscribed, who holds a code, or who once said stop is
-        // not asked again — and this component never works that out for
-        // itself. `mayInterrupt` is the whole of that answer.
-        if (!data.mayInterrupt) return;
+        setInvite(data);
+        // THE SERVER DECIDES WHO MAY BE INTERRUPTED. Someone who has already
+        // spun, or whose wheel is switched off, is not asked — and this
+        // component never reaches that conclusion for itself.
+        if (!data.mayInvite) return;
         if (dismissedRecently(Number(data.dismissCooldownDays ?? 7))) return;
-        window.setTimeout(() => { if (live) setOpen(true); }, OPEN_AFTER_MS);
+        window.setTimeout(() => {
+          if (!live) return;
+          // Re-checked at the moment of opening rather than only when the
+          // timer was set: the promotions card may have opened in between,
+          // which is the commonest way the two collide.
+          if (anotherOverlayIsOpen()) return;
+          setOpen(true);
+          // Counted only once it is actually on screen. An invitation that
+          // yielded was never shown, and counting it would put a denominator
+          // under an event that did not happen.
+          trackFunnelEvent("spin_invite_shown", { placement: "storefront" });
+        }, OPEN_AFTER_MS);
       })
       .catch(() => { /* an invitation is never worth an error on screen */ });
     return () => { live = false; };
   }, [pathname]);
 
+  // SKIPPING IS A FIRST-CLASS ANSWER. The close control, the backdrop, the
+  // escape key and the "No thanks" button all land here, and all of them count
+  // as the same thing: a shopper who was offered the wheel and said no.
   const close = useCallback(() => {
     setOpen(false);
     remember(DISMISSED_KEY, String(Date.now()));
+    trackFunnelEvent("spin_invite_skipped", { placement: "storefront" });
   }, []);
 
   useEffect(() => {
@@ -172,63 +222,76 @@ export function EntryOfferModal() {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, close]);
 
-  const offerLive = offer?.promptsEnabled === true;
+  const askForTexts = invite?.askForTexts === true;
+  const needPhone = invite?.needPhone === true;
 
-  const submit = useCallback(async () => {
+  /**
+   * Take the shopper to the wheel, recording the consent first if they gave it.
+   *
+   * ONE BUTTON, TWO OUTCOMES, and the order matters. A shopper who left the
+   * text section alone goes straight to the wheel. A shopper who ticked the box
+   * has asked for two things, so both have to happen — and if the number or the
+   * attestation is missing, they are told and kept here rather than being
+   * carried off to the wheel with the sign-up they asked for silently dropped.
+   *
+   * THE SPIN SURVIVES A FAILED SIGN-UP. If the consent POST refuses for any
+   * other reason the shopper still goes to the wheel: the offer was never
+   * conditional on the text list, and stranding them on a card because a
+   * subscription did not take would be making it conditional after the fact.
+   */
+  const spin = useCallback(async () => {
     if (saving) return;
-    if (!confirmed) { setError("Please confirm you are 21 or older and buying for research use."); return; }
-    if (!email.trim()) { setError("Enter your email address."); return; }
-    // THE OFFER IS THE TEXT LIST. claimWelcomeOffer refuses without an
-    // acceptable mobile number and recordSmsSignupOnly does too, so there is
-    // no email-only path behind this endpoint — letting someone submit an
-    // address alone only produced "That does not look like a mobile number",
-    // which answers a question they did not ask. Asked for here instead, in
-    // the words of what they are actually agreeing to.
-    // Both messages follow the switch, like the rest of the copy. With the
-    // discount off the page says nothing about a code, so an error that
-    // mentions one describes a screen the reader is not looking at.
-    if (!smsConsent) {
-      setError(offerLive
-        ? "Tick the text box to get your code — that is what the discount is for."
-        : "Tick the text box to join the text list.");
+
+    // THE NUMBER IS THE ONE THING THE WHEEL ASKS FOR. Not asked at all when
+    // the store already holds one — that number is what a later tick would
+    // subscribe, so making somebody retype it buys nothing.
+    if (needPhone && !phone.trim()) {
+      setError("Enter your mobile number to spin.");
       return;
     }
-    if (!phone.trim()) {
-      setError(offerLive
-        ? "Enter your mobile number so we can text your code."
-        : "Enter your mobile number to join the text list.");
+    // THE TICK IS ITS OWN DECISION, and the attestation gates that decision
+    // rather than the spin: this store may not MARKET to anyone who has not
+    // made it, and keeping a number is not marketing.
+    if (smsConsent && !confirmed) {
+      setError("Please confirm you are 21 or older and buying for research use.");
       return;
     }
 
-    setSaving(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/offers/welcome", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        // The tick is required above, so a number only ever reaches the
-        // server behind an explicit, unticked-by-default agreement.
-        body: JSON.stringify({
-          email: email.trim(),
-          phone: phone.trim(),
-          placement: "storefront",
-        }),
-      });
-      const data = (await res.json()) as { ok?: boolean; error?: string; code?: string };
-      if (data?.ok) {
-        remember(JOINED_KEY, "1");
-        setJoined(true);
-        setCode(data.code ?? null);
-        return;
+    if (needPhone && phone.trim()) {
+      setSaving(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/offers/welcome", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          // SAID, NOT INFERRED. The endpoint keeps the number either way and
+          // subscribes only on an explicit true, so an untouched box cannot
+          // become a consent by accident. The address is the session's: the
+          // endpoint reads `sessionEmail || typedEmail` and there is always a
+          // session here.
+          body: JSON.stringify({ phone: phone.trim(), placement: "storefront", smsConsent }),
+        });
+        const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+        if (data?.ok === false) {
+          // A number nobody could be texted at is worth stopping for: it is
+          // the one failure the shopper can fix, and it is in front of them.
+          setError(data.error ?? "That does not look like a mobile number.");
+          setSaving(false);
+          return;
+        }
+      } catch {
+        // Offline, or the request was cut off. The wheel is what they pressed
+        // and the prize is not conditional on the store filing their number,
+        // so they go through; the number is asked for again next time.
       }
-      setError(data?.error ?? "This did not go through. Please try again.");
-    } catch {
-      setError("This did not go through. Please try again.");
-    } finally {
       setSaving(false);
     }
-  }, [confirmed, email, offerLive, phone, saving, smsConsent]);
+
+    trackFunnelEvent("spin_invite_accepted", { placement: "storefront", joinedTexts: smsConsent });
+    setOpen(false);
+    router.push("/spin");
+  }, [confirmed, needPhone, phone, router, saving, smsConsent]);
 
   if (!open) return null;
 
@@ -263,161 +326,139 @@ export function EntryOfferModal() {
         <div className="text-[0.7rem] font-semibold uppercase tracking-[0.28em] text-[color:var(--accent-gold)]">Vanta Labs</div>
         <div className="mt-0.5 text-[0.62rem] uppercase tracking-[0.3em] text-white/35">Research Peptides</div>
 
-        {joined ? (
-          <div className="mt-6" data-testid="entry-offer-success">
-            <h2 id="entry-offer-heading" className="font-serif text-2xl leading-tight">
-              {code ? "Here&rsquo;s your code." : "You&rsquo;re on the list."}
-            </h2>
-            {code ? (
+        <div className="mt-4 inline-flex rounded-full bg-[color:var(--accent-gold-soft)] px-3 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.22em] text-[color:var(--accent-gold)] sm:mt-5 sm:py-1.5 sm:text-[0.65rem]">
+          Spin to win
+        </div>
+
+        <h2 id="entry-offer-heading" className="mt-3 font-serif text-[1.5rem] leading-[1.12] [@media(max-height:780px)]:mt-2 [@media(max-height:780px)]:text-[1.35rem] sm:mt-4 sm:text-[1.75rem] sm:leading-[1.15]">
+          Spin the wheel for a free vial.
+        </h2>
+
+        <p className="mt-2.5 text-[0.82rem] leading-[1.35rem] text-white/55 [@media(max-height:780px)]:hidden sm:mt-3 sm:text-sm sm:leading-6 sm:[@media(max-height:780px)]:block">
+          Sixteen wedges and every one of them is a real reward — free vials, free
+          shipping, money off. One spin per account. Whatever you land on waits in
+          your cart for 72 hours.
+        </p>
+
+        {needPhone || askForTexts ? (
+          <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-3 sm:mt-5 sm:px-3.5">
+            {needPhone ? (
               <>
-                <p className="mt-2 text-sm leading-6 text-white/60">
-                  Copy it now and use it at checkout on your first order.
+                <p className="text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-white/40">
+                  Your details
                 </p>
-                <p
-                  data-testid="entry-offer-code"
-                  className="mt-4 rounded-xl border border-[color:var(--accent-gold)]/40 bg-[color:var(--accent-gold-soft)] px-4 py-3 text-center font-mono text-lg tracking-[0.2em] text-[color:var(--accent-gold)]"
-                >
-                  {code}
+                <input
+                  type="tel"
+                  inputMode="tel"
+                  autoComplete="tel"
+                  value={phone}
+                  onChange={(event) => setPhone(event.target.value)}
+                  placeholder="+1 (555) 123-4567"
+                  aria-label="Mobile number"
+                  data-testid="entry-offer-phone"
+                  className="vl-sms-field vl-focus-ring mt-2 w-full"
+                />
+                {/* WHAT THE NUMBER IS FOR, said before it is given. It is
+                    contact detail for this account; it is not a subscription,
+                    and the box below is where that decision is made. */}
+                <p className="mt-1.5 pl-1 text-[0.7rem] leading-4 text-white/35">
+                  {invite?.accountEmail
+                    ? `Kept with ${invite.accountEmail} for your order. We do not text you unless you ask below.`
+                    : "Kept with your account for your order. We do not text you unless you ask below."}
                 </p>
               </>
-            ) : (
-              <p className="mt-2 text-sm leading-6 text-white/60">
-                Thanks — you&rsquo;ll hear from us with new product launches, restock alerts and subscriber offers.
-              </p>
-            )}
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              className="vl-focus-ring mt-6 flex w-full items-center justify-center rounded-xl bg-[color:var(--accent-gold)] px-6 py-3.5 text-sm font-semibold text-[#0b0b0b] transition hover:bg-[color:var(--accent-gold-strong)]"
-            >
-              Continue
-            </button>
-          </div>
-        ) : (
-          <>
-            <div className="mt-4 inline-flex rounded-full bg-[color:var(--accent-gold-soft)] px-3 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.22em] text-[color:var(--accent-gold)] sm:mt-5 sm:py-1.5 sm:text-[0.65rem]">
-              Email &amp; text sign-up
-            </div>
-
-            <h2 id="entry-offer-heading" className="mt-3 font-serif text-[1.5rem] leading-[1.12] [@media(max-height:780px)]:mt-2 [@media(max-height:780px)]:text-[1.35rem] sm:mt-4 sm:text-[1.75rem] sm:leading-[1.15]">
-              {offerLive ? `Get ${WELCOME_OFFER_PERCENT}% off your first order.` : "Join the Vanta Labs list."}
-            </h2>
-
-            <p className="mt-2.5 text-[0.82rem] leading-[1.35rem] text-white/55 [@media(max-height:780px)]:hidden sm:mt-3 sm:text-sm sm:leading-6 sm:[@media(max-height:780px)]:block">
-              {offerLive
-                ? `Opt in to texts and your ${WELCOME_OFFER_PERCENT}% code appears right here — plus new product launches, restock alerts and exclusive offers from Vanta Labs.`
-                : "Be first to hear about new product launches, restock alerts and exclusive offers from Vanta Labs — by email, and by text if you want them."}
-            </p>
-
-            <div className="mt-4 space-y-2 [@media(max-height:780px)]:mt-3 sm:mt-5 sm:space-y-2.5">
-              {/* READ-ONLY WHEN THE SERVER NAMED AN ADDRESS. The POST reads
-                  the session's address and discards this one, so an editable
-                  field here is a promise the server does not keep. Checkout
-                  says "Using your account email." for the same reason; this
-                  says it the same way. */}
-              <input
-                type="email"
-                inputMode="email"
-                autoComplete="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                readOnly={Boolean(offer?.accountEmail)}
-                placeholder="you@lab.com"
-                aria-label="Email address"
-                data-testid="entry-offer-email"
-                className={`vl-sms-field vl-focus-ring w-full${offer?.accountEmail ? " cursor-default opacity-70" : ""}`}
-              />
-              {offer?.accountEmail ? (
-                <p className="pl-1 text-[0.7rem] leading-4 text-white/35">Using your account email.</p>
-              ) : null}
-              <input
-                type="tel"
-                inputMode="tel"
-                autoComplete="tel"
-                value={phone}
-                onChange={(event) => setPhone(event.target.value)}
-                placeholder="+1 (555) 123-4567"
-                aria-label="Mobile number"
-                data-testid="entry-offer-phone"
-                className="vl-sms-field vl-focus-ring w-full"
-              />
-            </div>
-
-            <label className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2.5 sm:mt-4 sm:gap-3 sm:px-3.5 sm:py-3">
-              <input
-                type="checkbox"
-                checked={confirmed}
-                onChange={(event) => setConfirmed(event.target.checked)}
-                data-testid="entry-offer-confirm"
-                className="mt-0.5 h-4 w-4 flex-shrink-0 accent-[color:var(--accent-gold)]"
-              />
-              <span className="text-[0.76rem] leading-[1.1rem] sm:text-[0.8rem] sm:leading-5">
-                <span className="font-semibold text-white/90">I confirm I am 21 years of age or older.</span>{" "}
-                <span className="text-white/45">These products are for laboratory research use only.</span>
-              </span>
-            </label>
-
-            <label className="mt-2 flex cursor-pointer items-start gap-2.5 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2.5 sm:gap-3 sm:px-3.5 sm:py-3">
-              <input
-                type="checkbox"
-                checked={smsConsent}
-                onChange={(event) => setSmsConsent(event.target.checked)}
-                data-testid="entry-offer-sms-consent"
-                aria-describedby="entry-offer-sms-disclosure"
-                className="mt-0.5 h-4 w-4 flex-shrink-0 accent-[color:var(--accent-gold)]"
-              />
-              <span className="text-[0.73rem] leading-[1.05rem] text-white/45 sm:text-[0.8rem] sm:leading-5">
-                <span className="font-semibold text-white/90">Text me my {WELCOME_OFFER_PERCENT}% code and updates.</span>{" "}
-                {SMS_CONSENT_TEXT}
-              </span>
-            </label>
-
-            <p id="entry-offer-sms-disclosure" className="mt-2 px-1 text-[0.68rem] leading-[1rem] text-white/35 sm:mt-2.5 sm:text-[0.72rem] sm:leading-5">
-              {SMS_DISCLOSURE_TEXT}{" "}
-              See our{" "}
-              <Link href="/legal/privacy" className="text-white/60 underline decoration-white/25 underline-offset-4 hover:text-white">
-                Privacy Policy
-              </Link>{" "}
-              &amp;{" "}
-              <Link href="/legal/terms" className="text-white/60 underline decoration-white/25 underline-offset-4 hover:text-white">
-                Terms
-              </Link>
-              .
-            </p>
-
-            {error ? (
-              <p data-testid="entry-offer-error" className="mt-3 text-[0.8rem] leading-5 text-red-300">
-                {error}
-              </p>
             ) : null}
 
-            <button
-              type="button"
-              onClick={() => { void submit(); }}
-              disabled={saving}
-              data-testid="entry-offer-submit"
-              className="vl-focus-ring mt-3.5 flex w-full items-center justify-center gap-2 rounded-xl bg-[color:var(--accent-gold)] px-6 py-3 text-sm font-semibold tracking-wide text-[#0b0b0b] shadow-[0_8px_24px_-8px_rgba(199,174,94,0.55)] transition hover:bg-[color:var(--accent-gold-strong)] disabled:opacity-60 sm:mt-4 sm:py-3.5"
-            >
-              {saving ? "Sending…" : offerLive ? `Get ${WELCOME_OFFER_PERCENT}% Off` : "Join the list"}
-              {saving ? null : <span aria-hidden="true">→</span>}
-            </button>
+            {askForTexts ? (
+              <>
+                <label className={`flex cursor-pointer items-start gap-2.5 sm:gap-3 ${needPhone ? "mt-3" : "mt-0"}`}>
+                  <input
+                    type="checkbox"
+                    checked={confirmed}
+                    onChange={(event) => setConfirmed(event.target.checked)}
+                    data-testid="entry-offer-confirm"
+                    className="mt-0.5 h-4 w-4 flex-shrink-0 accent-[color:var(--accent-gold)]"
+                  />
+                  <span className="text-[0.76rem] leading-[1.1rem] sm:text-[0.8rem] sm:leading-5">
+                    <span className="font-semibold text-white/90">I confirm I am 21 years of age or older.</span>{" "}
+                    <span className="text-white/45">These products are for laboratory research use only.</span>
+                  </span>
+                </label>
 
-            <ul className="mt-4 space-y-1.5 text-[0.75rem] text-white/45 [@media(max-height:780px)]:mt-3 sm:mt-5 sm:text-[0.78rem]">
-              <li className="flex items-center gap-2">
-                <span aria-hidden="true" className="text-[color:var(--accent-gold)]">✓</span>
-                <span><span className="font-semibold text-white/75">≥99%</span> HPLC-verified purity</span>
-              </li>
-              <li className="flex items-center gap-2">
-                <span aria-hidden="true" className="text-[color:var(--accent-gold)]">✓</span>
-                <span><span className="font-semibold text-white/75">Batch-specific</span> COAs</span>
-              </li>
-            </ul>
+                <label className="mt-2 flex cursor-pointer items-start gap-2.5 sm:gap-3">
+                  <input
+                    type="checkbox"
+                    checked={smsConsent}
+                    onChange={(event) => setSmsConsent(event.target.checked)}
+                    data-testid="entry-offer-sms-consent"
+                    aria-describedby="entry-offer-sms-disclosure"
+                    className="mt-0.5 h-4 w-4 flex-shrink-0 accent-[color:var(--accent-gold)]"
+                  />
+                  <span className="text-[0.73rem] leading-[1.05rem] text-white/45 sm:text-[0.8rem] sm:leading-5">
+                    {SMS_CONSENT_TEXT} <span className="text-white/40">Optional.</span>
+                  </span>
+                </label>
 
-            <p className="mt-3 border-t border-white/10 pt-2.5 text-[0.65rem] leading-[0.95rem] text-white/30 sm:mt-4 sm:pt-3 sm:text-[0.68rem] sm:leading-5">
-              For Research Use Only. Not for human consumption. Unsubscribe anytime.
-            </p>
-          </>
-        )}
+                <p id="entry-offer-sms-disclosure" className="mt-2 px-1 text-[0.68rem] leading-[1rem] text-white/35 sm:mt-2.5 sm:text-[0.72rem] sm:leading-5">
+                  {SMS_DISCLOSURE_TEXT}{" "}
+                  See our{" "}
+                  <Link href="/legal/privacy" className="text-white/60 underline decoration-white/25 underline-offset-4 hover:text-white">
+                    Privacy Policy
+                  </Link>{" "}
+                  &amp;{" "}
+                  <Link href="/legal/terms" className="text-white/60 underline decoration-white/25 underline-offset-4 hover:text-white">
+                    Terms
+                  </Link>
+                  .
+                </p>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+
+        {error ? (
+          <p data-testid="entry-offer-error" className="mt-3 text-[0.8rem] leading-5 text-red-300">
+            {error}
+          </p>
+        ) : null}
+
+        <button
+          type="button"
+          onClick={() => { void spin(); }}
+          disabled={saving}
+          data-testid="entry-offer-submit"
+          className="vl-focus-ring mt-3.5 flex w-full items-center justify-center gap-2 rounded-xl bg-[color:var(--accent-gold)] px-6 py-3 text-sm font-semibold tracking-wide text-[#0b0b0b] shadow-[0_8px_24px_-8px_rgba(199,174,94,0.55)] transition hover:bg-[color:var(--accent-gold-strong)] disabled:opacity-60 sm:mt-4 sm:py-3.5"
+        >
+          {saving ? "One moment…" : "Spin the wheel"}
+          {saving ? null : <span aria-hidden="true">→</span>}
+        </button>
+
+        {/* SAYING NO HAS ITS OWN CONTROL. The × in the corner is a close
+            button; this is the answer to the question, in words, where a
+            shopper reading the card will see it. */}
+        <button
+          type="button"
+          onClick={close}
+          data-testid="entry-offer-skip"
+          className="vl-focus-ring mt-2.5 flex w-full items-center justify-center rounded-xl px-6 py-2 text-[0.8rem] text-white/45 transition hover:text-white/70"
+        >
+          No thanks
+        </button>
+
+        <ul className="mt-4 space-y-1.5 text-[0.75rem] text-white/45 [@media(max-height:780px)]:mt-3 sm:mt-5 sm:text-[0.78rem]">
+          <li className="flex items-center gap-2">
+            <span aria-hidden="true" className="text-[color:var(--accent-gold)]">✓</span>
+            <span><span className="font-semibold text-white/75">≥99%</span> HPLC-verified purity</span>
+          </li>
+          <li className="flex items-center gap-2">
+            <span aria-hidden="true" className="text-[color:var(--accent-gold)]">✓</span>
+            <span><span className="font-semibold text-white/75">Batch-specific</span> COAs</span>
+          </li>
+        </ul>
+
+        <p className="mt-3 border-t border-white/10 pt-2.5 text-[0.65rem] leading-[0.95rem] text-white/30 sm:mt-4 sm:pt-3 sm:text-[0.68rem] sm:leading-5">
+          For Research Use Only. Not for human consumption. Every reward has a minimum spend, shown on the wheel.
+        </p>
       </div>
     </div>
   );

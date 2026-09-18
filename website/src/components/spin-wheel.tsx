@@ -214,7 +214,12 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
       const response = await fetch("/api/spin/dose", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label }),
+        // THE LINK TRAVELS WITH THE CHOICE, because most winners are
+        // anonymous: the wheel is mailed, and an email-link grant carries a
+        // capability rather than an address. The route prefers a session when
+        // there is one and falls back to this, which is the same signed link
+        // the draw itself was made on.
+        body: JSON.stringify({ label, token }),
       });
       const body = (await response.json().catch(() => null)) as
         | { success?: boolean; error?: string; dose?: { label: string; minSubtotalCents: number } }
@@ -235,7 +240,7 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
     } finally {
       setSavingDose(null);
     }
-  }, []);
+  }, [token]);
 
   const [spinning, setSpinning] = useState(false);
   const [error, setError] = useState<string | null>(null);

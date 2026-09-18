@@ -169,6 +169,86 @@ export async function recordSmsConsent(input: {
 }
 
 /**
+ * KEEP THE NUMBER. DO NOT CLAIM PERMISSION TO TEXT IT.
+ *
+ * Having somebody's phone number and being allowed to market to it are two
+ * different facts, and this store had no way to hold the first without
+ * asserting the second: every path that stored a number went through
+ * recordSmsConsent, which sets marketing_consent. So the wheel could either
+ * collect a number and claim a consent nobody gave, or collect nothing.
+ *
+ * This is the other half. The number lands on the consent ledger and on the
+ * account's profile with `marketing_consent` false, which is exactly what
+ * readSmsStanding already reads as "none" — so a person whose number we hold
+ * and whose box is unticked is NOT subscribed, everywhere that asks, with no
+ * new state to get wrong.
+ *
+ * THE DAY OMNISEND SMS IS APPROVED, NOTHING HERE PROMOTES ANYBODY. Approval
+ * changes what the store may send, not what anyone agreed to. A stored number
+ * becomes a subscriber only by passing through recordSmsConsent, which only an
+ * explicit tick calls.
+ *
+ * IT NEVER DOWNGRADES AND NEVER RESURRECTS, which is why the insert ignores a
+ * duplicate rather than upserting. An upsert carrying `marketing_consent:
+ * false` would unsubscribe a live subscriber who typed their number into the
+ * wheel, and would wipe the opt-out of somebody who had said STOP. A row that
+ * already exists knows more about this number than this call does, so it is
+ * left alone.
+ */
+export async function recordPhoneOnFile(input: {
+  email: string;
+  phone: string;
+  source: SmsConsentSource;
+  userId?: string | null;
+}): Promise<boolean> {
+  const email = normalizeEmail(input.email);
+  const phone = normalizeE164(acceptableSmsPhone(input.phone));
+  if (!email || !phone) return false;
+  const now = new Date().toISOString();
+
+  try {
+    const { error } = await supabaseAdmin
+      .from("sms_subscribers")
+      .upsert(
+        {
+          phone_e164: phone,
+          email,
+          // Stated rather than left to the column default, because the whole
+          // point of this row is that the answer is no.
+          marketing_consent: false,
+          // WHERE THE NUMBER CAME FROM, not where a consent came from — there
+          // is no consent. An audit asking "why do you hold this number"
+          // should find the screen that asked for it.
+          consent_source: input.source,
+          updated_at: now,
+        },
+        { onConflict: "phone_e164", ignoreDuplicates: true },
+      );
+    if (error) {
+      console.error(LOG, "phone row refused", { source: input.source, message: error.message });
+      return false;
+    }
+
+    // THE PROFILE MIRROR, so the number is on the customer's record and a
+    // later tick has something to subscribe. Deliberately only the number:
+    // touching sms_marketing here would be the inference this function exists
+    // to avoid, and the columns left out of an upsert are left alone.
+    if (input.userId) {
+      const { error: mirrorError } = await supabaseAdmin
+        .from("customer_preferences")
+        .upsert({ user_id: input.userId, phone, updated_at: now }, { onConflict: "user_id" });
+      if (mirrorError) console.error(LOG, "profile phone refused", { source: input.source, message: mirrorError.message });
+    }
+
+    pushToOmnisend(email);
+    return true;
+  } catch (error) {
+    console.error(LOG, "phone could not be stored", { source: input.source, error });
+    return false;
+  }
+}
+
+/**
  * Record a stop: the account box unticked, or Omnisend reporting STOP
  * (reconcile.ts). Every row for the ADDRESS is stopped, not just one number,
  * because a person who says stop means the person and not the handset.
@@ -220,8 +300,17 @@ export async function recordSmsOptOut(email: string, at: string, keyword = "STOP
  * the store learns of it on the next write-back. This mirrors it ONCE and
  * never again: recordSmsConsent would re-stamp `marketing_consent_at` on every
  * half-hourly tick and quietly rewrite the date the person agreed, which is
- * the one field a carrier dispute turns on. A number that already has a row —
- * consented or stopped — is left exactly as it is.
+ * the one field a carrier dispute turns on. A number that already has a
+ * CONSENT — or a stop — is left exactly as it is.
+ *
+ * A NUMBER THE STORE MERELY HOLDS IS NOT A REASON TO REFUSE A REAL CONSENT,
+ * and it briefly was. The guard here used to be "any row at all", which was
+ * every row there could be until recordPhoneOnFile started keeping numbers
+ * with no permission attached. A wheel entrant who later ticked Omnisend's own
+ * pop-up would have hit that row and been left unsubscribed for ever — the
+ * store holding their number, Omnisend holding their consent, and nothing
+ * joining the two. There is no consent date on such a row to overwrite, which
+ * is the whole reason the guard existed, so it is promoted instead.
  *
  * `at` is when Omnisend recorded the consent, not when this run found it.
  */
@@ -231,9 +320,10 @@ export async function mirrorSmsConsent(input: { email: string; phone: string; so
   if (!email || !phone) return "nothing";
   try {
     const existing = await readByPhone(phone);
-    if (existing) return "nothing";
+    // A consent already recorded, or a stop: both say more than this does.
+    if (existing && (existing.marketing_consent || existing.opted_out_at)) return "nothing";
     const now = new Date().toISOString();
-    const { error } = await supabaseAdmin.from("sms_subscribers").insert({
+    const row = {
       phone_e164: phone,
       email,
       marketing_consent: true,
@@ -242,7 +332,16 @@ export async function mirrorSmsConsent(input: { email: string; phone: string; so
       disclosure_version: SMS_DISCLOSURE_VERSION,
       created_at: now,
       updated_at: now,
-    });
+    };
+    // Held-but-unconsented rows already exist, so this is an upsert rather
+    // than an insert: the number is the same number, and what changes is that
+    // somebody has now agreed to be texted at it.
+    const { error } = existing
+      ? await supabaseAdmin.from("sms_subscribers").upsert(
+          { ...row, created_at: undefined },
+          { onConflict: "phone_e164" },
+        )
+      : await supabaseAdmin.from("sms_subscribers").insert(row);
     if (error) {
       console.error(LOG, "mirror write refused", error.message);
       return "failed";
@@ -251,6 +350,35 @@ export async function mirrorSmsConsent(input: { email: string; phone: string; so
   } catch (error) {
     console.error(LOG, "mirror could not be written", error);
     return "failed";
+  }
+}
+
+/**
+ * Does the store already hold a number for this address?
+ *
+ * Asked by the wheel so it does not make somebody type a number the store has
+ * already kept. A refused read answers TRUE — the safe direction here is the
+ * opposite of the consent reads above: the cost of a wrong "yes" is a number
+ * not collected this once, and the cost of a wrong "no" is a field shoved in
+ * front of somebody who has already filled it in.
+ */
+export async function readPhoneOnFile(email: string): Promise<boolean> {
+  const address = normalizeEmail(email);
+  if (!address) return true;
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("sms_subscribers")
+      .select("phone_e164")
+      .eq("email", address)
+      .limit(1);
+    if (error) {
+      console.error(LOG, "phone-on-file read refused", error.message);
+      return true;
+    }
+    return ((data ?? []) as Array<{ phone_e164: string | null }>).some((row) => String(row.phone_e164 ?? "").trim());
+  } catch (error) {
+    console.error(LOG, "phone-on-file read failed", error);
+    return true;
   }
 }
 

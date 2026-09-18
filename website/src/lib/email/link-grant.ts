@@ -282,6 +282,14 @@ export const EMAIL_GRANT_BROWSE_EXACT = new Set<string>([
   // them here removes the wall, not their own guards.
   "/api/spin",
   "/api/spin/claim",
+  // The size chooser, on the same terms. A quarter of the wedges are laddered
+  // and the picker renders from the PRIZE rather than the session, so without
+  // this an anonymous winner was shown a chooser whose every press met the
+  // wall's "Sign in to continue" — the wall's words, on a page reached from a
+  // link that had already proved who they were. The route verifies the same
+  // signed spin link the draw does and moves nothing but that address's own
+  // row, so listing it removes the wall, not its own guard.
+  "/api/spin/dose",
   // What the catalogue pages fetch. Anything missing here renders as an empty
   // shelf rather than an error, which is the failure mode that looks like a
   // working site and sells nothing.

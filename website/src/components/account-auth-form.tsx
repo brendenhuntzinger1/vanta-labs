@@ -10,7 +10,6 @@ import { resolveSignupOutcome, SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-sig
 import { deadAuthLinkMessage, readOAuthCallbackFragment, type OAuthCallbackReturn } from "@/lib/auth-link-fragment";
 import { safeInternalPath } from "@/lib/internal-path";
 import { signInFailureMessage } from "@/lib/sign-in-failure-message";
-import { WELCOME_OFFER_SENTENCE } from "@/lib/offers/welcome-offer-copy";
 import {
   hasAnyOAuthProvider,
   isAppleSignInEnabled,
@@ -1458,14 +1457,21 @@ export function AccountAuthForm() {
               The number sits above the box so "at the number above" is true
               on this screen, as it is on the account page and in the pop-up.
 
-              THE DISCOUNT RIDES WITH THIS BOX, NOT THE ONE ABOVE IT. The
-              offer is stated here, in the same words the catalogue, the cart
-              and the checkout use, so what is being offered and what is being
-              agreed to are read together. Ticking it is still optional and
-              still not a condition of anything. */}
-          <p className="px-1 text-[0.8125rem] leading-6 text-[color:var(--accent-gold)]/85" data-testid="signup-welcome-offer">
-            {WELCOME_OFFER_SENTENCE}
-          </p>
+              THE DISCOUNT THAT USED TO RIDE WITH THIS BOX IS GONE. A gold line
+              here read "Get 15% off your first order. First order only. Valid
+              for 14 days." — and on 2026-09-18 the welcome code stopped
+              minting at both of its call sites, so that sentence became an
+              advertisement for something the till can no longer honour, on the
+              one opt-in screen a carrier review can actually load. It is
+              removed rather than reworded, which leaves the box exactly what
+              the consent record says it is: an optional subscription with
+              nothing bought by ticking it.
+
+              THIS IS THE ONLY THING THAT CHANGED ON THIS SCREEN. The consent
+              sentence, the disclosure, its version, both legal links, the
+              unticked boxes and everything the server stores with the consent
+              are untouched — they are what was submitted for review, and they
+              are not ours to edit. */}
           <label className="block">
             <span className="mb-2 block text-[0.8125rem] font-medium text-white/70">Mobile number <span className="text-white/40">(optional, for texts)</span></span>
             <input

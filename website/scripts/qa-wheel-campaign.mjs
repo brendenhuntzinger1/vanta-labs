@@ -104,17 +104,49 @@ const SAME_ORIGIN = { Origin: BASE, "x-forwarded-proto": "http" };
 let ipCounter = 0;
 const nextIp = () => `203.0.113.${(ipCounter += 1) % 250}`;
 
+// ---------------------------------------------------------------------------
+// A COOKIE JAR, BECAUSE THIS SCRIPT IS PRETENDING TO BE A BROWSER.
+//
+// It was not keeping one, and that quietly cost the seven checks that decide
+// whether a won prize is worth anything.
+//
+// The spin route re-arms a device that is holding nothing: when an address has
+// already span, it reads the request's vl_offer cookie and, finding none,
+// calls claimSpinForAccount — which ROTATES the bearer token, retiring the
+// copy the previous device had. That is correct and is exactly what carries a
+// prize from the phone that span it to the laptop that did not.
+//
+// Section 7 spins a second time for the same subscriber. Sending no vl_offer
+// made the server treat the script as a fresh device every time, so the token
+// captured in section 6 was retired before section 10 ever used it. The till
+// then answered `no_offer` — not because the prize was unhonoured, but because
+// the script was presenting a credential it had thrown away. Six more checks
+// failed behind it, including "the prize is redeemed", which is the single
+// most important assertion in the file.
+//
+// A real browser sends the cookie back, the route's own guard sees an armed
+// device and leaves it alone, and no rotation happens. Holding the latest
+// token here is what makes this script a client rather than eight unrelated
+// ones.
+// ---------------------------------------------------------------------------
+let currentOfferToken = null;
+
 /** POST a spin as one client. Returns status and parsed body. */
-async function spin(token, ip = nextIp()) {
+async function spin(token, ip = nextIp(), { carryOffer = true } = {}) {
+  const cookies = [`vl_email_grant=${GRANT}`];
+  if (carryOffer && currentOfferToken) cookies.push(`vl_offer=${currentOfferToken}`);
   const r = await fetch(`${BASE}/api/spin`, {
     method: "POST",
-    headers: { ...SAME_ORIGIN, "Content-Type": "application/json", Cookie: `vl_email_grant=${GRANT}`, "x-forwarded-for": ip },
+    headers: { ...SAME_ORIGIN, "Content-Type": "application/json", Cookie: cookies.join("; "), "x-forwarded-for": ip },
     body: JSON.stringify({ token }),
   });
   // The route arms the offer cookie on a successful spin — that bearer token is
   // how the till finds the prize, so the checkout sections below need it.
   const setCookie = r.headers.get("set-cookie") ?? "";
   const offerToken = /(?:^|[,\s])vl_offer=([^;,\s]+)/.exec(setCookie)?.[1] ?? null;
+  // Newest wins, the way a browser's jar works. A rotation this client asked
+  // for is a rotation this client must follow.
+  if (carryOffer && offerToken) currentOfferToken = offerToken;
   return { status: r.status, body: await r.json().catch(() => ({})), offerToken };
 }
 
@@ -294,7 +326,10 @@ async function main() {
   {
     const parts = spinToken(`other-${stamp}@example.test`).split(".");
     parts[1] = b64(attacker); // keep the signature, swap the address
-    const r = await spin(parts.join("."));
+    // A DIFFERENT CLIENT, so it takes none of the subscriber's cookies and
+    // leaves none of its own behind. An attacker who inherited the victim's
+    // jar would be testing something nobody can arrange.
+    const r = await spin(parts.join("."), nextIp(), { carryOffer: false });
     check("a tampered token is refused as invalid, not merely rate-limited", r.status === 400, `${r.status} ${JSON.stringify(r.body).slice(0,80)}`);
     check("the tampered address got no prize", (await liveOffers(attacker)).length === 0);
   }
@@ -306,8 +341,12 @@ async function main() {
   // several people at once, or one person retrying across networks. Separate
   // IPs keep the rate limiter out of it, so what is under test is the database
   // guarantee — the partial unique index on customer_offers — and nothing else.
+  // EIGHT SEPARATE CLIENTS, which is the whole point, so none of them shares
+  // the subscriber's jar — and none of them may write into it either, or the
+  // burst address's freshly minted token would displace the one the till
+  // sections are about to present.
   const burst = await Promise.all(Array.from({ length: 8 }, () =>
-    spin(burstToken).catch(() => ({ status: 0, body: {} }))));
+    spin(burstToken, nextIp(), { carryOffer: false }).catch(() => ({ status: 0, body: {} }))));
   const burstOffers = await liveOffers(burstEmail);
   check("eight concurrent spins produced exactly one prize", burstOffers.length === 1, `${burstOffers.length} rows`);
   const answered = burst.filter((b) => b.status === 200);
@@ -323,7 +362,10 @@ async function main() {
   // whichever reward came up rather than assuming one.
   // =========================================================================
   const offerRow = (await liveOffers(subscriber))[0];
-  const offerToken = first.offerToken;
+  // THE ONE THE JAR IS HOLDING, not the one section 6 first saw. A re-arm
+  // between them rotates it, and presenting the retired copy is what made the
+  // till answer `no_offer` for seven checks.
+  const offerToken = currentOfferToken ?? first.offerToken;
   const minCents = Number(offerRow?.min_subtotal_cents ?? 0);
 
   const CUSTOMER = {
