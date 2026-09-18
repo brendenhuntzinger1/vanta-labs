@@ -151,14 +151,82 @@ carrier's own screen looked worse than removing it.
 If the owner would rather it stayed, the revert is one block in
 `account-auth-form.tsx` and two assertions.
 
+## The number and the permission are two facts
+
+The owner's direction, implemented after the first pass: the wheel collects
+BOTH an email and a phone, and holding a number must not imply permission to
+text it.
+
+**What the wheel asks for.** A number from everybody, beside the account's own
+address, and it will not spin without one — unless the store already holds one,
+because that stored number is what a later tick would subscribe and retyping it
+buys nothing. The SMS consent box beside it is unticked, optional, and buys
+nothing. The age and research attestation gates the consent alone: it gates
+MARKETING, and keeping a number is not marketing.
+
+**Where the number goes.** `recordPhoneOnFile` is the other half of
+`recordSmsConsent`: the consent ledger and the account profile, with
+`marketing_consent` false. `readSmsStanding` already reads that as "none", so a
+held number is not a subscriber to any reader, with no new state to get wrong.
+It never downgrades and never resurrects — the insert ignores a duplicate
+rather than upserting, because an upsert carrying `marketing_consent: false`
+would unsubscribe a live subscriber who typed their own number into the wheel,
+and would wipe the opt-out of somebody who had said STOP.
+
+**What Omnisend is told.** The number, with `sms: nonSubscribed`. A held number
+used to be indistinguishable from no number at all — both omitted the phone
+identifier — so the day a tick arrived it had to be sent as a brand-new
+identifier. Now the identifier is already there and a tick changes its STATUS.
+That is what lets the consent box activate SMS with nothing upstream
+redesigned.
+
+**Consent is said, not inferred.** The endpoint read the presence of a phone as
+agreement, which was safe only while a ticked box was the only reason to send
+one. `smsConsent` must be exactly `true`; absent, `false`, `"true"`, `1` and
+`{}` all keep the number and subscribe nobody. The direction is deliberate: a
+caller that forgets the field under-claims, and the other failure mode is a
+text to somebody who never agreed. The checkout and the storefront form state
+it explicitly.
+
+**Approval day promotes nobody.** Approval changes what the store may send, not
+what anyone agreed to. The only writers of `marketing_consent: true` are this
+store's own box and a tick somebody gave Omnisend's pop-up.
+
+**One gap this opened, and closed.** `mirrorSmsConsent` refused on ANY existing
+row — which was every row there could be until numbers started being kept
+without permission. A wheel entrant who later ticked Omnisend's own pop-up
+would have met their own held row and stayed unsubscribed for ever: the store
+holding the number, Omnisend holding the consent, nothing joining them. A held
+row has no consent date to overwrite, which is the reason the guard existed, so
+it is promoted; a real consent or a stop is still left alone.
+
+**No OTP, deliberately.** Omnisend's SMS model is single opt-in, and the owner
+ruled out building double opt-in now. The phone gate rejects numbers the
+numbering plan could never assign; it cannot tell a stranger's real number from
+the subscriber's own, and nothing here pretends otherwise — `status` stays at
+the table's default rather than claiming "verified".
+
+### Measured, in the browser
+
+A number entered at the wheel with the consent box untouched stored as
+`+15125550142`, `marketing_consent` false, no consent timestamp, no disclosure
+version; profile `sms_marketing` false. An explicit tick afterwards flipped
+that SAME row — one row, same number — to consented, with its timestamp and
+disclosure version. Suite 11,737 passed / 11 skipped; `qa-wheel-campaign.mjs`
+still 59/59.
+
 ## Traps worth carrying forward
 
-**The harness database is older than the harness setup script.**
-`sms_subscribers` there has no `marketing_consent` column, although
-`setup-local-harness.sh` creates one — `create table if not exists` does not
-alter an existing table. `readSmsStanding` fails closed to "subscribed" on a
-refused read, so the effect is silent: the invitation simply never shows its
-text-list half, and nothing looks wrong. Added by hand for this run.
+**The harness database is older than the harness setup script, and it bites
+twice.** Its `sms_subscribers` was the pre-rework shape — keyed on `email`,
+with a `phone` column and no `marketing_consent` — while
+`setup-local-harness.sh` creates production's shape, keyed on `phone_e164`.
+`create table if not exists` does not alter an existing table, so the stale one
+survived every setup run. Both reads over it fail closed (`readSmsStanding` to
+"subscribed", `readPhoneOnFile` to "we have one"), so the effect is silent: the
+card simply stops asking, and nothing looks wrong. Dropped and rebuilt from the
+setup script's DDL plus `src/lib/sql/sms-subscribers.sql` for this run. A fresh
+container gets it right; a warm one does not.
 
 **Three services, not one.** The PostgREST shim on `:54321`, the payment stub
 on `:59999` and the SMTP sink on `:2525`. Without the sink the wheel script
