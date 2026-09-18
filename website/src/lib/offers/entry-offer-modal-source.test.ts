@@ -129,10 +129,42 @@ describe("it can be dismissed, and it stays dismissed", () => {
   });
 });
 
-describe("it opens where a visitor enters the site", () => {
-  it("is mounted on the access portal", () => {
-    // The portal is the entrance for this store and the only page an
-    // anonymous visitor — or a reviewer — can reach.
-    expect(PORTAL).toContain("EntryOfferModal");
+describe("it opens once a visitor is INSIDE the store, never on the gate", () => {
+  const LAYOUT = readFileSync(join(SRC, "app", "layout.tsx"), "utf8");
+
+  it("is not on the access portal", () => {
+    // THE GATE ASKS ONE THING. A visitor standing at a sign-in screen has not
+    // chosen this store yet, and interrupting that decision with a discount is
+    // the owner's call and the answer is no.
+    expect(PORTAL).not.toContain("EntryOfferModal");
+  });
+
+  it("is mounted globally, so it can open on the pages behind the gate", () => {
+    expect(LAYOUT).toContain("<EntryOfferModal />");
+  });
+
+  it("replaces the older invitation rather than joining it", () => {
+    // Two cards asking the same question is worse than one. The older
+    // catalogue invitation is stood down; this is the one the owner approved.
+    expect(LAYOUT).not.toContain("<SmsInviteModal />");
+  });
+
+  it("opens only on the storefront pages, never checkout or an account screen", () => {
+    expect(MODAL).toMatch(/function isStoreRoute/);
+    expect(MODAL).toMatch(/pathname === "\/"/);
+    expect(MODAL).toMatch(/\/products/);
+  });
+
+  it("waits the house interval rather than pouncing on arrival", () => {
+    // 6s is what sms-invite-modal.tsx already used. A card that lands the
+    // instant a page paints reads as an ad; one that waits reads as an offer.
+    expect(MODAL).toMatch(/OPEN_AFTER_MS = 6000/);
+  });
+
+  it("does not interrupt someone the offer is not open to", () => {
+    // Bought already, subscribed already, holding a code, or once said stop:
+    // the server decides all of it and answers mayInterrupt. This never works
+    // it out for itself.
+    expect(MODAL).toMatch(/mayInterrupt/);
   });
 });

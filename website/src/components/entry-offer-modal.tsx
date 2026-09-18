@@ -1,44 +1,53 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { SMS_CONSENT_TEXT, SMS_DISCLOSURE_TEXT } from "@/lib/sms-consent-text";
 import { WELCOME_OFFER_PERCENT } from "@/lib/offers/welcome-offer-copy";
 
 /**
- * THE ENTRY INVITATION — the email and text sign-up a visitor meets on arrival.
+ * THE STORE INVITATION — the email and text sign-up a shopper meets once they
+ * are inside.
  *
- * WHY THIS EXISTS WHEN sms-invite-modal.tsx ALREADY DOES.
+ * WHERE IT OPENS, AND WHY NOT AT THE DOOR. It used to mount on the access
+ * portal. The owner's call is that the gate asks one thing: a visitor standing
+ * at a sign-in screen has not chosen this store yet, and interrupting that
+ * decision with a discount is the wrong first impression. So it opens on the
+ * storefront pages behind the gate — the home page and the catalogue — and
+ * never on checkout, an account screen or a payment page, where a card over
+ * the task is a lost order rather than a captured address.
  *
- * That one opens on the catalogue, which is behind the account wall: an
- * anonymous request to any storefront path is redirected to this portal. So no
- * carrier or messaging provider reviewing this store's A2P use case can ever
- * see it, and "show us your opt-in" has no answer. This modal opens ON the
- * portal — the one page an anonymous visitor, or a reviewer, can actually
- * reach — which is also the honest meaning of "when someone enters the site"
- * for a store whose front door is a sign-in screen.
+ * SIX SECONDS, which is what sms-invite-modal.tsx already used before this
+ * replaced it. A card that lands the instant a page paints reads as an ad; one
+ * that waits until someone has looked at something reads as an offer. It is
+ * also long enough that a shopper who arrived to do one specific thing can do
+ * it first.
  *
- * It does NOT replace the catalogue invitation. That one asks a signed-in
- * shopper mid-visit and reads their session for an address; this one asks a
- * stranger at the door and therefore has to collect the address itself.
+ * IT REPLACES THAT OLDER INVITATION RATHER THAN JOINING IT. Two cards asking
+ * the same question is worse than one, and this is the design the owner
+ * approved. What carried over from it is the gating, which is the part that
+ * matters: the server decides who may be interrupted and this never works it
+ * out for itself.
  *
  * THE TWO TICKS ARE SEPARATE DECISIONS, AND STAY SEPARATE.
  *
  *   * the age and research confirmation is REQUIRED — this store may not
- *     market to anyone who has not made it, and it is the same representation
- *     the access portal itself collects;
- *   * the text consent is OPTIONAL and its own box. Someone who wants the
- *     discount by email and no texts gets exactly that: the number is withheld
- *     from the request unless the box is ticked, so an untick can never become
- *     a consent row. Neither box is ever pre-ticked, which is not a nicety —
- *     a pre-ticked box is not consent under the TCPA.
+ *     market to anyone who has not made it;
+ *   * the text consent is its own box and the offer rides on it, because the
+ *     server issues no code without a mobile number. Neither box is ever
+ *     pre-ticked, which is not a nicety — a pre-ticked box is not consent
+ *     under the TCPA.
  *
  * THE COPY FOLLOWS THE SERVER, NEVER THE OTHER WAY ROUND. `promptsEnabled` is
  * the store's kill switch for first-order discounts. While it is off the
- * server records consent and issues NO code, so this must not promise one:
- * with the switch off the modal invites you to the list and says nothing about
- * a discount. Promising 15% and delivering nothing is worse than not asking.
+ * server records consent and issues NO code, so this must not promise one.
+ *
+ * NOT REACHABLE BY AN A2P REVIEWER, DELIBERATELY. Everything here is behind
+ * the account wall. The publicly reachable opt-in, which is what a carrier
+ * review can actually load, is the create-account form at /account/login: same
+ * consent sentence, same unticked box, same two legal links.
  */
 
 type OfferShape = {
@@ -47,6 +56,19 @@ type OfferShape = {
   promptsEnabled?: boolean;
   dismissCooldownDays?: number;
 };
+
+/**
+ * Where shopping happens, and therefore the only place this may open. Checkout
+ * and the account screens are deliberately absent: a card over a task someone
+ * is mid-way through costs an order.
+ */
+function isStoreRoute(pathname: string | null): boolean {
+  if (!pathname) return false;
+  return pathname === "/" || pathname === "/products" || pathname.startsWith("/products/");
+}
+
+/** The house interval, carried over from the invitation this replaced. */
+const OPEN_AFTER_MS = 6000;
 
 /** Remembered per browser, so a dismissal is not re-asked on the next page. */
 const DISMISSED_KEY = "vl_entry_offer_dismissed_at";
@@ -83,6 +105,7 @@ function remember(key: string, value: string) {
 }
 
 export function EntryOfferModal() {
+  const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [offer, setOffer] = useState<OfferShape | null>(null);
 
@@ -101,18 +124,23 @@ export function EntryOfferModal() {
   useEffect(() => {
     let live = true;
     if (alreadyJoined()) return;
+    if (!isStoreRoute(pathname)) return;
     void fetch("/api/offers/welcome", { credentials: "same-origin" })
       .then((r) => (r.ok ? r.json() : null))
       .then((data: OfferShape | null) => {
         if (!live || !data) return;
         setOffer(data);
+        // THE SERVER DECIDES WHO MAY BE INTERRUPTED. Someone who has bought,
+        // who already subscribed, who holds a code, or who once said stop is
+        // not asked again — and this component never works that out for
+        // itself. `mayInterrupt` is the whole of that answer.
+        if (!data.mayInterrupt) return;
         if (dismissedRecently(Number(data.dismissCooldownDays ?? 7))) return;
-        // A beat, so the page is seen before it is asked anything.
-        window.setTimeout(() => { if (live) setOpen(true); }, 1200);
+        window.setTimeout(() => { if (live) setOpen(true); }, OPEN_AFTER_MS);
       })
       .catch(() => { /* an invitation is never worth an error on screen */ });
     return () => { live = false; };
-  }, []);
+  }, [pathname]);
 
   const close = useCallback(() => {
     setOpen(false);
