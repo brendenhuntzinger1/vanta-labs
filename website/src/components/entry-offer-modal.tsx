@@ -138,8 +138,21 @@ export function EntryOfferModal() {
     // address alone only produced "That does not look like a mobile number",
     // which answers a question they did not ask. Asked for here instead, in
     // the words of what they are actually agreeing to.
-    if (!smsConsent) { setError("Tick the text box to get your code — that is what the discount is for."); return; }
-    if (!phone.trim()) { setError("Enter your mobile number so we can text your code."); return; }
+    // Both messages follow the switch, like the rest of the copy. With the
+    // discount off the page says nothing about a code, so an error that
+    // mentions one describes a screen the reader is not looking at.
+    if (!smsConsent) {
+      setError(offerLive
+        ? "Tick the text box to get your code — that is what the discount is for."
+        : "Tick the text box to join the text list.");
+      return;
+    }
+    if (!phone.trim()) {
+      setError(offerLive
+        ? "Enter your mobile number so we can text your code."
+        : "Enter your mobile number to join the text list.");
+      return;
+    }
 
     setSaving(true);
     setError(null);
@@ -169,7 +182,7 @@ export function EntryOfferModal() {
     } finally {
       setSaving(false);
     }
-  }, [confirmed, email, phone, saving, smsConsent]);
+  }, [confirmed, email, offerLive, phone, saving, smsConsent]);
 
   if (!open) return null;
 
