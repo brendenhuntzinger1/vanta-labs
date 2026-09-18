@@ -1,4 +1,99 @@
 {
   "version": 1,
-  "concepts": []
+  "concepts": [
+    {
+      "concept_id": "vl-curiosity-001",
+      "archetype": "curiosity_hook",
+      "platform": "snapchat",
+      "status": "draft",
+      "hypothesis": "A discount-only wheel, with no product names on any wedge, can carry a cold-traffic Snapchat ad on mechanic alone. Disproved if CTR is decisively below the account benchmark, or if the ad is rejected in category review.",
+      "eligibility": "needs_verification",
+      "eligibility_reason": "Snapchat has no section in platform-eligibility.md and no category ruling has been obtained for the Vanta Labs domain. The concept removes product names and all outcome language, which lowers claim risk, but the underlying category remains unverified.",
+      "hook": "wheel already mid-spin, decelerating, ticker audible, lands on a discount wedge",
+      "opening_frame": "0:00 is the wheel at speed, filling the frame, off-centre. No logo, no headline card.",
+      "script": "0.0-1.5 wheel decelerating, ticker sound only. 1.5-2.5 lands, soft gold flare on the winning wedge. 2.5-5.0 on-screen: every spin wins something. 5.0-7.0 cut to catalogue scroll on dark field. 7.0-9.0 CTA card.",
+      "shot_list": "1) 0:00-2:5 macro wheel, shallow depth, 60fps to 24fps ramp on landing. 2) 2:5-5:0 hold on winning wedge, hairline gold rim catches light. 3) 5:0-7:0 vertical catalogue scroll, dark field, product vials backlit. 4) 7:0-9:0 static CTA on charcoal.",
+      "visual_direction": "Dark matte laboratory per brand.md. Background #0a0a0a, surfaces #141414. Gold #c7ae5e rationed to roughly 8% of frame: the wheel rim hairline and the winning wedge only. No solid gold fills, no blue or green wedge tints, all dark values pure neutral. Motion 200-350ms eased, nothing bounces.",
+      "on_screen_text": "every spin wins something | Vanta Labs | research use only",
+      "on_screen_text_safe_area": "Keep all text inside the middle 60% vertically. Snapchat crops top and bottom aggressively and overlays its own CTA bar at the base.",
+      "voiceover": "none",
+      "cta": "Spin it",
+      "caption": "every spin wins something. research use only.",
+      "landing_page": "/spin via a paid-traffic variant whose wedges carry no product names, so the ad and the page show the same offer",
+      "audience": "cold prospecting, 21+ age gate enforced at the ad set, interest-based",
+      "length": 9,
+      "claims_used": [
+        {
+          "claim": "every spin wins",
+          "source": "live /spin page copy: '16 wedges, every spin wins, and your reward is claimed with your next order'"
+        },
+        {
+          "claim": "research use only",
+          "source": "standing site-wide product classification"
+        }
+      ],
+      "open_questions": [
+        "Requires building a discount-only wheel variant for paid traffic before this can run.",
+        "No specific percentage is stated in the creative; if one is added it must be re-verified against the live store that day."
+      ],
+      "registered_at": "2026-09-18T16:41:51.996574+00:00",
+      "metrics_history": [],
+      "status_history": [
+        {
+          "status": "draft",
+          "at": "2026-09-18T16:41:51.996608+00:00",
+          "note": "registered"
+        }
+      ]
+    },
+    {
+      "concept_id": "vl-documentation-001",
+      "archetype": "documentation",
+      "platform": "snapchat",
+      "status": "draft",
+      "hypothesis": "The searchable batch-level COA library outperforms the wheel as a cold-traffic hook, because it makes no claim at all and is the one thing in this category a competitor cannot copy overnight. Disproved if CTR is decisively below the wheel concept at comparable spend.",
+      "eligibility": "needs_verification",
+      "eligibility_reason": "Lowest claim risk available: no outcome language, no human-use framing, no dosing, no product benefit stated. Category eligibility for the domain is still unverified on Snapchat.",
+      "hook": "a lot number typed into a search field, report resolving on screen",
+      "opening_frame": "0:00 is a close crop of a search field on a dark background, a lot number being typed character by character. No logo.",
+      "script": "0.0-2.0 lot number typed, cursor blinking. 2.0-4.0 the report resolves, page renders. 4.0-8.0 slow scroll down the actual published report. 8.0-10.0 on-screen: search any batch we have sold. 10.0-12.0 CTA card.",
+      "shot_list": "1) 0:00-2:0 macro screen capture, real page, no mockup. 2) 2:0-4:0 report render, one beat of hold. 3) 4:0-8:0 continuous slow scroll, no cuts, no music swell. 4) 8:0-12:0 CTA on charcoal.",
+      "visual_direction": "Screen-native, not a rendered mockup. Dark UI as the site already ships. Geist Mono for the lot number, which is what the site uses. Gold only on the hairline and the CTA text. Restraint is the message.",
+      "on_screen_text": "search any batch we have sold | research use only",
+      "on_screen_text_safe_area": "Middle 60% vertically; the scrolling report must not run under Snapchat's bottom CTA bar.",
+      "voiceover": "none",
+      "cta": "Read the reports",
+      "caption": "every batch we sell has a report you can read. research use only.",
+      "landing_page": "/coa library index, because the ad promises a document and the page must deliver that document, not a catalogue",
+      "audience": "cold prospecting, 21+ age gate enforced at the ad set",
+      "length": 12,
+      "claims_used": [
+        {
+          "claim": "searchable batch-level COA library exists",
+          "source": "live COA library on the site"
+        },
+        {
+          "claim": "specific lot number shown on screen",
+          "source": "must be a real published report; pick the lot at shoot time and record it here"
+        },
+        {
+          "claim": "research use only",
+          "source": "standing site-wide product classification"
+        }
+      ],
+      "open_questions": [
+        "Do not use the phrase third-party tested unless every product shown has a published report.",
+        "The exact lot number filmed must be pinned into claims_used before this ships."
+      ],
+      "registered_at": "2026-09-18T16:41:52.054341+00:00",
+      "metrics_history": [],
+      "status_history": [
+        {
+          "status": "draft",
+          "at": "2026-09-18T16:41:52.054368+00:00",
+          "note": "registered"
+        }
+      ]
+    }
+  ]
 }
