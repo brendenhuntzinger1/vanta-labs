@@ -167,16 +167,23 @@ describe("it opens once a visitor is INSIDE the store, never on the gate", () =>
     expect(LAYOUT).not.toContain("<SmsInviteModal />");
   });
 
-  it("opens only on the storefront pages, never checkout or an account screen", () => {
+  it("opens on the catalogue and product pages, and NOT on the front page", () => {
+    // THE OFFER NEEDS SOMETHING TO ATTACH TO. The front page is brand-only,
+    // and someone who has just signed in has not seen a product or a price
+    // yet — "15% off your first order" there is an advert. Beside a $59 vial
+    // it is a number. It is also never checkout or an account screen.
     expect(MODAL).toMatch(/function isStoreRoute/);
-    expect(MODAL).toMatch(/pathname === "\/"/);
     expect(MODAL).toMatch(/\/products/);
+    expect(MODAL, "the front page is back in the route list").not.toMatch(/pathname === "\/"/);
   });
 
-  it("waits the house interval rather than pouncing on arrival", () => {
-    // 6s is what sms-invite-modal.tsx already used. A card that lands the
-    // instant a page paints reads as an ad; one that waits reads as an offer.
-    expect(MODAL).toMatch(/OPEN_AFTER_MS = 6000/);
+  it("waits ten seconds, long enough to have read the page", () => {
+    // Everyone who sees this is already signed in — they made an account and
+    // made the 21+/research attestations to get in — so the intent is not in
+    // doubt and a long warm-up buys nothing. A minute is worse than useless:
+    // most product-page visits are decided before then, so the ask would
+    // arrive after the decision.
+    expect(MODAL).toMatch(/OPEN_AFTER_MS = 10000/);
   });
 
   it("does not interrupt someone the offer is not open to", () => {
