@@ -1,17 +1,16 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SMS_SIGNUP_CONFIG } from "@/lib/admin-control";
 import { CONTACT_CODE_OFFERS } from "@/lib/marketing/omnisend/codes";
 import {
   SMS_BAR_TEXT,
   SMS_CHECKOUT_CHECKBOX,
-  SMS_CHECKOUT_INCENTIVE,
   SMS_INVITE_BODY,
   SMS_INVITE_BUTTON,
   SMS_INVITE_FIELD_LABEL,
   SMS_INVITE_HEADLINE,
   SMS_PRODUCT_LINK,
-  SMS_RETURNING_INVITE,
   WELCOME_OFFER_APPLIED,
   WELCOME_OFFER_DAYS,
   WELCOME_OFFER_HELD_BY_BETTER,
@@ -22,15 +21,17 @@ import {
 // ---------------------------------------------------------------------------
 // ONE TEXT-LIST SIGN-UP, SAID THE SAME WAY EVERYWHERE.
 //
-// The owner's brief: SMS is the priority and the 15% first-order offer is its
-// incentive; one branded invitation inside the store, quiet opportunities
-// while shopping, an inline box at the checkout, and the homepage left alone.
-// Nothing customer-facing turns on until the carriers approve this store.
+// The owner's brief was: SMS is the priority and the 15% first-order offer is
+// its incentive. The second half of that is retired. On 2026-09-18 the welcome
+// code stopped minting at both call sites and the spin-to-win wheel took its
+// place as the store's acquisition offer, so what is left here is the text list
+// asked for on its own terms: quiet opportunities while shopping, an inline box
+// at the checkout, and the homepage left alone.
 //
-// These are the invariants that brief turns into. They are about wiring and
-// wording rather than rendering: what breaks silently is a sixth surface
-// describing the offer in its own words, an incentive shown to someone who
-// cannot have it, or a prompt that ignores the kill switch.
+// These are the invariants that turns into, and most of them are now about what
+// is NOT said. What breaks silently is a surface still advertising the retired
+// discount, an incentive shown to somebody who cannot have it, or a prompt that
+// ignores the kill switch.
 // ---------------------------------------------------------------------------
 
 const read = (path: string) => readFileSync(new URL(`../../../${path}`, import.meta.url), "utf8");
@@ -41,27 +42,43 @@ const CART = read("src/app/cart/cart-client.tsx");
 const CHECKOUT = read("src/app/checkout/page.tsx");
 const SIGNUP = read("src/components/account-auth-form.tsx");
 const COMPONENT = read("src/components/welcome-offer-signup.tsx");
-const MODAL = read("src/components/sms-invite-modal.tsx");
+const COPY = read("src/lib/offers/welcome-offer-copy.ts");
 const LAYOUT = read("src/app/layout.tsx");
 const ROUTE = read("src/app/api/offers/welcome/route.ts");
 const SERVICE = read("src/lib/offers/welcome-offer.ts");
 const HOOKS = read("src/lib/marketing/omnisend/hooks.ts");
 
 describe("one wording, matching the code the store actually mints", () => {
-  it("carries the owner's invitation copy verbatim", () => {
-    expect(SMS_INVITE_HEADLINE).toBe("Get 15% off your first order");
+  it("asks for the list on its own terms, with no discount attached", () => {
     expect(SMS_INVITE_BODY).toBe(
       "Join Vanta Labs texts for exclusive sales, restock alerts, giveaways, and free product offers.",
     );
     expect(SMS_INVITE_FIELD_LABEL).toBe("Mobile number");
-    expect(SMS_INVITE_BUTTON).toBe("Get my 15% off");
+    // The headline and the button used to name the retired discount.
+    for (const line of [SMS_INVITE_HEADLINE, SMS_INVITE_BUTTON, SMS_BAR_TEXT, SMS_PRODUCT_LINK]) {
+      expect(line, `"${line}" still sells a discount nothing mints`).not.toMatch(/\d+%|off your first order/i);
+    }
   });
 
-  it("states all three restrictions in one line, shown before the button", () => {
+  it("no longer offers anything the module cannot mint", () => {
+    // Each of these named the retired welcome code on a surface that is an
+    // OFFER rather than a record of one somebody already holds.
+    for (const gone of ["SMS_CHECKOUT_INCENTIVE", "SMS_CHECKOUT_NEEDS_PHONE", "WELCOME_OFFER_SENTENCE", "SMS_RETURNING_INVITE"]) {
+      expect(COPY, `${gone} is back`).not.toContain(`export const ${gone}`);
+    }
+  });
+
+  it("states the terms only where a code actually exists", () => {
     expect(WELCOME_OFFER_TERMS).toBe("First order only. Valid for 14 days. Cannot be combined with other offers.");
-    // Before submission, not after: the terms block sits above the field.
-    const form = COMPONENT.slice(COMPONENT.indexOf("export function SmsSignupForm"));
-    expect(form.indexOf("WELCOME_OFFER_TERMS")).toBeLessThan(form.indexOf("welcome-offer-submit"));
+    // THE FORM MINTS NOTHING NOW, so printing the retired code's three
+    // restrictions over it would describe a deal the shopper is not being
+    // given. They survive for the holder's own card and the checkout.
+    const form = COMPONENT.slice(
+      COMPONENT.indexOf("export function SmsSignupForm"),
+      COMPONENT.indexOf("export function WelcomeCodeCard"),
+    );
+    expect(form).not.toContain("WELCOME_OFFER_TERMS");
+    expect(COMPONENT.slice(COMPONENT.indexOf("export function WelcomeCodeCard"))).toContain("WELCOME_OFFER_TERMS");
   });
 
   it("promises exactly what the minter mints", () => {
@@ -94,7 +111,7 @@ describe("one wording, matching the code the store actually mints", () => {
   });
 
   it("says texts, never emails: the discount buys the channel the store lacks", () => {
-    for (const line of [SMS_INVITE_BODY, SMS_BAR_TEXT, SMS_PRODUCT_LINK, SMS_CHECKOUT_CHECKBOX, SMS_RETURNING_INVITE]) {
+    for (const line of [SMS_INVITE_BODY, SMS_BAR_TEXT, SMS_PRODUCT_LINK, SMS_CHECKOUT_CHECKBOX]) {
       expect(line).not.toMatch(/\bemails?\b/i);
     }
   });
@@ -102,8 +119,8 @@ describe("one wording, matching the code the store actually mints", () => {
   it("keeps the house voice: no emoji, no exclamation marks", () => {
     const copy = [
       SMS_INVITE_HEADLINE, SMS_INVITE_BODY, SMS_INVITE_BUTTON, SMS_BAR_TEXT, SMS_PRODUCT_LINK,
-      SMS_CHECKOUT_CHECKBOX, SMS_CHECKOUT_INCENTIVE, WELCOME_OFFER_TERMS, WELCOME_OFFER_APPLIED,
-      WELCOME_OFFER_HELD_BY_BETTER, SMS_RETURNING_INVITE,
+      SMS_CHECKOUT_CHECKBOX, WELCOME_OFFER_TERMS, WELCOME_OFFER_APPLIED,
+      WELCOME_OFFER_HELD_BY_BETTER,
     ].join(" ");
     expect(copy).not.toMatch(/!/);
     expect(copy).not.toMatch(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u);
@@ -122,9 +139,26 @@ describe("every placement the owner asked for, and no others", () => {
     expect(LAYOUT.indexOf("<EntryOfferModal />")).toBeGreaterThan(LAYOUT.indexOf("<StorefrontOfferModal"));
   });
 
-  it("explains the offer beside the sign-up page's SMS box, never the email one", () => {
-    expect(SIGNUP.indexOf('data-testid="signup-welcome-offer"')).toBeGreaterThan(SIGNUP.indexOf('data-testid="signup-marketing-opt-in"'));
-    expect(SIGNUP.indexOf('data-testid="signup-welcome-offer"')).toBeLessThan(SIGNUP.indexOf('data-testid="signup-sms-opt-in"'));
+  it("offers nothing for the tick on the one opt-in a carrier can load", () => {
+    // /account/login carried a gold line reading "Get 15% off your first
+    // order. First order only. Valid for 14 days." between the email box and
+    // the SMS one. Nothing mints that code any more, so on the single opt-in
+    // screen an A2P review can actually reach it had become an advertisement
+    // for something the till refuses. It is removed rather than reworded.
+    expect(SIGNUP).not.toContain('data-testid="signup-welcome-offer"');
+    expect(SIGNUP).not.toContain("WELCOME_OFFER_SENTENCE");
+  });
+
+  it("changes nothing else about that screen's consent", () => {
+    // The wording the carrier review saw, its version, the unticked boxes and
+    // both legal links are not ours to edit.
+    expect(SIGNUP).toContain("{SMS_CONSENT_TEXT}");
+    expect(SIGNUP).toContain("{SMS_DISCLOSURE_TEXT}");
+    expect(SIGNUP).toContain('data-testid="signup-sms-opt-in"');
+    expect(SIGNUP).toContain('data-testid="signup-marketing-opt-in"');
+    expect(SIGNUP).toContain("/legal/terms");
+    expect(SIGNUP).toContain("/legal/privacy");
+    expect(SIGNUP).toMatch(/const \[smsOptIn, setSmsOptIn\] = useState\(false\)/);
   });
 
   it("leaves the home page alone", () => {
@@ -142,32 +176,14 @@ describe("every placement the owner asked for, and no others", () => {
   });
 });
 
-describe("the one invitation behaves like one invitation", () => {
-  it("opens only on the catalogue and its product pages", () => {
-    expect(MODAL).toContain('pathname === "/products" || pathname.startsWith("/products/")');
-    expect(MODAL).toContain("if (!isShoppingRoute(pathname)) return;");
-  });
-
-  it("yields to anything already on screen, re-checked at the moment it opens", () => {
-    expect(MODAL).toContain('document.querySelector(\'[data-offer-modal], [role="dialog"], [data-vl-overlay]\')');
-    const effect = MODAL.slice(MODAL.indexOf("const timer = window.setTimeout"));
-    expect(effect).toContain("if (anotherOverlayIsOpen()) return;");
-  });
-
-  it("shows once per session and then not again for the configured cooldown", () => {
-    expect(MODAL).toContain("if (seenThisSession()) return;");
-    expect(MODAL).toContain("if (withinCooldown(offer.dismissCooldownDays ?? 7)) return;");
-    expect(DEFAULT_SMS_SIGNUP_CONFIG.dismissCooldownDays).toBe(7);
-  });
-
-  it("opens only for someone the server says may be interrupted", () => {
-    expect(MODAL).toContain('if (offer.status !== "eligible" || !offer.mayInterrupt) return;');
-  });
-
-  it("closes on the backdrop, the control and escape", () => {
-    expect(MODAL).toContain('data-testid="sms-invite-close"');
-    expect(MODAL).toContain('if (event.key === "Escape") close();');
-    expect(MODAL).toContain("markDismissed();");
+describe("the older invitation is gone, not merely unmounted", () => {
+  it("leaves no second card asking the same question", () => {
+    // sms-invite-modal.tsx was stood down when the entry card replaced it and
+    // then sat in the tree for a fortnight, mounted nowhere, still importing
+    // the retired discount's copy — so every constant it named looked live to
+    // anyone grepping for consumers before deleting one.
+    expect(existsSync(join("src", "components", "sms-invite-modal.tsx"))).toBe(false);
+    expect(LAYOUT).not.toContain("<SmsInviteModal />");
   });
 });
 
@@ -184,7 +200,6 @@ describe("the kill switch", () => {
 
   it("hides every acquisition prompt while it is off", () => {
     expect(COMPONENT).toContain("if (offer.promptsEnabled === false) return null;");
-    expect(MODAL).toContain("if (offer.promptsEnabled === false) return;");
     // The checkout no longer consults the switch at all: it gated a discount
     // that no longer exists, and the panel that remains is for a customer who
     // already holds a code rather than an offer to anybody.
@@ -294,12 +309,7 @@ describe("the reward is immediate, not synced", () => {
   });
 });
 
-describe("the sentence survives minification", () => {
-  it("composes from two already-folded halves rather than a template pair", () => {
-    const copy = read("src/lib/offers/welcome-offer-copy.ts");
-    expect(copy).toContain('export const WELCOME_OFFER_SENTENCE = SMS_INVITE_HEADLINE + ". " + WELCOME_OFFER_TERMS;');
-  });
-
+describe("the copy survives minification", () => {
   it("carries the invitation copy whole in a built client bundle", () => {
     let chunks: string[];
     try {
@@ -311,8 +321,14 @@ describe("the sentence survives minification", () => {
       .filter((name) => name.endsWith(".js"))
       .map((name) => readFileSync(new URL(`../../../.next/static/chunks/${name}`, import.meta.url), "utf8"))
       .join("\n");
-    if (!bundle.includes("off your first order")) return;
-    expect(bundle.includes(SMS_INVITE_HEADLINE)).toBe(true);
+    // THE SHAPE THAT SHIPPED A BROKEN SENTENCE ONCE. A pair of template
+    // literals added together, with only compile-time constants inside them,
+    // folds in the minifier and loses the first one's tail — the bundle
+    // shipped "Get 15Valid for 14 days." The source-level scan in
+    // constant-template-folding.test.ts is what actually runs in CI, since
+    // there are no chunks there; this is the belt to its braces.
+    if (!bundle.includes("Vanta Labs texts")) return;
+    expect(bundle.includes(SMS_INVITE_BODY)).toBe(true);
     expect(bundle.includes(WELCOME_OFFER_TERMS)).toBe(true);
   });
 });
