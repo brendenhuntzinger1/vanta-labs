@@ -650,6 +650,76 @@ export class FakeDb {
         return { data: true, error: null };
       }
 
+      // The one-time offer hold (src/lib/sql/customer-offers.sql), modelled to
+      // the same refusals. Same argument as reserve_inventory above: the thing
+      // under test at this level is that the CHECKOUT takes the hold before it
+      // writes an order and hands it back when the order dies, so the hold has
+      // to behave. The SQL itself — the advisory lock, the row lock, genuinely
+      // parallel connections — is proved against a real Postgres in
+      // src/lib/sql/customer-offers.test.ts, which this deliberately does not
+      // duplicate.
+      case "customer_offer_reserve": {
+        const tokenHash = args.p_token_hash ? String(args.p_token_hash) : "";
+        const orderId = args.p_order_id ? String(args.p_order_id) : "";
+        const email = String(args.p_email ?? "").trim().toLowerCase();
+        if (!tokenHash || !orderId || !email) return { data: [], error: null };
+
+        const offer = this.table("customer_offers").find((row) => String(row.token_hash ?? "") === tokenHash);
+        if (!offer) return { data: [], error: null };
+        if (offer.revoked_at) return { data: [], error: null };
+        if (String(offer.expires_at ?? "") <= new Date().toISOString()) return { data: [], error: null };
+        if (String(offer.email ?? "").toLowerCase() !== email) return { data: [], error: null };
+        // Already spent, except by the order asking again — an idempotent replay.
+        if (offer.redeemed_at && String(offer.redeemed_order_id ?? "") !== orderId) {
+          return { data: [], error: null };
+        }
+
+        const holder = offer.reserved_order_id ? String(offer.reserved_order_id) : "";
+        if (holder && holder !== orderId) {
+          const holdingOrder = this.table("orders").find((row) => String(row.order_id ?? "") === holder);
+          const holdingStatus = String(holdingOrder?.payment_status ?? "");
+          // Spent by an order that PAID but whose redeem step never ran. Money
+          // moved, so the gift is gone however old the hold is.
+          if (["paid", "partially_refunded", "refunded"].includes(holdingStatus)) {
+            return { data: [], error: null };
+          }
+          const holdSeconds = Math.max(0, Number(args.p_hold_seconds ?? 1800));
+          const heldSince = Date.parse(String(offer.reserved_at ?? "")) || 0;
+          const stillLive = heldSince > Date.now() - holdSeconds * 1000;
+          const holderDied = ["canceled", "cancelled", "payment_failed", "refunded"].includes(holdingStatus);
+          if (stillLive && !holderDied) return { data: [], error: null };
+        }
+
+        offer.reserved_order_id = orderId;
+        offer.reserved_at = new Date().toISOString();
+        return { data: [{ ...offer }], error: null };
+      }
+
+      case "customer_offer_redeem": {
+        const orderId = String(args.p_order_id ?? "");
+        let redeemed = 0;
+        for (const offer of this.table("customer_offers")) {
+          if (String(offer.reserved_order_id ?? "") !== orderId || offer.redeemed_at) continue;
+          offer.redeemed_order_id = orderId;
+          offer.redeemed_at = new Date().toISOString();
+          redeemed += 1;
+        }
+        return { data: redeemed > 0, error: null };
+      }
+
+      case "customer_offer_release": {
+        const orderId = String(args.p_order_id ?? "");
+        let released = 0;
+        for (const offer of this.table("customer_offers")) {
+          // A redeemed offer is never handed back, whatever the caller says.
+          if (String(offer.reserved_order_id ?? "") !== orderId || offer.redeemed_at) continue;
+          offer.reserved_order_id = null;
+          offer.reserved_at = null;
+          released += 1;
+        }
+        return { data: released > 0, error: null };
+      }
+
       case "redeem_coupon": {
         const coupon = this.table("coupons").find(
           (row) => String(row.code ?? "").toUpperCase() === String(args.p_code ?? "").toUpperCase(),
