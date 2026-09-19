@@ -107,10 +107,26 @@ const DESKTOP = { width: 1280, height: 900 };
 let chromiumBrowser = null;
 let webkitBrowser = null;
 
+// WEBKIT IF IT IS THERE, CHROMIUM IF IT IS NOT — AND THE RUN SAYS WHICH.
+//
+// Every iOS in-app browser is a WKWebView, so WebKit is the engine that would
+// make an in-app scenario a real engine test rather than a string swap. This
+// container ships only Chromium builds under /opt/pw-browsers, and the project
+// runbook forbids `playwright install`, so the in-app phase falls back to
+// Chromium carrying the in-app user agent.
+//
+// That is a WEAKER test and is reported as one: it still proves the gate does
+// not branch on the user agent and that the journey completes, and it does NOT
+// prove WebKit-specific behaviour (Secure-cookie handling, mixed content, the
+// storage quirks the runbook documents).
+let webkitAvailable = null;
 async function browserFor(engine) {
   if (engine === "webkit") {
-    if (!webkitBrowser) webkitBrowser = await webkit.launch();
-    return webkitBrowser;
+    if (webkitAvailable === null) {
+      try { webkitBrowser = await webkit.launch(); webkitAvailable = true; }
+      catch { webkitAvailable = false; }
+    }
+    if (webkitAvailable) return webkitBrowser;
   }
   if (!chromiumBrowser) {
     chromiumBrowser = await chromium.launch(
@@ -216,7 +232,7 @@ async function mintOffer({ email, prize, doseLabel = null, ttlHours = 72, issued
        (id, offer_key, token_hash, email, product_slug, variant_id, min_subtotal_cents,
         issued_at, expires_at, reward_kind, percent_off, max_discount_cents, quantity, gift_items)
      values (gen_random_uuid(), $1, $2, $3, $4, $5, $6,
-             now() - ($7 || ' hours')::interval, now() + ($8 || ' hours')::interval, $9, $10, $11, 1, null)`,
+             now() - ($7 || ' hours')::interval, now() + ($8 || ' hours')::interval, $9, $10, $11, $12, null)`,
     [
       "spin:winback_2026q4", hashToken(token), email,
       reward.kind === "free_product" ? reward.productSlug : null,
@@ -224,6 +240,11 @@ async function mintOffer({ email, prize, doseLabel = null, ttlHours = 72, issued
       min, String(issuedHoursAgo), String(ttlHours - issuedHoursAgo),
       reward.kind, reward.kind === "percent" ? reward.percent : null,
       prize.maxDiscountCents ?? null,
+      // customer_offers_quantity_shape: a quantity may only exist alongside a
+      // product_slug. A percent or free-shipping wedge has no product, so it
+      // carries no quantity — writing 1 there is refused by the schema, which
+      // is the database declining to hold "one of nothing".
+      reward.kind === "free_product" ? 1 : null,
     ],
   );
   return { token, minSubtotalCents: min };
@@ -246,7 +267,7 @@ let PRIZES = [];
 async function loadCatalog() {
   const r = await q(
     `select p.slug, p.name, p.category, p.price_cents, p.stock_status, p.image_url,
-            coalesce(json_agg(json_build_object('label', d.label, 'price_cents', d.price_cents,
+            coalesce(json_agg(json_build_object('id', d.id, 'label', d.label, 'price_cents', d.price_cents,
                                                 'inventory', d.inventory_quantity, 'enabled', d.is_enabled,
                                                 'is_default', d.is_default, 'position', d.position)
                               order by d.position) filter (where d.id is not null), '[]') as doses
@@ -278,14 +299,40 @@ async function dismissConsent(page) {
   } catch { /* the bar may not be there */ }
 }
 
+/**
+ * THE CART IS THE BROWSER'S, NOT THE SERVER'S.
+ *
+ * There is no `GET /api/cart` — cart-context.tsx keeps the basket in
+ * localStorage under `vanta-labs-cart` and the server only ever sees it when
+ * a quote or a checkout is requested. An earlier version of this helper read
+ * a `/api/cart` that does not exist, got null every time, and reported an
+ * empty basket for every add-to-cart in the run: roughly thirty scenarios
+ * failing for a reason that was entirely this file's.
+ *
+ * Lines are keyed by `slug`, with the chosen dose in `variantId`.
+ */
+const CART_STORAGE_KEY = "vanta-labs-cart";
+
 async function cartState(page) {
-  return page.evaluate(async () => {
+  return page.evaluate((key) => {
     try {
-      const r = await fetch("/api/cart", { headers: { accept: "application/json" } });
-      if (r.ok) return await r.json();
-    } catch { /* fall through */ }
-    return null;
-  });
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return { items: [], referralCode: null, couponCode: null };
+      const parsed = JSON.parse(raw);
+      return {
+        items: Array.isArray(parsed?.items) ? parsed.items : [],
+        referralCode: parsed?.referralCode ?? null,
+        couponCode: parsed?.couponCode ?? null,
+      };
+    } catch {
+      return { items: [], referralCode: null, couponCode: null };
+    }
+  }, CART_STORAGE_KEY);
+}
+
+/** Lines for one product, whichever dose. */
+function linesFor(cart, slug) {
+  return (cart?.items ?? []).filter((i) => String(i.slug ?? "") === slug);
 }
 
 /** Add a product to the cart the way a shopper does: from its own page. */
@@ -295,19 +342,33 @@ async function addToCartFromPdp(page, slug, doseLabel = null) {
   await dismissConsent(page);
   if (doseLabel) {
     const picked = await page.evaluate((label) => {
-      const norm = (s) => (s || "").replace(/\s+/g, "").toLowerCase();
-      const candidates = [...document.querySelectorAll("button,[role=radio],label,option")];
-      const hit = candidates.find((el) => norm(el.textContent) === norm(label));
+      // THE BADGE IS PART OF THE BUTTON'S TEXT. The recommended dose renders as
+      // "10mg★ Most Popular", so an exact-match picker silently misses it and
+      // adds whatever was already selected instead. That is not a hypothetical:
+      // it made a GLP-1 scenario report "two doses became one cart line", which
+      // reads exactly like a cart defect and was entirely this selector.
+      //
+      // Matching is therefore on the text UP TO the badge, still exactly — a
+      // loose `startsWith` would let "5mg" select "50mg", and would let the
+      // "Recon Water 10 mL · $14.99" add-on stand in for a genuine "10mL" dose
+      // on b12 and lipo-c.
+      const norm = (s) => (s || "").split("★")[0].replace(/\s+/g, "").toLowerCase();
+      const want = norm(label);
+      const candidates = [...document.querySelectorAll("button,[role=radio],[role=option],label,option")];
+      const hit = candidates.find((el) => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && !el.disabled && norm(el.textContent) === want;
+      });
       if (hit) { hit.click(); return true; }
       const sel = document.querySelector("select");
       if (sel) {
-        const opt = [...sel.options].find((o) => norm(o.textContent) === norm(label) || norm(o.value) === norm(label));
+        const opt = [...sel.options].find((o) => norm(o.textContent) === want || norm(o.value) === want);
         if (opt) { sel.value = opt.value; sel.dispatchEvent(new Event("change", { bubbles: true })); return true; }
       }
       return false;
     }, doseLabel);
     if (!picked) return { added: false, reason: `dose "${doseLabel}" not selectable` };
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(500);
   }
   const clicked = await page.evaluate(() => {
     const b = [...document.querySelectorAll("button")]
@@ -320,15 +381,22 @@ async function addToCartFromPdp(page, slug, doseLabel = null) {
   return { added: true };
 }
 
+/**
+ * Empty the basket, then RELOAD — the provider hydrates from storage once at
+ * mount, so clearing the key underneath a live page leaves React holding the
+ * old items and the next assertion reads a cart the customer no longer has.
+ */
 async function clearCart(page) {
-  await page.evaluate(async () => {
-    try { await fetch("/api/cart", { method: "DELETE" }); } catch { /* ignore */ }
+  await page.evaluate((key) => {
     try {
-      localStorage.removeItem("vl_cart");
-      localStorage.removeItem("vanta_cart");
-      for (const k of Object.keys(localStorage)) if (/cart/i.test(k)) localStorage.removeItem(k);
+      window.localStorage.removeItem(key);
+      for (const k of Object.keys(window.localStorage)) if (/cart/i.test(k)) window.localStorage.removeItem(k);
     } catch { /* ignore */ }
-  });
+  }, CART_STORAGE_KEY);
+  try {
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(400);
+  } catch { /* a page mid-navigation is fine to leave */ }
 }
 
 /** Overflow, overlap and the things a phone customer notices. */
@@ -385,9 +453,15 @@ function writeReports() {
   return fail;
 }
 
+/** Did the in-app phase get the engine it wanted? Reported, never assumed. */
+function engineUsed(requested) {
+  if (requested !== "webkit") return "chromium";
+  return webkitAvailable ? "webkit" : "chromium (webkit unavailable in this container)";
+}
+
 export {
-  BASE, CATALOG, PRIZES, client, q, record, scenario, nextId, freshContext, shot,
+  BASE, CATALOG, PRIZES, client, q, record, scenario, nextId, freshContext, shot, engineUsed,
   createConfirmedCustomer, newEmail, signIn, mintOffer, loadCatalog, loadPrizes,
-  dismissConsent, cartState, addToCartFromPdp, clearCart, layoutProbe, writeReports,
+  dismissConsent, cartState, linesFor, addToCartFromPdp, clearCart, layoutProbe, writeReports,
   PHONE, DESKTOP, UA, results,
 };

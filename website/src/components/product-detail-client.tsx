@@ -809,6 +809,22 @@ export function ProductDetailClient({
                         <button
                           key={variant.id}
                           type="button"
+                          // SELECTION WAS CONVEYED BY COLOUR ALONE.
+                          //
+                          // These are plain buttons in a row: no radiogroup, no
+                          // aria-checked, and the only signal that 10mg rather
+                          // than 5mg is active was `bg-[#111] text-white`. A
+                          // screen reader therefore read "5mg, button. 10mg,
+                          // button. 20mg, button." with nothing to say which one
+                          // the price and the Add to Cart underneath are about
+                          // to act on — WCAG 4.1.2, on the control that decides
+                          // what the customer buys.
+                          //
+                          // `aria-pressed` is the minimum honest fix: a toggle
+                          // button group is a legitimate pattern for this, it
+                          // costs one attribute, and it changes nothing visual
+                          // or behavioural.
+                          aria-pressed={selectedDose?.id === variant.id}
                           onClick={() => setSelectedDoseId(variant.id)}
                           className={`relative rounded-full border px-4 py-2 text-sm transition active:scale-95 ${
                             selectedDose?.id === variant.id
@@ -868,6 +884,12 @@ export function ProductDetailClient({
                         key={option.quantity}
                         type="button"
                         disabled={exceedsStock}
+                        // The same gap as the dose row above, and worse here:
+                        // the tick that marks the chosen tier is `aria-hidden`,
+                        // so selection was conveyed ONLY by colour. This is the
+                        // control that sets how many vials are bought and which
+                        // bundle discount applies.
+                        aria-pressed={isSelected}
                         onClick={() => setQuantity(option.quantity)}
                         className={`relative rounded-xl border px-2 py-3.5 text-center transition duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${isSelected ? "border-[color:var(--accent-gold)]/70 bg-[#181818] text-white shadow-[0_8px_20px_-12px_rgba(0,0,0,0.9)]" : "border-white/[0.06] bg-[#121212] text-white hover:border-white/20"}`}
                       >

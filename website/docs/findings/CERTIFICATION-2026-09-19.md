@@ -676,24 +676,50 @@ New tests added by this certification (behaviour-neutral; no `src/` changes):
 - **Verification:** Measured across 6 routes.
 - **Production status:** **OPEN.**
 
-### Q-1 — one shipped order carries no postage cost, so its margin is overstated
+### Q-1 — one shipped order's postage cost is an estimate, because no label was ever bought for it
+
+**Corrected 2026-09-19 after root-cause work (§34).** This entry first said the
+order's "margin is overstated by whatever the label cost." That was wrong, and
+wrong in the store's favour to report: the profit engine does not treat a
+missing actual as zero. It substitutes the configured estimate and flags the
+figure as an estimate. The corrected finding is smaller and more precise.
 
 - **Severity:** Low (single historical order; reporting only)
-- **Reproduction:** `VL-E8F4D52F` (2026-08-02, `express_apple_pay`,
-  `fulfillment_status = 'shipped'`) has `actual_shipping_cost_cents = NULL`,
-  `estimated_shipping_cost_cents = NULL`, `shipping_cost_source = NULL`,
+- **Reproduction:** `VL-E8F4D52F` (2026-08-02) has
+  `actual_shipping_cost_cents = NULL`, `shipping_cost_source = NULL`,
   `profit_finalized = false`.
 - **Customer impact:** None. The customer paid and was shipped correctly.
-- **Business impact:** This order's contribution is overstated by whatever the
-  label cost. It is the store's **first ever** order, predating shipping-cost
-  capture. The other three unfinalised orders are correctly excluded (a test
-  order, a cancelled order, a membership with no parcel).
-- **Root cause:** Shipping-cost capture landed after this order shipped.
-- **Test added:** None — this is a historical data gap, not a live code path.
-- **Fix:** Not applied. Correcting it means entering a real postage figure for a
-  2026-08-02 label, which is a business record, not a code change.
-- **Production status:** **OPEN — owner decision.** Enter the postage cost, or
-  accept a known single-order overstatement.
+- **Root cause — established, not guessed.** Of 16 shipped orders, 15 carry an
+  actual cost from Shippo. This one is the sole exception and its row explains
+  itself: `shippo_transaction_id` NULL, `label_purchased_at` NULL,
+  `shipped_at` NULL, **tracking number present**. It was shipped by hand with a
+  carrier tracking number pasted in. `actual_shipping_cost_cents` is written by
+  `recordActualShippingCost`, which only ever runs off a label **purchase** — no
+  purchase, no figure, and no sweep can repair it because there is no Shippo
+  transaction to ask about.
+- **Classification:** **Isolated historical omission with a structural cause —
+  NOT an ongoing defect.** Every label-bought order since has captured its cost
+  (15/15). The latent gap is that any future hand-shipped order lands in the
+  same place, with `profit_finalized = false` as its only tell.
+- **Actual exposure:** the order is costed at the configured `$6.00` estimate
+  against a comparable-order actual range of `$5.48–$11.50` (median ≈ `$7.10`).
+  So roughly **$1.10 understated on one order**, and explicitly labelled
+  "Shipping cost (estimated)" with `profitStatus: "estimated"`.
+- **Test added:** **Yes.** `admin-profit-shipped-without-a-label.test.ts` (4
+  tests) pins the overlay decision that protects this whole class — a NULL
+  actual becomes the configured estimate and never zero, is labelled an
+  estimate, yields to a real figure the moment a label is bought, and does not
+  swallow a legitimate `0`. Nothing pinned it before: `order-profit.test.ts`
+  covers the pure function's handling of an estimate it is *handed*, and
+  `admin-profit-schema-contract.test.ts` even builds a NULL overlay and then
+  never asserts what comes out of it. Rewriting three lines as
+  `(overlay?.actualShippingCostCents ?? 0) / 100` would have booked full margin
+  on every hand-shipped parcel with the suite still green.
+- **Fix:** No code change. The engine already behaves correctly; the residue is
+  one order that will never have an actual figure unless a human enters it.
+- **Production status:** **OPEN — owner decision, and a small one.** Enter the
+  real postage for that 2026-08-02 label, or accept a ~$1.10 estimate on the
+  store's first order.
 
 ### R-1 — leaked-password protection is disabled
 
@@ -776,8 +802,10 @@ the real host, `/` is `307`. See section A.
 ```
 CUSTOMER-CRITICAL DEFECTS REMAINING:      0
 FINANCIAL DISCREPANCIES REMAINING:        1   (Q-1 — one 2026-08-02 order's
-                                               postage cost unrecorded;
-                                               no customer affected)
+                                               postage carried at the $6.00
+                                               estimate rather than an actual,
+                                               ~$1.10 understated, flagged as an
+                                               estimate; no customer affected)
 CONSENT/MARKETING DISCREPANCIES REMAINING: 0
 DATABASE INVARIANT VIOLATIONS:            0
 UNVERIFIED ITEMS:                         2
