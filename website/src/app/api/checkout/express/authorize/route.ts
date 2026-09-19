@@ -29,6 +29,7 @@ import { describeExpressDecline, type PaymentFailureDetail } from "@/lib/payment
 import type { CustomerInput } from "@/lib/payment-types";
 import { recordOrderAttribution } from "@/lib/order-attribution";
 import { customerSafeMessage } from "@/lib/safe-error";
+import { readOfferCookie } from "@/lib/offers/customer-offers";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -214,6 +215,17 @@ export async function POST(request: Request) {
     items: intent.items.map((item) => ({ id: item.id, quantity: item.quantity })),
     referralCode: intent.referral_code ?? undefined,
     couponCode: intent.coupon_code ?? undefined,
+    // THE SAME PRIZE THE SHEET WAS PRICED WITH. Read here as well as in
+    // session/route.ts because this is the quote the charge is built from: if
+    // only one of the two knew about the gift, the amount the wallet approved
+    // and the amount the order records would disagree, and the
+    // addressIndependentCents check below would refuse the payment outright.
+    //
+    // The cookie rather than a column on the intent: the offer token is
+    // httpOnly and same-site lax, so it rides this request the way it rides
+    // every other checkout call, and adding it to the frozen snapshot would be
+    // a production migration for a value the browser already presents.
+    offerToken: readOfferCookie(request) ?? undefined,
     customerUserId: intent.customer_user_id ?? undefined,
     pointsToRedeem: 0,
     shippingProtection: intent.shipping_protection,

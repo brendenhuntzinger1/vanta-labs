@@ -319,13 +319,19 @@ describe("the classifier is not duplicated", () => {
 
   it("has no second component left that could move a visitor after paint", () => {
     // This used to pair middleware with the age gate, which held its own
-    // client-side destination: if the two disagreed, a visitor got moved by the
+    // client-side DESTINATION: if the two disagreed, a visitor got moved by the
     // client after the page was already on screen — the flash this whole
-    // mechanism exists to remove. That overlay is gone, so the pairing has one
-    // member. What is pinned now is that no replacement destination has come
-    // back, in middleware or anywhere else.
+    // mechanism exists to remove. What was wrong was never the overlay; it was
+    // that the overlay could navigate.
+    //
+    // AN AGE GATE EXISTS AGAIN, because opening "/" for Twilio's verification
+    // took away the 307 that had been asking a stranger's age by accident. It
+    // cannot move anybody: it has no router, no href and no location write, and
+    // that — not its filename — is what this test now holds it to.
     expect(mw).toMatch(/const IN_APP_HOME_REPLACEMENT: string \| null = null;/);
-    const components = readdirSync(join(process.cwd(), "src/components"));
-    expect(components).not.toContain("age-gate.tsx");
+    const gate = readFileSync(join(process.cwd(), "src/components/age-gate.tsx"), "utf8");
+    for (const move of ["useRouter", "router.push", "router.replace", "window.location", "redirect("]) {
+      expect(gate, `the age gate must not be able to move a visitor (${move})`).not.toContain(move);
+    }
   });
 });

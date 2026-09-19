@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import { trackFunnelEvent } from "@/lib/analytics-funnel-client";
 import { SMS_CONSENT_TEXT, SMS_DISCLOSURE_TEXT } from "@/lib/sms-consent-text";
 import { REQUEST_TIMEOUT_MS, timeoutSignal } from "@/lib/request-timeout";
+import { FREE_VIAL_WEDGES, SpinWheelFace, WEDGE_COUNT } from "@/components/spin-wheel-face";
 
 /**
  * THE STORE INVITATION — and what it invites people to is the wheel.
@@ -353,18 +354,40 @@ export function EntryOfferModal() {
         <div className="text-[0.7rem] font-semibold uppercase tracking-[0.28em] text-[color:var(--accent-gold)]">Vanta Labs</div>
         <div className="mt-0.5 text-[0.62rem] uppercase tracking-[0.3em] text-white/35">Research Peptides</div>
 
-        <div className="mt-4 inline-flex rounded-full bg-[color:var(--accent-gold-soft)] px-3 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.22em] text-[color:var(--accent-gold)] sm:mt-5 sm:py-1.5 sm:text-[0.65rem]">
-          Spin to win
+        {/* THE PRIZES, SHOWN RATHER THAN DESCRIBED.
+            A card that says "sixteen wedges, free vials" is a claim; the board
+            itself is evidence, and every wedge on it is a real reward the
+            shopper can read. Drawn from SPIN_PRIZES by the same geometry the
+            live wheel turns (spin-wheel-face.tsx), so it can never advertise a
+            board that does not exist. Hidden on a short viewport, where the
+            form is what has to fit. */}
+        <div className="relative mt-4 flex justify-center [@media(max-height:780px)]:hidden sm:mt-5">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 -z-10 blur-2xl"
+            style={{ background: "radial-gradient(circle at 50% 45%, var(--accent-gold-soft), transparent 65%)" }}
+          />
+          <SpinWheelFace className="h-[130px] w-[130px] drop-shadow-[0_10px_30px_rgba(0,0,0,0.65)] sm:h-[150px] sm:w-[150px]" />
         </div>
 
-        <h2 id="entry-offer-heading" className="mt-3 font-serif text-[1.5rem] leading-[1.12] [@media(max-height:780px)]:mt-2 [@media(max-height:780px)]:text-[1.35rem] sm:mt-4 sm:text-[1.75rem] sm:leading-[1.15]">
+        <h2 id="entry-offer-heading" className="mt-3.5 text-center font-serif text-[1.45rem] leading-[1.12] [@media(max-height:780px)]:mt-2 [@media(max-height:780px)]:text-[1.35rem] sm:mt-4 sm:text-[1.7rem] sm:leading-[1.15]">
           Spin the wheel for a free vial.
         </h2>
 
-        <p className="mt-2.5 text-[0.82rem] leading-[1.35rem] text-white/55 [@media(max-height:780px)]:hidden sm:mt-3 sm:text-sm sm:leading-6 sm:[@media(max-height:780px)]:block">
-          Sixteen wedges and every one of them is a real reward — free vials, free
-          shipping, money off. One spin per account. Whatever you land on waits in
-          your cart for 72 hours.
+        {/* WHO THIS IS FOR, in the shopper's own terms. The offer is the first
+            order and the text list — say so rather than making them infer it
+            from a form. The counts are read from the prize table so the claim
+            cannot outrun the board. */}
+        <p className="mt-2 text-center text-[0.82rem] leading-[1.3rem] text-white/60 sm:text-[0.86rem] sm:leading-[1.4rem]">
+          New customers and text subscribers get a spin —{" "}
+          <span className="font-semibold text-[color:var(--accent-gold)]">
+            {FREE_VIAL_WEDGES} of the {WEDGE_COUNT} wedges are a free vial
+          </span>
+          , and the rest are free shipping or money off.
+        </p>
+
+        <p className="mt-1.5 text-center text-[0.72rem] leading-[1.05rem] text-white/35 [@media(max-height:780px)]:hidden">
+          One spin per account. Whatever you land on waits in your cart for 72 hours.
         </p>
 
         {needPhone || askForTexts ? (

@@ -528,12 +528,39 @@ describe("the policy is the only place the decision is made", () => {
 
   it("no second access overlay has reappeared in the component tree", () => {
     // The store had two access systems and the older one protected nothing —
-    // it rendered the storefront and covered it with CSS. One is the rule.
-    const components = readdirSync(join(process.cwd(), "src/components"));
-    expect(components).not.toContain("age-gate.tsx");
+    // it rendered the storefront and covered it with CSS. One is the rule, and
+    // the rule is this policy.
+    //
+    // THIS TEST USED TO BAN THE FILENAME age-gate.tsx OUTRIGHT, and that was
+    // the right guard aimed slightly wrong. What made the old overlay bad was
+    // not that it was an overlay: it was that it was load-bearing. It covered
+    // a storefront the server had already fetched and serialised, so the
+    // catalogue was one "view source" away while the CSS said otherwise.
+    //
+    // WHAT CHANGED. Opening "/" for Twilio's toll-free verification took away
+    // the thing that had been asking a stranger's age by accident — the 307.
+    // So an age attestation came back, on the home page only, and it is not
+    // load-bearing in any sense: page.tsx makes the catalogue READ conditional
+    // on the session, so for the visitor who sees this overlay there is no
+    // product data on the page, in the DOM or in the flight payload. It covers
+    // marketing copy, and marketing copy is all it has to cover.
+    //
+    // The teeth that matter are kept and sharpened below: it must not be
+    // sitewide, and it must never be what withholds the catalogue.
     const layout = readFileSync(join(process.cwd(), "src/app/layout.tsx"), "utf8");
-    expect(layout).not.toContain("AgeGate");
+    expect(layout, "an age gate in the layout is the sitewide overlay again").not.toContain("AgeGate");
     expect(layout).not.toContain("data-age-verified");
+
+    // Home page only, and the home page still fetches nothing for a stranger.
+    const home = readFileSync(join(process.cwd(), "src/app/page.tsx"), "utf8");
+    expect(home).toContain("<AgeGate />");
+    expect(home, "the catalogue read must stay conditional on the session")
+      .toContain("const catalogVisible = Boolean(viewer);");
+
+    // And it is never consulted to decide what may be served.
+    const policy = readFileSync(join(process.cwd(), "src/lib/access-policy.ts"), "utf8");
+    expect(policy).not.toContain("AgeGate");
+    expect(policy).not.toContain("age_attested");
   });
 });
 

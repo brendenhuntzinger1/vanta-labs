@@ -24,6 +24,7 @@ import { US_STATE_TAX_TABLE } from "@/lib/sales-tax";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import type { CartItemInput } from "@/lib/payment-types";
 import { customerSafeMessage } from "@/lib/safe-error";
+import { readOfferCookie } from "@/lib/offers/customer-offers";
 
 export const dynamic = "force-dynamic";
 
@@ -133,6 +134,17 @@ export async function POST(request: Request) {
       },
       referralCode: body.referralCode,
       couponCode: body.couponCode,
+      // THE WHEEL PRIZE PRICES THE WALLET SHEET TOO.
+      //
+      // It did not, and the lane had no idea: this quote and the one in
+      // authorize both omitted the token, so a shopper who had won a free vial
+      // and paid with Apple Pay from the cart drawer was charged as though they
+      // held nothing. The prize was not consumed — it stayed live and spendable
+      // — but the order they just paid for did not carry it, and nothing on the
+      // sheet said why. The full checkout has read this cookie since the offer
+      // existed (create-session/route.ts); the express lane simply never
+      // learned to.
+      offerToken: readOfferCookie(request) ?? undefined,
       customerUserId,
       // Points are user-entered at the full checkout; the express lane never
       // redeems them (there is nowhere in an Apple sheet to choose an amount).

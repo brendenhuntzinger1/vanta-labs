@@ -6,7 +6,6 @@ import { ProductCard } from "@/components/product-card";
 import { useCart } from "@/components/cart-context";
 import type { Product } from "@/lib/catalog-types";
 import { CatalogTrustRail } from "@/components/catalog-trust-rail";
-import { WelcomeOfferSignup } from "@/components/welcome-offer-signup";
 import { hasCoa } from "@/lib/coa-url";
 import { inDefaultCatalogOrder, sortCatalogBy, type CatalogSortKey } from "@/lib/catalog-order";
 
@@ -213,15 +212,14 @@ function ProductsPageContent({ initialProducts }: { initialProducts: Product[] }
             same headline and the same code twice in one phone viewport, a few
             hundred pixels apart. One offer, stated once, at the top. */}
 
-        {/* THE WELCOME OFFER, ON THE CATALOGUE ONLY.
-            A slim bar, above the filters, where someone deciding what to buy
-            can see what subscribing is worth. It renders nothing at all for a
-            shopper who has already bought and shows the code rather than the
-            ask once there is one, so it is never a standing advertisement.
-            The home page deliberately has none of this. */}
-        <div className="mt-8">
-          <WelcomeOfferSignup variant="bar" />
-        </div>
+        {/* THE TEXT-LIST BAR IS GONE FROM THE CATALOGUE, and the reason is
+            how many of them there were rather than anything wrong with this
+            one. The same ask now appears in the wheel invitation, under the
+            purchase controls on a product page, in the cart, at checkout, on
+            the sign-up form, on /sms and in account settings. A shopper
+            walking the catalogue met it twice before reaching a product.
+            The invitation is the one that converts, because it offers
+            something; a bar that only asks is the one to drop. */}
 
         {/* ONE BAR.
             This was a search field, a category dropdown, a duplicate row of
