@@ -239,6 +239,26 @@ describe("the dose ladder", () => {
     }
   });
 
+  it("puts the ENTRY rung first, which is the half of the default-dose invariant that lives here", () => {
+    // A laddered prize is minted with variant_id null, and quoteOrder resolves
+    // null to the CATALOGUE's default dose — not to doses[0]. So the prize ships
+    // correctly only while those two name the same vial.
+    //
+    // This pins the half that is in the code: doses[0] is the cheapest rung and
+    // the one whose minimum is minted. The other half — that the catalogue's
+    // is_default is still that dose — lives in production data and cannot be
+    // asserted from a suite that runs without it; spin-service.ts says so where
+    // the minting happens, rather than claiming a guard that does not exist.
+    for (const prize of SPIN_PRIZES) {
+      const rungs = prize.doses ?? [];
+      if (rungs.length === 0) continue;
+      const cheapest = [...rungs].sort((a, b) => a.retailCentsAtDesignTime - b.retailCentsAtDesignTime)[0];
+      expect(rungs[0].label, `${prize.id}: the entry rung is not the cheapest`).toBe(cheapest.label);
+      expect(rungs[0].minSubtotalCents, `${prize.id}: the minted minimum is not the entry rung's`)
+        .toBe(prize.minSubtotalCents);
+    }
+  });
+
   it("MAKES EVERY STEP UP WORTH TAKING — the whole point of the feature", () => {
     // If this fails the ladder is decorative: the customer is being asked for
     // more money than the extra vial is worth, and will always decline.

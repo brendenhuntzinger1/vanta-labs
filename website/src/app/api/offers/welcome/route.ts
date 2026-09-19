@@ -4,6 +4,7 @@ import { getAuthenticatedUser } from "@/lib/auth-session";
 import { claimWelcomeOffer, readWelcomeOffer, recordPhoneWithoutConsent, recordSmsSignupOnly } from "@/lib/offers/welcome-offer";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { rateLimitKeyForRequest } from "@/lib/request-ip";
+import { phoneOnFileFor } from "@/lib/sms-consent";
 
 export const dynamic = "force-dynamic";
 
@@ -81,9 +82,31 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  // Ten an hour from one address covers a shopper who mistypes their number a
-  // few times and a household behind one router; it does not cover a script.
-  const limit = await checkRateLimit(rateLimitKeyForRequest("welcome-offer", request), 10, 60 * 60);
+  const user = await getAuthenticatedUser();
+  const sessionEmail = user?.email?.trim().toLowerCase() ?? "";
+
+  // TEN AN HOUR, COUNTED AGAINST THE SHOPPER WHERE THERE IS ONE.
+  //
+  // It used to be counted against the request IP for everybody, and the
+  // comment here said that covered "a household behind one router". It does
+  // not cover the NAT a mobile carrier puts thousands of phones behind, and
+  // most of this store's traffic is mobile. MEASURED on the harness: with ten
+  // hits already on `welcome-offer:127.0.0.1`, the next shopper opened the
+  // invitation, entered a number, pressed Spin, was told "Please wait a moment
+  // before trying again", never reached /spin and minted nothing — a hard stop
+  // on the store's acquisition funnel caused by other people's traffic.
+  //
+  // A signed-in caller is therefore counted as themselves, which is the thing
+  // the limit is actually about: one person retyping a number they keep
+  // getting wrong. The storefront invitation only renders for a session, so
+  // that is its whole population. A guest — the checkout form — is still
+  // counted by IP, because there is nothing else to count them by until they
+  // have given an address, and enumeration there is the case IP-keying is for.
+  const limit = await checkRateLimit(
+    sessionEmail ? `welcome-offer-account:${sessionEmail}` : rateLimitKeyForRequest("welcome-offer", request),
+    10,
+    60 * 60,
+  );
   if (!limit.allowed) {
     return NextResponse.json(
       { ok: false, error: "Please wait a moment before trying again." },
@@ -101,12 +124,10 @@ export async function POST(request: Request) {
   // means the number is kept and nobody is subscribed.
   const smsConsent = body.smsConsent === true;
 
-  const user = await getAuthenticatedUser();
-  const sessionEmail = user?.email?.trim().toLowerCase() ?? "";
   const typedEmail = String(body.email ?? "").trim().toLowerCase();
   // The session wins whenever there is one; the body is read only for a guest.
   const email = sessionEmail || typedEmail;
-  const phone = String(body.phone ?? "");
+  const typedPhone = String(body.phone ?? "").trim();
   // Which screen collected the tick, stored with the consent row. Anything
   // unrecognised is recorded as the storefront rather than trusted through.
   const source = body.placement === "checkout" ? "checkout" as const : "storefront" as const;
@@ -122,6 +143,29 @@ export async function POST(request: Request) {
   }
 
   const config = await getSmsSignupConfig();
+
+  // A TICK WITH NOTHING TYPED IS THE COMMON CASE, NOT AN EMPTY FORM.
+  //
+  // The wheel stops asking for a number once the store holds one, so anybody
+  // who has checked out before ticks the box with the field absent. The number
+  // that tick subscribes is the store's own, read here rather than accepted
+  // from the body — the body can never name a number the caller does not
+  // already have.
+  //
+  // Only a CONSENT reaches for it. An untouched box with nothing typed has
+  // given nothing and agreed to nothing, and re-filing a number the store
+  // already holds would write a fresh collection date over a real one.
+  const phone = typedPhone || (smsConsent ? (await phoneOnFileFor(email)) ?? "" : "");
+  if (smsConsent && !phone) {
+    // The card hid its phone field because the store was believed to hold a
+    // number. It does not. `needPhone` is what reopens the field, so the
+    // shopper has somewhere to answer rather than an instruction they cannot
+    // follow — and the consent is refused rather than recorded against nothing.
+    return NextResponse.json(
+      { ok: false, needPhone: true, error: "Enter your mobile number to get texts." },
+      { status: 400 },
+    );
+  }
 
   try {
     // NO TICK: KEEP THE NUMBER, SUBSCRIBE NOBODY.

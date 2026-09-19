@@ -354,6 +354,42 @@ export async function mirrorSmsConsent(input: { email: string; phone: string; so
 }
 
 /**
+ * The number this address is on file with, or null.
+ *
+ * THIS IS WHAT A LATER TICK SUBSCRIBES. The wheel stops asking for a number
+ * once one is held, so the commonest consent has an empty phone field and the
+ * number has to come from here — server-side, from the store's own record,
+ * never from a body the caller composed.
+ *
+ * Null on a refused read as well as on a genuine absence. The two are worth
+ * separating for the question below, where a wrong "no" puts a field in front
+ * of somebody who has already filled it in; here they are not, because both
+ * mean the same thing: there is no number this call may subscribe.
+ */
+export async function phoneOnFileFor(email: string): Promise<string | null> {
+  const address = normalizeEmail(email);
+  if (!address) return null;
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("sms_subscribers")
+      .select("phone_e164")
+      .eq("email", address)
+      .limit(1);
+    if (error) {
+      console.error(LOG, "phone-on-file read refused", error.message);
+      return null;
+    }
+    const held = ((data ?? []) as Array<{ phone_e164: string | null }>)
+      .map((row) => String(row.phone_e164 ?? "").trim())
+      .find(Boolean);
+    return held ?? null;
+  } catch (error) {
+    console.error(LOG, "phone-on-file read failed", error);
+    return null;
+  }
+}
+
+/**
  * Does the store already hold a number for this address?
  *
  * Asked by the wheel so it does not make somebody type a number the store has

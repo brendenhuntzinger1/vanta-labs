@@ -28,7 +28,7 @@ type Row = {
 };
 
 const db = vi.hoisted(() => ({ rows: [] as Row[], updates: 0 }));
-const catalog = vi.hoisted(() => ({ disabled: new Set<string>() }));
+const catalog = vi.hoisted(() => ({ disabled: new Set<string>(), available: new Map<string, number | null>(), status: new Map<string, string>() }));
 
 vi.mock("server-only", () => ({}));
 
@@ -44,7 +44,16 @@ vi.mock("@/lib/catalog", () => ({
     };
     return slugs.map((slug) => ({
       slug,
-      doses: (doses[slug] ?? []).filter((dose) => !catalog.disabled.has(dose.id)),
+      // `availableQuantity` is what the real catalogue puts on a dose: units on
+      // hand less what in-flight checkouts hold, and NULL when this product's
+      // inventory is not tracked at all (which means unlimited, not none).
+      doses: (doses[slug] ?? [])
+        .filter((dose) => !catalog.disabled.has(dose.id))
+        .map((dose) => ({
+          ...dose,
+          availableQuantity: catalog.available.has(dose.id) ? catalog.available.get(dose.id) : 29,
+          stockStatus: catalog.status.get(dose.id) ?? "In Stock",
+        })),
     }));
   },
 }));
@@ -122,6 +131,8 @@ beforeEach(() => {
   db.rows = [];
   db.updates = 0;
   catalog.disabled = new Set();
+  catalog.available = new Map();
+  catalog.status = new Map();
 });
 
 describe("recording the dose a winner chose", () => {
@@ -258,6 +269,40 @@ describe("the doses offered to the customer", () => {
     catalog.disabled = new Set(["v-20"]);
     const rungs = await availableDoseRungs(glp1);
     expect(rungs.map((rung) => rung.label)).toEqual(["5mg", "10mg", "30mg"]);
+  });
+
+  it("drops a rung that has sold out, for the same reason", async () => {
+    // FOUND BY AUDIT, not by a customer, and the copy claimed otherwise: the
+    // filter read enabled-ness only, so a winner could pick GLP-1 30mg the
+    // moment it sold out and carry a prize to a till that had nothing to give
+    // them. A retired rung and an empty shelf are the same thing to a shopper.
+    catalog.available.set("v-30", 0);
+    const rungs = await availableDoseRungs(glp1);
+    expect(rungs.map((rung) => rung.label)).toEqual(["5mg", "10mg", "20mg"]);
+  });
+
+  it("drops a rung the shelf says is gone even while units remain on it", async () => {
+    // stock_status is STORED, not derived: a dose can read "Out of Stock" with
+    // inventory_quantity still positive, and quote-order withholds on exactly
+    // that. Counting units alone let this case through — caught by an
+    // adversarial re-read of the first fix, not by the first fix.
+    catalog.status.set("v-20", "Out of Stock");
+    const rungs = await availableDoseRungs(glp1);
+    expect(rungs.map((rung) => rung.label)).toEqual(["5mg", "10mg", "30mg"]);
+  });
+
+  it("drops a rung held by somebody else's checkout, as the till does", async () => {
+    catalog.status.set("v-10", "Reserved");
+    const rungs = await availableDoseRungs(glp1);
+    expect(rungs.map((rung) => rung.label)).not.toContain("10mg");
+  });
+
+  it("keeps a rung whose stock is simply not tracked", async () => {
+    // NULL is "no shelf to count", not "an empty shelf". Reading it as sold
+    // out would silently hide every rung of an untracked product.
+    catalog.available.set("v-10", null);
+    const rungs = await availableDoseRungs(glp1);
+    expect(rungs.map((rung) => rung.label)).toContain("10mg");
   });
 
   it("offers nothing for a single-dose prize", async () => {

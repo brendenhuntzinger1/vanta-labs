@@ -100,3 +100,25 @@ describe("it is a statement, not an ask", () => {
     expect(BAR).toContain('offer.rewardKind === "free_product" ? `free ${offer.rewardName}`');
   });
 });
+
+describe("what it says when the till has not answered", () => {
+  // THE FALLBACK IS NOT A SECOND OPINION, IT IS A GAP. offer-quote.ts stores a
+  // quote only on `response.ok && data.ok`, so a 500, a cut connection or the
+  // first paint leave `offerQuote` null. The gross arithmetic then reads two
+  // $119.99 vials against a $200 floor as "over it" — and the bar printed
+  // "is applied at checkout" for a reward the till was about to withdraw.
+  //
+  // That is the exact false success the server figure was added to prevent, so
+  // it must not come back through the fallback. The fallback keeps the FIGURE
+  // (better than a blank) and loses the CLAIM.
+  const OWNERS = [
+    ["the storefront prize bar", BAR],
+    ["the cart drawer", readFileSync(join(SRC, "components", "cart-drawer.tsx"), "utf8")],
+  ] as const;
+
+  for (const [name, source] of OWNERS) {
+    it(`${name} says "applied" only on the server's own answer`, () => {
+      expect(source).toContain("const offerApplied = serverShortfall !== null && serverShortfall <= 0;");
+    });
+  }
+});

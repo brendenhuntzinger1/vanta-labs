@@ -171,24 +171,6 @@ export function CartDrawer() {
     return () => { cancelled = true; };
   }, [signedIn, emailGrant]);
 
-  const offerShortfall = pendingOffer
-    ? Math.max(0, pendingOffer.minSubtotalCents / 100 - subtotal)
-    : 0;
-
-  // A GIFT THAT ALREADY WAIVES SHIPPING MAKES THE PROGRESS BAR A LIE.
-  //
-  // Caught in a 390px screenshot: the drawer said "You are $131.00 away from
-  // FREE SHIPPING" directly above a banner saying free shipping was already
-  // applied. Both were individually true — the bar measures the STORE threshold
-  // and knows nothing about offers — and together they are the kind of
-  // contradiction a customer reads as a broken cart.
-  //
-  // Suppressed only once the gift actually applies, i.e. its own minimum is
-  // met; below that the shopper genuinely still has the store threshold to
-  // chase and the bar is the honest thing to show.
-  const offerCoversShipping = Boolean(pendingOffer)
-    && pendingOffer!.rewardKind.startsWith("free_shipping")
-    && offerShortfall <= 0;
 
   // WHAT THIS CART ACTUALLY COSTS, ACCORDING TO THE THING THAT CHARGES FOR IT.
   //
@@ -208,6 +190,45 @@ export function CartDrawer() {
     referralCode,
     shippingProtection: shippingProtectionEnabled,
   });
+
+  // HOW FAR THIS BASKET IS FROM THE GIFT'S FLOOR — ACCORDING TO THE SERVER.
+  //
+  // Measured against the gross basket this was wrong for exactly the shopper
+  // most likely to see it: one who is also BUYING the prize product. The
+  // reward absorbs one of those units, so the qualifying subtotal is the
+  // basket less the absorbed vial. Two KLOW at $227.98 against a $200 floor
+  // read as "over it" here and "$80.01 short" at the checkout, and the drawer
+  // said "Free KLOW — applied at checkout" over a gift the till then withheld.
+  //
+  // quoteOrder answers it from the pass that will charge; the gross figure is
+  // kept only as the first-paint fallback, before any quote has returned.
+  const serverShortfall = typeof offerQuote?.offerShortfallCents === "number"
+    ? offerQuote.offerShortfallCents / 100
+    : null;
+  const offerShortfall = serverShortfall ?? (pendingOffer
+    ? Math.max(0, pendingOffer.minSubtotalCents / 100 - subtotal)
+    : 0);
+  // "APPLIED" IS THE SERVER'S WORD. With no quote — a 500, a cut connection,
+  // the first paint — the gross fallback reads two $119.99 vials against a
+  // $200 floor as "over it", and the banner would announce a gift the till is
+  // about to withdraw. The figure is worth keeping while a quote is in flight;
+  // the claim is not.
+  const offerApplied = serverShortfall !== null && serverShortfall <= 0;
+
+  // A GIFT THAT ALREADY WAIVES SHIPPING MAKES THE PROGRESS BAR A LIE.
+  //
+  // Caught in a 390px screenshot: the drawer said "You are $131.00 away from
+  // FREE SHIPPING" directly above a banner saying free shipping was already
+  // applied. Both were individually true — the bar measures the STORE threshold
+  // and knows nothing about offers — and together they are the kind of
+  // contradiction a customer reads as a broken cart.
+  //
+  // Suppressed only once the gift actually applies, i.e. its own minimum is
+  // met; below that the shopper genuinely still has the store threshold to
+  // chase and the bar is the honest thing to show.
+  const offerCoversShipping = Boolean(pendingOffer)
+    && pendingOffer!.rewardKind.startsWith("free_shipping")
+    && offerShortfall <= 0;
 
   // The server's answer wins wherever it has one. Falling back rather than
   // blanking matters: a preview one request behind should show the previous
@@ -534,14 +555,14 @@ export function CartDrawer() {
                 <div
                   data-testid="offer-banner"
                   className={`rounded-2xl border p-4 ${
-                    offerShortfall > 0
-                      ? "border-white/[0.06] bg-white/[0.02]"
-                      : "border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.06]"
+                    offerApplied
+                      ? "border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.06]"
+                      : "border-white/[0.06] bg-white/[0.02]"
                   }`}
                 >
-                  {offerShortfall > 0 ? (
+                  {!offerApplied ? (
                     <p className="text-sm text-zinc-300">
-                      Add{" "}
+                      {offerShortfall > 0 ? (<>Add{" "}
                       <span className="font-semibold text-[color:var(--accent-gold)]">
                         ${offerShortfall.toFixed(2)}
                       </span>{" "}
@@ -552,7 +573,15 @@ export function CartDrawer() {
                           "your free Free shipping + 15% off". */}
                       {pendingOffer.rewardKind === "free_product"
                         ? `free ${pendingOffer.rewardName}`
-                        : pendingOffer.rewardName.toLowerCase()}.
+                        : pendingOffer.rewardName.toLowerCase()}.</>) : (
+                        // No answer from the till yet. Name the gift, promise
+                        // nothing about this basket.
+                        <>Your{" "}
+                          {pendingOffer.rewardKind === "free_product"
+                            ? `free ${pendingOffer.rewardName}`
+                            : pendingOffer.rewardName.toLowerCase()}{" "}
+                          is waiting.</>
+                      )}
                     </p>
                   ) : (
                     <>

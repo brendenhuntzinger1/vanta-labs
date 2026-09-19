@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { formatMoneyFromCents as formatCents } from "@/lib/spin/disclosure";
+import { REQUEST_TIMEOUT_MS, timeoutSignal } from "@/lib/request-timeout";
 
 export type WheelSlice = {
   id: string;
@@ -213,6 +214,7 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
     try {
       const response = await fetch("/api/spin/dose", {
         method: "POST",
+        signal: timeoutSignal(REQUEST_TIMEOUT_MS),
         headers: { "Content-Type": "application/json" },
         // THE LINK TRAVELS WITH THE CHOICE, because most winners are
         // anonymous: the wheel is mailed, and an email-link grant carries a
@@ -315,6 +317,10 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
     try {
       const response = await fetch("/api/spin", {
         method: "POST",
+        // A HANG IS THE ONE FAILURE THE CATCH BELOW CANNOT REACH. Without a
+        // deadline a held-open socket leaves "Spinning…" disabled for the life
+        // of the page; with one it becomes the error this already handles.
+        signal: timeoutSignal(REQUEST_TIMEOUT_MS),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token }),
       });
