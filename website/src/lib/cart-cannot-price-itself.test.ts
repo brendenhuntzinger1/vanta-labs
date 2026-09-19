@@ -90,7 +90,45 @@ describe("the one way an order acquires a $0 line", () => {
     // The row is fetched by token AND address together, so the reward the quote
     // prices is the one that address owns. A forwarded link quotes nothing for
     // the person holding it.
-    expect(QUOTE).toContain("await peekCustomerOffer({ token: input.offerToken, email: input.customer.email ?? \"\" })");
+    //
+    // THIS USED TO PIN THE CALL AS A LITERAL, reading `email:
+    // input.customer.email ?? ""` off the source. The address moved into a
+    // named value on 2026-09-19 (see `offerEmail`), so the literal no longer
+    // matches — but the literal was never the property. The property is that
+    // BOTH arguments are present and both are server-derived, and that is what
+    // is asserted now.
+    const peek = QUOTE.slice(QUOTE.indexOf("await peekCustomerOffer({"));
+    expect(peek.slice(0, 160), "the offer must still be fetched by its token").toContain("token: input.offerToken");
+    expect(peek.slice(0, 160), "an offer fetched without an address is one anybody can spend")
+      .toContain("email: offerAddress");
+    // And the address is derived, not accepted: either the express lane's one
+    // named address or the contact this quote is already pricing for.
+    expect(QUOTE).toContain('const offerAddress = String(input.offerEmail ?? input.customer.email ?? "");');
+  });
+
+  it("never lets the CLIENT name the address that owns a prize", () => {
+    // `offerEmail` was added for the express lane and is the one input that
+    // could, if wired carelessly, let a request nominate whose prize to spend.
+    // It has exactly two call sites and both read a server value: the session
+    // route from the verified session, and the authorize route from the frozen
+    // intent row. A body field reaching this would be the whole store's worst
+    // bug, so it is pinned here rather than left to review.
+    const SESSION = withoutComments(read("src/app/api/checkout/express/session/route.ts"));
+    const AUTHORIZE = withoutComments(read("src/app/api/checkout/express/authorize/route.ts"));
+
+    expect(SESSION, "the sheet must name the VERIFIED session's address").toContain("offerEmail: customerEmail,");
+    expect(SESSION).toContain('const customerEmail = isCustomer ? (authenticatedUser!.email ?? "").trim().toLowerCase() : "";');
+
+    expect(AUTHORIZE, "the charge must name the frozen intent's address")
+      .toContain('offerEmail: intent.customer_email ?? "",');
+
+    // Nothing anywhere reads it off a request body.
+    for (const source of [SESSION, AUTHORIZE]) {
+      expect(source).not.toMatch(/offerEmail:\s*body\./);
+      expect(source).not.toMatch(/offerEmail:\s*walletContact/);
+    }
+    // The card lane does not set it at all, so its behaviour is unchanged.
+    expect(withoutComments(CREATE_SESSION)).not.toContain("offerEmail:");
   });
 
   it("still refuses the gift below its own minimum, server-side", () => {

@@ -233,6 +233,27 @@ export async function POST(request: Request) {
     // every other checkout call, and adding it to the frozen snapshot would be
     // a production migration for a value the browser already presents.
     offerToken: readOfferCookie(request) ?? undefined,
+    // THE ONE ADDRESS THAT OWNS THE PRIZE, on BOTH quotes below.
+    //
+    // It is the intent's email — the account the sheet was armed for — and
+    // deliberately NOT walletContact.email. Left to the customer object, the
+    // address-less quote would resolve the offer against the intent's address
+    // and the full quote against Apple's, and the order is built from the
+    // first while the reservation is driven by the second: a guest had the
+    // prize consumed against an order that carried no vial, and a signed-in
+    // shopper whose Apple address differed had the vial shipped with the token
+    // never spent. Both directions are pinned in
+    // express-checkout-quote-parity.test.ts.
+    //
+    // session/route.ts refuses to arm express for a shopper who holds a prize
+    // with no session, so this is never empty while an offer is in play.
+    // ALWAYS GIVEN, never left to the fallback. "" is a real answer here —
+    // it means "this lane knows of no address that owns a prize", and
+    // peekCustomerOffer refuses an empty address, so the gift is withheld
+    // from BOTH quotes together. Passing undefined would let quoteOrder fall
+    // back to customer.email, which is the wallet contact, which is exactly
+    // the divergence this field exists to end.
+    offerEmail: intent.customer_email ?? "",
     customerUserId: intent.customer_user_id ?? undefined,
     pointsToRedeem: 0,
     shippingProtection: intent.shipping_protection,
@@ -303,7 +324,16 @@ export async function POST(request: Request) {
     const reserved = await reserveCustomerOffer({
       token: quoteFull.appliedOffer.token,
       orderId: claimed.order_id,
-      email: customer.email,
+      // THE SAME ADDRESS THE QUOTES RESOLVED IT AGAINST, not the wallet
+      // contact's. Reserving against a different address than the one the gift
+      // was priced for is the divergence this lane was shut for: the reserve
+      // would refuse a prize the order already carries (vial shipped, token
+      // unspent) or take one the order does not (charged full price, token
+      // spent). The binding is still enforced — customer_offer_reserve
+      // re-checks it under its own lock — and this address is one the shopper
+      // holds a verified session for, which is a stronger claim than a string
+      // Apple handed us.
+      email: intent.customer_email ?? "",
       // A wallet charge settles in seconds, so this lane takes the card lane's
       // short hold rather than the manual one.
       holdSeconds: CLAIM_HOLD_SECONDS,

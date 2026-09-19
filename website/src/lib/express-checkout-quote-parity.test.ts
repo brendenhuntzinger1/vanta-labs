@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultBxgyPromotions } from "@/lib/bxgy-config";
 import type { BxgyPromotion } from "@/lib/bxgy-engine";
@@ -539,74 +542,151 @@ describe("the reward beside the store's other discounts", () => {
   });
 });
 
-describe("the email the express lane resolves the prize against", () => {
-  // THE THREE-EMAIL PROBLEM, which is what makes this lane different from the
+describe("the ONE address the express lane resolves the prize against", () => {
+  // THE THREE-EMAIL PROBLEM, which is what made this lane different from the
   // card lane rather than merely a second copy of it.
   //
   // The card lane has ONE email: the shopper typed it, the quote resolves the
   // offer against it, and reserveCustomerOffer binds against the same value.
-  // Express has three chances to disagree:
+  // Express had three chances to disagree — the intent's address (empty for a
+  // guest), the wallet contact's address on the order-building quote, and the
+  // wallet contact's again on the reservation — and peekCustomerOffer refuses
+  // an empty address and refuses a mismatched one, so they DID disagree, in
+  // both directions and both expensive.
   //
-  //   session + quoteA   `intent.customer_email` — the signed-in account's
-  //                      address, and EMPTY STRING for a guest, because a
-  //                      guest has typed nothing when the sheet is armed;
-  //   quoteFull          the wallet contact's email, which is whatever address
-  //                      the shopper has on file with Apple;
-  //   the reserve        the wallet contact's email again.
-  //
-  // peekCustomerOffer refuses an empty email and refuses a mismatched one, so
-  // these three can and do resolve to different answers for the same cart.
-  // Both directions cost a customer something, so both are pinned here.
+  // The fix is `offerEmail`: express names one address and passes it to every
+  // quote it takes and to the reservation. These tests drive the real
+  // quoteOrder the way the two routes now call it.
 
-  async function expressQuotes(sheetEmail: string, walletEmail: string, items: Cart, offerToken?: string) {
+  /** Quote the way express does: one offer address, whatever the wallet says. */
+  async function expressQuotes(opts: {
+    offerEmail: string | undefined;
+    walletEmail: string;
+    items: Cart;
+    offerToken?: string;
+  }) {
     const { quoteOrder } = await import("@/lib/quote-order");
-    const inputs = { items, offerToken, pointsToRedeem: 0 as const };
-    const quoteA = await quoteOrder({
+    const inputs = {
+      items: opts.items,
+      offerToken: opts.offerToken,
+      offerEmail: opts.offerEmail,
+      pointsToRedeem: 0 as const,
+    };
+    const sheet = await quoteOrder({
       ...inputs,
-      customer: { ...SHEET_CUSTOMER, email: sheetEmail },
+      customer: { ...SHEET_CUSTOMER, email: opts.offerEmail ?? "" },
       mode: "address_optional",
     });
-    const quoteFull = await quoteOrder({
+    const charge = await quoteOrder({
       ...inputs,
-      customer: { ...CUSTOMER, email: walletEmail },
+      customer: { ...CUSTOMER, email: opts.walletEmail },
       mode: "full",
     });
-    return { quoteA, quoteFull };
+    return { sheet, charge };
   }
 
-  it("a GUEST's sheet and their order must not disagree about the prize", async () => {
-    // A guest has no `intent.customer_email`, so quoteA prices no gift; the
-    // wallet then hands back the very address the prize was mailed to, and
-    // quoteFull prices one. The order row and its items are built from quoteA
-    // — so the customer is charged full price and receives no vial — while
-    // `quoteFull.appliedOffer` is what triggers reserveCustomerOffer, so the
-    // prize is CONSUMED. Strictly worse than the bug this work set out to fix,
-    // which at least left the token spendable.
+  it("a wallet address that differs from the account does NOT change the prize", async () => {
+    // The signed-in case, and the commonest one in life: the shopper's Apple
+    // ID email is not the address they created the account with. Before
+    // offerEmail the sheet priced the gift and the order-building quote
+    // withheld it, so the vial shipped and the token was never spent — the
+    // same customer could collect it again tomorrow.
     offerState.row = offer();
-    const { quoteA, quoteFull } = await expressQuotes("", CUSTOMER.email, [{ id: "peptide-b", quantity: 3 }], TOKEN);
-    expect(
-      Boolean(quoteFull.appliedOffer),
-      "the order-building quote granted a prize the wallet sheet never priced",
-    ).toBe(Boolean(quoteA.appliedOffer));
+    const { sheet, charge } = await expressQuotes({
+      offerEmail: CUSTOMER.email,
+      walletEmail: "apple-id@icloud.test",
+      items: [{ id: "peptide-b", quantity: 3 }],
+      offerToken: TOKEN,
+    });
+    expect(charge.appliedOffer?.rewardKind, "the order lost a prize the sheet priced").toBe("free_product");
+    expect(rewardShape(charge)).toEqual(rewardShape(sheet));
+    expect(rewardShape(charge).giftLines).toHaveLength(1);
   });
 
-  it("a SIGNED-IN shopper paying from a different Apple address must not disagree either", async () => {
-    // The mirror image. The account holds the prize, so the sheet is priced
-    // with the gift; the wallet contact is a different address, so quoteFull
-    // withholds it and nothing reserves the token. The order is written from
-    // quoteA — free vial included — and the prize stays spendable, so the same
-    // customer can collect it again tomorrow.
-    offerState.row = offer();
-    const { quoteA, quoteFull } = await expressQuotes(
-      CUSTOMER.email,
-      "apple-id@icloud.test",
-      [{ id: "peptide-b", quantity: 3 }],
-      TOKEN,
+  it("and the reservation is driven by that same address, so the token is actually spent", async () => {
+    // The half a quote cannot show. quoteFull.appliedOffer is what triggers
+    // reserveCustomerOffer in authorize/route.ts, and the route passes
+    // intent.customer_email to it rather than the wallet contact — so the
+    // address that PRICED the gift is the address that CONSUMES it.
+    const AUTHORIZE = readFileSync(
+      join(process.cwd(), "src", "app", "api", "checkout", "express", "authorize", "route.ts"),
+      "utf8",
     );
-    expect(
-      Boolean(quoteFull.appliedOffer),
-      "the wallet sheet priced a prize the order-building quote refuses to reserve",
-    ).toBe(Boolean(quoteA.appliedOffer));
+    const reserve = AUTHORIZE.slice(AUTHORIZE.indexOf("await reserveCustomerOffer({"));
+    expect(reserve.slice(0, 900), "the reservation still binds against the wallet contact")
+      .toContain('email: intent.customer_email ?? ""');
+    expect(AUTHORIZE, "both quotes must name the one offer address")
+      .toContain('offerEmail: intent.customer_email ?? "",');
+  });
+
+  it("a guest is never armed for express while holding a prize, rather than losing it", async () => {
+    // The guest case has no address to bind to: the sheet is priced before the
+    // shopper types anything. Pricing no gift would charge a winner full price
+    // for a vial they earned; resolving the offer from the token itself would
+    // let a forwarded cookie spend somebody else's prize. So the session route
+    // declines to arm express at all and the ordinary checkout — which asks
+    // for the address and applies the prize properly — carries it instead.
+    //
+    // NOT SILENT, which is the requirement: the button does not render, and
+    // the reason says what to do.
+    const SESSION = readFileSync(
+      join(process.cwd(), "src", "app", "api", "checkout", "express", "session", "route.ts"),
+      "utf8",
+    );
+    // A LIVE prize, not merely a cookie: the cookie outlives the prize by 27
+    // days, so refusing on its presence alone would take express away from a
+    // guest for weeks over a reward that no longer exists.
+    expect(SESSION).toContain("const liveOffer = await readOfferStatus(readOfferCookie(request));");
+    expect(SESSION).toContain("if (liveOffer && !customerEmail) {");
+    const guard = SESSION.slice(SESSION.indexOf("if (liveOffer && !customerEmail) {"));
+    expect(guard.slice(0, 260)).toContain("unavailable(");
+    // And the guard sits BEFORE the quote, so no sheet is ever priced for one.
+    expect(SESSION.indexOf("if (liveOffer && !customerEmail) {"))
+      .toBeLessThan(SESSION.indexOf("quote = await quoteOrder({"));
+  });
+
+  it("with no offer address at all the lane simply prices no gift", async () => {
+    // The guarded-away case, modelled the way the routes actually call it: they
+    // pass "" rather than undefined, deliberately. An empty string is a real
+    // answer — "no address owns a prize here" — and peekCustomerOffer refuses
+    // it, so BOTH quotes withhold together. undefined would fall back to
+    // customer.email, which on the charge quote is the wallet contact, which is
+    // the whole divergence. That is why the routes never pass undefined, and
+    // this test is what stops somebody "tidying" the ?? "" away.
+    offerState.row = offer();
+    const { sheet, charge } = await expressQuotes({
+      offerEmail: "",
+      walletEmail: CUSTOMER.email,
+      items: [{ id: "peptide-b", quantity: 3 }],
+      offerToken: TOKEN,
+    });
+    expect(sheet.appliedOffer).toBeNull();
+    expect(charge.appliedOffer, "the order-building quote resolved a prize the sheet never priced").toBeNull();
+  });
+
+  it("the card lane is untouched: with no offerEmail it still reads the typed address", async () => {
+    // offerEmail is express-only. The card lane passes one email and must keep
+    // resolving the offer from it, or this fix would have moved the bug rather
+    // than closed it.
+    offerState.row = offer();
+    const { quoteOrder } = await import("@/lib/quote-order");
+    const card = await quoteOrder({
+      items: [{ id: "peptide-b", quantity: 3 }],
+      customer: CUSTOMER,
+      offerToken: TOKEN,
+      pointsToRedeem: 0,
+      mode: "full",
+    });
+    expect(card.appliedOffer?.rewardKind).toBe("free_product");
+
+    const wrongAddress = await quoteOrder({
+      items: [{ id: "peptide-b", quantity: 3 }],
+      customer: { ...CUSTOMER, email: "someone.else@example.test" },
+      offerToken: TOKEN,
+      pointsToRedeem: 0,
+      mode: "full",
+    });
+    expect(wrongAddress.appliedOffer, "the card lane stopped enforcing the binding").toBeNull();
   });
 });
 

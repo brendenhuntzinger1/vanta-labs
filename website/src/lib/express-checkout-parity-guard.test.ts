@@ -38,6 +38,18 @@ const REQUIRED_FOR_PARITY: Array<{ route: keyof typeof ROUTES; symbol: string; w
   // still credited to cart recovery rather than filed organic; the express lane
   // must not turn on without it, for the same reason as the two above.
   { route: "authorize", symbol: "readCartRecoveryCookie(", why: "wallet orders must credit the cart-recovery email that produced them" },
+  // Added 2026-09-19, and load-bearing in a way the others are not: without it
+  // the wiring above is present and STILL wrong. The express lane takes its
+  // quotes from two different addresses — the intent's (empty for a guest) and
+  // the wallet contact's — and peekCustomerOffer answers them differently, so
+  // the sheet and the order disagreed about the prize in both directions: a
+  // guest had it consumed against an order that carried no vial, and a
+  // signed-in shopper whose Apple address differed had the vial shipped with
+  // the token never spent. Naming one address on every quote is what makes
+  // "reserveCustomerOffer is called" mean what it looks like it means.
+  { route: "session", symbol: "offerEmail:", why: "the sheet must resolve the prize against the one address the order will" },
+  { route: "authorize", symbol: "offerEmail:", why: "both authorize quotes must resolve the prize against that same address" },
+  { route: "authorize", symbol: 'email: intent.customer_email ?? ""', why: "the reservation must bind the address the quotes priced, not the wallet contact's" },
 ];
 
 /** The route's CODE, with comments removed — a comment that names a symbol is not wiring. */

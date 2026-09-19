@@ -129,6 +129,39 @@ export interface QuoteOrderInput {
    */
   offerToken?: string;
   /**
+   * WHICH ADDRESS OWNS THE PRIZE, when that is not the address being shipped to.
+   *
+   * The card lane never sets this: the shopper types one email, the offer is
+   * resolved against it and the reservation binds against it, and one value
+   * cannot disagree with itself.
+   *
+   * THE EXPRESS LANE HAS THREE CANDIDATES AND THAT WAS THE BUG. It quotes the
+   * wallet sheet from the intent's email (empty for a guest, who has typed
+   * nothing when the sheet is armed) and quotes the ORDER from the wallet
+   * contact's email, which is whatever address the shopper keeps with Apple.
+   * peekCustomerOffer refuses an empty address and refuses a mismatched one, so
+   * the two quotes answered differently for one cart, in both directions:
+   *
+   *   a guest         the sheet priced no gift, the order-building quote priced
+   *                   one, and it is that quote which triggers the reservation
+   *                   — so the prize was consumed while the order carried no
+   *                   free vial and the customer paid full price;
+   *   a signed-in     the account held the prize so the sheet priced it, the
+   *   shopper whose   Apple address did not match so the order-building quote
+   *   Apple email     withheld it and nothing reserved the token — the free
+   *   differs         vial shipped and the prize stayed spendable tomorrow.
+   *
+   * So the express lane passes ONE address here to every quote it takes and to
+   * the reservation, and that address is the authenticated account's. Nothing
+   * about the wallet contact can move it. See express/authorize/route.ts.
+   *
+   * IT GRANTS NOTHING. The reservation re-checks the binding under its own lock
+   * against whatever this names, so passing an address the shopper does not own
+   * would be caught there — and the express lane only ever names an address it
+   * has a verified session for.
+   */
+  offerEmail?: string;
+  /**
    * Which single promotional benefit the shopper chose, when a wheel gift and
    * a first-order welcome code are both in play.
    *
@@ -647,13 +680,20 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // price row for its COGS, a real stock level, and a real dose id, exactly as
   // a bought unit does.
   //
-  // A quote with no known email cannot resolve one at all: the offer is bound
-  // to an address, and the express lane's "address_optional" pass has none yet.
-  // That pass prices the cart WITHOUT the gift, and the full quote at authorize
-  // adds it — which is the safe direction, since the wallet sheet then never
-  // shows a total lower than the one actually charged.
+  // A quote with no known address cannot resolve one at all: the offer is bound
+  // to an address, and there is nothing to match against.
+  //
+  // `offerEmail` WINS WHERE IT IS GIVEN, and only the express lane gives it.
+  // This used to read input.customer.email unconditionally, and the note here
+  // argued that an address-less pass pricing no gift was "the safe direction,
+  // since the wallet sheet then never shows a total lower than the one actually
+  // charged". That was true about the TOTAL and false about the PRIZE: the
+  // order is built from the address-less quote and the reservation is driven by
+  // the full one, so the two disagreeing meant a prize consumed against an
+  // order that never carried it. See the field's own note for both directions.
+  const offerAddress = String(input.offerEmail ?? input.customer.email ?? "");
   const offer: CustomerOffer | null = input.offerToken
-    ? await peekCustomerOffer({ token: input.offerToken, email: input.customer.email ?? "" })
+    ? await peekCustomerOffer({ token: input.offerToken, email: offerAddress })
     : null;
 
   const requestedSlugs = Array.from(new Set([

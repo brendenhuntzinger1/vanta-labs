@@ -24,7 +24,7 @@ import { US_STATE_TAX_TABLE } from "@/lib/sales-tax";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import type { CartItemInput } from "@/lib/payment-types";
 import { customerSafeMessage } from "@/lib/safe-error";
-import { readOfferCookie } from "@/lib/offers/customer-offers";
+import { readOfferCookie, readOfferStatus } from "@/lib/offers/customer-offers";
 
 export const dynamic = "force-dynamic";
 
@@ -117,6 +117,35 @@ export async function POST(request: Request) {
   // authorize re-quotes with the real email and refuses on any disagreement.
   const customerEmail = isCustomer ? (authenticatedUser!.email ?? "").trim().toLowerCase() : "";
 
+  // A PRIZE THIS LANE CANNOT BIND MUST NOT BE SILENTLY DROPPED, AND MUST NOT
+  // BE HALF-HONOURED EITHER.
+  //
+  // The offer is bound to an address, and every quote this lane takes must
+  // resolve it against the SAME one or the sheet and the order disagree (see
+  // quoteOrder's `offerEmail`). The only address express can name with a
+  // verified session behind it is the signed-in account's. A GUEST has typed
+  // nothing when the sheet is armed, so there is no address to bind to — and
+  // the alternatives are both wrong: pricing no gift charges a winner full
+  // price for a vial they had earned, and resolving it from the token itself
+  // would let a forwarded cookie spend somebody else's prize, which is the one
+  // thing the email binding exists to stop.
+  //
+  // So express declines to arm at all, and says so. The button simply does not
+  // render, and the ordinary checkout — which asks for the address and applies
+  // the prize properly — is one tap away and untouched. The reward is not lost,
+  // it is claimed on the lane that can bind it.
+  // A LIVE prize, not merely a cookie. The offer cookie lives 30 days and the
+  // prize inside it lives 72 hours, so for most of a month after a prize has
+  // expired, been redeemed or been revoked the browser is still carrying its
+  // token. Refusing on the cookie alone would take express away from every one
+  // of those guests for weeks over a reward that no longer exists.
+  // readOfferStatus is the same read the storefront banner uses and filters all
+  // three, so this refuses only while there is something real to lose.
+  const liveOffer = await readOfferStatus(readOfferCookie(request));
+  if (liveOffer && !customerEmail) {
+    return unavailable("Sign in to use express checkout with your reward, or continue to checkout.");
+  }
+
   // Price the cart with no address. Any pricing refusal (referral minimum,
   // coupon/referral conflict, profit floor, out of stock, empty cart) hides the
   // button — fail closed BEFORE the sheet rather than mid-authorization.
@@ -145,6 +174,13 @@ export async function POST(request: Request) {
       // existed (create-session/route.ts); the express lane simply never
       // learned to.
       offerToken: readOfferCookie(request) ?? undefined,
+      // The one address this lane resolves the prize against, on every quote
+      // it takes, here and at authorize. Always given, never left to the
+      // fallback: "" means "no address owns a prize here" and withholds the
+      // gift, where undefined would fall back to customer.email and reopen
+      // the sheet/order divergence. The guard above means a guest holding a
+      // prize never reaches this line at all; this is the second lock.
+      offerEmail: customerEmail,
       customerUserId,
       // Points are user-entered at the full checkout; the express lane never
       // redeems them (there is nowhere in an Apple sheet to choose an amount).
