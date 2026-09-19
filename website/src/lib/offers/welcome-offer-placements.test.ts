@@ -128,8 +128,17 @@ describe("one wording, matching the code the store actually mints", () => {
 });
 
 describe("every placement the owner asked for, and no others", () => {
-  it("mounts the bar, the link and the card", () => {
-    expect(CATALOG).toContain('<WelcomeOfferSignup variant="bar" />');
+  it("mounts the link and the card, and NOT a bar on the catalogue", () => {
+    // THE CATALOGUE BAR IS GONE, at the owner's direction, and the reason is
+    // how many asks there were rather than anything wrong with that one. The
+    // same invitation to join the text list appears in the wheel card, under
+    // the purchase controls on a product page, in the cart, at checkout, on
+    // the sign-up form, on /sms and in account settings — a shopper walking
+    // the catalogue met it twice before reaching a product.
+    //
+    // The wheel invitation is the one kept on that page, because it offers
+    // something in exchange. A bar that only asks is the one to drop.
+    expect(CATALOG, "the catalogue bar is back").not.toContain("WelcomeOfferSignup");
     expect(PRODUCT).toContain('<WelcomeOfferSignup variant="link" />');
     expect(CART).toContain('<WelcomeOfferSignup variant="card" />');
   });

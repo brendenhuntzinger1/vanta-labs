@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
+import { AgeGate } from "@/components/age-gate";
 import { HeroVideo } from "@/components/hero-video";
 import { ProductCard } from "@/components/product-card";
 import { ScrollReveal } from "@/components/scroll-reveal";
@@ -104,6 +105,11 @@ export default async function HomePage() {
 
   return (
     <div className="min-h-screen bg-[#0f0f0f] text-white">
+      {/* THE QUESTION THE WALL USED TO ASK BY ACCIDENT. Painted in the
+          browser, after this server render, so Googlebot and the carrier and
+          ad-platform reviewers still receive the whole page — which is the
+          reason "/" is public at all. See components/age-gate.tsx. */}
+      <AgeGate />
       <SiteHeaderV2 />
       <main>
 

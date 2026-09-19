@@ -161,6 +161,11 @@ export async function POST(request: Request) {
         name: line.product.name,
         variantLabel: line.product.variantLabel ?? null,
         quantity: line.quantity,
+        // The actual vial, and the actual price it is free instead of, so the
+        // summary can show the customer WHICH product they won and WHAT it
+        // would have cost rather than a grey placeholder and the word Free.
+        imageUrl: line.giftImageUrl ?? null,
+        listUnitPrice: typeof line.giftListUnitPrice === "number" ? line.giftListUnitPrice : null,
       }));
 
     return NextResponse.json({

@@ -1315,8 +1315,18 @@ export default function CheckoutPage() {
   // creating one.
   const giftProductLines = giftLines.map((line) => (
     <div key={`gift-${line.name}-${line.variantLabel ?? ""}`} className="flex items-start gap-3" data-testid="checkout-gift-line">
-      <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-lg border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.06] text-[10px] uppercase tracking-[0.16em] text-[color:var(--accent-gold)]">
-        Reward
+      {/* THE VIAL THEY WON, not a word in a box. A grey "REWARD" tile beside
+          two real product photos reads as a coupon or a placeholder, and the
+          one thing this line has to communicate is that a specific physical
+          product is coming. The gold ring is what still marks it as the gift. */}
+      <div className="relative h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg border border-[color:var(--accent-gold)]/40 bg-black/40">
+        {line.imageUrl ? (
+          <Image src={line.imageUrl} alt={line.name} fill sizes="56px" className="object-cover" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-[10px] uppercase tracking-[0.16em] text-[color:var(--accent-gold)]">
+            Reward
+          </div>
+        )}
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm text-white">{line.name}</p>
@@ -1325,7 +1335,18 @@ export default function CheckoutPage() {
           Your one-time reward{line.quantity > 1 ? ` × ${line.quantity}` : ""}
         </p>
       </div>
-      <p className="text-sm font-semibold text-[color:var(--accent-gold)] tabular-nums">Free</p>
+      {/* WHAT IT WOULD HAVE COST, STRUCK THROUGH, then Free. "Free" alone
+          states the price and hides the value; the two together are the whole
+          point of the prize. Only when the catalogue actually gave us a
+          number — an invented one would be worse than none. */}
+      <div className="flex-shrink-0 text-right">
+        {typeof line.listUnitPrice === "number" && line.listUnitPrice > 0 ? (
+          <p className="text-xs text-white/35 line-through tabular-nums" data-testid="checkout-gift-was">
+            ${(line.listUnitPrice * line.quantity).toFixed(2)}
+          </p>
+        ) : null}
+        <p className="text-sm font-semibold text-[color:var(--accent-gold)] tabular-nums">Free</p>
+      </div>
     </div>
   ));
 
@@ -1407,9 +1428,11 @@ export default function CheckoutPage() {
 
         <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr] lg:gap-8">
           {/* ---------------- Left column: the form ---------------- */}
-          <div className="space-y-5">
+          {/* Sections sit closer together now: five boxes with 20px between
+              them read as five separate forms rather than one checkout. */}
+          <div className="space-y-3.5">
             <CheckoutSection innerRef={shippingSectionRef} step="01" title="Contact" subtitle="Where we send your receipt and tracking.">
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <TextField
                   label="Email"
                   value={form.email}
@@ -1499,7 +1522,7 @@ export default function CheckoutPage() {
             </CheckoutSection>
 
             <CheckoutSection step="02" title="Shipping address" subtitle="United States and Canada.">
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <TextField
                   label="Full name"
                   value={form.fullName}
@@ -1802,9 +1825,14 @@ export default function CheckoutPage() {
 
             {/* Required confirmations — compact rows, full legal text on demand */}
             <CheckoutSection innerRef={confirmationsRef} step="04" title="Required confirmations" subtitle="Both are required to place a research order. Untick either one to withhold it.">
-              <div className="overflow-hidden rounded-xl border border-white/[0.06]">
-                <div className="flex items-center justify-between bg-white/[0.02] px-4 py-2.5">
-                  <span className="text-[11px] text-white/40">Confirm to continue</span>
+              {/* NO BOX INSIDE THE BOX. This panel had its own border and its
+                  own header row inside a section that already has both, so the
+                  two required ticks were three frames deep. The rows keep their
+                  dividers — that is what makes them a list — and lose the
+                  outer frame and the duplicate "Confirm to continue" label,
+                  which the section's own subtitle already says. */}
+              <div className="overflow-hidden rounded-xl">
+                <div className="flex items-center justify-end pb-2">
                   <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums ${allAcknowledged ? "bg-[color:var(--accent-gold)]/20 text-[color:var(--accent-gold-strong)]" : "bg-white/[0.06] text-white/50"}`}>
                     {acknowledgedCount} of {REQUIRED_CONFIRMATIONS.length}
                   </span>

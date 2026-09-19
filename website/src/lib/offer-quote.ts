@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // ---------------------------------------------------------------------------
 // THE SERVER'S OWN NUMBERS, FOR A CART THAT HOLDS A ONE-TIME OFFER.
@@ -19,6 +19,10 @@ export interface OfferQuoteLine {
   name: string;
   variantLabel: string | null;
   quantity: number;
+  /** The gift's own product photo; null when the catalogue has none yet. */
+  imageUrl?: string | null;
+  /** What one unit would have cost. Null when it could not be resolved. */
+  listUnitPrice?: number | null;
 }
 
 export interface OfferQuote {
@@ -131,6 +135,9 @@ export function useOfferQuote(input: UseOfferQuoteInput): OfferQuote | null {
     })
     : "";
 
+  // True until the first request of this mount has been scheduled.
+  const firstQuote = useRef(true);
+
   useEffect(() => {
     if (!signature) return;
     let cancelled = false;
@@ -138,6 +145,14 @@ export function useOfferQuote(input: UseOfferQuoteInput): OfferQuote | null {
 
     // Debounced: typing a state or nudging a quantity should cost one request
     // when the shopper stops, not one per keystroke.
+    //
+    // EXCEPT THE FIRST ONE. The debounce exists for keystrokes, and the first
+    // quote of a page load is not a keystroke — it is the summary's opening
+    // state. Waiting on it is why a customer who had won a free vial watched
+    // the summary render without their prize and then saw it appear a moment
+    // later, which reads as the store changing its mind. There is nothing to
+    // coalesce yet, so the first request goes immediately and every later one
+    // still waits for them to stop typing.
     const timer = setTimeout(() => {
       fetch("/api/checkout/quote", {
         method: "POST",
@@ -157,7 +172,8 @@ export function useOfferQuote(input: UseOfferQuoteInput): OfferQuote | null {
         })
         // A preview is never worth a console error or a broken summary.
         .catch(() => {});
-    }, 250);
+    }, firstQuote.current ? 0 : 250);
+    firstQuote.current = false;
 
     return () => {
       cancelled = true;

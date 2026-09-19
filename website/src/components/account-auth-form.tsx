@@ -10,6 +10,7 @@ import { resolveSignupOutcome, SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-sig
 import { deadAuthLinkMessage, readOAuthCallbackFragment, type OAuthCallbackReturn } from "@/lib/auth-link-fragment";
 import { safeInternalPath } from "@/lib/internal-path";
 import { signInFailureMessage } from "@/lib/sign-in-failure-message";
+import { AGE_ATTESTATION_TEXT, RESEARCH_USE_ATTESTATION_TEXT } from "@/lib/attestation-text";
 import {
   hasAnyOAuthProvider,
   isAppleSignInEnabled,
@@ -1423,26 +1424,41 @@ export function AccountAuthForm() {
       </div>
 
       {mode === "signup" ? (
-        <div className="mt-5 space-y-2.5">
-          <label className="flex cursor-pointer items-start gap-3 rounded-[14px] border border-white/[0.07] bg-white/[0.02] px-4 py-3.5 text-[0.875rem] leading-6 text-white/75 transition-colors duration-200 hover:border-white/[0.12]">
+        /* TWO GROUPS, NOT SEVEN STACKED CARDS.
+         *
+         * Everything below is required reading and none of it may be cut — the
+         * two attestations are representations a person makes, and the SMS
+         * block is the consent record a carrier reviews. What CAN change is
+         * how much room it takes: the same words at a tighter rhythm, under
+         * two headings that say which half is compulsory and which is not, so
+         * a shopper can see at a glance that only the first two boxes stand
+         * between them and an account. Spacing and type scale only. */
+        <div className="mt-5 space-y-4">
+          <fieldset className="space-y-1.5">
+            <legend className="mb-1.5 text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-white/35">Required</legend>
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-[11px] border border-white/[0.07] bg-white/[0.02] px-3 py-2.5 text-[0.8125rem] leading-[1.15rem] text-white/75 transition-colors duration-200 hover:border-white/[0.12]">
             <input
               type="checkbox"
               checked={ageConfirmed}
               onChange={(event) => setAgeConfirmed(event.target.checked)}
               className="vl-auth-check mt-0.5"
             />
-            <span>I confirm that I am at least 21 years old.</span>
+            <span>{AGE_ATTESTATION_TEXT}</span>
           </label>
-          <label className="flex cursor-pointer items-start gap-3 rounded-[14px] border border-white/[0.07] bg-white/[0.02] px-4 py-3.5 text-[0.875rem] leading-6 text-white/75 transition-colors duration-200 hover:border-white/[0.12]">
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-[11px] border border-white/[0.07] bg-white/[0.02] px-3 py-2.5 text-[0.8125rem] leading-[1.15rem] text-white/75 transition-colors duration-200 hover:border-white/[0.12]">
             <input
               type="checkbox"
               checked={researchUseAgreed}
               onChange={(event) => setResearchUseAgreed(event.target.checked)}
               className="vl-auth-check mt-0.5"
             />
-            <span>I agree and understand that the products on this site are intended strictly for laboratory research use only, and not for human or animal consumption.</span>
+            <span>{RESEARCH_USE_ATTESTATION_TEXT}</span>
           </label>
-          <label className="flex cursor-pointer items-start gap-3 rounded-[14px] border border-white/[0.07] bg-white/[0.02] px-4 py-3.5 text-[0.875rem] leading-6 text-white/75 transition-colors duration-200 hover:border-white/[0.12]">
+          </fieldset>
+
+          <fieldset className="space-y-1.5">
+            <legend className="mb-1.5 text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-white/35">Optional — you can skip all of this</legend>
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-[11px] border border-white/[0.07] bg-white/[0.02] px-3 py-2.5 text-[0.8125rem] leading-[1.15rem] text-white/75 transition-colors duration-200 hover:border-white/[0.12]">
             <input
               type="checkbox"
               checked={marketingOptIn}
@@ -1473,7 +1489,7 @@ export function AccountAuthForm() {
               are untouched — they are what was submitted for review, and they
               are not ours to edit. */}
           <label className="block">
-            <span className="mb-2 block text-[0.8125rem] font-medium text-white/70">Mobile number <span className="text-white/40">(optional, for texts)</span></span>
+            <span className="mb-1.5 block text-[0.75rem] font-medium text-white/60">Mobile number <span className="text-white/35">(optional, for texts)</span></span>
             <input
               type="tel"
               inputMode="tel"
@@ -1485,7 +1501,7 @@ export function AccountAuthForm() {
               data-testid="signup-sms-phone"
             />
           </label>
-          <label className="flex cursor-pointer items-start gap-3 rounded-[14px] border border-white/[0.07] bg-white/[0.02] px-4 py-3.5 text-[0.875rem] leading-6 text-white/75 transition-colors duration-200 hover:border-white/[0.12]">
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-[11px] border border-white/[0.07] bg-white/[0.02] px-3 py-2.5 text-[0.8125rem] leading-[1.15rem] text-white/75 transition-colors duration-200 hover:border-white/[0.12]">
             <input
               type="checkbox"
               checked={smsOptIn}
@@ -1496,11 +1512,12 @@ export function AccountAuthForm() {
             />
             <span>{SMS_CONSENT_TEXT} <span className="text-white/40">Optional.</span></span>
           </label>
-          <p id="signup-sms-disclosure" className="px-1 text-[0.75rem] leading-5 text-white/40">
+          <p id="signup-sms-disclosure" className="px-1 text-[0.7rem] leading-[1.05rem] text-white/40">
             {SMS_DISCLOSURE_TEXT}{" "}
             <a href="/legal/terms" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-white/70">Terms</a> and{" "}
             <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-white/70">Privacy Policy</a>.
           </p>
+          </fieldset>
         </div>
       ) : null}
 
@@ -1585,7 +1602,7 @@ export function AccountAuthForm() {
                   onChange={(event) => setAgeConfirmed(event.target.checked)}
                   className="vl-auth-check mt-0.5"
                 />
-                <span>I confirm that I am at least 21 years old.</span>
+                <span>{AGE_ATTESTATION_TEXT}</span>
               </label>
               <label className="flex cursor-pointer items-start gap-3 rounded-[14px] border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[0.8125rem] leading-6 text-white/70 transition-colors duration-200 hover:border-white/[0.12]">
                 <input

@@ -171,15 +171,21 @@ export function CheckoutSection({
   innerRef?: React.Ref<HTMLElement>;
 }) {
   return (
-    <section ref={innerRef} className="rounded-2xl border border-white/[0.06] bg-white/[0.015] p-5 sm:p-6">
-      <div className="flex items-baseline gap-3">
+    /* TIGHTER, AND THE HEADING SITS ON ONE LINE.
+     *
+     * The checkout read as a column of large boxes with a lot of air in each,
+     * and the step number, title and subtitle took three lines of vertical
+     * space before the first field. Nothing is removed — the padding, the type
+     * scale and the gap above the fields are smaller, and the subtitle now
+     * trails the title instead of sitting under it, which is where a shopper
+     * reads it anyway. */
+    <section ref={innerRef} className="rounded-2xl border border-white/[0.06] bg-white/[0.015] p-4 sm:p-5">
+      <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
         <span className="text-[11px] font-semibold tabular-nums text-[color:var(--accent-gold)]/70">{step}</span>
-        <div>
-          <h2 className="text-base font-semibold tracking-tight text-white sm:text-lg">{title}</h2>
-          {subtitle ? <p className="mt-0.5 text-xs text-white/40">{subtitle}</p> : null}
-        </div>
+        <h2 className="text-[0.95rem] font-semibold tracking-tight text-white sm:text-base">{title}</h2>
+        {subtitle ? <p className="text-[0.7rem] text-white/35">{subtitle}</p> : null}
       </div>
-      <div className="mt-5">{children}</div>
+      <div className="mt-3.5">{children}</div>
     </section>
   );
 }

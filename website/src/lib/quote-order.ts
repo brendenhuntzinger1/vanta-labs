@@ -180,6 +180,21 @@ export interface QuoteOrderLine {
    * see it, because it ships.
    */
   gift?: true;
+  /**
+   * What this gift's vial looks like, and what it would have cost.
+   *
+   * The gift line's `price` is forced to 0 — it is not a discount on a real
+   * price, it IS the price — so by the time a summary renders it there is
+   * nothing left to show the customer the value of what they won, and nothing
+   * to show them WHICH vial it is. Both are carried here, beside the zero,
+   * rather than recovered by a second catalogue read in every caller.
+   *
+   * Set only on a gift line. `giftListUnitPrice` is the dose's own retail, so
+   * a laddered prize shows the rung the customer chose rather than the
+   * product's entry price.
+   */
+  giftImageUrl?: string | null;
+  giftListUnitPrice?: number;
 }
 
 export interface ValidatedReferral {
@@ -1153,6 +1168,15 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
           // was never "discounted" from anything.
           baseUnitPrice: 0,
           gift: true,
+          // The real vial, and the real price it is free INSTEAD of. Read from
+          // the chosen dose first: a laddered prize is worth what that rung
+          // costs, not what the entry rung costs.
+          giftImageUrl: offerDose?.imageUrl || offerProduct.coverImage || offerProduct.image || null,
+          // Sale price first where there is one: the number struck through has
+          // to be what this shopper would actually have paid.
+          giftListUnitPrice: offerDose
+            ? parseProductPrice(offerDose.salePrice ?? offerDose.price)
+            : parseProductPrice(offerProduct.salePrice ?? offerProduct.price),
         });
         const name = offerDose?.label ? `${offerProduct.name} (${offerDose.label})` : offerProduct.name;
         // One unit keeps the wording every existing receipt and email uses.

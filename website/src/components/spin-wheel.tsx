@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { formatMoneyFromCents as formatCents } from "@/lib/spin/disclosure";
+import { wedgeLabelGeometry, wedgePath } from "@/lib/spin/wheel-geometry";
 import { REQUEST_TIMEOUT_MS, timeoutSignal } from "@/lib/request-timeout";
 
 export type WheelSlice = {
@@ -769,28 +770,8 @@ function restingRotation(index: number, wedgeAngle: number): number {
  *
  * Exported because that test needs it; the component is the only caller.
  */
-export function wedgeLabelGeometry(index: number, wedgeAngle: number): {
-  x: string;
-  rotate: number;
-  textAnchor: "start" | "end";
-} {
-  const angle = (((index * wedgeAngle + wedgeAngle / 2 - 90) % 360) + 360) % 360;
-  const flipped = angle > 90 && angle < 270;
-  return {
-    x: flipped ? "19" : "201",
-    rotate: flipped ? angle + 180 : angle,
-    textAnchor: flipped ? "start" : "end",
-  };
-}
 
-/** One wedge as an SVG path, drawn clockwise from twelve o'clock. */
-function wedgePath(index: number, wedgeAngle: number): string {
-  const start = index * wedgeAngle - 90;
-  const end = start + wedgeAngle;
-  const radius = 96;
-  const toPoint = (degrees: number) => {
-    const radians = (degrees * Math.PI) / 180;
-    return `${(110 + radius * Math.cos(radians)).toFixed(3)} ${(110 + radius * Math.sin(radians)).toFixed(3)}`;
-  };
-  return `M 110 110 L ${toPoint(start)} A ${radius} ${radius} 0 0 1 ${toPoint(end)} Z`;
-}
+// Lifted to lib/spin/wheel-geometry.ts so the invitation preview shares it.
+// Re-exported here because that is where the tests and this file have always
+// looked for it.
+export { wedgeLabelGeometry, wedgePath };

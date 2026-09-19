@@ -22,7 +22,8 @@ export const dynamic = "force-dynamic";
  * two must never be confused, and a "premium" flag inside SPIN_PRIZES would
  * eventually be read as one.
  */
-const PREMIUM_PRIZE_IDS = new Set(["klow", "glow"]);
+// Shared with the invitation's preview — see lib/spin/wheel-geometry.ts.
+import { PREMIUM_PRIZE_IDS } from "@/lib/spin/wheel-geometry";
 
 export const metadata: Metadata = {
   title: "Spin to win — Vanta Labs",
