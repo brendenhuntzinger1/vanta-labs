@@ -11,20 +11,25 @@ import {
 /**
  * THE FRONT DOOR'S AGE GATE.
  *
- * WHY IT HAD TO BE BUILT. The wall used to do this job by accident: every
- * unauthenticated request answered 307, so a stranger never saw the home page
- * and never needed asking. Opening "/" (access-policy.ts, "THE FRONT DOOR")
- * was right and is not being undone — with it closed, Twilio's toll-free
- * verification could not validate the business website and this store's SMS
- * programme was refused on that basis repeatedly. But it left a
- * research-peptide storefront's marketing in front of anyone, with nothing
- * asked. This is the thing that was implicit becoming explicit.
+ * WHY IT HAD TO BE BUILT. The access wall used to do this job by accident:
+ * every unauthenticated request answered 307, so a stranger never saw the home
+ * page and never needed asking. "/" is public now (access-policy.ts, "THE
+ * FRONT DOOR") and is not being undone, which left a research-peptide
+ * storefront's marketing in front of anyone with nothing asked. This is the
+ * thing that was implicit becoming explicit.
  *
- * CLIENT-SIDE, AND THAT IS THE POINT. The server still renders the whole page
- * and still serves it to Googlebot, to Twilio's reviewer and to Meta's — the
- * overlay is painted afterwards, in the browser, by a person's own session. So
- * the page remains verifiable and indexable while a human is still asked.
- * Gating it server-side would recreate the exact failure "/" was opened to fix.
+ * IT DETECTS NOTHING, AND MUST NEVER LEARN TO. There is no user-agent read, no
+ * IP check, no header sniff, no bot or crawler heuristic, and no allow-list of
+ * any party — not in this file and not anywhere it reaches. Every visitor gets
+ * the same bytes from the server and the same component in the browser. The
+ * only input to whether the overlay is shown is what THIS browser previously
+ * stored, which is the shopper's own answer and nobody else's. If a future
+ * change wants to vary this by who is asking, that change is wrong.
+ *
+ * CLIENT-SIDE, FOR A PLAIN REASON. The answer lives in localStorage and the
+ * server has none to read, so the server cannot know and must not guess. It
+ * renders the page; the browser paints the question over it. That is ordinary
+ * client-side UX, and it is the same for everyone.
  *
  * A UI GATE, NOT AN ACCESS CONTROL, and the distinction is worth stating
  * plainly so nobody later mistakes it for one: the catalogue stays behind the
@@ -42,10 +47,15 @@ import {
  * READ THROUGH useSyncExternalStore RATHER THAN IN AN EFFECT, for two reasons
  * that happen to be the same reason. React's own rule refuses a setState fired
  * synchronously from an effect (it cascades a second render), and the server
- * has no localStorage to read — so the server snapshot says "attested", the
- * overlay is absent from the HTML, and the client decides on its first paint.
- * A returning visitor who has already answered therefore never sees a flash of
- * the gate, and Googlebot and the carrier reviewers are served the page whole.
+ * has no localStorage to read.
+ *
+ * The server snapshot therefore reports "already answered". That is not a
+ * judgement about who is asking — the server is not told, and does not look.
+ * It is the only honest value: the alternative is emitting an interstitial
+ * into the HTML of every visitor including the ones who answered yesterday,
+ * which would flash the gate at them on every page load and would still have
+ * to be corrected by the browser a moment later. The question is asked where
+ * the answer lives.
  */
 const subscribeToAttestation = (onChange: () => void) => {
   window.addEventListener("storage", onChange);
@@ -63,7 +73,11 @@ const readAttestation = () => {
   }
 };
 
-/** The server cannot know, and must not render an interstitial on a guess. */
+/**
+ * The server has no store to read, so it reports the only value that does not
+ * flash the overlay at somebody who already answered. Constant for every
+ * request — nothing about the requester is consulted to produce it.
+ */
 const attestedOnServer = () => true;
 
 export function AgeGate() {

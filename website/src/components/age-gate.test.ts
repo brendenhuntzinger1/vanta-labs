@@ -90,12 +90,34 @@ describe("how it behaves while it is up", () => {
     expect(reader.slice(0, 400)).toContain("return false;");
   });
 
-  it("says ATTESTED on the server, so the page is served whole", () => {
-    // The server has no localStorage to read. Guessing "not attested" would put
-    // an interstitial in the HTML for Googlebot and for the carrier reviewer —
-    // which is the failure opening "/" was meant to repair.
+  it("reports 'already answered' from the server, the same for every request", () => {
+    // The server has no localStorage to read, so it cannot know. The constant
+    // is the only value that does not paint the overlay over somebody who
+    // answered yesterday and then take it away again a frame later.
     expect(GATE).toContain("const attestedOnServer = () => true;");
     expect(GATE).toContain("useSyncExternalStore(subscribeToAttestation, readAttestation, attestedOnServer)");
+  });
+
+  it("decides on nothing about the visitor — no agent, no address, no headers", () => {
+    // THE RULE, PINNED. A gate that varies by who is asking is not an age gate,
+    // it is a bypass, and the whole value of asking is that it is asked of
+    // everyone. The server snapshot above is a constant precisely so that no
+    // request property can reach this decision.
+    for (const sniff of [
+      "userAgent", "navigator.", "headers", "x-forwarded", "remoteAddress",
+      "bot", "crawler", "googlebot", "spider", "headless",
+    ]) {
+      expect(GATE.toLowerCase(), `the age gate must not consult ${sniff}`)
+        .not.toContain(sniff.toLowerCase() + "(");
+    }
+    // Comments are prose, but the executable lines must name none of them.
+    const code = GATE.split("\n").filter((line) => {
+      const t = line.trim();
+      return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*");
+    }).join("\n");
+    for (const sniff of ["userAgent", "navigator", "googlebot", "crawler", "isBot", "headless"]) {
+      expect(code, `${sniff} appears in the age gate's logic`).not.toContain(sniff);
+    }
   });
 
   it("stops the page behind it scrolling", () => {
