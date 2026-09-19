@@ -342,7 +342,7 @@ export default async function AccountDashboardPage() {
         <section className="vl-panel rounded-2xl p-5 sm:p-6">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-white">Shipping address</h2>
-            <Link href="/account/addresses" className="vl-focus-ring text-xs text-cyan-300 underline-offset-2 hover:underline">Manage →</Link>
+            <Link href="/account/addresses" className="vl-focus-ring inline-flex min-h-11 items-center -my-2.5 text-xs text-cyan-300 underline-offset-2 hover:underline">Manage →</Link>
           </div>
           {defaultAddress ? (
             <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.02] p-4 text-sm text-zinc-300">
