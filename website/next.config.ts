@@ -42,6 +42,12 @@ const nextConfig: NextConfig = {
     return [
       { source: "/privacy", destination: "/legal/privacy", permanent: true },
       { source: "/terms", destination: "/legal/terms", permanent: true },
+      // The spellings other platforms' forms suggest. Omnisend's own toll-free
+      // verification form offers `/privacy-policy` and `/terms-and-conditions`
+      // as its placeholders, which is what a merchant types from memory and a
+      // reviewer guesses. Both answered the sign-in wall before this.
+      { source: "/privacy-policy", destination: "/legal/privacy", permanent: true },
+      { source: "/terms-and-conditions", destination: "/legal/terms", permanent: true },
     ];
   },
   images: {

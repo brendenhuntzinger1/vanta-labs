@@ -121,6 +121,25 @@ export const PUBLIC_EXACT = new Set([
   // has to be public, not just the destination.
   "/privacy",
   "/terms",
+  // ---- AND THE SPELLINGS OTHER PEOPLE'S FORMS SUGGEST.
+  //
+  // Added 2026-09-19, from the Omnisend verification form itself: its "Privacy
+  // policy URL" and "Terms and conditions URL" fields show
+  // `yourstore.com/privacy-policy` and `yourstore.com/terms-and-conditions` as
+  // their placeholders. Those are the conventional paths on most platforms, so
+  // they are what a merchant types from memory and what a reviewer guesses when
+  // a link is wrong — and on this site both answered 307 to the sign-in page,
+  // which is the exact failure the /sms work exists to end. Measured before
+  // adding:
+  //
+  //     GET /privacy-policy         307 -> /account/login?next=%2Fprivacy-policy
+  //     GET /terms-and-conditions   307 -> /account/login?next=%2Fterms-and-conditions
+  //
+  // Four spellings now reach two documents, and the canonical pair is still
+  // /legal/privacy and /legal/terms — everything else is a 308 into them, so
+  // nothing is duplicated for search engines.
+  "/privacy-policy",
+  "/terms-and-conditions",
   // The maintenance page IS the answer when the store is closed.
   "/maintenance",
   // Crawler and browser conventions. Serving a redirect for these is noise.

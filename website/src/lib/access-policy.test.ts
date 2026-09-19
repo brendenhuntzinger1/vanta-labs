@@ -181,7 +181,16 @@ describe("the exemptions, each of which has to earn its place", () => {
     //
     // None of them widens the catalogue, and the four assertions in "the front
     // door is open, and the shop behind it is not" hold that line directly.
-    expect(PUBLIC_EXACT.size + PUBLIC_PREFIXES.length).toBeLessThanOrEqual(48);
+    //
+    // RAISED FROM 48 TO 50 on 2026-09-19 for "/privacy-policy" and
+    // "/terms-and-conditions", and this is the deliberate part. They are the
+    // placeholders in Omnisend's own toll-free verification form, so they are
+    // what a merchant types from memory and what a reviewer guesses when a
+    // link is wrong — and both answered 307 to the sign-in page, which is the
+    // failure this whole surface exists to end. Like "/privacy" and "/terms"
+    // they are 308s into the canonical /legal documents and carry no content
+    // of their own, so they widen nothing.
+    expect(PUBLIC_EXACT.size + PUBLIC_PREFIXES.length).toBeLessThanOrEqual(50);
   });
 
   it("exempts the welcome-offer leaf without opening the rest of /api/offers", () => {
@@ -433,6 +442,37 @@ describe("the front door is open, and the shop behind it is not", () => {
   it("serves the pages a carrier or ad reviewer has to be able to open", () => {
     for (const open of ["/", "/sms", "/privacy", "/terms", "/legal/privacy", "/legal/terms", "/contact"]) {
       expect(isPublicPath(open), `${open} must be reachable with no account`).toBe(true);
+    }
+  });
+
+  it("serves the policy spellings other platforms' forms suggest", () => {
+    // Taken from Omnisend's own verification form, whose placeholders are
+    // `yourstore.com/privacy-policy` and `yourstore.com/terms-and-conditions`.
+    // A merchant types those from memory and a reviewer guesses them; both
+    // answered 307 to the sign-in page until 2026-09-19, which is the same
+    // failure the rest of this block exists to prevent.
+    for (const guessed of ["/privacy-policy", "/terms-and-conditions"]) {
+      expect(isPublicPath(guessed), `${guessed} must not answer the wall`).toBe(true);
+    }
+  });
+
+  it("points every policy spelling at the canonical document", () => {
+    // The redirects live in next.config.ts, and a redirect cannot run if
+    // middleware answers first — so the pair has to stay in step. This is the
+    // check that fails if someone opens a path here and forgets the redirect,
+    // which would turn a 308 into a 404.
+    const config = readFileSync(join(process.cwd(), "next.config.ts"), "utf8");
+    for (const [source, destination] of [
+      ["/privacy", "/legal/privacy"],
+      ["/terms", "/legal/terms"],
+      ["/privacy-policy", "/legal/privacy"],
+      ["/terms-and-conditions", "/legal/terms"],
+    ]) {
+      expect(
+        config,
+        `${source} is public but next.config.ts does not redirect it to ${destination}`,
+      ).toMatch(new RegExp(`source:\\s*"${source}"[^}]*destination:\\s*"${destination}"`));
+      expect(isPublicPath(source)).toBe(true);
     }
   });
 
