@@ -7,6 +7,19 @@
 //
 // What is compared is the AUTHORITATIVE answer — the gift the server resolved,
 // its product, its variant and the minimum it enforced — not a rendered string.
+//
+// WHAT IT REPORTS TODAY, AND WHY THAT IS THE CORRECT RESULT. The express lane
+// is held shut by EXPRESS_OFFER_PARITY in lib/express-checkout.ts, a second
+// gate the env var cannot open, so the session endpoint answers
+// {"available":false,"reason":"Express checkout is not enabled."} and there is
+// no second quote to compare. That is not this script failing — it is the
+// store correctly refusing to run a lane whose offer wiring is incomplete.
+//
+// Three of the five things express-checkout-parity-guard.test.ts requires are
+// still missing from authorize/: reserveCustomerOffer before the order, and
+// attributeOrderToAutomation / attributeOrderToCampaign after it. Run this
+// again the day those land and the flag is opened deliberately; until then a
+// refusal here is the expected and desirable output.
 import { chromium } from "playwright";
 
 const BASE = process.env.PARITY_BASE ?? "http://127.0.0.1:3000";
@@ -32,6 +45,9 @@ await page.getByRole("textbox", { name: /Password/ }).fill(PASSWORD);
 await page.getByRole("button", { name: /^Sign In$/ }).click();
 await page.waitForURL((u) => !/\/account\/login/.test(u.toString()), { timeout: 25000 });
 
+// ARM THIS BROWSER the way a spin does — /api/spin/claim hands the session its
+// bearer cookie for a prize it already holds. No draw, no new entitlement.
+await page.evaluate(async () => { await fetch("/api/spin/claim", { method: "POST", credentials: "same-origin" }).catch(() => {}); });
 const held = await page.evaluate(async () => (await (await fetch("/api/offer/status", { credentials: "same-origin" })).json()));
 say("prize this session holds", JSON.stringify(held?.offer ?? null));
 if (!held?.offer) {
