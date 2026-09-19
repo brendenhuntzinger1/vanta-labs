@@ -103,12 +103,17 @@ describe("nothing is ever pre-ticked", () => {
     // tick travels beside it as its own field, so entering a number can never
     // become a consent by accident.
     const submit = MODAL.slice(MODAL.indexOf("const spin = useCallback"));
-    expect(submit).toMatch(/if \(needPhone && phone\.trim\(\)\)/);
+    // Either half is a reason to post: a number to keep, or a tick to record
+    // against the number already kept.
+    expect(submit).toMatch(/if \(phone\.trim\(\) \|\| smsConsent\)/);
     expect(submit).toContain("smsConsent }");
   });
 
   it("does not make somebody retype a number the store already holds", () => {
-    expect(MODAL).toMatch(/const needPhone = invite\?\.needPhone === true;/);
+    // The server answers this; the card never decides it. The one thing that
+    // can override it is the server saying, on a tick, that it has no number
+    // after all — and then the field is shown rather than the consent lost.
+    expect(MODAL).toMatch(/const needPhone = invite\?\.needPhone === true \|\| revealPhone;/);
   });
 });
 
@@ -254,5 +259,100 @@ describe("the funnel can be measured at its widest point", () => {
     // The backdrop, the ×, escape and "No thanks" all route through close().
     const closeFn = MODAL.slice(MODAL.indexOf("const close = useCallback"), MODAL.indexOf("useEffect(() => {\n    if (!open) return;"));
     expect(closeFn).toContain("spin_invite_skipped");
+  });
+});
+
+describe("a tick is recorded even when the card never asked for a number", () => {
+  // THE CARD STOPS ASKING once the store holds a number — that stored number is
+  // what the tick subscribes, so retyping it buys nothing. But the SMS box is
+  // still shown, and the submit used to post only when a number had been typed
+  // INTO THIS CARD. So the commonest consent there is — a returning shopper
+  // ticking the box with no field in front of them — was read, shown a wheel,
+  // and dropped. Nothing recorded it and nothing said so.
+  const SPIN_FN = MODAL_CODE.slice(MODAL_CODE.indexOf("const spin = useCallback"), MODAL_CODE.indexOf("if (!open) return null;"));
+
+  it("posts when the box is ticked, with or without a typed number", () => {
+    expect(SPIN_FN).toContain("if (phone.trim() || smsConsent)");
+    expect(SPIN_FN, "the post is still gated on a typed number").not.toContain("if (needPhone && phone.trim())");
+  });
+
+  it("still sends the tick as its own field rather than implying it from the number", () => {
+    expect(SPIN_FN).toContain("smsConsent }");
+  });
+
+  it("reopens the phone field when the server says it has no number to consent", () => {
+    // The alternative is telling somebody to enter a number with nowhere to
+    // type one, which is how a dropped consent looks from the shopper's side.
+    expect(SPIN_FN).toContain("needPhone");
+    expect(MODAL_CODE).toContain("setRevealPhone(true)");
+    // One `needPhone`, so the field that appears and the field the submit
+    // insists on can never disagree.
+    expect(MODAL_CODE, "the revealed field is never rendered").toContain("const needPhone = invite?.needPhone === true || revealPhone;");
+  });
+});
+
+describe("a refusal the shopper cannot act on does not cost them the spin", () => {
+  // THE COMPONENT HAS ALWAYS SAID THIS AND DID NOT DO IT: "the offer was never
+  // conditional on the text list, and stranding them on a card because a
+  // subscription did not take would be making it conditional after the fact."
+  // Every `ok: false` stopped the spin, including the rate limiter's.
+  //
+  // MEASURED, not theorised: the limiter is keyed on the request IP at ten an
+  // hour, so the eleventh shopper behind one mobile carrier's NAT was shown
+  // "Please wait a moment before trying again" and could not spin at all.
+  const SPIN_FN = MODAL_CODE.slice(MODAL_CODE.indexOf("const spin = useCallback"), MODAL_CODE.indexOf("if (!open) return null;"));
+
+  it("keeps them on the card only for a refusal they can fix", () => {
+    expect(SPIN_FN).toContain("res.status === 400");
+  });
+
+  it("goes to the wheel on anything else", () => {
+    // The push is what must always happen; the sign-up is the thing that may
+    // fail. If this assertion ever inverts, a limiter or a 500 takes the prize.
+    const afterPost = SPIN_FN.slice(SPIN_FN.indexOf("res.status === 400"));
+    expect(afterPost).toContain('router.push("/spin")');
+  });
+
+  it("is not gated on the storefront limiter being shared between shoppers", () => {
+    // The endpoint's own key: a signed-in caller is counted as themselves, so
+    // one household, campus or carrier NAT is not one bucket.
+    const route = readFileSync(join(SRC, "app", "api", "offers", "welcome", "route.ts"), "utf8");
+    expect(route).toContain("sessionEmail ? `welcome-offer-account:${sessionEmail}`");
+  });
+});
+
+describe("what the funnel is told, and what a stalled connection does", () => {
+  const MODAL_ALL = MODAL_CODE;
+
+  it("reports joining the text list only when the server said it happened", () => {
+    // `joinedTexts: smsConsent` reported the ASK. A limiter, a 500 or the
+    // endpoint's own 200-with-ok:false all let the shopper through to the
+    // wheel with nothing recorded, so the funnel counted sign-ups that no
+    // consent record could ever be produced for.
+    expect(MODAL_ALL).toContain("joinedTexts = smsConsent && data?.subscribed === true;");
+    expect(MODAL_ALL).toContain('trackFunnelEvent("spin_invite_accepted", { placement: "storefront", joinedTexts });');
+    expect(MODAL_ALL, "the ask is being reported as the outcome").not.toContain("joinedTexts: smsConsent");
+  });
+
+  it("gives the request a deadline, so a held-open socket cannot disable the button for good", () => {
+    // `fetch` on a socket that is opened and never answered neither resolves
+    // nor rejects, so no catch can reach it: "One moment…" stays disabled for
+    // the life of the page and the only way out is a reload.
+    expect(MODAL_ALL).toContain("signal: timeoutSignal(REQUEST_TIMEOUT_MS)");
+  });
+
+  it("announces a validation refusal rather than only drawing it", () => {
+    expect(MODAL).toContain('role="alert"');
+    expect(MODAL).toContain('aria-describedby={error ? "entry-offer-error" : undefined}');
+  });
+});
+
+describe("the wheel's own presses have the same deadline", () => {
+  const WHEEL = readFileSync(join(SRC, "components", "spin-wheel.tsx"), "utf8");
+
+  it("the spin and the dose choice both carry one", () => {
+    // "Spinning…" and "Saving…" are both disabled-while-in-flight controls.
+    const signals = WHEEL.split("signal: timeoutSignal(REQUEST_TIMEOUT_MS)").length - 1;
+    expect(signals, "a press can still hang for ever").toBeGreaterThanOrEqual(2);
   });
 });

@@ -51,6 +51,34 @@ describe("a number held without permission", () => {
     expect(phoneOf(built)?.channels?.sms?.status).toBe("nonSubscribed");
   });
 
+  it("is dated at the epoch, so it can never overwrite a consent Omnisend already holds", () => {
+    // OMNISEND RESOLVES A CHANNEL BY DATE: "If you submit a status date
+    // earlier than the one already stored, the status and its date will not be
+    // updated." A shopper who subscribed through Omnisend's own pop-up, and
+    // then typed their number into the wheel, would otherwise be unsubscribed
+    // by this push — the store's own `changedAt` for a held number is `now`,
+    // and `now` beats everything.
+    //
+    // The email channel already dates its unknown status this way and says so
+    // at length. The phone identifier is newer, and had to learn the same
+    // thing: an unknown status loses every race by construction.
+    const built = buildContactPayload({
+      ...facts,
+      smsConsent: { status: "nonSubscribed", changedAt: "2099-01-01T00:00:00.000Z" },
+    }) as { identifiers: Array<{ type: string; channels?: { sms?: { statusChangedAt?: string } } }> };
+    const phone = built.identifiers.find((i) => i.type === "phone");
+    expect(phone?.channels?.sms?.statusChangedAt).toBe("1970-01-01T00:00:00.000Z");
+  });
+
+  it("still dates a real consent by when it was given", () => {
+    const built = buildContactPayload({
+      ...facts,
+      smsConsent: { status: "subscribed", changedAt: "2026-09-20T00:00:00.000Z", source: "storefront" },
+    }) as { identifiers: Array<{ type: string; channels?: { sms?: { statusChangedAt?: string } } }> };
+    expect(built.identifiers.find((i) => i.type === "phone")?.channels?.sms?.statusChangedAt)
+      .toBe("2026-09-20T00:00:00.000Z");
+  });
+
   it("carries no consent block, because there is no consent to describe", () => {
     const built = buildContactPayload({
       ...facts,

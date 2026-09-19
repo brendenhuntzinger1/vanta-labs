@@ -98,9 +98,23 @@ export function SpinPrizeBar() {
   // words, and the drawer opens over whatever is behind it.
   if (pathname === "/cart" || pathname === "/spin") return null;
 
-  const shortfall = typeof offerQuote?.offerShortfallCents === "number"
+  const serverShortfall = typeof offerQuote?.offerShortfallCents === "number"
     ? offerQuote.offerShortfallCents / 100
-    : Math.max(0, pendingOffer.minSubtotalCents / 100 - subtotal);
+    : null;
+  const shortfall = serverShortfall ?? Math.max(0, pendingOffer.minSubtotalCents / 100 - subtotal);
+  // "APPLIED" IS THE SERVER'S WORD, NEVER THIS COMPONENT'S GUESS.
+  //
+  // offer-quote.ts stores a quote only when the request succeeded AND the
+  // quote itself said ok, so a 500, a cut connection or the very first paint
+  // all leave `offerQuote` null. The gross fallback then reads two $119.99
+  // vials against a $200 floor as "over it" — and this bar announced a reward
+  // the till was about to withdraw, which is the precise false success the
+  // server figure exists to prevent.
+  //
+  // The fallback keeps the FIGURE, which is better than a blank while a quote
+  // is in flight, and loses the CLAIM: with no answer the bar says the prize
+  // is there and promises nothing about this basket.
+  const offerApplied = serverShortfall !== null && serverShortfall <= 0;
 
   return (
     <div
@@ -109,7 +123,12 @@ export function SpinPrizeBar() {
     >
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-3">
         <p className="text-[0.8rem] leading-5 text-white/70 sm:text-[0.85rem]">
-          {shortfall > 0 ? (
+          {offerApplied ? (
+            <>
+              Your <span className="font-semibold text-[color:var(--accent-gold)]">{rewardPhrase(pendingOffer)}</span>{" "}
+              is applied at checkout.
+            </>
+          ) : shortfall > 0 ? (
             <>
               Your <span className="font-semibold text-[color:var(--accent-gold)]">{rewardPhrase(pendingOffer)}</span>{" "}
               is waiting — add{" "}
@@ -118,7 +137,7 @@ export function SpinPrizeBar() {
           ) : (
             <>
               Your <span className="font-semibold text-[color:var(--accent-gold)]">{rewardPhrase(pendingOffer)}</span>{" "}
-              is applied at checkout.
+              is waiting.
             </>
           )}
         </p>

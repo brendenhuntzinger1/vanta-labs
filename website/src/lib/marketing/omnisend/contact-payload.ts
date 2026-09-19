@@ -259,10 +259,25 @@ export function buildContactPayload(facts: ContactFacts): Record<string, unknown
   // not the customer's to text and not ours to hand over.
   const phone = facts.smsConsent ? normalizeE164(facts.phone, facts.countryCode ?? "US") : null;
   if (phone && facts.smsConsent) {
+    // THE SAME EPOCH RULE AS THE EMAIL CHANNEL, AND FOR THE SAME REASON.
+    //
+    // A held-but-unconsented number is dated `now` by collectContactFacts,
+    // because there is no consent date to give it. Posting that would beat
+    // whatever Omnisend holds — so a shopper who subscribed through Omnisend's
+    // own pop-up and later typed their number into the wheel would be
+    // unsubscribed by the nightly push, silently and for good.
+    //
+    // "If you submit a status date earlier than the one already stored, the
+    // status and its date will not be updated." An unknown status therefore
+    // loses every race by construction, while the identifier still arrives so
+    // a later tick is a STATUS CHANGE rather than a new number.
+    const statusChangedAt = facts.smsConsent.status === "nonSubscribed"
+      ? UNKNOWN_STATUS_CHANGED_AT
+      : facts.smsConsent.changedAt;
     identifiers.push({
       type: "phone",
       id: phone,
-      channels: { sms: { status: facts.smsConsent.status, statusChangedAt: facts.smsConsent.changedAt } },
+      channels: { sms: { status: facts.smsConsent.status, statusChangedAt } },
       ...consentBlock(facts.smsConsent),
     });
   }

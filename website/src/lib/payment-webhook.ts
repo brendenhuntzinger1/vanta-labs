@@ -49,6 +49,7 @@ import { getOrderAttribution } from "@/lib/order-attribution";
 import { toAnalyticsAttribution } from "@/lib/attribution";
 import { creditFundedOrderNotice } from "@/lib/credit-funded-order-notice";
 import { isSaleOrder } from "@/lib/ledger";
+import { releaseCustomerOffer } from "@/lib/offers/customer-offers";
 
 /**
  * A durable alert for a financial effect that FAILED and CANNOT be auto-repaired.
@@ -3453,6 +3454,29 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       } catch (tenderReleaseError) {
         console.error("Unable to release the tender hold for order", orderId, tenderReleaseError);
         await recordSystemAlert(unsafeEffectAlert("tender_hold_release", orderId, tenderReleaseError))
+          .catch(() => {});
+      }
+
+      // THE GIFT TOKEN IS A THIRD HOLD, and it was the one left behind.
+      //
+      // A dead checkout's stock hold is released above and its store-credit
+      // hold on the line before; customer_offers.reserved_order_id was not,
+      // and unlike the other two it does not age out of everything. The dose
+      // picker's write is guarded on `reserved_order_id is null` and fails
+      // closed on a stale hold (spin-dose.ts), so a winner of one of the four
+      // laddered prizes who had a card declined could never change their dose
+      // again — told to "finish or cancel" an order that was already dead,
+      // while the wheel's own panel says "You can change this until the prize
+      // expires".
+      //
+      // customer_offer_release refuses a redeemed offer (customer-offers.sql),
+      // so a replayed event and a paid order are both no-ops, and the `!wasPaid`
+      // guard above keeps a real redemption out of this branch entirely.
+      try {
+        await releaseCustomerOffer(orderId);
+      } catch (offerReleaseError) {
+        console.error("Unable to release the offer hold for order", orderId, offerReleaseError);
+        await recordSystemAlert(unsafeEffectAlert("offer_hold_release", orderId, offerReleaseError))
           .catch(() => {});
       }
     }

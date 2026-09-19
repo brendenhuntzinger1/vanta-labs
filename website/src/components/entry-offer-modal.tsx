@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { trackFunnelEvent } from "@/lib/analytics-funnel-client";
 import { SMS_CONSENT_TEXT, SMS_DISCLOSURE_TEXT } from "@/lib/sms-consent-text";
+import { REQUEST_TIMEOUT_MS, timeoutSignal } from "@/lib/request-timeout";
 
 /**
  * THE STORE INVITATION — and what it invites people to is the wheel.
@@ -171,6 +172,10 @@ export function EntryOfferModal() {
   const [phone, setPhone] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [smsConsent, setSmsConsent] = useState(false);
+  // THE FIELD THE CARD DECIDED NOT TO SHOW, shown after all. Set only by the
+  // server answering that it has no number to put the tick against — the one
+  // case where "we already have it" turns out to be wrong.
+  const [revealPhone, setRevealPhone] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -223,7 +228,7 @@ export function EntryOfferModal() {
   }, [open, close]);
 
   const askForTexts = invite?.askForTexts === true;
-  const needPhone = invite?.needPhone === true;
+  const needPhone = invite?.needPhone === true || revealPhone;
 
   /**
    * Take the shopper to the wheel, recording the consent first if they gave it.
@@ -257,29 +262,51 @@ export function EntryOfferModal() {
       return;
     }
 
-    if (needPhone && phone.trim()) {
+    // A NUMBER OR A TICK IS A REASON TO POST, and the tick on its own is the
+    // commonest one. The card stops asking for a number once the store holds
+    // one, so a returning shopper agrees to texts with no field in front of
+    // them; posting only on a typed number read that as nothing to send and
+    // dropped the consent where no record could show it had been given.
+    let joinedTexts = false;
+    if (phone.trim() || smsConsent) {
       setSaving(true);
       setError(null);
       try {
         const res = await fetch("/api/offers/welcome", {
           method: "POST",
+          // A held-open socket would leave "One moment…" disabled for good.
+          signal: timeoutSignal(REQUEST_TIMEOUT_MS),
           credentials: "same-origin",
           headers: { "Content-Type": "application/json" },
           // SAID, NOT INFERRED. The endpoint keeps the number either way and
           // subscribes only on an explicit true, so an untouched box cannot
           // become a consent by accident. The address is the session's: the
           // endpoint reads `sessionEmail || typedEmail` and there is always a
-          // session here.
+          // session here. An empty `phone` is the tick alone — the endpoint
+          // then reads the number it already holds for this address.
           body: JSON.stringify({ phone: phone.trim(), placement: "storefront", smsConsent }),
         });
-        const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
-        if (data?.ok === false) {
-          // A number nobody could be texted at is worth stopping for: it is
-          // the one failure the shopper can fix, and it is in front of them.
+        const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string; needPhone?: boolean; subscribed?: boolean } | null;
+        // ONLY A REFUSAL THE SHOPPER CAN ACT ON KEEPS THEM HERE, and 400 is
+        // how the endpoint says so: a number nobody could be texted at, or a
+        // tick with no number to put it against. Everything else — the rate
+        // limiter, a 500, an outage — is the store's problem, not theirs, and
+        // taking the spin for it makes the offer conditional on the text list
+        // after the fact. MEASURED: the limiter is keyed per request IP at ten
+        // an hour, so behind one mobile carrier's NAT the eleventh shopper of
+        // the hour was shown "Please wait a moment before trying again" and
+        // could not spin at all.
+        if (res.status === 400 && data?.ok === false) {
+          if (data.needPhone) setRevealPhone(true);
           setError(data.error ?? "That does not look like a mobile number.");
           setSaving(false);
           return;
         }
+        // WHAT ACTUALLY HAPPENED, not what was asked for. A limiter, a 500 or
+        // the endpoint's own 200-with-ok:false all let the shopper through to
+        // the wheel — and reporting the tick as a sign-up would put a join in
+        // the funnel that no consent record can be shown for.
+        joinedTexts = smsConsent && data?.subscribed === true;
       } catch {
         // Offline, or the request was cut off. The wheel is what they pressed
         // and the prize is not conditional on the store filing their number,
@@ -288,7 +315,7 @@ export function EntryOfferModal() {
       setSaving(false);
     }
 
-    trackFunnelEvent("spin_invite_accepted", { placement: "storefront", joinedTexts: smsConsent });
+    trackFunnelEvent("spin_invite_accepted", { placement: "storefront", joinedTexts });
     setOpen(false);
     router.push("/spin");
   }, [confirmed, needPhone, phone, router, saving, smsConsent]);
@@ -356,6 +383,8 @@ export function EntryOfferModal() {
                   placeholder="+1 (555) 123-4567"
                   aria-label="Mobile number"
                   data-testid="entry-offer-phone"
+                  aria-invalid={error ? true : undefined}
+                  aria-describedby={error ? "entry-offer-error" : undefined}
                   className="vl-sms-field vl-focus-ring mt-2 w-full"
                 />
                 {/* WHAT THE NUMBER IS FOR, said before it is given. It is
@@ -417,7 +446,15 @@ export function EntryOfferModal() {
         ) : null}
 
         {error ? (
-          <p data-testid="entry-offer-error" className="mt-3 text-[0.8rem] leading-5 text-red-300">
+          <p
+            id="entry-offer-error"
+            data-testid="entry-offer-error"
+            // A validation refusal a screen reader never hears is a dead end:
+            // the press appears to do nothing at all.
+            role="alert"
+            aria-live="assertive"
+            className="mt-3 text-[0.8rem] leading-5 text-red-300"
+          >
             {error}
           </p>
         ) : null}

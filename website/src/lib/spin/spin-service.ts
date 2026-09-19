@@ -251,9 +251,22 @@ export async function spin(input: {
     // leaves a prize that redeems, at the minimum it was minted with, with no
     // catalogue read in the mint path and no new way for a spin to fail.
     //
-    // The invariant that keeps those two in step — entry rung == default dose —
-    // is enforced in prize-table.test.ts against the live catalogue, so it
-    // breaks the build rather than a customer's order.
+    // THE INVARIANT THAT KEEPS THOSE TWO IN STEP IS NOT BUILD-ENFORCED, and
+    // this comment used to say it was — "enforced in prize-table.test.ts
+    // against the live catalogue". That file makes no catalogue read at all,
+    // and no test in the repo does: the suite runs without Supabase, so an
+    // invariant about LIVE data cannot break the build here.
+    //
+    // What is checked: prize-table.test.ts pins each ladder's rungs, prices and
+    // minimums, and cheapest-first ordering, so entry rung == doses[0] cannot
+    // drift in the code. What is NOT checked is the other half — that the
+    // catalogue's is_default for that product is still the same dose. An admin
+    // flipping is_default on glp-1 from 5mg to 10mg would silently ship the
+    // larger vial against the entry rung's $90 minimum, with nothing said.
+    //
+    // Verified by hand against production on 2026-09-19 (all four ladders:
+    // glp-1 5mg, glp-2 5mg, glp-3 5mg, hgh-gh-191 24iu are is_default). It
+    // belongs in the admin dose editor, which is where the flip happens.
     variantId: null,
     minSubtotalCents: prize.minSubtotalCents,
     alreadySpun: false,

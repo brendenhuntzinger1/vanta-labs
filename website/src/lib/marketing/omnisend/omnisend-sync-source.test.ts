@@ -254,7 +254,14 @@ describe("contact-payload.ts copies consent exactly", () => {
     const guard = source.lastIndexOf("if (phone && facts.smsConsent) {", push);
     expect(guard, "the phone identifier is pushed outside the smsConsent guard").toBeGreaterThan(phoneRead);
     // The SMS channel status is the store's record, never a literal.
-    expect(source).toContain("channels: { sms: { status: facts.smsConsent.status, statusChangedAt: facts.smsConsent.changedAt } }");
+    expect(source).toContain("channels: { sms: { status: facts.smsConsent.status, statusChangedAt } }");
+    // THE DATE HAS ONE EXCEPTION AND IT IS NAMED. A real status is dated by
+    // when the store recorded it; the unknown one is dated at the epoch so it
+    // cannot overwrite a consent Omnisend already holds — the same rule the
+    // email channel above applies, for the same documented reason.
+    expect(source).toContain('const statusChangedAt = facts.smsConsent.status === "nonSubscribed"');
+    expect(source).toContain("? UNKNOWN_STATUS_CHANGED_AT");
+    expect(source).toContain(": facts.smsConsent.changedAt;");
     expect(source).not.toMatch(/sms:\s*\{\s*status:\s*"subscribed"/);
   });
 

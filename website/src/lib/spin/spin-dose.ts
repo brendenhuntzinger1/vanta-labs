@@ -59,13 +59,35 @@ export async function availableDoseRungs(prize: SpinPrize): Promise<Array<SpinDo
   if (!slug) return [];
 
   const [product] = await getCatalogProductsBySlugs([slug]);
-  const doses = (product as { doses?: Array<{ id: string; label: string }> } | undefined)?.doses ?? [];
+  const doses = (product as { doses?: Array<{ id: string; label: string; availableQuantity?: number | null; stockStatus?: string | null }> } | undefined)?.doses ?? [];
 
   // A rung whose label no longer resolves is DROPPED, not shown greyed out: the
   // customer cannot be offered something the till would then refuse them.
+  //
+  // AND NEITHER IS A SOLD-OUT ONE, which this used to offer. Enabled-ness was
+  // the only test, so the moment GLP-1's 30mg emptied a winner could still
+  // choose it, have it written to their offer row, and carry a prize to a till
+  // with nothing to hand over. A retired rung and an empty shelf are the same
+  // thing from where the shopper is standing.
+  //
+  // THE SAME TEST THE TILL APPLIES, both halves of it. quote-order.ts withholds
+  // a reward whose dose is "Out of Stock" or "Reserved" OR whose sellable count
+  // has reached zero, and those are two different facts: `stock_status` is
+  // stored and can say Out of Stock while units remain on the shelf, and
+  // `availableQuantity` is units on hand less what in-flight checkouts hold.
+  // Testing only the count left the stored-status case reaching the picker.
+  //
+  // NULL quantity means this product's inventory is not tracked, which is
+  // unlimited rather than none, so only a real number at or below zero drops a
+  // rung.
+  const UNSELLABLE = new Set(["out of stock", "reserved"]);
+  const sellable = (dose: { availableQuantity?: number | null; stockStatus?: string | null }) =>
+    !UNSELLABLE.has(String(dose.stockStatus ?? "").trim().toLowerCase())
+    && (typeof dose.availableQuantity !== "number" || dose.availableQuantity > 0);
+
   return (prize.doses ?? []).flatMap((rung) => {
     const live = doses.find((dose) => dose.label.trim().toLowerCase() === rung.label.toLowerCase());
-    return live ? [{ ...rung, variantId: live.id }] : [];
+    return live && sellable(live) ? [{ ...rung, variantId: live.id }] : [];
   });
 }
 

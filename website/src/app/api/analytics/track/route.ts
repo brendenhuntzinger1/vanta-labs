@@ -10,6 +10,7 @@ import { detectRoleFromUser } from "@/lib/auth-role";
 import { resolveAnalyticsUserId } from "@/lib/analytics-identity";
 import { resolveCoarseGeoFromHeaders } from "@/lib/request-geo";
 import { isLikelyBotUserAgent } from "@/lib/bot-detection";
+import { redactUrlSecrets } from "@/lib/analytics/redact-url";
 
 const insertAnalyticsEvent = createOptionalColumnInserter(async (row) =>
   supabaseAdmin.from("website_analytics_events").insert(row),
@@ -197,8 +198,13 @@ export async function POST(request: Request) {
       {
         event_type: eventType,
         page_path: pagePath,
-        page_url: normalizeText(body.pageUrl, 1200),
-        referrer: normalizeText(body.referrer, 1200),
+        // THE URL IS A LOG LINE, NOT A PLACE TO KEEP A SECRET. The win-back
+        // wheel is reached at /spin?t=<signed token>, and that token is worth
+        // the prize to whoever holds it — three live ones were found stored
+        // here verbatim. Redacted server-side rather than in the tracker: an
+        // older cached bundle and a hand-made POST both arrive here too.
+        page_url: normalizeText(redactUrlSecrets(body.pageUrl), 1200),
+        referrer: normalizeText(redactUrlSecrets(body.referrer), 1200),
         session_id: sessionId,
         visitor_id: normalizeText(body.visitorId, 120),
         user_agent: normalizeText(userAgent, 700),
