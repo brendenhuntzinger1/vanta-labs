@@ -21,7 +21,12 @@ const verdictOf = (rs) => rs.length === 0 ? "—" : rs.every((r) => r.verdict ==
 const rows = products.map((p) => {
   const pdp = has((r) => r.group === "pdp" && (r.entry ?? "").includes(`/products/${p.slug}`));
   const variants = has((r) => r.group === "variants" && (r.entry ?? "").includes(`/products/${p.slug}`));
-  const cart = has((r) => ["cart", "variants", "checkout", "nowheel", "in-app", "security"].includes(r.group)
+  // "cart-all" IS THE GROUP THAT COVERS EVERY PRODUCT, AND IT WAS LEFT OUT.
+  // Without it this reported CART COVERAGE 10/34 while the run had in fact put
+  // all 34 through a basket — understating the very number the brief asks for.
+  // An out-of-stock product's cart scenario asserts that it is REFUSED, which
+  // is coverage of the cart decision, not an absence of it.
+  const cart = has((r) => ["cart", "cart-all", "variants", "checkout", "nowheel", "in-app", "security"].includes(r.group)
     && ((r.entry ?? "") + (r.actual ?? "")).includes(p.slug));
   const mobile = has((r) => ["mobile", "in-app"].includes(r.group) && ((r.entry ?? "") + (r.actual ?? "")).includes(p.slug));
   return { ...p, pdp: verdictOf(pdp), pdpN: pdp.length, variants: verdictOf(variants), variantsN: variants.length,

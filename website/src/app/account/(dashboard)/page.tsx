@@ -216,8 +216,14 @@ export default async function AccountDashboardPage() {
       <section className="vl-panel rounded-2xl p-5 sm:p-6">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-white">Latest orders</h2>
+          {/* A 44px hit area that does not grow the row. These four "view all"
+              links sit beside an h2, and two of them carried min-h-6 (24px)
+              while the other two carried nothing at all — measured at 28x16
+              and 28x24 on a phone, well under the 44pt/48dp floor. min-h-11
+              with -my-2.5 makes the hit box 44px while the margin box stays
+              24px, so the heading rows are pixel-identical. */}
           {orders.length > 0 ? (
-            <Link href="/account/orders" className="vl-focus-ring inline-flex min-h-6 items-center text-xs text-cyan-300 underline-offset-2 hover:underline">View all →</Link>
+            <Link href="/account/orders" className="vl-focus-ring inline-flex min-h-11 items-center -my-2.5 text-xs text-cyan-300 underline-offset-2 hover:underline">View all →</Link>
           ) : null}
         </div>
 
@@ -278,7 +284,7 @@ export default async function AccountDashboardPage() {
               <h2 className="text-lg font-semibold text-white">Popular right now</h2>
               <p className="mt-0.5 text-xs text-zinc-500">Best sellers across the Vanta Labs catalog.</p>
             </div>
-            <Link href="/products" className="vl-focus-ring text-xs text-cyan-300 underline-offset-2 hover:underline">Shop all →</Link>
+            <Link href="/products" className="vl-focus-ring inline-flex min-h-11 items-center -my-2.5 text-xs text-cyan-300 underline-offset-2 hover:underline">Shop all →</Link>
           </div>
           <div className="mt-4 flex snap-x gap-3 overflow-x-auto pb-1 sm:grid sm:grid-cols-4 sm:overflow-visible [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {recommended.map((product) => (
@@ -293,7 +299,7 @@ export default async function AccountDashboardPage() {
         <section className="vl-panel rounded-2xl p-5 sm:p-6">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-white">Your wishlist</h2>
-            <Link href="/account/wishlist" className="vl-focus-ring inline-flex min-h-6 items-center text-xs text-cyan-300 underline-offset-2 hover:underline">View all →</Link>
+            <Link href="/account/wishlist" className="vl-focus-ring inline-flex min-h-11 items-center -my-2.5 text-xs text-cyan-300 underline-offset-2 hover:underline">View all →</Link>
           </div>
           <div className="mt-4 flex snap-x gap-3 overflow-x-auto pb-1 sm:grid sm:grid-cols-4 sm:overflow-visible [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {wishlistProducts.slice(0, 4).map((product) => (
@@ -311,7 +317,7 @@ export default async function AccountDashboardPage() {
         <section className="vl-panel rounded-2xl p-5 sm:p-6">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-white">Recent activity</h2>
-            <Link href="/account/rewards" className="vl-focus-ring text-xs text-cyan-300 underline-offset-2 hover:underline">All →</Link>
+            <Link href="/account/rewards" className="vl-focus-ring inline-flex min-h-11 items-center -my-2.5 text-xs text-cyan-300 underline-offset-2 hover:underline">All →</Link>
           </div>
           {pointsHistory.length === 0 ? (
             <p className="mt-4 text-sm text-zinc-500">No activity yet — your rewards will show up here.</p>

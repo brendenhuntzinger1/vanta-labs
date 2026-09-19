@@ -183,7 +183,12 @@ export function SiteHeaderV2() {
             </button>
           </form>
 
-          <Link href="/account" aria-label="Your account" className="vl-focus-ring inline-flex h-10 w-10 items-center justify-center text-white/80 transition hover:text-white">
+          {/* 44x44, NOT 40x40. These three — account, cart, the mobile menu —
+              are the only navigation a phone gets, and they were a 40px box
+              each: under the 44pt/48dp floor both platform guidelines set, and
+              measured as such at 390x844. The icons inside are unchanged; the
+              hit area around them is not. */}
+          <Link href="/account" aria-label="Your account" className="vl-focus-ring inline-flex h-11 w-11 items-center justify-center text-white/80 transition hover:text-white">
             <AccountIcon />
           </Link>
 
@@ -192,7 +197,7 @@ export function SiteHeaderV2() {
             onClick={openCart}
             id="site-cart-trigger"
             aria-label={`Open cart with ${itemCount} items`}
-            className="vl-focus-ring relative inline-flex h-10 w-10 items-center justify-center text-white/80 transition hover:text-white"
+            className="vl-focus-ring relative inline-flex h-11 w-11 items-center justify-center text-white/80 transition hover:text-white"
           >
             <CartIcon />
             {itemCount > 0 ? (
@@ -205,7 +210,7 @@ export function SiteHeaderV2() {
           <button
             type="button"
             onClick={() => setMobileNavOpen((open) => !open)}
-            className="vl-focus-ring inline-flex h-10 w-10 items-center justify-center text-white/80 lg:hidden"
+            className="vl-focus-ring inline-flex h-11 w-11 items-center justify-center text-white/80 lg:hidden"
             aria-label="Toggle navigation"
             aria-expanded={mobileNavOpen}
           >

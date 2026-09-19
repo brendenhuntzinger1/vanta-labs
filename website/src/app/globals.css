@@ -1662,6 +1662,30 @@ body[data-cookie-banner="true"] .vl-bottom-bar {
   }
 }
 
+/* THE FOOTER ENDS ABOVE THE CTA BAR, NOT UNDERNEATH IT.
+   A bottom-pinned bar covers whatever happens to be at the bottom of the
+   viewport — the same conclusion cookie-consent.tsx reached before it moved
+   itself out of the way. The .vl-cta-bar bars cannot move: Add to Cart, the
+   checkout pay bar and the account nav belong at the bottom. So the page has
+   to stop short of them.
+
+   Measured at 390x844, scrolled to the very end: the last two footer lines sat
+   permanently under the bar — the copyright, and on /checkout and every
+   product page the support@vantalabsresearch.com link, which is a live mailto
+   a customer scrolls to the bottom to find and could not tap at any scroll
+   position.
+
+   10rem clears the tallest of the three (checkout's 146px TOTAL + pay button +
+   card marks) with room to spare. The surplus under a 65px bar is dark space
+   below the last line of a dark footer, which is invisible; a short reserve
+   that fits one bar and not another is not. Scoped below lg, where the bars
+   render — above it they are display:none and the footer needs nothing. */
+@media (max-width: 1023px) {
+  body:has(.vl-cta-bar) .vl-site-footer {
+    padding-bottom: calc(10rem + env(safe-area-inset-bottom, 0px));
+  }
+}
+
 /* The cart drawer's pay bar needs the same treatment but cannot use the rule
    above: it is not `fixed`, it is the last flex child of a full-height drawer
    panel, so there is no `bottom` to shift. Below `sm` that panel fills the
@@ -4449,9 +4473,13 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   flex-shrink: 0;
 }
 
+/* 2.75rem, NOT 2rem. On a phone this collapses to "···" — a 32x32 box, and
+   the only way to reach the other offers from the bar. 44px is the floor both
+   platform guidelines set; the label, colour and padding are untouched, so the
+   bar looks exactly as it did. */
 .vl-offer-link {
-  min-height: 2rem;
-  min-width: 2rem;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
   padding: 0.25rem 0.5rem;
   display: inline-flex;
   align-items: center;
@@ -5551,10 +5579,18 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   color: rgba(255, 255, 255, 0.72);
 }
 
+/* A 24px hit box on the two legal links, without moving a pixel of the
+   sentence. Measured at 390x844 they were 37x18 — WCAG 2.2 AA (2.5.8) sets the
+   floor at 24x24, and although an inline target inside a sentence is expressly
+   exempt from it, Privacy Policy and Terms are the links a phone user is most
+   likely to be reaching for on this page. Vertical padding on an inline box
+   extends what is painted and what is hit; it does not change the line box, so
+   the paragraph reflows identically. */
 .vl-optin-disclosure a {
   color: rgba(199, 174, 94, 0.95);
   text-decoration: underline;
   text-underline-offset: 2px;
+  padding-block: 0.1875rem;
 }
 
 .vl-optin-disclosure a:hover { color: var(--accent-gold); }

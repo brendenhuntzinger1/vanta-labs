@@ -62,7 +62,7 @@ function FooterColumn({
 
 export function SiteFooter() {
   return (
-    <footer className="border-t border-white/10 bg-[#0b0b0b]">
+    <footer className="vl-site-footer border-t border-white/10 bg-[#0b0b0b]">
       <div className="border-b border-white/10">
         <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-center gap-2.5 px-4 py-5 sm:gap-3 sm:px-6 sm:py-6 lg:px-12">
           {/* K-21. The footer cannot show a COA, so it does not claim one. The point
