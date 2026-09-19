@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { NextRequest } from "next/server";
 
@@ -531,29 +531,37 @@ describe("the policy is the only place the decision is made", () => {
     // it rendered the storefront and covered it with CSS. One is the rule, and
     // the rule is this policy.
     //
-    // THIS TEST USED TO BAN THE FILENAME age-gate.tsx OUTRIGHT, and that was
-    // the right guard aimed slightly wrong. What made the old overlay bad was
-    // not that it was an overlay: it was that it was load-bearing. It covered
-    // a storefront the server had already fetched and serialised, so the
-    // catalogue was one "view source" away while the CSS said otherwise.
+    // THIS TEST USED TO BAN THE FILENAME age-gate.tsx OUTRIGHT, then briefly
+    // REQUIRED it on the home page. Both aimed at the filename; the property
+    // is what matters. What made the original overlay bad was not that it was
+    // an overlay: it was that it was load-bearing. It covered a storefront the
+    // server had already fetched and serialised, so the catalogue was one
+    // "view source" away while the CSS said otherwise.
     //
-    // WHAT CHANGED. Opening "/" for Twilio's toll-free verification took away
-    // the thing that had been asking a stranger's age by accident — the 307.
-    // So an age attestation came back, on the home page only, and it is not
-    // load-bearing in any sense: page.tsx makes the catalogue READ conditional
-    // on the session, so for the visitor who sees this overlay there is no
-    // product data on the page, in the DOM or in the flight payload. It covers
-    // marketing copy, and marketing copy is all it has to cover.
+    // WHY THERE IS NO OVERLAY NOW. Opening "/" for Twilio's toll-free
+    // verification took away the 307 that had been asking a stranger's age by
+    // accident, and an attestation overlay was added to the home page to
+    // replace it. It asked the SAME TWO SENTENCES the sign-in portal asks —
+    // the identical constants from attestation-text.ts — so every visitor
+    // answered the same question twice on the way to the catalogue. The
+    // owner's call is one gate, and it is the portal: the screen with Google
+    // and Apple sign-in, where the answer becomes a durable record against an
+    // account rather than a flag in one browser's localStorage.
     //
-    // The teeth that matter are kept and sharpened below: it must not be
-    // sitewide, and it must never be what withholds the catalogue.
+    // So the rule is back to its original shape, and it is the stronger one:
+    // NO access overlay in the component tree at all.
     const layout = readFileSync(join(process.cwd(), "src/app/layout.tsx"), "utf8");
     expect(layout, "an age gate in the layout is the sitewide overlay again").not.toContain("AgeGate");
     expect(layout).not.toContain("data-age-verified");
 
-    // Home page only, and the home page still fetches nothing for a stranger.
     const home = readFileSync(join(process.cwd(), "src/app/page.tsx"), "utf8");
-    expect(home).toContain("<AgeGate />");
+    expect(home, "the front door must not grow a second gate in front of the portal")
+      .not.toContain("<AgeGate />");
+    expect(existsSync(join(process.cwd(), "src/components/age-gate.tsx")),
+      "the overlay component is back; the portal is the one gate").toBe(false);
+
+    // The teeth that always mattered: the catalogue is withheld by the session
+    // read, never by anything painted over it.
     expect(home, "the catalogue read must stay conditional on the session")
       .toContain("const catalogVisible = Boolean(viewer);");
 

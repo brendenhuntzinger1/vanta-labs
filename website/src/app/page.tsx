@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
-import { AgeGate } from "@/components/age-gate";
 import { HeroVideo } from "@/components/hero-video";
 import { ProductCard } from "@/components/product-card";
 import { ScrollReveal } from "@/components/scroll-reveal";
@@ -105,11 +104,21 @@ export default async function HomePage() {
 
   return (
     <div className="min-h-screen bg-[#0f0f0f] text-white">
-      {/* THE QUESTION THE WALL USED TO ASK BY ACCIDENT. Painted in the
-          browser, after this server render, so Googlebot and the carrier and
-          ad-platform reviewers still receive the whole page — which is the
-          reason "/" is public at all. See components/age-gate.tsx. */}
-      <AgeGate />
+      {/* NO OVERLAY HERE, AND THAT IS THE OWNER'S CALL RATHER THAN AN
+          OVERSIGHT. A second attestation overlay lived on this page briefly.
+          It asked the same two sentences the sign-in portal has always asked
+          — the identical constants — so a visitor answered the same question
+          twice on the way to the catalogue, once on the front door and again
+          at the portal a click later. One gate, and it is the portal: it is
+          the screen that carries the Google and Apple sign-in, it is where an
+          account is created, and it is the only one of the two whose answer
+          becomes a durable record against that account.
+
+          THE CATALOGUE IS STILL WITHHELD, and never by CSS. `catalogVisible`
+          below is a session read, so a stranger's render fetches no products,
+          names none and serialises none. "/" is public (access-policy.ts,
+          "THE FRONT DOOR") so Twilio, Meta and Googlebot receive this page in
+          full; what stands between it and the store is the portal. */}
       <SiteHeaderV2 />
       <main>
 

@@ -20,12 +20,7 @@ export const AGE_ATTESTATION_TEXT = "I confirm that I am at least 21 years old."
 export const RESEARCH_USE_ATTESTATION_TEXT =
   "I agree and understand that the products on this site are intended strictly for laboratory research use only, and not for human or animal consumption.";
 
-/**
- * Where the browser remembers that this visitor has already answered.
- *
- * A UI gate, deliberately, and not an access control: the wall, the SQL
- * policies and the checkout's own attestation are what actually withhold
- * anything. This only stops the front door showing a research-peptide
- * catalogue's marketing to somebody who has not said they are 21.
- */
-export const AGE_GATE_STORAGE_KEY = "vl_age_attested";
+// A localStorage key lived here, for a front-door overlay that remembered a
+// visitor's answer in their browser. It is gone with the overlay: the two
+// sentences are asked once, at the sign-in portal, where the answer is written
+// against an account instead of a browser and is therefore worth keeping.

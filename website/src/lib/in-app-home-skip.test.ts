@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { NextRequest } from "next/server";
 
@@ -39,9 +39,9 @@ const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
 // and the answer is known before a byte of HTML is written. No home page is
 // rendered, nothing flashes, and it holds however "/" was reached.
 //
-// The age gate keeps its own version of this check. It is now unreachable in
-// practice — a visitor cannot be standing on "/" in an in-app browser — and is
-// kept as the fallback for any path where middleware does not run.
+// The age gate kept its own version of this check as a fallback. That overlay
+// is gone (it re-asked what the sign-in portal already asks), so the server
+// decision above is the only one, which is where this header wanted it anyway.
 // ---------------------------------------------------------------------------
 
 const IN_APP_AGENTS = {
@@ -324,14 +324,23 @@ describe("the classifier is not duplicated", () => {
     // mechanism exists to remove. What was wrong was never the overlay; it was
     // that the overlay could navigate.
     //
-    // AN AGE GATE EXISTS AGAIN, because opening "/" for Twilio's verification
-    // took away the 307 that had been asking a stranger's age by accident. It
-    // cannot move anybody: it has no router, no href and no location write, and
-    // that — not its filename — is what this test now holds it to.
+    // AN AGE GATE CAME BACK BRIEFLY, because opening "/" for Twilio's
+    // verification took away the 307 that had been asking a stranger's age by
+    // accident, and then went again: it re-asked the two sentences the sign-in
+    // portal already asks, so a visitor answered the same question twice. The
+    // portal is the one gate now, and it is a NAVIGATION rather than an
+    // overlay — it cannot move anybody after paint because it is not on the
+    // page after paint.
+    //
+    // The property is unchanged and is what this holds: nothing on the home
+    // page may relocate a visitor once the page is on screen. So no component
+    // it renders may carry a client-side destination.
     expect(mw).toMatch(/const IN_APP_HOME_REPLACEMENT: string \| null = null;/);
-    const gate = readFileSync(join(process.cwd(), "src/components/age-gate.tsx"), "utf8");
+    const home = readFileSync(join(process.cwd(), "src/app/page.tsx"), "utf8");
     for (const move of ["useRouter", "router.push", "router.replace", "window.location", "redirect("]) {
-      expect(gate, `the age gate must not be able to move a visitor (${move})`).not.toContain(move);
+      expect(home, `the home page must not be able to move a visitor (${move})`).not.toContain(move);
     }
+    expect(existsSync(join(process.cwd(), "src/components/age-gate.tsx")),
+      "an overlay that can hold its own destination is back on the front door").toBe(false);
   });
 });
