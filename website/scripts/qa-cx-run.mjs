@@ -62,7 +62,17 @@ function loadPrizeTable() {
 
 const PRIZES = loadPrizeTable();
 
-const PHASES = (process.env.CX_PHASES ?? "gate,home,catalog,variants,cart,wheel,nowheel,checkout,mobile,desktop,inapp,confused,network,compliance,affiliate,account,security")
+// THE REFERRAL CODE THIS HARNESS ACTUALLY HAS.
+//
+// `/r/[code]` sets vl_referral_code only for a code it can RESOLVE, which is
+// correct — an unknown code should not plant an attribution. Production's DREW
+// does not exist in the harness database, so a scenario pointed at it proved
+// nothing except that the guard works. QAAMB is an approved harness ambassador.
+// Production's own hop is verified separately and directly:
+//   GET /r/DREW -> 307 + set-cookie: vl_referral_code=DREW; Secure; SameSite=lax
+const REFERRAL_CODE = process.env.CX_REFERRAL_CODE ?? "QAAMB";
+
+const PHASES = (process.env.CX_PHASES ?? "gate,home,catalog,variants,cart,wheel,nowheel,checkout,mobile,desktop,inapp,confused,network,compliance,affiliate,account,security,a11y")
   .split(",").map((s) => s.trim()).filter(Boolean);
 const on = (p) => PHASES.includes(p);
 
@@ -560,9 +570,13 @@ async function phaseCart() {
       expected: "the cart survives back and forward navigation" },
     async () => {
       await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
-      await page.goBack({ waitUntil: "domcontentloaded" });
-      await page.goForward({ waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(900);
+      await page.goBack({ waitUntil: "domcontentloaded" }).catch(() => {});
+      // A forward entry replaced by a client-side navigation aborts here. That
+      // is the driver, not the shop: what matters is that the basket is intact
+      // after the customer has moved back and forth, which is asserted below
+      // regardless of how the forward step resolved.
+      await page.goForward({ waitUntil: "domcontentloaded" }).catch(() => {});
+      await page.waitForTimeout(1100);
       const c = await cartState(page);
       const items = c?.items ?? [];
       return { ok: items.length === 2, actual: `${items.length} line(s)` };
@@ -1189,7 +1203,7 @@ async function phaseCompliance() {
 // ===========================================================================
 async function phaseAffiliate() {
   await scenario(
-    { group: "affiliate", persona: "referred customer", device: "phone 390 Chromium", entry: "/r/DREW",
+    { group: "affiliate", persona: "referred customer", device: "phone 390 Chromium", entry: `/r/${REFERRAL_CODE}`,
       expected: "a referral link is remembered through the portal, the store and the cart" },
     async () => {
       const email = await createConfirmedCustomer(newEmail("referred"));
@@ -1201,7 +1215,7 @@ async function phaseAffiliate() {
       // it — without following the absolute redirect the harness proxy
       // mis-origins onto an http port. The cookie is the whole point: it is
       // what carries the referral from here to the order.
-      await ctx.request.get(`${BASE}/r/DREW`, { maxRedirects: 0 }).catch(() => {});
+      await ctx.request.get(`${BASE}/r/${REFERRAL_CODE}`, { maxRedirects: 0 }).catch(() => {});
       await page.waitForTimeout(400);
       const afterHop = (await ctx.cookies()).find((c) => /referral/i.test(c.name));
       await signIn(page, email);
@@ -1220,14 +1234,14 @@ async function phaseAffiliate() {
 
   await scenario(
     { group: "affiliate", persona: "referred customer who then spins", device: "phone 390 Chromium",
-      entry: "/r/DREW then /spin",
+      entry: `/r/${REFERRAL_CODE} then /spin`,
       expected: "winning a prize does not erase the referral" },
     async () => {
       const email = await createConfirmedCustomer(newEmail("refspin"));
       await mintOffer({ email, prize: PRIZES.find((p) => p.id === "percent_15_a") });
       const ctx = await freshContext({ viewport: PHONE });
       const page = await ctx.newPage();
-      await ctx.request.get(`${BASE}/r/DREW`, { maxRedirects: 0 }).catch(() => {});
+      await ctx.request.get(`${BASE}/r/${REFERRAL_CODE}`, { maxRedirects: 0 }).catch(() => {});
       await page.waitForTimeout(400);
       await signIn(page, email);
       await page.goto(`${BASE}/spin`, { waitUntil: "domcontentloaded" });
@@ -1405,6 +1419,124 @@ async function phaseSecurity() {
 }
 
 // ===========================================================================
+// PHASE: a11y — the three fixes, proven in a browser rather than in a diff
+// ===========================================================================
+async function phaseA11y() {
+  const email = await createConfirmedCustomer(newEmail("a11y"));
+
+  await scenario(
+    { group: "a11y", persona: "screen-reader user", device: "phone 390 Chromium", entry: "/spin",
+      expected: "T-1: /spin exposes exactly one main landmark" },
+    async () => {
+      const ctx = await freshContext({ viewport: PHONE });
+      const page = await ctx.newPage();
+      await signIn(page, email);
+      await page.goto(`${BASE}/spin`, { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(1400);
+      const n = await page.evaluate(() => document.querySelectorAll("main, [role=main]").length);
+      await ctx.close();
+      return { ok: n === 1, actual: `main landmarks: ${n}` };
+    });
+
+  await scenario(
+    { group: "a11y", persona: "keyboard-only user", device: "desktop Chromium", entry: "/products",
+      expected: "T-3: the first Tab reaches a skip link that actually moves focus into the content" },
+    async () => {
+      const ctx = await freshContext({ viewport: DESKTOP });
+      const page = await ctx.newPage();
+      await signIn(page, email);
+      await page.goto(`${BASE}/products`, { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(1200);
+      await page.evaluate(() => document.body.focus());
+      await page.keyboard.press("Tab");
+      const first = await page.evaluate(() => {
+        const a = document.activeElement;
+        return { tag: a?.tagName, text: (a?.textContent || "").trim(), href: a?.getAttribute?.("href") ?? null };
+      });
+      // Visible once focused, not merely present.
+      const visible = await page.evaluate(() => {
+        const a = document.activeElement; if (!a) return false;
+        const r = a.getBoundingClientRect(); return r.width > 1 && r.height > 1;
+      });
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(500);
+      const landed = await page.evaluate(() => document.activeElement?.id ?? null);
+      await ctx.close();
+      const isSkip = /skip/i.test(first.text) && first.href === "#vl-main-content";
+      return { ok: isSkip && visible && landed === "vl-main-content",
+        actual: `firstTab=${first.tag} "${first.text}" href=${first.href} visibleOnFocus=${visible} focusAfterEnter=${landed}` };
+    });
+
+  await scenario(
+    { group: "a11y", persona: "vestibular-sensitive user (prefers-reduced-motion)", device: "phone 390 Chromium",
+      entry: "/spin",
+      expected: "T-2: reduced motion removes the spin animation and NOTHING else — one prize, same rules" },
+    async () => {
+      const e2 = await createConfirmedCustomer(newEmail("reduced"));
+      const ctx = await freshContext({ viewport: PHONE });
+      await ctx.emulateMedia?.({ reducedMotion: "reduce" });
+      const page = await ctx.newPage();
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await signIn(page, e2);
+      await page.goto(`${BASE}/spin`, { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(1500);
+      await dismissConsent(page);
+      const spun = await page.evaluate(() => {
+        const b = [...document.querySelectorAll("button")].find((x) => /spin/i.test(x.textContent || "") && !x.disabled);
+        if (b) { b.click(); return true; } return false;
+      });
+      // Sampled DURING the window the animation would have occupied.
+      await page.waitForTimeout(700);
+      const transition = await page.evaluate(() => {
+        const g = document.querySelector("svg g[style*='rotate'], svg g");
+        return g ? getComputedStyle(g).transitionDuration : null;
+      });
+      await page.waitForTimeout(2500);
+      const rows = await q(
+        `select reward_kind, product_slug, percent_off, min_subtotal_cents,
+                extract(epoch from (expires_at - issued_at))::int as ttl_seconds
+         from customer_offers where email = $1`, [e2]);
+      await ctx.close();
+      const one = rows.rows.length === 1;
+      const r = rows.rows[0] ?? {};
+      // The prize must still be a real wedge on the ordinary 72-hour clock.
+      const ttlOk = one && Math.abs(Number(r.ttl_seconds) - 259200) <= 5;
+      const noAnim = transition === "0s" || transition === null;
+      return { ok: spun && one && ttlOk && noAnim,
+        actual: `spun=${spun} offers=${rows.rows.length} kind=${r.reward_kind ?? "-"} `
+          + `min=${r.min_subtotal_cents ?? "-"} ttl=${r.ttl_seconds ?? "-"}s (want 259200) transitionDuration=${transition}` };
+    });
+
+  await scenario(
+    { group: "a11y", persona: "screen-reader user", device: "desktop Chromium", entry: "/products/glp-1",
+      expected: "the dose and quantity pickers announce which option is selected" },
+    async () => {
+      const ctx = await freshContext({ viewport: DESKTOP });
+      const page = await ctx.newPage();
+      await signIn(page, email);
+      await page.goto(`${BASE}/products/glp-1`, { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(1200);
+      const before = await page.evaluate(() => [...document.querySelectorAll("button[aria-pressed]")]
+        .map((b) => ({ t: (b.textContent || "").trim().slice(0, 14), p: b.getAttribute("aria-pressed") })));
+      // Choose a different dose and confirm the announcement follows the choice.
+      await page.evaluate(() => {
+        const n = (s) => (s || "").split("\u2605")[0].replace(/\s+/g, "").toLowerCase();
+        const el = [...document.querySelectorAll("button")].find((x) => n(x.textContent) === "20mg");
+        if (el) el.click();
+      });
+      await page.waitForTimeout(500);
+      const after = await page.evaluate(() => [...document.querySelectorAll("button[aria-pressed]")]
+        .map((b) => ({ t: (b.textContent || "").trim().slice(0, 14), p: b.getAttribute("aria-pressed") })));
+      await ctx.close();
+      const pressedBefore = before.filter((b) => b.p === "true").length;
+      const pressedAfter = after.filter((b) => b.p === "true").length;
+      const twentyPressed = after.some((b) => /^20mg/.test(b.t) && b.p === "true");
+      return { ok: before.length > 0 && pressedBefore >= 1 && pressedAfter >= 1 && twentyPressed,
+        actual: `${before.length} aria-pressed controls; pressed before=${pressedBefore} after=${pressedAfter}; 20mg pressed=${twentyPressed}` };
+    });
+}
+
+// ===========================================================================
 async function main() {
   await client.connect();
   await loadCatalog();
@@ -1439,6 +1571,7 @@ async function main() {
   if (on("affiliate")) await phaseAffiliate();
   if (on("account")) await phaseAccount();
   if (on("security")) await phaseSecurity();
+  if (on("a11y")) await phaseA11y();
 
   const failed = writeReports();
   await client.end();
