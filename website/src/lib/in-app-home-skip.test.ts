@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { NextRequest } from "next/server";
 
@@ -39,9 +39,9 @@ const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
 // and the answer is known before a byte of HTML is written. No home page is
 // rendered, nothing flashes, and it holds however "/" was reached.
 //
-// The age gate keeps its own version of this check. It is now unreachable in
-// practice — a visitor cannot be standing on "/" in an in-app browser — and is
-// kept as the fallback for any path where middleware does not run.
+// The age gate kept its own version of this check as a fallback. That overlay
+// is gone (it re-asked what the sign-in portal already asks), so the server
+// decision above is the only one, which is where this header wanted it anyway.
 // ---------------------------------------------------------------------------
 
 const IN_APP_AGENTS = {
@@ -137,21 +137,22 @@ describe("an in-app browser now keeps the home page, like everyone else", () => 
       // by browser would be a cloak either way.
       const inApp = await redirectTarget({ path: "/", ua });
       const desktop = await redirectTarget({ path: "/", ua: REAL_BROWSER_AGENTS["chrome desktop"] });
-      expect(inApp, "the home page is served, not redirected").toBeNull();
-      expect(inApp).toBe(desktop);
+      expect(inApp, "the front door meets the portal").toContain("/account/login");
+      expect(inApp, "the answer must not depend on the browser").toBe(desktop);
     });
   }
 
-  it("never routes an in-app visitor anywhere at all", async () => {
-    // The regression this guarded was a DOUBLE hop, when "/" redirected to the
-    // catalogue and the catalogue redirected to sign-in. There is no hop left
-    // to double: the home page is served where it was asked for. Pinned as
-    // "nowhere" rather than deleted, because a future in-app special case
-    // would reintroduce exactly the browser-dependent routing this file exists
-    // to forbid.
+  it("never double-hops an in-app visitor, which is the loop this file exists for", async () => {
+    // The regression this guards is a DOUBLE hop: "/" redirecting to the
+    // catalogue and the catalogue redirecting to sign-in. "/" is gated again,
+    // so there IS one hop now — and exactly one. It must land on the portal
+    // directly, and the portal must be a place that does not itself redirect,
+    // or an in-app browser spins.
     for (const ua of Object.values(IN_APP_AGENTS)) {
-      const target = await redirectTarget({ path: "/", ua });
-      expect(target, "an in-app browser is not routed off the home page").toBeNull();
+      const first = await redirectTarget({ path: "/", ua });
+      expect(first, "the front door must go straight to the portal").toBe("/account/login?next=%2F");
+      const second = await redirectTarget({ path: "/account/login", ua });
+      expect(second, "the portal itself must not redirect, or this is a loop").toBeNull();
     }
   });
 
@@ -162,14 +163,24 @@ describe("an in-app browser now keeps the home page, like everyone else", () => 
     // pageview dropped — the campaign was billed for an arrival the store
     // never recorded.
     //
-    // Now the ad lands on the page it bought, with its query string intact and
-    // nothing to survive, because nothing moves it. The strongest form of
-    // "attribution survives the hop" is that there is no hop.
-    const target = await redirectTarget({
+    // "/" is gated again, so the hop is back and has to be survivable rather
+    // than absent. It is: middleware copies the tags to the top level of the
+    // portal URL and keeps the full original in `next`, which
+    // ad-attribution-through-access-wall.test.ts proves end to end against the
+    // real parser. What THIS file owns is the narrower claim — the hop is the
+    // same hop for every browser, so no attribution is lost on account of who
+    // is asking.
+    const inApp = await redirectTarget({
       path: "/?ttclid=ABC123&utm_source=tiktok",
       ua: IN_APP_AGENTS.tiktok,
     });
-    expect(target, "a paid click must land where it was pointed").toBeNull();
+    const desktop = await redirectTarget({
+      path: "/?ttclid=ABC123&utm_source=tiktok",
+      ua: REAL_BROWSER_AGENTS["chrome desktop"],
+    });
+    expect(inApp, "the tags must reach the portal").toContain("ttclid=ABC123");
+    expect(inApp, "the destination must survive the hop").toContain("next=");
+    expect(inApp, "a paid click must not be routed by browser").toBe(desktop);
   });
 
   it("treats an RSC navigation the same as a page load", async () => {
@@ -179,7 +190,7 @@ describe("an in-app browser now keeps the home page, like everyone else", () => 
     // withheld from someone the document is served to.
     const asDocument = await redirectTarget({ path: "/", ua: IN_APP_AGENTS.tiktok });
     const asPayload = await redirectTarget({ path: "/", ua: IN_APP_AGENTS.tiktok, document: false });
-    expect(asPayload).toBeNull();
+    expect(asPayload, "the flight payload must meet the same wall").toContain("/account/login");
     expect(asPayload).toBe(asDocument);
   });
 
@@ -191,8 +202,8 @@ describe("an in-app browser now keeps the home page, like everyone else", () => 
 
 describe("every browser that can play the vial keeps it", () => {
   for (const [name, ua] of Object.entries(REAL_BROWSER_AGENTS)) {
-    it(`serves ${name} the home page, like every other browser`, async () => {
-      expect(await redirectTarget({ path: "/", ua })).toBeNull();
+    it(`answers ${name} at the front door like every other browser`, async () => {
+      expect(await redirectTarget({ path: "/", ua })).toBe("/account/login?next=%2F");
     });
 
     it(`answers ${name} the same way from a paid social link`, async () => {
@@ -200,30 +211,54 @@ describe("every browser that can play the vial keeps it", () => {
       // render, and it is attacker-supplied. It must not move the answer.
       const plain = await redirectTarget({ path: "/", ua });
       const paid = await redirectTarget({ path: "/?ttclid=ABC123", ua });
-      expect(paid, "a tracking parameter must not change what is served").toBeNull();
-      expect(paid).toBe(plain);
+      expect(paid, "a tracking parameter must not change WHERE a visitor is sent")
+        .toContain("/account/login");
+      // The destinations differ only by the query the visitor actually brought.
+      expect(paid?.startsWith("/account/login")).toBe(plain?.startsWith("/account/login"));
     });
   }
 
   it("answers a request with no user-agent identically", async () => {
-    // A crawler, a curl, a scanner. Unknown gets the same answer as everyone,
-    // and that answer is now the page rather than the wall. This is the
-    // assertion that matters most to the SMS work: a carrier's checker often
-    // sends no recognisable user-agent at all, and it must not be a special
-    // case in either direction.
+    // A crawler, a curl, a scanner. Unknown gets the same answer as everyone.
+    // This is the assertion that matters most to the SMS work: a carrier's
+    // checker often sends no recognisable user-agent at all, and it must not be
+    // a special case in EITHER direction — not given the page, not refused it.
+    // The compliance island below is what such a checker is pointed at, and it
+    // is public for everybody rather than for anybody in particular.
     const anonymous = await redirectTarget({ path: "/" });
     const desktop = await redirectTarget({ path: "/", ua: REAL_BROWSER_AGENTS["chrome desktop"] });
-    expect(anonymous).toBeNull();
+    expect(anonymous).toBe("/account/login?next=%2F");
     expect(anonymous).toBe(desktop);
   });
 
-  it("serves the SMS opt-in page to every browser alike", async () => {
-    // The page a carrier opens. Same uniformity rule: no user-agent may change
-    // whether the consent form is reachable.
-    for (const ua of [...Object.values(REAL_BROWSER_AGENTS), ...Object.values(IN_APP_AGENTS)]) {
-      expect(await redirectTarget({ path: "/sms", ua })).toBeNull();
+  it("serves the compliance island to every browser alike", async () => {
+    // The pages a carrier opens. Same uniformity rule: no user-agent may change
+    // whether the consent form or a policy is reachable, in either direction.
+    const ISLAND = ["/sms", "/privacy", "/terms", "/legal/privacy", "/legal/terms"];
+    for (const path of ISLAND) {
+      for (const ua of [...Object.values(REAL_BROWSER_AGENTS), ...Object.values(IN_APP_AGENTS)]) {
+        expect(await redirectTarget({ path, ua }), `${path} was gated for one browser`).toBeNull();
+      }
+      expect(await redirectTarget({ path }), `${path} needed a user-agent`).toBeNull();
     }
-    expect(await redirectTarget({ path: "/sms" })).toBeNull();
+  });
+
+  it("does not let the island become a way into the store", async () => {
+    // Standing on a public page changes nothing about the next request. The
+    // wall is a function of the path, so there is no state to carry — but this
+    // is the property the whole island arrangement rests on, so it is asserted
+    // rather than argued: ask for the store with a Referer from each public
+    // page and get the portal every time.
+    for (const from of ["/sms", "/privacy", "/terms"]) {
+      for (const into of ["/", "/products", "/cart", "/account"]) {
+        const headers = new Headers({ referer: `https://www.vantalabsresearch.com${from}` });
+        headers.set("sec-fetch-dest", "document");
+        const response = await middleware(
+          new NextRequest(new URL(into, "https://www.vantalabsresearch.com"), { method: "GET", headers }),
+        );
+        expect(response.headers.get("location"), `${from} unlocked ${into}`).toContain("/account/login");
+      }
+    }
   });
 });
 
@@ -324,14 +359,23 @@ describe("the classifier is not duplicated", () => {
     // mechanism exists to remove. What was wrong was never the overlay; it was
     // that the overlay could navigate.
     //
-    // AN AGE GATE EXISTS AGAIN, because opening "/" for Twilio's verification
-    // took away the 307 that had been asking a stranger's age by accident. It
-    // cannot move anybody: it has no router, no href and no location write, and
-    // that — not its filename — is what this test now holds it to.
+    // AN AGE GATE CAME BACK BRIEFLY, because opening "/" for Twilio's
+    // verification took away the 307 that had been asking a stranger's age by
+    // accident, and then went again: it re-asked the two sentences the sign-in
+    // portal already asks, so a visitor answered the same question twice. The
+    // portal is the one gate now, and it is a NAVIGATION rather than an
+    // overlay — it cannot move anybody after paint because it is not on the
+    // page after paint.
+    //
+    // The property is unchanged and is what this holds: nothing on the home
+    // page may relocate a visitor once the page is on screen. So no component
+    // it renders may carry a client-side destination.
     expect(mw).toMatch(/const IN_APP_HOME_REPLACEMENT: string \| null = null;/);
-    const gate = readFileSync(join(process.cwd(), "src/components/age-gate.tsx"), "utf8");
+    const home = readFileSync(join(process.cwd(), "src/app/page.tsx"), "utf8");
     for (const move of ["useRouter", "router.push", "router.replace", "window.location", "redirect("]) {
-      expect(gate, `the age gate must not be able to move a visitor (${move})`).not.toContain(move);
+      expect(home, `the home page must not be able to move a visitor (${move})`).not.toContain(move);
     }
+    expect(existsSync(join(process.cwd(), "src/components/age-gate.tsx")),
+      "an overlay that can hold its own destination is back on the front door").toBe(false);
   });
 });

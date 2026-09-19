@@ -20,17 +20,36 @@
 // If a future change needs to know the requester's identity to decide what to
 // serve here, that change is wrong.
 //
-// THE PRICE, STATED PLAINLY: the research library is no longer indexable,
-// because Googlebot is unauthenticated like everyone else. That is a
-// deliberate decision by the owner, taken with the consequence in front of
-// them, not an accident of this rule.
+// THE PRICE, STATED PLAINLY: the home page and the research library are no
+// longer indexable, because Googlebot is unauthenticated like everyone else.
+// That is a deliberate decision by the owner, taken with the consequence in
+// front of them, not an accident of this rule.
 //
-// THE HOME PAGE IS NAMED PUBLIC BELOW, AND THAT IS NOT A RETREAT FROM ANY OF
-// THIS. It was always written to be served to a stranger: src/app/page.tsx
-// gates the catalogue READ on the session, so a visitor with no cookie causes
-// no product fetch and nothing lands in the flight payload. Closing the
-// default swept it up anyway, and the front door then answered 307 to every
-// unauthenticated request. The entry itself records what that cost.
+// THE FRONT DOOR IS GATED, AND IT WAS BRIEFLY NOT. "/" was opened on
+// 2026-09-18 for Twilio's toll-free verification, on the reasoning that a
+// business whose own domain answers 307 to everyone who cannot sign in has no
+// website a carrier can validate. That reasoning is recorded below and is not
+// being called wrong — but it opened the store's front page to everyone, and
+// the owner's decision on 2026-09-19 is that the universal portal comes first
+// for customers, with the verification surface kept as a NARROW island rather
+// than as an open front page.
+//
+// SO THE ISLAND IS THE EXEMPTION, NOT THE HOME PAGE. /sms, /privacy, /terms
+// and /legal stay public for everyone, forever, with no detection of any kind:
+// a carrier, a crawler, a competitor and a customer all get the identical
+// bytes. What they do NOT do is unlock anything. None of them establishes a
+// session, sets an access cookie or satisfies the portal, so a visitor who
+// reads the privacy policy and then clicks the wordmark meets the portal like
+// anyone else. That is the difference between a public page and a back door.
+//
+// WHAT THIS COSTS, SO THE NEXT PERSON DOES NOT HAVE TO REDISCOVER IT. Twilio's
+// toll-free verification lists "cannot validate business website URL" as an
+// automatic rejection, and this store was refused on it while "/" was gated.
+// Opening /sms, /privacy and /terms answers "opt-in not provided" and "age
+// gate is needed"; it does not obviously answer the website-URL check, because
+// that check is about the business homepage. If a submission is refused on
+// that reason again, THIS ENTRY IS WHY, and the fix is a decision about "/"
+// rather than another rewrite of the consent copy.
 //
 // WHY MIDDLEWARE CARRIES IT.
 //
@@ -58,35 +77,31 @@
 
 /** Public, matched exactly. Anything not listed here or below needs an account. */
 export const PUBLIC_EXACT = new Set([
-  // ---- THE FRONT DOOR.
+  // ---- THE FRONT DOOR IS NOT HERE, AND THAT IS THE DECISION.
   //
-  // Not an exemption granted for convenience: this page was BUILT to be served
-  // to a stranger. page.tsx reads the viewer's session, sets `catalogVisible`
-  // from it, and only then decides whether to call getCatalogProducts(). The
-  // signed-out render fetches nothing, names nothing and serialises nothing —
-  // the distinction its own header draws between "not fetched" and "fetched
-  // and hidden".
+  // "/" was listed here between 2026-09-18 and 2026-09-19. It is deliberately
+  // absent again: the owner's call is that a customer meets ONE gate — the
+  // portal at /account/login, which carries the 21+ and research-use
+  // attestation above Google and Apple sign-in — and that after passing it
+  // they reach the home page and the whole store with nothing else asked.
   //
-  // WHAT GATING IT COST, MEASURED RATHER THAN ASSUMED. With "/" absent from
-  // this list, every unauthenticated request to the site's own domain answered
+  // So a signed-out GET / answers
   //
   //     GET /   307 -> /account/login?next=%2F
   //
-  // so to any party that could not sign in, the business had no website. That
-  // is the automatic-rejection case in Twilio's toll-free verification
-  // ("Cannot validate business website URL"), and this store's SMS programme
-  // was refused on it repeatedly while the consent copy being rewritten each
-  // time was already correct. Meta and TikTok review the same way, and
-  // Googlebot had stopped seeing the one page that has to win the branded
-  // query.
+  // and after sign-in the visitor lands back on the home page. The `next`
+  // parameter is what makes this one gate rather than a detour: a deep link to
+  // a product page returns to that product page.
   //
-  // THE CATALOGUE IS NOT AFFECTED. /products, /products/[slug], /coa-library,
-  // /cart and /checkout stay behind the wall, and the SQL policy behind them
-  // is what actually withholds the rows. Opening the front door widens none of
-  // that, and public-pages-name-no-product.test.ts holds this page to the same
-  // "no catalogue name reaches an anonymous reader" rule as every other public
-  // page.
-  "/",
+  // WHAT IT COSTS is recorded in this file's header and is not repeated here,
+  // except for the part that matters at this exact line: this 307 is the
+  // "cannot validate business website URL" rejection. It was taken knowingly.
+  //
+  // The page itself is still WRITTEN to be safe for a stranger — page.tsx
+  // gates the catalogue read on the session, so even served publicly it fetches
+  // and serialises no products. That has not changed and must not, because it
+  // is what makes reopening "/" a one-line decision rather than a rebuild.
+  //
   // ---- THE SMS OPT-IN PAGE.
   //
   // A carrier reviewing a toll-free number has to SEE the consent being

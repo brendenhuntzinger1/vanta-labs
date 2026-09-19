@@ -38,13 +38,15 @@ export default function robots(): MetadataRoute.Robots {
         // URLs that answer 307. That costs crawl budget and teaches Google the
         // site is full of redirects.
         //
-        // The home page is deliberately NOT listed, and the reason changed on
-        // 2026-09-18. It used to be "Disallow: / would block the whole site
-        // including the pages that ARE public, and it is gated anyway". The
-        // second half is no longer true: "/" is public again (see the entry in
-        // access-policy.ts for what gating it cost), so a crawler now gets the
-        // real front page. The first half still holds, and it is now the whole
-        // reason — the home page is the one URL this site most wants indexed.
+        // The home page is deliberately NOT listed, and the reason went back on
+        // 2026-09-19 to what it was before: "Disallow: /" would block the whole
+        // site including the pages that ARE public — /sms, /privacy, /terms and
+        // /legal, which exist precisely to be fetched by anyone — and the home
+        // page is gated anyway, so a crawler asking for it gets a 307 and
+        // discovers nothing. Listing it would buy nothing and cost the island.
+        //
+        // "/" was public for one day (see access-policy.ts) and this comment
+        // read the other way round. The wall moved, not this file's logic.
         //
         // /sms is likewise absent, and that is also deliberate. It is a
         // legitimate public consent page rather than something to hide: a
