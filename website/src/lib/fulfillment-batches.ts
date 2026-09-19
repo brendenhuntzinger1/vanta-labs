@@ -3,6 +3,7 @@ import { businessDayKey, businessHour } from "@/lib/business-day";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { bucketForOrder, exceptionsForOrder, inPackingOrder, type OrderBucketInput } from "@/lib/fulfillment-buckets";
+import { isShippableOrderType } from "@/lib/order-pipeline";
 
 // ---------------------------------------------------------------------------
 // BATCHES, PICKING AND PACKING.
@@ -71,8 +72,13 @@ export async function createBatch(input: {
   for (const orderId of input.orderIds) {
     const row = byId.get(orderId);
     if (!row) { rejected.push({ orderId, reason: "Order not found." }); continue; }
-    if (String(row.order_type ?? "") === "membership") {
-      rejected.push({ orderId, reason: "Membership orders are digital and never ship." });
+    if (!isShippableOrderType(row.order_type as string | null | undefined)) {
+      rejected.push({
+        orderId,
+        reason: String(row.order_type ?? "").toLowerCase() === "membership"
+          ? "Membership orders are digital and never ship."
+          : "Test orders must not be shipped.",
+      });
       continue;
     }
     const asInput = row as unknown as OrderBucketInput;

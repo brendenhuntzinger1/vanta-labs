@@ -3,6 +3,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { findPaidRetry, PAID_RETRY_WINDOW_MS, type PaidOrderCandidate, type PaidRetryLink } from "@/lib/payment-failure";
+import { NON_SALE_ORDER_TYPES } from "@/lib/ledger";
 import { sendEmail } from "@/lib/email/send";
 import { enqueueFailedEmail } from "@/lib/email/retry-queue";
 import { shippingUpdateTemplate } from "@/lib/email/templates";
@@ -28,9 +29,19 @@ export interface AdminOrderRow {
    * list, so an operator had no way to tell a test order from a real one
    * without opening it. Surfaced as a badge by admin-orders-client.
    *
-   * THIS IS A LABEL, NOT A LEDGER RULE. Only NON_SALE_ORDER_TYPES decides what
-   * counts as revenue, and 'test' is deliberately not in it — the charge was
-   * real money and still reports as such. See ledger.ts.
+   * IT IS NO LONGER A LABEL ONLY, and this comment used to say it was: "only
+   * NON_SALE_ORDER_TYPES decides what counts as revenue, and 'test' is
+   * deliberately not in it — the charge was real money and still reports as
+   * such." The charge is indeed real money, but it is the owner's own money
+   * paid to the owner's own store, and reporting it as revenue made /admin
+   * describe a business that had sold something it had not.
+   *
+   * So 'test' is now in NON_SALE_ORDER_TYPES (no revenue, no sale count), out of
+   * the profit report entirely via ledger.countsInFinancials (no COGS, no
+   * postage, no fee — see why the two predicates differ there), and in
+   * order-pipeline.NON_SHIPPABLE_ORDER_TYPES so it is never offered to be
+   * packed. The badge below is what is left of the label: it tells an operator
+   * which row this is, which the numbers no longer need to.
    */
   order_type: string | null;
   /**
@@ -244,13 +255,17 @@ async function findPaidRetries(rows: readonly RetryCandidateRow[]): Promise<Map<
   if (!Number.isFinite(earliest)) return links;
 
   try {
-    const { data, error } = await supabaseAdmin
+    let retryQuery = supabaseAdmin
       .from("orders")
       .select("order_id, order_number, customer_email, created_at, amount_paid, order_type")
-      .eq("payment_status", "paid")
-      // A $0 replacement shipment is not a sale (ledger.ts); the same-kind rule
-      // in findPaidRetry also drops it, this just keeps it out of the read.
-      .neq("order_type", "replacement")
+      .eq("payment_status", "paid");
+    // Not a sale, so not a "they retried and paid" either (ledger.ts). A $0
+    // replacement shipment never was; a test order is the same mistake wearing a
+    // different type — it would have linked a real customer's failed checkout to
+    // the owner's own test purchase and reported the lost sale as recovered.
+    // The whole set, so the next type added to the ledger lands here too.
+    for (const orderType of NON_SALE_ORDER_TYPES) retryQuery = retryQuery.neq("order_type", orderType);
+    const { data, error } = await retryQuery
       .in("customer_email", Array.from(emails))
       .gt("created_at", new Date(earliest).toISOString())
       .lte("created_at", new Date(latest + PAID_RETRY_WINDOW_MS).toISOString())

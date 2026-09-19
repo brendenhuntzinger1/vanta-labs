@@ -12,7 +12,7 @@ import {
   type ExceptionReason,
   type OrderBucketInput,
 } from "@/lib/fulfillment-buckets";
-import { fulfillmentStatusLabel, normalizeLegacyStatus } from "@/lib/order-pipeline";
+import { fulfillmentStatusLabel, NON_SHIPPABLE_ORDER_TYPES_FILTER, normalizeLegacyStatus } from "@/lib/order-pipeline";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 
 // ---------------------------------------------------------------------------
@@ -113,9 +113,12 @@ function toQueueOrder(row: Record<string, unknown>, batchId: string | null = nul
   };
 }
 
-// Every query below is scoped to PHYSICAL, PAID orders: membership orders are
-// digital and never ship, and unpaid orders are abandoned carts. Both would
-// bury the orders that actually need work.
+// Every query below is scoped to SHIPPABLE, PAID orders. A membership is
+// digital and never ships; a test order is physical but has no customer waiting
+// for it and has had its stock returned to the shelf, so packing one oversells.
+// Unpaid orders are abandoned carts. All three would bury the orders that
+// actually need work. The set itself is order-pipeline.NON_SHIPPABLE_ORDER_TYPES
+// — `onlyShippableOrders` is the one place it is applied to a query.
 
 /** Every raw status that maps into a bucket, so a query can ask for it. */
 function rawStatusesForBucket(bucket: BucketId): string[] {
@@ -229,7 +232,7 @@ export const getBucketCounts = cache(async function getBucketCounts(): Promise<B
       supabaseAdmin
         .from("orders")
         .select(BUCKET_DECISION_COLUMNS)
-        .neq("order_type", "membership")
+        .not("order_type", "in", NON_SHIPPABLE_ORDER_TYPES_FILTER)
         // This list IS the predicate of idx_orders_fulfillment_counts
         // (sql/fulfillment-batches.sql). A partial index is only usable when
         // the query implies its predicate, so adding a status here without
@@ -286,7 +289,7 @@ export async function getBucketOrders(
       .select(QUEUE_COLUMNS)
       .eq("payment_status", "paid")
       .eq("fulfillment_status", status)
-      .neq("order_type", "membership")
+      .not("order_type", "in", NON_SHIPPABLE_ORDER_TYPES_FILTER)
       .order("paid_at", { ascending: true, nullsFirst: false })
       .limit(limit);
     if (error) throw error;
@@ -369,7 +372,7 @@ export async function getExceptionOrders(opts: { limit?: number } = {}): Promise
       supabaseAdmin
         .from("orders")
         .select(QUEUE_COLUMNS)
-        .neq("order_type", "membership")
+        .not("order_type", "in", NON_SHIPPABLE_ORDER_TYPES_FILTER)
         .in("payment_status", ["paid", "awaiting_verification"])
         // created_at rather than paid_at: an awaiting_verification order — one
         // of the exception reasons — has no paid_at at all, and ordering a

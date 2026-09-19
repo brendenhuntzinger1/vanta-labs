@@ -53,7 +53,7 @@ as $$
     from public.orders
     where ambassador_id is not null
       and payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
-      and coalesce(order_type, 'product') <> 'replacement'
+      and coalesce(order_type, 'product') not in ('replacement', 'test')
     group by ambassador_id
   ),
   k as (

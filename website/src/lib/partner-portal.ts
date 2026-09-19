@@ -5,7 +5,7 @@ import { validatePayoutHandle } from "@/lib/payout-handle-validation";
 import { redactEmailForLog } from "@/lib/log-redaction";
 import { CustomerFacingError } from "@/lib/safe-error";
 import { validateReferralCodeFormat } from "@/lib/referral-code-validation";
-import { isEarnedCommission, isRevenueOrderStatus, isSaleOrder, netOrderRevenue, REVENUE_ORDER_STATUSES } from "@/lib/ledger";
+import { isEarnedCommission, isRevenueOrderStatus, isSaleOrder, netOrderRevenue, NON_SALE_ORDER_TYPES, REVENUE_ORDER_STATUSES } from "@/lib/ledger";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 import { businessMonthKey, startOfBusinessDayIso, startOfBusinessMonth, startOfBusinessMonthIso } from "@/lib/business-day";
 import { formatDisplayDate } from "@/lib/format-date";
@@ -1704,6 +1704,24 @@ export async function getAdminOperationsSummary(): Promise<AdminOperationsSummar
     // ledger.ts — netOrderRevenue over REVENUE_ORDER_STATUSES, replacements
     // excluded — which is what makes this tile agree with /admin/revenue.
     const revenueStatuses = [...REVENUE_ORDER_STATUSES];
+    // Replacements are excluded for the same reason admin_ops_summary's
+    // per_customer CTE excludes them: admin-replacements.ts writes a reship as a
+    // paid order under the ORIGINAL BUYER'S email, so a one-time buyer who was
+    // sent one had two paid rows and was counted as a RETURNING customer. The
+    // repeat-purchase tile was counting the store's own warranty shipments as
+    // repeat business, and improved the more reships it sent.
+    //
+    // A test order is the same failure with a different type: it carries the
+    // owner's own email, so it made them a "returning customer" too. Built from
+    // NON_SALE_ORDER_TYPES rather than naming a type, so the ledger stays the
+    // only place the rule is written.
+    let repeatCustomerQuery = supabaseAdmin
+      .from("orders")
+      .select("customer_email")
+      .eq("payment_status", "paid");
+    for (const orderType of NON_SALE_ORDER_TYPES) {
+      repeatCustomerQuery = repeatCustomerQuery.neq("order_type", orderType);
+    }
     const [
       { data: todayOrders, error: todayError },
       { data: monthOrders, error: monthError },
@@ -1722,13 +1740,7 @@ export async function getAdminOperationsSummary(): Promise<AdminOperationsSummar
         .select("amount_paid, refund_amount, payment_status, order_type")
         .in("payment_status", revenueStatuses)
         .gte("paid_at", monthStart),
-      // Replacements are excluded for the same reason admin_ops_summary's
-      // per_customer CTE excludes them: admin-replacements.ts writes a reship as
-      // a paid order under the ORIGINAL BUYER'S email, so a one-time buyer who
-      // was sent one had two paid rows and was counted as a RETURNING customer.
-      // The repeat-purchase tile was counting the store's own warranty
-      // shipments as repeat business, and improved the more reships it sent.
-      supabaseAdmin.from("orders").select("customer_email").eq("payment_status", "paid").neq("order_type", "replacement"),
+      repeatCustomerQuery,
     ]);
     assertNoSupabaseError("orders.select(live sales today)", todayError);
     assertNoSupabaseError("orders.select(live sales month)", monthError);

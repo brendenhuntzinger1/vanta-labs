@@ -1,6 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { NON_SHIPPABLE_ORDER_TYPES_FILTER } from "@/lib/order-pipeline";
 import { isDomesticCountry } from "@/lib/shipping";
 
 export interface FulfillmentItem {
@@ -66,6 +67,9 @@ export async function getFulfillmentRows(filters: FulfillmentFilters = {}): Prom
   const to = from + pageSize - 1;
   const status = filters.status ?? "queue";
 
+  // Nothing that cannot be put in a box: a membership is digital, and a test
+  // order's stock has already gone back on the shelf. See
+  // order-pipeline.NON_SHIPPABLE_ORDER_TYPES.
   let query = supabaseAdmin
     .from("orders")
     .select(
@@ -73,8 +77,7 @@ export async function getFulfillmentRows(filters: FulfillmentFilters = {}): Prom
       { count: "exact" },
     )
     .eq("payment_status", "paid")
-    // Membership orders are digital — never shipped, so keep them out of the queue.
-    .neq("order_type", "membership")
+    .not("order_type", "in", NON_SHIPPABLE_ORDER_TYPES_FILTER)
     .order("paid_at", { ascending: true, nullsFirst: false });
 
   if (status === "queue") {

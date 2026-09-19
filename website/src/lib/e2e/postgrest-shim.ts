@@ -27,6 +27,8 @@ type Filter =
   | { kind: "eq" | "gt" | "gte" | "lt" | "lte"; column: string; value: unknown }
   | { kind: "in"; column: string; value: unknown[] }
   | { kind: "is"; column: string; value: null | boolean }
+  | { kind: "notIs"; column: string; value: null | boolean }
+  | { kind: "notIn"; column: string; value: unknown[] }
   | { kind: "neq"; column: string; value: unknown };
 
 export interface ShimOptions {
@@ -91,6 +93,37 @@ class QueryBuilder<T> implements PromiseLike<ShimResult<T>> {
   in(column: string, value: unknown[]) { this.filters.push({ kind: "in", column, value }); return this; }
   is(column: string, value: null | boolean) { this.filters.push({ kind: "is", column, value }); return this; }
 
+  /**
+   * `.not(column, op, value)` — the negated forms the application actually uses:
+   * `not.is.null` and `not.in.(a,b)`.
+   *
+   * ABSENT UNTIL NOW, which meant any module reaching one of them could not be
+   * exercised against this shim at all — it died on `not is not a function`.
+   * Three call sites were already in that position (admin-customers' non-null
+   * email, order-sync's two shipment sweeps) and the fulfillment queues' order
+   * type exclusion made a fourth.
+   *
+   * An unknown operator throws. Returning `this` and ignoring it would drop a
+   * filter the production query applies, and a dropped filter WIDENS the result
+   * set — so the test sees more rows than production would and an exclusion
+   * proves itself by not being tested.
+   */
+  not(column: string, op: string, value: unknown) {
+    if (op === "is") {
+      this.filters.push({ kind: "notIs", column, value: value === "null" ? null : (value as null | boolean) });
+      return this;
+    }
+    if (op === "in") {
+      // PostgREST's wire form is the string `(a,b)`; supabase-js passes it through.
+      const values = Array.isArray(value)
+        ? value
+        : String(value).replace(/^\(|\)$/g, "").split(",").map((part) => part.trim()).filter(Boolean);
+      this.filters.push({ kind: "notIn", column, value: values });
+      return this;
+    }
+    throw new Error(`postgrest-shim: unsupported .not(${column}, ${op}, …)`);
+  }
+
   // supabase-js appends each `.order()` as an additional sort key, in call
   // order — which is what makes keyset-free paging deterministic.
   order(column: string, opts?: { ascending?: boolean }) {
@@ -121,6 +154,21 @@ class QueryBuilder<T> implements PromiseLike<ShimResult<T>> {
         }
         case "is":
           return filter.value === null ? `${col} is null` : `${col} is ${filter.value ? "true" : "false"}`;
+        case "notIs":
+          return filter.value === null ? `${col} is not null` : `${col} is not ${filter.value ? "true" : "false"}`;
+        case "notIn": {
+          // An empty exclusion list excludes nothing — `not in ()` is a syntax
+          // error, and `false` here would be the opposite of what was asked.
+          if (filter.value.length === 0) return "true";
+          const placeholders = filter.value.map((v) => { params.push(v); return `$${params.length}`; });
+          // `not in` over a NULL column yields NULL, which WHERE drops. Every
+          // column the app negates this way is NOT NULL, but a shim that
+          // silently loses rows on a nullable one would be a trap, so the null
+          // case is spelled out as "keep it" — matching PostgREST, which builds
+          // the same `not.in` predicate and leaves the three-valued logic to
+          // Postgres only where the column really can be null.
+          return `(${col} is null or ${col} not in (${placeholders.join(", ")}))`;
+        }
         case "neq":
           params.push(filter.value);
           return `${col} is distinct from $${params.length}`;

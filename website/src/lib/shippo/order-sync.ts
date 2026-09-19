@@ -12,7 +12,7 @@ import {
 import { isShippoConfigured } from "@/lib/shippo/config";
 import { buildOrderParcel, toCountryCode } from "@/lib/shippo/service";
 import type { ShippoAddress, ShippoOrderLineItem, ShippoTransactionCreated } from "@/lib/shippo/types";
-import { canTransition } from "@/lib/order-pipeline";
+import { canTransition, isShippableOrderType, NON_SHIPPABLE_ORDER_TYPES_FILTER } from "@/lib/order-pipeline";
 import { recordSystemAlert } from "@/lib/monitoring";
 
 // ---------------------------------------------------------------------------
@@ -344,10 +344,12 @@ export async function syncOrderToShippo(orderId: string): Promise<SyncOutcome> {
     return { ok: false, reason: "Only paid orders are sent to Shippo.", retryable: false };
   }
 
-  // Memberships are digital. Pushing one would put a shipment in the Orders tab
-  // for something that will never be posted.
-  if (String(order.order_type ?? "product") === "membership") {
-    return { ok: false, reason: "Membership orders are not shipped.", retryable: false };
+  // Memberships are digital, and a test order has no customer waiting for it —
+  // its stock is already back on the shelf, so posting one oversells. Pushing
+  // either would put a shipment in the Orders tab for something that will never
+  // be posted. Same set as the sweeps above (NON_SHIPPABLE_ORDER_TYPES).
+  if (!isShippableOrderType(order.order_type as string | null | undefined)) {
+    return { ok: false, reason: "This order type is never shipped.", retryable: false };
   }
 
   // These two checks run BEFORE anything is claimed or sent, and both used to
@@ -1111,7 +1113,7 @@ export async function sweepMissingShipments(limit = 20): Promise<{ attempted: nu
     .from("orders")
     .select("order_id")
     .eq("payment_status", "paid")
-    .neq("order_type", "membership")
+    .not("order_type", "in", NON_SHIPPABLE_ORDER_TYPES_FILTER)
     .not("shippo_order_id", "is", null)
     .is("shippo_shipment_id", null)
     .is("shippo_transaction_id", null)
@@ -1141,7 +1143,7 @@ export async function sweepUnsyncedOrders(limit = 20): Promise<{ attempted: numb
     .from("orders")
     .select("order_id")
     .eq("payment_status", "paid")
-    .neq("order_type", "membership")
+    .not("order_type", "in", NON_SHIPPABLE_ORDER_TYPES_FILTER)
     .is("shippo_order_id", null)
     .order("paid_at", { ascending: true, nullsFirst: false })
     .limit(Math.min(100, Math.max(1, limit)));

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { NON_SALE_ORDER_TYPES } from "@/lib/ledger";
 
 // ---------------------------------------------------------------------------
 // TWO METRIC DEFINITIONS THAT WERE OWNER DECISIONS, NOW SETTLED — AND THE
@@ -111,11 +112,27 @@ describe("M-14: a warranty reship is not an order the customer placed", () => {
     // `agg` produces order_count and total_spent; `named` picks the display
     // name off the most recent row. Excluding from only one would leave the
     // count right and the name taken from a reship, or the reverse.
-    expect([...fn.matchAll(/coalesce\(order_type, 'product'\) <> 'replacement'/g)].length).toBeGreaterThanOrEqual(2);
+    //
+    // ASSERTED AGAINST THE LEDGER'S SET, not a literal. This pinned the exact
+    // string `<> 'replacement'`, so widening the rule to cover test orders broke
+    // it — and the only thing the failure told you was that the text had
+    // changed, not whether the new text was right. Now it fails when a type the
+    // ledger calls a non-sale is missing from either CTE, which is the property
+    // M-14 is actually about.
+    const predicates = [...fn.matchAll(/coalesce\(order_type, 'product'\)\s*(?:<>|not in)\s*\(?([^)\n]*)\)?/g)];
+    expect(predicates.length).toBeGreaterThanOrEqual(2);
+    for (const predicate of predicates) {
+      const listed = predicate[1].split(",").map((part) => part.trim().replace(/^'|'$/g, ""));
+      for (const orderType of NON_SALE_ORDER_TYPES) expect(listed).toContain(orderType);
+    }
   });
 
   it("the TypeScript twin excludes them too", () => {
-    expect(code(CUSTOMERS)).toContain('.neq("order_type", "replacement")');
+    // Also the ledger's set rather than one hardcoded type: admin-customers.ts
+    // now loops NON_SALE_ORDER_TYPES for exactly the reason this test exists —
+    // so the SQL and the TypeScript cannot be widened one at a time.
+    expect(code(CUSTOMERS)).toContain("for (const orderType of NON_SALE_ORDER_TYPES)");
+    expect(code(CUSTOMERS)).toContain('.neq("order_type", orderType)');
   });
 
   it("still counts every status, because placing an order is not paying for one", () => {

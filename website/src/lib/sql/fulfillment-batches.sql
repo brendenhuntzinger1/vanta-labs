@@ -154,12 +154,20 @@ create index concurrently if not exists idx_orders_fulfillment_queue
   on public.orders (payment_status, fulfillment_status, paid_at);
 
 -- The drop is not optional and must come FIRST: `if not exists` matches on the
--- NAME only, so on any database still carrying the old `payment_status = 'paid'`
--- definition the create below would be a silent no-op and the index would stay
--- unusable by its own caller.
+-- NAME only, so on any database still carrying an older predicate the create
+-- below would be a silent no-op and the index would stay unusable by its own
+-- caller. That has now bitten twice — first on `payment_status = 'paid'`, then
+-- on the membership-only order_type clause this predicate replaces.
+--
+-- THE PREDICATE MUST TRACK order-pipeline.NON_SHIPPABLE_ORDER_TYPES EXACTLY.
+-- A partial index is only usable when the query implies its predicate, so the
+-- moment getBucketCounts started excluding 'test' as well, an index that still
+-- said "not membership" no longer matched the query and Postgres fell back to a
+-- sequential scan on every admin page load. Silent, and slower the bigger the
+-- store gets — which is the opposite of why these indexes exist.
 drop index concurrently if exists idx_orders_fulfillment_counts;
 
 create index concurrently if not exists idx_orders_fulfillment_counts
   on public.orders (payment_status, fulfillment_status)
   where payment_status in ('paid', 'awaiting_verification')
-    and order_type is distinct from 'membership';
+    and order_type not in ('membership', 'test');

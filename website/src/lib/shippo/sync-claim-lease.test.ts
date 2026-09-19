@@ -52,7 +52,15 @@ vi.mock("@/lib/shippo/service", () => ({
   toCountryCode: (v: string) => v || "US",
 }));
 vi.mock("@/lib/admin-profit", () => ({ recordActualShippingCost: vi.fn(async () => {}) }));
-vi.mock("@/lib/order-pipeline", () => ({ canTransition: () => true }));
+// Partial, not total. This was `() => ({ canTransition: () => true })`, which
+// replaces the WHOLE module — so the day order-sync.ts started calling a second
+// thing from it (isShippableOrderType), all seven tests here died on a missing
+// export while having nothing to do with the change. The override that this file
+// actually cares about is kept; everything else stays real.
+vi.mock("@/lib/order-pipeline", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/order-pipeline")>()),
+  canTransition: () => true,
+}));
 const address = {
   name: "Origin", company: "", street1: "1 Origin Way", street2: "", city: "Testville",
   state: "FL", zip: "33333", country: "US", phone: "", email: "",

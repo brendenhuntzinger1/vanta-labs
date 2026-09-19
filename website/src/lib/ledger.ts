@@ -79,19 +79,72 @@ export function hasCapturedPayment(status: string | null | undefined): boolean {
   return CAPTURED_PAYMENT_STATUSES.has(String(status ?? "").toLowerCase());
 }
 
+// An order placed to exercise checkout, not to buy anything. The owner pays
+// themselves, the goods never leave, and the row is retired by hand afterwards.
+//
+// IT IS NOT IN THE BOOKS AT ALL, which is what makes it different from every
+// other type here. A replacement has no revenue but real costs; a membership
+// has real revenue and no costs; a test has NEITHER, because nothing about it
+// happened commercially. See `countsInFinancials`.
+//
+// This used to be a LABEL ONLY — admin-orders.ts said so in as many words, and
+// the badge in the orders list was the whole of its effect. So a test order
+// reported as revenue on /admin/revenue, carried a COGS and a processor fee
+// into the profit dashboard, and sat in the packing queue waiting to be
+// shipped to the owner. The store's own 2026-09-19 test order (VL-594E0EAB,
+// $3.00 against an 80% coupon) is what surfaced all three.
+export const TEST_ORDER_TYPES = new Set(["test"]);
+
+export function isTestOrder(orderType: string | null | undefined): boolean {
+  return TEST_ORDER_TYPES.has(String(orderType ?? "product").toLowerCase());
+}
+
 // The order types that are NOT sales. A `replacement` is an outbound reshipment
 // the store paid for itself: payment_status is "paid" and amount_paid is 0, so
 // every count that filters on status alone counts it as an order and divides
 // revenue by a denominator that includes it — 100 sales plus 3 reships reports
 // 103 orders and drags average order value down with three $0 denominators.
 //
+// A `test` is not a sale either, for a different reason: there was no buyer.
+// The money is real (a card really was charged) but it is the store's own money
+// moving in a circle, and counting it inflates revenue, the order count, and
+// every per-order average derived from the two.
+//
 // A `membership` IS a sale (real money, real revenue). It is excluded from
 // FULFILLMENT because nothing ships, which is a different question answered by
 // a different filter. Nothing here may be used to drop it from revenue.
-export const NON_SALE_ORDER_TYPES = new Set(["replacement"]);
+export const NON_SALE_ORDER_TYPES = new Set(["replacement", ...TEST_ORDER_TYPES]);
 
 export function isSaleOrder(orderType: string | null | undefined): boolean {
   return !NON_SALE_ORDER_TYPES.has(String(orderType ?? "product").toLowerCase());
+}
+
+/**
+ * Does this order belong in the FINANCIAL REPORTS at all — profit included?
+ *
+ * `isSaleOrder` is not this question, and the profit engine is where the two
+ * come apart. A replacement is not a sale, but admin-profit still counts its
+ * row: "a replacement's COSTS are counted below exactly like any other
+ * order's — the merchandise and the postage were really spent. Only the sale
+ * count excludes it." That is right, and it is exactly why `isSaleOrder` alone
+ * cannot exclude a test order from profit: it would have kept the row and gone
+ * on booking the COGS, the postage estimate and the processor fee against a
+ * sale the store made to itself.
+ *
+ * A test order has no honest line in the books on EITHER side:
+ *
+ *   revenue   — the store paid itself; the money came back out of the same
+ *               pocket it went into
+ *   COGS      — nothing shipped, and the stock was returned to the shelf
+ *   postage   — no label was ever bought
+ *   fee       — real, but a few cents of self-inflicted cost that says nothing
+ *               about how the business is doing, which is what the report is for
+ *
+ * So the row is dropped whole rather than netted to zero. Netting would still
+ * put it in the order count, the estimated-cost count and the average.
+ */
+export function countsInFinancials(orderType: string | null | undefined): boolean {
+  return !isTestOrder(orderType);
 }
 
 /**

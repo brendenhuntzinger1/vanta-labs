@@ -97,8 +97,25 @@ function makeClient(rows: Row[]) {
         not(column: string, op: string, value: unknown) {
           if (op === "is" && (value === null || value === "null")) {
             filters.push((row) => row[column] != null);
+            return builder;
           }
-          return builder;
+          // `not.in` — how the queues exclude order types that never ship.
+          // PostgREST spells the value `(a,b)`, which is what the caller passes.
+          //
+          // THIS BRANCH USED NOT TO EXIST, and the method fell through to a bare
+          // `return builder` for every operator it did not know. So a filter the
+          // production query really applies was silently dropped here, and a test
+          // asserting "test orders are not on the board" would have passed
+          // against a fake that never excluded them. An unrecognised operator now
+          // throws rather than quietly widening the result set.
+          if (op === "in") {
+            const wanted = new Set(
+              String(value).replace(/^\(|\)$/g, "").split(",").map((part) => part.trim()).filter(Boolean),
+            );
+            filters.push((row) => !wanted.has(String(row[column] ?? "")));
+            return builder;
+          }
+          throw new Error(`fake client: unsupported .not(${column}, ${op}, …)`);
         },
         order(column: string, opts?: { ascending?: boolean }) {
           sortColumn = column;

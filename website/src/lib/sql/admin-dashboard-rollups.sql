@@ -17,6 +17,19 @@
 -- dashboard does. The JS fallback applies the same exclusion, so the app is
 -- correct either way — but an instance still running the OLD function bodies
 -- keeps over-counting until this file is re-applied.
+--
+-- 'test' JOINED 'replacement' IN EVERY ONE OF THOSE PREDICATES (2026-09-19). A
+-- test order is a real card charge the owner made to themselves to exercise
+-- checkout; it is not a sale, and it was being counted as one on every surface
+-- these functions back. ledger.NON_SALE_ORDER_TYPES is the TypeScript half of
+-- the same list and ledger-test-order-rule.test.ts fails if this file and that
+-- set stop agreeing, so neither can be widened alone.
+--
+-- RE-APPLY THIS FILE. The exclusion lives in the function BODIES, so an
+-- instance that has not re-run it keeps counting test orders as revenue while
+-- the JS fallback does not — the two numbers disagree depending on whether the
+-- rollup migration happens to be present, which is the exact failure the
+-- DEPLOYMENT ORDER NOTE above was written about.
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -63,7 +76,7 @@ as $$
       paid_at
     from public.orders
     where payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
-      and coalesce(order_type, 'product') <> 'replacement'
+      and coalesce(order_type, 'product') not in ('replacement', 'test')
   )
   select
     coalesce(sum(net), 0) as total_paid_revenue,
@@ -91,7 +104,7 @@ as $$
     count(*) as orders
   from public.orders
   where payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
-    and coalesce(order_type, 'product') <> 'replacement'
+    and coalesce(order_type, 'product') not in ('replacement', 'test')
   group by coalesce(payment_method, '')
   order by revenue desc;
 $$;
@@ -173,7 +186,7 @@ as $$
       max(created_at) as last_order_at
     from public.orders
     where customer_email is not null and trim(customer_email) <> ''
-      and coalesce(order_type, 'product') <> 'replacement'
+      and coalesce(order_type, 'product') not in ('replacement', 'test')
     group by lower(trim(customer_email))
   ),
   named as (
@@ -182,7 +195,7 @@ as $$
       customer_name as name
     from public.orders
     where customer_email is not null and trim(customer_email) <> ''
-      and coalesce(order_type, 'product') <> 'replacement'
+      and coalesce(order_type, 'product') not in ('replacement', 'test')
     order by lower(trim(customer_email)), created_at desc
   ),
   joined as (
@@ -261,7 +274,7 @@ as $$
     select customer_email, count(*) as cnt
     from public.orders
     where payment_status = 'paid' and customer_email is not null and customer_email <> ''
-      and coalesce(order_type, 'product') <> 'replacement'
+      and coalesce(order_type, 'product') not in ('replacement', 'test')
     group by customer_email
   )
   -- LIVE SALES IS KEYED ON paid_at, NOT created_at (ADM-11 / VL-PARITY-01).
@@ -288,12 +301,12 @@ as $$
     coalesce((select sum(round(coalesce(amount_paid, 0) - coalesce(refund_amount, 0), 2))
               from public.orders
               where payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
-                and coalesce(order_type, 'product') <> 'replacement'
+                and coalesce(order_type, 'product') not in ('replacement', 'test')
                 and paid_at is not null and paid_at >= p_today_start), 0) as live_sales_today,
     coalesce((select sum(round(coalesce(amount_paid, 0) - coalesce(refund_amount, 0), 2))
               from public.orders
               where payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
-                and coalesce(order_type, 'product') <> 'replacement'
+                and coalesce(order_type, 'product') not in ('replacement', 'test')
                 and paid_at is not null and paid_at >= p_month_start), 0) as live_sales_month,
     coalesce((select count(*) from per_customer where cnt = 1), 0) as new_customers,
     coalesce((select count(*) from per_customer where cnt > 1), 0) as returning_customers,
@@ -376,7 +389,7 @@ as $$
   from public.orders
   where bulk_discount_tier is not null
     and payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
-    and coalesce(order_type, 'product') <> 'replacement'
+    and coalesce(order_type, 'product') not in ('replacement', 'test')
   group by bulk_discount_tier;
 $$;
 

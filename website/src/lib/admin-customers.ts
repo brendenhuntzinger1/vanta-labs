@@ -1,7 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { netOrderRevenue } from "@/lib/ledger";
+import { NON_SALE_ORDER_TYPES, netOrderRevenue } from "@/lib/ledger";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 
 // There is no customer-account system yet (Phase 5) - this aggregates the
@@ -35,19 +35,27 @@ export interface AdminCustomerListResult {
 }
 
 async function aggregateCustomers(search?: string): Promise<AdminCustomerRow[]> {
-  const { data, error } = await supabaseAdmin
+  let ordersQuery = supabaseAdmin
     .from("orders")
     .select("customer_email, customer_name, amount_paid, refund_amount, payment_status, created_at")
-    .not("customer_email", "is", null)
-    // A warranty reship is written as a paid order under the ORIGINAL BUYER'S
-    // email (admin-replacements.ts), so it would be counted here as an order
-    // this customer placed. It is the store's own shipment. Excluded to match
-    // admin_customer_rollup's `agg` CTE — see M-14 in admin-dashboard-rollups.sql.
-    // The two must agree, or /admin/customers changes meaning depending on
-    // whether the rollup migration happens to be present. `orders.order_type` is
-    // `text not null default 'product'`, so `neq` cannot silently drop rows to a
-    // null comparison.
-    .neq("order_type", "replacement")
+    .not("customer_email", "is", null);
+  // A warranty reship is written as a paid order under the ORIGINAL BUYER'S
+  // email (admin-replacements.ts), so it would be counted here as an order this
+  // customer placed. It is the store's own shipment. Excluded to match
+  // admin_customer_rollup's `agg` CTE — see M-14 in admin-dashboard-rollups.sql.
+  // The two must agree, or /admin/customers changes meaning depending on whether
+  // the rollup migration happens to be present. `orders.order_type` is
+  // `text not null default 'product'`, so `neq` cannot silently drop rows to a
+  // null comparison.
+  //
+  // THE WHOLE SET, not the one type this used to name. A test order is the store
+  // buying from itself, so it inflated the customer's order count and lifetime
+  // value exactly as a reship did. Looping NON_SALE_ORDER_TYPES means the next
+  // type added to the ledger is excluded here without anyone having to remember
+  // this call site exists — which is the failure the hardcoded literal caused.
+  for (const orderType of NON_SALE_ORDER_TYPES) ordersQuery = ordersQuery.neq("order_type", orderType);
+
+  const { data, error } = await ordersQuery
     .order("created_at", { ascending: false })
     .limit(5000);
 

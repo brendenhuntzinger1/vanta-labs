@@ -18,6 +18,7 @@ import {
   FULFILLMENT_STATUS_LABELS,
   applyTransition,
   applyTrackingUpdate as applyPipelineTrackingUpdate,
+  isShippableOrderType,
   type FulfillmentStatus,
   type OrderStatusHistoryRecord,
   type TransitionSource,
@@ -244,10 +245,22 @@ async function loadOrder(orderId: string): Promise<ServiceResult<OrderShippingRo
  * A membership is not a parcel. It carries no shipping address by design, and
  * quoting one produces a confusing Shippo validation error instead of the true
  * answer, which is that there is nothing to ship.
+ *
+ * A TEST ORDER IS A PARCEL, and that is why it needs naming here rather than
+ * being caught by accident. It has a real address and real product, so every
+ * check below would pass and a label would buy cleanly — for a box nobody is
+ * waiting for, containing a unit the inventory count has already had returned
+ * to it. The refusal is deliberate, not a side effect of the row being odd.
  */
 function assertShippable(order: OrderShippingRow): ShippoServiceFailure | null {
-  if (String(order.order_type ?? "product") === "membership") {
-    return fail("not_shippable", "This is a membership order — there is nothing to ship.");
+  const orderType = String(order.order_type ?? "product").toLowerCase();
+  if (!isShippableOrderType(orderType)) {
+    return fail(
+      "not_shippable",
+      orderType === "membership"
+        ? "This is a membership order — there is nothing to ship."
+        : "This is a test order — it must not be shipped.",
+    );
   }
   return null;
 }

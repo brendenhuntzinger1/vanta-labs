@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
+import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue, NON_SALE_ORDER_TYPES } from "@/lib/ledger";
 
 // ---------------------------------------------------------------------------
 // PHASE 11, BUCKET 2 — the partner surfaces, held to the same two rules the
@@ -304,7 +304,13 @@ describe("DUP-09 — a replacement reship is not a repeat customer", () => {
     const body = sql.slice(sql.indexOf("create or replace function public.admin_ops_summary"));
     const perCustomer = body.slice(body.indexOf("with per_customer as"), body.indexOf("group by customer_email"));
 
-    expect(perCustomer).toContain("coalesce(order_type, 'product') <> 'replacement'");
+    // Derived from the ledger, not a pinned string: the predicate was widened
+    // to cover test orders and a literal assertion could only report that the
+    // text had moved, never whether it still excluded what it must.
+    const match = /coalesce\(order_type, 'product'\)\s*(?:<>|not in)\s*\(?([^)\n]*)\)?/.exec(perCustomer);
+    expect(match, "per_customer no longer has an order_type exclusion").not.toBeNull();
+    const listed = match![1].split(",").map((part) => part.trim().replace(/^'|'$/g, ""));
+    for (const orderType of NON_SALE_ORDER_TYPES) expect(listed).toContain(orderType);
   });
 });
 

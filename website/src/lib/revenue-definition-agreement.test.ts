@@ -35,6 +35,7 @@ import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger
  *   partial refund  200.00 − 50.00 = 150.00   counts NET
  *   full refund       0.00  excluded (status), and netOrderRevenue would be 0 anyway
  *   replacement       0.00  excluded (order_type) — a reship the store paid for
+ *   test              0.00  excluded (order_type) — the store bought from itself
  *   pending           0.00  excluded (status) — no money has moved
  */
 const BASKET = [
@@ -53,6 +54,12 @@ const BASKET = [
   // disagree again. This row is what keeps the exclusion honest in the meantime.
   { order_id: "o-replacement-paid", payment_status: "paid", order_type: "replacement", amount_paid: 15, refund_amount: 0 },
   { order_id: "o-pending", payment_status: "pending_payment", order_type: "product", amount_paid: 200, refund_amount: 0 },
+  // A TEST ORDER: a real card charge the owner made to themselves to exercise
+  // checkout. It carries money, so none of the `amount <= 0` guards that mask
+  // the $0 replacement can hide it — every surface has to drop it on the
+  // order_type filter or not at all. VL-594E0EAB was $3.00 against an 80%
+  // coupon and was counted as revenue on all five of them.
+  { order_id: "o-test", payment_status: "paid", order_type: "test", amount_paid: 3, refund_amount: 0 },
   // AN OVER-REFUNDED ORDER: more handed back than was ever collected, so its
   // net revenue is NEGATIVE. netOrderRevenue used to floor it at 0 while the
   // profit engine reported the loss, and admin-analytics dropped it outright
@@ -188,6 +195,16 @@ describe("the basket the ledger describes", () => {
     expect(isSaleOrder("replacement")).toBe(false);
     // ...but a membership IS a sale. Nothing here may be used to drop it.
     expect(isSaleOrder("membership")).toBe(true);
+  });
+
+  it("counts a test order as neither revenue nor a sale, though it carries money", () => {
+    // The distinction that matters: a replacement is excluded because there is
+    // no money, a test because there is no buyer. Only the second one survives
+    // an `amount > 0` guard, so a surface that leans on the amount instead of
+    // the type lets it through — which is how o-test above earns its place in
+    // the basket rather than duplicating o-replacement.
+    expect(isSaleOrder("test")).toBe(false);
+    expect(BASKET.find((row) => row.order_id === "o-test")?.amount_paid).toBeGreaterThan(0);
   });
 });
 

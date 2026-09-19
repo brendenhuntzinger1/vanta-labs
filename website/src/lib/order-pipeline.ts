@@ -229,6 +229,63 @@ export function fulfillmentStatusLabel(value: string | null | undefined): string
 }
 
 // ---------------------------------------------------------------------------
+// What actually goes in a box
+// ---------------------------------------------------------------------------
+
+/**
+ * Order types that must never reach a fulfillment queue, a batch, or Shippo.
+ *
+ * `membership` was the only member for a long time and the reason was purely
+ * physical: it is digital, it carries no shipping address by design, and
+ * quoting a parcel for it fails. Seven call sites spell that out as a literal
+ * `.neq("order_type", "membership")`, which is a rule written down seven times
+ * and owned by none of them.
+ *
+ * `test` joins it for a different reason, and the difference matters. A test
+ * order IS physical — real product, real address, a parcel that would post
+ * perfectly well. It must not ship because there is no customer waiting for it
+ * and, once the row is retired, its stock has already been returned to the
+ * shelf. Leaving it in the queue means the next person packing orders picks
+ * and posts a vial the inventory count says is still in stock, which oversells
+ * by one and is invisible until someone reconciles.
+ *
+ * That is not hypothetical: VL-594E0EAB sat in `awaiting_fulfillment` with its
+ * unit already restocked. This set is what keeps the next one out.
+ *
+ * NOT A MONEY RULE. Whether an order counts as revenue is ledger.ts's question
+ * and has different answers — a membership is a sale that never ships, a test
+ * is neither. Nothing here may be used to decide what appears in a report.
+ */
+export const NON_SHIPPABLE_ORDER_TYPES = new Set(["membership", "test"]);
+
+/** `true` when this order type is something a human can actually put in a box. */
+export function isShippableOrderType(orderType: string | null | undefined): boolean {
+  return !NON_SHIPPABLE_ORDER_TYPES.has(String(orderType ?? "product").toLowerCase());
+}
+
+/**
+ * The query-side twin of `isShippableOrderType`, so a queue's SQL and a queue's
+ * in-memory check can never disagree about what ships. Used as
+ * `.not("order_type", "in", NON_SHIPPABLE_ORDER_TYPES_FILTER)`.
+ *
+ * DERIVED FROM THE SET, never typed out. A literal `"(membership,test)"` here
+ * is the same rule written twice, and the seven hand-written
+ * `.neq("order_type", "membership")` call sites this replaces are what that
+ * costs: adding `test` meant finding all seven, and missing one would have left
+ * a queue quietly still offering test orders to be packed.
+ *
+ * SAFE AS `not in` because `orders.order_type` is `not null default 'product'`
+ * (schema-complete-sync.sql), so there is no NULL row for SQL's three-valued
+ * NOT IN to drop on the floor. A nullable column would need
+ * `coalesce(order_type, 'product')`, which is exactly what the SQL rollups do.
+ *
+ * A plain string rather than a helper that takes the builder: wrapping
+ * PostgREST's chain in a generic makes TypeScript re-instantiate its
+ * column-parsing types through every link and give up (TS2589).
+ */
+export const NON_SHIPPABLE_ORDER_TYPES_FILTER = `(${[...NON_SHIPPABLE_ORDER_TYPES].join(",")})`;
+
+// ---------------------------------------------------------------------------
 // Who is allowed to do what
 // ---------------------------------------------------------------------------
 

@@ -4,7 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { businessDayKey, startOfBusinessDay, startOfBusinessMonth, startOfBusinessWeek, startOfBusinessYear } from "@/lib/business-day";
 import { getProfitSettings, type ProfitSettingsConfig } from "@/lib/admin-control";
 import { computeOrderProfit, marginPercentOf, type OrderProfitLine, type OrderProfitResult } from "@/lib/order-profit";
-import { hasCapturedPayment, isEarnedCommission, isSaleOrder } from "@/lib/ledger";
+import { countsInFinancials, hasCapturedPayment, isEarnedCommission, isSaleOrder } from "@/lib/ledger";
 import { refundedTaxFor } from "@/lib/admin-tax-report";
 import { pointsToDollars } from "@/lib/points-math";
 import { readAllRowsBounded } from "@/lib/supabase-page";
@@ -465,12 +465,25 @@ export async function getOrderProfit(orderId: string): Promise<OrderProfit | nul
   const loaded = await computeProfitForOrderId(orderId);
   if (!loaded) return null;
   if (!hasCapturedPayment(loaded.record.payment_status)) return null;
+  // Blank panel on a test order, for the same reason the dashboard drops it:
+  // there is no profit to report on a sale the store made to itself. Callers
+  // already render null as empty cells rather than as a zero.
+  if (!countsInFinancials(loaded.record.order_type)) return null;
   return loaded.profit;
 }
 
 // ---- Many orders, computed once (used by dashboard + analytics) ----
 
 function ordersThatTookMoney(orders: OrderRecord[]): OrderRecord[] {
+  // A TEST ORDER IS NOT IN THE BOOKS, and it has to be dropped HERE rather than
+  // netted to zero downstream. `isSaleOrder` — the predicate the two callers
+  // below already apply — governs only the ORDER COUNT, deliberately, because a
+  // replacement's costs are real and must still land in the total. A test
+  // order's are not: nothing shipped, no label was bought, and the stock went
+  // back on the shelf. Left in, it would have gone on contributing a COGS
+  // fallback, a postage estimate and a processor fee to net profit while
+  // contributing no sale — the report reading worse the more the store tested
+  // itself. See ledger.countsInFinancials for why the two questions differ.
   // EVERY order that captured money, INCLUDING the fully refunded ones.
   //
   // This filtered on isRevenueOrderStatus, which excludes a fully refunded
@@ -484,7 +497,7 @@ function ordersThatTookMoney(orders: OrderRecord[]): OrderRecord[] {
   // Still a SINGLE shared rule, not a hand-written status list: see
   // ledger.CAPTURED_PAYMENT_STATUSES, which is also what keeps orders that
   // never took payment out of the per-order surfaces (M-03).
-  return orders.filter((o) => hasCapturedPayment(o.payment_status));
+  return orders.filter((o) => hasCapturedPayment(o.payment_status) && countsInFinancials(o.order_type));
 }
 
 async function computeProfitForOrders(orders: OrderRecord[]): Promise<OrderProfit[]> {
@@ -540,6 +553,7 @@ export async function getOrderProfitMap(orderIds: string[]): Promise<Map<string,
 
   for (const record of records) {
     if (!hasCapturedPayment(record.payment_status)) continue;
+    if (!countsInFinancials(record.order_type)) continue;
     const overlay = overlays.get(record.order_id);
     map.set(
       record.order_id,
