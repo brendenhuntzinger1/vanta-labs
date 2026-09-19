@@ -152,8 +152,8 @@ describe("the access wall hands the portal a tagged URL", () => {
     expect(location.searchParams.get("next")).toBe(landingUrl(PLATFORMS[1]));
   });
 
-  it.each(["/", "/products", "/products/recon-water"])(
-    "sends %s to the same portal, so every ad destination has one arrival screen",
+  it.each(["/products", "/products/recon-water"])(
+    "sends %s to the same portal, so every gated ad destination has one arrival screen",
     async (path) => {
       const { response, location } = await adClick(landingUrl(PLATFORMS[1], path));
       expect(response.status).toBe(307);
@@ -162,6 +162,27 @@ describe("the access wall hands the portal a tagged URL", () => {
       expect(location.searchParams.get("next")).toBe(landingUrl(PLATFORMS[1], path));
     },
   );
+
+  it("lands a home-page ad directly, because there is no longer a wall to bounce it off", async () => {
+    // "/" WAS IN THE LIST ABOVE UNTIL 2026-09-18, and its removal is an
+    // improvement to attribution rather than a hole in it.
+    //
+    // While the home page was gated, a paid click to "/" was bounced to the
+    // sign-in portal. That bounce is what the rest of this file exists to make
+    // survivable: the tags had to be copied to the top level so the touch could
+    // be read before the visitor signed in, because the signed-out pageview on
+    // the landing page itself was being dropped — /api/analytics/track answered
+    // 401 to anyone without an account, so the store was billed for an arrival
+    // it never recorded.
+    //
+    // A public home page removes the problem instead of surviving it. The click
+    // lands on the page the ad bought, keeping its whole query string, and the
+    // pageview fires from a page that is actually served. Nothing has to cross
+    // a redirect, so nothing can be lost crossing one.
+    const path = "/";
+    const { response } = await adClick(landingUrl(PLATFORMS[1], path));
+    expect(response.status, "a paid click to the home page is served, not redirected").toBe(200);
+  });
 });
 
 // ---------------------------------------------------------------------------

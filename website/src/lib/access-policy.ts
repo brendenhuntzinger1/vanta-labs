@@ -20,10 +20,17 @@
 // If a future change needs to know the requester's identity to decide what to
 // serve here, that change is wrong.
 //
-// THE PRICE, STATED PLAINLY: the home page and the research library are no
-// longer indexable, because Googlebot is unauthenticated like everyone else.
-// That is a deliberate decision by the owner, taken with the consequence in
-// front of them, not an accident of this rule.
+// THE PRICE, STATED PLAINLY: the research library is no longer indexable,
+// because Googlebot is unauthenticated like everyone else. That is a
+// deliberate decision by the owner, taken with the consequence in front of
+// them, not an accident of this rule.
+//
+// THE HOME PAGE IS NAMED PUBLIC BELOW, AND THAT IS NOT A RETREAT FROM ANY OF
+// THIS. It was always written to be served to a stranger: src/app/page.tsx
+// gates the catalogue READ on the session, so a visitor with no cookie causes
+// no product fetch and nothing lands in the flight payload. Closing the
+// default swept it up anyway, and the front door then answered 307 to every
+// unauthenticated request. The entry itself records what that cost.
 //
 // WHY MIDDLEWARE CARRIES IT.
 //
@@ -51,6 +58,69 @@
 
 /** Public, matched exactly. Anything not listed here or below needs an account. */
 export const PUBLIC_EXACT = new Set([
+  // ---- THE FRONT DOOR.
+  //
+  // Not an exemption granted for convenience: this page was BUILT to be served
+  // to a stranger. page.tsx reads the viewer's session, sets `catalogVisible`
+  // from it, and only then decides whether to call getCatalogProducts(). The
+  // signed-out render fetches nothing, names nothing and serialises nothing —
+  // the distinction its own header draws between "not fetched" and "fetched
+  // and hidden".
+  //
+  // WHAT GATING IT COST, MEASURED RATHER THAN ASSUMED. With "/" absent from
+  // this list, every unauthenticated request to the site's own domain answered
+  //
+  //     GET /   307 -> /account/login?next=%2F
+  //
+  // so to any party that could not sign in, the business had no website. That
+  // is the automatic-rejection case in Twilio's toll-free verification
+  // ("Cannot validate business website URL"), and this store's SMS programme
+  // was refused on it repeatedly while the consent copy being rewritten each
+  // time was already correct. Meta and TikTok review the same way, and
+  // Googlebot had stopped seeing the one page that has to win the branded
+  // query.
+  //
+  // THE CATALOGUE IS NOT AFFECTED. /products, /products/[slug], /coa-library,
+  // /cart and /checkout stay behind the wall, and the SQL policy behind them
+  // is what actually withholds the rows. Opening the front door widens none of
+  // that, and public-pages-name-no-product.test.ts holds this page to the same
+  // "no catalogue name reaches an anonymous reader" rule as every other public
+  // page.
+  "/",
+  // ---- THE SMS OPT-IN PAGE.
+  //
+  // A carrier reviewing a toll-free number has to SEE the consent being
+  // collected: the unticked box, the exact TCPA sentence, the programme
+  // description, STOP and HELP, and the policy links. Every existing copy of
+  // that form renders on /products, /products/[slug] or /cart — all of which
+  // require an account. So the one artefact the review is about was the one
+  // artefact a reviewer could not reach, which is the "Opt-in not provided"
+  // rejection.
+  //
+  // This page is that artefact, at a stable URL that can be pasted into a
+  // verification submission and will still answer 200 a year from now. It
+  // names no product and sells nothing, and it carries the same 21+
+  // affirmation the account-creation form carries, so the age check is visible
+  // before a number is taken rather than only after a sign-up.
+  "/sms",
+  // The endpoint behind the page above. Public for the same reason /contact is
+  // public and /api/contact had to follow it: a form whose action answers 307
+  // to a sign-in page is not a form. It records consent and nothing else — it
+  // mints no code, reads no session, and refuses outright unless the tick
+  // arrived explicitly. Rate-limited per requester like every other public
+  // form here.
+  "/api/sms/subscribe",
+  // ---- THE POLICY SHORTCUTS.
+  //
+  // The canonical documents are /legal/privacy and /legal/terms and stay
+  // there; these two are 308s to them, declared in next.config.ts. They exist
+  // because a reviewer, a carrier or a customer types the obvious URL, and
+  // before this the obvious URL was swallowed by the wall and answered with a
+  // sign-in page — the worst possible answer to "show me your privacy policy".
+  // A redirect cannot run if the wall eats the request first, so the SOURCE
+  // has to be public, not just the destination.
+  "/privacy",
+  "/terms",
   // The maintenance page IS the answer when the store is closed.
   "/maintenance",
   // Crawler and browser conventions. Serving a redirect for these is noise.

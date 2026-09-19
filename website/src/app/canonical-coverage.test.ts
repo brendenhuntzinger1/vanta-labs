@@ -44,6 +44,12 @@ const SITEMAP_PAGES: Array<[route: string, file: string]> = [
   ["/research", "research/page.tsx"],
   ["/research/[slug]", "research/[slug]/page.tsx"],
   ["/legal/[slug]", "legal/[slug]/page.tsx"],
+  // The public SMS consent page. It wants no SEO effort, but it is offered to
+  // Google in the sitemap, so by this file's own rule it declares its own
+  // canonical — and it needs one more than most: /sms is the URL submitted to
+  // carriers as opt-in proof, and it is reached with tracking parameters
+  // attached whenever it is linked from a message.
+  ["/sms", "sms/page.tsx"],
 ];
 
 describe("canonical coverage", () => {
