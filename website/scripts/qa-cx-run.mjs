@@ -330,7 +330,10 @@ async function phaseCatalog() {
             status: "ok",
             h1: document.querySelector("h1")?.innerText?.trim() ?? "",
             prices,
-            addable: [...document.querySelectorAll("button")].some((b) => /add to cart|add to bag/i.test(b.textContent || "") && !b.disabled),
+            // The product's OWN control (data-vl-cta), never the Related
+            // Products rail — those are other, in-stock items and scanning the
+            // whole page reported an empty product as addable.
+            addable: [...document.querySelectorAll("button[data-vl-cta]")].some((b) => !b.disabled),
             outOfStock: /out of stock|sold out|notify me/i.test(text),
             researchUse: /research use only|not for human/i.test(text),
             brokenImages: [...document.querySelectorAll("img")].filter((i) => i.currentSrc && i.complete && i.naturalWidth === 0).length,
@@ -340,8 +343,18 @@ async function phaseCatalog() {
         const priceShown = info.prices.includes(expectPrice)
           || (product.doses ?? []).some((d) => info.prices.includes((d.price_cents / 100).toFixed(2)));
         const nameShown = info.h1.toLowerCase().includes(product.name.toLowerCase().split(" ")[0].toLowerCase());
-        // An out-of-stock product legitimately has no enabled add-to-cart.
-        const addOk = info.addable || info.outOfStock;
+        // THE PAGE MUST AGREE WITH THE SHELF, IN BOTH DIRECTIONS.
+        //
+        // This was `info.addable || info.outOfStock`, which passes whichever
+        // way the page goes — an empty product offering Add to Cart satisfied
+        // it as readily as a stocked one. `product.stock_status` is now the
+        // status catalog.ts actually publishes (resolved from the default
+        // dose's own count and inventory.tracking_enabled, not from the stale
+        // products.stock_status column), so the assertion can be the real one.
+        const shouldSell = product.stock_status !== "Out of Stock";
+        const addOk = shouldSell
+          ? info.addable
+          : !info.addable && info.outOfStock;
         // BROKEN IMAGES ARE NOT ASSERTED ON THE HARNESS, and the reason is this
         // harness, not the shop. next.config.ts derives the image optimizer's
         // remotePatterns from NEXT_PUBLIC_SUPABASE_URL — a deliberate
@@ -354,7 +367,7 @@ async function phaseCatalog() {
         // separately.
         const ok = res?.status() === 200 && nameShown && priceShown && addOk;
         return { ok,
-          actual: `status=${res?.status()} h1="${info.h1}" wantPrice=${expectPrice} saw=[${info.prices.slice(0, 4).join(",")}] addable=${info.addable} oos=${info.outOfStock} brokenImg=${info.brokenImages}`,
+          actual: `status=${res?.status()} h1="${info.h1}" wantPrice=${expectPrice} saw=[${info.prices.slice(0, 4).join(",")}] shouldSell=${shouldSell} addable=${info.addable} oos=${info.outOfStock} brokenImg=${info.brokenImages}`,
           notes: `category=${product.category} researchUse=${info.researchUse}` };
       });
   }
@@ -1447,22 +1460,26 @@ async function phaseCartAll() {
         const outOfStock = product.stock_status === "Out of Stock";
 
         if (outOfStock) {
-          // A STORED "Out of Stock" IS NOT A BLOCK HERE, AND THAT IS THE
-          // CONFIGURED BEHAVIOUR — not a defect this run gets to invent.
+          // AN EMPTY SHELF MUST BE REFUSED AT THE PAGE, NOT AT THE TILL.
           //
-          // inventory-settings.ts keeps store-wide gating OFF by default and
-          // says why: switching it on makes stored statuses and zero counts
-          // start blocking sales immediately, and with unpopulated quantities
-          // that would silently pull sellable products off the storefront.
-          // So resolveStockStatus returns "In Stock" for everything and the
-          // CHECKOUT is the guard. Verified against a genuinely empty dose:
-          //   400 "MOTS-C 10mg just sold out. Please adjust your cart and try
-          //        again."
-          // The cost is that the customer is told late; that is recorded as an
-          // observation for the owner, not asserted here as a failure.
-          return { ok: true,
-            actual: `stored status "Out of Stock"; store-wide gating off, so it adds (${lines.length} line) and the checkout refuses`,
-            notes: "checkout is the guard while inventory.tracking_enabled is off" };
+          // This branch used to accept the add and call it configured
+          // behaviour, because the harness ran with inventory.tracking_enabled
+          // unset — the default, which is FALSE. Production has had it TRUE
+          // since 2026-08-25, so the harness was answering a different question
+          // from the shop: MOTS-C, with zero units, was addable here while
+          // production correctly refuses it, and this scenario passed for the
+          // wrong reason. The harness now mirrors production
+          // (scripts/harness-seed-controls.sql) and the expectation is the real
+          // one — the button is disabled and nothing reaches the basket.
+          //
+          // Checkout remains the server-side guard regardless; it answers
+          // 400 "MOTS-C 10mg just sold out. Please adjust your cart and try
+          // again." This asserts the customer never gets that far.
+          return { ok: !added.added && lines.length === 0,
+            actual: added.added
+              ? `an out-of-stock product was ADDED (${lines.length} line) — the page let it through`
+              : `refused at the page (${added.reason}); nothing in the basket`,
+            notes: "inventory.tracking_enabled = true, mirroring production" };
         }
 
         if (!added.added) return { ok: false, actual: added.reason };

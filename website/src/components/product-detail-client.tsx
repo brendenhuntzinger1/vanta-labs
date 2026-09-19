@@ -958,6 +958,14 @@ export function ProductDetailClient({
                   onClick={(event) => handleAddToCart(event.currentTarget)}
                   type="button"
                   disabled={isOutOfStock}
+                  // THIS PRODUCT'S OWN BUY BUTTON, NAMED SO A TEST CAN FIND IT.
+                  // The Related Products rail below carries "Add to Cart"
+                  // buttons for other, in-stock items. A browser check that
+                  // scanned the page for an enabled one therefore reported this
+                  // page as addable while its real control sat disabled — a
+                  // fabricated defect on an out-of-stock product. Presentation
+                  // and behaviour are unchanged; this is an address.
+                  data-vl-cta="primary"
                   // The one bright-gold element on the page. Everything else is
                   // champagne or charcoal so this reads as THE action.
                   className="vl-focus-ring flex-1 rounded-2xl bg-[color:var(--accent-gold-bright)] px-5 py-4 text-sm font-semibold uppercase tracking-[0.08em] text-black shadow-[0_10px_26px_-16px_rgba(199,174,94,0.55)] transition duration-200 hover:-translate-y-px hover:bg-[color:var(--accent-gold-bright-hover)] hover:shadow-[0_14px_32px_-16px_rgba(199,174,94,0.6)] active:translate-y-0 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 motion-reduce:hover:translate-y-0"
@@ -1075,6 +1083,7 @@ export function ProductDetailClient({
             onClick={(event) => handleAddToCart(event.currentTarget)}
             type="button"
             disabled={isOutOfStock}
+            data-vl-cta="sticky"
             className="vl2-btn-primary vl-focus-ring shrink-0 rounded-full px-7 py-3.5 text-xs"
           >
             {isOutOfStock ? "Unavailable" : `Add ${quantity > 1 ? `${quantity} ` : ""}to Cart`}

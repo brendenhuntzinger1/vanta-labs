@@ -272,13 +272,35 @@ function mapProductRow(
   const backingAvailability = defaultDose
     ? defaultDose.availableQuantity ?? undefined
     : sellable(productLevelQuantity, reservedQuantity);
-  // Availability has exactly one source of truth: Vanta Labs. Until tracking is
-  // on (inventoryActive === false) everything is In Stock.
-  const defaultDoseStatus = resolveStockStatus(
-    String(defaultDose?.stockStatus ?? row.stock_status ?? "In Stock"),
-    inventoryActive,
-    backingAvailability,
-  );
+  // THE DOSE IS THE AUTHORITY. products.stock_status IS NOT CONSULTED WHEN ONE
+  // EXISTS, AND IS NOT RELIED ON TO BE FRESH.
+  //
+  // `products.stock_status` and `products.inventory_quantity` are a
+  // denormalised copy of what the doses know, and the copy drifts. Measured on
+  // production 2026-09-19, three of the thirty-four live products disagreed
+  // with their own doses: DSIP and SS-31 stored "Out of Stock" while their
+  // doses held 19 and 18 sellable units, and MOTS-C stored "In Stock" with
+  // none. All forty-six doses were internally consistent; only the product
+  // column was stale.
+  //
+  // No customer saw any of that, because `defaultDose?.stockStatus` shadowed
+  // the column in the `??` chain this replaces — but it shadowed it by
+  // accident of ordering, not by rule. A dose whose status was ever nullish
+  // fell straight through to the stale copy. This states the rule outright:
+  // with a dose present the headline IS the dose's already-resolved status,
+  // which was computed from that dose's own count, its own reservations and
+  // the tracking flag. The column is only read for a product with no dose at
+  // all — none today, and the branch exists so such a product degrades rather
+  // than crashes.
+  //
+  // DISPLAY ONLY, AND NO BEHAVIOUR CHANGE TODAY. Checkout's reservation is a
+  // separate server-side guard and is untouched: a zero-count dose is refused
+  // there with "MOTS-C 10mg just sold out. Please adjust your cart and try
+  // again."
+  const defaultDoseStatus: Product["stockStatus"] = defaultDose
+    ? defaultDose.stockStatus ?? "In Stock"
+    : resolveStockStatus(String(row.stock_status ?? "In Stock"), inventoryActive, backingAvailability);
+
   // A PRODUCT WITH SEVERAL DOSES IS IN STOCK WHEN ANY ENABLED DOSE CAN BE SOLD.
   //
   // The headline status was the default dose's alone. The card, the "In Stock"

@@ -400,6 +400,19 @@ check "the seed applied: six synthetic products" \
 check "product images point at a file that exists in public/" \
   "select not exists (select 1 from public.products where image_url like '/img/%') and not exists (select 1 from public.product_images where image_url like '/img/%');"
 
+# PRODUCTION'S CUSTOMER-FACING CONTROL SETTINGS, NOT THE DEFAULTS.
+#
+# The catalogue alone is not the shop. `inventory.tracking_enabled` is unset on
+# a fresh harness and defaults to FALSE, which makes resolveStockStatus answer
+# "In Stock" for every row; production has had it TRUE since 2026-08-25. A
+# browser test of stock against the default harness therefore passes for the
+# wrong reason — MOTS-C, empty and correctly Out of Stock on production, was
+# addable here. Shipping thresholds, referral percentages and welcome_offer
+# matter for the same reason. No secrets are seeded; see the file's header.
+$PSQL -q -f "$(dirname "$0")/harness-seed-controls.sql" || true
+check "inventory tracking is ON, as it is on production" \
+  "select coalesce((select (metadata->>'value')::boolean from admin_audit_logs where action='admin_control_upsert' and target_table='inventory' and target_id='tracking_enabled' order by created_at desc limit 1), false);"
+
 if [ "$parity_failures" -ne 0 ]; then
   echo ""
   echo "!!  $parity_failures parity check(s) failed. The harness does NOT match production."

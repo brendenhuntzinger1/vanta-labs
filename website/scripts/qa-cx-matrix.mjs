@@ -265,17 +265,54 @@ let CATALOG = [];
 let PRIZES = [];
 
 async function loadCatalog() {
+  // THE DOSE IS THE AUTHORITY, AND SO THIS QUERY ASKS THE DOSE.
+  //
+  // This used to publish `p.stock_status` as the product's stock state, which
+  // is a denormalised copy that has drifted on three of the thirty-four live
+  // rows (DSIP and SS-31 stored "Out of Stock" over 19 and 18 sellable units;
+  // MOTS-C stored "In Stock" with none). Asserting against that column tests
+  // the copy, not the shop. `resolved_status` below mirrors what catalog.ts
+  // actually publishes: the default dose's own status, resolved from its own
+  // count, gated by inventory.tracking_enabled — and a product is sellable if
+  // ANY enabled dose is.
+  const trackingRow = await q(
+    `select coalesce((metadata->>'value')::boolean, false) as on
+       from admin_audit_logs
+      where action = 'admin_control_upsert'
+        and target_table = 'inventory' and target_id = 'tracking_enabled'
+      order by created_at desc limit 1`);
+  const tracking = trackingRow.rows[0]?.on === true;
+
   const r = await q(
-    `select p.slug, p.name, p.category, p.price_cents, p.stock_status, p.image_url,
+    `select p.slug, p.name, p.category, p.price_cents, p.stock_status as product_column_status, p.image_url,
             coalesce(json_agg(json_build_object('id', d.id, 'label', d.label, 'price_cents', d.price_cents,
                                                 'inventory', d.inventory_quantity, 'enabled', d.is_enabled,
+                                                'stock_status', d.stock_status, 'tracks', d.track_inventory,
                                                 'is_default', d.is_default, 'position', d.position)
                               order by d.position) filter (where d.id is not null), '[]') as doses
      from products p left join product_doses d on d.product_id = p.id
      where p.is_active and p.is_published and p.is_enabled and not p.is_archived
-     group by p.slug, p.name, p.category, p.price_cents, p.stock_status, p.image_url
+     group by p.slug, p.name, p.category, p.stock_status, p.price_cents, p.image_url
      order by p.category, p.slug`);
-  CATALOG = r.rows;
+
+  const doseStatus = (dose) => {
+    if (!tracking) return "In Stock";
+    const qty = Number(dose?.inventory ?? 0);
+    if (Number.isFinite(qty) && qty <= 0) return "Out of Stock";
+    return dose?.stock_status || "In Stock";
+  };
+
+  CATALOG = r.rows.map((row) => {
+    const doses = (row.doses ?? []).filter((d) => d.enabled !== false);
+    const fallback = doses.find((d) => d.is_default) ?? doses[0];
+    const resolved = doses.map(doseStatus);
+    const headline = fallback ? doseStatus(fallback) : (tracking ? row.product_column_status || "In Stock" : "In Stock");
+    // catalog.ts: a product with several doses is In Stock when ANY enabled
+    // dose can be sold, even if the default one cannot.
+    const sellable = resolved.some((s) => s === "In Stock");
+    return { ...row, doses, stock_status: headline === "In Stock" || !sellable ? headline : "In Stock",
+             inventory_tracking: tracking };
+  });
 }
 
 /** Read the prize table out of the built app rather than restating it here. */
@@ -370,13 +407,24 @@ async function addToCartFromPdp(page, slug, doseLabel = null) {
     if (!picked) return { added: false, reason: `dose "${doseLabel}" not selectable` };
     await page.waitForTimeout(500);
   }
+  // THIS PRODUCT'S BUY BUTTON, NOT WHICHEVER ONE THE PAGE HAPPENS TO CONTAIN.
+  //
+  // This used to take the first enabled button matching /add to cart/ anywhere
+  // in the document. For an in-stock product that is the right one, because the
+  // page's own CTA comes first; for an OUT-OF-STOCK product the real CTA is
+  // disabled and the search fell through to the Related Products rail, which
+  // carries live Add to Cart buttons for other items. The run then reported
+  // "an out-of-stock product was ADDED" — it had clicked a different product —
+  // and would have added a foreign line to the basket under a stock assertion.
+  // `data-vl-cta` addresses the page's own control directly.
   const clicked = await page.evaluate(() => {
-    const b = [...document.querySelectorAll("button")]
-      .find((x) => /add to cart|add to bag/i.test(x.textContent || "") && !x.disabled);
+    const own = [...document.querySelectorAll("button[data-vl-cta]")];
+    const b = own.find((x) => !x.disabled && x.getBoundingClientRect().width > 0)
+      ?? own.find((x) => !x.disabled);
     if (b) { b.click(); return true; }
     return false;
   });
-  if (!clicked) return { added: false, reason: "no enabled add-to-cart control" };
+  if (!clicked) return { added: false, reason: "the product's own add-to-cart control is disabled" };
   await page.waitForTimeout(900);
   return { added: true };
 }
