@@ -5403,3 +5403,187 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   .vl-sms-scrim, .vl-sms-modal { animation: none; }
   .vl-sms-submit:hover { transform: none; }
 }
+
+/* ---------------------------------------------------------------------------
+   THE PUBLIC SMS OPT-IN PAGE (/sms).
+   
+   ITS OWN CLASSES, NOT THE .vl-sms-* ONES ABOVE, AND DELIBERATELY SO. Those
+   style a prompt that appears beside shopping — a slim bar, a card in a modal —
+   where the legal sentence is correctly quiet: .vl-sms-legal is 0.7rem at 38%
+   white, which is right for a line a shopper has already agreed to once and is
+   now seeing again next to a product.
+
+   It is wrong for THIS page. Here the consent language is the entire subject:
+   a carrier reviewing the toll-free number reads it off a screenshot, and
+   11-pixel text at 38% opacity is the thing that makes a reviewer write
+   "consent language not legible" instead of approving. So the disclosure below
+   is 0.8125rem at 72% — a real contrast ratio on the near-black shell — and the
+   agreement labels are full body size.
+
+   Restyling .vl-sms-legal itself would have been the smaller diff and the wrong
+   one: it would have changed the invitation modal, the catalogue bar, the
+   product line and the cart card, none of which this work is allowed to touch.
+   --------------------------------------------------------------------------- */
+
+.vl-optin-lede {
+  font-size: 1rem;
+  line-height: 1.65;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.vl-optin-identity {
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.vl-optin-identity a {
+  color: rgba(199, 174, 94, 0.9);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.vl-optin-identity a:hover { color: var(--accent-gold); }
+
+.vl-optin-card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.025);
+  padding: 1.5rem 1.35rem;
+}
+
+@media (min-width: 640px) {
+  .vl-optin-card { padding: 1.75rem 1.6rem; }
+}
+
+.vl-optin-field-row { display: flex; flex-direction: column; gap: 0.45rem; }
+
+.vl-optin-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.vl-optin-hint {
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* The two agreements. Generous hit area and a real gap between them, because
+   they are separate decisions and must not read as one stacked block. */
+.vl-optin-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  margin-top: 1.15rem;
+  cursor: pointer;
+}
+
+.vl-optin-consent input[type="checkbox"] {
+  margin-top: 0.12rem;
+  width: 1.2rem;
+  height: 1.2rem;
+  flex-shrink: 0;
+  accent-color: var(--accent-gold);
+}
+
+.vl-optin-consent-text {
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+/* THE SENTENCE A REVIEWER READS. See the note at the top of this block for why
+   it is not .vl-sms-legal. */
+.vl-optin-disclosure {
+  margin-top: 0.9rem;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.vl-optin-disclosure a {
+  color: rgba(199, 174, 94, 0.95);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.vl-optin-disclosure a:hover { color: var(--accent-gold); }
+
+.vl-optin-panel {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.015);
+  padding: 1.35rem 1.3rem;
+}
+
+.vl-optin-panel-title {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: var(--accent-gold);
+}
+
+.vl-optin-panel-body {
+  margin-top: 0.85rem;
+  font-size: 0.875rem;
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.vl-optin-facts { margin-top: 1rem; display: grid; gap: 0.85rem; }
+
+.vl-optin-facts > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+@media (min-width: 640px) {
+  .vl-optin-facts > div {
+    grid-template-columns: 11rem 1fr;
+    gap: 1rem;
+    align-items: baseline;
+  }
+}
+
+.vl-optin-facts dt {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: rgba(255, 255, 255, 0.42);
+}
+
+.vl-optin-facts dd {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.vl-optin-facts dd a {
+  color: rgba(199, 174, 94, 0.95);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.vl-optin-done-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+.vl-optin-done-body {
+  margin-top: 0.7rem;
+  font-size: 0.9375rem;
+  line-height: 1.65;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.vl-optin-footnote {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: rgba(255, 255, 255, 0.25);
+}

@@ -4,7 +4,13 @@ import { join } from "node:path";
 import { NextRequest } from "next/server";
 
 import { middleware as runMiddleware } from "../../middleware";
-import { isPublicPath, requiresAccount, PUBLIC_EXACT, PUBLIC_PREFIXES } from "@/lib/access-policy";
+import {
+  isPerRequesterResponse,
+  isPublicPath,
+  requiresAccount,
+  PUBLIC_EXACT,
+  PUBLIC_PREFIXES,
+} from "@/lib/access-policy";
 
 // ---------------------------------------------------------------------------
 // THE ONE ACCESS DECISION, EXERCISED DIRECTLY.
@@ -22,8 +28,9 @@ import { isPublicPath, requiresAccount, PUBLIC_EXACT, PUBLIC_PREFIXES } from "@/
 
 describe("everything a customer touches requires an account", () => {
   const PROTECTED = [
-    // The storefront itself.
-    "/",
+    // The storefront itself. "/" is deliberately NOT here: the front door is
+    // public (see "the front door is open, and the shop behind it is not"
+    // below), and it is the only part of the storefront that is.
     "/products",
     "/products/glp-1",
     "/products/anything-at-all",
@@ -149,7 +156,32 @@ describe("the exemptions, each of which has to earn its place", () => {
     // nothing about the address it was given, is throttled at ten an hour per
     // IP, and mints only an address-bound single-use code the till refuses for
     // anyone else.
-    expect(PUBLIC_EXACT.size + PUBLIC_PREFIXES.length).toBeLessThanOrEqual(43);
+    //
+    // RAISED FROM 43 TO 48 on 2026-09-18 for the SMS verification surface, and
+    // this is the deliberate part. Five entries, and they divide into three
+    // kinds:
+    //
+    //   "/"                    the front door. Not a new hole: page.tsx gates
+    //                          its catalogue read on the session, so the
+    //                          anonymous render fetches nothing and serialises
+    //                          nothing. Gating it made the business
+    //                          unverifiable to every party that cannot sign in
+    //                          — carriers, ad reviewers, Googlebot — and that
+    //                          is what refused this store's toll-free number.
+    //   "/sms"                 the standalone opt-in page a carrier has to be
+    //   "/api/sms/subscribe"   able to open and submit. The page names no
+    //                          product and sells nothing; the endpoint mints
+    //                          nothing, reads no session, refuses anything
+    //                          whose consent flag is not exactly true, and is
+    //                          throttled at ten an hour per requester.
+    //   "/privacy" "/terms"    308s to the canonical /legal/* documents. A
+    //                          redirect cannot run if the wall answers first,
+    //                          so the sources have to be public even though
+    //                          the destinations already were.
+    //
+    // None of them widens the catalogue, and the four assertions in "the front
+    // door is open, and the shop behind it is not" hold that line directly.
+    expect(PUBLIC_EXACT.size + PUBLIC_PREFIXES.length).toBeLessThanOrEqual(48);
   });
 
   it("exempts the welcome-offer leaf without opening the rest of /api/offers", () => {
@@ -347,20 +379,29 @@ describe("the wall never blocks a page an auth email links to", () => {
   it("still gates everything the wall actually exists for", () => {
     // The exemptions must never widen into the storefront. If this goes red,
     // the wall has been defeated rather than corrected.
-    for (const shopfront of ["/", "/products", "/products/bac-water", "/cart", "/coa-library"]) {
+    for (const shopfront of ["/products", "/products/bac-water", "/cart", "/coa-library"]) {
       expect(requiresAccount(shopfront), `${shopfront} must stay behind the wall`).toBe(true);
     }
   });
 });
 
 describe("the deliberate cost of closing the default", () => {
-  it("puts the home page and the research library behind the wall", () => {
+  it("puts the research library behind the wall", () => {
     // Recorded as a test rather than a comment because it is the one
     // consequence that is easy to undo by accident and expensive to discover:
-    // Googlebot is unauthenticated like everyone else, so these two leave the
+    // Googlebot is unauthenticated like everyone else, so this leaves the
     // index. The owner chose this with the consequence in front of them.
-    expect(requiresAccount("/")).toBe(true);
+    //
+    // THE HOME PAGE USED TO BE ASSERTED HERE TOO, and it is not an oversight
+    // that it no longer is. Gating "/" was the part of that decision that cost
+    // more than it was worth: it made the site unverifiable to anyone who
+    // could not sign in, which is every carrier and ad-platform reviewer, and
+    // it is why this store's toll-free SMS registration was refused on "cannot
+    // validate business website URL" while the consent copy was already
+    // correct. The research library stays closed; the front door does not.
+    // See "the front door is open, and the shop behind it is not".
     expect(requiresAccount("/research")).toBe(true);
+    expect(requiresAccount("/research/some-article")).toBe(true);
   });
 
   it("says so in the policy, where the next person will look", () => {
@@ -371,6 +412,67 @@ describe("the deliberate cost of closing the default", () => {
     const prose = source.replace(/\/\//g, " ").replace(/\s+/g, " ");
     expect(prose).toMatch(/no longer indexable/i);
     expect(prose).toMatch(/Googlebot is unauthenticated like everyone else/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE VERIFICATION SURFACE, WHICH IS THE WHOLE REASON THE FRONT DOOR REOPENED.
+//
+// A carrier reviewing a toll-free number opens the business URL and the opt-in
+// form. When both answered 307 to /account/login, the registration was refused
+// for reasons that read like consent-copy problems ("cannot validate business
+// website URL", "opt-in not provided", "age gate is needed") and were not: the
+// copy was already right, and nobody could see it.
+//
+// These paths are therefore not a convenience. Each one is load-bearing for a
+// review that happens again every time the number is re-audited or a complaint
+// is filed, which is why they are pinned here rather than left to whoever next
+// tidies the public list.
+// ---------------------------------------------------------------------------
+describe("the front door is open, and the shop behind it is not", () => {
+  it("serves the pages a carrier or ad reviewer has to be able to open", () => {
+    for (const open of ["/", "/sms", "/privacy", "/terms", "/legal/privacy", "/legal/terms", "/contact"]) {
+      expect(isPublicPath(open), `${open} must be reachable with no account`).toBe(true);
+    }
+  });
+
+  it("serves the endpoint the opt-in form posts to", () => {
+    // /contact was public while /api/contact was not, and the contact form was
+    // dead for a year. The same mistake here would mean a reviewer sees a
+    // perfect consent form, ticks the box, and watches it fail.
+    expect(isPublicPath("/api/sms/subscribe")).toBe(true);
+  });
+
+  it("opens nothing else: the catalogue, cart, checkout and account stay shut", () => {
+    for (const shut of [
+      "/products",
+      "/products/glp-1",
+      "/coa-library",
+      "/cart",
+      "/checkout",
+      "/account",
+      "/account/orders",
+      "/research",
+    ]) {
+      expect(requiresAccount(shut), `${shut} must still require an account`).toBe(true);
+    }
+  });
+
+  it("does not open the catalogue by prefix accident", () => {
+    // "/" is an exact entry, never a prefix. If it were ever moved into
+    // PUBLIC_PREFIXES it would match every path on the site and silently
+    // unlock the entire store, which is the single most expensive mistake
+    // available in this file.
+    expect(PUBLIC_EXACT.has("/")).toBe(true);
+    expect(PUBLIC_PREFIXES).not.toContain("/");
+  });
+
+  it("keeps the opt-in page out of the self-authenticating set", () => {
+    // These two answer different questions and the second one decides cache
+    // headers. /sms is genuinely anonymous — the same bytes for everyone — so
+    // it must not be marked per-requester.
+    expect(isPerRequesterResponse("/sms")).toBe(false);
+    expect(isPerRequesterResponse("/")).toBe(false);
   });
 });
 

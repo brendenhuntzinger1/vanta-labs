@@ -23,6 +23,27 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_SENTRY_RELEASE:
       process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.NEXT_PUBLIC_BUILD_ID ?? "local",
   },
+  // THE TWO URLS EVERYONE TYPES FROM MEMORY.
+  //
+  // The canonical policies are /legal/privacy and /legal/terms and they do not
+  // move — one document, one address, one thing for Google to index. But a
+  // carrier reviewing an SMS programme, a customer looking for the policy and
+  // anyone linking to it all reach for /privacy and /terms first, and before
+  // this those answered a sign-in redirect, which is the worst available
+  // answer to "show me your privacy policy".
+  //
+  // 308 rather than 307: the destination is permanent and should be cached and
+  // consolidated by search engines onto the canonical URL.
+  //
+  // The SOURCES are named public in lib/access-policy.ts. A redirect declared
+  // here never runs if middleware answers the request first, so opening the
+  // destination alone would have left these still landing on the login page.
+  async redirects() {
+    return [
+      { source: "/privacy", destination: "/legal/privacy", permanent: true },
+      { source: "/terms", destination: "/legal/terms", permanent: true },
+    ];
+  },
   images: {
     // ONE HOST: THE STORAGE PROJECT THIS DEPLOYMENT ACTUALLY USES.
     //

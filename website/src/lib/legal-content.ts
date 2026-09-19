@@ -2,6 +2,11 @@ import "server-only";
 
 import { getControlSnapshot } from "@/lib/admin-control";
 import { DEFAULT_BUSINESS_SETTINGS } from "@/lib/admin-control";
+// The canonical host, so the SMS section can name the public opt-in page by its
+// full address. A policy is a document people copy out of the page — into a
+// carrier submission, into an email to support — and a bare "/sms" does not
+// survive the trip.
+import { siteUrl } from "@/lib/site-identity";
 
 // -------------------------------------------------------------------------
 // Legal / policy content — editable from the admin dashboard.
@@ -114,11 +119,15 @@ We do not run any advertising or marketing tracking technology beyond the six na
 ## Sharing
 Only with service providers that help us operate — payment processing, transactional email delivery (Resend, which also carries some marketing email until the move to Omnisend is complete), marketing email and SMS delivery (Omnisend), hosting, analytics and shipping — as needed to run the store, or as required by law.
 
+**A service provider is not a third party we share you with.** The companies named above process data *on our behalf and under our instructions*, to do a job we have asked them to do — take a payment, deliver a message, host a page. They are not permitted to use your information for their own purposes or to market to you themselves. That is a different thing from selling or sharing your information with someone else so that *they* can market to you, which we do not do.
+
+**Your mobile number and SMS consent are never shared or sold for anyone else's marketing.** This is an absolute: we do not sell, rent, trade or otherwise disclose your mobile phone number or your SMS opt-in consent to any third party or affiliate for their own marketing purposes, under any circumstance. The only company that receives your number is Omnisend, and only so that it can deliver the messages you asked us to send.
+
 ## Data retention & security
 We retain order records as required for accounting and legal purposes and use reasonable safeguards to protect your information.
 
 ## SMS / text messaging
-If you choose to receive text messages from Vanta Labs, you do so by entering your mobile number and actively ticking an unticked consent box in your account settings. SMS consent is optional. Consent is not a condition of any purchase.
+If you choose to receive text messages from Vanta Labs, you do so by entering your mobile number and actively ticking a consent box that is never pre-ticked. You can do this on our public sign-up page at ${siteUrl()}/sms, at the checkout, or in your account settings. SMS consent is optional and separate from every other agreement on the page. Consent is not a condition of any purchase. It is not a condition of creating an account or of using this website either. Giving us a phone number on its own — at the checkout, for an order, or for delivery — is not SMS consent and never enrols you in marketing messages.
 
 **What we send.** Recurring automated marketing text messages from Vanta Labs: promotional offers, product updates, restock notifications and subscriber-only promotions. Message frequency varies. Message and data rates may apply.
 

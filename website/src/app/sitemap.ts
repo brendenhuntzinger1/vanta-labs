@@ -30,11 +30,14 @@ export const dynamic = "force-dynamic";
 // the same deploy, with no second edit and nobody having to remember. Open one
 // and it returns.
 //
-// WHAT THIS DOES NOT DO: it does not decide what is public. The home page and
-// the research library are behind the account wall by the owner's deliberate
-// decision (see the header of lib/access-policy.ts, which states the indexing
-// cost of that in as many words). This file only stops advertising doors that
-// are locked.
+// WHAT THIS DOES NOT DO: it does not decide what is public. The research
+// library is behind the account wall by the owner's deliberate decision (see
+// the header of lib/access-policy.ts, which states the indexing cost of that in
+// as many words), and the home page came back out from behind it on
+// 2026-09-18 when gating it turned out to make the business unverifiable to
+// every reviewer who cannot sign in. Both of those are that file's decisions,
+// not this one's. This file only stops advertising doors that are locked — and
+// starts advertising them again, with no edit here, the day they open.
 //
 // NO PRODUCT URLS, and no import that could reintroduce them. A product URL is
 // a compound name, so publishing the catalogue here would hand an anonymous
@@ -45,10 +48,14 @@ export const dynamic = "force-dynamic";
 /** Everything this site would offer a crawler if nothing were gated. */
 function candidates(): Array<{ path: string; changeFrequency: "weekly" | "monthly" | "yearly"; priority: number }> {
   return [
-    ...["", "/ambassador", "/partner", "/contact", "/wholesale", "/research"].map((path) => ({
+    // "/sms" is the public SMS consent page. Low priority — it needs no SEO
+    // effort — but it belongs here: it is a real public page, a carrier
+    // re-auditing the toll-free number should be able to find it, and so
+    // should a customer looking for how to stop the messages.
+    ...["", "/ambassador", "/partner", "/contact", "/wholesale", "/research", "/sms"].map((path) => ({
       path,
       changeFrequency: "weekly" as const,
-      priority: path === "" ? 1 : 0.7,
+      priority: path === "" ? 1 : path === "/sms" ? 0.3 : 0.7,
     })),
     ...ARTICLE_SLUGS.map((slug) => ({
       path: `/research/${slug}`,

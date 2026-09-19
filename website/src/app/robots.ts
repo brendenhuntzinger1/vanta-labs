@@ -38,10 +38,20 @@ export default function robots(): MetadataRoute.Robots {
         // URLs that answer 307. That costs crawl budget and teaches Google the
         // site is full of redirects.
         //
-        // The home page is deliberately NOT listed: "Disallow: /" would block
-        // the whole site including the pages that ARE public. It is gated, so a
-        // crawler gets the login page there and nothing else; robots.txt has
-        // nothing useful to add.
+        // The home page is deliberately NOT listed, and the reason changed on
+        // 2026-09-18. It used to be "Disallow: / would block the whole site
+        // including the pages that ARE public, and it is gated anyway". The
+        // second half is no longer true: "/" is public again (see the entry in
+        // access-policy.ts for what gating it cost), so a crawler now gets the
+        // real front page. The first half still holds, and it is now the whole
+        // reason — the home page is the one URL this site most wants indexed.
+        //
+        // /sms is likewise absent, and that is also deliberate. It is a
+        // legitimate public consent page rather than something to hide: a
+        // carrier re-auditing the number should find it, and a customer
+        // searching for how to stop the texts should too. It needs no SEO
+        // effort, but disallowing it would be the wrong signal about a page
+        // whose entire purpose is to be publicly verifiable.
         //
         // sitemap.ts derives its list from isPublicPath() and cannot drift
         // again. This one cannot be derived the same way — it names PREFIXES,

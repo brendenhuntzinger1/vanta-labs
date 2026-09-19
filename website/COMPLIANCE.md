@@ -24,7 +24,8 @@ in the "Legal decisions" section.
 ### Compliance / ecommerce
 - **Policies** (editable in **Admin → Policies**, no code): Terms, Privacy, Research Disclaimer, **Shipping**, **Return & Refund**, **Cookie**. Linked in the footer.
 - **Cookie consent banner** with a link to the Cookie Policy.
-- **Age gate** (21+) on first visit; checkout requires 3 explicit research/compliance/age acknowledgements.
+- **Age restriction (21+)**, enforced by the account wall rather than by an overlay. This line used to read "age gate (21+) on first visit", which stopped being true when the first-visit gate was removed: it rendered the storefront and covered it with CSS, so it withheld nothing from anyone who scrolled, disabled styles or read the page source. What replaced it is stronger — the catalogue requires an account, and creating one requires explicit 21+ and research-use confirmations — plus a 21+ confirmation on the public SMS opt-in at `/sms`, and 3 explicit research/compliance/age acknowledgements at the checkout.
+- **Public SMS opt-in page** at `/sms`: business identity, an unticked marketing-consent box separate from the 21+ confirmation, the full TCPA disclosure from the one shared constant, STOP/HELP, and links to Privacy and Terms. Reachable signed-out; it is the URL submitted to carriers as opt-in proof.
 - **Research-use-only** disclaimers throughout; "not for human/animal use" messaging.
 - **Pricing transparency**: shipping, handling, tax, discounts, and the card processing fee are all shown at checkout **before** payment; the card fee has an explicit notice.
 - **Membership terms**: non-refundable annual disclosed at signup and cancellation; recurring billing terms shown before purchase.

@@ -206,9 +206,48 @@ describe("the popup is not a nag", () => {
     expect(modal).toMatch(/isShoppingRoute\(pathname\)/);
     expect(modal).not.toContain("useAccessGranted");
     // And the routes it considers "shopping" must all be behind the wall.
-    for (const route of ["/", "/products", "/cart", "/checkout"]) {
+    //
+    // THIS LIST USED TO INCLUDE "/", "/cart" AND "/checkout", AND THAT WAS
+    // ALWAYS OVER-BROAD: the modal's own isShoppingRoute is /products and
+    // /products/* and has never been anything else, so three of the four
+    // routes named here were not routes this component can render on. The
+    // over-reach went unnoticed until the home page was opened for SMS
+    // verification, at which point the test failed for a page the modal cannot
+    // appear on.
+    //
+    // Narrowed to what the component actually claims, and checked against the
+    // component rather than a list kept beside it — a hardcoded list is how
+    // this drifted in the first place.
+    expect(modal).toMatch(/pathname === "\/products" \|\| pathname\.startsWith\("\/products\/"\)/);
+    for (const route of ["/products", "/products/some-compound"]) {
       expect(requiresAccount(route), `${route} must require an account`).toBe(true);
     }
+    // The home page is public now, so the modal must NOT treat it as shopping.
+    expect(modal).not.toMatch(/pathname === "\/"/);
+  });
+
+  it("never fetches a promotion for a visitor without a verified session", () => {
+    // THE REAL PROTECTION, PINNED WHERE THE WEAKER PROXY USED TO BE.
+    //
+    // The offers bar and this modal are both mounted in the ROOT layout, which
+    // wraps the public pages too — the sign-in screen, the legal policies, the
+    // contact form, and now the home page. So "every shopping route requires
+    // an account" was never what kept a promotion out of anonymous HTML; this
+    // line in layout.tsx is:
+    //
+    //     const allOffers = signedIn ? await getStorefrontOffers() : [];
+    //
+    // NOT FETCHED, rather than fetched and not rendered — a server component
+    // that reads the offers and renders nothing still serialises the campaign
+    // name and a live coupon code into the flight payload. And `signedIn` is a
+    // GoTrue-verified session rather than the presence of a cookie, because a
+    // forged cookie once bought "Labor Day · Buy 2 Get 1" and its code on the
+    // login page.
+    const layout = code(readFileSync(join(process.cwd(), "src/app/layout.tsx"), "utf8"));
+    expect(layout).toMatch(/const\s+allOffers\s*=\s*signedIn\s*\?\s*await\s+getStorefrontOffers\(\)/);
+    expect(layout).toMatch(/const\s+signedIn\s*=\s*Boolean\(await\s+getAuthenticatedUser\(\)\)/);
+    // The unauthenticated branch must be an empty list, not a fetch.
+    expect(layout).not.toMatch(/signedIn\s*\?\s*\[\]\s*:\s*await\s+getStorefrontOffers/);
   });
 
   it("does not write the body scroll lock", () => {
