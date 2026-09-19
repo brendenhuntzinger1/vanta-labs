@@ -393,16 +393,26 @@ export default async function RootLayout({
               rather than stacking on it, opens only on the catalogue, and
               renders nothing at all while the kill switch is off. */}
           <EntryOfferModal />
-          {/* THE SKIP LINK'S TARGET, AND THE ONLY ELEMENT EVERY ROUTE SHARES.
-              `tabIndex={-1}` is not decoration: without it focus cannot land
-              here at all and the skip link moves the scroll position while
-              leaving the keyboard exactly where it was — which is the classic
-              way a skip link looks implemented and does nothing. `contents`
-              keeps it out of the layout entirely, so adding it changes no
-              spacing, no flex behaviour and no stacking context. */}
-          <div id="vl-main-content" tabIndex={-1} style={{ display: "contents" }}>
-            {children}
-          </div>
+          {/* THE SKIP LINK'S TARGET: AN EMPTY ELEMENT THAT CAN HOLD FOCUS.
+              ---------------------------------------------------------------
+              `tabIndex={-1}` is not decoration. Without it, activating the
+              link scrolls the page and leaves the keyboard exactly where it
+              was — the classic skip link that looks implemented and does
+              nothing.
+
+              IT IS DELIBERATELY NOT A WRAPPER AROUND {children}, and this was
+              measured rather than assumed. The first attempt wrapped them in a
+              `display: contents` div, which keeps layout identical — but an
+              element with `display: contents` generates NO BOX, so the browser
+              will not move focus to it. Tab reached the link and Enter did
+              nothing, which is the exact failure the paragraph above describes.
+
+              An empty, zero-height element instead: it generates a real box, so
+              focus lands; it is a flex item of no height in a `flex flex-col`
+              body, so it occupies nothing and shifts nothing; and Tab from it
+              continues into the page content. */}
+          <div id="vl-main-content" tabIndex={-1} />
+          {children}
           <SiteFooterSlot />
           {/* vl-bottom-bar lifts this out of the consent banner's way while
               the banner is on screen. Being fixed, the link cannot be
