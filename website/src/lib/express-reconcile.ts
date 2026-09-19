@@ -8,6 +8,7 @@ import { classifyDeadSession } from "@/lib/payment-failure";
 import { signWebhookPayload } from "@/lib/payment-provider";
 import { processPaymentWebhook } from "@/lib/payment-webhook";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { releaseCustomerOffer } from "@/lib/offers/customer-offers";
 
 // -------------------------------------------------------------------------
 // Settlement backstop for the express (Apple Pay) lane.
@@ -428,6 +429,19 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
         .select("order_id");
       if (!failError && (retired?.length ?? 0) > 0) {
         await releaseInventoryForOrder(order.order_id);
+        // AND THE GIFT, for the same reason as the stock. This order is dead —
+        // declined, expired or cancelled at the processor — and the one-time
+        // offer it reserved is otherwise held against an order that will never
+        // be paid. The shopper cannot spend it elsewhere until the hold ages
+        // out, and for a laddered prize cannot re-choose a dose at all, since
+        // spin-dose.ts guards on reserved_order_id and fails closed.
+        //
+        // customer_offer_release refuses a redeemed offer, so a row that did
+        // settle can never lose its gift here, and an order that reserved
+        // nothing is a no-op.
+        await releaseCustomerOffer(order.order_id).catch((error: unknown) => {
+          console.error("[express-reconcile] could not release the offer for", order.order_id, error);
+        });
         failedOut += 1;
       } else if (!failError) {
         raced += 1;

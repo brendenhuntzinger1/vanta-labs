@@ -30,6 +30,13 @@ import type { CustomerInput } from "@/lib/payment-types";
 import { recordOrderAttribution } from "@/lib/order-attribution";
 import { customerSafeMessage } from "@/lib/safe-error";
 import { readOfferCookie } from "@/lib/offers/customer-offers";
+import { releaseCustomerOffer, reserveCustomerOffer } from "@/lib/offers/customer-offers";
+import { attributeOrderToCampaign } from "@/lib/email/campaign-attribution";
+import { readCampaignCookie } from "@/lib/email/campaign-links";
+import { attributeOrderToAutomation } from "@/lib/email/automation-attribution";
+import { readAutomationCookie } from "@/lib/email/automation-links";
+import { stampMarketingSourceAtCreation } from "@/lib/marketing-source";
+import { readCartRecoveryCookie } from "@/lib/email/cart-recovery-links";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -274,6 +281,40 @@ export async function POST(request: Request) {
     return refuse("We're confirming your payment. Please don't try again.", 409);
   }
 
+  // ---- 5.65 RESERVE THE ONE-TIME OFFER, BEFORE THE ORDER EXISTS ----------
+  //
+  // The same rule the card lane states at payment-service.ts:429, for the same
+  // reason and with the same consequence. quoteFull has already put a $0 line
+  // in this order from an ADVISORY read that took no lock, so two checkouts
+  // holding one token can both have been priced a free vial. This is the only
+  // place that can be resolved.
+  //
+  // A FAILURE HERE REFUSES THE ORDER AND CHARGES NOTHING. Letting it through
+  // would ship a free unit without consuming the offer, and the customer could
+  // do it again tomorrow. The reserve also re-checks expiry, revocation, prior
+  // redemption and the email binding under its lock, so a token that went
+  // stale between the sheet and this call is caught here rather than honoured
+  // — which is the "variant became unavailable between quote and authorization"
+  // case, answered by refusing rather than by quietly dropping the gift.
+  //
+  // Placed after the claim so the hold is bound to the order id that will be
+  // written, and before insertOrderRow so a refusal leaves nothing to cancel.
+  if (quoteFull.appliedOffer) {
+    const reserved = await reserveCustomerOffer({
+      token: quoteFull.appliedOffer.token,
+      orderId: claimed.order_id,
+      email: customer.email,
+      // A wallet charge settles in seconds, so this lane takes the card lane's
+      // short hold rather than the manual one.
+      holdSeconds: CLAIM_HOLD_SECONDS,
+    });
+    if (!reserved) {
+      const message = "Your free gift is no longer available, so this order was not placed and you have not been charged. Open your cart to see the current total.";
+      await finish(sessionId, { ok: false, outcome: "refused", message }, "failed");
+      return refuse(message);
+    }
+  }
+
   // ---- 5.7 Order row + inventory hold ------------------------------------
   const orderRow = buildOrderRow({
     orderId: claimed.order_id,
@@ -360,11 +401,25 @@ export async function POST(request: Request) {
     }
   }
 
+  // FROM HERE ON, EVERY REFUSAL HANDS THE GIFT BACK. The card lane does this
+  // through releaseAbandonedCheckoutClaims; this lane has its own failure
+  // branches, and a gift left reserved against an order that will never be
+  // paid is one the customer cannot spend until the hold ages out — and, for a
+  // laddered prize, cannot re-choose a dose on at all (spin-dose.ts guards on
+  // reserved_order_id). customer_offer_release refuses a redeemed offer, so
+  // this is safe on every path and a no-op where nothing was reserved.
+  const handBackTheGift = async () => {
+    await releaseCustomerOffer(claimed.order_id).catch((error: unknown) => {
+      console.error("Unable to release the offer for express order", claimed.order_id, error);
+    });
+  };
+
   const insertOutcome = await insertOrderRow(orderRow);
   if (insertOutcome.status !== "inserted") {
     if (quoteA.appliedPromotionId && quoteA.appliedPromotionLimits) {
       await releasePromotionRedemption(claimed.order_id);
     }
+    await handBackTheGift();
     await finish(sessionId, { ok: false, outcome: "refused", message: "We couldn't create your order. No charge was made." }, "failed");
     return refuse("We couldn't create your order. No charge was made.");
   }
@@ -376,6 +431,7 @@ export async function POST(request: Request) {
   );
   if (itemError) {
     await cancelOrder(claimed.order_id);
+    await handBackTheGift();
     await finish(sessionId, { ok: false, outcome: "refused", message: "We couldn't create your order. No charge was made." }, "failed");
     return refuse("We couldn't create your order. No charge was made.");
   }
@@ -389,8 +445,31 @@ export async function POST(request: Request) {
   // this is the first safe point to link it to its campaign. Cannot throw.
   await recordOrderAttribution({ orderId: claimed.order_id, raw: body.attribution });
 
+  // THE SAME THREE SIGNALS THE CARD LANE RECORDS (create-session/route.ts).
+  // A wallet order follows a campaign click or an automation click exactly as
+  // a card order does, and until now none of it was credited: the retention
+  // mail that produced the sale showed nothing, and the marketing source was
+  // never stamped. The cookies ride this request like any other same-origin
+  // call. All three are non-throwing by construction and none of them can
+  // affect the order, its totals or the charge below.
+  await attributeOrderToCampaign({
+    orderId: claimed.order_id,
+    cookieValue: readCampaignCookie(request),
+  });
+  await attributeOrderToAutomation({
+    orderId: claimed.order_id,
+    cookieValue: readAutomationCookie(request),
+  });
+  await stampMarketingSourceAtCreation({
+    orderId: claimed.order_id,
+    automationCookie: readAutomationCookie(request),
+    campaignCookie: readCampaignCookie(request),
+    cartRecoveryCookie: readCartRecoveryCookie(request),
+  });
+
   if (!reservation.ok) {
     await cancelOrder(claimed.order_id);
+    await handBackTheGift();
     // Same detail as the standard checkout, plus the reassurance that matters
     // most in a wallet sheet: no money moved. Appended only when the detail does
     // not already say it — the held-stock wording carries its own "you have not
@@ -422,6 +501,7 @@ export async function POST(request: Request) {
   });
   if (!tender.ok) {
     await cancelOrder(claimed.order_id);
+    await handBackTheGift();
     await releaseInventoryForOrder(claimed.order_id);
     const message = describeTenderShortfall(tender.shortOf);
     await finish(sessionId, { ok: false, outcome: "refused", message }, "failed");
@@ -498,6 +578,7 @@ export async function POST(request: Request) {
     // safe in a way the `never_heard_back` release would not be — there, the
     // charge may have landed; here Veyra told us it explicitly did not.
     await cancelOrder(claimed.order_id);
+    await handBackTheGift();
     await releaseInventoryForOrder(claimed.order_id);
     // Same reasoning as the stock release directly above: Veyra told us
     // explicitly that this order was not charged.
