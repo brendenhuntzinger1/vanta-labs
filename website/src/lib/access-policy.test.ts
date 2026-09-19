@@ -28,9 +28,13 @@ import {
 
 describe("everything a customer touches requires an account", () => {
   const PROTECTED = [
-    // The storefront itself. "/" is deliberately NOT here: the front door is
-    // public (see "the front door is open, and the shop behind it is not"
-    // below), and it is the only part of the storefront that is.
+    // The storefront itself, and "/" leads it again. The front door was public
+    // for one day (2026-09-18 to 2026-09-19) and is gated once more: the
+    // owner's call is ONE customer gate — the portal at /account/login — with
+    // the verification surface kept as a narrow public island beside it rather
+    // than as an open front page. See "one gate for customers, an island for
+    // compliance" below.
+    "/",
     "/products",
     "/products/glp-1",
     "/products/anything-at-all",
@@ -157,17 +161,17 @@ describe("the exemptions, each of which has to earn its place", () => {
     // IP, and mints only an address-bound single-use code the till refuses for
     // anyone else.
     //
-    // RAISED FROM 43 TO 48 on 2026-09-18 for the SMS verification surface, and
+    // RAISED FROM 43 TO 48 on 2026-09-18 for the SMS verification surface, then
+    // BACK TO 47 on 2026-09-19 when the front door was withdrawn from it, and
     // this is the deliberate part. Five entries, and they divide into three
     // kinds:
     //
-    //   "/"                    the front door. Not a new hole: page.tsx gates
-    //                          its catalogue read on the session, so the
-    //                          anonymous render fetches nothing and serialises
-    //                          nothing. Gating it made the business
-    //                          unverifiable to every party that cannot sign in
-    //                          — carriers, ad reviewers, Googlebot — and that
-    //                          is what refused this store's toll-free number.
+    //   "/"                    WITHDRAWN on 2026-09-19. It was listed for one
+    //                          day; the owner's call is that customers meet
+    //                          the portal first. The budget below is one
+    //                          smaller for it, deliberately, so re-adding it
+    //                          is a decision somebody makes rather than a
+    //                          line that slips back in under the ceiling.
     //   "/sms"                 the standalone opt-in page a carrier has to be
     //   "/api/sms/subscribe"   able to open and submit. The page names no
     //                          product and sells nothing; the endpoint mints
@@ -181,7 +185,7 @@ describe("the exemptions, each of which has to earn its place", () => {
     //
     // None of them widens the catalogue, and the four assertions in "the front
     // door is open, and the shop behind it is not" hold that line directly.
-    expect(PUBLIC_EXACT.size + PUBLIC_PREFIXES.length).toBeLessThanOrEqual(48);
+    expect(PUBLIC_EXACT.size + PUBLIC_PREFIXES.length).toBeLessThanOrEqual(47);
   });
 
   it("exempts the welcome-offer leaf without opening the rest of /api/offers", () => {
@@ -392,14 +396,16 @@ describe("the deliberate cost of closing the default", () => {
     // Googlebot is unauthenticated like everyone else, so this leaves the
     // index. The owner chose this with the consequence in front of them.
     //
-    // THE HOME PAGE USED TO BE ASSERTED HERE TOO, and it is not an oversight
-    // that it no longer is. Gating "/" was the part of that decision that cost
-    // more than it was worth: it made the site unverifiable to anyone who
-    // could not sign in, which is every carrier and ad-platform reviewer, and
-    // it is why this store's toll-free SMS registration was refused on "cannot
-    // validate business website URL" while the consent copy was already
-    // correct. The research library stays closed; the front door does not.
-    // See "the front door is open, and the shop behind it is not".
+    // THE HOME PAGE IS ASSERTED HERE AGAIN, having been dropped for one day.
+    // Opening "/" on 2026-09-18 bought verifiability for parties that cannot
+    // sign in — carriers, ad reviewers, Googlebot — and the owner withdrew it
+    // on 2026-09-19 in favour of one customer gate with a narrow public island
+    // beside it. The cost is therefore back, in full, and named here because
+    // it is the thing that will be rediscovered the expensive way otherwise:
+    // a toll-free submission can still be refused on "cannot validate business
+    // website URL", and if it is, THIS is the line to come back to rather than
+    // the consent copy. See "one gate for customers, an island for compliance".
+    expect(requiresAccount("/")).toBe(true);
     expect(requiresAccount("/research")).toBe(true);
     expect(requiresAccount("/research/some-article")).toBe(true);
   });
@@ -416,7 +422,7 @@ describe("the deliberate cost of closing the default", () => {
 });
 
 // ---------------------------------------------------------------------------
-// THE VERIFICATION SURFACE, WHICH IS THE WHOLE REASON THE FRONT DOOR REOPENED.
+// ONE GATE FOR CUSTOMERS, AN ISLAND FOR COMPLIANCE.
 //
 // A carrier reviewing a toll-free number opens the business URL and the opt-in
 // form. When both answered 307 to /account/login, the registration was refused
@@ -424,16 +430,74 @@ describe("the deliberate cost of closing the default", () => {
 // website URL", "opt-in not provided", "age gate is needed") and were not: the
 // copy was already right, and nobody could see it.
 //
-// These paths are therefore not a convenience. Each one is load-bearing for a
-// review that happens again every time the number is re-audited or a complaint
-// is filed, which is why they are pinned here rather than left to whoever next
-// tidies the public list.
+// The whole front page was opened for that on 2026-09-18 and withdrawn again
+// on 2026-09-19. What stayed is the island: /sms, /privacy, /terms and /legal.
+// These paths are not a convenience. Each is load-bearing for a review that
+// happens again every time the number is re-audited or a complaint is filed,
+// which is why they are pinned here rather than left to whoever next tidies
+// the public list.
+//
+// THE ISLAND IS NOT A BACK DOOR, and that is the half worth testing rather
+// than asserting. A public page that quietly satisfied the gate would be one,
+// so the rule is: reachable by anyone, grants nothing to anyone. The same
+// bytes for a carrier, a crawler, a competitor and a customer — there is no
+// user-agent, IP, header or referrer test anywhere near this, and a change
+// that added one would be cloaking whichever direction it pointed.
 // ---------------------------------------------------------------------------
-describe("the front door is open, and the shop behind it is not", () => {
+describe("one gate for customers, an island for compliance", () => {
+  /** Reachable with no account, forever, for everybody. */
+  const ISLAND = ["/sms", "/privacy", "/terms", "/legal/privacy", "/legal/terms", "/contact"];
+
   it("serves the pages a carrier or ad reviewer has to be able to open", () => {
-    for (const open of ["/", "/sms", "/privacy", "/terms", "/legal/privacy", "/legal/terms", "/contact"]) {
+    for (const open of ISLAND) {
       expect(isPublicPath(open), `${open} must be reachable with no account`).toBe(true);
     }
+  });
+
+  it("sends a signed-out visitor to the ONE portal, front door included", () => {
+    // The correction of 2026-09-19. "/" is a customer surface and belongs
+    // behind the same single gate as the rest of the store.
+    for (const gated of ["/", "/products", "/products/glp-1", "/cart", "/account", "/research", "/spin"]) {
+      expect(requiresAccount(gated), `${gated} must meet the portal`).toBe(true);
+    }
+  });
+
+  it("does not let the island unlock the store", () => {
+    // Standing on a public page must not carry anything over to a protected
+    // one. The policy is a pure function of the PATH — it takes no session, no
+    // cookie, no referrer and no header — so "I just came from /sms" is not a
+    // thing it can express. That is the property, checked by asking about a
+    // protected path with nothing else supplied and getting the same answer.
+    for (const gated of ["/", "/products", "/cart", "/account"]) {
+      expect(requiresAccount(gated), `${gated} became reachable from the island`).toBe(true);
+    }
+    // And no island path is a PREFIX of anything in the store, which is the
+    // way a public entry has actually unlocked a site before.
+    for (const open of ISLAND) {
+      for (const gated of ["/", "/products", "/cart", "/account", "/checkout"]) {
+        if (gated === "/") continue;
+        expect(gated.startsWith(`${open}/`), `${open} is a prefix of ${gated}`).toBe(false);
+      }
+    }
+  });
+
+  it("decides on the path alone, so nothing about the requester can change it", () => {
+    // The anti-cloaking property, asserted on the source rather than inferred.
+    // A reviewer-, carrier- or crawler-specific branch here would be the exact
+    // thing the header forbids, and it would be invisible in a pass/fail test
+    // that only ever asks about paths.
+    const source = readFileSync(join(process.cwd(), "src/lib/access-policy.ts"), "utf8");
+    const code = source.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    for (const sniff of [
+      "user-agent", "useragent", "navigator", "x-forwarded-for", "referer", "referrer",
+      "googlebot", "bytespider", "twilio", "omnisend", "crawler", "headers.get",
+    ]) {
+      expect(code.toLowerCase(), `access-policy.ts inspects ${sniff}`).not.toContain(sniff);
+    }
+    // "bot" on its own would match "robots.txt", which is a PATH in the public
+    // list and exactly the kind of false positive that gets a guard deleted.
+    // Asked with a boundary instead, so a real `isBot` helper is still caught.
+    expect(code).not.toMatch(/\bbots?\b/i);
   });
 
   it("serves the endpoint the opt-in form posts to", () => {
@@ -459,11 +523,12 @@ describe("the front door is open, and the shop behind it is not", () => {
   });
 
   it("does not open the catalogue by prefix accident", () => {
-    // "/" is an exact entry, never a prefix. If it were ever moved into
-    // PUBLIC_PREFIXES it would match every path on the site and silently
-    // unlock the entire store, which is the single most expensive mistake
-    // available in this file.
-    expect(PUBLIC_EXACT.has("/")).toBe(true);
+    // "/" is gated, and the far more important half of this test is unchanged:
+    // if it were ever put in PUBLIC_PREFIXES it would match every path on the
+    // site and silently unlock the entire store, which is the single most
+    // expensive mistake available in this file. That holds whichever way the
+    // front door is set, so it is asserted whichever way the front door is set.
+    expect(PUBLIC_EXACT.has("/")).toBe(false);
     expect(PUBLIC_PREFIXES).not.toContain("/");
   });
 
@@ -472,7 +537,8 @@ describe("the front door is open, and the shop behind it is not", () => {
     // headers. /sms is genuinely anonymous — the same bytes for everyone — so
     // it must not be marked per-requester.
     expect(isPerRequesterResponse("/sms")).toBe(false);
-    expect(isPerRequesterResponse("/")).toBe(false);
+    expect(isPerRequesterResponse("/privacy")).toBe(false);
+    expect(isPerRequesterResponse("/terms")).toBe(false);
   });
 });
 

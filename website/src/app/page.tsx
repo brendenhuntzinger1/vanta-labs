@@ -114,11 +114,17 @@ export default async function HomePage() {
           account is created, and it is the only one of the two whose answer
           becomes a durable record against that account.
 
-          THE CATALOGUE IS STILL WITHHELD, and never by CSS. `catalogVisible`
-          below is a session read, so a stranger's render fetches no products,
-          names none and serialises none. "/" is public (access-policy.ts,
-          "THE FRONT DOOR") so Twilio, Meta and Googlebot receive this page in
-          full; what stands between it and the store is the portal. */}
+          NOBODY REACHES THIS PAGE WITHOUT PASSING THAT PORTAL. "/" requires an
+          account (access-policy.ts, "THE FRONT DOOR IS NOT HERE"), so the
+          signed-out request is a 307 to it and an overlay would have nothing
+          left to ask.
+
+          THE SESSION-GATED CATALOGUE READ BELOW STAYS ANYWAY. It is not
+          redundant with the wall: it is what makes this page safe to serve
+          publicly, so reopening "/" is a one-line decision rather than a
+          rebuild. `catalogVisible` is a session read, so a stranger's render
+          fetches no products, names none and serialises none — never CSS over
+          data that was already fetched. */}
       <SiteHeaderV2 />
       <main>
 
