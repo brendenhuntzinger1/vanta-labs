@@ -290,6 +290,28 @@ export default async function RootLayout({
       //
     >
       <body className="min-h-full flex flex-col">
+        {/* THE FIRST THING A KEYBOARD REACHES, AND THE ONLY WAY PAST THE HEADER.
+            ---------------------------------------------------------------
+            Measured 2026-09-19: on /products at 390px a keyboard-only visitor
+            passes roughly fifty-three focusable controls — consent bar, offers
+            band, header, mobile nav — before the first product. That is WCAG
+            2.4.1 Bypass Blocks, and landmarks alone do not satisfy it for
+            people driving the page with Tab rather than a screen reader's
+            landmark list.
+
+            It lives here rather than in each route because the header it
+            bypasses lives here: one link, every page, including the ones added
+            tomorrow. `sr-only` until focused is the standard shape — invisible
+            to everyone who does not need it, the first tab stop for everyone
+            who does.
+
+            The target is the wrapper below rather than a `main` id, because
+            each route declares its own `main` and several declare none. The
+            wrapper is the one element guaranteed to exist on every route, and
+            `tabIndex={-1}` is what lets focus actually land on it. */}
+        <a href="#vl-main-content" className="vl-skip-link">
+          Skip to main content
+        </a>
         {/* THE GOOGLE TAG IS FIRST IN THE BODY, AND SERVER-RENDERED.
             Google's install screen asks for it "immediately after the <head>
             element", and unlike the three pixels further down it is not a
@@ -371,7 +393,16 @@ export default async function RootLayout({
               rather than stacking on it, opens only on the catalogue, and
               renders nothing at all while the kill switch is off. */}
           <EntryOfferModal />
-          {children}
+          {/* THE SKIP LINK'S TARGET, AND THE ONLY ELEMENT EVERY ROUTE SHARES.
+              `tabIndex={-1}` is not decoration: without it focus cannot land
+              here at all and the skip link moves the scroll position while
+              leaving the keyboard exactly where it was — which is the classic
+              way a skip link looks implemented and does nothing. `contents`
+              keeps it out of the layout entirely, so adding it changes no
+              spacing, no flex behaviour and no stacking context. */}
+          <div id="vl-main-content" tabIndex={-1} style={{ display: "contents" }}>
+            {children}
+          </div>
           <SiteFooterSlot />
           {/* vl-bottom-bar lifts this out of the consent banner's way while
               the banner is on screen. Being fixed, the link cannot be

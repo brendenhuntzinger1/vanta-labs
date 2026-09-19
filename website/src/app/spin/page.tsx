@@ -167,7 +167,10 @@ export default async function SpinPage({
 
 function LinkProblem() {
   return (
-    <div className="mx-auto w-full max-w-md px-4 py-20 text-center">
+    // A `main`, for the same reason the wheel itself is one: this is the whole
+    // page when a link has expired, and a page with no main landmark is a page
+    // a screen-reader visitor cannot jump into.
+    <main className="mx-auto w-full max-w-md px-4 py-20 text-center">
       <h1 className="text-xl font-semibold">This link is no longer valid</h1>
       <p className="mt-3 text-sm" style={{ color: "var(--foreground-muted)" }}>
         Spin links expire, and each one works only for the campaign it was sent for.
@@ -180,7 +183,7 @@ function LinkProblem() {
       >
         Browse the catalogue
       </Link>
-    </div>
+    </main>
   );
 }
 

@@ -249,6 +249,19 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
   const [error, setError] = useState<string | null>(null);
   /** Revealed only after the animation settles, so the prize is not spoiled. */
   const [revealed, setRevealed] = useState(Boolean(initialResult));
+
+  // READ ONCE AT MOUNT, the same way hero-video.tsx reads it and for the same
+  // reason: this decides whether a 4.4-second full-rotation spin happens at
+  // all, and a value that changes underneath a spin in flight would leave the
+  // wheel half-animated. A large rotating disc is the archetypal vestibular
+  // trigger, and the inline transition below cannot be overridden by any
+  // stylesheet rule, so the setting has to be honoured here or not at all.
+  const [reduceMotion] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
   const [rotation, setRotation] = useState(() =>
     initialResult ? restingRotation(initialResult.sliceIndex, wedgeAngle) : 0,
   );
@@ -355,20 +368,39 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
 
       // Six full turns then settle on the winning wedge. The server decided
       // which wedge before this request returned; the animation only reports it.
+      //
+      // AND THAT IS EXACTLY WHY REDUCED MOTION IS FREE TO SKIP IT. `won` is
+      // already in hand: the prize, its minimum, its expiry and its doses were
+      // all chosen server-side and are unchanged by anything below. Honouring
+      // the setting removes a 4.4-second spin and the 4.6-second wait that only
+      // exists to cover it — the odds, the wedge, the entitlement and every
+      // later eligibility rule are untouched, which is what makes this a
+      // presentation change rather than a second way to win.
       setRotation(360 * 6 + restingRotation(won.sliceIndex, wedgeAngle));
       window.setTimeout(() => {
         setRevealed(true);
         setSpinning(false);
-      }, 4_600);
+      }, reduceMotion ? 0 : 4_600);
     } catch {
       setError("We couldn't reach the server. Please try again.");
       setSpinning(false);
       inFlight.current = false;
     }
-  }, [spinning, result, token, wedgeAngle]);
+    // `reduceMotion` is read once at mount and never set again, so it cannot
+    // go stale in this closure — but it IS read here, and leaving it out of the
+    // list would be a lie about that for the next person to edit this function.
+  }, [spinning, result, token, wedgeAngle, reduceMotion]);
 
   return (
-    <div className="mx-auto w-full max-w-xl px-4 pb-16 pt-8">
+    // A `main` RATHER THAN A `div`, AND IT IS THE PAGE'S ONLY ONE.
+    //
+    // Every other storefront route supplies its own `main`; the root layout
+    // renders `{children}` bare, so a page that does not declare one has no
+    // main landmark at all. /spin was that page — measured 2026-09-19, the
+    // only audited route answering 0 for `main, [role=main]` — which on the
+    // store's headline acquisition surface left a screen-reader visitor no
+    // landmark to jump to and the whole header to traverse on every arrival.
+    <main className="mx-auto w-full max-w-xl px-4 pb-16 pt-8">
       <header className="text-center">
         <p className="text-[11px] font-semibold uppercase tracking-[0.22em]" style={{ color: GOLD }}>
           One spin · {prizes.length} prizes
@@ -423,7 +455,15 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
               style={{
                 transform: `rotate(${rotation}deg)`,
                 transformOrigin: "110px 110px",
-                transition: spinning ? "transform 4.4s cubic-bezier(0.16, 0.72, 0.1, 1)" : "none",
+                // AN INLINE TRANSITION OUTRANKS EVERY STYLESHEET RULE, so the
+                // twenty-six `prefers-reduced-motion` blocks in globals.css
+                // cannot reach this one — none of them targets it and none uses
+                // `!important`. It has to be decided here. Reduced motion lands
+                // the wheel on its winning wedge without turning; the wedge is
+                // the same wedge either way.
+                transition: spinning && !reduceMotion
+                  ? "transform 4.4s cubic-bezier(0.16, 0.72, 0.1, 1)"
+                  : "none",
               }}
             >
               <circle cx="110" cy="110" r="96" fill={INK} />
@@ -733,7 +773,7 @@ export default function SpinWheel({ slices, prizes, terms, token, initialResult 
           normal checkout and are subject to the same age and research-use requirements as any order.
         </p>
       </section>
-    </div>
+    </main>
   );
 }
 

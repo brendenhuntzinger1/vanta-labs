@@ -369,6 +369,53 @@ textarea.vl-input { min-height: 6rem; }
   outline-offset: 2px;
 }
 
+/* ---------------------------------------------------------------------------
+   SKIP TO MAIN CONTENT — invisible until it is the thing you need.
+   ---------------------------------------------------------------------------
+   Clipped to a single pixel rather than `display: none` or `visibility:
+   hidden`, because both of those remove it from the tab order and a skip link
+   nothing can focus is not a skip link. On focus it becomes an ordinary,
+   clearly visible control at the top-left, above every fixed bar in the app
+   (the account, product and checkout CTAs sit at z-40/z-50).
+
+   It is the FIRST element in <body>, so it is the first tab stop on every
+   page — which is the whole point: on /products at 390px it skips roughly
+   fifty-three controls to reach the catalogue.
+   --------------------------------------------------------------------------- */
+.vl-skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  z-index: 100;
+}
+
+.vl-skip-link:focus,
+.vl-skip-link:focus-visible {
+  left: 8px;
+  top: 8px;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0a0a0a;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  outline: 2px solid rgba(10, 10, 10, 0.9);
+  outline-offset: 2px;
+}
+
+/* The target takes focus programmatically, so it must never paint a ring of
+   its own around the whole page. */
+#vl-main-content:focus {
+  outline: none;
+}
+
 .vl-gradient-text {
   background: linear-gradient(135deg, #ffffff 0%, #f2f2f2 48%, #cecece 100%);
   -webkit-background-clip: text;
